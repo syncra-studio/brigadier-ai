@@ -78,7 +78,6 @@ fn spec(
         add_dirs: vec![],
         project: None,
         skill_plugins: vec![],
-        installed_skills: vec![],
         switched_off: Default::default(),
         env: vec![],
         unset_env: vec![],

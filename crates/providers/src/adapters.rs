@@ -44,8 +44,6 @@ pub struct Adapter {
     pub sign_out: &'static [&'static str],
     /// Its account homes, for a CLI that takes more than one login.
     pub home: Option<&'static crate::accounts::Home>,
-    /// What starts a skill in a message (`/` or `$`).
-    pub skill_prefix: &'static str,
     /// The built-in tool capabilities its adapter implements, by their model registry names
     /// (`webSearch`, `imageGeneration`): a registry can't enable others.
     pub tools: &'static [&'static str],

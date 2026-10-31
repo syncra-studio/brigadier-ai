@@ -810,7 +810,6 @@ impl SessionManager {
                 .collect(),
             tools: ToolSet::Lean,
             skill_plugins: computer.iter().map(|kit| kit.plugin.clone()).collect(),
-            installed_skills: Vec::new(),
             switched_off,
             add_dirs: vec![record],
             // The project's own setup (its hooks, MCP servers, skills), in a folder the user

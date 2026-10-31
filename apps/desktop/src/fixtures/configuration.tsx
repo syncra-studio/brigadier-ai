@@ -35,24 +35,10 @@ useApp.setState((state) => ({
   providers: { ...state.providers, view: { providers: OVERVIEWS, sessions: [], fixtures: [] } },
 }));
 
-const calls: string[] = [];
-
 mockIPC((command, payload) => {
-  if (command === "reveal_path") {
-    calls.push(`show ${(payload as { path: string }).path}`);
-    return null;
-  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
-    case "getBrigadeSkill":
-      return { method: req.method, custom: true, path: "~/.brigadier/brigade/SKILL.md" };
-    case "resetBrigadeSkill":
-      calls.push("reset");
-      return { method: req.method, custom: false, path: "~/.brigadier/brigade/SKILL.md" };
-    case "createBrigadeSkill":
-      calls.push("create");
-      return { method: req.method, custom: true, path: "~/.brigadier/brigade/SKILL.md" };
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     default:
@@ -95,9 +81,6 @@ const typeSearch = (value: string) => {
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 };
-const skill = () => document.querySelector('[data-setting="How sessions run workers"]');
-const skillButtons = () => all("button", skill() ?? document.createElement("div"));
-const skillButton = (name: string) => skillButtons().find((button) => text(button) === name);
 const MENUS: Record<string, string> = {
   sessions: "Model for sessions",
   chats: "Model for chats",
@@ -130,19 +113,8 @@ function Fixture() {
         seen.triggers = Object.values(MENUS).map((label) => text(trigger(label)));
         // Each picker says the choice it holds (#564).
         seen.names = Object.values(MENUS).map((label) => accessibleName(trigger(label)));
-        seen.skill = { helper: text(skill()?.querySelector(".text-xs")), buttons: skillButtons().map(text) };
-        skillButton("Reset to shipped")?.click();
-      },
-      () => {
-        seen.skillReset = { helper: text(skill()?.querySelector(".text-xs")), buttons: skillButtons().map(text), calls: [...calls] };
-        skillButton("Create")?.click();
-      },
-      () => {
-        seen.skillCreated = { helper: text(skill()?.querySelector(".text-xs")), buttons: skillButtons().map(text), calls: [...calls] };
-        skillButton("Show file")?.click();
-      },
-      () => {
-        seen.skillShown = [...calls];
+        // No skill row (D58): the orchestrator's rules are its instructions and `brigadier help`.
+        seen.skillRow = all("[data-setting]").some((row) => /skill/i.test(text(row)));
         const row = document.querySelector('[data-setting="Workers at once"]');
         seen.workers = { helper: text(row?.querySelector(".text-xs")), choice: text(trigger("Workers at once")) };
         trigger("Workers at once")?.click();

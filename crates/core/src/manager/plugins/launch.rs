@@ -239,25 +239,10 @@ pub fn apply_resolved(
         .iter()
         .filter(|skill| !skill.native)
         .collect();
-    if injected.is_empty() && spec.installed_skills.is_empty() {
+    if injected.is_empty() {
         return Ok(());
     }
     std::fs::create_dir_all(&skills).map_err(|error| Error::Invalid(error.to_string()))?;
-    for plugin in std::mem::take(&mut spec.installed_skills) {
-        if let Ok(entries) = std::fs::read_dir(plugin.join("skills")) {
-            for entry in entries.flatten() {
-                if entry.path().join("SKILL.md").is_file()
-                    && let Err(error) = brigadier_providers::accounts::link_to(
-                        &entry.path(),
-                        &skills.join(entry.file_name()),
-                        true,
-                    )
-                {
-                    tracing::warn!(path = %entry.path().display(), %error, "Skipping skill that couldn't be staged");
-                }
-            }
-        }
-    }
     for skill in injected {
         if Path::new(&skill.display).components().count() != 1
             || !matches!(
@@ -306,7 +291,6 @@ mod overlay_tests {
             add_dirs: Vec::new(),
             project: None,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             env: Vec::new(),
             unset_env: Vec::new(),

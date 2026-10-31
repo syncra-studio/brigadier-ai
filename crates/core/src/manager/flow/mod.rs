@@ -2463,7 +2463,6 @@ mod background_tests;
 #[cfg(unix)]
 mod branch_prefix_tests;
 #[cfg(unix)]
-mod brigade_tests;
 mod browser_switch_tests;
 mod browser_tool_tests;
 #[cfg(unix)]
@@ -2497,11 +2496,12 @@ mod engine_tests;
 #[cfg(unix)]
 mod ledger_tests;
 #[cfg(unix)]
+mod no_skill_tests;
+#[cfg(unix)]
 mod open_in_app_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod records_tests;
-#[cfg(unix)]
 mod standing_tests;
 #[cfg(unix)]
 mod terminal_run_tests;

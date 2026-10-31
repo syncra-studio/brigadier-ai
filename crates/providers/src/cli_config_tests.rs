@@ -135,7 +135,6 @@ for line in sys.stdin:
             },
             tools: ToolSet::Thread,
             skill_plugins: vec![],
-            installed_skills: vec![],
             switched_off: Default::default(),
             add_dirs: vec![self.0.join("record")],
             project: None,

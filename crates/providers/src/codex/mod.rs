@@ -198,7 +198,6 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     sign_in: &["login"],
     sign_out: &["logout"],
     home: Some(&HOME),
-    skill_prefix: "$",
     tools: &["webSearch", "imageGeneration"],
     session_files: &[GENERATED_IMAGES],
     vendor: "Codex",
@@ -726,21 +725,23 @@ impl Codex {
 }
 
 impl Codex {
-    /// Once, removes the copies of `spec`'s installed skills that Brigadier used to write into
-    /// the user's skills folder (`$CODEX_HOME/skills`), where every plain `codex` listed them.
-    /// They now reach each session through its own app-server ([`open_thread`]). A marker in
-    /// the data folder keeps it to one pass, so a copy the user makes later stays.
-    async fn remove_old_skill_copies(&self, spec: &SessionSpec) {
-        let marker = self.platform.paths().data_dir.join(SKILLS_MOVED_MARKER);
-        if spec.installed_skills.is_empty() || marker.exists() {
+    /// Once, removes the copies of Brigadier's old skills it wrote into the user's skills folder
+    /// (`$CODEX_HOME/skills`) on 10-23, where every plain `codex` listed them. Brigadier installs
+    /// no skill now (D58). A marker in the data folder keeps it to one pass, so a copy the user
+    /// makes later stays.
+    async fn remove_old_skill_copies(&self) {
+        let data = self.platform.paths().data_dir.clone();
+        let marker = data.join(OLD_SKILLS_REMOVED_MARKER);
+        if marker.exists() {
             return;
         }
         let Some(home) = self.history_home() else {
             return;
         };
-        let plugins = spec.installed_skills.clone();
         let removed = tokio::task::spawn_blocking(move || {
-            remove_old_skill_copies(&home.join("skills"), &plugins)?;
+            remove_old_skill_copies(&home.join("skills"), SHIPPED_SKILLS)?;
+            // The first pass's marker, which compared against a skill no longer shipped.
+            let _ = std::fs::remove_file(data.join("codex-skills-moved"));
             std::fs::write(marker, "")
         })
         .await;
@@ -751,24 +752,39 @@ impl Codex {
 }
 
 /// The data-folder marker of [`Codex::remove_old_skill_copies`].
-const SKILLS_MOVED_MARKER: &str = "codex-skills-moved";
+const OLD_SKILLS_REMOVED_MARKER: &str = "codex-old-skills-removed";
 
-/// Removes `<skills>/<name>` for each plugin's `skills/<name>` when it holds only a
-/// `SKILL.md` byte-for-byte identical to the plugin's. Anything else there is the user's
-/// and stays, including an edited body with the same name and description.
-fn remove_old_skill_copies(skills: &Path, plugins: &[PathBuf]) -> std::io::Result<()> {
-    for plugin in plugins {
-        for entry in std::fs::read_dir(plugin.join("skills"))? {
-            let entry = entry?;
-            let ours = std::fs::read(entry.path().join("SKILL.md"))?;
-            let dir = skills.join(entry.file_name());
-            let Ok(copy) = std::fs::read(dir.join("SKILL.md")) else {
-                continue;
-            };
-            let only_skill = std::fs::read_dir(&dir)?.count() == 1;
-            if only_skill && copy == ours {
-                std::fs::remove_dir_all(&dir)?;
-            }
+/// The SHA-256 of every `SKILL.md` Brigadier ever copied into Codex's skills folder: each
+/// version of its `brigade` and `fusion` skills from c8f72eea2 to 97b75ca2a.
+const SHIPPED_SKILLS: &[&str] = &[
+    "1807e69d42b43909d7251dd7022a5d720f8e37def1aa3f546a259be34d9834a1",
+    "1d23793c5451c00f2a216af7154b7b15444bb98971aaa624ba7cdc7296c189b2",
+    "5a8a70ddf1afaf8f7428d832ad802f25fb24275f81ac1bd76fa1aafd24ccfdd0",
+    "67761ccf64b95576ba9b507bec7e5fd21301bf1ebe2e2fd3ac2c84e40eaef217",
+    "7845198aea08577148a64b9e7a4ea5576cc5f3d2d340cf3d5f545b037b2eeb4d",
+    "8373a7f4bef44619ffa6511734c29258b218f53bd37410402b33fcd126db3245",
+    "9c48c99c6e9fbf7f9098db128dd1c4b6231c65064e49255b86e4f0333fdd0460",
+    "a136d3cdeab9877a0b5fca608c9f8b2ccfcb0ca2273ec647edd2b4292810026c",
+    "a79ef925edc4cc6e0d2f9a262dcf070c8f01805e9a5a7f3d79ddb10535ab30b0",
+    "cd0016b2f00bba554d31ae337f2a4c43c54a384feb8595b97d18938468407b0c",
+    "ecc8926884ae35550116eafa6b18613e394af70d34af35903769342c2618348d",
+];
+
+/// Removes `<skills>/brigade` and `<skills>/fusion` when one holds only a `SKILL.md` whose
+/// SHA-256 is one of `shipped`. Anything else there is the user's and stays, an edited copy too.
+fn remove_old_skill_copies(skills: &Path, shipped: &[&str]) -> std::io::Result<()> {
+    use sha2::{Digest, Sha256};
+    for name in ["brigade", "fusion"] {
+        let dir = skills.join(name);
+        let Ok(copy) = std::fs::read(dir.join("SKILL.md")) else {
+            continue;
+        };
+        let hash: String = Sha256::digest(&copy)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if std::fs::read_dir(&dir)?.count() == 1 && shipped.contains(&hash.as_str()) {
+            std::fs::remove_dir_all(&dir)?;
         }
     }
     Ok(())
@@ -1318,7 +1334,7 @@ impl Provider for Codex {
                 )?)),
                 None => None,
             };
-            self.remove_old_skill_copies(&spec).await;
+            self.remove_old_skill_copies().await;
             let spawned = self
                 .app_server(
                     &cwd,
@@ -1717,11 +1733,10 @@ async fn open_thread(
     // `codex` never lists them. A Codex without extra skill roots still runs; the agent's prompt
     // names the tools either way.
     let mut skill_notices = Vec::new();
-    if !spec.skill_plugins.is_empty() || !spec.installed_skills.is_empty() {
+    if !spec.skill_plugins.is_empty() {
         let roots: Vec<String> = spec
             .skill_plugins
             .iter()
-            .chain(&spec.installed_skills)
             .map(|plugin| plugin.join("skills").display().to_string())
             .collect();
         if let Err(error) = rpc
@@ -3670,7 +3685,6 @@ mod tests {
             mcp_servers: Vec::new(),
             tools,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
@@ -4414,66 +4428,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The copies of the installed skills Brigadier used to write into the user's skills
-    /// folder go only when byte-identical; the user's own skills stay.
+    /// The copies Brigadier wrote into an unmigrated Codex home go only when they are a shipped
+    /// version, unedited and alone in their folder; the user's own skills and edits stay (D58).
     #[test]
     fn the_old_skill_copies_leave_the_users_skills_folder() {
+        use sha2::{Digest, Sha256};
         let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
-        let plugin = dir.join("brigade");
-        let skill = |name: &str, description: &str, body: &str| {
-            format!("---\nname: {name}\ndescription: {description}\n---\n{body}\n")
-        };
-        for name in ["brigade", "fusion"] {
-            std::fs::create_dir_all(plugin.join("skills").join(name)).unwrap();
-            std::fs::write(
-                plugin.join("skills").join(name).join("SKILL.md"),
-                skill(name, "Brigadier's.", "today"),
-            )
-            .unwrap();
-        }
         let skills = dir.join("codex-home/skills");
-        // An exact copy of Brigadier's skill, and the user's skill of the same name.
-        std::fs::create_dir_all(skills.join("brigade")).unwrap();
-        std::fs::write(
-            skills.join("brigade/SKILL.md"),
-            skill("brigade", "Brigadier's.", "today"),
-        )
-        .unwrap();
-        std::fs::create_dir_all(skills.join("fusion")).unwrap();
-        std::fs::write(
-            skills.join("fusion/SKILL.md"),
-            skill("fusion", "Mine.", "mine"),
-        )
-        .unwrap();
-        std::fs::create_dir_all(skills.join("theirs")).unwrap();
-        remove_old_skill_copies(&skills, std::slice::from_ref(&plugin)).unwrap();
+        let ours = "---\nname: brigade\ndescription: Brigadier's.\n---\nShipped body\n";
+        let hash: String = Sha256::digest(ours.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let write = |name: &str, text: &str| {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(skills.join(name).join("SKILL.md"), text).unwrap();
+        };
+        write("brigade", ours);
+        // The user's edit of the shipped skill, and a skill of their own.
+        write("fusion", &ours.replace("Shipped body", "My edited body"));
+        write("theirs", ours);
+        remove_old_skill_copies(&skills, &[hash.as_str()]).unwrap();
         assert!(!skills.join("brigade").exists());
         assert!(skills.join("fusion/SKILL.md").is_file());
-        assert!(skills.join("theirs").is_dir());
+        assert!(skills.join("theirs/SKILL.md").is_file());
+        // A shipped copy beside a file of the user's stays too.
+        write("brigade", ours);
+        std::fs::write(skills.join("brigade/notes.md"), "mine").unwrap();
+        remove_old_skill_copies(&skills, &[hash.as_str()]).unwrap();
+        assert!(skills.join("brigade/SKILL.md").is_file());
         // A missing folder is nothing to remove.
-        remove_old_skill_copies(&dir.join("none"), std::slice::from_ref(&plugin)).unwrap();
+        remove_old_skill_copies(&dir.join("none"), SHIPPED_SKILLS).unwrap();
+        assert!(SHIPPED_SKILLS.iter().all(|hash| hash.len() == 64));
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn old_skill_copy_with_an_edited_body_survives() {
-        let dir =
-            std::env::temp_dir().join(format!("brigadier-old-skill-{}", uuid::Uuid::new_v4()));
-        let plugin = dir.join("plugin");
-        let skills = dir.join("skills");
-        let original = "---\nname: review\ndescription: Review\n---\nOriginal body\n";
-        let edited = original.replace("Original body", "My edited body");
-        for base in [plugin.join("skills/review"), skills.join("review")] {
-            std::fs::create_dir_all(base).unwrap();
-        }
-        std::fs::write(plugin.join("skills/review/SKILL.md"), original).unwrap();
-        std::fs::write(skills.join("review/SKILL.md"), &edited).unwrap();
-        remove_old_skill_copies(&skills, &[plugin]).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(skills.join("review/SKILL.md")).unwrap(),
-            edited
-        );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// core-goals D2: a naked worker gets a home of its own only when the account's home holds

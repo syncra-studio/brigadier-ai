@@ -291,18 +291,9 @@ async fn a_chats_cli_runs_as_a_sessions_at_its_level() {
             assert_eq!(spec.tools, session.tools, "{label}");
             assert!(spec.keeps_detached && session.keeps_detached, "{label}");
             assert!(spec.tools.user_setup(), "{label}");
-            let mut directories = vec![folder.record()];
-            if provider == ProviderKind::Claude {
-                directories.push(folder.root().join("overlay"));
-            }
-            assert_eq!(spec.add_dirs, directories, "{label}");
-            assert!(
-                folder
-                    .root()
-                    .join("overlay/.claude/skills/brigade/SKILL.md")
-                    .is_file(),
-                "{label}"
-            );
+            // No skill overlay (D58).
+            assert_eq!(spec.add_dirs, vec![folder.record()], "{label}");
+            assert!(!folder.root().join("overlay").exists(), "{label}");
             let tmp = spec
                 .env
                 .iter()

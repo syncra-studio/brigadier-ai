@@ -7,7 +7,6 @@ use crate::sessions::fusion_question;
 use crate::tools::OfferFusion;
 use crate::work::OrchestratorStepKind;
 use crate::{Error, Result};
-use brigadier_providers::KindFacts as _;
 
 fn fusion_chat(conversation: &Conversation) -> Result<()> {
     if conversation.kind != ConversationKind::Chat
@@ -28,16 +27,16 @@ fn fusion_chat(conversation: &Conversation) -> Result<()> {
 
 impl SessionManager {
     /// The Fusion button's message, also used by a clicked offer. It still uses the normal
-    /// send queue and lanes; the prefix only invokes the skill in the selected CLI.
+    /// send queue and lanes; `/fusion` is the same plain text on every CLI, which the Chat's
+    /// instructions turn into `brigadier help fusion` (D58).
     pub fn fusion_message(&self, id: &ConversationId, text: String) -> Result<String> {
-        let conversation = self.core.conversation(id)?;
-        fusion_chat(&conversation)?;
-        let provider = conversation
-            .setup
-            .as_ref()
-            .map(|setup| setup.choice().provider)
-            .unwrap_or_else(|| self.default_chat_choice().provider);
-        Ok(provider.skill_invocation("fusion", fusion_question(&text).unwrap_or(&text)))
+        fusion_chat(&self.core.conversation(id)?)?;
+        let question = fusion_question(&text).unwrap_or(&text).trim();
+        Ok(if question.is_empty() {
+            "/fusion".to_owned()
+        } else {
+            format!("/fusion {question}")
+        })
     }
 
     pub(super) fn normalize_fusion_message(

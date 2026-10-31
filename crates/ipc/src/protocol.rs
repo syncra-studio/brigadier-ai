@@ -746,14 +746,6 @@ pub enum Request {
     DontResume {
         conversation_id: ConversationId,
     },
-    /// Whether the user's copy of the `/brigade` skill (`~/.brigadier/brigade/SKILL.md`)
-    /// overrides the shipped one (S15).
-    GetBrigadeSkill,
-    /// Settings' Reset to shipped: the user's copy goes; new sessions get the shipped skill.
-    ResetBrigadeSkill,
-    /// Settings' Create: the user's copy, written as the shipped skill to edit; one already
-    /// there is kept as it is.
-    CreateBrigadeSkill,
     /// Settings › Routing: the user's rules file (`~/.brigadier/models.md`) as it is on disk
     /// now, beside the shipped guidance (S32).
     GetModelRules,
@@ -1707,18 +1699,6 @@ pub enum Response {
     },
     ContinueWaiting,
     DontResume,
-    GetBrigadeSkill {
-        custom: bool,
-        path: String,
-    },
-    ResetBrigadeSkill {
-        custom: bool,
-        path: String,
-    },
-    CreateBrigadeSkill {
-        custom: bool,
-        path: String,
-    },
     GetModelRules {
         rules: ModelRules,
     },

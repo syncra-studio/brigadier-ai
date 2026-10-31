@@ -55,6 +55,10 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             let _ = write!(stdout, "{}", commands::command_help(command));
             return 0;
         }
+        Ok(Invocation::Topic(topic)) => {
+            let _ = write!(stdout, "{}", commands::topic_help(topic));
+            return 0;
+        }
         Ok(Invocation::Version) => {
             let _ = writeln!(stdout, "brigadier {}", env!("CARGO_PKG_VERSION"));
             return 0;

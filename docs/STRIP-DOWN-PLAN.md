@@ -208,6 +208,10 @@ the same commands is a non-goal; it would come only if a client can't run shell,
 should be shippable as a product later, so it is one binary, its subcommand names are stable, and its interface
 has no app-internal paths.
 
+> Superseded by core-goals D58 (2026-10-31): no skill is installed. The orchestrator's must-follow rules are
+> lines of the standing instructions, the same on every CLI, and the how-to is `brigadier help <topic>`
+> (`crates/cli/src/help/`); Fusion is its `fusion` topic, started by a plain `/fusion` message.
+
 **Teams = the Delegator pattern, built in (G3, G19, G20).** The `/brigade` skill (plain, editable, the one skill
 Brigadier ships, G19.Q5) plus the `brigadier` worker commands. **Every session and chat is a brigade (G20).** The
 skill is always installed, and one line of the standing instructions says the session may run workers through
@@ -1178,6 +1182,10 @@ and `run`.
     worker has no sidebar row.
   - An app test: a worker opened from the rail shows its thread and no composer.
   - No component under `SummaryContent` imports `boardJob` or `liveJob`.
+
+> Superseded by core-goals D58 (2026-10-31): no skill is installed. The orchestrator's must-follow rules are
+> lines of the standing instructions, the same on every CLI, and the how-to is `brigadier help <topic>`
+> (`crates/cli/src/help/`); Fusion is its `fusion` topic, started by a plain `/fusion` message.
 
 **S15. The `/brigade` skill, always on (G3, G19.Q5, G20, G21, G23).** Opus.
 - **Scope:** one plain, editable skill, the only one Brigadier ships: `crates/core/src/manager/brigade/SKILL.md`,

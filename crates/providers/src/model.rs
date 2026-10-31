@@ -20,8 +20,6 @@ pub trait KindFacts {
     fn label(self) -> &'static str;
     /// Its short vendor word, in error lines ("Claude: …").
     fn vendor(self) -> &'static str;
-    /// A skill invoked in this CLI's own message syntax.
-    fn skill_invocation(self, skill: &str, question: &str) -> String;
     /// The binary name looked up on the login shell's PATH.
     fn binary(self) -> &'static str;
     /// The vendor's own installer, as typed into a terminal (PowerShell on Windows).
@@ -37,16 +35,6 @@ impl KindFacts for ProviderKind {
 
     fn vendor(self) -> &'static str {
         crate::adapters::adapter(self).map_or(self.id(), |adapter| adapter.vendor)
-    }
-
-    fn skill_invocation(self, skill: &str, question: &str) -> String {
-        let prefix = crate::adapters::adapter(self).map_or("/", |adapter| adapter.skill_prefix);
-        let question = question.trim();
-        if question.is_empty() {
-            format!("{prefix}{skill}")
-        } else {
-            format!("{prefix}{skill} {question}")
-        }
     }
 
     fn binary(self) -> &'static str {
@@ -1624,10 +1612,6 @@ pub struct SessionSpec {
     /// `.claude-plugin/plugin.json`). Claude loads each with `--plugin-dir`; Codex adds each
     /// one's `skills` folder as an extra skills root. The user's own skills are unaffected.
     pub skill_plugins: Vec<PathBuf>,
-    /// Brigadier's skill plugins every session and Chat gets (the `/brigade` skill, S15).
-    /// Claude loads each with `--plugin-dir`, Codex adds each one's `skills` folder as an extra
-    /// skills root, as above: a plain `claude` or `codex` never lists them.
-    pub installed_skills: Vec<PathBuf>,
     /// What of the user's own setup a thread or worker goes without ([`ToolSet::user_setup`]):
     /// what they switched off for Brigadier.
     pub switched_off: SwitchedOff,

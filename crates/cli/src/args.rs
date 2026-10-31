@@ -14,6 +14,8 @@ use crate::protocol::{
 pub enum Invocation {
     /// `brigadier --help`, or one command's help.
     Help(Option<&'static Command>),
+    /// `brigadier help <topic>`: a how-to page, and the command of the same name's help.
+    Topic(&'static commands::Topic),
     Version,
     Run {
         command: &'static Command,
@@ -93,9 +95,10 @@ where
         "help" => {
             return match words.next() {
                 None => Ok(Invocation::Help(None)),
-                Some(name) => match commands::find(&name) {
-                    Some(command) => Ok(Invocation::Help(Some(command))),
-                    None => Err(unknown_command(&name)),
+                Some(name) => match (commands::topic(&name), commands::find(&name)) {
+                    (Some(topic), _) => Ok(Invocation::Topic(topic)),
+                    (None, Some(command)) => Ok(Invocation::Help(Some(command))),
+                    (None, None) => Err(unknown_command(&name)),
                 },
             };
         }

@@ -1088,6 +1088,91 @@ impl Command {
     }
 }
 
+/// A how-to page of `brigadier help <topic>`: what a session's instructions point to.
+#[derive(Debug)]
+pub struct Topic {
+    pub name: &'static str,
+    pub summary: &'static str,
+    pub text: &'static str,
+}
+
+/// Every topic, in the order `brigadier help` lists them.
+pub const TOPICS: &[Topic] = &[
+    Topic {
+        name: "orchestrate",
+        summary: "Who does what: you, your subagents, your workers; reporting.",
+        text: include_str!("help/orchestrate.md"),
+    },
+    Topic {
+        name: "workers",
+        summary: "Which worker, one short job, waves and every `wait` event.",
+        text: include_str!("help/workers.md"),
+    },
+    Topic {
+        name: "approvals",
+        summary: "Answering a worker's permission prompt yourself.",
+        text: include_str!("help/approvals.md"),
+    },
+    Topic {
+        name: "routing",
+        summary: "Which agent, model and effort a worker runs on.",
+        text: include_str!("help/routing.md"),
+    },
+    Topic {
+        name: "briefs",
+        summary: "A worker's brief: five lines, and what it carries.",
+        text: include_str!("help/briefs.md"),
+    },
+    Topic {
+        name: "asking",
+        summary: "Grilling the user, and what always needs their yes.",
+        text: include_str!("help/asking.md"),
+    },
+    Topic {
+        name: "integrate",
+        summary: "Merging workers' steps, watching what ends later, gotchas.",
+        text: include_str!("help/integrate.md"),
+    },
+    Topic {
+        name: "reviews",
+        summary: "Plan reviews and end verification.",
+        text: include_str!("help/reviews.md"),
+    },
+    Topic {
+        name: "context",
+        summary: "What to pull, and where it comes from.",
+        text: include_str!("help/context.md"),
+    },
+    Topic {
+        name: "commands",
+        summary: "The commands an orchestrator uses, with their flags.",
+        text: include_str!("help/commands.md"),
+    },
+    Topic {
+        name: "fusion",
+        summary: "Running a Fusion the user started in a top-level Chat.",
+        text: include_str!("help/fusion.md"),
+    },
+];
+
+/// The topic called `name`.
+pub fn topic(name: &str) -> Option<&'static Topic> {
+    TOPICS.iter().find(|topic| topic.name == name)
+}
+
+/// `brigadier help <topic>`: its page, then the help of the command of the same name.
+pub fn topic_help(topic: &Topic) -> String {
+    match find(topic.name) {
+        Some(command) => format!(
+            "{}\n`brigadier {}` itself:\n{}",
+            topic.text,
+            command.name,
+            command_help(command)
+        ),
+        None => topic.text.to_owned(),
+    }
+}
+
 /// `brigadier --help`.
 pub fn help() -> String {
     let width = COMMANDS.iter().map(|c| c.name.len()).max().unwrap_or(0);
@@ -1105,6 +1190,10 @@ pub fn help() -> String {
             "  {:width$}  {}{soon}\n",
             command.name, command.summary
         ));
+    }
+    out.push_str("\nHow-to topics (`brigadier help <topic>`):\n");
+    for topic in TOPICS {
+        out.push_str(&format!("  {:width$}  {}\n", topic.name, topic.summary));
     }
     out.push_str(
         "\nEvery command takes --json for machine-readable output.\n\

@@ -1,10 +1,8 @@
-import { useEffect, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { findModel, ModelSelector, type ModelGroup, SettingsCard, SettingsRow } from "@/components/shared";
-import { Button, SettingsSelect, selectTrigger } from "@/components/controls";
-import { request, revealPath } from "@/ipc/client";
+import { SettingsSelect, selectTrigger } from "@/components/controls";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
   builtInDefault,
@@ -66,10 +64,6 @@ export const CONFIGURATION_ROWS = {
     label: "Plan before building",
     description: "A session asks its questions and shows you a plan to approve before it changes anything",
   },
-  brigadeSkill: {
-    label: "How sessions run workers",
-    description: "Brigadier’s brigade skill. Your own copy at ~/.brigadier/brigade/SKILL.md replaces it",
-  },
 } as const;
 
 /**
@@ -113,7 +107,6 @@ export function ConfigurationPage() {
         <SettingsCard>
           <WorkersAtOnceRow />
           <SwitchSetting setting="planFirst" row={CONFIGURATION_ROWS.planFirst} />
-          <BrigadeSkillRow />
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title="Composer">
@@ -177,61 +170,10 @@ function DefaultModelRow({
   );
 }
 
-/**
- * The brigade skill sessions get: the shipped one, or the user's copy. Create writes the copy
- * from the shipped skill and shows it; Show file shows a copy there; Reset removes it.
- */
-function BrigadeSkillRow() {
-  const reset = useAction();
-  const [skill, setSkill] = useState<{ custom: boolean; path: string } | null>(null);
-  useEffect(() => {
-    void request({ method: "getBrigadeSkill" }).then(setSkill, () => setSkill(null));
-  }, []);
-  return (
-    <SettingsRow
-      label={CONFIGURATION_ROWS.brigadeSkill.label}
-      description={skill?.custom ? `Your copy at ${skill.path} is in use` : CONFIGURATION_ROWS.brigadeSkill.description}
-      error={reset.error}
-    >
-      {skill && !skill.custom && (
-        <Button
-          variant="soft"
-          size="sm"
-          disabled={reset.busy}
-          onClick={() =>
-            reset.run(async () => {
-              const created = await request({ method: "createBrigadeSkill" });
-              setSkill(created);
-              await revealPath(created.path);
-            })
-          }
-        >
-          Create
-        </Button>
-      )}
-      {skill?.custom && (
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="soft" size="sm" disabled={reset.busy} onClick={() => reset.run(() => revealPath(skill.path))}>
-            Show file
-          </Button>
-          <Button
-            variant="soft"
-            size="sm"
-            disabled={reset.busy}
-            onClick={() => reset.run(() => request({ method: "resetBrigadeSkill" }).then(setSkill))}
-          >
-            Reset to shipped
-          </Button>
-        </div>
-      )}
-    </SettingsRow>
-  );
-}
-
 /** The numbers "Workers at once" offers; the daemon reads a saved number outside them as the nearest. */
 const WORKERS_AT_ONCE = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
-/** How many workers one session may run at the same time (run2-D31): advice the brigade skill reads. */
+/** How many workers one session may run at the same time (run2-D31): advice the orchestrator reads in `brigadier models`. */
 function WorkersAtOnceRow() {
   const save = useAction();
   const saved = useApp((s) => s.settings.workersAtOnce);

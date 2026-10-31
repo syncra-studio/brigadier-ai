@@ -22,7 +22,6 @@ mod brains;
 mod branch_names;
 mod branches;
 #[allow(dead_code)]
-mod brigade;
 pub(crate) mod browser_tool;
 mod cards;
 mod cli;
@@ -368,6 +367,7 @@ impl SessionManager {
             let data_dir = data_dir.clone();
             let _ = blocking(move || {
                 outputs::clear_opened(&data_dir);
+                remove_old_skill_plugin(&data_dir);
                 Ok(())
             })
             .await;
@@ -1142,5 +1142,46 @@ impl SessionManager {
             Some(crate::model::Setup::Session { repo, .. }) => Ok(std::path::PathBuf::from(repo)),
             _ => Err(Error::Invalid("tasks belong to a session".into())),
         }
+    }
+}
+
+/// Removes the skill plugin Brigadier used to write for every session (`<data>/brigade`): no
+/// skill is installed since D58. Only what it wrote goes (its manifest and skills); the folder
+/// goes only when nothing else is left in it.
+fn remove_old_skill_plugin(data_dir: &std::path::Path) {
+    let plugin = data_dir.join("brigade");
+    for written in [".claude-plugin", "skills"] {
+        match std::fs::remove_dir_all(plugin.join(written)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                tracing::warn!(%error, "couldn't remove Brigadier's old skill plugin");
+            }
+            _ => {}
+        }
+    }
+    let _ = std::fs::remove_dir(plugin);
+}
+
+#[cfg(test)]
+mod old_skill_plugin_tests {
+    #[test]
+    fn the_old_skill_plugin_goes_and_nothing_else() {
+        let data =
+            std::env::temp_dir().join(format!("brigadier-old-plugin-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(data.join("brigade/skills/brigade")).unwrap();
+        std::fs::write(data.join("brigade/skills/brigade/SKILL.md"), "x").unwrap();
+        std::fs::create_dir_all(data.join("brains")).unwrap();
+        std::fs::create_dir_all(data.join("brigade/.claude-plugin")).unwrap();
+        super::remove_old_skill_plugin(&data);
+        assert!(!data.join("brigade").exists());
+        assert!(data.join("brains").is_dir());
+        // A file that isn't the plugin's stays, and so does its folder.
+        std::fs::create_dir_all(data.join("brigade/skills")).unwrap();
+        std::fs::write(data.join("brigade/SKILL.md"), "mine").unwrap();
+        super::remove_old_skill_plugin(&data);
+        assert!(data.join("brigade/SKILL.md").is_file());
+        assert!(!data.join("brigade/skills").exists());
+        // Already gone: nothing to do.
+        super::remove_old_skill_plugin(&data);
+        std::fs::remove_dir_all(&data).unwrap();
     }
 }

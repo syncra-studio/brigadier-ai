@@ -67,7 +67,6 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     sign_out: &["auth", "logout"],
     // One login store, in its data folder's database.
     home: None,
-    skill_prefix: "/",
     // Switching its built-in tools off isn't implemented.
     tools: &[],
     session_files: &[TRANSCRIPT],
@@ -359,7 +358,6 @@ fn config_content(spec: &SessionSpec) -> Value {
     let skills: Vec<String> = spec
         .skill_plugins
         .iter()
-        .chain(&spec.installed_skills)
         .map(|plugin| plugin.join("skills").display().to_string())
         .collect();
     if !skills.is_empty() {
@@ -1431,7 +1429,6 @@ mod tests {
             add_dirs: Vec::new(),
             project: None,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: SwitchedOff::default(),
             env: vec![("TMPDIR".into(), "/t".into())],
             unset_env: Vec::new(),
@@ -1473,7 +1470,6 @@ mod tests {
             trusted: true,
             always_load: true,
         }];
-        worker.installed_skills = vec![PathBuf::from("/skills/brigade")];
         assert!(sealed(&worker));
         let env = session_env(&worker, Some(Path::new("/data/opencode-1")));
         assert_eq!(
@@ -1491,7 +1487,7 @@ mod tests {
             config["mcp"]["servers"]["brigadier"],
             json!({"type": "remote", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer s"}, "oauth": false, "timeout": {"execution": 600_000}, "codemode": false})
         );
-        assert_eq!(config["skills"], json!(["/skills/brigade/skills"]));
+        assert!(config.get("skills").is_none());
         assert!(config.get("compaction").is_none());
 
         // A thread keeps the user's own setup; one that must not compact doesn't.

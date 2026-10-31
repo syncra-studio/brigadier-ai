@@ -16,7 +16,6 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     sign_in: &[],
     sign_out: &[],
     home: None,
-    skill_prefix: "/",
     tools: &[],
     session_files: &[],
     vendor: "Fake",

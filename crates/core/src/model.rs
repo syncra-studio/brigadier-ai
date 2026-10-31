@@ -912,7 +912,7 @@ pub struct Settings {
     /// A notice above the composer while a conversation is in Full access.
     pub show_full_access_notice: bool,
     /// How many workers one session may run at the same time (Settings › Configuration ›
-    /// Workers). Advice the brigade skill reads through `brigadier models`; `brigadier start`
+    /// Workers). Advice the orchestrator reads through `brigadier models`; `brigadier start`
     /// refuses no further worker (G18).
     pub workers_at_once: u32,
     /// "Plan before building" (Settings › Configuration › Workers). Experiment (harness D42),

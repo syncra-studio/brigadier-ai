@@ -122,12 +122,8 @@ async fn fusion_invocations_use_the_selected_cli_and_keep_the_normal_queue() {
             .await
             .unwrap()
             .id;
-        let expected = format!(
-            "{}fusion Which approach?",
-            brigadier_providers::adapters::adapter(provider)
-                .unwrap()
-                .skill_prefix
-        );
+        // One syntax on every CLI (D1, D58): no skill is invoked.
+        let expected = "/fusion Which approach?";
         assert_eq!(
             flow.manager
                 .fusion_message(&chat, "Which approach?".into())

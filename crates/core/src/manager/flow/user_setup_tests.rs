@@ -37,19 +37,8 @@ async fn a_thread_and_its_worker_get_the_projects_setup_in_a_trusted_folder() {
         assert_eq!(thread.project.as_ref(), Some(&thread.cwd), "{thread:#?}");
         assert_eq!(
             thread.add_dirs,
-            vec![
-                flow.manager.session_dir(&flow.conversation).record(),
-                flow.manager
-                    .session_dir(&flow.conversation)
-                    .root()
-                    .join("overlay")
-            ],
-            "it works in its workspace and writes its ledger"
-        );
-        assert!(
-            thread.add_dirs[1]
-                .join(".claude/skills/brigade/SKILL.md")
-                .is_file()
+            vec![flow.manager.session_dir(&flow.conversation).record()],
+            "it works in its workspace and writes its ledger; no skill overlay (D58)"
         );
     }
     let workers = of(&flow, ToolSet::Lean);

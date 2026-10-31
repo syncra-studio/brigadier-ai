@@ -3159,11 +3159,6 @@ impl SessionManager {
                 ConversationKind::Chat => ToolSet::Thread,
             },
             skill_plugins: computer.iter().map(|kit| kit.plugin.clone()).collect(),
-            // Every session and Chat is a brigade (G20); a tab chat is its session's helper.
-            installed_skills: match tab_checkout {
-                Some(_) => Vec::new(),
-                None => self.brigade_plugin().into_iter().collect(),
-            },
             // Its agent's own setup, as its CLI loads it.
             switched_off: Default::default(),
             // A tab chat reads its session's checkout, never its own to clean up. A thread writes

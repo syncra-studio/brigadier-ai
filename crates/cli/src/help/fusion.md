@@ -1,9 +1,3 @@
----
-name: fusion
-description: Only when the user starts Fusion in a top-level Chat, consult every installed CLI as workers, run one cross round, then answer with one merged recommendation.
----
-
-# Fusion
 
 Use it only when the user starts it in a top-level Chat: a `/fusion <question>` message, the Fusion button, or a click on its offer card. Never on your own. Sessions, side chats, tab chats and workers never run or offer Fusion. When a second opinion would help in a top-level Chat, offer it with `brigadier fusion offer "<question>"` and carry on; the offer starts nothing until the user clicks Ask.
 

@@ -170,7 +170,6 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     sign_in: &["auth", "login"],
     sign_out: &["auth", "logout"],
     home: Some(&HOME),
-    skill_prefix: "/",
     tools: &["webSearch"],
     session_files: &[
         files::kinds::PROJECT_DIR,
@@ -747,9 +746,6 @@ impl Claude {
             args.push("--plugin-dir".into());
             args.push(plugin.display().to_string());
         }
-        for overlay in &spec.installed_skills {
-            args.extend(["--add-dir".to_owned(), overlay.display().to_string()]);
-        }
         if let Some(model) = &spec.model {
             args.push("--model".into());
             args.push(model.clone());
@@ -1054,15 +1050,12 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     // A global skillOverride would hide the injected version too. Keep its qualified
     // overlay invocation available and deny only the native plain invocation instead.
     let overlay_collision = |name: &str| {
-        spec.add_dirs
-            .iter()
-            .chain(&spec.installed_skills)
-            .any(|root| {
-                root.join(".claude/skills")
-                    .join(name)
-                    .join("SKILL.md")
-                    .is_file()
-            })
+        spec.add_dirs.iter().any(|root| {
+            root.join(".claude/skills")
+                .join(name)
+                .join("SKILL.md")
+                .is_file()
+        })
     };
     let mut allow: Vec<String> = spec
         .mcp_servers
@@ -3117,7 +3110,6 @@ for line in sys.stdin:
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
@@ -3138,19 +3130,6 @@ for line in sys.stdin:
             native_compaction: None,
             temp_tag: None,
         }
-    }
-
-    /// The `/brigade` skill loads as a plugin beside Brigadier's other skills (S15).
-    #[test]
-    fn installed_skills_load_from_overlay_roots() {
-        let dir = Temp::new();
-        let mut spec = spec(dir.path(), &["claude-sonnet-5-5"]);
-        spec.tools = ToolSet::Thread;
-        spec.installed_skills = vec![PathBuf::from("/data/brigade")];
-        let args = Claude::session_args(&spec, dir.path(), "x", false, None).unwrap();
-        let at = args.iter().position(|arg| arg == "--add-dir").unwrap();
-        assert_eq!(args[at + 1], "/data/brigade");
-        assert!(!args.iter().any(|arg| arg == "--plugin-dir"));
     }
 
     fn assert_thinking_args(args: &[String]) {
@@ -3492,7 +3471,6 @@ for line in sys.stdin:
             access,
             tools: ToolSet::Thread,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: vec![ws.clone()],
             allowed_models: None,

@@ -2023,27 +2023,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.continue_waiting(&conversation_id)).await?;
             Response::ContinueWaiting
         }
-        Request::GetBrigadeSkill => {
-            let skill = sessions.brigade_skill();
-            Response::GetBrigadeSkill {
-                custom: skill.custom,
-                path: skill.path.display().to_string(),
-            }
-        }
-        Request::ResetBrigadeSkill => {
-            let skill = sessions.reset_brigade_skill()?;
-            Response::ResetBrigadeSkill {
-                custom: skill.custom,
-                path: skill.path.display().to_string(),
-            }
-        }
-        Request::CreateBrigadeSkill => {
-            let skill = sessions.create_brigade_skill()?;
-            Response::CreateBrigadeSkill {
-                custom: skill.custom,
-                path: skill.path.display().to_string(),
-            }
-        }
         Request::GetModelRules => Response::GetModelRules {
             rules: sessions.model_rules()?,
         },
