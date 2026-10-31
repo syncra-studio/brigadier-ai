@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, appTaskRows, workerAppTaskRows } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows, workerTaskRows } from "@/app/conversation/backgroundRows";
 import { endWords, taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
@@ -41,7 +41,7 @@ const NO_ENTRIES: readonly FileEntry[] = [];
 /** No previews. */
 const NO_PREVIEWS: readonly Preview[] = [];
 
-/** Previews and proven live native apps, with their own output/Stop and durable History. */
+/** Previews and running background commands, with their own output/Stop and durable History. */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
   const workers = useWorkerRows(conversationId);
@@ -55,8 +55,9 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
-  // Ended app tasks leave immediately; the native records remain in History.
-  const activities = [...rows, ...appTaskRows(cliTasks, entries, clock.now), ...workerAppTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now)]
+  // Every running background command, the session's and its workers' (D51); ended ones leave at
+  // once, their records stay in History.
+  const activities = [...rows, ...taskRows(cliTasks, entries, clock.now), ...workerTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now)]
     .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const ticking = activities.length > 0;
   useEffect(() => {

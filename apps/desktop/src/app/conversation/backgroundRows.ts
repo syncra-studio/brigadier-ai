@@ -1,4 +1,3 @@
-import { persistentApp } from "@/app/conversation/persistentApps";
 import { taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
 import { brigadierCalls } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
@@ -89,11 +88,11 @@ export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[])
 }
 
 /**
- * Running CLI tasks (`taskShown`), excluding the session's worker
- * wait already covered by the workers card.
+ * Running CLI tasks (`taskShown`), excluding subagents (shown as workers, D50) and the session's
+ * worker wait already covered by the workers card.
  */
 export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
-  return tasks.filter((task) => taskShown(task, now) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
+  return tasks.filter((task) => taskShown(task, now) && task.kind !== "agent" && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
     type: "task", id: `task:${task.id}`, command: taskCommand(task, entries), startedAtMs: task.startedAtMs, task, state: taskState(task), worker: null,
   }));
 }
@@ -110,17 +109,6 @@ export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskI
       type: "task", id: `task:${worker.id}:${task.id}`, command, startedAtMs: task.startedAtMs, task, state: taskState(task),
       worker: { id: worker.id, name: workerName(worker.id) },
     })));
-}
-
-/** Only proven app invocations belong beside previews; labels never establish command evidence. */
-export function appTaskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
-  return taskRows(tasks, entries, now).filter((row) => row.type === "task" && persistentApp(taskCommand(row.task, entries) ?? ""));
-}
-
-export function workerAppTaskRows(workers: readonly WorkerRow[], workerName: (id: string) => string | null, now: number): BackgroundRow[] {
-  const apps = workers.map((worker) => ({ ...worker, background: (worker.background ?? []).filter(({ task, command }) =>
-    (task.kind === "shell" || task.kind === "terminal") && persistentApp(command ?? (task.kind === "terminal" ? task.label : ""))) }));
-  return workerTaskRows(apps, workerName, now);
 }
 
 /**

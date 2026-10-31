@@ -57,20 +57,20 @@ test("rows sort newest first", () => {
 
 const nativeApp = (id: string, label: string, status: BackgroundTask["status"] = "running"): BackgroundTask => ({ id, itemId: `call-${id}`, kind: "shell", label, status, startedAtMs: 10, endedAtMs: null, outputFile: null, summary: null, lastLine: null });
 
-test("proven native apps use Background once; unknown commands and waits are none of it", async () => {
-  const { appTaskRows, workerAppTaskRows } = await import("./backgroundRows");
+test("every running command is a Background row, the session's and its workers' (D51); subagents, waits and ended ones are not", async () => {
+  const { taskRows, workerTaskRows } = await import("./backgroundRows");
 
-  const app = nativeApp("app", "Show the website"), tests = nativeApp("tests", "pnpm dev"), unknown = nativeApp("unknown", "pnpm dev");
+  const sleep = nativeApp("sleep", "sleep 25 && echo done"), app = nativeApp("app", "Show the website"), wait = nativeApp("wait", "brigadier wait");
+  const agent: BackgroundTask = { ...nativeApp("agent", "Count lines"), kind: "agent" };
   const entries: FileEntry[] = [
-    { event: { type: "command", itemId: "call-app", command: "cd '/work/site app' && PORT=5173 pnpm dev", cwd: "/work", status: "completed", exitCode: null, output: null, durationMs: null } },
-    { event: { type: "command", itemId: "call-tests", command: "pnpm test", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
+    { event: { type: "command", itemId: "call-wait", command: "brigadier wait --all", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
   ];
-  const source = [app, tests, unknown];
+  const source = [sleep, app, wait, agent];
   const before = structuredClone(source);
-  assert.deepEqual(appTaskRows(source, entries, 20).map((row) => row.id), ["task:app"]);
-  const worker = { id: "worker", background: [{ task: app, command: "next dev" }, { task: tests, command: "pnpm test" }] } as WorkerRow;
-  assert.deepEqual(workerAppTaskRows([worker], () => "Site worker", 20).map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:app", { id: "worker", name: "Site worker" }]]);
-  assert.deepEqual(appTaskRows([{ ...app, status: "completed" }], entries, 20), []);
-  assert.deepEqual(workerAppTaskRows([{ ...worker, background: [{ task: { ...app, status: "stopped" }, command: "next dev" }] }], () => "Site worker", 20), []);
+  assert.deepEqual(taskRows(source, entries, 20).map((row) => row.id), ["task:sleep", "task:app"]);
+  const worker = { id: "worker", background: [{ task: sleep, command: "sleep 25" }, { task: agent, command: null }] } as WorkerRow;
+  assert.deepEqual(workerTaskRows([worker], () => "Site worker", 20).map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:sleep", { id: "worker", name: "Site worker" }]]);
+  assert.deepEqual(taskRows([{ ...sleep, status: "completed" }], entries, 20), []);
+  assert.deepEqual(workerTaskRows([{ ...worker, background: [{ task: { ...sleep, status: "stopped" }, command: "sleep 25" }] }], () => "Site worker", 20), []);
   assert.deepEqual(source, before, "native records/history stay intact");
 });

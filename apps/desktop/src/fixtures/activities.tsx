@@ -304,7 +304,7 @@ async function driveApps(): Promise<Record<string, unknown>> {
   ], opened: false });
   const workerApp = { ...devApp, itemId: "call-worker-app", label: "Run the worker website" };
   workerTasksSaid({ task: workerApp, command: "next dev" }, { task: { ...tests, id: "worker-test" }, command: "pnpm test" });
-  await until(() => ids().length === 3, 5000);
+  await until(() => ids().length === 5, 5000);
   const running = ids();
   const workerName = row("task:task-2:b7dev")?.querySelector("[data-activity-worker]")?.textContent;
   row("task:raw-browser")?.click();
@@ -314,11 +314,11 @@ async function driveApps(): Promise<Record<string, unknown>> {
   await until(() => appStops.length === 1, 3000);
   stop("task:task-2:b7dev")?.click();
   await until(() => appStops.length === 2, 3000);
-  tasksSaid({ ...appTask, status: "completed", endedAtMs: Date.now() }, { ...browser, status: "failed", endedAtMs: Date.now() }, tests);
+  tasksSaid({ ...appTask, status: "completed", endedAtMs: Date.now() }, { ...browser, status: "failed", endedAtMs: Date.now() }, { ...tests, status: "completed", endedAtMs: Date.now() });
   workerTasksSaid({ task: { ...workerApp, status: "stopped", endedAtMs: Date.now() }, command: "next dev" });
   await until(() => ids().length === 0, 3000);
   const ended = ids();
-  tasksSaid({ ...appTask, startedAtMs: now + 10 }, tests);
+  tasksSaid({ ...appTask, startedAtMs: now + 10 });
   await until(() => ids().length === 1, 3000);
   stop("task:raw-dev")?.click();
   await until(() => appStops.length === 3, 3000);
