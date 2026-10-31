@@ -30,6 +30,7 @@ export function workingWorkers(
   workers: readonly WorkerRow[],
   turns: readonly Pick<ThreadTurn, "startedAtMs">[],
   starts: readonly number[],
+  endedAtMs: number | null = null,
 ): number {
   if (starts.length === 0) return 0;
   const startedAtMs = Math.min(...starts);
@@ -37,7 +38,8 @@ export function workingWorkers(
   const newest = next === null;
   return workers.filter((worker) => {
     if (isNativeWorker(worker)) return false;
-    if (worker.startedAtMs < startedAtMs || (next !== null && worker.startedAtMs >= next) || worker.gone) return false;
+    // None started after its turns ended is its: the next turn may not be in `turns` yet.
+    if (worker.startedAtMs < startedAtMs || (next !== null && worker.startedAtMs >= next) || (endedAtMs !== null && worker.startedAtMs > endedAtMs) || worker.gone) return false;
     if (worker.lastEnd === null) return true;
     return newest && (worker.working || worker.waiting.length > 0);
   }).length;

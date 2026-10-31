@@ -519,18 +519,18 @@ export function useWorkerRows(conversationId: string | null): readonly WorkerRow
 }
 
 /** How many of the workers a session's block, its turns started at `starts`, started still work (`workingWorkers`). */
-export function useTurnWorkers(conversationId: string | null, starts: readonly number[]): number {
+export function useTurnWorkers(conversationId: string | null, starts: readonly number[], endedAtMs: number | null = null): number {
   return useCliThread((s) => {
     const view = conversationId && starts.length > 0 ? s.views[conversationId] : undefined;
-    return view ? workingWorkers(workersOf(conversationId!, view), view.turns, starts) : 0;
+    return view ? workingWorkers(workersOf(conversationId!, view), view.turns, starts, endedAtMs) : 0;
   });
 }
 
 /** How many of the background commands a session's block, its turns started at `starts`, started still hold it (`turnCommands`, D21). */
-export function useTurnCommands(conversationId: string | null, starts: readonly number[]): number {
+export function useTurnCommands(conversationId: string | null, starts: readonly number[], endedAtMs: number | null = null): number {
   return useCliThread((s) => {
     const view = conversationId && starts.length > 0 ? s.views[conversationId] : undefined;
-    return view ? turnCommands(view, view.turns, starts) : 0;
+    return view ? turnCommands(view, view.turns, starts, endedAtMs) : 0;
   });
 }
 

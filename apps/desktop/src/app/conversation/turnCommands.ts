@@ -12,12 +12,14 @@ import type { BackgroundTask, FileEntry, ThreadTurn, ThreadView } from "@/ipc/ge
  * its call came in: found by the task's item id among the thread's items, else by when it
  * started (a Codex terminal is seen only when Codex lists it, maybe after a later turn began).
  * One that ended while no turn was open holds the newest block it started in until the turn its
- * end starts begins (`CliJobs::waking`).
+ * end starts begins (`CliJobs::waking`). None started after the block's turns ended (`endedAtMs`)
+ * is its: the next turn may not be in `turns` yet while its items already are.
  */
 export function turnCommands(
   view: Pick<ThreadView, "background" | "entries" | "jobs">,
   turns: readonly Pick<ThreadTurn, "startedAtMs">[],
   starts: readonly number[],
+  endedAtMs: number | null = null,
 ): number {
   const jobs = view.jobs;
   if (starts.length === 0 || !jobs || (!jobs.holding?.length && !jobs.waking)) return 0;
@@ -28,7 +30,7 @@ export function turnCommands(
   const ours = (task: BackgroundTask) => {
     const call = task.itemId === null ? undefined : entries.find(({ event, parent }) => !parent && "itemId" in event && event.itemId === task.itemId);
     const at = call?.atMs ?? task.startedAtMs;
-    return at >= startedAtMs && (next === null || at < next);
+    return at >= startedAtMs && (next === null || at < next) && (endedAtMs === null || at <= endedAtMs);
   };
   const holding = background.filter((task) => jobs.holding?.includes(task.id) && ours(task)).length;
   if (holding > 0 || !jobs.waking || next !== null) return holding;

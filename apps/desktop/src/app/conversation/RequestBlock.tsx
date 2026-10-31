@@ -178,10 +178,10 @@ export const RequestBlock: FC = () => {
   // wake-ups when they do are in the same turn), with no end cards yet, and its work doesn't
   // fold by itself meanwhile.
   const starts = meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS;
-  const holding = useTurnWorkers(conversationId, starts);
+  const holding = useTurnWorkers(conversationId, starts, meta?.endedAtMs ?? null);
   // So do the background commands it started (a CI watch, a Monitor) until the turn their end
   // starts is over (D21), though its work folds as it would without them.
-  const commands = useTurnCommands(conversationId, starts);
+  const commands = useTurnCommands(conversationId, starts, meta?.endedAtMs ?? null);
   // Its CLI's own subagents, which keep its work from folding by itself while they work.
   const workerRows = useWorkerRows(conversationId);
   // Its cards load before its work can open, so they are there the moment it does.

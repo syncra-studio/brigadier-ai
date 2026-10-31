@@ -48,6 +48,17 @@ test("a block that starts with its message, before its CLI's turn began, still h
   assert.equal(turnCommands(view, turns, [4900]), 0, "the next block's turn isn't this one's");
 });
 
+test("a command the next turn started isn't held by the block before it while that turn isn't listed yet", () => {
+  // The newest listed turn began at 5000 and ended at 6000; the next one's call already came at 9500.
+  const view: Pick<ThreadView, "background" | "entries" | "jobs"> = {
+    entries: [bash("toolu_next", "sleep 5 && echo done", 9500)],
+    background: [task("bnext", "toolu_next", 9550)],
+    jobs: { holding: ["bnext"] },
+  };
+  assert.equal(turnCommands(view, turns, [5000], 6000), 0);
+  assert.equal(turnCommands(view, turns, [5000], 9600), 1, "one its own turn started still holds it");
+});
+
 test("a command that ended holds the newest block that started it until the turn its end starts begins (D21)", () => {
   const ended = task("bwatch", "toolu_watch", 5250, { status: "completed", endedAtMs: 9000 });
   const waiting = task("bwait", "toolu_wait", 5260, { status: "completed", endedAtMs: 9000 });
