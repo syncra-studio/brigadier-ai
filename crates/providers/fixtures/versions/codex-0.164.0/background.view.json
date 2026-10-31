@@ -57,6 +57,23 @@
       "type": "compactionStarted"
     },
     {
+      "task": {
+        "command": "sleep 2",
+        "endedAtMs": 1792929291439,
+        "id": "63484",
+        "itemId": "exec-13c61f35-2e1d-444e-bf56-307f52473e73",
+        "kind": "terminal",
+        "label": "sleep 2",
+        "lastLine": null,
+        "outputFile": null,
+        "provider": "codex",
+        "startedAtMs": 1792929290721,
+        "status": "completed",
+        "summary": null
+      },
+      "type": "backgroundTask"
+    },
+    {
       "command": "/bin/zsh -c 'sleep 2'",
       "cwd": "/private/tmp/20261025-1046-harness-research-w17-codex/lifecycle",
       "durationMs": 1858,
