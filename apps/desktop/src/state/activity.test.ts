@@ -50,9 +50,9 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.equal(row("c4").awaiting, null);
 });
 
-const card = (id: string, taskId: string | null) =>
-  on("c5", { type: "approvalUpdated", approval: { id, conversationId: "c5", taskId, requestId: null, position: 0, state: { type: "pending" },
-    createdAtMs: 0, resolvedAtMs: null, subject: { type: "cli", request: { id, kind: "command", tool: "Bash", command: "touch /x", cwd: null, paths: [], reason: null, escalation: false, input: null } } } });
+const card = (id: string, taskId: string | null, agent?: string, conversationId = "c5") =>
+  on(conversationId, { type: "approvalUpdated", approval: { id, conversationId, taskId, requestId: null, position: 0, state: { type: "pending" },
+    createdAtMs: 0, resolvedAtMs: null, subject: { type: "cli", request: { id, kind: "command", tool: "Bash", command: "touch /x", cwd: null, paths: [], reason: null, escalation: false, input: null, ...(agent && { agent }) } } } });
 
 test("a worker CLI's permission prompt never needs the user: its orchestrator answers it (D48); the session's own does", () => {
   applyActivityEvents([card("w", "t1")]);
@@ -62,6 +62,12 @@ test("a worker CLI's permission prompt never needs the user: its orchestrator an
   applyActivityEvents([card("own", null)]);
   assert.equal(row("c5").awaiting, "approval");
   assert.deepEqual(Object.keys(applyToBoard(board, card("own", null)).approvals), ["own"]);
+});
+
+test("a CLI's own subagent's permission request never needs the user: a fork of its orchestrator answers it (D69)", () => {
+  applyActivityEvents([card("sub", null, "toolu_agent", "c6")]);
+  assert.equal(row("c6").awaiting, null);
+  assert.deepEqual(Object.keys(applyToBoard(emptyBoard("c6"), card("sub", null, "toolu_agent", "c6")).approvals), [], "no card for the user");
 });
 
 const stopped = () => stoppedOf(useActivity.getState().byConversation.stopped);

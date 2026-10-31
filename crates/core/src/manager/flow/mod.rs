@@ -298,6 +298,7 @@ impl Turn {
     ) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
             network: false,
+            agent: None,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::Command,
             tool: tool.into(),
@@ -313,10 +314,35 @@ impl Turn {
         .await
     }
 
+    /// Asks for approval to run `command` as the CLI's own subagent `agent` would (D69), and
+    /// waits for the answer.
+    pub async fn ask_subagent_approval(
+        &self,
+        agent: &str,
+        command: &str,
+    ) -> Option<ApprovalDecision> {
+        self.ask(brigadier_providers::ApprovalRequest {
+            network: false,
+            agent: Some(agent.into()),
+            id: String::new(),
+            kind: brigadier_providers::model::ApprovalKind::Command,
+            tool: "Bash".into(),
+            command: Some(command.into()),
+            cwd: None,
+            paths: Vec::new(),
+            reason: None,
+            escalation: false,
+            input: None,
+            grant: None,
+        })
+        .await
+    }
+
     /// Asks to change `paths` outside the sandbox, as Codex does, and waits for the answer.
     pub async fn ask_file_approval(&self, paths: &[&Path]) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
             network: false,
+            agent: None,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::FileChange,
             tool: "fileChange".into(),
@@ -338,6 +364,7 @@ impl Turn {
     pub async fn ask_network_approval(&self, host: &str) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
             network: true,
+            agent: None,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::Tool,
             tool: brigadier_providers::policy::NETWORK_TOOL.into(),
@@ -2503,6 +2530,8 @@ mod open_in_app_tests;
 mod records_tests;
 #[cfg(unix)]
 mod standing_tests;
+#[cfg(unix)]
+mod subagent_approval_tests;
 #[cfg(unix)]
 mod terminal_run_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.

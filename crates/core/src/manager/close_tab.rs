@@ -160,6 +160,7 @@ impl SessionManager {
     async fn confirm_close(&self, id: &ConversationId, question: &str) -> Result<()> {
         let request = ApprovalRequest {
             network: false,
+            agent: None,
             id: format!("{OWN_APPROVAL}{}", uuid::Uuid::now_v7()),
             kind: ApprovalKind::Tool,
             tool: "close_tab".into(),

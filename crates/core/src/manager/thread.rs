@@ -259,7 +259,12 @@ impl SessionManager {
             self.answer_thread(conv, cli, request, ApprovalDecision::Allow)
                 .await;
         } else {
-            self.ask_user_for_thread(conv, cli, request).await;
+            // A subagent's request: a fork of the thread answers it, never the user (D69).
+            if request.agent.is_some() {
+                self.ask_fork(cli, &conv.id, None, request).await;
+            } else {
+                self.ask_user_for_thread(conv, cli, request).await;
+            }
             // Raised while its card opened, after the waiting cards were looked at: it goes.
             if self.raised_to_full(&conv.id, cli) {
                 self.allow_waiting_at_full(&conv.id).await;

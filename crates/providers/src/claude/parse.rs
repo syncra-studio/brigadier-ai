@@ -1445,6 +1445,14 @@ impl Parser {
                     || ["web", "fetch", "search", "network"]
                         .iter()
                         .any(|word| tool.to_lowercase().contains(word)),
+                // A subagent's request names its task (`agent_id`), whose Agent call its
+                // entries are under (D69).
+                agent: str_of(&request, "agent_id").map(|agent| {
+                    self.tasks
+                        .get(agent)
+                        .and_then(|(task, _)| task.item_id.clone())
+                        .unwrap_or_else(|| agent.to_owned())
+                }),
             },
         }));
         out.push(Output::Control(Control::Approval { request_id, input }));
@@ -2557,6 +2565,42 @@ mod tests {
             .unwrap();
         assert_eq!(request.reason, None);
         assert_eq!(request.grant.as_deref(), Some("python3"));
+    }
+
+    /// A subagent's request (2.1.316, w23's live sample) names its task (`agent_id`): the
+    /// request is the subagent's, under its Agent call (D69); the session's own names none.
+    #[test]
+    fn a_subagents_approval_names_the_agent_call_it_runs_in() {
+        let mut parser = Parser::live();
+        parser.feed(
+            &json!({"type": "system", "subtype": "task_started", "task_id": "a9c2d632785443234",
+                "tool_use_id": "toolu_01WA7p", "description": "Compute", "task_type": "local_agent"})
+            .to_string(),
+        );
+        let mut asked = |agent: Option<&str>| {
+            let mut request = json!({ "subtype": "can_use_tool", "tool_name": "Bash",
+                "input": { "command": "sleep 2 && python3 -c 'print(6*7)'" },
+                "tool_use_id": "toolu_01Gf3Y" });
+            if let Some(agent) = agent {
+                request["agent_id"] = json!(agent);
+            }
+            parser
+                .feed(&json!({"type": "control_request", "request_id": "567c3485", "request": request}).to_string())
+                .into_iter()
+                .find_map(|out| match out {
+                    Output::Event(ProviderEvent::ApprovalRequested { request }) => Some(request),
+                    _ => None,
+                })
+                .unwrap()
+                .agent
+        };
+        assert_eq!(
+            asked(Some("a9c2d632785443234")).as_deref(),
+            Some("toolu_01WA7p")
+        );
+        // A task it never said started: its own id still marks it the subagent's.
+        assert_eq!(asked(Some("a_unknown")).as_deref(), Some("a_unknown"));
+        assert_eq!(asked(None), None);
     }
 
     #[test]

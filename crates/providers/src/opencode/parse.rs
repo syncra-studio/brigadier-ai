@@ -38,6 +38,8 @@ pub struct Parser {
     ended_early: HashSet<String>,
     /// Each running shell's output file (`shell.created`), by its id.
     shell_files: HashMap<String, String>,
+    /// Each sub-agent's session → the `subagent` call it runs for, whose row it is (D69).
+    agents: HashMap<String, String>,
 }
 
 impl Parser {
@@ -68,6 +70,20 @@ impl Parser {
             && of_session != self.session.as_deref()
             && kind != "permission.asked"
         {
+            // A sub-agent's session starts: it runs for the oldest `subagent` call still unmatched.
+            if kind == "session.created" && data["parentID"].as_str() == self.session.as_deref() {
+                let call = self
+                    .calls
+                    .iter()
+                    .filter(|(id, (name, _))| {
+                        name == "subagent" && !self.agents.values().any(|call| call == *id)
+                    })
+                    .min_by_key(|(id, _)| self.called_at.get(*id).copied().unwrap_or(i64::MAX))
+                    .map(|(id, _)| id.clone());
+                if let (Some(call), Some(child)) = (call, of_session) {
+                    self.agents.insert(child.to_owned(), call);
+                }
+            }
             return match kind {
                 "session.step.started"
                 | "session.tool.called"
@@ -312,7 +328,15 @@ impl Parser {
             "permission.asked" => {
                 let call = data.pointer("/source/id").and_then(Value::as_str);
                 let called = call.and_then(|call| self.calls.get(call));
-                let request = approval(data, called.map(|(_, input)| input));
+                let mut request = approval(data, called.map(|(_, input)| input));
+                request.agent = of_session
+                    .filter(|asker| Some(*asker) != self.session.as_deref())
+                    .map(|asker| {
+                        self.agents
+                            .get(asker)
+                            .cloned()
+                            .unwrap_or_else(|| asker.to_owned())
+                    });
                 self.asked.insert(
                     request.id.clone(),
                     (
@@ -485,6 +509,7 @@ fn approval(data: &Value, called: Option<&Value>) -> ApprovalRequest {
             .then(|| clip(&metadata.to_string(), OUTPUT_CLIP)),
         grant,
         network: matches!(action, "webfetch" | "websearch" | "codesearch"),
+        agent: None,
     }
 }
 
@@ -1214,12 +1239,59 @@ mod tests {
             matches!(&events[5], ProviderEvent::Command { status: ItemStatus::Declined, output: Some(why), .. } if why.contains("Unable"))
         );
         assert_eq!(events.len(), 6);
-        // A sub-agent asks under its own session: the card shows, answered there.
+        // A sub-agent asks under its own session: it is the sub-agent's (D69), answered there.
         let asked = parser.feed(&line("permission.asked", json!({"id": "per_3", "sessionID": "ses_sub", "action": "edit", "resources": ["c.txt"], "source": {"type": "tool", "messageID": "m", "id": "call_c"}})));
         assert!(
             matches!(&asked[..], [ProviderEvent::ApprovalRequested { request }] if request.id == "per_3")
         );
         assert_eq!(parser.asked["per_3"].0, "ses_sub");
+    }
+
+    /// A sub-agent asks under its own session (v2.2.3, w23's live sample), which starts with
+    /// `parentID` naming this one: the request is the sub-agent's, named by the `subagent` call
+    /// its row is (D69); the session's own names none.
+    #[test]
+    fn a_subagents_approval_names_the_call_it_runs_for() {
+        let mut parser = Parser::new(Some(S.into()), None);
+        let events = feed(
+            &mut parser,
+            &[
+                line(
+                    "session.tool.input.started",
+                    json!({"sessionID": S, "id": "call_old", "name": "shell"}),
+                ),
+                line(
+                    "session.tool.input.started",
+                    json!({"sessionID": S, "id": "call_sub", "name": "subagent"}),
+                ),
+                line(
+                    "session.tool.called",
+                    json!({"sessionID": S, "id": "call_sub", "input": {"agent": "general", "prompt": "Run it"}}),
+                ),
+                line(
+                    "session.created",
+                    json!({"sessionID": "ses_child", "parentID": S}),
+                ),
+                line(
+                    "permission.asked",
+                    json!({"id": "per_1", "sessionID": "ses_child", "action": "shell",
+                    "resources": ["sleep 2", "python3 -c 'print(6*7)'"], "source": {"type": "tool", "messageID": "m", "id": "call_x"}}),
+                ),
+                line(
+                    "permission.asked",
+                    json!({"id": "per_2", "sessionID": S, "action": "shell",
+                    "resources": ["ls"], "source": {"type": "tool", "messageID": "m", "id": "call_old"}}),
+                ),
+            ],
+        );
+        let agents: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                ProviderEvent::ApprovalRequested { request } => Some(request.agent.as_deref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(agents, [Some("call_sub"), None]);
     }
 
     #[test]

@@ -42,4 +42,10 @@ grant: string | null,
 /**
  * It asks to reach the network: a host, a page or a web search.
  */
-network?: boolean, };
+network?: boolean, 
+/**
+ * The CLI's own subagent that asks: the id its thread gives the subagent's call (the
+ * `parent` of its entries). None for the session's own request. A fork of the session that
+ * started it answers it, never the user (D69).
+ */
+agent?: string, };

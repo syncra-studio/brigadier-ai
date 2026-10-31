@@ -918,14 +918,17 @@ impl SessionManager {
         let provider = task.route.choice.provider;
         let account = self.runtime.account_for(&task.route.choice);
         let tools_key = crate::routing::meter::tools_key(&spec);
-        let Started { session, events } =
-            match self.runtime.start_hosted(&owner, &account, spec).await {
-                Ok(started) => started,
-                Err(err) => {
-                    self.grants.revoke(&[grant]);
-                    return Err(err);
-                }
-            };
+        let Started { session, events } = match self
+            .runtime
+            .start_hosted(&owner, &account, spec.clone())
+            .await
+        {
+            Ok(started) => started,
+            Err(err) => {
+                self.grants.revoke(&[grant]);
+                return Err(err);
+            }
+        };
         // A cleanup that stopped waiting for this start has already ended the task (its
         // session may have been restored since, and the task launched again): this session
         // ends unused, and only what it made goes.
@@ -956,6 +959,7 @@ impl SessionManager {
             grants: vec![grant],
             ended: CancellationToken::new(),
             launch: None,
+            spec,
         });
         {
             let mut state = live.state.lock().await;
@@ -1816,7 +1820,13 @@ impl SessionManager {
             });
         if !raised && !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref())
         {
-            self.ask_orchestrator_for_worker(live, cli, request).await;
+            // Its CLI's own subagent's: a fork of the worker's session answers it (D69).
+            if request.agent.is_some() {
+                self.ask_fork(cli, &live.conversation_id, Some(live.id.clone()), request)
+                    .await;
+            } else {
+                self.ask_orchestrator_for_worker(live, cli, request).await;
+            }
             // Raised while its card opened, after the waiting cards were looked at: it goes.
             if self.worker_raised_now(live, cli).await {
                 self.allow_workers_waiting_at_full(&live.conversation_id)

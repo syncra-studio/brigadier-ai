@@ -774,6 +774,10 @@ impl SessionManager {
         let (view, workers) = tokio::join!(thread, self.worker_rows_of(id, false));
         let mut view = view?;
         view.workers = workers?;
+        // Its CLI's own subagents' requests, which a fork of it answers (D69).
+        let board = self.core.board(id).await?;
+        let failures = self.fork_failures.lock().unwrap().clone();
+        super::worker_rows::add_prompts(&mut view.entries, &board, None, &failures);
         Ok(view)
     }
 

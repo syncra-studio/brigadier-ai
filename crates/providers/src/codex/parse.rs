@@ -833,6 +833,12 @@ impl Parser {
         out: &mut Vec<Output>,
     ) {
         let approval_id = format!("codex-{}", rpc_id);
+        // A subagent asks on its own thread, which its row is named by (D69).
+        let agent = params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .filter(|thread| self.thread_id.as_deref().is_some_and(|own| own != *thread))
+            .map(str::to_owned);
         // Codex's own question tool: the user's question card (harness D7).
         if method == "item/tool/requestUserInput" {
             let Some((ids, questions)) = asked_questions(&params) else {
@@ -919,6 +925,7 @@ impl Parser {
                         input: ask.command.clone(),
                         grant: grant.clone(),
                         network,
+                        agent: None,
                     },
                     PendingKind::Command {
                         grant: grant.is_some(),
@@ -960,6 +967,7 @@ impl Parser {
                         input: None,
                         grant: None,
                         network: false,
+                        agent: None,
                     },
                     PendingKind::FileChange,
                 )
@@ -987,12 +995,14 @@ impl Parser {
                         input: Some(clip(&requested.to_string(), OUTPUT_CLIP)),
                         grant: None,
                         network: false,
+                        agent: None,
                     },
                     PendingKind::Permissions(requested),
                 )
             }
             _ => return self.unsupported(rpc_id, method, out),
         };
+        let request = ApprovalRequest { agent, ..request };
         out.push(Output::Event(ProviderEvent::ApprovalRequested { request }));
         out.push(Output::Control(Control::Approval {
             approval_id,
@@ -2831,6 +2841,33 @@ mod tests {
             request.paths,
             vec!["write /other/wt", "read /data", "network"]
         );
+    }
+
+    /// A subagent asks on its own thread (0.166.0, w23's live sample): the request is the
+    /// subagent's, named by its thread as its row is (D69); the session's own names none.
+    #[test]
+    fn a_subagents_approval_names_its_thread() {
+        let mut parser = Parser::live();
+        events(
+            &mut parser,
+            &json!({ "method": "turn/started", "params": { "threadId": "01a193c1-3a35",
+                "turn": { "id": "u0", "items": [], "status": "inProgress" } } }),
+        );
+        let mut asked = |thread: &str| {
+            let line = json!({ "id": 9, "method": "item/commandExecution/requestApproval", "params": {
+                "itemId": "exec-4c2d", "threadId": thread, "turnId": "01a193c1-4a3a", "startedAtMs": 0,
+                "command": "/bin/zsh -lc \"sleep 2 && python3 -c 'print(6*7)'\"", "cwd": "/w" } });
+            events(&mut parser, &line)
+                .into_iter()
+                .find_map(|event| match event {
+                    ProviderEvent::ApprovalRequested { request } => Some(request),
+                    _ => None,
+                })
+                .expect("an approval")
+                .agent
+        };
+        assert_eq!(asked("01a193c1-4a05").as_deref(), Some("01a193c1-4a05"));
+        assert_eq!(asked("01a193c1-3a35"), None);
     }
 
     #[test]

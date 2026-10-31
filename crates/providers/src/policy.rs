@@ -972,6 +972,7 @@ mod tests {
             input: None,
             grant: None,
             network: false,
+            agent: None,
         }
     }
 
@@ -1075,6 +1076,7 @@ mod tests {
             tool: NETWORK_TOOL.into(),
             grant: Some(host.into()),
             network: true,
+            agent: None,
             ..write(Path::new("/"))
         };
         let mut similar = Similar::default();
