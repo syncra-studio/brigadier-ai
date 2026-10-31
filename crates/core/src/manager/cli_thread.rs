@@ -249,10 +249,9 @@ impl SessionManager {
             }
             match event {
                 Some(ProviderEvent::BackgroundTask { task }) => {
-                    // A command that ends while no turn is open starts one of its CLI's: it is
-                    // owed until it starts, or the grace passes (D21).
+                    // A command or a subagent that ends while no turn is open starts one of its
+                    // CLI's: it is owed until it starts, or the grace passes (D21, D24).
                     let ended = task.status != BackgroundTaskStatus::Running
-                        && task.kind != BackgroundTaskKind::Agent
                         && !live.persistent_task(task)
                         && live.background.iter().any(|held| {
                             held.id == task.id && held.status == BackgroundTaskStatus::Running

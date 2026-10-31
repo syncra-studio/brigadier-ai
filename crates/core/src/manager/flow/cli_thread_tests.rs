@@ -564,6 +564,77 @@ async fn a_sessions_background_command_holds_its_turn_until_the_turn_its_end_sta
     flow.stop().await;
 }
 
+/// A subagent its lead's turn left running holds that turn as a command does (D24): its end
+/// owes the turn it starts, so the turn never reads done between the two. Claude Code 2.1.308
+/// stream lines (an `Agent` call with `run_in_background`).
+#[tokio::test]
+async fn a_subagent_ending_after_its_turn_owes_the_turn_its_end_starts() {
+    use brigadier_providers::claude::parse::{Output, Parser};
+
+    let flow = Flow::start(
+        "cli-thread-subagent-owes",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async { Reply::text("Looked.") }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let conv = flow.manager.conv(&id).unwrap();
+    let mut parser = Parser::live();
+    let mut follow = async |lines: &[&str]| {
+        for line in lines {
+            for output in parser.feed(line) {
+                if let Output::Event(event) = output {
+                    flow.manager.follow_cli_thread(&conv, Some(&event)).await;
+                }
+            }
+        }
+        flow.manager.thread_view(&id).unwrap()
+    };
+    let view = follow(&[
+        r#"{"type":"user","isReplay":true,"uuid":"u-sub","message":{"role":"user","content":"Start a subagent in the background."}}"#,
+        r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_sub","name":"Agent","input":{"description":"Run sleep and ls","prompt":"Run sleep 15 && ls.","run_in_background":true}}]}}"#,
+        r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a1","task_type":"local_agent","description":"Run sleep and ls"}]}"#,
+        r#"{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_sub","description":"Run sleep and ls","is_backgrounded":true,"task_type":"local_agent"}"#,
+        r#"{"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"tool_use_id":"toolu_sub","type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}"#,
+        r#"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m2","content":[{"type":"text","text":"Started it."}]}}"#,
+        r#"{"type":"result","subtype":"success","is_error":false,"result":"Started it."}"#,
+    ])
+    .await;
+    assert_eq!(
+        view.turns.last().and_then(|turn| turn.end),
+        Some(TurnEnd::Done)
+    );
+    assert!(
+        view.jobs.is_empty(),
+        "a running subagent shows as a worker, not a command"
+    );
+
+    let view = follow(&[
+        r#"{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"completed","end_time":2000}}"#,
+        r#"{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_sub","status":"completed","output_file":"/private/tmp/claude-501/-w/s1/tasks/a1.output","summary":"Listed two files."}"#,
+        r#"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#,
+    ])
+    .await;
+    assert!(view.jobs.waking, "its end owes the turn it starts");
+
+    let view = follow(&[
+        r#"{"type":"user","isReplay":true,"uuid":"n-sub","message":{"role":"user","content":"<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>Listed two files.</summary>\n</task-notification>"}}"#,
+    ])
+    .await;
+    assert!(
+        view.jobs.is_empty(),
+        "the turn started: its own open turn says Working"
+    );
+    assert_eq!(view.turns.last().and_then(|turn| turn.end), None);
+    flow.stop().await;
+}
+
 /// The same hold on OpenCode: a command its `shell` tool moves to the background holds the
 /// turn from its call's result until OpenCode says its end, which owes the turn that word
 /// starts (still Working) until that turn starts; done once it ends. Lines in the shapes

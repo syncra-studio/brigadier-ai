@@ -69,3 +69,13 @@ test("between its calls a working agent says what it last did, from its own item
   const over = workersOf("c-doing-3", { entries: [user("u2", 2000), agentCall("live", 2010), said], turns: [turn("u2", 2000, "stopped")] });
   assert.equal(over[0]?.doing, undefined);
 });
+
+test("a background agent that ended after its lead's turn works until the turn its end owes starts (D24)", () => {
+  const task = { id: "a1", itemId: "bg", kind: "agent", label: "bg", status: "completed", startedAtMs: 1020, endedAtMs: 3000, provider: "claude" } as never;
+  const ended = turn("u1", 1000, "done");
+  const view = { entries: [user("u1", 1000), agentCall("bg", 1010)], turns: [ended], background: [task] };
+  assert.equal(workersOf("c-owed", { ...view, jobs: { holding: [], waking: true } } as never)[0]?.working, true);
+  assert.equal(workersOf("c-owed-2", view)[0]?.working, false, "no turn owed: done");
+  const woken = { ...view, turns: [ended, turn("", 3100, null)], jobs: { holding: [], waking: false } };
+  assert.equal(workersOf("c-owed-3", woken as never)[0]?.working, false, "its turn started: done");
+});

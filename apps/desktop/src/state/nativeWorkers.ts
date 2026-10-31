@@ -40,10 +40,13 @@ export function workersOf(conversationId: string, view: ThreadView): readonly Wo
   // unfinished (the CLI ended or was stopped under it) is over.
   const last = view.turns.at(-1);
   const liveFrom = last && last.end === null ? (last.startedAtMs ?? 0) : Infinity;
+  // A background agent that ended after its lead's turn did works until the turn its end owes
+  // starts (`jobs.waking`), so its lead's work never folds between the two (D24).
+  const owedAfter = view.jobs?.waking ? (last?.endedAtMs ?? Infinity) : Infinity;
   // Numbered after the engine's workers, so none shares a number.
   let next = Math.max(0, ...rows.map((row) => row.number)) + 1;
   const add = (callId: string | null, task: BackgroundTask | undefined, title: string, prompt: string, model: string | null, at: number, status: string, ended: number, agent: WorkerRow["agent"]) => {
-    const working = task ? task.status === "running" : status === "inProgress" && at >= liveFrom;
+    const working = task ? task.status === "running" || (task.endedAtMs ?? -Infinity) >= owedAfter : status === "inProgress" && at >= liveFrom;
     const end = task ? task.status === "stopped" ? "stopped" : task.status === "failed" ? "failed" : "done"
       : status === "failed" || status === "declined" ? "failed" : "done";
     const steps = callId === null ? undefined : atWork.get(callId);
