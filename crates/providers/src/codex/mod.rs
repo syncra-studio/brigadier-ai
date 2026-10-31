@@ -1878,9 +1878,17 @@ async fn unarchive_thread(rpc: &Rpc, thread_id: &str) -> Result<bool> {
         .await;
     match unarchived {
         Ok(_) => Ok(true),
-        Err(Error::Rejected(message)) if message.contains("no archived rollout found") => Ok(false),
+        Err(Error::Rejected(message)) if not_archived(&message) => Ok(false),
         Err(err) => Err(err),
     }
+}
+
+/// `thread/unarchive`'s refusal of a thread that isn't archived: none is, or it is open in
+/// another app-server right now (0.166.0: "already has an active writer"), as a live session's
+/// thread is while a fork of it starts (D69).
+fn not_archived(message: &str) -> bool {
+    message.contains("no archived rollout found")
+        || message.contains("already has an active writer")
 }
 
 async fn trusted_projects(rpc: &Rpc, cwd: &Path) -> Result<Map<String, Value>> {
@@ -3504,6 +3512,17 @@ async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A live session's thread can be forked (D69's fork, `fork_session`): `thread/unarchive`
+    /// refuses it as open in another app-server (0.166.0, live), which only means not archived.
+    #[test]
+    fn a_thread_open_elsewhere_counts_as_not_archived() {
+        assert!(not_archived("no archived rollout found for thread t"));
+        assert!(not_archived(
+            "thread 01a193ff-a35f already has an active writer"
+        ));
+        assert!(!not_archived("thread not found"));
+    }
 
     /// The `/` menu lists what `skills/list` reports, each typed as Codex's `$name` mention
     /// (checked live on 0.164: `$skill` in a turn's text runs it), once each and only those
