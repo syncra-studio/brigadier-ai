@@ -8,6 +8,7 @@ use serde_json::json;
 use super::chat_thread_tests::new_chat;
 use super::{Flow, Options, Reply};
 use crate::model::{ConversationId, ConversationKind, TabTarget};
+use crate::thread_view::ThreadView;
 
 #[tokio::test]
 async fn the_visuals_guide_is_only_available_in_top_level_chats() {
@@ -99,7 +100,15 @@ async fn visual_fences_rebuild_from_both_cli_session_files_after_restart() {
     }
     flow.restart().await;
     for (chat, before) in chats {
-        assert_eq!(flow.manager.thread_view(&chat).unwrap(), before);
+        // The same thread; only the news number it was read at moved on.
+        let after = flow.manager.thread_view(&chat).unwrap();
+        assert_eq!(
+            ThreadView {
+                seq: before.seq,
+                ..after
+            },
+            before
+        );
     }
     flow.stop().await;
 }
