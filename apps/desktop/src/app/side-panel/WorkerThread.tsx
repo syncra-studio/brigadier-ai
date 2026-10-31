@@ -23,6 +23,7 @@ import type { ThreadTurn, ThreadView, WorkerRow } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
+import { request } from "@/ipc/client";
 import { isNativeWorker, type NativeWorker } from "@/state/nativeWorkers";
 import { loadWorkerThread, useCliThread, useWorkerThreads } from "@/state/cliThread";
 
@@ -119,17 +120,46 @@ function BrigadierWorkerThread({ conversationId, row }: { conversationId: string
 
 /**
  * A subagent's thread: its entries in its session's thread, as that thread is kept (read, live
- * news, read again at its turn's end), so its last words show even when they come after its call ended.
+ * news, read again at its turn's end), so its last words show even when they come after its call
+ * ended. Its entries come only from its session's files, which live news doesn't carry: while it
+ * works they are read every 1.5 s too, and the fuller of the two shows (a transcript only grows).
  */
 function NativeWorkerThread({ conversationId, row }: { conversationId: string; row: NativeWorker }) {
   const callId = row.native.callId;
+  const [polled, setPolled] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   // A string, so a change of the session's thread that is not the subagent's repaints nothing.
   const json = useCliThread((s) => {
     const parent = s.views[conversationId];
-    return parent ? JSON.stringify(callId ? parent.entries.filter((entry) => entry.parent === callId) : []) : null;
+    return parent ? JSON.stringify(ownEntries(parent, callId)) : null;
   });
-  const view = useMemo<ThreadView | null>(() => (json === null ? null : { entries: JSON.parse(json), turns: [] }), [json]);
-  return <WorkerTranscript row={row} view={view} error={null} native />;
+  useEffect(() => {
+    if (!row.working) return;
+    let current = true;
+    const read = () =>
+      request({ method: "threadView", conversationId }).then(
+        ({ view: parent }) => current && (setPolled(JSON.stringify(ownEntries(parent, callId))), setError(null)),
+        (cause: unknown) => current && setError(cause instanceof Error ? cause.message : String(cause)),
+      );
+    void read();
+    const timer = window.setInterval(() => void read(), WORKER_THREAD_EVERY_MS);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+    };
+  }, [conversationId, callId, row.working]);
+  const view = useMemo<ThreadView | null>(() => {
+    const held = json === null ? null : (JSON.parse(json) as ThreadView["entries"]);
+    const read = polled === null ? null : (JSON.parse(polled) as ThreadView["entries"]);
+    const entries = read && (!held || read.length > held.length) ? read : held;
+    return entries ? { entries, turns: [] } : null;
+  }, [json, polled]);
+  return <WorkerTranscript row={row} view={view} error={view ? null : error} native />;
+}
+
+/** A subagent's own entries in its session's thread `parent`. */
+function ownEntries(parent: ThreadView, callId: string | null): ThreadView["entries"] {
+  return callId ? parent.entries.filter((entry) => entry.parent === callId) : [];
 }
 
 function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow; view: ThreadView | null; error: string | null; native?: boolean }) {
