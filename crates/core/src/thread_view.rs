@@ -448,7 +448,7 @@ pub(crate) struct LiveTurn {
     /// call. Those of its background tasks are kept while the tasks are.
     pub commands: Vec<(String, String)>,
     /// A background command ended while no turn was open: until when the turn its end starts
-    /// is owed (`CliJobs::waking`).
+    /// is owed (`CliJobs::waking`), a turn begun meanwhile included until it says whose it is.
     pub waking_until: Option<i64>,
     /// What of its background work was last said to hold its turn.
     pub jobs_said: CliJobs,
@@ -553,7 +553,8 @@ impl LiveTurn {
             .collect();
         CliJobs {
             holding,
-            waking: !self.open && self.waking_until.is_some_and(|until| now < until),
+            waking: (!self.open || self.awaiting_user)
+                && self.waking_until.is_some_and(|until| now < until),
         }
     }
 }

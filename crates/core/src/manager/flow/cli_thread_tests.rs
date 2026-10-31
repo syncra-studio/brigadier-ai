@@ -638,13 +638,21 @@ async fn an_opencode_background_command_holds_its_turn_until_the_turn_its_end_st
         "still Working until that turn starts"
     );
 
-    follow(vec![
-        line("session.execution.started", json!({})),
-        line(
-            "session.text.ended",
-            json!({"assistantMessageID": "msg_c", "ordinal": 0, "text": "Done: it printed done."}),
-        ),
-    ])
+    // Begun, the turn hasn't said yet that it is the end's: the turn before still waits for it,
+    // never reads done meanwhile.
+    follow(vec![line("session.execution.started", json!({}))]).await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(
+        view.jobs.waking || view.turns.last().is_some_and(|turn| turn.end.is_none()),
+        "{:#?} {:#?}",
+        view.jobs,
+        view.turns
+    );
+
+    follow(vec![line(
+        "session.text.ended",
+        json!({"assistantMessageID": "msg_c", "ordinal": 0, "text": "Done: it printed done."}),
+    )])
     .await;
     let view = flow.manager.thread_view(&id).unwrap();
     assert!(

@@ -343,6 +343,8 @@ impl SessionManager {
                             jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
                             context_window: live.context_window,
+                            // Still owed until it says whose it is: its first item, or a user message.
+                            waking_until: live.waking_until,
                             ..LiveTurn::default()
                         };
                     }
@@ -372,6 +374,7 @@ impl SessionManager {
                     }
                     if !steer {
                         live.awaiting_user = false;
+                        live.waking_until = None;
                         live.user_message = Some(item_id.clone());
                         live.joins = carried.as_ref().is_some_and(|(_, joins)| *joins);
                     }
@@ -440,6 +443,7 @@ impl SessionManager {
             }
             if let Some(end) = ended {
                 live.open = false;
+                live.waking_until = None;
                 if let Some((carried, _)) = &carried {
                     thread_view::add_requests(&mut live.requests, carried);
                 }
