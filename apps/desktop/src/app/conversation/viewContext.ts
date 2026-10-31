@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-import type { Conversation } from "@/ipc/generated";
+import type { Conversation, ModelChoice } from "@/ipc/generated";
 import type { Selection } from "@/state/store";
 
 /**
@@ -12,6 +12,8 @@ export const ViewContext = createContext<{
   conversation: Conversation | null;
   /** The view sits inside another one's side panel (a side chat). */
   embedded: boolean;
+  /** A draft's model as its composer shows it: choosing another project keeps it. */
+  draftModel?: ModelChoice;
 }>({
   selection: { type: "none" },
   conversation: null,

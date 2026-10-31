@@ -1,6 +1,7 @@
 import {
   type KeyboardEvent,
   type ReactNode,
+  useContext,
   useId,
   useMemo,
   useState,
@@ -13,6 +14,7 @@ import { PickerRow } from "@/app/conversation/PickerRow";
 import { RailPill } from "@/app/conversation/RailPill";
 import { MENU, ROW, ROW_ACTIVE } from "@/app/conversation/railMenu";
 import { UsageRemaining } from "@/app/conversation/UsageRemaining";
+import { ViewContext } from "@/app/conversation/viewContext";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 
@@ -96,8 +98,11 @@ export function ProjectCombobox({
   // A typed path is a folder to add: "Add ~/code/app".
   const typedPath = /^(~|\/|[A-Za-z]:[\\/])/.test(query.trim()) ? query.trim() : "";
   const shown = sorted.filter((entry) => entry.name.toLowerCase().includes(needle));
+  const { draftModel } = useContext(ViewContext);
   const choose = (id: string | null) => {
     setOpen(false);
+    // The model the composer shows stays: another project's last pick doesn't replace it.
+    if (draftModel && id !== (project?.id ?? null)) updateDraft(id, { model: draftModel });
     // The same draft, for another project: no new place to go back from.
     select(
       id ? { type: "draft", kind: "session", projectId: id } : { type: "draft", kind: "chat" },

@@ -3,7 +3,8 @@
  * session opened from a conversation, as the sidebar's button does, IPC mocked, the repository
  * read taking a while. It opens once with nothing read of the repository yet and once again
  * after; then another project's from the new chat, and one whose checkout isn't on a branch, a
- * real problem the composer still tells. Each records the composer card's top, and what shows
+ * real problem the composer still tells; last, from the new chat, the project picker choosing a
+ * project whose last session ran on another CLI, which keeps the model the composer showed. Each records the composer card's top, and what shows
  * under the card, on every frame from the click until a while after the read is in. What it saw
  * goes as JSON into `<pre id="composer-new-session-result">`.
  */
@@ -66,10 +67,13 @@ mockIPC(async (command, payload) => {
 const state = useApp.getState();
 useApp.setState({
   conversations: { c1: conversation },
-  projects: { p1: projectOf("p1", "todo-app"), p2: projectOf("p2", "api"), p3: projectOf("p3", "detached") },
+  projects: {
+    p1: projectOf("p1", "todo-app"), p2: projectOf("p2", "api"), p3: projectOf("p3", "detached"),
+    p4: { ...projectOf("p4", "other-cli"), prefs: { orchestrator: { provider: "opencode", model: "glm", effort: null } } },
+  },
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { status: "connected", daemon: null, reason: null },
-  providers: { ...state.providers, view: { providers: [overview("claude", [model("opus", "Opus 5.5", { isDefault: true })])], sessions: [], fixtures: [] } },
+  providers: { ...state.providers, view: { providers: [overview("claude", [model("opus", "Opus 5.5", { isDefault: true })]), overview("opencode", [model("glm", "GLM-5.3", { isDefault: true })])], sessions: [], fixtures: [] } },
 });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -131,6 +135,17 @@ async function run() {
   // A checkout on no branch: a real problem, told once the read says so.
   await showConversation();
   seen.detached = await openNewSession("p3");
+  // The new chat's project picker: choosing a project leaves the model the composer shows.
+  await select({ type: "draft", kind: "chat" });
+  await until("the new chat's composer", () => editor() !== null && bar() !== null);
+  await sleep(300);
+  const before = card()!.textContent ?? "";
+  bar()!.querySelector<HTMLElement>("[aria-label=Project]")!.click();
+  await until("the project list", () => document.querySelector("[aria-label=Projects]") !== null);
+  [...document.querySelectorAll<HTMLElement>("[aria-label=Projects] *")].find((row) => row.textContent === "other-cli")!.click();
+  await until("the project's draft", () => (bar()?.textContent ?? "").includes("other-cli"));
+  await sleep(300);
+  seen.picked = { before: before.includes("Opus 5.5"), after: card()!.textContent ?? "" };
   return seen;
 }
 
