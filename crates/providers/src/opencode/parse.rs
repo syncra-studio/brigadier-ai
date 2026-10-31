@@ -99,12 +99,10 @@ impl Parser {
             }
             // The user's message joins the session when it is delivered: after its turn started,
             // or, a steer, at the running turn's next step. Its id is its message's.
-            "session.inbox.enqueued" => {
-                if data.pointer("/item/type") == Some(&json!("user")) {
-                    let said = data.pointer("/item/payload/text").and_then(Value::as_str);
-                    self.inbox
-                        .insert(text("inboxID"), said.unwrap_or_default().to_owned());
-                }
+            "session.inbox.enqueued" if data.pointer("/item/type") == Some(&json!("user")) => {
+                let said = data.pointer("/item/payload/text").and_then(Value::as_str);
+                self.inbox
+                    .insert(text("inboxID"), said.unwrap_or_default().to_owned());
                 Vec::new()
             }
             "session.inbox.delivered" => match self.inbox.remove(&text("inboxID")) {
@@ -189,7 +187,7 @@ impl Parser {
                     .map(|(from, to)| to - from);
                 let mut out = vec![tool_event(&id, &call, status, output, took, data)];
                 // A command OpenCode moved to the background: its call ends, the command runs on
-                // until OpenCode says its end (`session.synthetic`).
+                // until OpenCode says its end (a shell item in its inbox).
                 if call.0 == "shell"
                     && data.pointer("/metadata/status") == Some(&json!("running"))
                     && let Some(shell) = data.pointer("/metadata/shellID").and_then(Value::as_str)
@@ -216,9 +214,12 @@ impl Parser {
                 }
                 out
             }
-            // OpenCode's word that a background command ended, which starts its next turn.
-            "session.synthetic" if data.pointer("/metadata/source") == Some(&json!("shell")) => {
-                let metadata = &data["metadata"];
+            // OpenCode's word that a background command ended, a synthetic item in the inbox
+            // that starts its next turn.
+            "session.inbox.enqueued"
+                if data.pointer("/item/payload/metadata/source") == Some(&json!("shell")) =>
+            {
+                let metadata = &data["item"]["payload"]["metadata"];
                 let shell = metadata["shellID"].as_str().unwrap_or_default();
                 let Some(at) = self.background.iter().position(|task| task.id == shell) else {
                     self.ended_early.insert(shell.to_owned());
@@ -848,8 +849,8 @@ mod tests {
         let ended = |created: i64, shell: &str, state: &str, exit: i64| {
             at(
                 created,
-                "session.synthetic",
-                json!({"sessionID": S, "description": "sleep 25 && echo done", "text": "<shell>done</shell>", "metadata": {"source": "shell", "jobID": shell, "shellID": shell, "state": state, "exit": exit, "truncated": false}}),
+                "session.inbox.enqueued",
+                json!({"inboxID": "msg_s", "sessionID": S, "item": {"type": "synthetic", "payload": {"text": "<shell>done</shell>", "description": "sleep 25 && echo done", "metadata": {"source": "shell", "shellID": shell, "jobID": shell, "state": state, "truncated": false, "exit": exit}}, "delivery": "steer"}}),
             )
         };
         let mut lines = vec![at(

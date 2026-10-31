@@ -629,7 +629,7 @@ async fn an_opencode_background_command_holds_its_turn_until_the_turn_its_end_st
     assert_eq!(view.jobs.holding, ["sh_1"], "{:#?}", view.background);
     assert!(commands_working().await, "the sidebar says Working");
 
-    follow(vec![line("session.synthetic", json!({"description": "sleep 25 && echo done", "text": "<shell>done</shell>", "metadata": {"source": "shell", "jobID": "sh_1", "shellID": "sh_1", "state": "completed", "exit": 0}}))]).await;
+    follow(vec![line("session.inbox.enqueued", json!({"inboxID": "msg_s", "item": {"type": "synthetic", "payload": {"text": "<shell>done</shell>", "description": "sleep 25 && echo done", "metadata": {"source": "shell", "jobID": "sh_1", "shellID": "sh_1", "state": "completed", "exit": 0}}, "delivery": "steer"}}))]).await;
     let view = flow.manager.thread_view(&id).unwrap();
     assert!(view.jobs.holding.is_empty());
     assert!(view.jobs.waking, "its end owes the turn it starts");
