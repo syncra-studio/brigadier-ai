@@ -227,13 +227,15 @@ async fn a_waiting_message_waits_for_the_next_block_and_is_judged_again_there() 
     assert_eq!(answers.lock().unwrap()["joined"]["state"], "joined");
     // The new block is no turn of the old one; the second joined it. (The turns that woke the
     // session to judge them went on in the old block.)
+    super::eventually("the new block's turn to name both", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.last().is_some_and(|opened| {
+            opened.requests.contains(&first.id) && opened.requests.contains(&second.id)
+        })
+    })
+    .await;
     let view = flow.manager.thread_view(&flow.conversation).unwrap();
-    let opened = view.turns.last().unwrap();
-    assert!(
-        opened.requests.contains(&first.id) && opened.requests.contains(&second.id),
-        "{view:#?}"
-    );
-    assert!(!opened.joins, "{view:#?}");
+    assert!(!view.turns.last().unwrap().joins, "{view:#?}");
     flow.stop().await;
 }
 
@@ -337,8 +339,10 @@ async fn an_earlier_judgings_timer_never_settles_the_judging_again() {
         1,
         "still queued"
     );
-    let board = flow.settled().await;
     // Waiting again, it goes once the new block closes: on its own turn.
-    assert!(board.requests.contains_key(&second.id), "{:?}", board.queue);
+    flow.until("the second on its own turn", |board| {
+        board.requests.contains_key(&second.id)
+    })
+    .await;
     flow.stop().await;
 }

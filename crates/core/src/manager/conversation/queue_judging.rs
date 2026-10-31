@@ -380,12 +380,33 @@ impl SessionManager {
         });
     }
 
+    /// The command queued messages `items` waited behind ended: the session reads them now, and
+    /// each still Deciding gets its whole [`DECIDING_WAIT`] from now.
+    pub(super) async fn judge_from_now(&self, conv: &Arc<ConvLive>, items: &[String]) {
+        let mut attempts = Vec::new();
+        {
+            let mut state = conv.state.lock().await;
+            for id in items {
+                if state.deciding.contains(id) {
+                    let attempt = state.judge_attempts.entry(id.clone()).or_default();
+                    *attempt += 1;
+                    attempts.push((id.clone(), *attempt));
+                }
+            }
+        }
+        for (id, attempt) in attempts {
+            self.judge_within(conv, &id, attempt);
+        }
+    }
+
     async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str, attempt: u64) {
         let _routing = conv.queue_routing.lock().await;
         {
             let state = conv.state.lock().await;
+            // Behind a command, the session can't read it yet: its time starts once that ends.
             if !state.deciding.iter().any(|id| id == item_id)
                 || state.claimed.contains(item_id)
+                || state.held_items.iter().any(|id| id == item_id)
                 || state.judge_attempts.get(item_id) != Some(&attempt)
             {
                 return;

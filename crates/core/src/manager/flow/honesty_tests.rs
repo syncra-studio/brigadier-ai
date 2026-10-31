@@ -167,6 +167,22 @@ async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
              Also check the formatting."
         )
     );
+    // Its time to be judged starts once the command ends: held past it, it still waits.
+    tokio::time::sleep(
+        crate::manager::conversation::queue_judging::DECIDING_WAIT
+            + std::time::Duration::from_millis(800),
+    )
+    .await;
+    let board = flow.board().await;
+    assert!(
+        board
+            .queue
+            .items
+            .first()
+            .is_some_and(|queued| queued.deciding),
+        "joined while the command held it: {:?}",
+        board.queue
+    );
     release.notify_one();
     let board = flow
         .until("the unjudged message to join the turn", |board| {

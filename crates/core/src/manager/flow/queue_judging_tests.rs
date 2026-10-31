@@ -134,7 +134,10 @@ fn judging(answers: Answers, gates: Gates, plan: Plan) -> Script {
             let steered = if plan.plain {
                 String::new()
             } else {
-                turn.steered().await.unwrap_or_default()
+                // As a real CLI: what was steered in is read once the running call ends.
+                let steered = turn.steered().await.unwrap_or_default();
+                turn.emit(bash(ItemStatus::Completed)).await;
+                steered
             };
             if !plan.plain {
                 keep("steered", json!(steered));
@@ -167,7 +170,9 @@ fn judging(answers: Answers, gates: Gates, plan: Plan) -> Script {
                 () = gate.notified() => {}
                 true = turn.stopped() => return Reply::text("Stopped."),
             }
-            turn.emit(bash(ItemStatus::Completed)).await;
+            if plan.plain {
+                turn.emit(bash(ItemStatus::Completed)).await;
+            }
             Reply::text("The tests pass.")
         })
     })

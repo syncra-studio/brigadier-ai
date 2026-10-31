@@ -1675,6 +1675,7 @@ impl SessionManager {
         if let Some((requests, items)) = conv.holding_command(item, words, status).await {
             self.mark_held(conv, &requests, None).await;
             self.mark_items_held(conv, &items, None).await;
+            self.judge_from_now(conv, &items).await;
         }
         if status != ItemStatus::InProgress {
             self.steer_held(conv).await;
