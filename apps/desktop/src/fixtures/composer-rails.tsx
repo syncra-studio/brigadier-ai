@@ -2,7 +2,7 @@
 /**
  * A standalone Vite entry, excluded from the production build: the strips above the composer
  * (`ComposerStatusSlot` in a real rail over the composer's card) from synthetic thread views:
- * the session's workers and its own subagents (its CLI's Agent calls, as plain rows); its own
+ * the session's workers and its own subagents (its CLI's Agent calls), one Workers strip (D50); its own
  * commands show no strip (D24: the open work block says them). `?scene=` shows one of them alone
  * (`subagents`, `checks`, `all`, `long`, `empty`). `drive=1` opens each strip, presses Stop all,
  * and writes what it saw as JSON into
@@ -32,6 +32,7 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "stopBackgroundTask") calls.push(`stopBackgroundTask ${req.taskId}`);
+  if (req.method === "stopWorkers") return calls.push("stopWorkers"), { method: req.method, taskIds: [] };
   if (req.method === "readBackgroundTaskOutput") return { method: req.method, output: "ok\n" };
   return { method: req.method };
 });
@@ -160,7 +161,7 @@ async function read(id: Scene) {
   return {
     order: strips.map((strip) => strip.getAttribute("aria-label")),
     closed,
-    subagents: [...scene(id).querySelectorAll('[data-slot="subagents-strip"] [data-slot="subagents-strip-row"]')].map((row) => ({
+    rows: [...scene(id).querySelectorAll('[data-slot="workers-strip"] [data-slot="workers-strip-row"]')].map((row) => ({
       state: row.getAttribute("data-worker-state"),
       text: text(row),
       stop: !!row.parentElement?.querySelector('[data-slot="worker-stop"]'),
@@ -177,10 +178,10 @@ async function drive() {
     checks: await read("checks"),
   };
   // A subagent's row opens its transcript, as a worker's does.
-  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip"] [data-slot="subagents-strip-row"]')?.click();
+  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="workers-strip"] [data-slot="workers-strip-row"]')?.click();
   await frame();
   seen.panel = panelOpened;
-  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="subagents-strip-stop-all"]')?.click();
+  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="workers-stop-all"]')?.click();
   await frame();
   seen.calls = calls.toSorted();
   return seen;

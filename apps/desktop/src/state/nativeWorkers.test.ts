@@ -4,7 +4,7 @@ import { test } from "node:test";
 import type { FileEntry, ThreadTurn, ThreadView, WorkerRow } from "@/ipc/generated";
 import { workersOf } from "@/state/nativeWorkers";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
-import { subagentsStrip } from "@/app/conversation/activity/stripView";
+import { workersStrip } from "@/app/conversation/activity/stripView";
 
 const agentCall = (itemId: string, atMs: number): FileEntry => ({
   event: { type: "toolCall", itemId, name: "Agent", input: JSON.stringify({ description: itemId, prompt: "Look" }), status: "inProgress", output: null },
@@ -28,7 +28,7 @@ test("subagent lifecycle calls leave the main thread while their source, strip a
     const rows = workersOf(`strip-only-${name}`, view);
     assert.equal(rows.length, 1, name);
     assert.equal(rows[0]?.title, "live", name);
-    assert.deepEqual(subagentsStrip(rows, 2030)?.rows, [rows[0]?.id], name);
+    assert.deepEqual(workersStrip(rows, 2030)?.rows, [rows[0]?.id], name);
     assert.deepEqual(cliBlocks(view, "c").flatMap((block) => block.orchestratorSteps), [], name);
     assert.equal(view.entries[1], call);
     assert.equal(view.entries[2], child);

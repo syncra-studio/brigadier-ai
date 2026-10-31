@@ -13,7 +13,7 @@ import { isNativeWorker } from "@/state/nativeWorkers";
  * that a later turn sent more work never opens the older turn again.
  *
  * Its CLI's own subagents are not workers: they never hold a turn or count as one it waits for
- * (they have their own strip); a turn whose subagents run is still the lead's turn, working.
+ * (`runningSubagents` counts them); a turn whose subagents run is still the lead's turn, working.
  */
 /**
  * When the turn after a block's, its turns started at `starts`, began; `null` for the newest

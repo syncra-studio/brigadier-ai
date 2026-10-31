@@ -122,7 +122,7 @@ try {
     const seen: Record<string, unknown> = { initial: text(strip()), strips: document.querySelectorAll("[data-slot=quota-wait-strip]").length,
       oldCards: document.querySelectorAll("[data-slot=schedule-card]").length, pills: document.querySelectorAll("[data-slot=quota-wait-pill]").length,
       initialLive: liveText(), header: text(document.querySelector("[data-slot=request-work-label]")),
-      native: text(document.querySelector("[data-slot=subagents-strip]")),
+      native: text(document.querySelector("[data-slot=workers-strip]")),
       rawEnd: useCliThread.getState().views[ID]?.turns.at(-1)?.end,
       quotaSourceEnd: useCliThread.getState().views[ID]?.turns[0]?.end,
       quotaErrors: document.querySelectorAll("[data-slot=error-state], [data-slot=usage-limit]").length,

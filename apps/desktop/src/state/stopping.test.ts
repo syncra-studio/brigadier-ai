@@ -128,7 +128,7 @@ test("Stop all shows the workers stopped at once; one the daemon didn't stop sho
 
 const agent = (taskId: string) => ({ id: taskId, kind: "agent", status: "running", label: taskId, itemId: null, startedAtMs: 1, endedAtMs: null });
 
-test("the Workers strip's Stop all stops only Brigadier's workers: the CLI's own agents are the Subagents strip's, and go on", async () => {
+test("stopWorkers stops only Brigadier's workers: the CLI's own agents are stopped by their own ids (the strip's Stop all does that), and go on", async () => {
   useCliThread.setState({ views: { [id]: { entries: [], turns: [], background: [agent("a1"), agent("a2")] } } } as never);
   const done = stopWorkers(id);
   await flushed();

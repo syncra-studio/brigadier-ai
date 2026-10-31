@@ -3,7 +3,7 @@ import { agentDetail, isSubagentStart, toolName } from "@/app/conversation/activ
 import type { BackgroundTask, StepAtWork, ThreadView, WorkerDoing, WorkerRow } from "@/ipc/generated";
 import { CLIS } from "@/ipc/generated/clis";
 
-/** Native subagents keep their own strip and transcript, apart from durable workers. */
+/** Native subagents: worker rows shown as workers are (D50), with their CLI's transcript. */
 export type NativeWorker = WorkerRow & {
   native: { conversationId: string; callId: string | null; backgroundId: string | null; prompt: string };
 };

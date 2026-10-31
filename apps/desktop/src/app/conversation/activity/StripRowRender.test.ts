@@ -38,28 +38,22 @@ test("a strip row says what its worker does while it works, shimmering, else its
   }
 });
 
-test("a subagent's strip row is plain: a neutral mark, its task and time, no worker glyph or name", async () => {
+test("a subagent's strip row is a worker's: its glyph, its name, what it does and its time (D50)", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
-    const { StripRow, SubagentRow } = await server.ssrLoadModule("/src/app/conversation/activity/StripRow.tsx");
+    const { StripRow } = await server.ssrLoadModule("/src/app/conversation/activity/StripRow.tsx");
     const { useCliThread } = await server.ssrLoadModule("/src/state/cliThread.ts");
     const subagent = { ...row({ id: "native:c:call1", title: "Explore the parser" }), native: { conversationId: "c", callId: "call1", backgroundId: null, prompt: "" } };
     Object.assign(useCliThread.getInitialState().views, { c: { entries: [], turns: [], workers: [subagent] } });
-    // A worker's row carries its glyph (the two-tone avatar in its own colour); a subagent's never does.
-    assert.match(renderSubagent(StripRow), /text-glyph-/);
-    const html = renderSubagent(SubagentRow);
-    assert.doesNotMatch(html, /text-glyph-/);
-    assert.match(html, /data-slot="subagents-strip-row"/);
-    assert.equal(html.match(/<svg/g)?.length, 1);
-    assert.match(html, /data-slot="subagent-mark"[^>]*><svg/);
-    const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    assert.match(text, /^Explore the parser \d+s$/);
+    const html = renderSubagent(StripRow);
+    assert.match(html, /text-glyph-/);
+    assert.match(html, /data-slot="workers-strip-row"/);
   } finally {
     await server.close();
   }
 });
 
-test("a subagent's panel is headed by its task, as its strip row says it, even when an earlier one had the same, and shows its last words from its session's thread", async () => {
+test("a subagent's panel is headed by its name as its rows say it, as a worker's is (D50), and shows its last words from its session's thread", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { WorkersTab } = await server.ssrLoadModule("/src/app/side-panel/Agents.tsx");
@@ -77,7 +71,7 @@ test("a subagent's panel is headed by its task, as its strip row says it, even w
       React.createElement(TooltipProvider, null, React.createElement(AgentsPanelContext.Provider, { value: { panel: "native:c:call2", setPanel: () => {} } },
         React.createElement(WorkersTab as React.FC<{ conversationId: string }>, { conversationId: "c" }))),
     );
-    assert.match(html, /<h2[^>]*>Run sleep then ls src<\/h2>/);
+    assert.match(html, /<h2[^>]*>Run sleep then 2<\/h2>/);
     assert.match(html, /Ran it: greet\.js, index\.js/);
   } finally {
     await server.close();
