@@ -615,6 +615,22 @@ async fn a_subagent_ending_after_its_turn_owes_the_turn_its_end_starts() {
         "a running subagent shows as a worker, not a command"
     );
 
+    // The subagent works: its own items, in the lead's stream.
+    let view = follow(&[
+        r#"{"type":"assistant","parent_tool_use_id":"toolu_sub","message":{"id":"c1","content":[{"type":"tool_use","id":"toolu_child","name":"Bash","input":{"command":"sleep 15 && ls"}}]}}"#,
+        r#"{"type":"system","subtype":"task_progress","task_id":"a1","tool_use_id":"toolu_sub","description":"Running sleep 15 && ls","usage":{"total_tokens":20926,"tool_uses":1,"duration_ms":1808},"last_tool_name":"Bash"}"#,
+        r#"{"type":"system","subtype":"task_started","task_id":"b1","owned_by_subagent":true,"tool_use_id":"toolu_child","description":"sleep 15 && ls","is_backgrounded":false,"parent_task_id":"a1","task_type":"local_bash"}"#,
+        r#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_child","status":"completed","output_file":"","summary":"sleep 15 && ls"}"#,
+        r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"role":"user","content":[{"tool_use_id":"toolu_child","type":"tool_result","content":"LICENSE","is_error":false}]}}"#,
+        r#"{"type":"assistant","parent_tool_use_id":"toolu_sub","message":{"id":"c2","content":[{"type":"text","text":"It printed LICENSE."}]}}"#,
+    ])
+    .await;
+    assert_eq!(
+        view.turns.last().and_then(|turn| turn.end),
+        Some(TurnEnd::Done),
+        "a subagent's own items open no turn of its lead's"
+    );
+
     let view = follow(&[
         r#"{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"completed","end_time":2000}}"#,
         r#"{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_sub","status":"completed","output_file":"/private/tmp/claude-501/-w/s1/tasks/a1.output","summary":"Listed two files."}"#,

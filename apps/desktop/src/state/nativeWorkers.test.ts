@@ -76,6 +76,8 @@ test("a background agent that ended after its lead's turn works until the turn i
   const view = { entries: [user("u1", 1000), agentCall("bg", 1010)], turns: [ended], background: [task] };
   assert.equal(workersOf("c-owed", { ...view, jobs: { holding: [], waking: true } } as never)[0]?.working, true);
   assert.equal(workersOf("c-owed-2", view)[0]?.working, false, "no turn owed: done");
-  const woken = { ...view, turns: [ended, turn("", 3100, null)], jobs: { holding: [], waking: false } };
+  const starting = { ...view, turns: [ended, turn("", 3100, null)], jobs: { holding: [], waking: true } };
+  assert.equal(workersOf("c-owed-4", starting as never)[0]?.working, true, "its turn listed, not yet its own: still owed");
+  const woken = { ...starting, jobs: { holding: [], waking: false } };
   assert.equal(workersOf("c-owed-3", woken as never)[0]?.working, false, "its turn started: done");
 });
