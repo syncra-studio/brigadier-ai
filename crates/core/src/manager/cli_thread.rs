@@ -841,8 +841,10 @@ impl SessionManager {
             .chain(owned.iter().map(|(_, entries)| entries.clone()))
             .collect();
         let mut records = forked.turns;
-        records.extend(thread_view::read_turns(&record));
+        // Under the lock a turn's end is noted and numbered under: the turns read, the live turn
+        // and `seq` all stand at the same moment.
         let mut threads = self.cli_threads.lock().unwrap();
+        records.extend(thread_view::read_turns(&record));
         if let Some(live) = threads.get_mut(id) {
             thread_view::keep_unheld(&mut live.earlier, &files);
         }
