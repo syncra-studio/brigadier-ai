@@ -969,7 +969,7 @@ test("goal 8: a follow-up shows nowhere in the thread while it waits or is judge
       user("u2", "[queued message 0badf00d, now on its own turn]\nThe release notes.", 2000),
       user("s4", toJudge("Also the docs."), 2100, { steer: true }),
     ],
-    turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }, { ...turn("u2", 2000, null, null), requests: ["q2"] }],
+    turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }, { ...turn("u2", 2000, null, null), requests: ["0192aaaa-0badf00d"] }],
   };
   const queued = { id, text: "Also the docs.", attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, deciding: true, delivered: true };
   // Still in the rail (judged again): no bubble anywhere, the steer once, no line of Brigadier's.
@@ -977,7 +977,7 @@ test("goal 8: a follow-up shows nowhere in the thread while it waits or is judge
   assert.deepEqual(inRail.map((block) => block.steers.map((steer) => steer.text)), [["And the logo."], []]);
   assert.equal(inRail[1]!.user?.kind === "message" && inRail[1]!.user.text, "The release notes.");
   // Joined in the new block: one bubble, where the CLI read it last.
-  const joined = cliBlocks({ ...followUps, turns: [followUps.turns[0]!, { ...followUps.turns[1]!, requests: ["q2", id] }] }, "c1", NO_BOARD);
+  const joined = cliBlocks({ ...followUps, turns: [followUps.turns[0]!, { ...followUps.turns[1]!, requests: ["0192aaaa-0badf00d", id] }] }, "c1", NO_BOARD);
   assert.deepEqual(joined.map((block) => block.steers.map((steer) => [steer.message.id, steer.text])), [[["r2", "And the logo."]], [[id, "Also the docs."]]]);
 });
 
@@ -1246,7 +1246,7 @@ test("of the user's words with Brigadier's around them only theirs show: a note 
         // A turn that carries a request already shown with a new one: its first id is reused.
         sent("u2", "[Your last turn stopped early, on another account.]\n\nAnd the tests.", 2000, { by: "both", user: "And the tests." }),
       ],
-      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1", "r3"] }],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "0192aaaa-abcd1234"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1", "r3"] }],
     },
     "conv",
     NO_BOARD,
@@ -1269,7 +1269,8 @@ test("authored message frames stay literal in user bubbles, also inside a queued
       const wire = by === "user" ? words : `[queued message 12345678 · judge it]\n${words}`;
       const blocks = cliBlocks({
         entries: [sent("u1", wire, 1000, said), reply1],
-        turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }],
+        // A queued message on its own turn: that turn's request is the queued message's id.
+        turns: [{ ...turn("u1", 1000, 1500, "done"), requests: [by === "user" ? "r1" : "0192aaaa-12345678"] }],
       }, "conv", NO_BOARD, true);
       assert.deepEqual(blocks.map((block) => [block.user?.kind, block.user?.kind === "message" ? block.user.text : null]), [["message", words]], `${by}: ${words}`);
     }
@@ -1342,4 +1343,44 @@ test("a sent message's turn keeps one start from sending it to the CLI saying it
   assert.deepEqual(start({ ...before, entries: [...before.entries, said] }), onItsWay);
   // Its turn read: the CLI started it later than it was sent.
   assert.deepEqual(start({ entries: [...before.entries, said], turns: [...before.turns, { ...turn("cli-m1", 6500, null, null), requests: ["m1"] }] }), onItsWay);
+});
+
+test("D68: a follow-up is in the rail or in the thread, exactly once, at every step of its join, steer, own turn and hand-off, and never moves once shown", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const words = "Also the docs.";
+  const running = { state: "running", error: null } as const;
+  const item = { id, text: words, attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, delivered: true };
+  const judged = [user("u1", "Fix the test", 1000), user("j1", toJudge(words), 1100, { steer: true }), at({ type: "message", itemId: "a1", role: "assistant", text: "Noted." }, 1200)];
+  const steered = user("s2", `[queued message feedbeef, steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]\n${words}`, 3000, { steer: true });
+  const ownTurn = user("u2", `[queued message feedbeef, now on its own turn]\n${words}`, 3000);
+  const open = (requests: string[]) => [{ ...turn("u1", 1000, null, null), requests }];
+  const done = (requests: string[]) => [{ ...turn("u1", 1000, 1500, "done"), requests }];
+  const kept = (...more: Message[]) => [message("r1", "Fix the test", 990), ...more];
+  const taken = message(id, words, 2900);
+  // Each step as the app may read it: the CLI's entries, its turns, Brigadier's kept messages
+  // and whether the rail still has it.
+  type Step = [FileEntry[], ThreadTurn[], Message[], boolean];
+  const paths: Record<string, Step[]> = {
+    // Judged join: out of the rail, kept, then named by the running turn.
+    join: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
+    // Steered in after it waited, in the turn that read it: named, then read again.
+    steer: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false], [[...judged, steered], open(["r1", id]), kept(taken), false]],
+    // Waited, then on its own turn once the block closed: on its way, then heading that turn.
+    ownTurn: [[judged, done(["r1"]), kept(), true], [judged, done(["r1"]), kept(taken), false], [[...judged, ownTurn], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false]],
+    // Handed to a worker: out of the rail, never kept here, never a bubble in this thread.
+    handOff: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(), false]],
+  };
+  for (const [name, steps] of Object.entries(paths)) {
+    let shownAs: string | null = null;
+    steps.forEach(([entries, turns, messages, inRail], step) => {
+      const tree = cliThreadTree({ entries, turns }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [item] : [] }, running);
+      const nodes = shown(tree).filter(([, , said]) => JSON.stringify(said).includes(words));
+      const count = nodes.reduce((sum, [, , said]) => sum + JSON.stringify(said).split(words).length - 1, 0);
+      assert.equal(count + (inRail ? 1 : 0), name === "handOff" && !inRail ? 0 : 1, `${name} step ${step}: ${JSON.stringify(shown(tree))}`);
+      if (count === 0) return;
+      const where = String(nodes[0]![0]);
+      assert.ok(shownAs === null || shownAs === where, `${name} step ${step} moved from ${shownAs} to ${where}`);
+      shownAs = where;
+    });
+  }
 });

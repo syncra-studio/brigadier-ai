@@ -17,8 +17,8 @@ import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { rowOf, threadOf } from "@/fixtures/workerRows";
-import type { Conversation, ConversationView as View, Project, Request, Task } from "@/ipc/generated";
-import { select } from "@/state/actions";
+import type { Conversation, ConversationView as View, Project, QueuedMessage, Request, Task } from "@/ipc/generated";
+import { restoreQueued, select } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 const id = "direct-session";
@@ -45,6 +45,8 @@ localStorage.setItem("brigadier.drafts", JSON.stringify({
   [id]: { text: "[Image #1] see [Pasted text #1]", attachments: [image, paste], atMs: Date.now(), mentions: [] },
 }));
 const queued = { id: "q1", text: "queued for the session", attachments: [], mentions: [], delivered: false, deciding: false };
+// One for the busy importer worker: it waits for that worker's turn to end (goal 8).
+const forWorker = { id: "q2", text: "for the importer", attachments: [], mentions: [], delivered: false, deciding: false, worker: "task-live", queuedAtMs: start, editedAtMs: null };
 
 /** What each request carried: `session …` for the session's own, `worker <task> …` for a direct one. */
 const sent: string[] = [];
@@ -65,7 +67,7 @@ mockIPC(async (command, payload) => {
           conversation: useApp.getState().conversations[req.id] ?? sessionOf(req.id, "Other"), context: null,
           messages: { messages: [], hasMore: false }, tasks: req.id === id ? [live, ended, docs] : [], approvals: [], questions: [],
           requests: [], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [],
-          compactions: [], decisions: [], queue: { items: req.id === id ? [queued] : [], paused: true }, run: "idle",
+          compactions: [], decisions: [], queue: { items: req.id === id ? [queued, forWorker] : [], paused: true }, run: "idle",
           runRequest: null, head: null, ratings: {}, streaming: null, notices: [],
           previews: [],
         } as unknown as View,
@@ -78,6 +80,8 @@ mockIPC(async (command, payload) => {
       return { method: req.method, data: req.id === "img-1" ? PNG : btoa("# Notes") };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
+    case "deleteQueued":
+      return { method: req.method, queue: { items: [queued], paused: true, sent: [] } };
     case "sendToWorker": {
       sent.push(`worker ${req.taskId} ${req.text} ${JSON.stringify(req.mentions)}`);
       const how = next;
@@ -107,11 +111,13 @@ useApp.setState({
   connection: { status: "connected", daemon: null, reason: null },
 });
 
+let pageError = "";
+window.addEventListener("error", (event) => { pageError ||= String(event.error?.stack ?? event.message); });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(what: string, check: () => boolean, ms = 10_000) {
   const end = performance.now() + ms;
   while (!check()) {
-    if (performance.now() > end) throw new Error(`timed out waiting for ${what}: ${document.querySelector("[data-slot=composer]")?.textContent ?? "no composer"}`);
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}: ${document.querySelector("[data-slot=composer]")?.textContent ?? "no composer: " + pageError.slice(0, 1500)}`);
     await sleep(16);
   }
 }
@@ -133,6 +139,7 @@ function rowsUnder(heading: string): string[] {
   }
   return rows;
 }
+const editItem = () => [...document.querySelectorAll<HTMLElement>("[role=menu][data-state=open] [role=menuitem]")].find((item) => item.textContent === "Edit message");
 const directCalls = () => calls.filter((call): call is Extract<Request, { method: "sendToWorker" }> => call.method === "sendToWorker");
 const directSends = () => directCalls().length;
 const sentRefs = () => directCalls().at(-1)!.attachments.map((ref) => ref.id).toSorted();
@@ -303,6 +310,40 @@ async function drive() {
     await until("back", () => field() !== null);
     await sleep(200);
     seen.chipAfterSwitch = chip() !== null;
+
+    // Goal 8: Enter sends the follow-up's way (Queue), ⌥⏎ the other way (Steer), to a worker too.
+    await clearComposer();
+    await pickDirect("Build the importer");
+    await type("now");
+    await key("Enter", ["Alt"]);
+    await until("the steer sent", () => chip() === null);
+    const steers = directCalls().map((call) => call.steer ?? null);
+    seen.steers = { enter: [...new Set(steers.slice(0, -1))], other: steers.at(-1) };
+
+    // The worker's queued row names it, and Steer, Edit and Undo keep it the worker's.
+    const workerRow = () => [...document.querySelectorAll<HTMLElement>("[data-slot=message-queue-item]")].find((row) => row.textContent?.includes(forWorker.text));
+    await until("the worker's row", () => workerRow() !== undefined);
+    seen.workerRow = workerRow()!.querySelector("span.text-xs")?.textContent;
+    await fixtureClick([...workerRow()!.querySelectorAll("button")].find((button) => button.textContent?.includes("Steer"))!);
+    await until("the row steered", () => calls.some((call) => call.method === "steerQueued"));
+    seen.rowSteer = calls.filter((call) => call.method === "steerQueued").map((call) => (call as { itemId: string }).itemId);
+    await clearComposer();
+    // Opened from the keyboard, as Radix takes a pointer press only on pointerdown.
+    const actions = workerRow()!.querySelector<HTMLElement>("[aria-label='Queued message actions']")!;
+    actions.focus();
+    actions.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await until("the row's menu", () => editItem() !== undefined);
+    editItem()!.click();
+    await until("the row in the composer", () => typed() === forWorker.text && chip() !== null);
+    seen.edited = { chip: chip()!.textContent, deleted: calls.filter((call) => call.method === "deleteQueued").map((call) => (call as { itemId: string }).itemId) };
+    field()!.focus();
+    await key("Enter");
+    await until("the edit sent", () => chip() === null);
+    const resent = directCalls().at(-1)!;
+    seen.editSent = { taskId: resent.taskId, text: resent.text, steer: resent.steer, queueIndex: resent.queueIndex };
+    await restoreQueued(id, forWorker as QueuedMessage, 1);
+    const undone = directCalls().at(-1)!;
+    seen.undo = { taskId: undone.taskId, text: undone.text, steer: undone.steer ?? null, queueIndex: undone.queueIndex };
   } catch (error) {
     seen.error = String(error);
   }

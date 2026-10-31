@@ -7,13 +7,19 @@ import type { Conversation, Mention } from "@/ipc/generated";
 
 /**
  * A queued message pulled into the composer to edit ("Edit message"): the slot it goes back
- * to when sent, and its mentions. Taken by the next send in that conversation.
+ * to when sent, its mentions, and the worker it was for, if one. Taken by the next send in that
+ * conversation.
  */
 export class PulledSlot {
-  private slot: { conversationId: string; index: number; mentions: Mention[] } | null = null;
+  private slot: { conversationId: string; index: number; mentions: Mention[]; worker: string | null } | null = null;
 
-  set(conversationId: string, index: number, mentions: Mention[]): void {
-    this.slot = { conversationId, index, mentions };
+  set(conversationId: string, index: number, mentions: Mention[], worker: string | null = null): void {
+    this.slot = { conversationId, index, mentions, worker };
+  }
+
+  /** The worker the pulled message was for, if one. */
+  worker(conversationId: string | null): string | null {
+    return this.holds(conversationId) ? (this.slot?.worker ?? null) : null;
   }
 
   /** Whether a queued message of `conversationId` is pulled out to edit. */
@@ -21,7 +27,7 @@ export class PulledSlot {
     return this.slot !== null && this.slot.conversationId === conversationId;
   }
 
-  take(conversationId: string | null): { index: number; mentions: Mention[] } | null {
+  take(conversationId: string | null): { index: number; mentions: Mention[]; worker: string | null } | null {
     const slot = this.slot;
     this.slot = null;
     return slot && slot.conversationId === conversationId ? slot : null;

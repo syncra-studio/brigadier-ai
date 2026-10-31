@@ -612,7 +612,14 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
  * Brigadier compacts a long one itself. `typed`: the words of the user's own messages that no
  * turn read names yet.
  */
-export function cliBlocks(view: ThreadView, conversationId: string, board?: BoardDigest, session = false, typed: readonly string[] = []): Block[] {
+export function cliBlocks(
+  view: ThreadView,
+  conversationId: string,
+  board?: BoardDigest,
+  session = false,
+  typed: readonly string[] = [],
+  kept: readonly string[] = [],
+): Block[] {
   const blocks: Block[] = [];
   // Each block's CLI items, by position and time.
   const times: [number, number][][] = [];
@@ -658,15 +665,41 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // A successor that started by itself: its first message is Brigadier's word to carry on.
   const carried = new Set(seams.flatMap((seam) => (seam.carried && seam.at ? [seam.at] : [])));
   // A queued message shows once (run2-D44): in the rail while the CLI has it there, else
-  // where the CLI last took it (a message that waited for its own turn was read before).
+  // where the CLI first read it in the turn that took it (a message that waited for its own
+  // turn, or was steered in after it waited, was read before; until the CLI reads it again it is
+  // on its way, so it never shows where it was judged and then moves). With no turn naming it
+  // yet: where the CLI last read it in the turn running now (it joins that turn), else on its way.
   const inRail = new Set((board?.queueItems ?? []).flatMap((item) => (item.delivered ? [item.id.slice(-8)] : [])));
+  // The queued messages the session took in (a turn names them, or Brigadier keeps them as the
+  // user's): one handed to a worker, or still judged, never shows in this thread (D68).
+  const tookIn = new Set([...view.turns.flatMap((each) => each.requests), ...kept].map((request) => request.slice(-8)));
+  const takenIn = new Map<string, number>();
+  // The first turn naming it took it: a later turn may carry it on as its first request.
+  view.turns.forEach((each, index) => each.requests.forEach((request) => !takenIn.has(request.slice(-8)) && takenIn.set(request.slice(-8), index)));
   const lastTaken = new Map<string, number>();
+  const readIds = new Set<string>();
+  const running = view.turns.length - 1;
+  const runs = view.turns[running]?.end == null;
+  const inTaking = new Set<string>();
+  let readIn = -1;
   view.entries.forEach((entry, position) => {
+    if (!entry.parent && startsTurn(entry)) readIn += 1;
     const id = !entry.parent && entry.said?.by !== "user" && entry.event.type === "message" && entry.event.role === "user" ? queuedId(entry.event.text) : null;
-    if (id) lastTaken.set(id, position);
+    if (!id) return;
+    readIds.add(id);
+    const takingTurn = takenIn.get(id);
+    if (takingTurn === undefined) {
+      if (runs && readIn === running) lastTaken.set(id, position);
+      else lastTaken.delete(id);
+    } else if (readIn < takingTurn || (takingTurn === readIn && !inTaking.has(id))) {
+      // Its last read before the turn that names it stands until that turn reads it: the live
+      // turn's requests can name it a turn late.
+      lastTaken.set(id, position);
+      if (takingTurn === readIn) inTaking.add(id);
+    }
   });
   // The steers that name no queued message answer the turn's other requests, in order.
-  const framed = (request: string) => lastTaken.has(request.slice(-8));
+  const framed = (request: string) => readIds.has(request.slice(-8));
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
     if (startsTurn(entry)) turn += 1;
@@ -716,7 +749,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const news = asked && !theirs && workerNotices(asked.text);
     const queued = asked && said?.by !== "user" && queuedId(asked.text);
     const unshown =
-      !!asked && ((!!queued && (inRail.has(queued) || lastTaken.get(queued) !== position)) || (!said && onlyWithdrawn(asked.text)));
+      !!asked && ((!!queued && (inRail.has(queued) || !tookIn.has(queued) || lastTaken.get(queued) !== position)) || (!said && onlyWithdrawn(asked.text)));
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
     // divider, never the command or what its summary must keep, from the stream's first word of
     // it on. Its checkpoint request before Codex compacts is Brigadier's too (run2-D9). Its turn
@@ -1015,7 +1048,8 @@ export function cliThreadTree(
   const stored = thread ? messages : messages.filter((message) => message.createdAtMs >= unreadSince);
   const named = new Set(view.turns.flatMap((turn) => turn.requests));
   const typed = stored.flatMap((message) => (message.role === "user" && !named.has(message.requestId ?? message.id) ? [(fullText[message.id] ?? message.text).trim()] : []));
-  const blocks = cliBlocks(view, conversationId, board, session, typed);
+  const keptIds = stored.flatMap((message) => (message.role === "user" ? [message.requestId ?? message.id] : []));
+  const blocks = cliBlocks(view, conversationId, board, session, typed, keptIds);
   // The user's own messages as Brigadier keeps them, by their request: a turn that names one
   // shows it as it was sent, its pasted chips, mentions and attachments with it. The first under
   // a request is the user's; Brigadier's words kept after it under the same request are not.
@@ -1055,7 +1089,7 @@ export function cliThreadTree(
   }
   // A queued message joins the turn that read it after the CLI had it (the turn names it only
   // once it ends): it is drawn there, not on its way too.
-  const carried = new Set([...named, ...drawn]);
+  const carried = drawn;
   const heard = Math.max(
     0,
     ...view.entries.flatMap((entry) => (entry.event.type === "message" && entry.event.role === "user" && !entry.parent ? [entry.atMs ?? 0] : [])),

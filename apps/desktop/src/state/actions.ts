@@ -942,6 +942,12 @@ export async function restoreQueued(
   item: QueuedMessage,
   index: number,
 ): Promise<void> {
+  // One for a worker goes back as that worker's (goal 8).
+  if (item.worker) {
+    await sendToWorker(conversationId, item.worker, item, { queueIndex: index });
+    await loadConversation(conversationId).catch(() => {});
+    return;
+  }
   const { outcome } = await request({
     method: "sendMessage",
     conversationId,
@@ -1301,8 +1307,9 @@ export async function sendToWorker(
   conversationId: string,
   taskId: string,
   message: { text: string; attachments: AttachmentRef[]; mentions: Mention[] },
+  how: { steer?: boolean; queueIndex?: number } = {},
 ): Promise<{ queued: boolean }> {
-  const { queued } = await request({ method: "sendToWorker", conversationId, taskId, ...message });
+  const { queued } = await request({ method: "sendToWorker", conversationId, taskId, ...message, ...how });
   return { queued };
 }
 

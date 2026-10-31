@@ -124,11 +124,8 @@ async fn block_judging(name: &str, late: bool) -> (Flow, Answers, Arc<tokio::syn
                     )
                     .await;
                     assert_eq!(judged["state"], "waiting", "{judged:#}");
-                    answers
-                        .lock()
-                        .unwrap()
-                        .entry("first judged".into())
-                        .or_insert_with(|| json!(crate::now_ms()));
+                    // The latest first judging (the second message's) is the timer to outlast.
+                    keep("first judged", json!(crate::now_ms()));
                 }
                 Reply::text("Noted.")
             })
@@ -322,8 +319,9 @@ async fn an_earlier_judgings_timer_never_settles_the_judging_again() {
     flow.say(SECOND).await;
     let second = waits(&flow, SECOND).await;
     flow.idle().await;
-    // The second's own judging again starts well after its first.
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    // The second's own judging again starts well after its first, so its own timer is due well
+    // after the first one's (a wide gap, so a loaded machine never closes it).
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
     release.notify_one();
     super::eventually("the late judgment", || {
         answers.lock().unwrap().contains_key("joined")

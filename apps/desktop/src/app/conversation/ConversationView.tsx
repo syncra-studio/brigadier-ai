@@ -773,7 +773,7 @@ export function ConversationView({
    * the send.
    */
   const sendDirect = useCallback(
-    (message: AppendMessage, from: string, taskId: string) => {
+    (message: AppendMessage, from: string, taskId: string, lane: SendLane | "followUp") => {
       const text = textOf(message);
       const refs = attachments.messageRefs(text, message.attachments ?? []);
       if (!text && refs.length === 0) return;
@@ -787,8 +787,8 @@ export function ConversationView({
         if (visit.current === here) fail(cause);
         else toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
       };
-      // A queued message being edited is the session's; it never goes to a worker.
-      if (pulled.holds(from)) {
+      // A queued message being edited goes back to its slot, only to the worker it was for.
+      if (pulled.holds(from) && pulled.worker(from) !== taskId) {
         keep(new Error("Send the queued message you're editing first"));
         return;
       }
@@ -796,8 +796,11 @@ export function ConversationView({
         keep(new Error("Your message to the worker is still on its way"));
         return;
       }
+      const slot = pulled.take(from);
+      // Busy, the worker gets it the follow-up's way (Queue or Steer, goal 8), as sendLane picks.
+      const steer = sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp }) === "steer";
       setError(null);
-      sendToWorker(from, taskId, draft).then(
+      sendToWorker(from, taskId, draft, slot ? { steer, queueIndex: slot.index } : { steer }).then(
         () => {
           endDirectSend(from);
           try {
@@ -828,7 +831,7 @@ export function ConversationView({
         // This send's marks are void: it goes to neither a new session nor the paused queue.
         takeBackgroundSend(conversationId);
         takeQueueSend(conversationId);
-        sendDirect(message, conversationId, directTo);
+        sendDirect(message, conversationId, directTo, lane);
         return;
       }
       const text = textOf(message);

@@ -380,11 +380,12 @@ function ComposerKeys({
           // A ⌘⏎ whose send never came is not this send's.
           if (taskTab) clearBackgroundSend(taskTab);
           if (directToOf(conversationId) !== null) {
-            // To a worker: never a new session, the paused queue's question or a steer; one at
-            // a time.
+            // To a worker: never a new session or the paused queue's question; one at a time.
+            // The worker may be busy while the session is not: the follow-up's way is asked
+            // either way, the other key's the other way (goal 8).
             if (aui.composer().getState().isEmpty || directSendingOf(conversationId)) return true;
             if (refuseBlockedImages(imagesBlocked) || refuseUploading(aui, owner)) return true;
-            aui.composer().send();
+            aui.composer().send({ steer: action === "other" ? followUp === "queue" : followUp === "steer" });
             return true;
           }
           const thread = aui.thread().getState();

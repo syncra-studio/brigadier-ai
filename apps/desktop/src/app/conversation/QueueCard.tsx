@@ -34,7 +34,8 @@ import { useBoard } from "@/state/board";
 import { useQueueRows, type QueueRow } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
-import { useDirectTo } from "@/state/directTo";
+import { setDirectTo, useDirectTo } from "@/state/directTo";
+import { useWorkerName } from "@/app/conversation/workerNames";
 
 const NO_ITEMS: QueuedMessage[] = [];
 const NO_SENT: SentToWorker[] = [];
@@ -64,7 +65,9 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
       // One the session has, or is being given, can't be written again (run2-D46).
       if (!target || !conversationId || !item || item.delivered || item.deciding || !composer.getState().isEmpty) return;
       await deleteQueued(conversationId, item.id);
-      target.queue.pulled.set(conversationId, at, item.mentions);
+      target.queue.pulled.set(conversationId, at, item.mentions, item.worker ?? null);
+      // One for a worker goes back to that worker (goal 8).
+      if (item.worker) setDirectTo(conversationId, item.worker);
       target.mentions.recall(item.mentions);
       const normalized = normalizedImages(item.text, item.attachments);
       composer.setText(normalized.text);
@@ -74,8 +77,7 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
     },
     [aui, target, conversationId, items],
   );
-  // A queued message is the session's: none is pulled into a composer whose next message goes
-  // to a worker.
+  // None is pulled into a composer whose next message goes to a worker already.
   const direct = useDirectTo(conversationId);
   return conversationId && items.length > 0 && direct === null ? pull : null;
 }
@@ -192,6 +194,8 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 >
                   Deciding
                 </span>
+              ) : item.worker ? (
+                <ToWorker taskId={item.worker} />
               ) : item.offerSession && (
                 <>
                   <Button
@@ -281,4 +285,10 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
       )}
     </ComposerRailItem>
   );
+}
+
+/** A row for a busy worker: it goes as that worker's next turn (goal 8). */
+function ToWorker({ taskId }: { taskId: string }) {
+  const name = useWorkerName(taskId);
+  return <span className="text-muted-foreground min-w-0 shrink-8 truncate text-xs">To {name ?? "a worker"}</span>;
 }
