@@ -1516,8 +1516,11 @@ impl CommandItems {
             ProviderEvent::TurnStarted { .. } => self.ended.clear(),
             // The model goes on while they run: Codex stopped waiting for them (a command
             // yields after a while, or at once when the model asks), so they are in the
-            // background.
-            ProviderEvent::MessageDelta { .. }
+            // background. Codex reports its usage only as its model takes the turn back, so a
+            // report while they run is a yield too, also one it polls at once with no words
+            // (checked on 0.166.0: none comes while a command it waits on runs).
+            ProviderEvent::Usage { .. }
+            | ProviderEvent::MessageDelta { .. }
             | ProviderEvent::ReasoningDelta { .. }
             | ProviderEvent::Reasoning { .. }
             | ProviderEvent::Message {
@@ -2069,6 +2072,25 @@ mod tests {
             background_terminals(&listed("exec-e"), &mut known, &commands, 1).len(),
             1
         );
+
+        // The model took the turn back while it ran (its usage came) and polled it with no
+        // words: a background terminal, ending with its item.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        let usage = ProviderEvent::Usage {
+            total: TokenUsage::default(),
+            last: None,
+            calls: Vec::new(),
+        };
+        for event in [&started, &command("exec-g", ItemStatus::InProgress), &usage] {
+            commands.note(event, 0);
+        }
+        assert_eq!(
+            background_terminals(&listed("exec-g"), &mut known, &commands, 1).len(),
+            1
+        );
+        let done = command("exec-g", ItemStatus::Completed);
+        commands.note(&done, 0);
+        assert!(ended_terminal(&done, &mut known, 2).is_some());
     }
 
     #[test]
