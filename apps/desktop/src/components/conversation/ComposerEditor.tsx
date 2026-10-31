@@ -301,6 +301,7 @@ function ComposerKeys({
   const taskTab = target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
   const privateLogs = Boolean(target?.conversation?.tabChat);
   const conversationId = target?.conversation?.id ?? null;
+  const pulled = target?.queue.pulled ?? null;
   const dictation = useDictation(owner);
   // Dictated text lands at the caret (or at the end, if the field never had one), spaced
   // from the word before it.
@@ -385,7 +386,9 @@ function ComposerKeys({
             // either way, the other key's the other way (goal 8).
             if (aui.composer().getState().isEmpty || directSendingOf(conversationId)) return true;
             if (refuseBlockedImages(imagesBlocked) || refuseUploading(aui, owner)) return true;
-            aui.composer().send({ steer: action === "other" ? followUp === "queue" : followUp === "steer" });
+            // A plain Enter on an edited queued message puts it back in its slot (sendLane).
+            const editing = pulled?.holds(conversationId) ?? false;
+            aui.composer().send({ steer: action === "other" ? followUp === "queue" : followUp === "steer" && !editing });
             return true;
           }
           const thread = aui.thread().getState();
@@ -479,6 +482,7 @@ function ComposerKeys({
     followUp,
     taskTab,
     conversationId,
+    pulled,
   ]);
   return null;
 }

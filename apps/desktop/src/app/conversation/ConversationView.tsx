@@ -43,7 +43,7 @@ import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
 import {
   type ComposerTarget,
   ComposerTargetContext,
-  PulledSlot,
+  pulledSlots,
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
@@ -736,18 +736,21 @@ export function ConversationView({
     composerRef: (id) => attachments.refOf(id),
   }), [attachments, conversationId]);
   const [mentions] = useState(() => new MentionMemory());
-  const [pulled] = useState(() => new PulledSlot());
+  const pulled = pulledSlots;
   // This view's visit of the conversation: a direct send's end acts here only while it lasts.
   const visit = useRef<object>({});
   useEffect(() => {
     const here = {};
     visit.current = here;
+    // A worker's queued message still being edited is that worker's again on return.
+    const worker = pulled.worker(conversationId);
+    if (conversationId && worker !== null) setDirectTo(conversationId, worker);
     return () => {
       visit.current = {};
       // The To: is for one message in this visit: leaving takes it away.
       if (conversationId) setDirectTo(conversationId, null);
     };
-  }, [conversationId]);
+  }, [conversationId, pulled]);
   const draftTarget = resolved.target;
   // The conversation whose `/status` card shows (none once another one opens).
   const [statusFor, setStatusFor] = useState<string | null>(null);

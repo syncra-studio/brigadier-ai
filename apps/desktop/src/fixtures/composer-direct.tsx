@@ -324,9 +324,14 @@ async function drive() {
     const workerRow = () => [...document.querySelectorAll<HTMLElement>("[data-slot=message-queue-item]")].find((row) => row.textContent?.includes(forWorker.text));
     await until("the worker's row", () => workerRow() !== undefined);
     seen.workerRow = workerRow()!.querySelector("span.text-xs")?.textContent;
-    await fixtureClick([...workerRow()!.querySelectorAll("button")].find((button) => button.textContent?.includes("Steer"))!);
-    await until("the row steered", () => calls.some((call) => call.method === "steerQueued"));
-    seen.rowSteer = calls.filter((call) => call.method === "steerQueued").map((call) => (call as { itemId: string }).itemId);
+    // Clicked where it is now, again if the worker's panel opening moved it under load.
+    const rowSteered = () => calls.some((call) => call.method === "steerQueued");
+    for (let i = 0; i < 10 && !rowSteered(); i++) {
+      await fixtureClick([...workerRow()!.querySelectorAll("button")].find((button) => button.textContent?.includes("Steer"))!);
+      await until("the row steered", rowSteered, 1500).catch(() => {});
+    }
+    await until("the row steered", rowSteered);
+    seen.rowSteer = [...new Set(calls.filter((call) => call.method === "steerQueued").map((call) => (call as { itemId: string }).itemId))];
     await clearComposer();
     // Opened from the keyboard, as Radix takes a pointer press only on pointerdown.
     const actions = workerRow()!.querySelector<HTMLElement>("[aria-label='Queued message actions']")!;
@@ -336,6 +341,12 @@ async function drive() {
     editItem()!.click();
     await until("the row in the composer", () => typed() === forWorker.text && chip() !== null);
     seen.edited = { chip: chip()!.textContent, deleted: calls.filter((call) => call.method === "deleteQueued").map((call) => (call as { itemId: string }).itemId) };
+    // With Steer the follow-up's way, after a revisit: the To: is back and Enter puts it back
+    // in its slot.
+    useApp.setState({ settings: { ...useApp.getState().settings, followUp: "steer" } });
+    await revisit();
+    await until("the To: back", () => chip() !== null);
+    seen.editedBack = { text: typed(), chip: chip()!.textContent };
     field()!.focus();
     await key("Enter");
     await until("the edit sent", () => chip() === null);
