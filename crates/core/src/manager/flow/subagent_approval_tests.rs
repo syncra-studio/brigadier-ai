@@ -38,6 +38,7 @@ fn script(fork_reply: &'static str, waits: bool, seen: Arc<Mutex<Seen>>) -> Scri
         Box::pin(async move {
             if turn.input.contains("One of your own subagents") {
                 assert!(turn.input.contains(PUSH), "{}", turn.input);
+                assert!(turn.input.contains("Its input: {"), "{}", turn.input);
                 let fork = (turn.native_id.clone(), turn.input.clone());
                 seen.lock().unwrap().forks.push(fork);
                 return Reply::text(fork_reply);
@@ -245,5 +246,39 @@ async fn a_request_no_fork_answers_is_asked_once_more_then_waits_and_says_so() {
         ] if message.starts_with("The orchestrator couldn't answer this request")),
         "{rows:#?}"
     );
+    flow.stop().await;
+}
+
+/// A fork a crash cut off before it was deleted goes at the next start; nothing else does.
+#[tokio::test]
+async fn a_fork_a_restart_cut_off_is_deleted() {
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let options = Options {
+        behavior: Arc::new(FakeBehavior {
+            cleanup: true,
+            ..FakeBehavior::default()
+        }),
+        ..Options::default()
+    };
+    let flow = Flow::start("subagent-fork-left", options, script("ALLOW", false, seen)).await;
+    let ledger = flow.manager.runtime.ledger().clone();
+    let session = |id: &str| Artifact::Session {
+        provider: ProviderKind::Claude,
+        id: id.into(),
+        home: None,
+        cwd: None,
+    };
+    ledger
+        .record("fork:left", session("fork-left"))
+        .await
+        .unwrap();
+    ledger
+        .record("gen:kept", session("gen-kept"))
+        .await
+        .unwrap();
+    flow.manager.sweep_forks().await;
+    assert!(ledger.artifacts("fork:left").is_empty());
+    assert_eq!(ledger.artifacts("gen:kept").len(), 1);
+    ledger.dispose("gen:kept").await;
     flow.stop().await;
 }

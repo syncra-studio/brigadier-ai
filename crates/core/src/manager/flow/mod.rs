@@ -332,7 +332,9 @@ impl Turn {
             paths: Vec::new(),
             reason: None,
             escalation: false,
-            input: None,
+            input: Some(
+                serde_json::json!({"command": command, "description": "As asked"}).to_string(),
+            ),
             grant: None,
         })
         .await

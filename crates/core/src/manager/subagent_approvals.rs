@@ -25,10 +25,28 @@ pub(super) type ForkFailures = std::sync::Mutex<HashMap<CardId, (i64, String)>>;
 /// leaves the request pending, it never answers it.
 const FORK_PATIENCE: Duration = Duration::from_secs(180);
 
+/// The ledger owner of each fork: none outlives the question it answers.
+const FORK_OWNER: &str = "fork:";
+
+/// How much of a request's tool input the fork reads: a file write's whole contents can be big.
+const INPUT_SHOWN: usize = 8_000;
+
 /// What the fork answers with when its own CLI asks for something: it only answers.
 const FORK_ONLY_ANSWERS: &str = "You only answer the question; don't act.";
 
 impl SessionManager {
+    /// Deletes the forks a crash or quit cut off before they were (D69, D32): a fork lives
+    /// only while it answers, so any at startup is left over.
+    pub(super) async fn sweep_forks(&self) {
+        let ledger = self.runtime.ledger();
+        for (owner, _, _) in ledger.owners() {
+            if owner.starts_with(FORK_OWNER) {
+                let left = ledger.dispose(&owner).await;
+                tracing::info!(owner, ?left, "deleted a fork a restart cut off");
+            }
+        }
+    }
+
     /// The subagent's request `request`, from the CLI `cli` runs (the thread's, or worker
     /// `task_id`'s): kept as a card only its orchestrator answers, then answered by a fork of
     /// that CLI's session. A fork that fails is asked once more; then the request stays pending.
@@ -99,7 +117,7 @@ impl SessionManager {
         cli: &Cli,
         request: &ApprovalRequest,
     ) -> Result<ApprovalDecision> {
-        let owner = format!("fork:{}", uuid::Uuid::now_v7());
+        let owner = format!("{FORK_OWNER}{}", uuid::Uuid::now_v7());
         let mut spec = cli.spec.clone();
         spec.origin = Origin::Fork {
             native_id: cli.session.native_id(),
@@ -181,7 +199,21 @@ fn fork_question(request: &ApprovalRequest) -> String {
         .command
         .clone()
         .or_else(|| (!request.paths.is_empty()).then(|| request.paths.join(", ")))
-        .or_else(|| request.input.clone())
+        .unwrap_or_default();
+    // The input says what an edit or write would put there, which the paths alone don't.
+    let input = request
+        .input
+        .as_deref()
+        .filter(|input| *input != what)
+        .map(|input| {
+            let shown: String = input.chars().take(INPUT_SHOWN).collect();
+            let cut = if shown.len() < input.len() {
+                " …(cut)"
+            } else {
+                ""
+            };
+            format!("\nIts input: {shown}{cut}")
+        })
         .unwrap_or_default();
     let place = request
         .cwd
@@ -195,7 +227,7 @@ fn fork_question(request: &ApprovalRequest) -> String {
         .unwrap_or_default();
     format!(
         "Brigadier here, not the user. One of your own subagents ({agent}) is waiting for \
-         permission to use {tool}: {what}{place}{why}\n\n\
+         permission to use {tool}: {what}{place}{input}{why}\n\n\
          You are a short-lived copy of yourself, made only to answer this; you can't act. \
          Judge it as its orchestrator, against what you are working on. Reply with one line \
          only: ALLOW, or DENY: <the reason, which the subagent reads>.",
@@ -204,25 +236,25 @@ fn fork_question(request: &ApprovalRequest) -> String {
     )
 }
 
-/// The fork's answer: its last line that says ALLOW or DENY (markdown aside), or `None`.
+/// The fork's answer: its last line that says ALLOW or DENY (markdown aside), or `None`. An
+/// allow is the bare word only: one with a condition ("ALLOW only if …") is no answer.
 fn verdict(reply: &str) -> Option<ApprovalDecision> {
-    reply.lines().rev().find_map(|line| {
+    let line = reply.lines().rev().find_map(|line| {
         let line = line
             .trim()
             .trim_matches(|c: char| matches!(c, '*' | '`' | '_' | '"'));
         let upper = line.to_ascii_uppercase();
-        if upper.starts_with("ALLOW") {
-            Some(ApprovalDecision::Allow)
-        } else if upper.starts_with("DENY") {
-            let reason = line[4..]
-                .trim_start_matches(|c: char| c == ':' || c.is_whitespace() || "*`_".contains(c));
-            Some(ApprovalDecision::Deny {
-                message: reason.trim().to_owned(),
-            })
-        } else {
-            None
-        }
-    })
+        (upper.starts_with("ALLOW") || upper.starts_with("DENY")).then_some(line)
+    })?;
+    if line.to_ascii_uppercase().starts_with("DENY") {
+        let reason = line[4..]
+            .trim_start_matches(|c: char| c == ':' || c.is_whitespace() || "*`_".contains(c));
+        return Some(ApprovalDecision::Deny {
+            message: reason.trim().to_owned(),
+        });
+    }
+    let rest = line[5..].trim_matches(|c: char| c.is_whitespace() || "*`_\".:".contains(c));
+    rest.is_empty().then_some(ApprovalDecision::Allow)
 }
 
 #[cfg(test)]
@@ -248,6 +280,8 @@ mod tests {
                 message: "not needed".into()
             })
         );
+        assert_eq!(verdict("**ALLOW.**"), Some(ApprovalDecision::Allow));
+        assert_eq!(verdict("ALLOW only after the user confirms"), None);
         assert_eq!(verdict("I think so"), None);
         assert_eq!(verdict(""), None);
     }
