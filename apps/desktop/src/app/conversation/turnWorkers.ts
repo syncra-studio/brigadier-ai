@@ -55,3 +55,12 @@ export function runningSubagents(workers: readonly WorkerRow[], startedAtMs: num
     (worker) => isNativeWorker(worker) && worker.working && worker.startedAtMs >= startedAtMs && (endedAtMs === null || worker.startedAtMs <= endedAtMs),
   ).length;
 }
+
+/**
+ * Whether the turn that ran from `startedAtMs` to `endedAtMs` is open again (the end of a
+ * background job it started woke it), its thread's open turn starting at `openStart`. The thread
+ * says so a draw before its block does, so its work never folds between the two (D24).
+ */
+export function reopened(openStart: number | null, startedAtMs: number, endedAtMs: number | null): boolean {
+  return openStart !== null && endedAtMs !== null && openStart >= startedAtMs && openStart < endedAtMs;
+}

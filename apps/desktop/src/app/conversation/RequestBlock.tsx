@@ -20,7 +20,7 @@ import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { turnParts, type WorkPart } from "@/app/conversation/workParts";
-import { runningSubagents } from "@/app/conversation/turnWorkers";
+import { reopened, runningSubagents } from "@/app/conversation/turnWorkers";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -53,7 +53,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { useTurnCommands, useTurnWorkers, useWorkerRows } from "@/state/cliThread";
+import { useOpenTurnStart, useTurnCommands, useTurnWorkers, useWorkerRows } from "@/state/cliThread";
 import { useRevealing } from "@/state/reveal";
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
@@ -184,6 +184,7 @@ export const RequestBlock: FC = () => {
   const commands = useTurnCommands(conversationId, starts, meta?.endedAtMs ?? null);
   // Its CLI's own subagents, which keep its work from folding by itself while they work.
   const workerRows = useWorkerRows(conversationId);
+  const openStart = useOpenTurnStart(conversationId);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
   useEffect(() => {
@@ -194,12 +195,13 @@ export const RequestBlock: FC = () => {
   // Its own subagents, workers and background commands that still work hold it open (D24).
   const subagents = runningSubagents(workerRows, meta.startedAtMs, meta.endedAtMs);
   const held = holding > 0 || commands > 0 || workersActive || subagents > 0;
-  const live = isLive(meta.state) || held || quotaWait !== null || (quotaRecovered && turnRuns);
+  const again = reopened(openStart, meta.startedAtMs, meta.endedAtMs);
+  const live = isLive(meta.state) || again || held || quotaWait !== null || (quotaRecovered && turnRuns);
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
   // Its CLI's turn is over and nothing it started still works: only then does its work fold, the
   // same moment on every CLI (D21, D24).
-  const done = blockFinished(meta.state) && !held && quotaWait === null && !(quotaRecovered && turnRuns);
+  const done = blockFinished(meta.state) && !again && !held && quotaWait === null && !(quotaRecovered && turnRuns);
   const transitions = leadTransitions(meta.orchestratorSteps);
   // The answer: once done, its last reply; until then the reply it is writing at its end, in the
   // same place, so the answer never moves when the work folds (an answer a step then follows

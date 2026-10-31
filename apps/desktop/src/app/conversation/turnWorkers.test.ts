@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { headerLabel, workersWaitWords } from "@/app/conversation/requestTime";
-import { workingWorkers } from "@/app/conversation/turnWorkers";
+import { reopened, workingWorkers } from "@/app/conversation/turnWorkers";
 import type { WorkerRow } from "@/ipc/generated";
 
 const worker = (id: string, startedAtMs: number, more: Partial<WorkerRow> = {}): WorkerRow => ({
@@ -88,4 +88,15 @@ test("the session CLI's own subagents never hold a turn nor count among the work
   const subagent = { ...worker("native:c:call1", 1500), native: { conversationId: "c", callId: "call1", backgroundId: "b1", prompt: "" } };
   assert.equal(workingWorkers([subagent], turns, [1000, 5000]), 0);
   assert.equal(workingWorkers([subagent, worker("w1", 1500)], turns, [1000, 5000]), 1);
+});
+
+test("a turn its background job's end woke is open again for its block, a later turn never is (D24)", () => {
+  // The turn ran 1000–5000; the subagent's end reopens it, its start unchanged.
+  assert.equal(reopened(1000, 1000, 5000), true);
+  // A block whose message was shown before the CLI said its turn's start.
+  assert.equal(reopened(1200, 1000, 5000), true);
+  // The user's next turn, the thread's newest turn closed, a block still running.
+  assert.equal(reopened(6000, 1000, 5000), false);
+  assert.equal(reopened(null, 1000, 5000), false);
+  assert.equal(reopened(1000, 1000, null), false);
 });
