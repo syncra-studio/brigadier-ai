@@ -53,3 +53,12 @@ test("old logs' workspace events change nothing: their sessions stay plain sessi
   assert.equal(after.conversations, before.conversations);
   assert.equal(after.projects, before.projects);
 });
+
+test("an event the app doesn't know changes nothing, and the rest of its batch still applies", () => {
+  const settings = { ...useApp.getState().settings, hibernateAfterMinutes: 41 };
+  let seq = 100;
+  const at = (event: unknown) => ({ seq: ++seq, stream: "catalog", streamSeq: seq, atMs: seq, event }) as Parameters<typeof applyEvents>[0][number];
+  // A turn snapshot's number, as an older daemon let onto the feed: no type of its own.
+  applyEvents([at({ number: 5 }), at({ type: "settingsChanged", settings })]);
+  assert.equal(useApp.getState().settings.hibernateAfterMinutes, 41);
+});

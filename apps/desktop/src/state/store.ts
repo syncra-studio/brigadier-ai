@@ -710,6 +710,9 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "mergeRefusalSet":
     case "unreviewedChanged":
       return slice;
+    // One this app doesn't know (a newer daemon's) changes nothing here, and the rest of its batch still applies.
+    default:
+      return slice;
   }
 }
 

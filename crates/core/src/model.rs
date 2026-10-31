@@ -2787,9 +2787,9 @@ pub mod streams {
 
     /// Whether the clients' live feed carries `stream`'s events: not the engine's own records,
     /// which are no domain events (a request's change records and pending changes, the
-    /// thread's inbox), #189.
+    /// thread's inbox, its turn snapshots' numbers), #189.
     pub fn on_live_feed(stream: &str) -> bool {
-        !["changes:", "pending:", "inbox:"]
+        !["changes:", "pending:", "inbox:", "snapshot:", "snapshots:"]
             .iter()
             .any(|internal| stream.starts_with(internal))
     }
@@ -3079,5 +3079,14 @@ mod skill_mention_tests {
             serde_json::json!({"type":"skill","rowId":"skill:review:hash"})
         );
         assert_eq!(serde_json::from_value::<Mention>(value).unwrap(), mention);
+    }
+
+    /// A turn snapshot's number is the engine's own record: a client that took it for a domain
+    /// event dropped the rest of its batch, a turn's end among it.
+    #[test]
+    fn turn_snapshot_numbers_stay_off_the_live_feed() {
+        assert!(!crate::model::streams::on_live_feed("snapshots:c1"));
+        assert!(!crate::model::streams::on_live_feed("snapshot:c1:r1"));
+        assert!(crate::model::streams::on_live_feed("conversation:c1"));
     }
 }
