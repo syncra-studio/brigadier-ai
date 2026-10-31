@@ -88,9 +88,9 @@ test("a missing or unreadable Claude command keeps the task, without using its l
     assert.equal(taskRows([waitLabel], entries, 0).length, 1);
   }
   assert.equal(taskRows([{ ...waitLabel, itemId: null }], [bash({ command: "brigadier wait" })], 0).length, 1);
-  for (const kind of ["agent", "other"] as const) {
-    assert.equal(taskRows([task(kind, "brigadier wait")], [bash({ command: "brigadier wait" })], 0).length, 1);
-  }
+  assert.equal(taskRows([task("other", "brigadier wait")], [bash({ command: "brigadier wait" })], 0).length, 1);
+  // A subagent is a worker's row, never a Background one (D50).
+  assert.equal(taskRows([task("agent", "brigadier wait")], [bash({ command: "brigadier wait" })], 0).length, 0);
 });
 
 test("task rows show only running work, and leave all source history intact", () => {
