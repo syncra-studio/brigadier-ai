@@ -69,7 +69,7 @@ useApp.setState({
   conversations: { c1: conversation },
   projects: {
     p1: projectOf("p1", "todo-app"), p2: projectOf("p2", "api"), p3: projectOf("p3", "detached"),
-    p4: { ...projectOf("p4", "other-cli"), prefs: { orchestrator: { provider: "opencode", model: "glm", effort: null } } },
+    p4: { ...projectOf("p4", "other-cli"), prefs: { permission: null, environment: null, secretFiles: [], branchPrefix: null, orchestrator: { provider: "opencode", model: "glm", effort: null } } },
   },
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { status: "connected", daemon: null, reason: null },
