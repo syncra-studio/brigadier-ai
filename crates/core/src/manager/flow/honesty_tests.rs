@@ -163,8 +163,9 @@ async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
         steered.lock().unwrap()[0],
         format!(
             "[queued message {shown} · judge it: brigadier queue {shown} \
-             join|wait|worker <id>|new-session (join, or worker, when it belongs to this \
-             work; wait when it doesn't); unjudged, it joins this work]\n\
+             join|wait|worker <id>|new-session (join, or worker, when it is part of the work \
+             in progress; wait when it is other work, which comes back once that is done); \
+             unjudged, it joins this work]\n\
              Also check the formatting."
         )
     );
