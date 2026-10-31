@@ -1,4 +1,4 @@
-import { type FC, type ReactNode, useContext } from "react";
+import { type FC, type ReactNode, useContext, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { Briefs } from "@/app/conversation/activity/Briefs";
@@ -7,13 +7,16 @@ import { QuietBrief } from "@/app/conversation/activity/QuietBrief";
 import { WorkerName } from "@/app/conversation/activity/WorkerName";
 import { type BlockRow, lifecycleWord } from "@/app/conversation/blocks";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
+import { useViewConversation } from "@/app/conversation/viewContext";
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
+import { workedBy } from "@/app/side-panel/WorkerThread";
 import { ROW, ROW_DETAIL, ThreadActivity } from "@/components/conversation";
 import { CheckCircle, Chat, Commit, StopCircle } from "@/components/icons";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";
 import { useBoard } from "@/state/board";
+import { loadWorkerThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
  * How workers show in the thread (THREAD-UX-PLAN.md §3.4): sentences in the row recipe of the
@@ -142,11 +145,20 @@ const changesFrom = (taskIds: readonly string[]) => (taskIds.length > 1 ? "the c
 export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = ({ kind, atMs }) => {
   // How long the worker had run when it was stopped: its attempts up to the step's own time, so
   // a later restart or handoff never changes what this row says.
-  const stoppedMs = useBoard((s) => {
-    if (kind.type !== "stopped" || atMs === undefined) return 0;
-    const attempts = s.board?.tasks[kind.taskId]?.attempts ?? [];
+  // The same number its panel says (D53): its turns' time, read as the panel reads it; its
+  // attempts' wall clock only until that read answers.
+  const conversationId = useViewConversation()?.id ?? null;
+  const stopped = kind.type === "stopped" && atMs !== undefined ? kind.taskId : null;
+  const turns = useWorkerThreads((s) => (stopped ? s.views[stopped]?.turns : undefined));
+  useEffect(() => {
+    if (stopped && conversationId && !turns) loadWorkerThread(conversationId, stopped).catch(() => undefined);
+  }, [stopped, conversationId, turns]);
+  const attemptsMs = useBoard((s) => {
+    if (!stopped || atMs === undefined) return 0;
+    const attempts = s.board?.tasks[stopped]?.attempts ?? [];
     return attempts.reduce((sum, a) => (a.startedAtMs < atMs ? sum + Math.min(a.endedAtMs ?? atMs, atMs) - a.startedAtMs : sum), 0);
   });
+  const stoppedMs = turns && atMs !== undefined ? workedBy(turns, atMs) : attemptsMs;
   let icon: ReactNode;
   let line: ReactNode;
   let detail: ReactNode = undefined;

@@ -60,6 +60,14 @@ export function workedMs(row: WorkerRow, turns: readonly ThreadTurn[], done: boo
 }
 
 /**
+ * How long a worker had worked by `atMs` (its Stop): its turns' time up to then, the sum its
+ * panel's header says, so the lead's "Stopped … after" row reads the same number.
+ */
+export function workedBy(turns: readonly ThreadTurn[], atMs: number): number {
+  return turns.reduce((sum, turn) => (turn.startedAtMs !== null && turn.startedAtMs < atMs ? sum + Math.max(0, Math.min(turn.endedAtMs ?? atMs, atMs) - turn.startedAtMs) : sum), 0);
+}
+
+/**
  * "Working for 1m 2s" while it works, "Worked for 3m 10s" once finished, "Stopped after 3m 10s"
  * when it was stopped, over a hairline.
  */

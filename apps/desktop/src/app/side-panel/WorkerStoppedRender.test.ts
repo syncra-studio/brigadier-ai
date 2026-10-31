@@ -28,6 +28,11 @@ test("a stopped worker's own view says it stopped, and after how long, from its 
     assert.equal(workedMs(later, [turn(1000, 8000), turn(1_090_000, 1_100_000)], true, 2_000_000), 17_000);
     assert.equal(workedMs(later, [turn(1000, 8000), turn(1_090_000, null)], false, 1_095_000), 12_000);
     assert.equal(workedMs(later, [], true, 2_000_000), 1_099_000);
+    // The lead's "Stopped … after" row: the same sum, up to the Stop, never the idle time between.
+    const { workedBy } = await server.ssrLoadModule("/src/app/side-panel/WorkerThread.tsx");
+    assert.equal(workedBy([turn(1000, 8000), turn(1_090_000, 1_100_000)], 2_000_000), 17_000);
+    assert.equal(workedBy([turn(1000, 8000), turn(1_090_000, null)], 1_095_000), 12_000);
+    assert.equal(workedBy([turn(1000, 8000), turn(1_090_000, 1_100_000)], 5000), 4000);
   } finally {
     Reflect.deleteProperty(globalThis, "document");
     Reflect.deleteProperty(globalThis, "getComputedStyle");
