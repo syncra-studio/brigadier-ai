@@ -1529,6 +1529,33 @@ impl CommandItems {
     }
 }
 
+/// The background terminal in `known` whose command `event` ends, ended at `now`: Codex says a
+/// command's end as it ends, while `/ps` may list its process until after its turn ended.
+pub(crate) fn ended_terminal(
+    event: &ProviderEvent,
+    known: &mut HashMap<String, BackgroundTask>,
+    now: i64,
+) -> Option<BackgroundTask> {
+    let ProviderEvent::Command {
+        item_id, status, ..
+    } = event
+    else {
+        return None;
+    };
+    if *status == ItemStatus::InProgress {
+        return None;
+    }
+    let id = known
+        .iter()
+        .find(|(_, task)| task.item_id.as_ref() == Some(item_id))?
+        .0
+        .clone();
+    let mut task = known.remove(&id)?;
+    task.status = BackgroundTaskStatus::Completed;
+    task.ended_at_ms = Some(now);
+    Some(task)
+}
+
 /// The thread's background terminals as `thread/backgroundTerminals/list` gives them, against
 /// those `known` from the last listing: each new one as running, each one gone as ended at
 /// `now`. `known` becomes this listing's. A command's process `commands` says isn't in the
@@ -1987,6 +2014,19 @@ mod tests {
             background_terminals(&listed("exec-d"), &mut known, &commands, 1).len(),
             1
         );
+        // The model polled it to its end in its turn: it ends with its item, not when `/ps`
+        // next misses it after the turn (that end would owe the thread a turn).
+        let done = command("exec-d", ItemStatus::Completed);
+        commands.note(&done);
+        assert!(ended_terminal(&command("exec-x", ItemStatus::Completed), &mut known, 2).is_none());
+        let ended = ended_terminal(&done, &mut known, 2).expect("its terminal ends");
+        assert_eq!(
+            (ended.id.as_str(), ended.status, ended.ended_at_ms),
+            ("77432", BackgroundTaskStatus::Completed, Some(2))
+        );
+        commands.note(&turn(TurnStatus::Completed));
+        assert!(background_terminals(&listed("exec-d"), &mut known, &commands, 3).is_empty());
+        assert!(background_terminals(&json!({ "data": [] }), &mut known, &commands, 4).is_empty());
     }
 
     #[test]

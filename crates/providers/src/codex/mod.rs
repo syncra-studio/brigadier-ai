@@ -1341,6 +1341,7 @@ impl Provider for Codex {
                 approvals: Mutex::new(HashMap::new()),
                 turn_id: Mutex::new(None),
                 commands: Mutex::default(),
+                terminals: Mutex::default(),
                 compact_asked: AtomicBool::new(false),
                 events: Events::new(events_tx, spec.redactor.clone()),
                 thread: Mutex::new(None),
@@ -2644,13 +2645,18 @@ impl Replayer for CodexReplayer {
                 Output::Control(_) => None,
             })
             .collect();
-        for event in &events {
-            self.commands.note(event);
-            if let ProviderEvent::ApprovalRequested { request } = event {
+        let mut said = Vec::with_capacity(events.len());
+        for event in events {
+            self.commands.note(&event);
+            if let ProviderEvent::ApprovalRequested { request } = &event {
                 self.asked.insert(request.id.clone());
             }
+            if let Some(task) = parse::ended_terminal(&event, &mut self.terminals, 0) {
+                said.push(ProviderEvent::BackgroundTask { task });
+            }
+            said.push(event);
         }
-        events
+        said
     }
 }
 
@@ -2759,6 +2765,8 @@ struct Shared {
     turn_id: Mutex<Option<String>>,
     /// Its shell commands, which tell its background terminals from the commands its turns run.
     commands: Mutex<parse::CommandItems>,
+    /// Its background terminals as last listed, by process id.
+    terminals: Mutex<HashMap<String, BackgroundTask>>,
     /// `thread/compact/start` is being sent; the reader tells its parser.
     compact_asked: AtomicBool,
     events: Events,
@@ -3341,6 +3349,15 @@ async fn read_loop(
                         ProviderEvent::McpServerChanged { server }
                             if server.status != McpStatus::Connecting
                     );
+                    // A background terminal ends with its command, in the turn that ran it.
+                    let ended =
+                        parse::ended_terminal(&event, &mut lock(&shared.terminals), now_ms());
+                    if let Some(task) = ended {
+                        shared
+                            .events
+                            .send(ProviderEvent::BackgroundTask { task })
+                            .await;
+                    }
                     shared.events.send(event).await;
                     if settled {
                         list_mcp_servers(&rpc, &shared);
@@ -3429,13 +3446,12 @@ const TERMINALS_EVERY: Duration = Duration::from_secs(2);
 /// ended. Listed while a turn runs (only a turn starts one), once as it ends, and while any
 /// run; it stops with the app-server, or for good when the app-server won't list them.
 async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: String) {
-    let mut known: HashMap<String, BackgroundTask> = HashMap::new();
     let mut was_active = false;
     while rpc.process.is_running() {
         tokio::time::sleep(TERMINALS_EVERY).await;
         let active = lock(&shared.turn_id).is_some();
         let ended = std::mem::replace(&mut was_active, active) && !active;
-        if !active && !ended && known.is_empty() {
+        if !active && !ended && lock(&shared.terminals).is_empty() {
             continue;
         }
         let listed = match rpc
@@ -3452,8 +3468,12 @@ async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: 
                 return;
             }
         };
-        let tasks =
-            parse::background_terminals(&listed, &mut known, &lock(&shared.commands), now_ms());
+        let tasks = parse::background_terminals(
+            &listed,
+            &mut lock(&shared.terminals),
+            &lock(&shared.commands),
+            now_ms(),
+        );
         for task in tasks {
             shared
                 .events
@@ -4859,6 +4879,7 @@ for line in sys.stdin:
             approvals: Mutex::new(HashMap::new()),
             turn_id: Mutex::new(None),
             commands: Mutex::default(),
+            terminals: Mutex::default(),
             compact_asked: AtomicBool::new(false),
             events: Events::new(events_tx, None),
             thread: Mutex::new(Some("t".into())),
@@ -4975,6 +4996,7 @@ for line in sys.stdin:
             approvals: Mutex::new(HashMap::new()),
             turn_id: Mutex::new(None),
             commands: Mutex::default(),
+            terminals: Mutex::default(),
             compact_asked: AtomicBool::new(false),
             events: Events::new(events_tx, None),
             thread: Mutex::new(Some("t".into())),
