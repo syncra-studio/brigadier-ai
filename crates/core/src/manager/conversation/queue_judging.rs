@@ -46,8 +46,9 @@ const JOINED_KEPT: usize = 32;
 /// The line a queued message reaches the session under, to judge it.
 pub(crate) fn deciding_frame(shown: &str) -> String {
     format!(
-        "{FRAME}{shown} · judge it: brigadier queue {shown} join|wait|worker <id>|new-session; \
-         unjudged, it joins this work]\n"
+        "{FRAME}{shown} · judge it: brigadier queue {shown} join|wait|worker <id>|new-session \
+         (join, or worker, when it belongs to this work; wait when it doesn't); unjudged, it \
+         joins this work]\n"
     )
 }
 
