@@ -1011,8 +1011,9 @@ export function cliThreadTree(
   const typed = stored.flatMap((message) => (message.role === "user" && !named.has(message.requestId ?? message.id) ? [(fullText[message.id] ?? message.text).trim()] : []));
   const blocks = cliBlocks(view, conversationId, board, session, typed);
   // The user's own messages as Brigadier keeps them, by their request: a turn that names one
-  // shows it as it was sent, its pasted chips, mentions and attachments with it.
-  const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])));
+  // shows it as it was sent, its pasted chips, mentions and attachments with it. The first under
+  // a request is the user's; Brigadier's words kept after it under the same request are not.
+  const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])).toReversed());
   // A queued message no turn names yet (`queued-‹id›`) is kept under its queue id.
   const keptOf = (id: string): Message | undefined =>
     own.get(id) ?? (id.startsWith("queued-") ? [...own.entries()].find(([request]) => request.endsWith(id.slice("queued-".length)))?.[1] : undefined);

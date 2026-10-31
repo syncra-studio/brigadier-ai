@@ -74,6 +74,9 @@ function cliIdOf(id: string): string {
 export function fixtureView(messages: readonly Message[], board: Board | null): ThreadView {
   const requests = board?.requests ?? {};
   const placed: { position: number; atMs: number; entry: FileEntry }[] = [];
+  // A request is the user's message sent under it; Brigadier's words after it under the same
+  // request (a job's end told to the CLI) are noted with none, as the engine notes them.
+  const noted = new Set<string>();
   for (const message of messages) {
     if ((message.role !== "user" && message.role !== "assistant") || cliLag.unsaid.has(message.id)) continue;
     const request = message.requestId ? requests[message.requestId] : undefined;
@@ -81,6 +84,7 @@ export function fixtureView(messages: readonly Message[], board: Board | null): 
     // A final answer stored: the CLI's item began when the answer started, and is the answer.
     const answer = message.role === "assistant" && message.answerAtMs !== undefined;
     const atMs = answer ? message.answerAtMs! : message.createdAtMs;
+    const first = message.role === "user" && !noted.has(message.requestId ?? message.id);
     placed.push({
       position: message.seq,
       atMs,
@@ -90,9 +94,10 @@ export function fixtureView(messages: readonly Message[], board: Board | null): 
         ...(steer && { steer: true }),
         ...(answer && { phase: "answer" as const }),
         // The request the engine noted it sent in the message, as it says it with the message.
-        ...(message.role === "user" && { requests: [message.requestId ?? message.id] }),
+        ...(first && { requests: [message.requestId ?? message.id] }),
       },
     });
+    if (first) noted.add(message.requestId ?? message.id);
   }
   for (const step of board?.orchestratorSteps ?? []) {
     if (step.kind.type !== "tool") continue;
