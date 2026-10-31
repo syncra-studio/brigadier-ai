@@ -107,7 +107,7 @@ const SCENES = {
     caption: "All three, Checks nearest the composer",
     workers: [
       worker("all", "w1", 1, "Parser fix", 312_000, { doing: { type: "call", step: { name: "shell", detail: "pnpm test parser" } }, diff: { insertions: 42, deletions: 7, files: [] } }),
-      worker("all", "w2", 2, "Readme draft", 95_000, { waiting: [{ kind: "permission", what: "pnpm install", card: null }] }),
+      worker("all", "w2", 2, "Readme draft", 95_000, { waiting: [{ kind: "question", what: "pnpm install", card: null }] }),
     ],
     background: [...SUBAGENTS.slice(0, 3), tests, CHECKS[1]!, CHECKS[6]!],
     entries: [...SUBAGENT_CALLS, ...CHECK_CALLS],

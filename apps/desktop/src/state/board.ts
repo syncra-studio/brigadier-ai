@@ -45,7 +45,12 @@ export type ShownApproval = Approval & {
 };
 
 export function shownApproval(approval: Approval): approval is ShownApproval {
-  return approval.subject.type !== "finishSession";
+  return approval.subject.type !== "finishSession" && !forOrchestrator(approval);
+}
+
+/** A worker CLI's own permission prompt: only its orchestrator answers it, the user never sees it (D48). */
+export function forOrchestrator(approval: Approval): boolean {
+  return approval.taskId !== null && approval.subject.type === "cli";
 }
 
 /** Newest entries kept per open worker transcript; older ones load on demand. */

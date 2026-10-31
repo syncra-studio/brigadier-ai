@@ -1141,7 +1141,7 @@ fn last_line(path: &std::path::Path) -> Option<String> {
     Some(line.chars().take(LINE_MAX).collect())
 }
 
-fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
+pub(super) fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
     let event = event.expect("an event");
     FileEntry {
         wake: thread_view::wake_of(&event),

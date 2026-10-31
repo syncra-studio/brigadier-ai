@@ -2714,7 +2714,7 @@ fn rows_script(answers: Answers) -> Script {
 }
 
 /// STRIP-DOWN-PLAN S14: a session's own workers reach its thread view as rows, from their
-/// CLIs' events and git: working, needs you with the CLI's permission prompt (answered by
+/// CLIs' events and git: working, its CLI's permission prompt waiting on the session (answered by
 /// the session's `send --allow`), done, +/− and commits against the session's branch, and
 /// merged once that branch has them. They come as thread news too, and never as sidebar rows.
 #[tokio::test]
@@ -2726,6 +2726,7 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     };
     let flow = Flow::start("cli-worker-rows", options, rows_script(answers.clone())).await;
     let mut news = flow.manager.subscribe_thread_news();
+    let mut sent: Vec<Vec<crate::thread_view::WorkerRow>> = Vec::new();
     flow.say("Start them.").await;
     flow.until("a asks", |_| answers.lock().unwrap().contains_key("asking"))
         .await;
@@ -2736,17 +2737,16 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
             .cloned()
             .unwrap_or_else(|| panic!("no row {title}: {:#?}", view.workers))
     };
-    super::eventually_async("a's prompt in its row", || {
+    // Its prompt waits on the session, never the user (D48): no card the user sees, nothing
+    // under Waiting on you.
+    super::eventually_async("a's prompt on the board", || {
         let manager = flow.manager.clone();
         let id = flow.conversation.clone();
         async move {
-            let view = manager.thread_view_with_workers(&id).await.unwrap();
-            let row = view
-                .workers
-                .iter()
-                .find(|row| row.title.starts_with("Asker"))
-                .cloned();
-            row.filter(|row| !row.waiting.is_empty()).is_some()
+            let board = manager.core.board(&id).await.unwrap();
+            board.approvals.values().any(|card| {
+                card.for_orchestrator() && card.state == crate::work::CardState::Pending
+            })
         }
     })
     .await;
@@ -2757,30 +2757,15 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
         .unwrap();
     let a = rows(&view, "Asker");
     assert!(a.working, "{a:#?}");
-    assert_eq!(a.waiting.len(), 1);
-    assert_eq!(
-        a.waiting[0].kind,
-        crate::thread_view::WorkerWaitKind::Permission
-    );
-    assert!(a.waiting[0].what.contains("curl"), "{a:#?}");
-    assert!(a.waiting[0].card.is_some());
+    assert!(a.waiting.is_empty(), "{a:#?}");
     assert_eq!(a.agent, ProviderKind::Claude);
-    // The prompt came as thread news too, before it is answered (news is debounced).
-    let mut sent = Vec::new();
-    while !sent
-        .iter()
-        .any(|rows: &Vec<crate::thread_view::WorkerRow>| {
-            rows.iter().any(|row| !row.waiting.is_empty())
-        })
-    {
-        let item = tokio::time::timeout(std::time::Duration::from_secs(20), news.recv())
-            .await
-            .expect("the prompt's rows as news")
-            .unwrap();
-        if let Some(rows) = item.workers {
-            sent.push(rows);
-        }
-    }
+    let board = flow.manager.core.board(&flow.conversation).await.unwrap();
+    assert!(
+        board
+            .activity(&flow.conversation, Default::default())
+            .is_none_or(|activity| activity.approvals.is_empty()),
+        "the user's activity counts no worker prompt"
+    );
     answers
         .lock()
         .unwrap()
@@ -2849,7 +2834,7 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     assert!(b.merged, "{b:#?}");
     assert_eq!(b.ahead, 0);
 
-    // The rows came as thread news too, the prompt included, ending with none working (news
+    // The rows came as thread news too, never with the prompt, ending with none working (news
     // is debounced: the last may come after the turn settled).
     while !sent
         .last()
@@ -2865,7 +2850,7 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     }
     assert!(
         sent.iter()
-            .any(|rows| rows.iter().any(|row| !row.waiting.is_empty())),
+            .all(|rows| rows.iter().all(|row| row.waiting.is_empty())),
         "{sent:#?}"
     );
     // Never sidebar rows.
@@ -3058,5 +3043,133 @@ async fn a_codex_thread_gets_the_stop_hook_too() {
     assert_eq!(stop.command, flow.manager.config.daemon_exe);
     assert_eq!(stop.args, ["hook", "stop"]);
     assert!(thread.output_hook.is_none());
+    flow.stop().await;
+}
+
+/// D48: a worker's permission prompt is its session's to answer, never the user's. It reaches
+/// the session as worker news naming the tool, the command and how to answer; the session's
+/// `send --deny <reason>` tells the worker's CLI that reason, as its orchestrator's; and the
+/// worker's thread shows the prompt and the answer as rows.
+#[tokio::test]
+async fn a_workers_prompt_is_answered_by_its_session_with_a_reason() {
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                let keep = |name: &str, value: Value| {
+                    answers.lock().unwrap().insert(name.into(), value);
+                };
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if let Some(Role::Worker { .. }) = worker {
+                    let decision = turn.ask_approval("touch /tmp/outside.txt", "touch").await;
+                    keep("decision", json!(format!("{decision:?}")));
+                    return Reply::text("Carried on.");
+                }
+                if !turn.input.contains("Start it.") {
+                    return Reply::text("Noted.");
+                }
+                let id =
+                    id_of(&brigadier(&turn, CliRequest::Start(Box::new(start("Touch it.")))).await);
+                let asked = wait_for(&turn, &[&id], 1).await;
+                keep("asked", json!(asked));
+                keep(
+                    "denied",
+                    brigadier(
+                        &turn,
+                        send(&id, Some("outside its worktree"), Some(Answer::Deny)),
+                    )
+                    .await,
+                );
+                keep("ended", json!(wait_for(&turn, &[&id], 1).await));
+                keep("id", json!(id));
+                Reply::text("Done.")
+            })
+        })
+    };
+    let options = Options {
+        permission: crate::model::PermissionLevel::AcceptEdits,
+        ..Options::default()
+    };
+    let flow = Flow::start("cli-worker-deny", options, script).await;
+    flow.say("Start it.").await;
+    flow.until("the session's turn ends", |_| {
+        answers.lock().unwrap().contains_key("id")
+    })
+    .await;
+    flow.settled().await;
+    let answers = answers.lock().unwrap().clone();
+    let asked = &answers["asked"][0];
+    assert_eq!(asked["event"], "needs-input", "{asked:#}");
+    assert_eq!(
+        asked["asks"], "permission for Bash: touch /tmp/outside.txt",
+        "{asked:#}"
+    );
+    assert_eq!(
+        answers["denied"]["answered"], "deny",
+        "{:#}",
+        answers["denied"]
+    );
+    assert!(
+        answers["decision"]
+            .as_str()
+            .unwrap()
+            .contains("Your orchestrator declined this: outside its worktree"),
+        "{}",
+        answers["decision"]
+    );
+    let board = flow.board().await;
+    let card = board
+        .approvals
+        .values()
+        .find(|card| card.for_orchestrator())
+        .expect("its prompt");
+    assert_eq!(
+        card.state,
+        crate::work::CardState::Denied {
+            by: brigadier_providers::Decider::Orchestrator,
+            message: Some("outside its worktree".into()),
+        }
+    );
+    // Never the user's: nothing waits on them.
+    assert!(
+        board
+            .activity(&flow.conversation, Default::default())
+            .is_none_or(|activity| activity.approvals.is_empty())
+    );
+    assert_eq!(board.tasks.len(), 1);
+    let task = board.tasks.keys().next().cloned().expect("its task");
+    let thread = flow
+        .manager
+        .worker_thread(&flow.conversation, &task)
+        .await
+        .unwrap();
+    let shown: Vec<_> = thread
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            brigadier_providers::ProviderEvent::ApprovalRequested { request } => {
+                request.command.clone()
+            }
+            brigadier_providers::ProviderEvent::ApprovalResolved {
+                decision,
+                decided_by,
+                ..
+            } => Some(format!("{decided_by:?} {decision:?}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "touch /tmp/outside.txt".to_owned(),
+            "Orchestrator Deny { message: \"outside its worktree\" }".to_owned()
+        ],
+        "{:#?}",
+        thread.entries
+    );
     flow.stop().await;
 }

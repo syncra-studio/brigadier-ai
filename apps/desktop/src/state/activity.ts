@@ -9,6 +9,7 @@ import type {
   TaskState,
   ThreadNews,
 } from "@/ipc/generated";
+import { forOrchestrator } from "@/state/board";
 import { type Stop, stopsOf, useStopping } from "@/state/stopping";
 
 /** A conversation's live state as the sidebar shows it, from the daemon's snapshot and events. */
@@ -232,7 +233,7 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
         approvals: toggled(
           current.approvals,
           event.approval.id,
-          event.approval.state.type === "pending",
+          event.approval.state.type === "pending" && !forOrchestrator(event.approval),
         ),
       };
     case "questionUpdated":

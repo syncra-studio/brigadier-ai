@@ -44,7 +44,7 @@ test("the context card's Workers row names each worker at work by its row, with 
 
     // A few: a line each with its state; the finished ones in the outcome line, not lines of their own.
     const few = text([
-      row("t2", "Find bar fixes", { waiting: [{ kind: "permission", what: "rm -rf dist", card: null }] }),
+      row("t2", "Find bar fixes", { waiting: [{ kind: "question", what: "rm -rf dist", card: null }] }),
       row("t1", "Demo of the fixes", { lastEventAtMs: NOW - 34 * 60_000 }),
       row("t4", "Settings fixes", { working: false, lastEnd: "done", merged: true, ahead: 1 }),
       row("t5", "Readme", { working: false, lastEnd: "stopped" }),

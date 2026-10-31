@@ -186,8 +186,8 @@ export function workerActivity(entries: readonly ThreadEntry[]): Activity<Action
     if (entry.kind === "action") {
       return workerPlumbing(entry.item) ? { type: "skip" } : { type: "step", key: entry.item.key, step: entry.item };
     }
-    // An answered approval leaves no trace: the action's own row tells what came of it.
-    if (entry.kind === "item" && entry.item.kind === "approval" && entry.item.resolution) return { type: "skip" };
+    // An answered approval leaves no trace, the action's own row tells what came of it, but the orchestrator's answer (D48).
+    if (entry.kind === "item" && entry.item.kind === "approval" && entry.item.resolution && entry.item.resolution.decidedBy !== "orchestrator") return { type: "skip" };
     // Thinking is never a row: the live one feeds the live line.
     if (entry.kind === "item" && entry.item.kind === "reasoning") return { type: "skip" };
     return { type: "break" };

@@ -30,11 +30,11 @@ test("the context card reads in the reference order, one row-height line per row
   ]);
 });
 
-test("Waiting on you lists each worker's permission prompt, question and sign-in under its name, and a click opens that worker", { timeout: 90000 }, async (t) => {
+test("Waiting on you lists each worker's questions and sign-in under its name, never a permission prompt (its orchestrator's), and a click opens that worker", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "context-rows.html?drive=1&waiting=1", "context-rows-result", 60000)) as Record<string, unknown>;
   assert.deepEqual(seen.sections, ["todo-app", "Waiting on you", "Workers", "Background", "Sources"]);
   assert.deepEqual(seen.waiting, [
-    ["permission", "Web page Allow npm install express"],
+    ["question", "Web page Which template engine?"],
     ["question", "API routes Which port should the server use?"],
     ["signIn", "API routes Sign in to figma"],
   ]);

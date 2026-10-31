@@ -1793,8 +1793,8 @@ impl SessionManager {
     }
 
     /// B7 for worker approvals: what the user already allowed "for this session" in this
-    /// conversation goes; anything else asks the user (the CLI asks only what its level
-    /// leaves to the user). A worker raised to Full access since its CLI started asks nobody.
+    /// conversation goes; anything else asks its orchestrator (the CLI asks only what its level
+    /// leaves open). A worker raised to Full access since its CLI started asks nobody.
     async fn route_worker_approval(
         &self,
         live: &Arc<TaskLive>,
@@ -1817,7 +1817,7 @@ impl SessionManager {
             });
         if !raised && !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref())
         {
-            self.ask_user_for_worker(live, cli, request).await;
+            self.ask_orchestrator_for_worker(live, cli, request).await;
             // Raised while its card opened, after the waiting cards were looked at: it goes.
             if self.worker_raised_now(live, cli).await {
                 self.allow_workers_waiting_at_full(&live.conversation_id)
@@ -1905,18 +1905,25 @@ impl SessionManager {
         }
     }
 
-    /// The user's card for the worker CLI's request, while that CLI runs; the worker shows it
-    /// waits on it.
-    async fn ask_user_for_worker(&self, live: &TaskLive, cli: &Cli, request: ApprovalRequest) {
+    /// The worker CLI's request, while that CLI runs, for its orchestrator alone to answer
+    /// (D48): it hears it as worker news, the user sees no card; the worker shows it waits.
+    async fn ask_orchestrator_for_worker(
+        &self,
+        live: &TaskLive,
+        cli: &Cli,
+        request: ApprovalRequest,
+    ) {
         let what = request
             .command
             .clone()
+            .or_else(|| (!request.paths.is_empty()).then(|| request.paths.join(", ")))
             .unwrap_or_else(|| request.tool.clone());
+        let asks = format!("permission for {}: {what}", request.tool);
         match self
             .open_cli_card(cli, &live.conversation_id, Some(live.id.clone()), request)
             .await
         {
-            Ok(Some(card)) => self.plain_needs_input(live, &card, &what),
+            Ok(Some(card)) => self.plain_needs_input(live, &card, &asks),
             Ok(None) => return,
             Err(err) => {
                 tracing::warn!(task = %live.id, error = %err, "could not open an approval card");
@@ -1950,13 +1957,14 @@ impl SessionManager {
         false
     }
 
-    /// Passes the user's answer to the worker's CLI; "Allow … for this session" also allows
+    /// Passes the answer (`by` its orchestrator) to the worker's CLI; "Allow … for this session" also allows
     /// similar requests from every worker of the conversation from now on.
     pub(crate) async fn answer_worker_approval(
         &self,
         task_id: &TaskId,
         request: &ApprovalRequest,
         decision: ApprovalDecision,
+        by: Decider,
     ) -> Result<()> {
         let approval_id = request.id.clone();
         let live = self
@@ -1982,7 +1990,7 @@ impl SessionManager {
         if decision == ApprovalDecision::AllowSimilar {
             self.waiters.allow_similar(&live.conversation_id, request);
         }
-        self.record_worker_resolution(task_id, approval_id, decision, Decider::User)
+        self.record_worker_resolution(task_id, approval_id, decision, by)
             .await;
         self.set_task_blocked(task_id, None).await;
         Ok(())

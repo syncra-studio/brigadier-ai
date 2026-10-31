@@ -399,10 +399,11 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 (false, true) => Some(Answer::Deny),
                 (false, false) => None,
             };
-            match (answer, text.trim().is_empty()) {
-                (Some(_), false) => {
+            let blank = text.trim().is_empty();
+            match (answer, blank) {
+                (Some(Answer::Allow), false) => {
                     return Err(error(
-                        "--allow and --deny answer a permission prompt and take no message".into(),
+                        "--allow takes no message; --deny takes its reason".into(),
                     ));
                 }
                 (None, true) => return Err(error("missing <text>".into())),
@@ -410,7 +411,8 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             }
             CliRequest::Send {
                 id: id(),
-                text: answer.is_none().then_some(text),
+                // A --deny's text is its reason.
+                text: (answer != Some(Answer::Allow) && !blank).then_some(text),
                 answer,
             }
         }
@@ -1212,6 +1214,22 @@ mod tests {
             }
         );
         assert_eq!(
+            run(&["send", "ab12", "--deny", "outside", "its", "worktree"]).0,
+            CliRequest::Send {
+                id: "ab12".into(),
+                text: Some("outside its worktree".into()),
+                answer: Some(Answer::Deny)
+            }
+        );
+        assert_eq!(
+            run(&["send", "ab12", "--deny"]).0,
+            CliRequest::Send {
+                id: "ab12".into(),
+                text: None,
+                answer: Some(Answer::Deny)
+            }
+        );
+        assert_eq!(
             run(&["wait", "ab12", "cd34", "--timeout", "60"]).0,
             CliRequest::Wait {
                 ids: vec!["ab12".into(), "cd34".into()],
@@ -1277,7 +1295,7 @@ mod tests {
         assert!(fails(&["start", "--lean"]).contains("missing <prompt>"));
         assert!(fails(&["send", "ab12"]).contains("missing <text>"));
         assert!(fails(&["send", "ab12", "--allow", "--deny"]).contains("don't go together"));
-        assert!(fails(&["send", "ab12", "--deny", "no"]).contains("take no message"));
+        assert!(fails(&["send", "ab12", "--allow", "yes"]).contains("--allow takes no message"));
     }
 
     #[test]

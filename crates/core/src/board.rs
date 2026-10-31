@@ -208,7 +208,7 @@ impl Board {
         let approvals: Vec<_> = self
             .approvals
             .values()
-            .filter(|approval| approval.state == CardState::Pending)
+            .filter(|approval| approval.state == CardState::Pending && !approval.for_orchestrator())
             .map(|approval| approval.id.clone())
             .collect();
         let questions: Vec<_> = self

@@ -380,14 +380,18 @@ pub const COMMANDS: &[Command] = &[
                   Another session (an id of `brigadier sessions --all`) gets it as a message \
                   from this session, never as its user's, and may answer with `brigadier send` \
                   back. Message another session only when the user asks, or when it is \
-                  absolutely needed. Another session's workers are out of reach. --allow or \
-                  --deny answers the permission prompt a worker's CLI shows (a `needs-input` \
-                  event of `brigadier wait`).",
+                  absolutely needed. Another session's workers are out of reach. A worker's \
+                  permission prompt (a `needs-input` event of `brigadier wait`) reaches only \
+                  you, never the user: judge it yourself and answer it with --allow, or \
+                  --deny <reason>; the worker waits until you do.",
         args: &[
             positional("id", "The worker, or another session."),
             switch("allow", "Allow what its permission prompt asks."),
-            switch("deny", "Deny what its permission prompt asks."),
-            rest("text", "The message.", false),
+            switch(
+                "deny",
+                "Deny what its permission prompt asks; the text is the reason its CLI is told.",
+            ),
+            rest("text", "The message, or a --deny's reason.", false),
         ],
         available: true,
         schema: include_str!("../schemas/send.schema.json"),

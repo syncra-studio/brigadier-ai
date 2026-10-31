@@ -63,7 +63,7 @@ const turns: ThreadTurn[] = [{ userMessage: "u1", startedAtMs: now - 14 * MIN, e
   ...(limit === "usage" && { limit: { kind: "usageWindow", resetsAtMs: RESET, window: "five_hour" } }),
   ...(limit === "credits" && { limit: { kind: "credits", resetsAtMs: null, window: null } }) }];
 const waits: WorkerWait[][] = params.has("waiting")
-  ? [[{ kind: "permission", what: "npm install express", card: null }], [{ kind: "question", what: "Which port should the server use?", card: null }, { kind: "signIn", what: "figma", card: null }]]
+  ? [[{ kind: "question", what: "Which template engine?", card: null }], [{ kind: "question", what: "Which port should the server use?", card: null }, { kind: "signIn", what: "figma", card: null }]]
   : [];
 const diffs: Record<string, { insertions: number; deletions: number }> = { "task-2": { insertions: 120, deletions: 4 }, "task-3": { insertions: 48, deletions: 0 } };
 showRows(id, Object.values(tasks).map((task, index) => rowOf(task, {

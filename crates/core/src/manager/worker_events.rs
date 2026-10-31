@@ -706,8 +706,17 @@ fn net_text(message: &str, held: &[Kept], titles: &HashMap<TaskId, String>) -> S
                     }
                 })
                 .unwrap_or_default();
+            // As `brigadier wait` says it: only the session answers its worker's prompt (D48).
+            let answer = if kept.event.event == EventKind::NeedsInput {
+                format!(
+                    " (`brigadier send {} --allow` or `--deny <reason>` answers a permission prompt)",
+                    kept.event.id
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "Worker \"{title}\" ({}): {}{what}{}",
+                "Worker \"{title}\" ({}): {}{what}{answer}{}",
                 kept.event.id,
                 net_word(kept.event.event),
                 super::work_facts::net_facts(&kept.event)

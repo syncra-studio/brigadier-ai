@@ -48,13 +48,20 @@ export function EntryView({ entry, sent }: { entry: ThreadEntry; sent: readonly 
       );
     }
     case "approval": {
-      // Answered, it leaves no trace: the command's own row tells what came of it.
-      if (item.resolution) return null;
+      // Its orchestrator answers it (D48); answered by anyone else, the command's own row tells what came of it.
+      const { resolution } = item;
+      if (resolution && resolution.decidedBy !== "orchestrator") return null;
       const what = item.request.command ? shownCommand(item.request.command) : item.request.paths.join(", ") || item.request.tool;
+      const reason = resolution?.decision.type === "deny" ? resolution.decision.message.trim() : "";
+      const text = !resolution
+        ? `Waiting for the orchestrator: ${what}`
+        : resolution.decision.type === "deny"
+          ? `Denied by orchestrator${reason ? `: ${reason}` : ""}`
+          : `Allowed by orchestrator: ${what}`;
       return (
-        <div className={cn(row, "text-warning")}>
+        <div data-slot="worker-approval" className={cn(row, resolution ? "text-muted-foreground" : "text-warning")} title={resolution ? `${text}\n${what}` : text}>
           <ShieldCheck aria-hidden className="size-4 shrink-0" />
-          <span className="min-w-0 truncate">Waiting for your approval: {what}</span>
+          <span className="min-w-0 truncate">{text}</span>
         </div>
       );
     }

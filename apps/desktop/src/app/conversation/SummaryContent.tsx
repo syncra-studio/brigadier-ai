@@ -192,11 +192,9 @@ export function fileSource(conversationId: string, file: AttachmentRef): UsedSou
 /** Sources shown before "View all". */
 const SOURCES = 3;
 
-/** A worker's wait in a line: what it asks to run, its question, the server it wants a sign-in for. */
+/** A worker's wait in a line: its question, or the server it wants a sign-in for. */
 function waitLine(wait: WorkerWait): string {
   switch (wait.kind) {
-    case "permission":
-      return `Allow ${wait.what}`;
     case "question":
       return wait.what;
     case "signIn":
@@ -231,7 +229,7 @@ function WaitingRow({ conversationId, row, name, wait }: { conversationId: strin
 }
 
 /**
- * "Waiting on you": the real pending permission prompts, questions and MCP sign-ins of this
+ * "Waiting on you": the real pending questions and MCP sign-ins of this
  * session's workers, from their rows, the oldest worker's first. The section is there only while
  * something waits. The session's own question shows only above its composer.
  */

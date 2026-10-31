@@ -17,7 +17,7 @@ const row = (patch: Partial<WorkerRow> = {}): WorkerRow => {
 
 test("the strip lists only the workers at work or waiting, oldest first; finished ones are the context card's", () => {
   const working = row();
-  const asks = row({ waiting: [{ kind: "permission", what: "rm -rf build", card: null }] });
+  const asks = row({ waiting: [{ kind: "question", what: "rm -rf build", card: null }] });
   const finished = [row({ working: false, lastEnd: "done" }), row({ working: false, lastEnd: "stopped" }), row({ working: false, lastEnd: "failed", gone: true }), row({ working: false, lastEnd: "done", merged: true, ahead: 1 })];
   const view = workersStrip([asks, ...finished, working], NOW);
   assert.deepEqual(view?.rows, [working.id, asks.id]);

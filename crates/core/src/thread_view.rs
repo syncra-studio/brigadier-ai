@@ -265,8 +265,6 @@ pub struct WorkerWait {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkerWaitKind {
-    /// A permission prompt of its CLI.
-    Permission,
     /// A question its CLI asks the user.
     Question,
     /// One of its MCP servers wants the user to sign in.

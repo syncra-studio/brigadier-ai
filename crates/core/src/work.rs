@@ -1232,6 +1232,13 @@ pub struct Approval {
     pub resolved_at_ms: Option<i64>,
 }
 
+impl Approval {
+    /// A worker CLI's own permission prompt: its orchestrator answers it, never the user (D48).
+    pub fn for_orchestrator(&self) -> bool {
+        self.task_id.is_some() && matches!(self.subject, ApprovalSubject::Cli { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "type",

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
+import { applyToBoard, emptyBoard } from "@/state/board";
 import { sessionStatus, sidebarIndicators, tabState } from "@/state/tabStates";
 
 const on = (conversationId: string, event: unknown): EventEnvelope =>
@@ -47,6 +48,20 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.deepEqual(sessionStatus(row("c4"), null), { state: "needsYou", reason: "sign-in" });
   applyActivityEvents([servers(null, [{ name: "linear", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
+});
+
+const card = (id: string, taskId: string | null) =>
+  on("c5", { type: "approvalUpdated", approval: { id, conversationId: "c5", taskId, requestId: null, position: 0, state: { type: "pending" },
+    createdAtMs: 0, resolvedAtMs: null, subject: { type: "cli", request: { id, kind: "command", tool: "Bash", command: "touch /x", cwd: null, paths: [], reason: null, escalation: false, input: null } } } });
+
+test("a worker CLI's permission prompt never needs the user: its orchestrator answers it (D48); the session's own does", () => {
+  applyActivityEvents([card("w", "t1")]);
+  assert.equal(row("c5").awaiting, null);
+  const board = applyToBoard(emptyBoard("c5"), card("w", "t1"));
+  assert.deepEqual(Object.keys(board.approvals), [], "no card for the user");
+  applyActivityEvents([card("own", null)]);
+  assert.equal(row("c5").awaiting, "approval");
+  assert.deepEqual(Object.keys(applyToBoard(board, card("own", null)).approvals), ["own"]);
 });
 
 const stopped = () => stoppedOf(useActivity.getState().byConversation.stopped);

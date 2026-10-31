@@ -219,7 +219,7 @@ impl SessionManager {
         }
     }
 
-    /// The user answered an approval card.
+    /// The user answered an approval card, or an orchestrator its worker's prompt.
     pub async fn answer_card(
         &self,
         conversation_id: ConversationId,
@@ -243,17 +243,17 @@ impl SessionManager {
                 "only a worker's own command can be allowed again".into(),
             ));
         }
+        // A worker's own prompt reaches only its orchestrator (D48), so only it answers it.
+        let by = if approval.for_orchestrator() {
+            Decider::Orchestrator
+        } else {
+            Decider::User
+        };
         approval.state = match &decision {
-            ApprovalDecision::Allow => CardState::Allowed {
-                by: Decider::User,
-                similar: false,
-            },
-            ApprovalDecision::AllowSimilar => CardState::Allowed {
-                by: Decider::User,
-                similar: true,
-            },
+            ApprovalDecision::Allow => CardState::Allowed { by, similar: false },
+            ApprovalDecision::AllowSimilar => CardState::Allowed { by, similar: true },
             ApprovalDecision::Deny { message } => CardState::Denied {
-                by: Decider::User,
+                by,
                 message: (!message.trim().is_empty()).then(|| message.clone()),
             },
         };
@@ -266,13 +266,13 @@ impl SessionManager {
             ApprovalSubject::Cli { request } => {
                 let decision = match &decision {
                     ApprovalDecision::Deny { message } => ApprovalDecision::Deny {
-                        message: brigadier_providers::user_deny_message(message),
+                        message: brigadier_providers::deny_message(by, message),
                     },
                     other => other.clone(),
                 };
                 match &approval.task_id {
                     Some(task_id) => {
-                        self.answer_worker_approval(task_id, request, decision)
+                        self.answer_worker_approval(task_id, request, decision, by)
                             .await?;
                     }
                     None => {

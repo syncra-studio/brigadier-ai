@@ -589,7 +589,7 @@ pub fn wait(output: &WaitOutput) -> String {
         out.push('\n');
         if let Some(asks) = &event.asks {
             out.push_str(&format!(
-                "asks: {}\n`brigadier send {} --allow` or `--deny` answers.\n",
+                "asks: {}\n`brigadier send {} --allow` or `--deny <reason>` answers a permission prompt.\n",
                 asks.trim_end(),
                 event.id
             ));

@@ -431,7 +431,17 @@ async fn with_no_wait_a_workers_prompt_reaches_the_parent_in_one_message_once() 
     let nets = seen.nets();
     assert_eq!(nets.len(), 1, "{nets:#?}");
     assert_eq!(seen.told(), [("Ask-first".into(), "asks".into())]);
-    assert!(nets[0].1.contains("asks · curl"), "{}", nets[0].1);
+    // The tool, the exact command and how to answer it (D48).
+    assert!(
+        nets[0].1.contains("asks · permission for Bash: curl"),
+        "{}",
+        nets[0].1
+    );
+    assert!(
+        nets[0].1.contains("--allow` or `--deny <reason>`"),
+        "{}",
+        nets[0].1
+    );
     flow.stop().await;
 }
 

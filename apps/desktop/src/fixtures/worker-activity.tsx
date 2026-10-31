@@ -31,7 +31,7 @@ useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, tasks 
 // held by a usage limit, one done and one stopped.
 showRows(conversationId, [
   rowOf(tasks.queued, { working: true, limit: { kind: "usageWindow", resetsAtMs: 3_600_000, window: "five_hour" } }),
-  rowOf(tasks.blocked, { working: true, waiting: [{ kind: "permission", what: "pnpm install", card: null }] }),
+  rowOf(tasks.blocked, { working: true, waiting: [{ kind: "question", what: "pnpm install", card: null }] }),
   rowOf(tasks.active),
   rowOf(tasks.completed, { lastEventAtMs: tasks.completed.updatedAtMs }),
   rowOf(tasks.stopped, { lastEventAtMs: tasks.stopped.updatedAtMs }),

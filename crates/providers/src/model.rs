@@ -509,6 +509,17 @@ pub fn user_deny_message(reason: &str) -> String {
     }
 }
 
+/// [`user_deny_message`], or for a worker's orchestrator (D48) its own words.
+pub fn deny_message(by: Decider, reason: &str) -> String {
+    match (by, reason.trim()) {
+        (Decider::Orchestrator, "") => "Your orchestrator declined this. Don't try it again; \
+            say in your reply what you were going to do and that you didn't do it."
+            .to_string(),
+        (Decider::Orchestrator, reason) => format!("Your orchestrator declined this: {reason}"),
+        (_, reason) => user_deny_message(reason),
+    }
+}
+
 /// Who answered an approval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -516,6 +527,8 @@ pub enum Decider {
     /// Brigadier's policy, on the user's behalf.
     Policy,
     User,
+    /// The orchestrator that started the worker (D48): `brigadier send <worker> --allow|--deny`.
+    Orchestrator,
     /// Replayed from a recording, which keeps the answer but not who gave it.
     Recorded,
 }

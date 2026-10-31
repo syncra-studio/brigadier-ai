@@ -47,7 +47,7 @@ All through `brigadier` (`--help`, `--json` on all):
 | `brigadier start "<brief>" --title "2-4 words" [--work KIND] [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--mcp NAME]… [--with computer-use] [--reviewing ID\|session] [--mockup]` | Start a worker in its own worktree off yours (or `--base`), at your permission level; prints its id. |
 | `brigadier wait [<id>…] [--timeout S]` | Wait for a worker's next event. |
 | `brigadier read <id> [--last N]` | Its last message or N items. |
-| `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
+| `brigadier send <id> "<text>"` / `--allow` / `--deny <reason>` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one. |
 | `brigadier sessions [--all]` | Other sessions; message one if asked. |
 | `brigadier fusion offer "<question>"` | In a top-level Chat only, offer a second opinion from every installed CLI; nothing starts until the user clicks Ask. |
@@ -89,7 +89,7 @@ Build or test work, one shell call each (a small edit you make yourself); the ta
 1. Start the wave: up to N workers on own files.
 2. Wait right after starting; never end a turn with workers running and no wait. One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn; it wakes you. Handle each event; wait again until all in:
    - **turn ended:** done: check its evidence. A question: answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once and relay with `brigadier send`.
-   - **needs input** (a permission prompt): `brigadier send <id> --allow` if inside the brief and harmless; else ask the user, or deny with a note.
+   - **needs input** (a permission prompt; only you see it, the worker waits): judge it yourself, then `brigadier send <id> --allow` or `--deny <reason>`.
    - **usage limit:** let it wait for the reset, or close it and restart the rest on the same Work's next row.
    - **fresh context** (compacted): check it still knows the brief, or resend.
    - **failed** or **interrupted:** `brigadier read <id> --last 10`; send it on or close it.

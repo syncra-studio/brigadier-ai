@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use brigadier_providers::{
-    BackgroundTask, ItemStatus, LimitHit, McpStatus, ProviderEvent, Role, TurnStatus,
+    ApprovalDecision, BackgroundTask, ItemStatus, LimitHit, McpStatus, ProviderEvent, Role,
+    TurnStatus,
 };
 
 use super::cli_thread::update_background;
@@ -691,23 +692,8 @@ impl SessionManager {
             self.read_workers_git(&board.tasks, parent_branch.clone(), parent_checkout)
                 .await;
         }
+        // Its CLI's permission prompts wait on its orchestrator, not the user (D48).
         let mut waiting: HashMap<&TaskId, Vec<WorkerWait>> = HashMap::new();
-        let mut approvals: Vec<_> = board.approvals.values().collect();
-        approvals.sort_by_key(|card| card.position);
-        for card in approvals {
-            if let (Some(task), CardState::Pending, ApprovalSubject::Cli { request }) =
-                (&card.task_id, &card.state, &card.subject)
-            {
-                waiting.entry(task).or_default().push(WorkerWait {
-                    kind: WorkerWaitKind::Permission,
-                    what: request
-                        .command
-                        .clone()
-                        .unwrap_or_else(|| request.tool.clone()),
-                    card: Some(card.id.clone()),
-                });
-            }
-        }
         let mut questions: Vec<_> = board.questions.values().collect();
         questions.sort_by_key(|card| card.position);
         for card in questions {
@@ -902,6 +888,8 @@ impl SessionManager {
         let mut view = thread_view::view(files, live.as_ref(), &records);
         let current = owned.last().map(|(kind, _)| *kind);
         thread_view::name_providers(&mut view, &owned, current);
+        let board = self.core.board(id).await?;
+        add_prompts(&mut view.entries, &board, &task.id);
         // Its hand-offs to fresh CLI sessions (D14): a divider each, the nudge and the
         // hand-off hidden, as a session's.
         view.seams = super::seam::marks(&record, &mut view.entries);
@@ -933,6 +921,66 @@ impl SessionManager {
         rows.due.lock().unwrap().remove(conv);
         rows.git_read_ms.lock().unwrap().remove(conv);
         rows.sent.lock().unwrap().remove(conv);
+    }
+}
+
+/// Worker `task`'s CLI permission prompts and their answers, each where it came by time among
+/// `entries` (its CLI's files keep neither): read-only rows of its thread (D48). One whose
+/// worker ended unanswered leaves none.
+fn add_prompts(
+    entries: &mut Vec<brigadier_providers::session_file::FileEntry>,
+    board: &crate::board::Board,
+    task: &TaskId,
+) {
+    for card in board.approvals.values() {
+        let (true, ApprovalSubject::Cli { request }) =
+            (card.task_id.as_ref() == Some(task), &card.subject)
+        else {
+            continue;
+        };
+        let answer = match (&card.state, card.resolved_at_ms) {
+            (CardState::Pending, _) => None,
+            (CardState::Allowed { by, similar }, Some(at)) => Some((
+                at,
+                if *similar {
+                    ApprovalDecision::AllowSimilar
+                } else {
+                    ApprovalDecision::Allow
+                },
+                *by,
+            )),
+            (CardState::Denied { by, message }, Some(at)) => Some((
+                at,
+                ApprovalDecision::Deny {
+                    message: message.clone().unwrap_or_default(),
+                },
+                *by,
+            )),
+            _ => continue,
+        };
+        let mut events = vec![(
+            card.created_at_ms,
+            ProviderEvent::ApprovalRequested {
+                request: request.clone(),
+            },
+        )];
+        events.extend(answer.map(|(at, decision, decided_by)| {
+            (
+                at,
+                ProviderEvent::ApprovalResolved {
+                    id: request.id.clone(),
+                    decision,
+                    decided_by,
+                },
+            )
+        }));
+        for (at, event) in events {
+            let index = entries
+                .iter()
+                .position(|entry| entry.at_ms.is_some_and(|written| written > at))
+                .unwrap_or(entries.len());
+            entries.insert(index, super::cli_thread::entry(Some(event), at));
+        }
     }
 }
 

@@ -1175,7 +1175,7 @@ impl SessionManager {
             let decision = match answer {
                 Answer::Allow => ApprovalDecision::Allow,
                 Answer::Deny => ApprovalDecision::Deny {
-                    message: String::new(),
+                    message: text.unwrap_or_default(),
                 },
             };
             self.answer_card(task.conversation_id.clone(), card.id.clone(), decision)

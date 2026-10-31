@@ -32,7 +32,7 @@ test("after a worker's name the line reads lowercase, but for a name it starts w
   const now = (detail: string, name = "shell") => nowInLine(workerNow(row({ steps: [{ name, detail }] }), NOW));
   assert.equal(now("pnpm build"), "running pnpm build");
   assert.equal(now("", "mcp__pencil__batch_design"), "Pencil: batch design");
-  assert.equal(nowInLine(workerNow(row({ waiting: [{ kind: "permission", what: "rm", card: null }] }), NOW)), "needs you");
+  assert.equal(nowInLine(workerNow(row({ waiting: [{ kind: "question", what: "rm", card: null }] }), NOW)), "needs you");
 });
 
 test("a thread's item is a call at work while it runs, named as the engine names a worker's", () => {
