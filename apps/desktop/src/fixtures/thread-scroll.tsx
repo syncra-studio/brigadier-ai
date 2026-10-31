@@ -710,6 +710,45 @@ const steps = {
     await settle(300);
     return { placed, shown };
   },
+  /**
+   * A working turn's approval card coming in the same update as its rows change (its words
+   * gone as it asks), and going again: the user's message stays where it was placed throughout.
+   */
+  async approvalAtWork() {
+    await open("other");
+    await userScroll(max());
+    sentWorking = true;
+    await send({ text: "A question whose turn asks first.", attachments: [], mentions: [] });
+    await settle(300);
+    const request = stored["other"]!.find((message) => message.id === lastSent)!.requestId!;
+    const now = Date.now();
+    const thinking = [0, 1, 2].map((index) => ({
+      itemId: `think-${index}`, requestId: request, text: `Step ${index + 1} of what it thinks through.`, position: 1_000 + index,
+      startedAtMs: now + index, updatedAtMs: now + index, throughPosition: 0, complete: index < 2,
+    }));
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "running", runRequest: request, thinking, streaming: { messageId: "said", text: "It says what it does first.\n\nThen a second paragraph.", requestId: request, startedAtMs: now, phase: "commentary" } as never } } : {}));
+    await settle(400);
+    const placed = { userTop: newestUserTop(), room: roomHeight() };
+    const tops: number[] = [];
+    const sample = async (ms: number) => {
+      // Read once each frame's resize observers ran: what the frame paints.
+      for (const end = performance.now() + ms; performance.now() < end; await frame()) tops.push(newestUserTop());
+    };
+    const approval = {
+      id: "ask", conversationId: "other", taskId: null, requestId: request, position: 2_000, state: { type: "pending" }, createdAtMs: now, resolvedAtMs: null,
+      subject: { type: "cli", request: { id: "ask", kind: "command", tool: "Bash", command: "sleep 25 && echo done", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: null } },
+    };
+    useBoard.setState(({ board }) => (board ? { board: { ...board, thinking: thinking.slice(0, 1), streaming: null, approvals: { ask: approval as never } } } : {}));
+    await sample(400);
+    const shown = { tops: [...new Set(tops)], room: roomHeight() };
+    tops.length = 0;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, approvals: {} } } : {}));
+    await sample(400);
+    const gone = { tops: [...new Set(tops)], room: roomHeight() };
+    sentWorking = false;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "idle", runRequest: null, thinking: [], streaming: null } } : {}));
+    return { placed, shown, gone };
+  },
   /** A send, then away to another conversation while it answers and back: at the bottom, without the room. */
   async returnAfterSend() {
     await open("other");

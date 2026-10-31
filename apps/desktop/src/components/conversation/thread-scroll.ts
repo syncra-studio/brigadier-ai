@@ -814,7 +814,11 @@ export class ThreadScroller {
     return layout ? layout.viewport.clientHeight - layout.footer() - SCROLL_PAD_PX : 0;
   }
 
-  /** The room's turn's growth since it was last measured uses the room up; at 0 it is gone. */
+  /**
+   * The room's turn's growth since it was last measured uses the room up; at 0 it is gone. Its
+   * shrinking (rows replaced by fewer) gives the room back, so the view's range never shrinks
+   * under the placed turn and nothing shown moves.
+   */
   private updateRoom(): void {
     const layout = this.layout;
     if (!layout || this.hide(layout.viewport) || this.room === null) return;
@@ -836,7 +840,7 @@ export class ThreadScroller {
       this.roomTurn = null;
     }
     const turn = last.getBoundingClientRect().bottom - user.getBoundingClientRect().top;
-    if (this.roomTurn !== null && turn > this.roomTurn) this.setRoomPx(Math.max(0, this.roomPx - (turn - this.roomTurn)));
+    if (this.roomTurn !== null && turn !== this.roomTurn) this.setRoomPx(Math.min(roomFor(this.visible()), Math.max(0, this.roomPx - (turn - this.roomTurn))));
     this.roomTurn = turn;
     if (this.roomPx === 0) this.dropRoom();
   }

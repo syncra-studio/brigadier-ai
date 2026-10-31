@@ -46,6 +46,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     };
     resizeAtBottom: { placed: number; shrunk: number; grown: number };
     cardAtSend: { placed: { userTop: number; room: number }; shown: { tops: number[]; room: number } };
+    approvalAtWork: { placed: { userTop: number; room: number }; shown: { tops: number[]; room: number }; gone: { tops: number[]; room: number } };
     returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
     sendScrolledUp: { moved: boolean; distance: number; inView: boolean; button: boolean };
     newChat: { userTop: number | null; top: number };
@@ -175,6 +176,12 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   const card = `card at send: ${JSON.stringify(seen.cardAtSend)}`;
   assert.deepEqual(seen.cardAtSend.shown.tops, [seen.cardAtSend.placed.userTop], card);
   assert.ok(seen.cardAtSend.shown.room < seen.cardAtSend.placed.room && seen.cardAtSend.shown.room > 0, card);
+  // A working turn's approval card coming as its rows shrink (its words replaced by the ask), and
+  // going: the room takes both, so the message never moves in a painted frame.
+  const asked = `approval at work: ${JSON.stringify(seen.approvalAtWork)}`;
+  assert.deepEqual(seen.approvalAtWork.shown.tops, [seen.approvalAtWork.placed.userTop], asked);
+  assert.deepEqual(seen.approvalAtWork.gone.tops, [seen.approvalAtWork.placed.userTop], asked);
+  assert.ok(seen.approvalAtWork.shown.room > 0, asked);
 
   // Left right after a send and back once it answered: the bottom, without the room.
   const { returnAfterSend } = seen;

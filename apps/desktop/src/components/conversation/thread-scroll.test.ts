@@ -581,14 +581,17 @@ test("a placeholder under a sent message giving way mid-spring doesn't turn the 
   }
   assert.ok(tops.every((top, index) => index === 0 || top >= tops[index - 1]!), tops.join(", "));
   assert.equal(fake.end(user), fake.turnLine);
-  // Once settled, the room only shrinks again.
+  // Once settled, a row coming uses the room and its going gives it back: nothing shown moves.
   const room = fake.room;
+  const top = fake.scrollTop;
   const answer = fake.row("answer", 40);
   fake.rows.push(answer);
   scroller.rowsChanged();
+  assert.equal(fake.room, room - 40 - GAP);
   fake.rows.pop();
   scroller.rowsChanged();
-  assert.equal(fake.room, room - 40 - GAP);
+  assert.equal(fake.room, room);
+  assert.equal(fake.scrollTop, top);
 });
 
 test("scrolled up from a sent turn, the room shrinks by as much and goes once used up; the turn is not followed; back at the bottom, it is", () => {
@@ -652,7 +655,7 @@ test("the user's own scroll to the very bottom keeps the room it shows (never go
   assert.equal(short.room, 0);
 });
 
-test("a sent turn's room only shrinks: a fold closing in it gives nothing back; a fold opened stops the watch", () => {
+test("a sent turn's room takes a fold closing in it back, never past what it had; a fold opened stops the watch", () => {
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
@@ -672,11 +675,11 @@ test("a sent turn's room only shrinks: a fold closing in it gives nothing back; 
   work.height -= 100;
   scroller.resized();
   scroller.scrolled();
-  assert.equal(fake.room, room);
+  assert.equal(fake.room, room + 100);
   // Growing again uses it up again.
   work.height += 50;
   scroller.resized();
-  assert.equal(fake.room, room - 50);
+  assert.equal(fake.room, room + 50);
   // A fold was clicked: growing past the view is not followed.
   work.height += 1000;
   scroller.resized();
