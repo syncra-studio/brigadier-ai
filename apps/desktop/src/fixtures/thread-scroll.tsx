@@ -775,6 +775,27 @@ const steps = {
     return { distance: distance(), rows: rows().length };
   },
   /**
+   * Rows of fractional height: the content's height is the same whichever rows are mounted, as a
+   * row not mounted keeps its exact height. Rounded, it moved a pixel as rows mounted and went,
+   * and a placement spring chasing that bottom never settled.
+   */
+  async fractionalRows() {
+    await open("long");
+    const style = document.createElement("style");
+    style.textContent = "[data-thread-row] { padding-bottom: 0.5px; }";
+    document.head.append(style);
+    // Every row measured at its new height.
+    await scrollTo(() => (distance() === 0 ? true : undefined));
+    const heights: number[] = [];
+    for (const top of [0, max(), 0, max()]) {
+      await userScroll(top);
+      heights.push(viewport().scrollHeight);
+    }
+    style.remove();
+    await settle(100);
+    return heights;
+  },
+  /**
    * A send whose message its CLI says before the view reads its turns again, as over a busy
    * connection: said 400ms in, its turn read at 2s, the turn working all along. Frame by frame:
    * the row holding the sent bubble, the bubble's top in the view, and whether blank room (a

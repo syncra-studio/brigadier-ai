@@ -14,7 +14,6 @@ import {
 } from "@assistant-ui/react";
 import {
   defaultRangeExtractor,
-  measureElement as measuredSize,
   observeElementOffset,
   observeElementRect,
   type Range as VirtualRange,
@@ -644,7 +643,9 @@ const ThreadMessages: FC<{
       const index = instance.indexFromElement(element);
       const id = ids[index];
       if (hidden()) return (id !== undefined ? heights.get(id) : undefined) ?? estimate(index);
-      const size = measuredSize(element, entry, instance);
+      // Exact, not rounded as the library's own: a row not mounted keeps this height in its
+      // spacer, so mounting and unmounting never moves the content's height by a pixel.
+      const size = entry?.borderBoxSize[0]?.blockSize ?? element.getBoundingClientRect().height;
       if (id !== undefined && size > 0) heights.set(id, size);
       return size;
     },

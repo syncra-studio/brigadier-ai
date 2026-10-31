@@ -50,6 +50,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     newChat: { userTop: number | null; top: number };
     capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
     working: { distance: number; rows: number };
+    fractionalRows: number[];
     sendBeforeItsTurnIsRead: { t: number; row: string | null; top: number | null; blank: boolean }[];
   };
   assert.equal(seen.error, undefined);
@@ -187,6 +188,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(seen.newChat.top, 0);
   assert.equal(seen.working.distance, 0);
   assert.ok(seen.working.rows >= 2);
+
+  // Rows of fractional height keep the content's height whichever of them are mounted.
+  assert.equal(new Set(seen.fractionalRows).size, 1, `content heights: ${seen.fractionalRows.join(", ")}`);
   // A send whose message its CLI says before the view reads its turns again: the bubble shows
   // from the first frame, under one row all along (never mounted afresh under the CLI's id, the
   // view thrown off the sent turn's place into room not drawn yet), and stays where it was placed.
