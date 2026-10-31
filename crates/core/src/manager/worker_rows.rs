@@ -819,7 +819,13 @@ impl SessionManager {
                             let merged = moved && repo.ancestor(&tip, &into).unwrap_or(false);
                             Some((ahead, merged))
                         })
-                        .unwrap_or_default();
+                        // No branch of its own (`--local`): its work is in the checkout it
+                        // shares with its session, so nothing is left to merge.
+                        .unwrap_or((
+                            0,
+                            branch.is_none()
+                                && diff.as_ref().is_some_and(|diff| !diff.files.is_empty()),
+                        ));
                     (
                         task,
                         Some(WorkerGit {
