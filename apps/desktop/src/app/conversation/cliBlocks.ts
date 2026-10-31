@@ -777,8 +777,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
-      // Before the turns are read again, the requests the engine noted it sent in the message.
-      const requests = view.turns[turn]?.requests ?? entry.requests ?? [];
+      // Before the turns are read again, the requests the engine noted it sent in the message;
+      // a turn read before the engine noted them names none, so they join its own.
+      const requests = [...new Set([...(view.turns[turn]?.requests ?? []), ...(entry.requests ?? [])])];
       const atMs = entry.atMs ?? 0;
       // A turn of a request an earlier turn carried (a background command's end, told after its
       // turn) starts with the CLI's message, not the user's: it keeps its own id. A queued message

@@ -115,6 +115,10 @@ export function mergeEntries(entries: readonly FileEntry[], more: readonly FileE
     const images = entry.images?.length ? entry.images : earlier.images;
     const atMs = earlier.atMs ?? entry.atMs;
     const parent = entry.parent ?? earlier.parent;
+    // Who sent a message and its requests, as the engine noted them: the stream's word of a
+    // message the file held first carries them.
+    const said = entry.said ?? earlier.said;
+    const requests = entry.requests ?? earlier.requests;
     merged[index] = {
       event: keepInput(earlier.event, entry.event),
       ...(atMs !== undefined && { atMs }),
@@ -122,6 +126,8 @@ export function mergeEntries(entries: readonly FileEntry[], more: readonly FileE
       ...(parent !== undefined && { parent }),
       ...((entry.steer || earlier.steer) && { steer: true }),
       ...(images?.length && { images }),
+      ...(said && { said }),
+      ...(requests && { requests }),
     };
   }
   return merged;

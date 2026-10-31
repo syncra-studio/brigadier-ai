@@ -8,6 +8,7 @@ import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "js
 import type { OrchestratorStep, ProviderEvent, Question, Task, ThreadView, UserRequest } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval } from "@/state/board";
+import { mergeEntries } from "@/state/cliThread";
 
 const base = Object.values(night.tasks)[0] as unknown as Task;
 let next = 0;
@@ -259,5 +260,30 @@ test("a subagent's approval wait in a CLI turn reads as awaiting approval, on th
   const [block] = cliBlocks(view, "c");
   const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as ShownApproval;
   assert.deepEqual(head(input({ ...leading, approvals: byId([approval]) }, { requestIds: block!.requestIds })),
+    { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
+});
+
+test("a follow-up's subagent approval reads as awaiting approval when the turn was read before the CLI's message was", () => {
+  // Read as the turn opened: the CLI's file already held the message, the engine had not bound
+  // it to its request yet, so the turn names none.
+  const read: ThreadView = {
+    entries: [
+      { event: { type: "message", itemId: "cli-u1", role: "user", text: "First" }, atMs: 1000, said: { by: "user" }, requests: ["r0"] },
+      { event: { type: "message", itemId: "a1", role: "assistant", text: "Done." }, atMs: 1500 },
+      { event: { type: "message", itemId: "cli-u2", role: "user", text: "Use a subagent" }, atMs: 2000 },
+    ],
+    turns: [
+      { userMessage: "cli-u1", startedAtMs: 1000, endedAtMs: 1500, end: "done", error: null, requests: ["r0"] },
+      { userMessage: "cli-u2", startedAtMs: 2000, endedAtMs: null, end: null, error: null, requests: [] },
+    ],
+  };
+  // The live stream's word of the message, with its request, comes after.
+  const view = { ...read, entries: mergeEntries(read.entries, [
+    { event: { type: "message", itemId: "cli-u2", role: "user", text: "Use a subagent" }, atMs: 2001, said: { by: "user" }, requests: ["r1"] },
+    { event: { type: "toolCall", itemId: "agent", name: "Agent", input: '{"description":"Run node"}', status: "inProgress", output: null }, atMs: 2100 },
+  ]) };
+  const block = cliBlocks(view, "c").at(-1)!;
+  const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as ShownApproval;
+  assert.deepEqual(head(input({ ...leading, approvals: byId([approval]) }, { requestIds: block.requestIds })),
     { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
 });
