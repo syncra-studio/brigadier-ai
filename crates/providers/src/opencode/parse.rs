@@ -639,7 +639,10 @@ pub(crate) fn read_transcript(path: &Path) -> std::io::Result<Vec<FileEntry>> {
                         }
                         _ => continue,
                     };
-                    entries.push(FileEntry::new(event, part_at));
+                    let mut entry = FileEntry::new(event, part_at);
+                    // A finished tool's last word is its end: a subagent's time reads from it.
+                    entry.updated_at_ms = part.pointer("/time/completed").and_then(Value::as_i64);
+                    entries.push(entry);
                 }
             }
             "compaction" if message["status"] == "completed" => entries.push(FileEntry::new(
@@ -1372,6 +1375,11 @@ mod tests {
             }
         ));
         assert_eq!(entries[1].at_ms, Some(1_150));
+        assert_eq!(
+            entries[2].updated_at_ms,
+            Some(1_190),
+            "a finished tool ends when it completed"
+        );
         assert!(
             matches!(&entries[5].event, ProviderEvent::Message { role: Role::Assistant, text, .. } if text == "DONE\n\nBANANA")
         );
