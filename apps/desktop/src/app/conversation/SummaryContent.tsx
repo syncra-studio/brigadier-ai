@@ -57,6 +57,7 @@ import { useBoard } from "@/state/board";
 import { useCliThread, useSessionMcp, useThreadFact, useWorkerRows } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { heldMap } from "@/lib/held";
 import { cn } from "@/lib/utils";
 
 /* What the summary reads from a session's own CLI items, each a string or a flag (see `useThreadFact`). */
@@ -84,8 +85,7 @@ function useSessionDiff(
     let current = true;
     getSessionDiff(conversationId)
       .then((next) => {
-        if (next) lastDiffs.set(conversationId, next);
-        else lastDiffs.delete(conversationId);
+        lastDiffs.set(conversationId, next ?? undefined);
         if (current) redraw();
       })
       // The last stat read stays while git can't tell; the card shows the branch alone when none was.
@@ -100,8 +100,13 @@ function useSessionDiff(
   return session ? (lastDiffs.get(conversationId) ?? null) : null;
 }
 
-/** Each session's last diff stat read. */
-const lastDiffs = new Map<string, { stat: DiffStat; commits: number }>();
+/** Each session's last diff stat read, held across restarts so a first open shows it at once. */
+const lastDiffs = heldMap(
+  "brigadier.sessionDiffs",
+  200,
+  (v): v is { stat: DiffStat; commits: number } =>
+    typeof v === "object" && v !== null && "stat" in v && typeof v.stat === "object" && v.stat !== null && Array.isArray((v.stat as DiffStat).files),
+);
 
 /** A Chat's sources: links in the user's messages (as soon as they are sent), first seen first. */
 function useSources(conversationId: string): string[] {

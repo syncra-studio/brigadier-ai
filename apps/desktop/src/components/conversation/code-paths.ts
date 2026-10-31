@@ -9,6 +9,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 
 import { request } from "@/ipc/client";
+import { heldMap } from "@/lib/held";
 import { listFiles } from "@/state/actions";
 
 /** A path as written in inline code, with the line it points at. */
@@ -55,6 +56,8 @@ type Known = {
 };
 
 const known = new Map<string, Known>();
+/** Each shown chip's last answer, by conversation and path, held across restarts: a first open draws it at once. */
+const held = heldMap("brigadier.codePaths", 2000, (v): v is boolean => typeof v === "boolean");
 const listeners = new Set<() => void>();
 let generation = 0;
 const changed = () => {
@@ -128,7 +131,7 @@ function subscribe(listener: () => void): () => void {
 /**
  * Whether the file inline code names exists in the session's checkout: `null` while unknown (or
  * with no session), so the code shows plain until it is known. While a new version of the
- * checkout is read, the last version's answer stands.
+ * checkout is read, the last version's answer stands; after a restart, the last answer held.
  */
 export function useCodePathExists(conversationId: string | null, root: string | null, version: string, path: CodePath | null): boolean | null {
   useSyncExternalStore(subscribe, () => generation);
@@ -141,7 +144,11 @@ export function useCodePathExists(conversationId: string | null, root: string | 
   // Not read for this version yet: what the last version read through knew.
   const latest = current ?? state;
   const previous = latest && (latest === current || latest.files === null) ? latest.before : latest;
-  const shown = result ?? (previous && absolute ? lookup(previous, relative, absolute) : null);
+  const heldKey = conversationId && absolute ? `${conversationId}\n${absolute}` : null;
+  const shown = result ?? (previous && absolute ? lookup(previous, relative, absolute) : null) ?? (heldKey ? (held.get(heldKey) ?? null) : null);
+  useEffect(() => {
+    if (heldKey && result !== null) held.set(heldKey, result);
+  }, [heldKey, result]);
   useEffect(() => {
     if (!conversationId || !absolute || result !== null) return;
     learn(conversationId, version, relative, absolute);
