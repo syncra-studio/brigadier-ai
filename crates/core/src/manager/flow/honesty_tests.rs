@@ -197,6 +197,63 @@ async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
     flow.stop().await;
 }
 
+/// A message the thread read just before it started a command can't be judged until that
+/// ends: its time to be judged starts again then, so the fallback never joins it mid-command.
+#[tokio::test]
+async fn a_message_read_just_before_a_command_waits_for_its_judging_until_that_ends() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let running = Arc::new(tokio::sync::Notify::new());
+    let inputs: Log = Default::default();
+    let (release, started, log) = (gate.clone(), running.clone(), inputs.clone());
+    let flow = Flow::start(
+        "honesty-queue-before-command",
+        Options::default(),
+        script(move |turn| {
+            let (gate, started, log) = (gate.clone(), started.clone(), log.clone());
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if !turn.input.contains("Run the tests.") {
+                    return Reply::text("Formatted.");
+                }
+                turn.steered().await;
+                turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
+                    .await;
+                started.notify_one();
+                gate.notified().await;
+                turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
+                    .await;
+                Reply::text("The tests pass.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Run the tests.").await;
+    super::eventually("the turn to run", || !inputs.lock().unwrap().is_empty()).await;
+    flow.say("Also check the formatting.").await;
+    running.notified().await;
+    tokio::time::sleep(
+        crate::manager::conversation::queue_judging::DECIDING_WAIT
+            + std::time::Duration::from_millis(800),
+    )
+    .await;
+    let board = flow.board().await;
+    assert!(
+        board
+            .queue
+            .items
+            .first()
+            .is_some_and(|queued| queued.deciding),
+        "joined while the command ran: {:?}",
+        board.queue
+    );
+    release.notify_one();
+    flow.until("the unjudged message to join the turn", |board| {
+        board.queue.items.is_empty()
+    })
+    .await;
+    flow.stop().await;
+}
+
 /// A message the user steers in while the thread's command runs says so until the command
 /// ends, then the thread reads it.
 #[tokio::test]

@@ -813,6 +813,13 @@ impl ConvLive {
                     },
                 ));
             }
+            // What it is judging it can't judge while the command runs: its time starts again
+            // once that ends.
+            let judging: Vec<String> = (state.deciding.iter())
+                .filter(|id| !state.held_items.contains(id))
+                .cloned()
+                .collect();
+            state.held_items.extend(judging);
             return None;
         }
         state.holding.retain(|(of, _)| of != item);
