@@ -45,15 +45,18 @@ const output = (seed, bytes) => {
   return text;
 };
 /** One session's turns: `calls` commands per turn, each `bytes` of output; the last answer ends with `end`. */
-const turnsOf = (tag, turns, calls, bytes) => Array.from({ length: turns }, (_, t) => ({
+const turnsOf = (tag, turns, calls, bytes) => Array.from({ length: turns }, (_turn, t) => ({
   t, at: BASE + t * 120_000, ask: `Question ${t + 1} of ${tag}: ${sentence(t, 14)}`, think: sentence(t + 1, 60),
   calls: Array.from({ length: calls }, (_, c) => ({ id: `${tag}-c${t}-${c}`, command: `pnpm test --filter part-${c} # ${tag} turn ${t + 1}`, output: output(t + c, bytes) })),
   answer: `Answer ${t + 1} of ${tag}. ${sentence(t + 2, 50)}${t === turns - 1 ? ` END-${tag}` : ''}`,
 }));
 
+const jsonLine = (value) => `${JSON.stringify(value)}\n`;
+const codexLine = (at, payload) => jsonLine({ timestamp: iso(at), type: 'event_msg', payload });
+
 const write = {
   claude(tag, turns) {
-    const line = (value) => `${JSON.stringify(value)}\n`;
+    const line = jsonLine;
     return turns.map(({ t, at, ask, think, calls, answer }) => {
       let lines = line({ type: 'user', uuid: `${tag}-u${t}`, timestamp: iso(at), message: { role: 'user', content: ask } });
       lines += line({ type: 'assistant', uuid: `${tag}-r${t}`, timestamp: iso(at + 1000), message: { id: `${tag}-m${t}-think`, role: 'assistant', content: [{ type: 'thinking', thinking: think }] } });
@@ -66,7 +69,7 @@ const write = {
     }).join('');
   },
   codex(tag, turns) {
-    const line = (at, payload) => `${JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload })}\n`;
+    const line = codexLine;
     const item = (at, turn, value) => line(at, { type: 'item_completed', thread_id: tag, turn_id: turn, item: value, started_at_ms: at, completed_at_ms: at });
     return turns.map(({ t, at, ask, think, calls, answer }) => {
       const turn = `${tag}-turn${t}`;
@@ -82,7 +85,7 @@ const write = {
     }).join('');
   },
   opencode(tag, turns) {
-    const line = (value) => `${JSON.stringify(value)}\n`;
+    const line = jsonLine;
     return turns.map(({ t, at, ask, think, calls, answer }) => {
       let lines = line({ id: `${tag}-u${t}`, type: 'user', text: ask, time: { created: at } });
       lines += line({ id: `${tag}-a${t}`, type: 'assistant', time: { created: at + 1000 }, content: [
@@ -204,7 +207,6 @@ for (const session of order) {
   mkdirSync(record, { recursive: true });
   writeFileSync(join(record, 'lineage.json'), JSON.stringify([{ provider: session.cli, sessionId: session.tag, file: session.file, startedAt: BASE }]));
 }
-const byId = Object.fromEntries(sessions.map((s) => [s.id, s]));
 await stopDaemon();
 
 // ---- The page.
@@ -228,6 +230,7 @@ async function forward(request) {
 
 /** In the page: selects `id` and samples every frame until the thread has been whole for 30
  * frames. `scrollUp`: then scrolls it up, so its return shows whether its place was kept. */
+// oxlint-disable unicorn/consistent-function-scoping -- sample() runs in the page, whole.
 function sample({ id, tag, rows, scrollUp }) {
   const viewport = () => document.querySelector('[data-slot="aui_thread-viewport"]');
   const place = (view) => ({ top: Math.round(view.scrollTop), gap: Math.round(view.scrollHeight - view.clientHeight - view.scrollTop) });
@@ -287,6 +290,7 @@ function sample({ id, tag, rows, scrollUp }) {
     requestAnimationFrame(tick);
   });
 }
+// oxlint-enable unicorn/consistent-function-scoping
 
 const rowsOf = {};
 const runs = [];
