@@ -37,6 +37,17 @@ test("a background command holds the block whose turn started it, by its call, n
   assert.equal(turnCommands(view, turns, []), 0, "a live turn isn't held");
 });
 
+test("a block that starts with its message, before its CLI's turn began, still holds the command its turn started", () => {
+  const view: Pick<ThreadView, "background" | "entries" | "jobs"> = {
+    entries: [bash("toolu_sleep", "sleep 25 && echo done", 1200)],
+    background: [task("bsleep", "toolu_sleep", 1250)],
+    jobs: { holding: ["bsleep"] },
+  };
+  // Sent at 900, its turn began at 1000: the block's first span starts at the message.
+  assert.equal(turnCommands(view, turns, [900]), 1);
+  assert.equal(turnCommands(view, turns, [4900]), 0, "the next block's turn isn't this one's");
+});
+
 test("a command that ended holds the newest block that started it until the turn its end starts begins (D21)", () => {
   const ended = task("bwatch", "toolu_watch", 5250, { status: "completed", endedAtMs: 9000 });
   const waiting = task("bwait", "toolu_wait", 5260, { status: "completed", endedAtMs: 9000 });

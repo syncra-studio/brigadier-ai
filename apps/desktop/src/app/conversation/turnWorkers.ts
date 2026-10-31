@@ -15,6 +15,17 @@ import { isNativeWorker } from "@/state/nativeWorkers";
  * Its CLI's own subagents are not workers: they never hold a turn or count as one it waits for
  * (they have their own strip); a turn whose subagents run is still the lead's turn, working.
  */
+/**
+ * When the turn after a block's, its turns started at `starts`, began; `null` for the newest
+ * block. Its first turn is its own though it began after the block did: the block starts with
+ * its message, sent before its CLI's turn began (`startBy`).
+ */
+export function nextTurnStart(turns: readonly Pick<ThreadTurn, "startedAtMs">[], starts: readonly number[]): number | null {
+  const startedAtMs = Math.min(...starts);
+  const first = turns.find((turn) => turn.startedAtMs !== null && turn.startedAtMs >= startedAtMs);
+  return turns.find((turn) => turn !== first && turn.startedAtMs !== null && turn.startedAtMs > startedAtMs && !starts.includes(turn.startedAtMs))?.startedAtMs ?? null;
+}
+
 export function workingWorkers(
   workers: readonly WorkerRow[],
   turns: readonly Pick<ThreadTurn, "startedAtMs">[],
@@ -22,7 +33,7 @@ export function workingWorkers(
 ): number {
   if (starts.length === 0) return 0;
   const startedAtMs = Math.min(...starts);
-  const next = turns.find((turn) => turn.startedAtMs !== null && turn.startedAtMs > startedAtMs && !starts.includes(turn.startedAtMs))?.startedAtMs ?? null;
+  const next = nextTurnStart(turns, starts);
   const newest = next === null;
   return workers.filter((worker) => {
     if (isNativeWorker(worker)) return false;

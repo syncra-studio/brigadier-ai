@@ -1,4 +1,5 @@
 import { runsBrigadier, taskCommand } from "@/app/conversation/backgroundRows";
+import { nextTurnStart } from "@/app/conversation/turnWorkers";
 import type { BackgroundTask, FileEntry, ThreadTurn, ThreadView } from "@/ipc/generated";
 
 /**
@@ -21,7 +22,7 @@ export function turnCommands(
   const jobs = view.jobs;
   if (starts.length === 0 || !jobs || (!jobs.holding?.length && !jobs.waking)) return 0;
   const startedAtMs = Math.min(...starts);
-  const next = turns.find((turn) => turn.startedAtMs !== null && turn.startedAtMs > startedAtMs && !starts.includes(turn.startedAtMs))?.startedAtMs ?? null;
+  const next = nextTurnStart(turns, starts);
   const entries = view.entries;
   const background = view.background ?? [];
   const ours = (task: BackgroundTask) => {
