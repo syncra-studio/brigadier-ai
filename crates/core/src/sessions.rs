@@ -1881,11 +1881,13 @@ impl Core {
         mentions: Vec<Mention>,
         index: Option<u32>,
     ) -> Result<QueuedMessage> {
-        self.enqueue_as(id, text, attachments, mentions, index, false)
+        self.enqueue_as(id, text, attachments, mentions, index, false, None)
             .await
     }
 
-    /// [`Self::enqueue`]; `deciding` while the session judges it (run2-D40).
+    /// [`Self::enqueue`]; `deciding` while the session judges it (run2-D40); for `worker`, the
+    /// user's message to that worker of the session's (goal 8).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn enqueue_as(
         &self,
         id: &ConversationId,
@@ -1894,6 +1896,7 @@ impl Core {
         mentions: Vec<Mention>,
         index: Option<u32>,
         deciding: bool,
+        worker: Option<TaskId>,
     ) -> Result<QueuedMessage> {
         if text.trim().is_empty() && attachments.is_empty() {
             return Err(Error::Invalid("message is empty".into()));
@@ -1910,6 +1913,7 @@ impl Core {
             delivered: false,
             held_by: None,
             offer_session: false,
+            worker,
         };
         let queued = item.clone();
         self.change_queue(id, move |queue| {

@@ -953,6 +953,34 @@ test("a queued message shows once, as the user's, its frame gone: in the rail wh
   assert.equal(second!.user?.kind === "message" && second!.user.message.id, id);
 });
 
+/** A queued message's words under the line giving them to the session to judge. */
+const toJudge = (words: string) => `[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`;
+
+test("goal 8: a follow-up shows nowhere in the thread while it waits or is judged again, then once where it went in; a steer's line never shows", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const fresh = "[steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]\nAnd the logo.";
+  const followUps: ThreadView = {
+    entries: [
+      user("u1", "Fix the test", 1000),
+      // Judged wait in this block, then given to judge again in the next one.
+      user("s1", toJudge("Also the docs."), 1100, { steer: true }),
+      user("s2", fresh, 1200, { steer: true }),
+      user("s3", "[queued message cafebabe steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]", 1300, { steer: true }),
+      user("u2", "[queued message 0badf00d, now on its own turn]\nThe release notes.", 2000),
+      user("s4", toJudge("Also the docs."), 2100, { steer: true }),
+    ],
+    turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }, { ...turn("u2", 2000, null, null), requests: ["q2"] }],
+  };
+  const queued = { id, text: "Also the docs.", attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, deciding: true, delivered: true };
+  // Still in the rail (judged again): no bubble anywhere, the steer once, no line of Brigadier's.
+  const inRail = cliBlocks(followUps, "c1", { ...NO_BOARD, queueItems: [queued] });
+  assert.deepEqual(inRail.map((block) => block.steers.map((steer) => steer.text)), [["And the logo."], []]);
+  assert.equal(inRail[1]!.user?.kind === "message" && inRail[1]!.user.text, "The release notes.");
+  // Joined in the new block: one bubble, where the CLI read it last.
+  const joined = cliBlocks({ ...followUps, turns: [followUps.turns[0]!, { ...followUps.turns[1]!, requests: ["q2", id] }] }, "c1", NO_BOARD);
+  assert.deepEqual(joined.map((block) => block.steers.map((steer) => [steer.message.id, steer.text])), [[["r2", "And the logo."]], [[id, "Also the docs."]]]);
+});
+
 const message = (requestId: string, text: string, createdAtMs: number): Message => ({ ...stored(requestId, createdAtMs), text });
 /** A tree's nodes as drawn: each user bubble's text, each block's steers. */
 const shown = (tree: ReturnType<typeof cliThreadTree>) =>

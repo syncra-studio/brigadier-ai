@@ -346,6 +346,8 @@ async fn a_session_lowered_to_ask_its_inheriting_workers_ask_again() {
                 "Fetch it.".into(),
                 Vec::new(),
                 Vec::new(),
+                true,
+                None,
             )
             .await
             .unwrap();

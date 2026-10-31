@@ -647,6 +647,8 @@ pub(crate) struct FakeBehavior {
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// What each compaction asked of its CLI was told to keep (its `/compact` words), in order.
     pub compactions: Mutex<Vec<Option<String>>>,
+    /// A compaction's end waits for this, once set.
+    pub hold_compaction: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Each thread turn's plan mode, as Brigadier set it on its CLI before the turn.
     pub plan_modes: Mutex<Vec<bool>>,
     /// CLI starts fail while this is set.
@@ -1485,6 +1487,7 @@ impl ProviderSession for FakeSession {
         self.behavior.compactions.lock().unwrap().push(instructions);
         let compaction = uuid::Uuid::new_v4().to_string();
         let tx = self.sender();
+        let hold = self.behavior.hold_compaction.lock().unwrap().clone();
         Box::pin(async move {
             let Some(tx) = tx else {
                 return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
@@ -1494,6 +1497,9 @@ impl ProviderSession for FakeSession {
                 let _ = tx
                     .send(ProviderEvent::CompactionStarted { automatic: false })
                     .await;
+                if let Some(hold) = hold {
+                    hold.notified().await;
+                }
                 let _ = tx
                     .send(ProviderEvent::CompactionEnded {
                         automatic: false,
@@ -2521,6 +2527,8 @@ mod honesty_tests;
 #[cfg(unix)]
 mod interrupted_turn_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(unix)]
+mod block_queue_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod litter_tests;
@@ -2567,6 +2575,8 @@ mod source_branch_tests;
 mod turn_changes_tests;
 #[cfg(unix)]
 mod why_tests;
+#[cfg(unix)]
+mod worker_queue_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]

@@ -1299,6 +1299,8 @@ async fn the_user_messages_a_worker_directly() {
             vec![crate::model::Mention::Task {
                 id: task.id.clone(),
             }],
+            false,
+            None,
         )
         .await
         .unwrap();
@@ -1332,10 +1334,12 @@ async fn the_user_messages_a_worker_directly() {
             "Also round the corners.".into(),
             Vec::new(),
             Vec::new(),
+            true,
+            None,
         )
         .await
         .unwrap();
-    assert!(queued);
+    assert!(!queued, "steered in: nothing waits in the queue");
     super::eventually("the running turn to take it", || {
         list("steered")
             .first()
@@ -1385,8 +1389,15 @@ async fn the_user_messages_a_worker_directly() {
     let heard = list("worker").len();
     let other = flow.add_session("Other", None, ProviderKind::Claude).await;
     let send = |to: crate::model::ConversationId, text: &str, files| {
-        flow.manager
-            .send_to_worker(to, task.id.clone(), text.into(), files, Vec::new())
+        flow.manager.send_to_worker(
+            to,
+            task.id.clone(),
+            text.into(),
+            files,
+            Vec::new(),
+            true,
+            None,
+        )
     };
     let err = send(other, "Hi.", Vec::new()).await.unwrap_err();
     assert!(err.to_string().contains("isn't this session's"), "{err}");

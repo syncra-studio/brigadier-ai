@@ -1002,8 +1002,10 @@ pub enum Request {
     },
     /// The user's one message to one of the session's own workers (the composer's To:): it
     /// goes to the worker, with its attachments and mentions, as `brigadier send` sends; the
-    /// session's thread shows "You messaged ‹worker›" and its next turn hears of it. An error
-    /// means the worker did not take it.
+    /// session's thread shows "You messaged ‹worker›" and its next turn hears of it. Sent
+    /// while the worker works and not `steer`ed, it waits in the session's queue for that
+    /// worker (at `queue_index`, back from an edit) and goes as its next turn. An error means
+    /// neither took it.
     SendToWorker {
         conversation_id: ConversationId,
         task_id: TaskId,
@@ -1011,6 +1013,12 @@ pub enum Request {
         attachments: Vec<AttachmentRef>,
         #[serde(default)]
         mentions: Vec<Mention>,
+        #[serde(default)]
+        #[ts(as = "Option<bool>", optional)]
+        steer: bool,
+        #[serde(default)]
+        #[ts(optional)]
+        queue_index: Option<u32>,
     },
     /// Interrupts a worker's turn; `resumeTask` continues it.
     PauseTask {
@@ -1856,7 +1864,7 @@ pub enum Response {
         task_ids: Vec<TaskId>,
     },
     SendMockupNotes,
-    /// `queued`: it went into the worker's running turn.
+    /// `queued`: it waits in the session's queue for the worker.
     SendToWorker {
         queued: bool,
     },

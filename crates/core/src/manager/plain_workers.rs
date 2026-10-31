@@ -799,6 +799,12 @@ impl SessionManager {
         // What git and its CLI showed as the turn ended, beside its own words (harness P1).
         self.with_facts(task, &mut event).await;
         self.worker_event(&task.conversation_id, &task.id, None, event);
+        // The user's next message for it goes now; after a stop or a failure it waits (§5.3).
+        if kind == EventKind::TurnEnded {
+            let (manager, conversation, worker) =
+                (self.arc(), task.conversation_id.clone(), task.id.clone());
+            self.spawn(async move { manager.drain_worker_queue(&conversation, &worker).await });
+        }
     }
 
     /// A plain worker's CLI asks permission: the card under Waiting on you is open, and its
@@ -990,11 +996,14 @@ impl SessionManager {
     }
 
     /// The user's message to one of session `conversation_id`'s workers, from its composer's
-    /// To: (one message, then the worker's thread). It goes as `brigadier send` sends, with
-    /// the user's pastes, attachments and mentions as a turn takes them; the session's thread
-    /// shows "You messaged ‹worker›" and its next turn hears it, without starting one. An
-    /// error means the worker did not take it; once it did, nothing after fails the send.
-    /// True when it went into a running turn.
+    /// To: (one message, then the worker's thread). Sent while the worker works and not
+    /// `steer`ed, it waits in the session's queue for that worker (`queue_index`: its place,
+    /// back from an edit) and goes as the worker's next turn (goal 8); else it goes now, as
+    /// `brigadier send` sends, with the user's pastes, attachments and mentions as a turn takes
+    /// them. The session's thread shows "You messaged ‹worker›" and its next turn hears it,
+    /// without starting one. An error means neither the worker nor the queue took it; once one
+    /// did, nothing after fails the send. True when it waits in the queue.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_to_worker(
         &self,
         conversation_id: ConversationId,
@@ -1002,6 +1011,8 @@ impl SessionManager {
         text: String,
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
+        steer: bool,
+        queue_index: Option<u32>,
     ) -> Result<bool> {
         self.admit()?;
         // Held to the end: the session does not close under a message on its way.
@@ -1025,7 +1036,135 @@ impl SessionManager {
                 )));
             }
         }
-        let live = self.task_live(&task);
+        if !steer && self.task_live(&task).busy().await {
+            self.core
+                .enqueue_as(
+                    &conversation_id,
+                    text,
+                    attachments,
+                    mentions,
+                    queue_index,
+                    false,
+                    Some(task.id.clone()),
+                )
+                .await?;
+            // Its turn may have ended meanwhile.
+            self.drain_worker_queue(&conversation_id, &task.id).await;
+            return Ok(true);
+        }
+        self.deliver_direct(&conversation_id, &task, &text, &attachments, &mentions)
+            .await?;
+        Ok(false)
+    }
+
+    /// The next message the user queued for worker `task_id` goes to it once it isn't working:
+    /// kept in the queue until the worker took it, and left there, waiting, when it can't (an
+    /// ended or closed worker, a failed send).
+    /// Boxed: a worker's turn end drains it, and delivering may start the worker again.
+    pub(crate) fn drain_worker_queue<'a>(
+        &'a self,
+        conversation_id: &'a ConversationId,
+        task_id: &'a TaskId,
+    ) -> brigadier_providers::BoxFuture<'a, ()> {
+        Box::pin(self.drain_worker_queue_now(conversation_id, task_id))
+    }
+
+    async fn drain_worker_queue_now(&self, conversation_id: &ConversationId, task_id: &TaskId) {
+        let Ok(task) = self.direct_recipient(conversation_id, task_id).await else {
+            return;
+        };
+        // A paused worker holds new messages (D7) until it is resumed.
+        if task.state == TaskState::Paused || self.task_live(&task).busy().await {
+            return;
+        }
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        let Some(item) = board
+            .queue
+            .items
+            .into_iter()
+            .find(|item| item.worker.as_ref() == Some(task_id))
+        else {
+            return;
+        };
+        match self
+            .deliver_direct(
+                conversation_id,
+                &task,
+                &item.text,
+                &item.attachments,
+                &item.mentions,
+            )
+            .await
+        {
+            Ok(()) => {
+                if let Err(err) = self.core.take_queued(conversation_id, &item.id).await {
+                    tracing::warn!(task = %task.id, error = %err, "could not take a message its worker took out of the queue");
+                }
+            }
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "a queued message could not go to its worker; it waits");
+            }
+        }
+    }
+
+    /// The user's Steer on their queued message for a worker: it goes to that worker now, into
+    /// its running turn or as a turn of its own, and leaves the queue once it did.
+    pub(crate) async fn steer_queued_to_worker(
+        &self,
+        conversation_id: &ConversationId,
+        item: crate::work::QueuedMessage,
+    ) -> Result<()> {
+        let _working = self.enter(conversation_id)?;
+        let Some(worker) = &item.worker else {
+            return Err(Error::Invalid("that message is not for a worker".into()));
+        };
+        let task = self.direct_recipient(conversation_id, worker).await?;
+        self.deliver_direct(
+            conversation_id,
+            &task,
+            &item.text,
+            &item.attachments,
+            &item.mentions,
+        )
+        .await?;
+        self.core.take_queued(conversation_id, &item.id).await?;
+        Ok(())
+    }
+
+    /// Each worker's next queued message, for those not working (after a restart).
+    pub(crate) async fn drain_worker_queues(&self, conversation_id: &ConversationId) {
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        let mut workers: Vec<TaskId> = Vec::new();
+        for worker in board
+            .queue
+            .items
+            .iter()
+            .filter_map(|item| item.worker.clone())
+        {
+            if !workers.contains(&worker) {
+                workers.push(worker);
+            }
+        }
+        for worker in workers {
+            self.drain_worker_queue(conversation_id, &worker).await;
+        }
+    }
+
+    /// The user's message gives worker `task` a turn now: steered into its running one, else
+    /// a turn of its own. The session's thread shows "You messaged ‹worker›".
+    pub(crate) async fn deliver_direct(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        text: &str,
+        attachments: &[AttachmentRef],
+        mentions: &[Mention],
+    ) -> Result<()> {
+        let live = self.task_live(task);
         if task.state == TaskState::Starting {
             let up = tokio::time::Instant::now() + CLI_START;
             while live.cli().await.is_none() && tokio::time::Instant::now() < up {
@@ -1034,7 +1173,7 @@ impl SessionManager {
         }
         // Under its settle lock, looked at again: a stop meanwhile wins, never a revival.
         let settled = live.settle.lock().await;
-        let task = self.direct_recipient(&conversation_id, &task_id).await?;
+        let task = self.direct_recipient(conversation_id, &task.id).await?;
         if self.is_stopping(&task.id) {
             return Err(Error::Invalid(format!(
                 "worker {} is stopping",
@@ -1052,16 +1191,15 @@ impl SessionManager {
             }
         };
         let input = self
-            .direct_input(&conversation_id, scratch, &text, &attachments, &mentions)
+            .direct_input(conversation_id, scratch, text, attachments, mentions)
             .await?;
-        let queued = live.busy().await;
-        self.deliver_to_worker(&conversation_id, &task, input)
+        self.deliver_to_worker(conversation_id, &task, input)
             .await?;
         drop(settled);
         // It reached the worker: the record and the note only log their failures.
         let shown = super::brains::cut(text.trim(), crate::work::STEP_TEXT_MAX);
         self.orchestrator_step(
-            &conversation_id,
+            conversation_id,
             crate::work::OrchestratorStepKind::Messaged {
                 task_id: task.id.clone(),
                 text: Some(shown.clone()),
@@ -1069,9 +1207,9 @@ impl SessionManager {
             },
         )
         .await;
-        self.note_next_turn(&conversation_id, user_messaged_note(&task, &shown))
+        self.note_next_turn(conversation_id, user_messaged_note(&task, &shown))
             .await;
-        Ok(queued)
+        Ok(())
     }
 
     /// Session `conversation_id`'s own plain worker `task_id`, while it can take a message

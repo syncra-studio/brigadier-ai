@@ -56,6 +56,28 @@ pub(crate) fn own_turn_frame(shown: &str) -> String {
     format!("{FRAME}{shown}, now on its own turn]\n")
 }
 
+/// The line a message the user steers in while the session works goes under: the work in
+/// progress takes it, whether or not it belongs (D25).
+pub(crate) const STEERED: &str = "[steered in by the user: it is part of the work you're doing; \
+     if it doesn't belong to it, start a worker for it]\n";
+
+/// [`STEERED`] for a queued message the session already read: named, with its words again.
+pub(crate) fn steered_frame(shown: &str) -> String {
+    format!(
+        "{FRAME}{shown}, steered in by the user: it is part of the work you're doing; if it \
+         doesn't belong to it, start a worker for it]\n"
+    )
+}
+
+/// What the session hears when the user steers in a queued message it is judging: it has the
+/// words already.
+pub(crate) fn steered_note(shown: &str) -> String {
+    format!(
+        "{FRAME}{shown} steered in by the user: it is part of the work you're doing; if it \
+         doesn't belong to it, start a worker for it]"
+    )
+}
+
 /// What the session hears when the user deletes a queued message it already has.
 pub(crate) fn withdrawn_frame(shown: &str) -> String {
     format!("{FRAME}{shown} withdrawn: the user took it back; leave it]")
@@ -65,12 +87,14 @@ pub(crate) fn withdrawn_frame(shown: &str) -> String {
 /// that one was taken back. The app's thread reads them the same way (`cliBlocks.ts`).
 pub(crate) fn without_frames(text: &str) -> std::borrow::Cow<'_, str> {
     static START: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\[queued message \S{8}(?: · [^\]\n]*|, now on its own turn)\]\n?").unwrap()
+        Regex::new(r"^\[(?:queued message \S{8}(?: · |, )|steered in by the user: )[^\]\n]*\]\n?")
+            .unwrap()
     });
     static WITHDRAWN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\n*\[queued message \S{8} withdrawn: [^\]\n]*\]\n*").unwrap()
+        Regex::new(r"\n*\[queued message \S{8} (?:withdrawn|steered in by the user): [^\]\n]*\]\n*")
+            .unwrap()
     });
-    if !text.contains(FRAME) {
+    if !text.contains(FRAME) && !text.starts_with(&STEERED[..10]) {
         return text.into();
     }
     let body = START.replace(text, "");
@@ -122,7 +146,7 @@ fn worker_text(words: String, files: &[(String, Option<String>)]) -> String {
 
 impl ConvLive {
     /// Sets the line message `id`'s text goes to its CLI under, once.
-    fn frame(&self, id: &str, frame: String) {
+    pub(super) fn frame(&self, id: &str, frame: String) {
         self.frames.lock().unwrap().insert(id.to_owned(), frame);
     }
 
@@ -161,6 +185,7 @@ impl SessionManager {
                 mentions,
                 queue_index,
                 true,
+                None,
             ))
             .await?;
         Ok(SendOutcome::Queued(
@@ -243,6 +268,12 @@ impl SessionManager {
             return item;
         }
         state.deciding.push(item.id.clone());
+        state.judged_in_block.insert(item.id.clone());
+        let attempt = {
+            let attempt = state.judge_attempts.entry(item.id.clone()).or_default();
+            *attempt += 1;
+            *attempt
+        };
         // A command of the thread's running now holds it: it reads the message once that ends.
         let held = state.held_by();
         if held.is_some() {
@@ -266,7 +297,7 @@ impl SessionManager {
             self.mark_items_held(conv, std::slice::from_ref(&item.id), None)
                 .await;
         }
-        self.judge_within(conv, &item.id);
+        self.judge_within(conv, &item.id, attempt);
         if woke {
             self.kick(conv);
         }
@@ -288,21 +319,75 @@ impl SessionManager {
         }
     }
 
+    /// The open block judges what waits in the queue and it hasn't judged yet (D25): each, in
+    /// order, goes to the session Deciding again, as a message sent now does; `wake`: no turn
+    /// runs, and one starts to judge them. Never one paused, offered, being handed to a worker
+    /// or for a worker of the user's own pick.
+    pub(super) async fn judge_waiting(&self, conv: &Arc<ConvLive>, wake: bool) {
+        let judges = self
+            .core
+            .conversation(&conv.id)
+            .is_ok_and(|conversation| judges_queue(&conversation));
+        let Ok(board) = self.core.board(&conv.id).await else {
+            return;
+        };
+        if !judges || board.queue.paused {
+            return;
+        }
+        for item in board.queue.items {
+            if item.deciding || item.offer_session || item.worker.is_some() {
+                continue;
+            }
+            {
+                // Once per block, given or not: one no turn could take waits for the next.
+                let mut state = conv.state.lock().await;
+                if state.claimed.contains(&item.id)
+                    || !state.judged_in_block.insert(item.id.clone())
+                {
+                    continue;
+                }
+            }
+            // Deciding again, kept so, before the session has it.
+            match self
+                .core
+                .settle_queued(&conv.id, std::slice::from_ref(&item.id), true)
+                .await
+            {
+                Ok(changed) if !changed.is_empty() => {}
+                // Gone, or taken meanwhile.
+                Ok(_) => continue,
+                Err(err) => {
+                    crate::logging::private_trace!(conv.private_logs, warn, "could not judge a waiting message again"; conversation = %conv.id, error = %err);
+                    continue;
+                }
+            }
+            let item = QueuedMessage {
+                deciding: true,
+                ..item
+            };
+            Box::pin(self.deliver_to_judge(conv, item, wake)).await;
+        }
+    }
+
     /// Gives the session [`DECIDING_WAIT`] to judge queued message `item_id`; one still
     /// unjudged then joins the working answer.
-    fn judge_within(&self, conv: &Arc<ConvLive>, item_id: &str) {
+    /// Only `attempt`, this judging's, is settled by it: one judged again since has its own.
+    fn judge_within(&self, conv: &Arc<ConvLive>, item_id: &str, attempt: u64) {
         let (manager, conv, item_id) = (self.arc(), conv.clone(), item_id.to_owned());
         self.spawn(async move {
             tokio::time::sleep(DECIDING_WAIT).await;
-            manager.join_unjudged(&conv, &item_id).await;
+            manager.join_unjudged(&conv, &item_id, attempt).await;
         });
     }
 
-    async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str) {
+    async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str, attempt: u64) {
         let _routing = conv.queue_routing.lock().await;
         {
             let state = conv.state.lock().await;
-            if !state.deciding.iter().any(|id| id == item_id) || state.claimed.contains(item_id) {
+            if !state.deciding.iter().any(|id| id == item_id)
+                || state.claimed.contains(item_id)
+                || state.judge_attempts.get(item_id) != Some(&attempt)
+            {
                 return;
             }
         }
@@ -392,6 +477,9 @@ impl SessionManager {
         };
         if deciding {
             self.join_delivered(conv, item_id).await?;
+            // It read the words to judge: now it hears the user took them into this work.
+            self.tell_thread_now(conv, steered_note(&short(item_id)))
+                .await;
         }
         Ok(deciding)
     }
@@ -535,6 +623,7 @@ impl SessionManager {
             .queue
             .items
             .iter()
+            .filter(|item| item.worker.is_none())
             .filter(|item| item.id == id || (id.len() >= MIN_ID && short(&item.id).starts_with(id)))
             .collect();
         let item = match found.as_slice() {
@@ -759,6 +848,14 @@ mod tests {
     /// app's thread recognises (run2-D44).
     #[test]
     fn the_frames_name_the_id_and_the_command() {
+        for text in [
+            format!("{STEERED}Also X."),
+            format!("{}Also X.", steered_frame("1a2b3c4d")),
+            format!("Also X.\n{}", steered_note("1a2b3c4d")),
+            format!("{}Also X.", deciding_frame("1a2b3c4d")),
+        ] {
+            assert_eq!(without_frames(&text), "Also X.", "{text}");
+        }
         let deciding = deciding_frame("1a2b3c4d");
         assert!(deciding.starts_with(FRAME) && deciding.ends_with("]\n"));
         assert_eq!(deciding.lines().count(), 1);

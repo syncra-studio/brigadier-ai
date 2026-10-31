@@ -2333,9 +2333,19 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             text,
             attachments,
             mentions,
+            steer,
+            queue_index,
         } => Response::SendToWorker {
             queued: heap(|| {
-                sessions.send_to_worker(conversation_id, task_id, text, attachments, mentions)
+                sessions.send_to_worker(
+                    conversation_id,
+                    task_id,
+                    text,
+                    attachments,
+                    mentions,
+                    steer,
+                    queue_index,
+                )
             })
             .await?,
         },

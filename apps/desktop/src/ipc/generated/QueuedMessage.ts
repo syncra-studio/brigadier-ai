@@ -2,6 +2,7 @@
 import type { AttachmentRef } from "./AttachmentRef";
 import type { HeldBy } from "./HeldBy";
 import type { Mention } from "./Mention";
+import type { TaskId } from "./TaskId";
 
 /**
  * A message waiting for the running turn (or a session's working answer) to end.
@@ -26,4 +27,9 @@ heldBy?: HeldBy,
  * The session judged it could run apart (`brigadier queue <id> new-session`): it waits for
  * the user's pick, "Open as a new session" or "Run here", and is never sent until then.
  */
-offerSession?: boolean, };
+offerSession?: boolean, 
+/**
+ * The user's message to this worker of the session's (the composer's To:), sent while it
+ * worked: it goes to that worker alone, as its next turn, never to the session (goal 8).
+ */
+worker?: TaskId, };

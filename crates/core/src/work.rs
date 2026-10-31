@@ -1450,6 +1450,11 @@ pub struct QueuedMessage {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub offer_session: bool,
+    /// The user's message to this worker of the session's (the composer's To:), sent while it
+    /// worked: it goes to that worker alone, as its next turn, never to the session (goal 8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worker: Option<TaskId>,
 }
 
 /// A queued message the session sent on to one of its workers (`brigadier queue <id> worker
@@ -1491,10 +1496,12 @@ pub struct MessageQueue {
 }
 
 impl MessageQueue {
-    /// The next message in queue order, past those waiting for the user's pick on a new
-    /// session offer.
+    /// The session's next message in queue order, past those waiting for the user's pick on a
+    /// new session offer and those for a worker.
     pub fn next_to_send(&self) -> Option<&QueuedMessage> {
-        self.items.iter().find(|item| !item.offer_session)
+        self.items
+            .iter()
+            .find(|item| !item.offer_session && item.worker.is_none())
     }
 
     /// The next message to send now: none while the next one is still Deciding.

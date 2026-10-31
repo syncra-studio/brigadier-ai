@@ -662,3 +662,91 @@ async fn the_thread_sets_and_shows_its_checkpoint_and_workers_and_chats_keep_non
     );
     flow.stop().await;
 }
+
+/// A steer while the session compacts (goal 8, §5.3): a queued message's Steer leaves it
+/// queued, saying why, and a fresh steer waits in the queue too; once compaction is done each
+/// goes on its own turn, in order, once.
+#[tokio::test]
+async fn a_steer_while_compacting_waits_in_the_queue_until_compaction_is_done() {
+    const FIRST: &str = "Also the docs.";
+    const SECOND: &str = "And the logo.";
+    let inputs: Inputs = Arc::default();
+    let options = options(ProviderKind::Claude);
+    let behavior = options.behavior.clone();
+    let hold = Arc::new(tokio::sync::Notify::new());
+    *behavior.hold_compaction.lock().unwrap() = Some(hold.clone());
+    let mut flow = Flow::start(
+        "long-steer-compacting",
+        options,
+        claude_thread(inputs.clone()),
+    )
+    .await;
+    switch(&mut flow, LongSessions::parse("native-bare"));
+    flow.say("Start.").await;
+    flow.settled().await;
+    flow.say("Grow.").await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while behavior.compactions.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a compaction at the point");
+    flow.say(FIRST).await;
+    let board = flow
+        .until("it to wait", |board| board.queue.items.len() == 1)
+        .await;
+    let first = board.queue.items[0].clone();
+    let refused = flow
+        .manager
+        .steer_queued(flow.conversation.clone(), first.id.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("Can't steer while compacting"),
+        "{refused}"
+    );
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            SECOND.into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    let board = flow.board().await;
+    let texts: Vec<&str> = board
+        .queue
+        .items
+        .iter()
+        .map(|item| item.text.as_str())
+        .collect();
+    assert_eq!(texts, [FIRST, SECOND], "both wait");
+    hold.notify_one();
+    flow.until("both to go", |board| board.queue.items.is_empty())
+        .await;
+    flow.idle().await;
+    let seen: Vec<String> = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, input)| input.clone())
+        .collect();
+    let first_at = seen.iter().position(|input| input.contains(FIRST));
+    let second_at = seen.iter().position(|input| input.contains(SECOND));
+    assert!(first_at.is_some() && first_at < second_at, "{seen:#?}");
+    assert_eq!(
+        seen.iter().filter(|input| input.contains(FIRST)).count(),
+        1,
+        "{seen:#?}"
+    );
+    assert_eq!(
+        seen.iter().filter(|input| input.contains(SECOND)).count(),
+        1,
+        "{seen:#?}"
+    );
+    flow.stop().await;
+}

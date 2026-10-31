@@ -460,13 +460,19 @@ const FROM_SESSION = /^\[message from session "[^"]*" \(([^)]+)\) · (sm-[0-9a-f
 /**
  * A message the user sent while the session worked (run2-D40): Brigadier gives it to the CLI
  * under a line naming its queue id, `[queued message ‹id› · judge it: …]`, or, when it waited
- * for its own turn, `[queued message ‹id›, now on its own turn]`. The thread hides that line
- * (run2-D44).
+ * for its own turn, `[queued message ‹id›, now on its own turn]`, or, steered in by the user,
+ * `[queued message ‹id›, steered in by the user: …]`. The thread hides that line (run2-D44).
  */
-const QUEUED = /^\[queued message (\S{8})(?: · [^\]\n]*|, now on its own turn)\]\n?/;
+const QUEUED = /^\[queued message (\S{8})(?: · |, )[^\]\n]*\]\n?/;
 
-/** What the session hears of a queued message the user deleted once it had it: never drawn. */
-const WITHDRAWN = /\n*\[queued message \S{8} withdrawn: [^\]\n]*\]\n*/g;
+/** The line a message the user steered in while the session worked goes under (D25): hidden. */
+const STEERED = /^\[steered in by the user: [^\]\n]*\]\n?/;
+
+/**
+ * What the session hears of a queued message it already had that the user deleted, or steered
+ * in while it judged it: never drawn.
+ */
+const WITHDRAWN = /\n*\[queued message \S{8} (?:withdrawn|steered in by the user): [^\]\n]*\]\n*/g;
 
 /** The queue id a user message's frame names, if it has one. */
 function queuedId(text: string): string | null {
@@ -481,7 +487,7 @@ function onlyWithdrawn(text: string): boolean {
 /** A user message as the thread shows it: another session's when its header says so, its body without the header. */
 function fromSession(message: Message, authored = false): { message: Message; text: string } {
   if (authored) return { message, text: message.text };
-  const queued = QUEUED.exec(message.text);
+  const queued = QUEUED.exec(message.text) ?? STEERED.exec(message.text);
   const body = message.text.slice(queued?.[0].length ?? 0).replace(WITHDRAWN, "\n").trim();
   if (queued || body !== message.text.trim()) message = { ...message, text: body };
   const header = FROM_SESSION.exec(message.text);

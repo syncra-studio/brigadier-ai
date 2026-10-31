@@ -267,6 +267,12 @@ impl SessionManager {
             }
             // Nothing runs any more: what was working is over or waits for the user.
             self.settle_requests(&conversation.id).await;
+            // The user's messages queued for its workers go on to those not working (goal 8),
+            // in the background: a worker's CLI may take a while to resume.
+            if conversation.lifecycle == Lifecycle::Active {
+                let (manager, id) = (self.arc(), conversation.id.clone());
+                self.spawn(async move { manager.drain_worker_queues(&id).await });
+            }
         }
         // What sessions deleted before Delete took all of them left behind (D3), in the
         // background: on a first launch there may be many.
