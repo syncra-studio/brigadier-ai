@@ -543,7 +543,12 @@ export class ThreadScroller {
     const now = performance.now();
     if (!this.pressed && now - this.inputAtMs > INPUT_MS && now - this.userScrollAtMs > FLING_MS) {
       if (this.follow && this.glide === null) this.toBottom();
-      else this.clearRoomIfUnneeded();
+      else {
+        this.clearRoomIfUnneeded();
+        // A sent turn placed with its room stays where it was placed: the browser moving it on
+        // its own (WebKit does as a card takes the focused composer's place) is put back.
+        if (this.roomPx > 0 && this.glide === null && this.anchor) this.keep(this.anchor);
+      }
       this.record();
       return;
     }

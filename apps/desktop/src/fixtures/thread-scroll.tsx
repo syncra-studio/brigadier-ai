@@ -712,7 +712,8 @@ const steps = {
   },
   /**
    * A working turn's approval card coming in the same update as its rows change (its words
-   * gone as it asks), and going again: the user's message stays where it was placed throughout.
+   * gone as it asks), the browser moving the view on its own as it comes, and the card going
+   * again: the user's message stays where it was placed throughout.
    */
   async approvalAtWork() {
     await open("other");
@@ -732,13 +733,20 @@ const steps = {
     const tops: number[] = [];
     const sample = async (ms: number) => {
       // Read once each frame's resize observers ran: what the frame paints.
-      for (const end = performance.now() + ms; performance.now() < end; await frame()) tops.push(newestUserTop());
+      for (const end = performance.now() + ms; performance.now() < end; ) {
+        await frame();
+        tops.push(newestUserTop());
+      }
     };
     const approval = {
       id: "ask", conversationId: "other", taskId: null, requestId: request, position: 2_000, state: { type: "pending" }, createdAtMs: now, resolvedAtMs: null,
       subject: { type: "cli", request: { id: "ask", kind: "command", tool: "Bash", command: "sleep 25 && echo done", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: null } },
     };
     useBoard.setState(({ board }) => (board ? { board: { ...board, thinking: thinking.slice(0, 1), streaming: null, approvals: { ask: approval as never } } } : {}));
+    // The browser moves the view itself as the card takes the focused composer's place (WebKit
+    // does): no input of the user's, no clamp.
+    await frame();
+    viewport().scrollTop -= 58;
     await sample(400);
     const shown = { tops: [...new Set(tops)], room: roomHeight() };
     tops.length = 0;
