@@ -1188,13 +1188,14 @@ impl SessionManager {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
             }
         }
-        // No turn runs or waits to run: the next queued message goes.
+        // No turn runs or waits to run: the next queued message goes; while the block stays
+        // open it waits for the next one (D25), and the block's end kicks it then.
         let waiting = conv.kind == ConversationKind::Session
             && activity.running.is_none()
             && activity.carried.is_empty()
             && !board.queue.paused
             && board.queue.ready_to_send().is_some();
-        if waiting {
+        if waiting && !self.work_holds(&conv).await {
             self.kick(&conv);
         }
     }
