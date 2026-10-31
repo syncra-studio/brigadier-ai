@@ -372,7 +372,7 @@ const ThreadRoot: FC<{
       aria-hidden
       className="thread-bottom-pad pointer-events-none sticky bottom-0 z-10 mt-auto w-full shrink-0"
     >
-      <ScrollFade edge="bottom" />
+      <BottomFade scroller={scroller} />
     </div>
   );
 
@@ -867,6 +867,11 @@ const ThreadScrollToBottom: FC = () => {
 
 const noSubscribe = () => () => {};
 const notShown = () => false;
+
+/** The thread's bottom fade, raised over the scroll button while it shows. */
+const BottomFade: FC<{ scroller: ThreadScroller }> = ({ scroller }) => (
+  <ScrollFade edge="bottom" raised={useSyncExternalStore(scroller.subscribe, scroller.contentBelow)} />
+);
 
 // The markdown stack (remark, micromark, mdast) loads off the cold start (`markdownText`).
 const MarkdownText = markdownText.View;
