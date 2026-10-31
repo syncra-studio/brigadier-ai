@@ -192,15 +192,10 @@ async fn the_self_edit_metric_counts_the_threads_uncommitted_and_trailerless_cha
         flow.repo.canonicalize().unwrap()
     );
     assert!(!spec.owned_cwd);
+    // No skill overlay (D58).
     assert_eq!(
         spec.add_dirs,
-        vec![
-            flow.manager.session_dir(&flow.conversation).record(),
-            flow.manager
-                .session_dir(&flow.conversation)
-                .root()
-                .join("overlay"),
-        ]
+        vec![flow.manager.session_dir(&flow.conversation).record()]
     );
     let before = std::fs::read_to_string(flow.repo.join("README.md")).unwrap();
     let removed = i64::try_from(before.lines().count()).unwrap();
