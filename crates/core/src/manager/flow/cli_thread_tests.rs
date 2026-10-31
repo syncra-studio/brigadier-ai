@@ -564,6 +564,100 @@ async fn a_sessions_background_command_holds_its_turn_until_the_turn_its_end_sta
     flow.stop().await;
 }
 
+/// The same hold on OpenCode: a command its `shell` tool moves to the background holds the
+/// turn from its call's result until OpenCode says its end, which owes the turn that word
+/// starts (still Working) until that turn starts; done once it ends. Lines in the shapes
+/// `opencode serve` 2.2.3 sends, through the adapter's own parser.
+#[tokio::test]
+async fn an_opencode_background_command_holds_its_turn_until_the_turn_its_end_starts() {
+    use brigadier_providers::opencode::parse::Parser;
+    use serde_json::{Value, json};
+
+    let flow = Flow::start(
+        "cli-thread-opencode-background",
+        Options {
+            thread: brigadier_providers::ProviderKind::OpenCode,
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async { Reply::text("Looked.") }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let conv = flow.manager.conv(&id).unwrap();
+    let mut parser = Parser::new(Some("ses_1".into()), None);
+    let line = |kind: &str, data: Value| {
+        let mut data = data;
+        data["sessionID"] = json!("ses_1");
+        json!({"id": "evt", "created": 1_000, "type": kind, "data": data}).to_string()
+    };
+    let commands_working = || async {
+        flow.manager
+            .activity()
+            .await
+            .into_iter()
+            .find(|entry| entry.conversation_id == id)
+            .is_some_and(|entry| entry.commands_working)
+    };
+    let mut follow = async |lines: Vec<String>| {
+        for line in lines {
+            for event in parser.feed(&line) {
+                flow.manager.follow_cli_thread(&conv, Some(&event)).await;
+            }
+        }
+    };
+
+    follow(vec![
+        line("session.inbox.enqueued", json!({"inboxID": "msg_u", "item": {"type": "user", "payload": {"text": "Start sleep 25 in the background, tell me when it ends."}}})),
+        line("session.execution.started", json!({})),
+        line("session.inbox.delivered", json!({"inboxID": "msg_u"})),
+        line("session.tool.input.started", json!({"assistantMessageID": "msg_a", "id": "call_1", "name": "shell"})),
+        line("session.tool.called", json!({"assistantMessageID": "msg_a", "id": "call_1", "input": {"command": "sleep 25 && echo done", "background": true}})),
+        line("session.tool.success", json!({"assistantMessageID": "msg_a", "id": "call_1", "content": [{"type": "text", "text": "Command moved to the background."}], "metadata": {"shellID": "sh_1", "status": "running", "truncated": false}})),
+        line("session.text.ended", json!({"assistantMessageID": "msg_b", "ordinal": 0, "text": "It runs; I'll tell you when it ends."})),
+        line("session.execution.succeeded", json!({})),
+    ])
+    .await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(
+        view.turns.last().and_then(|turn| turn.end),
+        Some(TurnEnd::Done)
+    );
+    assert_eq!(view.jobs.holding, ["sh_1"], "{:#?}", view.background);
+    assert!(commands_working().await, "the sidebar says Working");
+
+    follow(vec![line("session.synthetic", json!({"description": "sleep 25 && echo done", "text": "<shell>done</shell>", "metadata": {"source": "shell", "jobID": "sh_1", "shellID": "sh_1", "state": "completed", "exit": 0}}))]).await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(view.jobs.holding.is_empty());
+    assert!(view.jobs.waking, "its end owes the turn it starts");
+    assert!(
+        commands_working().await,
+        "still Working until that turn starts"
+    );
+
+    follow(vec![
+        line("session.execution.started", json!({})),
+        line(
+            "session.text.ended",
+            json!({"assistantMessageID": "msg_c", "ordinal": 0, "text": "Done: it printed done."}),
+        ),
+    ])
+    .await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(
+        view.jobs.is_empty(),
+        "the turn started: its own open turn says Working"
+    );
+    assert_eq!(view.turns.last().and_then(|turn| turn.end), None);
+
+    follow(vec![line("session.execution.succeeded", json!({}))]).await;
+    assert!(!commands_working().await, "done once that turn ends");
+    flow.stop().await;
+}
+
 /// Brigadier's `/compact` after a turn: Claude says the compaction, then `/compact` as the
 /// user's message. That message starts a turn of its own, noted under its own id, so the
 /// thread read back after the turn (the file holds `/compact` as a turn) never reads it as cut

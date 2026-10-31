@@ -27,7 +27,7 @@
 //! session's messages, as its API gives them, in a transcript file (`<data>/opencode/<id>.jsonl`,
 //! [`write_transcript`]) after every turn, which is the session file its thread is read back from.
 
-mod parse;
+pub mod parse;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

@@ -12,7 +12,7 @@ use crate::{OUTPUT_CLIP, clip};
 
 /// Reads one session's events, as a stream: tool rows are tied to the calls they report on.
 #[derive(Default)]
-pub(crate) struct Parser {
+pub struct Parser {
     /// The session whose events count; others on the stream (a sub-agent's) are left out.
     pub(crate) session: Option<String>,
     /// When the running turn started (`session.execution.started`), while one runs.
@@ -31,10 +31,17 @@ pub(crate) struct Parser {
     rejected: HashSet<String>,
     /// The model's context window, once a step names the model ([`Self::with_window`]).
     window: Option<i64>,
+    /// The commands OpenCode moved to the background whose end it hasn't said yet.
+    background: Vec<BackgroundTask>,
+    /// Background commands whose end came before their call's result (a command that ends at
+    /// once): their call starts none.
+    ended_early: HashSet<String>,
+    /// Each running shell's output file (`shell.created`), by its id.
+    shell_files: HashMap<String, String>,
 }
 
 impl Parser {
-    pub(crate) fn new(session: Option<String>, window: Option<i64>) -> Self {
+    pub fn new(session: Option<String>, window: Option<i64>) -> Self {
         Self {
             session,
             window,
@@ -47,7 +54,7 @@ impl Parser {
         self.turn_started_ms.is_some()
     }
 
-    pub(crate) fn feed(&mut self, line: &str) -> Vec<ProviderEvent> {
+    pub fn feed(&mut self, line: &str) -> Vec<ProviderEvent> {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             return Vec::new();
         };
@@ -180,7 +187,65 @@ impl Parser {
                     .remove(&id)
                     .zip(created)
                     .map(|(from, to)| to - from);
-                vec![tool_event(&id, &call, status, output, took, data)]
+                let mut out = vec![tool_event(&id, &call, status, output, took, data)];
+                // A command OpenCode moved to the background: its call ends, the command runs on
+                // until OpenCode says its end (`session.synthetic`).
+                if call.0 == "shell"
+                    && data.pointer("/metadata/status") == Some(&json!("running"))
+                    && let Some(shell) = data.pointer("/metadata/shellID").and_then(Value::as_str)
+                    && !self.ended_early.remove(shell)
+                {
+                    let command = call.1["command"].as_str().map(str::to_owned);
+                    let task = BackgroundTask {
+                        id: shell.to_owned(),
+                        item_id: Some(id),
+                        kind: BackgroundTaskKind::Shell,
+                        label: command.clone().unwrap_or_default(),
+                        status: BackgroundTaskStatus::Running,
+                        started_at_ms: created.unwrap_or_else(crate::now_ms),
+                        ended_at_ms: None,
+                        output_file: self.shell_files.remove(shell),
+                        summary: None,
+                        last_line: None,
+                        command,
+                        provider: Some(ProviderKind::OpenCode),
+                    };
+                    self.background.push(task.clone());
+                    out.push(self.jobs());
+                    out.push(ProviderEvent::BackgroundTask { task });
+                }
+                out
+            }
+            // OpenCode's word that a background command ended, which starts its next turn.
+            "session.synthetic" if data.pointer("/metadata/source") == Some(&json!("shell")) => {
+                let metadata = &data["metadata"];
+                let shell = metadata["shellID"].as_str().unwrap_or_default();
+                let Some(at) = self.background.iter().position(|task| task.id == shell) else {
+                    self.ended_early.insert(shell.to_owned());
+                    return Vec::new();
+                };
+                let mut task = self.background.remove(at);
+                task.status = match (metadata["state"].as_str(), metadata["exit"].as_i64()) {
+                    (Some("completed"), Some(0) | None) => BackgroundTaskStatus::Completed,
+                    (Some("cancelled"), _) => BackgroundTaskStatus::Stopped,
+                    _ => BackgroundTaskStatus::Failed,
+                };
+                task.ended_at_ms = Some(created.unwrap_or_else(crate::now_ms));
+                vec![ProviderEvent::BackgroundTask { task }, self.jobs()]
+            }
+            "shell.created" => {
+                if let (Some(shell), Some(file)) = (
+                    data.pointer("/info/id").and_then(Value::as_str),
+                    data.pointer("/info/file").and_then(Value::as_str),
+                ) {
+                    self.shell_files.insert(shell.to_owned(), file.to_owned());
+                }
+                Vec::new()
+            }
+            "shell.exited" => {
+                self.shell_files
+                    .remove(data["id"].as_str().unwrap_or_default());
+                Vec::new()
             }
             "session.step.ended" => {
                 let tokens = &data["tokens"];
@@ -250,6 +315,13 @@ impl Parser {
                 Vec::new()
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// The background commands still running, which each start a turn as they end.
+    fn jobs(&self) -> ProviderEvent {
+        ProviderEvent::BackgroundJobs {
+            running: self.background.iter().map(|task| task.id.clone()).collect(),
         }
     }
 
@@ -743,6 +815,121 @@ mod tests {
         );
         assert_eq!(events.len(), 10);
         assert!(!parser.running());
+    }
+
+    /// In `opencode serve` 2.2.3's shapes: a command OpenCode moves to the background is a
+    /// background task from its call's result until OpenCode's word of its end, which starts
+    /// the next turn; one that ends before its call's result starts none.
+    #[test]
+    fn a_background_command_runs_as_a_task_until_opencode_says_its_end() {
+        let mut parser = Parser::new(Some(S.into()), None);
+        let at = |created: i64, kind: &str, data: Value| {
+            json!({"id": "evt", "created": created, "type": kind, "data": data}).to_string()
+        };
+        let call = |id: &str, shell: &str, command: &str| {
+            vec![
+                at(
+                    1_000,
+                    "session.tool.input.started",
+                    json!({"sessionID": S, "id": id, "name": "shell"}),
+                ),
+                at(
+                    1_000,
+                    "session.tool.called",
+                    json!({"sessionID": S, "id": id, "input": {"command": command, "background": true}}),
+                ),
+                at(
+                    1_100,
+                    "session.tool.success",
+                    json!({"sessionID": S, "id": id, "content": [{"type": "text", "text": "Command moved to the background."}], "metadata": {"shellID": shell, "status": "running", "truncated": false}}),
+                ),
+            ]
+        };
+        let ended = |created: i64, shell: &str, state: &str, exit: i64| {
+            at(
+                created,
+                "session.synthetic",
+                json!({"sessionID": S, "description": "sleep 25 && echo done", "text": "<shell>done</shell>", "metadata": {"source": "shell", "jobID": shell, "shellID": shell, "state": state, "exit": exit, "truncated": false}}),
+            )
+        };
+        let mut lines = vec![at(
+            1_000,
+            "shell.created",
+            json!({"info": {"id": "sh_1", "status": "running", "command": "sleep 25 && echo done", "file": "/o/sh_1.out"}}),
+        )];
+        lines.extend(call("call_1", "sh_1", "sleep 25 && echo done"));
+        let events = feed(&mut parser, &lines);
+        assert!(matches!(
+            &events[1],
+            ProviderEvent::Command {
+                status: ItemStatus::Completed,
+                ..
+            }
+        ));
+        assert_eq!(
+            events[2],
+            ProviderEvent::BackgroundJobs {
+                running: vec!["sh_1".into()]
+            }
+        );
+        let ProviderEvent::BackgroundTask { task } = &events[3] else {
+            panic!("{events:#?}");
+        };
+        assert_eq!(
+            (
+                task.id.as_str(),
+                task.item_id.as_deref(),
+                task.kind,
+                task.status
+            ),
+            (
+                "sh_1",
+                Some("call_1"),
+                BackgroundTaskKind::Shell,
+                BackgroundTaskStatus::Running
+            )
+        );
+        assert_eq!(task.command.as_deref(), Some("sleep 25 && echo done"));
+        assert_eq!(
+            (task.started_at_ms, task.output_file.as_deref()),
+            (1_100, Some("/o/sh_1.out"))
+        );
+
+        let events = feed(&mut parser, &[ended(26_000, "sh_1", "completed", 0)]);
+        let [
+            ProviderEvent::BackgroundTask { task },
+            ProviderEvent::BackgroundJobs { running },
+        ] = &events[..]
+        else {
+            panic!("{events:#?}");
+        };
+        assert_eq!(
+            (task.status, task.ended_at_ms),
+            (BackgroundTaskStatus::Completed, Some(26_000))
+        );
+        assert!(running.is_empty());
+
+        // Ends at once, before its call's result: no task is left running.
+        let mut lines = vec![ended(30_000, "sh_2", "completed", 1)];
+        lines.extend(call("call_2", "sh_2", "false"));
+        let events = feed(&mut parser, &lines);
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                ProviderEvent::BackgroundTask { .. } | ProviderEvent::BackgroundJobs { .. }
+            )),
+            "{events:#?}"
+        );
+        // A failed one reads failed.
+        let events = feed(
+            &mut parser,
+            &[
+                call("call_3", "sh_3", "false"),
+                vec![ended(40_000, "sh_3", "completed", 1)],
+            ]
+            .concat(),
+        );
+        assert!(events.iter().any(|event| matches!(event, ProviderEvent::BackgroundTask { task } if task.status == BackgroundTaskStatus::Failed)), "{events:#?}");
     }
 
     /// As `opencode serve` 2.0.19 said them: the user's message is admitted, its turn starts,
