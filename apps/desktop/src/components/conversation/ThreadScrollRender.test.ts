@@ -45,6 +45,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
       grownWindow: number;
     };
     resizeAtBottom: { placed: number; shrunk: number; grown: number };
+    cardAtSend: { placed: { userTop: number; room: number }; shown: { tops: number[]; room: number } };
     returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
     sendScrolledUp: { moved: boolean; distance: number; inView: boolean; button: boolean };
     newChat: { userTop: number | null; top: number };
@@ -170,6 +171,10 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(send.shrunkWindow, 0);
   assert.equal(send.grownWindow, 0);
   assert.deepEqual(seen.resizeAtBottom, { placed: 1, shrunk: 0, grown: 0 });
+  // A card above the composer right after a send: the room takes it and the message stays put.
+  const card = `card at send: ${JSON.stringify(seen.cardAtSend)}`;
+  assert.deepEqual(seen.cardAtSend.shown.tops, [seen.cardAtSend.placed.userTop], card);
+  assert.ok(seen.cardAtSend.shown.room < seen.cardAtSend.placed.room && seen.cardAtSend.shown.room > 0, card);
 
   // Left right after a send and back once it answered: the bottom, without the room.
   const { returnAfterSend } = seen;

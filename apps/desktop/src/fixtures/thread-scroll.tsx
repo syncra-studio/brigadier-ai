@@ -265,6 +265,11 @@ const rows = () =>
 const max = () => viewport().scrollHeight - viewport().clientHeight;
 const distance = () => Math.round(max() - viewport().scrollTop);
 const viewTop = () => viewport().getBoundingClientRect().top;
+/** The newest user message's top in the view. */
+const newestUserTop = () => round(rows().findLast((row) => row.dataset["role"] === "user")!.getBoundingClientRect().top - viewTop());
+/** The sent turn's room. */
+const roomHeight = () => round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height);
+
 /** The floating footer's top: the composer, and whatever sits above it. */
 const stackTop = () => $('[data-slot="aui_thread-footer-column"]')!.getBoundingClientRect().top;
 const button = () => $<HTMLButtonElement>(".aui-thread-scroll-to-bottom")!;
@@ -690,6 +695,20 @@ const steps = {
     $("#thread-scroll-main")!.style.paddingBottom = "";
     await settle(200);
     return { placed, shrunk, grown: distance() };
+  },
+  /** A card coming above the composer right after a send (an approval): the room takes it, nothing shown moves. */
+  async cardAtSend() {
+    await send({ text: "A question that asks first.", attachments: [], mentions: [] });
+    await settle(600);
+    const placed = { userTop: newestUserTop(), room: roomHeight() };
+    const notice = { level: "warning", text: "A card above the composer, two lines long.\nIts second line.", atMs: Date.now() };
+    const tops: number[] = [];
+    useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [notice as never] } } : {}));
+    for (const end = performance.now() + 300; performance.now() < end; await new Promise(requestAnimationFrame)) tops.push(newestUserTop());
+    const shown = { tops: [...new Set(tops)], room: roomHeight() };
+    useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [] } } : {}));
+    await settle(300);
+    return { placed, shown };
   },
   /** A send, then away to another conversation while it answers and back: at the bottom, without the room. */
   async returnAfterSend() {
