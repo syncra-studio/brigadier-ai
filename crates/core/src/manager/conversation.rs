@@ -670,6 +670,11 @@ pub(crate) struct ConvLive {
 }
 
 impl ConvLive {
+    /// Ends the reservation `claim_worker_row` made.
+    pub(super) async fn unclaim(&self, item_id: &str) {
+        self.state.lock().await.claimed.remove(item_id);
+    }
+
     /// The conversation's CLI session, while one runs.
     pub(crate) async fn cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.clone()
@@ -1395,6 +1400,23 @@ impl SessionManager {
                     .edit_queued(id, item_id, text, attachments, mentions),
             )
             .await
+    }
+
+    /// Reserves worker row `item_id` for one delivery: None when it left the queue or another
+    /// delivery (a drain, the user's Steer) has it.
+    pub(super) async fn claim_worker_row(
+        &self,
+        conversation_id: &ConversationId,
+        item_id: &str,
+    ) -> Option<Arc<ConvLive>> {
+        let conv = self.conv(conversation_id).ok()?;
+        let _routing = conv.queue_routing.lock().await;
+        let board = self.core.board(conversation_id).await.ok()?;
+        if !board.queue.items.iter().any(|item| item.id == item_id) {
+            return None;
+        }
+        let fresh = conv.state.lock().await.claimed.insert(item_id.to_string());
+        fresh.then_some(conv.clone())
     }
 
     /// Sends a queued message now, into the running turn (or as a new turn when none runs); while

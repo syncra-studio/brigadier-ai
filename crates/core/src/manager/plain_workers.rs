@@ -1088,6 +1088,9 @@ impl SessionManager {
         else {
             return;
         };
+        let Some(conv) = self.claim_worker_row(conversation_id, &item.id).await else {
+            return;
+        };
         match self
             .deliver_direct(
                 conversation_id,
@@ -1107,6 +1110,7 @@ impl SessionManager {
                 tracing::warn!(task = %task.id, error = %err, "a queued message could not go to its worker; it waits");
             }
         }
+        conv.unclaim(&item.id).await;
     }
 
     /// The user's Steer on their queued message for a worker: it goes to that worker now, into
@@ -1121,16 +1125,29 @@ impl SessionManager {
             return Err(Error::Invalid("that message is not for a worker".into()));
         };
         let task = self.direct_recipient(conversation_id, worker).await?;
-        self.deliver_direct(
-            conversation_id,
-            &task,
-            &item.text,
-            &item.attachments,
-            &item.mentions,
-        )
-        .await?;
-        self.core.take_queued(conversation_id, &item.id).await?;
-        Ok(())
+        // Already on its way (a drain) or gone: it reaches the worker once.
+        let Some(conv) = self.claim_worker_row(conversation_id, &item.id).await else {
+            return Ok(());
+        };
+        let sent = match self
+            .deliver_direct(
+                conversation_id,
+                &task,
+                &item.text,
+                &item.attachments,
+                &item.mentions,
+            )
+            .await
+        {
+            Ok(()) => self
+                .core
+                .take_queued(conversation_id, &item.id)
+                .await
+                .map(|_| ()),
+            Err(err) => Err(err),
+        };
+        conv.unclaim(&item.id).await;
+        sent
     }
 
     /// Each worker's next queued message, for those not working (after a restart).

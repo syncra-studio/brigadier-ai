@@ -269,6 +269,39 @@ async fn after_a_stop_the_workers_message_waits_until_steered() {
     flow.stop().await;
 }
 
+/// Two deliveries of one worker row at once (a drain and the user's Steer, or two Steers):
+/// it reaches the worker once.
+#[tokio::test]
+async fn a_worker_row_steered_twice_at_once_reaches_the_worker_once() {
+    let (flow, answers, _release, task) = working("worker-row-once").await;
+    assert!(to_worker(&flow, &task, "Use blue.", false).await);
+    flow.manager.pause_task(task.id.clone()).await.unwrap();
+    flow.until("the turn to end", |board| {
+        Flow::task(board, 1).state != TaskState::Running
+    })
+    .await;
+    let id = flow.board().await.queue.items[0].id.clone();
+    let (first, second) = tokio::join!(
+        flow.manager
+            .steer_queued(flow.conversation.clone(), id.clone()),
+        flow.manager.steer_queued(flow.conversation.clone(), id),
+    );
+    first.unwrap();
+    second.unwrap();
+    flow.until("the queue to empty", |board| board.queue.items.is_empty())
+        .await;
+    flow.idle().await;
+    let all = [list(&answers, "worker"), list(&answers, "steered")].concat();
+    assert_eq!(
+        all.iter()
+            .filter(|input| input.contains("Use blue."))
+            .count(),
+        1,
+        "{all:#?}"
+    );
+    flow.stop().await;
+}
+
 /// Kept across a restart: the worker's message goes on once Brigadier is back.
 #[tokio::test]
 async fn a_workers_queued_message_survives_a_restart_and_goes_on() {
