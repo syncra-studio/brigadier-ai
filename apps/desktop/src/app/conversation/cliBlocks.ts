@@ -959,6 +959,18 @@ export function keptThread(messages: readonly Message[], fullText: Readonly<Reco
 /** How a message on its way reads: working while its turn starts, failed when the CLI never took it. */
 type RunNow = { state: RunState; error: string | null };
 
+/**
+ * A turn of a message sent from here starts no later than its message did: the block shown while
+ * it was on its way counted from then, so its clock goes on rather than starting again once the
+ * CLI says it.
+ */
+function startBy(block: Block, atMs: number): void {
+  const [first, ...rest] = block.worked;
+  if (!first || atMs >= first.fromMs) return;
+  block.startedAtMs = Math.min(block.startedAtMs, atMs);
+  block.worked = [{ ...first, fromMs: atMs }, ...rest];
+}
+
 /** A block of a message sent but not in the CLI's file yet: the bubble, and a block that works on it. */
 function onItsWay(key: string, user: Block["user"], startedAtMs: number, run: RunNow): Block {
   const block = { ...emptyBlock(key, startedAtMs), user };
@@ -1010,7 +1022,11 @@ export function cliThreadTree(
   // The user's messages a turn already shows: none of them is on its way as well.
   const drawn = new Set<string>();
   for (const block of blocks) {
-    if (block.user?.kind === "message") block.user = { kind: "message", ...asSent(block.user.message, block.user.text) };
+    if (block.user?.kind === "message") {
+      const kept = keptOf(block.user.message.id);
+      block.user = { kind: "message", ...asSent(block.user.message, block.user.text) };
+      if (kept) startBy(block, kept.createdAtMs);
+    }
     block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
     for (const said of [...(block.user?.kind === "message" ? [block.user] : []), ...block.steers]) drawn.add(said.message.requestId ?? said.message.id);
   }
@@ -1025,7 +1041,9 @@ export function cliThreadTree(
   for (const block of blocks.slice(newest + 1)) {
     if (block.user?.kind !== "message" || !said.has(block.user.message.id)) continue;
     const entry = sending.shift();
-    if (entry) block.user = { kind: "pending", pending: entry };
+    if (!entry) continue;
+    block.user = { kind: "pending", pending: entry };
+    startBy(block, entry.createdAtMs);
   }
   // A queued message joins the turn that read it after the CLI had it (the turn names it only
   // once it ends): it is drawn there, not on its way too.

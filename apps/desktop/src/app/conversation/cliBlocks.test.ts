@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { cliBlocks, cliThreadTree, exitOf, keptThread, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { confirmPending } from "@/state/shownIds";
-import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
+import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove, turnTime } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
 import { turnParts } from "@/app/conversation/workParts";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, Wake } from "@/ipc/generated";
@@ -1298,4 +1298,20 @@ test("an authored peer message keeps its bubble even when its delivery is marked
     true,
   );
   assert.deepEqual(blocks.map((block) => [block.user?.kind ?? null, block.user && "text" in block.user ? block.user.text : null]), [["peer", "The docs are done."]]);
+});
+
+test("a sent message's turn keeps one start from sending it to the CLI saying it to its turn read, so its clock never starts again", () => {
+  const before = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0"] }] };
+  const kept = [stored("m0", 900), stored("m1", 5000)];
+  const run = { state: "running", error: null } as const;
+  const said = user("cli-m1", "stored m1", 6200, { requests: ["m1"] });
+  const start = (thread: ThreadView) => {
+    const node = cliThreadTree(thread, "conv", kept, {}, [], NO_BOARD, run).nodes.at(-1)!;
+    return [node.block.startedAtMs, turnTime(node.block, 9000)];
+  };
+  const onItsWay = start(before);
+  assert.deepEqual(onItsWay, [5000, 4000]);
+  assert.deepEqual(start({ ...before, entries: [...before.entries, said] }), onItsWay);
+  // Its turn read: the CLI started it later than it was sent.
+  assert.deepEqual(start({ entries: [...before.entries, said], turns: [...before.turns, { ...turn("cli-m1", 6500, null, null), requests: ["m1"] }] }), onItsWay);
 });
