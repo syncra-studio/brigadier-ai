@@ -87,9 +87,9 @@ export function isSubagentStart(name: string): boolean {
  */
 export function agentDetail(name: string, input: string | null): string | null | undefined {
   const short = toolName(name);
-  if (!AGENTS.has(short) && short !== "Skill") return undefined;
+  if (!AGENTS.has(short) && !SKILLS.has(short)) return undefined;
   const args = parsedInput(input);
-  const given = args ? (short === "Skill" ? args["skill"] : (args["description"] ?? args["prompt"])) : input;
+  const given = args ? (SKILLS.has(short) ? (args["skill"] ?? args["id"]) : (args["description"] ?? args["prompt"])) : input;
   if (typeof given !== "string") return null;
   const line = given.trim().split("\n")[0]?.trim() ?? "";
   return line ? [...line].slice(0, 240).join("") : null;
@@ -106,10 +106,11 @@ const OTHER: Record<string, [doing: string, done: string]> = {
 const READS = new Set(["Read", "read", "read_file"]);
 const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]);
 const COMMANDS = new Set(["Bash", "exec_command", "shell"]);
-const CODE_SEARCH = new Set(["Grep"]);
-const LISTINGS = new Set(["Glob", "LS"]);
-const WEB_SEARCH = new Set(["WebSearch", "web_search"]);
-const WEB_FETCH = new Set(["WebFetch", "web_fetch"]);
+const CODE_SEARCH = new Set(["Grep", "grep"]);
+const LISTINGS = new Set(["Glob", "LS", "glob", "list"]);
+const WEB_SEARCH = new Set(["WebSearch", "web_search", "websearch"]);
+const WEB_FETCH = new Set(["WebFetch", "web_fetch", "webfetch"]);
+const SKILLS = new Set(["Skill", "skill"]);
 
 const READERS = new Set(["cat", "head", "tail", "nl", "less", "more", "bat", "wc", "sed"]);
 const LISTERS = new Set(["ls", "find", "tree", "fd"]);
@@ -350,7 +351,7 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
       ? { kind: "other", doing: `Running agent: ${detail}`, done: `Ran agent: ${detail}`, object: detail, phrase: "Ran an agent", many: "Ran agents" }
       : { kind: "other", doing: "Running an agent", done: "Ran an agent", phrase: "Ran an agent", many: "Ran agents" };
   }
-  if (short === "Skill") {
+  if (SKILLS.has(short)) {
     return detail
       ? { kind: "other", doing: `Using skill ${detail}`, done: `Used skill ${detail}`, object: detail, phrase: "Used a skill", many: "Used skills" }
       : { kind: "other", doing: "Using a skill", done: "Used a skill", phrase: "Used a skill", many: "Used skills" };

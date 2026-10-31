@@ -84,6 +84,24 @@ test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("Bash", "completed", "ls apps/desktop"), "Listed files in desktop");
 });
 
+test("each CLI's own name for a tool reads as the same action, never the bare name", () => {
+  for (const [mine, other, detail] of [
+    ["glob", "Glob", "**/*.js"],
+    ["grep", "Grep", "add"],
+    ["webfetch", "WebFetch", "https://tauri.app/start/"],
+    ["websearch", "WebSearch", "tauri"],
+    ["skill", "Skill", "brigade"],
+  ] as const) {
+    for (const status of ["inProgress", "completed"] as const) {
+      assert.equal(lead(mine, status, detail), lead(other, status, detail));
+      assert.doesNotMatch(lead(mine, status, detail), /^(Using|Used) (glob|grep|webfetch|websearch|skill)$/);
+    }
+  }
+  assert.equal(lead("list", "inProgress", "src"), "Listing files in src");
+  // OpenCode names its skill by `id`.
+  assert.equal(agentDetail("skill", JSON.stringify({ id: "brigade" })), "brigade");
+});
+
 test("the main thread and a worker's thread say the same step the same way", () => {
   const pairs: [ToolStep, ActionItem][] = [
     [call("Read", "completed", "/repo/apps/desktop/src/app/RequestBlock.tsx"),
