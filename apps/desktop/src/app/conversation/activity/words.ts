@@ -32,6 +32,8 @@ export type StepWords = {
   web?: boolean;
   /** It waits for other sessions to reply. */
   waiting?: boolean;
+  /** Its call hasn't said what it acts on yet (its input still streams): too vague to name the live row. */
+  pending?: boolean;
   /** It lists a folder's files (drawn with a folder, where a search has a magnifier). */
   list?: boolean;
   /** The files an edit changed, when known: a summary counts files, not calls ("Edited files"). */
@@ -329,15 +331,15 @@ function otherWords(short: string, detail: string | null = null, connector: stri
 export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> = {}): StepWords {
   const short = toolName(call.name);
   const detail = call.detail?.trim() ? namedTasks(call.detail.trim(), tasks) : null;
-  if (READS.has(short)) return detail ? read(basename(detail)) : { kind: "read", doing: "Reading a file", done: "Read a file" };
+  if (READS.has(short)) return detail ? read(basename(detail)) : { kind: "read", doing: "Reading a file", done: "Read a file", pending: true };
   if (EDITS.has(short)) {
-    if (!detail) return { kind: "edit", doing: "Editing a file", done: "Edited a file" };
+    if (!detail) return { kind: "edit", doing: "Editing a file", done: "Edited a file", pending: true };
     const [path, more] = detail.split(/ (and \d+ more)$/);
     const what = `${basename(path ?? detail)}${more ? ` ${more}` : ""}`;
     return { kind: "edit", doing: `Editing ${what}`, done: `Edited ${what}`, object: what };
   }
   if (COMMANDS.has(short)) {
-    return detail ? commandWords(detail) : { kind: "run", doing: "Running a command", done: "Ran a command" };
+    return detail ? commandWords(detail) : { kind: "run", doing: "Running a command", done: "Ran a command", pending: true };
   }
   if (CODE_SEARCH.has(short)) return searchedCode(detail);
   if (LISTINGS.has(short)) return listed(detail ? basename(detail) : null);

@@ -36,6 +36,11 @@ test("a live group names each newest step for its second even when told only onc
   assert.deepEqual(doneSteps.filter(Boolean), ["Reading part2.js", "Thinking", "Reading part3.js", "Thinking"]);
 });
 
+test("a live step that hasn't said what it acts on leaves the live line until it does, then names it", { timeout: 120000 }, async (t) => {
+  const { lateDetail } = await seen<{ lateDetail: string[] }>(t);
+  assert.deepEqual(lateDetail.filter(Boolean), ["Thinking", "Reading index.js"]);
+});
+
 // A group's and a row's body open and close with the shared animation, at once with reduced motion.
 for (const reducedMotion of [false, true]) {
   test(`a work group and its row open and close${reducedMotion ? " at once with reduced motion" : ", animated"}`, { timeout: 120000 }, async (t) => {

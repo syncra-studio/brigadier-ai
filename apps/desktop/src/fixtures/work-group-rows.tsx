@@ -129,6 +129,27 @@ function DoneSteps() {
   );
 }
 
+/** A read whose path streams in after its call shows, as Claude's does (`late-detail` sets it). */
+function LateDetail() {
+  const [detail, setDetail] = useState<string | null>(null);
+  useEffect(() => {
+    const said = () => setDetail("src/index.js");
+    window.addEventListener("late-detail", said);
+    return () => window.removeEventListener("late-detail", said);
+  }, []);
+  const words = stepWords({ name: "Read", detail, status: "inProgress" });
+  return (
+    <ActivityGroup<string>
+      items={[{ type: "step", key: "read-1", step: "read-1" }]}
+      live
+      working
+      liveLabel={{ text: "Thinking", tone: "busy" }}
+      describe={() => ({ words, status: "inProgress", exit: null })}
+      renderStep={(_, key) => <StepRow key={key} words={words} status="inProgress" exit={null} />}
+    />
+  );
+}
+
 function Page() {
   return (
     <TooltipProvider>
@@ -161,6 +182,9 @@ function Page() {
         </section>
         <section data-case="done-steps">
           <DoneSteps />
+        </section>
+        <section data-case="late-detail">
+          <LateDetail />
         </section>
         <section data-case="worker-lone" className="flex h-96 flex-col">
           <WorkerThread conversationId={CHAT} row={workerRow} />
@@ -276,6 +300,19 @@ async function measure(): Promise<object> {
   addDone();
   await sample(1600);
   out.doneSteps = labels;
+
+  // A read shown before its path came: the live line stands until the path names it.
+  const late: string[] = [];
+  const sampleLate = async (ms: number) => {
+    for (const end = performance.now() + ms; performance.now() < end; await new Promise(requestAnimationFrame)) {
+      const text = one("[data-slot=work-group] > button", at("late-detail"))?.textContent ?? "";
+      if (late.at(-1) !== text) late.push(text);
+    }
+  };
+  await sampleLate(300);
+  window.dispatchEvent(new Event("late-detail"));
+  await sampleLate(600);
+  out.lateDetail = late;
   return out;
 }
 

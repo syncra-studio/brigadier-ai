@@ -176,7 +176,8 @@ export function ActivityGroup<S>({ items, live, working, describe, renderStep, r
   const [named, setNamed] = useState<string | null>(null);
   const newest = items.at(-1)?.key ?? null;
   const fresh = !paused && !summary && live && newest !== named;
-  const stepNames = !paused && !summary && live && (current?.status === "inProgress" || fresh);
+  // A step that hasn't said what it acts on yet leaves the live line be until it does.
+  const stepNames = !paused && !summary && live && !current?.words.pending && (current?.status === "inProgress" || fresh);
   // The live line, unless the step running (or just ended) says it better; waiting on the user always wins.
   const line = live && liveLabel && (!stepNames || liveLabel.tone === "needsYou") ? liveLabel : null;
   const oneStep = !summary && (live || described.length === 1);
