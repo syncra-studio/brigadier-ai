@@ -3080,6 +3080,9 @@ impl ProviderSession for CodexSession {
                   // model reads "user rejected MCP tool call".
             };
             self.rpc.respond(rpc_id, result).await?;
+            if let (true, PendingKind::Command { item, .. }) = (allow, &kind) {
+                lock(&self.shared.commands).allowed(item, now_ms());
+            }
             // A decline carries no words (the app-server's approval responses, 0.162.1), so
             // the reason reaches the model as a message into its turn, naming the command.
             if let ApprovalDecision::Deny { message } = &decision

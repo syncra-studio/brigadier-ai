@@ -1526,6 +1526,14 @@ impl CommandItems {
         }
     }
 
+    /// The user allowed the command of item `item` at `at`: Codex asks before it runs one, so
+    /// its age starts here, not at its item's start.
+    pub(crate) fn allowed(&mut self, item: &str, at: i64) {
+        if let Some(started) = self.started.get_mut(item) {
+            *started = at;
+        }
+    }
+
     /// Whether the command of item `item` is no background terminal: its turn runs it, or it
     /// ended.
     fn foreground(&self, item: &str) -> bool {
@@ -2019,10 +2027,12 @@ mod tests {
         ] {
             commands.note(event, 0);
         }
-        // Its age runs from when the command began, not from when it was first listed.
-        let listed_d = background_terminals(&listed("exec-d"), &mut known, &commands, 1);
+        // Its age runs from when the command began (its approval, when it asked), not from
+        // when it was first listed.
+        commands.allowed("exec-d", 1);
+        let listed_d = background_terminals(&listed("exec-d"), &mut known, &commands, 2);
         assert_eq!(listed_d.len(), 1);
-        assert_eq!(listed_d[0].started_at_ms, 0);
+        assert_eq!(listed_d[0].started_at_ms, 1);
         // The model polled it to its end in its turn: it ends with its item, not when `/ps`
         // next misses it after the turn (that end would owe the thread a turn).
         let done = command("exec-d", ItemStatus::Completed);
