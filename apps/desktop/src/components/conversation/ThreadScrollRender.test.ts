@@ -47,6 +47,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     resizeAtBottom: { placed: number; shrunk: number; grown: number };
     cardAtSend: { placed: { userTop: number; room: number }; shown: { tops: number[]; room: number } };
     approvalAtWork: { placed: { userTop: number; room: number }; shown: { tops: number[]; room: number }; gone: { tops: number[]; room: number } };
+    shrinkWithBrowserMove: { placed: number; tops: number[] };
     returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
     sendScrolledUp: { moved: boolean; distance: number; inView: boolean; button: boolean };
     newChat: { userTop: number | null; top: number };
@@ -182,6 +183,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.deepEqual(seen.approvalAtWork.shown.tops, [seen.approvalAtWork.placed.userTop], asked);
   assert.deepEqual(seen.approvalAtWork.gone.tops, [seen.approvalAtWork.placed.userTop], asked);
   assert.ok(seen.approvalAtWork.shown.room > 0, asked);
+
+  // Its rows shrinking as the browser moves the view in the same frame: the message stays put.
+  assert.deepEqual(seen.shrinkWithBrowserMove.tops, [seen.shrinkWithBrowserMove.placed], JSON.stringify(seen.shrinkWithBrowserMove));
 
   // Left right after a send and back once it answered: the bottom, without the room.
   const { returnAfterSend } = seen;

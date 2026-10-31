@@ -546,8 +546,12 @@ export class ThreadScroller {
       else {
         this.clearRoomIfUnneeded();
         // A sent turn placed with its room stays where it was placed: the browser moving it on
-        // its own (WebKit does as a card takes the focused composer's place) is put back.
-        if (this.roomPx > 0 && this.glide === null && this.anchor) this.keep(this.anchor);
+        // its own (WebKit does as a card takes the focused composer's place) is put back. Its
+        // rows shrinking in the same frame give the room back first, or the range is short of it.
+        if (this.roomPx > 0 && this.glide === null && this.anchor) {
+          this.updateRoom();
+          this.keep(this.anchor);
+        }
       }
       this.record();
       return;

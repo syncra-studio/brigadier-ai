@@ -757,6 +757,36 @@ const steps = {
     useBoard.setState(({ board }) => (board ? { board: { ...board, run: "idle", runRequest: null, thinking: [], streaming: null } } : {}));
     return { placed, shown, gone };
   },
+  /**
+   * A placed turn's rows shrinking (its work folding as it ends) while the browser moves the
+   * view on its own in the same frame, before the resize is heard: the message stays put.
+   */
+  async shrinkWithBrowserMove() {
+    await open("other");
+    await userScroll(max());
+    sentWorking = true;
+    await send({ text: "A question whose work folds as it ends.", attachments: [], mentions: [] });
+    await settle(300);
+    const request = stored["other"]!.find((message) => message.id === lastSent)!.requestId!;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "running", runRequest: request, streaming: { messageId: "said", text: "It says what it does first.\n\nThen a second paragraph.", requestId: request, startedAtMs: Date.now(), phase: "commentary" } as never } } : {}));
+    await settle(400);
+    const placed = newestUserTop();
+    const last = rows().at(-1)!;
+    last.style.height = `${last.getBoundingClientRect().height - 4}px`;
+    last.style.overflow = "hidden";
+    viewport().scrollTop -= 35;
+    const tops: number[] = [];
+    for (const end = performance.now() + 300; performance.now() < end; ) {
+      await frame();
+      tops.push(newestUserTop());
+    }
+    last.style.height = "";
+    last.style.overflow = "";
+    sentWorking = false;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "idle", runRequest: null, streaming: null } } : {}));
+    await settle(300);
+    return { placed, tops: [...new Set(tops)] };
+  },
   /** A send, then away to another conversation while it answers and back: at the bottom, without the room. */
   async returnAfterSend() {
     await open("other");
