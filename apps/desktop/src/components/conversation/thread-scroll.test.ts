@@ -7,7 +7,6 @@ import {
   FOLLOW_PX,
   jumpInThread,
   keptDistance,
-  PLACE_PX,
   roomFor,
   SCROLL_PAD_PX,
   type RowBox,
@@ -720,28 +719,20 @@ test("in a short view a sent turn gets no room; a resize trims the room to the n
   assert.equal(tall.room, 0);
 });
 
-test("a message is placed only when sent within PLACE_PX of the bottom, the room aside; from further up nothing moves and the room goes", () => {
-  assert.equal(PLACE_PX, 300);
-  for (const [up, placed] of [[300, true], [301, false]] as const) {
+test("a message is placed wherever the view was when it was sent: near the bottom or screens up", () => {
+  for (const up of [300, 301, 3000]) {
     const fake = new Fake();
-    conversation(fake, 10);
+    conversation(fake, 30);
     const id = key();
     const scroller = open(fake, id, true);
     userScroll(fake, scroller, fake.max - up);
-    const top = fake.scrollTop;
     expectSentTurn(id, "sent");
     fake.rows.push(fake.row("sent", 60, "user"));
     scroller.rowsChanged();
-    if (placed) {
-      assert.ok(fake.room > 0);
-      assert.equal(distance(fake), 1);
-    } else {
-      assert.equal(fake.room, 0);
-      assert.equal(fake.scrollTop, top);
-      assert.equal(scroller.mode, "static");
-    }
+    assert.ok(fake.room > 0, `${up}`);
+    assert.equal(distance(fake), 1, `${up}`);
   }
-  // The room under the last turn doesn't count against it: 300px past it is still placed.
+  // The room under the last turn doesn't count against it.
   const fake = new Fake();
   conversation(fake, 6);
   const id = key();
@@ -749,8 +740,6 @@ test("a message is placed only when sent within PLACE_PX of the bottom, the room
   send(fake, scroller, id);
   scroller.setRunning(false);
   const room = fake.room;
-  // The room below the view, with the view 300px above where the room starts (no scroll to get
-  // there would leave the room this tall: rule 12 takes it as the user scrolls up).
   fake.scrollTop = fake.max - room - 300;
   scroller.scrolled();
   expectSentTurn(id, "next");

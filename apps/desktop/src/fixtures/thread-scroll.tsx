@@ -485,7 +485,9 @@ const steps = {
     await userScroll(max() - 26);
     await settle(250);
     const past = buttonState();
-    return { within, past };
+    // Shown, the fade is raised: its top above the button's, so no text runs under it.
+    const overText = round($(".thread-bottom-fade")!.getBoundingClientRect().top - button().getBoundingClientRect().top);
+    return { within, past, overText };
   },
   /**
    * Mid-scroll, a session switch and back: the same distance from the bottom, with history and
@@ -706,7 +708,7 @@ const steps = {
       button: buttonState().shown,
     };
   },
-  /** Scrolled up, a send leaves the view where it is: the turn is added below. */
+  /** Scrolled up, a send brings its message into view, placed near the top with room below. */
   async sendScrolledUp() {
     await open("other");
     await userScroll(Math.round(max() / 2));
@@ -714,7 +716,9 @@ const steps = {
     const top = Math.round(viewport().scrollTop);
     await send({ text: "A question sent while reading above.", attachments: [], mentions: [] });
     await settle(600);
-    return { top, after: Math.round(viewport().scrollTop), button: buttonState().shown };
+    const sent = rows().findLast((row) => row.dataset["role"] === "user")!.getBoundingClientRect();
+    const box = viewport().getBoundingClientRect();
+    return { moved: Math.round(viewport().scrollTop) !== top, distance: distance(), inView: sent.top >= box.top && sent.bottom <= box.bottom, button: buttonState().shown };
   },
   /** The first message of a new chat, sent from the new-chat view. */
   async newChat() {

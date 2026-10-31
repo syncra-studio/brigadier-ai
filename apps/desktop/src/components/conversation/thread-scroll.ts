@@ -11,14 +11,13 @@
  *   `FOLLOW_PX` from the bottom, and starts again from the scroll button, or when the user scrolls
  *   back to within `FOLLOW_PX` from further away with no more room than that below. A turn's end
  *   changes nothing: followed, its last layout and what comes late are in view.
- * - A message sent with the view within `PLACE_PX` of its bottom (its room aside) gets room under
- *   it: `roomFor` the view, as tall as it was when sent. The view springs to 1px from the bottom,
+ * - A message sent gets room under it, wherever the view was (spec §4.6): `roomFor` the view, as tall as it was when sent. The view springs to 1px from the bottom,
  *   the turn's end a third of the view down (at least 240px), and the turn's growth uses the room
  *   up, so nothing moves while its work and answer fill it; past that it is followed (below).
  *   The room only ever shrinks: by the turn's growth, by what the user scrolls up, to the view's
  *   new size when it or the composer resizes, and to nothing once it is all below the view or
  *   the content no longer needs it; never at once while it shows, also when its message shows
- *   again under another id. Sent from further up, nothing moves: the turn is added below.
+ *   again under another id.
  * - While the turn works (its answer streaming too, until its work block ends), it is watched:
  *   once a placed turn reaches past the view's bottom, the room goes and it is followed, unless
  *   the user scrolled or jumped up from it. Its block ending ends the watch (a turn followed stays followed).
@@ -40,8 +39,6 @@
 
 /** Within this of the bottom the thread is at its bottom: it follows, and comes back there. */
 export const FOLLOW_PX = 24;
-/** A message sent with the view within this of its bottom (its room aside) is placed. */
-export const PLACE_PX = 300;
 /** The scroll padding under the content: the floating footer's height and this (see globals.css). */
 export const SCROLL_PAD_PX = 16;
 /** The scroll button's glide to the bottom (easing out); within `FOLLOW_PX` it is there. */
@@ -400,14 +397,6 @@ export class ThreadScroller {
         if (this.firstTurn(rows)) {
           this.interrupt();
           this.followFromHere();
-          this.resized();
-          return;
-        }
-        // Sent from further up, reading, the user stays where they are: the turn is added below.
-        // The distance is the view's before the new row came.
-        if (this.lastDistance - this.roomPx > PLACE_PX) {
-          this.modeNow = "static";
-          this.clearRoom();
           this.resized();
           return;
         }

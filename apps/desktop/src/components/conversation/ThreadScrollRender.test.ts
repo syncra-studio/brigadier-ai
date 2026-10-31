@@ -18,7 +18,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     error?: string;
     viewport: { width: number; height: number };
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; topFadeScrolls: boolean; topFadeAt: number; bottomFade: number; buttonOverText: number };
-    button: { within: Button; past: Button };
+    button: { within: Button; past: Button; overText: number };
     switchBack: { offset: number; restoredOffset: number | null; early: (number | null)[]; loading: boolean; placeholders: number; distance: number; restoredDistance: number };
     revealedBack: { offset: number; restoredOffset: number | null };
     fullscreen: {
@@ -46,7 +46,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     };
     resizeAtBottom: { placed: number; shrunk: number; grown: number };
     returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
-    sendScrolledUp: { top: number; after: number; button: boolean };
+    sendScrolledUp: { moved: boolean; distance: number; inView: boolean; button: boolean };
     newChat: { userTop: number | null; top: number };
     capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
     working: { distance: number; rows: number };
@@ -79,6 +79,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.deepEqual(seen.button.past.size, [32, 32]);
   near(seen.button.past.aboveStack, 24, "button above the composer");
   near(seen.button.past.offCentre, 0, "button off the column's centre");
+  // Shown, the solid background reaches the button's top and the text fades out over the 32px
+  // above it: no text runs under the button.
+  near(seen.button.overText, -32, "the fade's top above the shown button's top by");
 
   // A switch away and back restores the place, while the history and long replies load late: its
   // distance from the bottom, within the pixel fractional rows round the scroll height by, and
@@ -174,8 +177,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(returnAfterSend.roomBack, 0);
   near(returnAfterSend.lastGap, 32, "returned to the bottom");
   assert.equal(returnAfterSend.button, false);
-  // Scrolled up, a send doesn't move the view: the turn is added below, the scroll button shown.
-  assert.deepEqual(seen.sendScrolledUp, { top: seen.sendScrolledUp.top, after: seen.sendScrolledUp.top, button: true });
+  // Scrolled up, a send still places its turn: the view goes to it, its message in view with room
+  // below, 1px from the bottom, and no scroll button (spec §4.6).
+  assert.deepEqual(seen.sendScrolledUp, { moved: true, distance: 1, inView: true, button: false });
 
   // The first message of a new chat sits at the top padding; an unseen working chat opens at
   // its bottom.
