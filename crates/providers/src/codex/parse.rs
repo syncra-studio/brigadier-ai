@@ -1487,10 +1487,12 @@ pub(crate) struct CommandItems {
     running: HashSet<String>,
     /// Commands that ended since the last turn began: Codex may still list their process.
     ended: HashSet<String>,
+    /// When each command not ended yet began, which a background terminal's age starts from.
+    started: HashMap<String, i64>,
 }
 
 impl CommandItems {
-    pub(crate) fn note(&mut self, event: &ProviderEvent) {
+    pub(crate) fn note(&mut self, event: &ProviderEvent, at: i64) {
         match event {
             ProviderEvent::Command {
                 item_id,
@@ -1498,9 +1500,11 @@ impl CommandItems {
                 ..
             } => {
                 self.running.insert(item_id.clone());
+                self.started.entry(item_id.clone()).or_insert(at);
             }
             ProviderEvent::Command { item_id, .. } => {
                 self.running.remove(item_id);
+                self.started.remove(item_id);
                 self.ended.insert(item_id.clone());
             }
             ProviderEvent::TurnStarted { .. } => self.ended.clear(),
@@ -1599,7 +1603,12 @@ pub(crate) fn background_terminals(
                     .unwrap_or_default()
                     .to_owned(),
                 status: BackgroundTaskStatus::Running,
-                started_at_ms: now,
+                // A command the model went on from began before it was listed as a terminal.
+                started_at_ms: terminal
+                    .get("itemId")
+                    .and_then(Value::as_str)
+                    .and_then(|item| commands.started.get(item).copied())
+                    .unwrap_or(now),
                 ended_at_ms: None,
                 output_file: None,
                 summary: None,
@@ -1953,24 +1962,24 @@ mod tests {
         // Stopped while it ran: listed before and after the turn's end, never a terminal.
         let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
         for event in [&started, &command("exec-a", ItemStatus::InProgress)] {
-            commands.note(event);
+            commands.note(event, 0);
         }
         assert!(background_terminals(&listed("exec-a"), &mut known, &commands, 1).is_empty());
-        commands.note(&turn(TurnStatus::Interrupted));
+        commands.note(&turn(TurnStatus::Interrupted), 0);
         assert!(background_terminals(&listed("exec-a"), &mut known, &commands, 2).is_empty());
         assert!(known.is_empty());
 
         // Ended in its turn, still listed as the turn ends: no terminal either.
         let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
         for event in [&started, &command("exec-b", ItemStatus::InProgress)] {
-            commands.note(event);
+            commands.note(event, 0);
         }
         assert!(background_terminals(&listed("exec-b"), &mut known, &commands, 1).is_empty());
         for event in [
             &command("exec-b", ItemStatus::Completed),
             &turn(TurnStatus::Completed),
         ] {
-            commands.note(event);
+            commands.note(event, 0);
         }
         assert!(background_terminals(&listed("exec-b"), &mut known, &commands, 2).is_empty());
         assert!(background_terminals(&json!({ "data": [] }), &mut known, &commands, 3).is_empty());
@@ -1979,10 +1988,10 @@ mod tests {
         // leaving the list ends it.
         let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
         for event in [&started, &command("exec-c", ItemStatus::InProgress)] {
-            commands.note(event);
+            commands.note(event, 0);
         }
         assert!(background_terminals(&listed("exec-c"), &mut known, &commands, 1).is_empty());
-        commands.note(&turn(TurnStatus::Completed));
+        commands.note(&turn(TurnStatus::Completed), 0);
         let tasks = background_terminals(&listed("exec-c"), &mut known, &commands, 2);
         assert_eq!(
             tasks
@@ -1992,7 +2001,7 @@ mod tests {
             [("77432", BackgroundTaskStatus::Running)]
         );
         // The next turn's start doesn't take it back.
-        commands.note(&started);
+        commands.note(&started, 0);
         assert!(background_terminals(&listed("exec-c"), &mut known, &commands, 3).is_empty());
         let tasks = background_terminals(&json!({ "data": [] }), &mut known, &commands, 4);
         assert_eq!(tasks[0].status, BackgroundTaskStatus::Completed);
@@ -2008,23 +2017,23 @@ mod tests {
                 phase: None,
             },
         ] {
-            commands.note(event);
+            commands.note(event, 0);
         }
-        assert_eq!(
-            background_terminals(&listed("exec-d"), &mut known, &commands, 1).len(),
-            1
-        );
+        // Its age runs from when the command began, not from when it was first listed.
+        let listed_d = background_terminals(&listed("exec-d"), &mut known, &commands, 1);
+        assert_eq!(listed_d.len(), 1);
+        assert_eq!(listed_d[0].started_at_ms, 0);
         // The model polled it to its end in its turn: it ends with its item, not when `/ps`
         // next misses it after the turn (that end would owe the thread a turn).
         let done = command("exec-d", ItemStatus::Completed);
-        commands.note(&done);
+        commands.note(&done, 0);
         assert!(ended_terminal(&command("exec-x", ItemStatus::Completed), &mut known, 2).is_none());
         let ended = ended_terminal(&done, &mut known, 2).expect("its terminal ends");
         assert_eq!(
             (ended.id.as_str(), ended.status, ended.ended_at_ms),
             ("77432", BackgroundTaskStatus::Completed, Some(2))
         );
-        commands.note(&turn(TurnStatus::Completed));
+        commands.note(&turn(TurnStatus::Completed), 0);
         assert!(background_terminals(&listed("exec-d"), &mut known, &commands, 3).is_empty());
         assert!(background_terminals(&json!({ "data": [] }), &mut known, &commands, 4).is_empty());
     }

@@ -2647,7 +2647,7 @@ impl Replayer for CodexReplayer {
             .collect();
         let mut said = Vec::with_capacity(events.len());
         for event in events {
-            self.commands.note(&event);
+            self.commands.note(&event, 0);
             if let ProviderEvent::ApprovalRequested { request } = &event {
                 self.asked.insert(request.id.clone());
             }
@@ -3331,7 +3331,7 @@ async fn read_loop(
         *lock(&shared.turn_id) = parser.turn_id().map(str::to_owned);
         for output in &outputs {
             if let Output::Event(event) = output {
-                lock(&shared.commands).note(event);
+                lock(&shared.commands).note(event, now_ms());
             }
         }
         for output in outputs {
