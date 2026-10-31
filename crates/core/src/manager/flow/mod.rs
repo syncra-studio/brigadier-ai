@@ -2462,7 +2462,6 @@ mod auto_merge_tests;
 mod background_tests;
 #[cfg(unix)]
 mod branch_prefix_tests;
-#[cfg(unix)]
 mod browser_switch_tests;
 mod browser_tool_tests;
 #[cfg(unix)]
@@ -2502,6 +2501,7 @@ mod open_in_app_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod records_tests;
+#[cfg(unix)]
 mod standing_tests;
 #[cfg(unix)]
 mod terminal_run_tests;
