@@ -171,7 +171,12 @@ export function ActivityGroup<S>({ items, live, working, describe, renderStep, r
   // The step running now (the newest of those running together), else the last.
   const current = described.findLast((step) => step.status === "inProgress") ?? described.at(-1);
   const first = described[0];
-  const stepNames = !paused && !summary && live && current?.status === "inProgress";
+  // The newest step names itself for its second even when it ended before it was drawn (a fast
+  // read, a CLI that tells a step only once it is done), so the live row says each action in turn.
+  const [named, setNamed] = useState<string | null>(null);
+  const newest = items.at(-1)?.key ?? null;
+  const fresh = !paused && !summary && live && newest !== named;
+  const stepNames = !paused && !summary && live && (current?.status === "inProgress" || fresh);
   // The live line, unless the step running (or just ended) says it better; waiting on the user always wins.
   const line = live && liveLabel && (!stepNames || liveLabel.tone === "needsYou") ? liveLabel : null;
   const oneStep = !summary && (live || described.length === 1);
@@ -191,6 +196,8 @@ export function ActivityGroup<S>({ items, live, working, describe, renderStep, r
   const calm = useCalmLabel(label, live && !summary);
   // The live line shows once the label before it has stood its second.
   const saysLine = !!line && calm.shown === line.text;
+  // Once on screen, the step has had its turn: the live line follows after its second.
+  if (fresh && naming && calm.shown === label) setNamed(newest);
   const [only] = items;
   if (!only) return null;
   // Paused for quota, a lone step keeps its own row, which says it is paused.

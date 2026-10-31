@@ -756,7 +756,8 @@ export function doingOf(event: ProviderEvent, current: string | null): string | 
         : `Reconnecting${attemptOf(event.error.message)}`;
     case "toolCall": {
       if (event.status !== "inProgress") return null;
-      return TOOL_DOING[event.name] ?? "Using a tool";
+      // Any other tool's step names itself on its own row; the line has nothing better to say.
+      return TOOL_DOING[event.name] ?? null;
     }
     case "reasoning":
     case "message":

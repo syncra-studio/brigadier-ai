@@ -169,7 +169,8 @@ test("the lead's retries show while its CLI retries, and clear when it goes on",
 test("the lead's live line names what a CLI tool does", () => {
   assert.equal(sending("WebSearch"), "Searching the web");
   assert.equal(sending("WebFetch"), "Reading a web page");
-  assert.equal(sending("mcp__linear__search_issues"), "Using a tool");
+  // Any other tool's own row names it; the line never says a vague "Using a tool".
+  assert.equal(sending("mcp__linear__search_issues"), null);
 });
 
 test("a message to another session: its own row names where it goes", () => {
