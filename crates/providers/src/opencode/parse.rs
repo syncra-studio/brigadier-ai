@@ -186,19 +186,27 @@ impl Parser {
                     .zip(created)
                     .map(|(from, to)| to - from);
                 let mut out = vec![tool_event(&id, &call, status, output, took, data)];
-                // A command OpenCode moved to the background: its call ends, the command runs on
-                // until OpenCode says its end (a shell item in its inbox).
-                if call.0 == "shell"
+                // A command or a subagent OpenCode moved to the background: its call ends, it
+                // runs on until OpenCode says its end (an item in its inbox).
+                let background = match call.0.as_str() {
+                    "shell" => Some(("/metadata/shellID", BackgroundTaskKind::Shell)),
+                    "subagent" => Some(("/metadata/sessionID", BackgroundTaskKind::Agent)),
+                    _ => None,
+                };
+                if let Some((key, kind)) = background
                     && data.pointer("/metadata/status") == Some(&json!("running"))
-                    && let Some(shell) = data.pointer("/metadata/shellID").and_then(Value::as_str)
+                    && let Some(shell) = data.pointer(key).and_then(Value::as_str)
                     && !self.ended_early.remove(shell)
                 {
                     let command = call.1["command"].as_str().map(str::to_owned);
                     let task = BackgroundTask {
                         id: shell.to_owned(),
                         item_id: Some(id),
-                        kind: BackgroundTaskKind::Shell,
-                        label: command.clone().unwrap_or_default(),
+                        label: command
+                            .clone()
+                            .or_else(|| call.1["description"].as_str().map(str::to_owned))
+                            .unwrap_or_default(),
+                        kind,
                         status: BackgroundTaskStatus::Running,
                         started_at_ms: created.unwrap_or_else(crate::now_ms),
                         ended_at_ms: None,
@@ -214,13 +222,20 @@ impl Parser {
                 }
                 out
             }
-            // OpenCode's word that a background command ended, a synthetic item in the inbox
-            // that starts its next turn.
+            // OpenCode's word that a background command or subagent ended, a synthetic item in
+            // the inbox that starts its next turn.
             "session.inbox.enqueued"
-                if data.pointer("/item/payload/metadata/source") == Some(&json!("shell")) =>
+                if matches!(
+                    data.pointer("/item/payload/metadata/source")
+                        .and_then(Value::as_str),
+                    Some("shell" | "subagent")
+                ) =>
             {
                 let metadata = &data["item"]["payload"]["metadata"];
-                let shell = metadata["shellID"].as_str().unwrap_or_default();
+                let shell = metadata["shellID"]
+                    .as_str()
+                    .or_else(|| metadata["childID"].as_str())
+                    .unwrap_or_default();
                 let Some(at) = self.background.iter().position(|task| task.id == shell) else {
                     self.ended_early.insert(shell.to_owned());
                     return Vec::new();
@@ -934,6 +949,71 @@ mod tests {
             .concat(),
         );
         assert!(events.iter().any(|event| matches!(event, ProviderEvent::BackgroundTask { task } if task.status == BackgroundTaskStatus::Failed)), "{events:#?}");
+    }
+
+    /// A subagent OpenCode runs in the background is a background agent task from its call's
+    /// result until OpenCode's word of its end, as a command it moves there is (2.2.3's shapes).
+    #[test]
+    fn a_background_subagent_runs_as_an_agent_task_until_opencode_says_its_end() {
+        let mut parser = Parser::new(Some(S.into()), None);
+        let at = |created: i64, kind: &str, data: Value| {
+            json!({"id": "evt", "created": created, "type": kind, "data": data}).to_string()
+        };
+        let events = feed(
+            &mut parser,
+            &[
+                at(
+                    1_000,
+                    "session.tool.input.started",
+                    json!({"sessionID": S, "id": "call_s", "name": "subagent"}),
+                ),
+                at(
+                    1_000,
+                    "session.tool.called",
+                    json!({"sessionID": S, "id": "call_s", "input": {"agent": "general", "description": "Run sleep 20 && ls", "background": true, "prompt": "Run sleep 20 && ls."}}),
+                ),
+                at(
+                    1_100,
+                    "session.tool.success",
+                    json!({"sessionID": S, "id": "call_s", "content": [{"type": "text", "text": "The subagent is working in the background."}], "metadata": {"sessionID": "ses_child", "status": "running", "truncated": false}}),
+                ),
+            ],
+        );
+        let task = events
+            .iter()
+            .find_map(|event| match event {
+                ProviderEvent::BackgroundTask { task } => Some(task),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{events:#?}"));
+        assert_eq!(
+            (
+                task.id.as_str(),
+                task.item_id.as_deref(),
+                task.kind,
+                task.status,
+                task.label.as_str()
+            ),
+            (
+                "ses_child",
+                Some("call_s"),
+                BackgroundTaskKind::Agent,
+                BackgroundTaskStatus::Running,
+                "Run sleep 20 && ls"
+            )
+        );
+        let events = feed(
+            &mut parser,
+            &[at(
+                30_000,
+                "session.inbox.enqueued",
+                json!({"inboxID": "msg_c", "sessionID": S, "item": {"type": "synthetic", "payload": {"text": "<subagent>done</subagent>", "description": "Run sleep 20 && ls", "metadata": {"source": "subagent", "childID": "ses_child", "agent": "General", "state": "completed"}}, "delivery": "steer"}}),
+            )],
+        );
+        assert!(
+            events.iter().any(|event| matches!(event, ProviderEvent::BackgroundTask { task } if task.id == "ses_child" && task.status == BackgroundTaskStatus::Completed && task.ended_at_ms == Some(30_000))),
+            "{events:#?}"
+        );
     }
 
     /// As `opencode serve` 2.0.19 said them: the user's message is admitted, its turn starts,
