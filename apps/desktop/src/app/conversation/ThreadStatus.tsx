@@ -1,8 +1,7 @@
 import { type FC, useMemo } from "react";
 
-import { elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
+import { elapsedWords, liveHead, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
-import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
 import type { BlockState } from "@/app/conversation/blocks";
 import { Tasks } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
@@ -36,12 +35,9 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const head = view?.head;
   const workers = props?.workers ?? 0;
   const commands = props?.commands ?? 0;
-  return useMemo(() => {
-    if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" as const };
-    if (commands > 0) return { text: commandsWaitWords(commands), tone: "still" as const };
-    return head ? { ...head, text: words } : null;
-  }, [head, words, workers, commands]);
+  return useMemo(() => liveHead(head ? { ...head, text: words } : null, workers, commands), [head, words, workers, commands]);
 }
+
 
 /** The status line on its own, when no work row says it; a long run's says how long it has gone. */
 export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {

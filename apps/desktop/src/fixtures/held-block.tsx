@@ -103,6 +103,9 @@ function seen() {
   return {
     blocks: blocks.length,
     headers: blocks.map((block) => block.querySelector('[data-slot="request-work-label"]')?.textContent ?? null),
+    // Every line of the block that says what it waits for: the header's, the live line's.
+    waits: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-work-label"], [data-slot="thread-status"], [data-slot="group-live-line"]')]
+      .map((line) => line.textContent ?? "").filter((text) => text.startsWith("Waiting"))),
     steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*(?:Yesterday|\d).*$/, "").trim() ?? "")),
   };
 }

@@ -59,9 +59,18 @@ test("a command that ended holds the newest block that started it until the turn
   assert.equal(turnCommands({ entries, background: [waiting], jobs: { waking: true } }, turns, [5000]), 0);
 });
 
-test("a held turn's header says it waits for its commands, its workers first", () => {
+test("a held turn's live line says it waits for its commands; its header keeps only the time", () => {
   assert.equal(commandsWaitWords(1), "Waiting for a command");
   assert.equal(commandsWaitWords(2), "Waiting for 2 commands");
-  assert.equal(headerLabel("done", 240_000, false, false, 0, 1), "Waiting for a command · 4m 0s");
-  assert.equal(headerLabel("done", 120_000, false, false, 1, 2), "Waiting for a worker · 2m 0s");
+  assert.equal(headerLabel("working", 240_000), "Working for 4m 0s");
+});
+
+test("a held turn's one wait line names the user first: a question's answer or an approval, then workers, then commands", async () => {
+  const { liveHead } = await import("./liveStatus");
+  const answer = { text: "Waiting for your answer", tone: "needsYou" as const, waitsOn: "answer" as const };
+  assert.equal(liveHead(answer, 0, 1)?.text, "Waiting for your answer");
+  assert.equal(liveHead(answer, 2, 1)?.text, "Waiting for your answer");
+  assert.equal(liveHead({ text: "Thinking", tone: "busy" }, 0, 1)?.text, "Waiting for a command");
+  assert.equal(liveHead({ text: "Thinking", tone: "busy" }, 1, 1)?.text, "Waiting for a worker");
+  assert.equal(liveHead(null, 0, 0), null);
 });

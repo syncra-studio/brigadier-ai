@@ -10,9 +10,9 @@ import { ChevronRightAlt } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**
- * The row over a request's work, with a rule under it: "Working for 12s" while live, "Worked
- * for 3m 4s ›" once its work folds, "Waiting for quota · 12s" while its messages wait for a
- * model that can take them.
+ * The row over a request's work, with a rule under it: "Working for 12s" while live, also while
+ * what it started still runs (its live line says what it waits on), "Worked for 3m 4s ›" once
+ * its work folds, "Waiting for quota · 12s" while its messages wait for a model that can take them.
  */
 export const WorkHeader: FC<{
   meta: BlockMeta;
@@ -20,26 +20,24 @@ export const WorkHeader: FC<{
   foldable: boolean;
   /** Its messages wait for quota, and no worker of it runs meanwhile. */
   quota: boolean;
-  /** Over, the workers it started that still work: it says it waits for them, since it ended. */
-  workers: number;
-  /** Over, the background commands it started that still hold it (D21): it says it waits for them. */
-  commands?: number;
+  /** Its turn is over, but workers, subagents or background commands it started still hold it open (D24). */
+  held: boolean;
   onToggle: () => void;
   /** Its calls the user denied: "{n} denied actions" on the right, which shows the first. */
   denied: number;
   onDenied: () => void;
-}> = ({ meta, open, foldable, quota, workers, commands = 0, onToggle, denied, onDenied }) => {
-  const held = workers > 0 || commands > 0;
+}> = ({ meta, open, foldable, quota, held, onToggle, denied, onDenied }) => {
   const now = useTicking(isLive(meta.state) || held);
-  const elapsed = held ? Math.max(0, now - (meta.endedAtMs ?? now)) : turnTime(meta, now);
-  // Waiting on its own question card, the turn still reads as working.
-  const state = waitsOnCard(meta) ? "working" : meta.state;
+  // Held open, it still works: its clock goes on from its start, never restarts.
+  const elapsed = held ? Math.max(0, now - (meta.worked[0]?.fromMs ?? meta.startedAtMs)) : turnTime(meta, now);
+  // Waiting on its own question card, or held open by what it started, the turn still reads as working.
+  const state = waitsOnCard(meta) || held ? "working" : meta.state;
   const failed = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error" ? String(status.error ?? "") : null;
   });
   const interrupted = interruptedByQuit(useBlockError(meta, failed)?.error);
-  const label = headerLabel(state, elapsed, quota, interrupted, workers, commands);
+  const label = headerLabel(state, elapsed, quota, interrupted);
   const text = (
     <span
       data-slot="request-work-label"

@@ -1,6 +1,6 @@
 import { isPlumbing } from "@/app/conversation/activity/words";
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
-import { commandsWaitWords } from "@/app/conversation/requestTime";
+import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
 import { activelyWorking } from "@/app/conversation/taskActivity";
 import type { QuotaWait, Task } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
@@ -141,4 +141,15 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
   if (state === "waiting") return none;
   // Between the lead's turns (a message just sent, a change being landed): it still works.
   return { head: { text: "Thinking", tone: "busy" } };
+}
+
+/**
+ * The one line a live turn says what it waits on with: what waits on the user (a question's
+ * answer, an approval) first, then the workers and commands holding it over, else `head`.
+ */
+export function liveHead(head: StatusHead | null, workers: number, commands: number): StatusHead | null {
+  if (head?.tone === "needsYou") return head;
+  if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" };
+  if (commands > 0) return { text: commandsWaitWords(commands), tone: "still" };
+  return head;
 }

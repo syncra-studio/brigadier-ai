@@ -238,7 +238,8 @@ export const RequestBlock: FC = () => {
     thinkingLive: !!liveThought,
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
-    ...(held && { workers: holding, commands }),
+    // Over, its line says what it waits on: its workers (subagents too, D50), then its commands.
+    ...(held && { workers: holding + (meta.state === "done" ? subagents : 0), commands }),
   };
 
   return (
@@ -268,9 +269,8 @@ export const RequestBlock: FC = () => {
             open={open}
             foldable={foldable}
             quota={quotaWait !== null}
-            // Over, it says it waits for its workers and commands (L3, D24).
-            workers={holding}
-            commands={commands}
+            // Over, it works on while what it started runs (L3, D24).
+            held={held && meta.state === "done"}
             onToggle={() => fold.set(!open)}
             denied={deniedCount}
             onDenied={() => {

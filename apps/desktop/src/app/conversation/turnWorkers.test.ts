@@ -64,7 +64,6 @@ test("a block Brigadier's word of its workers joined holds for the workers any o
 test("a turn held by its workers says it waits for them", () => {
   assert.equal(workersWaitWords(1), "Waiting for a worker");
   assert.equal(workersWaitWords(3), "Waiting for 3 workers");
-  assert.equal(headerLabel("done", 65_000, false, false, 2), "Waiting for 2 workers · 1m 5s");
   assert.equal(headerLabel("done", 65_000), "Worked for 1m 5s");
 });
 

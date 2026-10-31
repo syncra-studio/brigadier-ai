@@ -31,14 +31,11 @@ export function commandsWaitWords(commands: number): string {
 }
 
 /**
- * A turn's header: how long it worked, and how it ended. `workers`, `commands`: a turn over
- * whose workers still work, or whose background commands still run, says it waits for them,
- * and for how long; its workers first.
+ * A turn's header: how long it worked, and how it ended. What a live turn waits on is its live
+ * line's to say, once (`useThreadStatusHead`); the header only keeps the time.
  */
-export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false, workers = 0, commands = 0): string {
+export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false): string {
   const time = formatDuration(elapsed);
-  if (workers > 0) return `${workersWaitWords(workers)} · ${time}`;
-  if (commands > 0) return `${commandsWaitWords(commands)} · ${time}`;
   switch (state) {
     case "working": {
       if (quota) return `Waiting for quota · ${time}`;
