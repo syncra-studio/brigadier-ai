@@ -1499,8 +1499,14 @@ impl CommandItems {
                 status: ItemStatus::InProgress,
                 ..
             } => {
-                self.running.insert(item_id.clone());
-                self.started.entry(item_id.clone()).or_insert(at);
+                // A new command while others run: the turn went on from them (a yield), so they
+                // are in the background. shortcut: commands a turn starts side by side and waits
+                // on together read as background too; tell them apart if Codex ever says so.
+                if !self.started.contains_key(item_id) {
+                    self.running.clear();
+                    self.running.insert(item_id.clone());
+                    self.started.insert(item_id.clone(), at);
+                }
             }
             ProviderEvent::Command { item_id, .. } => {
                 self.running.remove(item_id);
@@ -2046,6 +2052,23 @@ mod tests {
         commands.note(&turn(TurnStatus::Completed), 0);
         assert!(background_terminals(&listed("exec-d"), &mut known, &commands, 3).is_empty());
         assert!(background_terminals(&json!({ "data": [] }), &mut known, &commands, 4).is_empty());
+
+        // The turn ran another command while it ran (a yield, with no words between): a
+        // background terminal, its own repeated start never taking it back.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [
+            &started,
+            &command("exec-e", ItemStatus::InProgress),
+            &command("exec-f", ItemStatus::InProgress),
+            &command("exec-f", ItemStatus::Completed),
+            &command("exec-e", ItemStatus::InProgress),
+        ] {
+            commands.note(event, 0);
+        }
+        assert_eq!(
+            background_terminals(&listed("exec-e"), &mut known, &commands, 1).len(),
+            1
+        );
     }
 
     #[test]
