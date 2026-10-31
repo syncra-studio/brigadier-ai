@@ -536,7 +536,12 @@ export class ThreadScroller {
     const max = maxScroll(viewport);
     const clamped = this.expected > max && Math.abs(viewport.scrollTop - max) < 1;
     if (clamped || Math.abs(viewport.scrollTop - this.expected) < 1) {
-      // Clamped, the view's top moved: its anchor is where it is now.
+      // Clamped under a placed turn's room (its rows shrank): the room takes the shrink back and
+      // the view goes back where it was, before anything paints. Else its anchor is where it is.
+      if (clamped && this.roomPx > 0 && this.glide === null && this.anchor) {
+        this.updateRoom();
+        this.keep(this.anchor);
+      }
       this.record(clamped);
       return;
     }
@@ -703,6 +708,14 @@ export class ThreadScroller {
   }
 
   /**
+   * A turn's work folds by itself: its answer `target` keeps its place, unless the turn is the
+   * placed one with its room, whose message stays instead (the room takes the fold).
+   */
+  foldsBySelf(target: RowBox): void {
+    if (!(this.placed && this.roomPx > 0)) this.holdStill(target);
+  }
+
+  /**
    * The scroll button: to the bottom, following from there. While the thread works, or with
    * more than `FOLLOW_PX` of room, the room goes and it is there at once; otherwise it glides,
    * there once within `FOLLOW_PX`.
@@ -825,8 +838,8 @@ export class ThreadScroller {
 
   /**
    * The room's turn's growth since it was last measured uses the room up; at 0 it is gone. Its
-   * shrinking (rows replaced by fewer) gives the room back, so the view's range never shrinks
-   * under the placed turn and nothing shown moves.
+   * shrinking (rows replaced by fewer, its work folding) gives the room back, so the view's range
+   * never shrinks under the placed turn and nothing shown moves.
    */
   private updateRoom(): void {
     const layout = this.layout;
@@ -849,7 +862,12 @@ export class ThreadScroller {
       this.roomTurn = null;
     }
     const turn = last.getBoundingClientRect().bottom - user.getBoundingClientRect().top;
-    if (this.roomTurn !== null && turn !== this.roomTurn) this.setRoomPx(Math.min(roomFor(this.visible()), Math.max(0, this.roomPx - (turn - this.roomTurn))));
+    if (this.roomTurn !== null && turn !== this.roomTurn) {
+      // Placed, it takes all the turn shrinks by, so its message never moves; mid-spring, no
+      // more than a sent turn gets, so the spring still ends with the turn's end a third down.
+      const room = Math.max(0, this.roomPx - (turn - this.roomTurn));
+      this.setRoomPx(this.springing ? Math.min(roomFor(this.visible()), room) : room);
+    }
     this.roomTurn = turn;
     if (this.roomPx === 0) this.dropRoom();
   }

@@ -173,13 +173,13 @@ export function useThreadAnswerStarted(requestIds: readonly string[], started: b
 
 /**
  * Once `folds` turns true (a turn's work folding by itself), `target` keeps its place on screen
- * while the fold closes above it (see `ThreadScroller.holdStill`).
+ * while the fold closes above it (see `ThreadScroller.foldsBySelf`).
  */
 export function useThreadHoldsOnFold(target: RefObject<HTMLElement | null>, folds: boolean): void {
   const scroller = useContext(ThreadScrollContext);
   const was = useRef(folds);
   useLayoutEffect(() => {
-    if (folds && !was.current && target.current) scroller?.holdStill(target.current);
+    if (folds && !was.current && target.current) scroller?.foldsBySelf(target.current);
     was.current = folds;
   }, [scroller, folds, target]);
 }

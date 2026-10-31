@@ -687,6 +687,28 @@ test("a sent turn's room takes a fold closing in it back, never past what it had
   assert.equal(scroller.contentBelow(), true);
 });
 
+test("a placed turn's work folding by itself at its end moves nothing: its message stays, the room takes all it shrinks by", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const id = key();
+  const scroller = open(fake, id, true);
+  const { user, reply: work } = send(fake, scroller, id, 40);
+  flushFrames(scroller);
+  const offset = fake.offset(user);
+  // Its work grows into the room, then folds by itself to less than it was when sent.
+  work.height += 150;
+  scroller.resized();
+  assert.equal(fake.offset(user), offset);
+  const answer = fake.row("answer-2", 30);
+  fake.rows.push(answer);
+  scroller.rowsChanged();
+  scroller.foldsBySelf(answer);
+  work.height = 20;
+  scroller.resized();
+  scroller.scrolled();
+  assert.equal(fake.offset(user), offset);
+});
+
 test("in a short view a sent turn gets no room; a resize trims the room to the new size and never grows it back", () => {
   const fake = new Fake();
   conversation(fake, 6);
@@ -1059,13 +1081,12 @@ test("a sent turn's room never shows the button alone, and stays as it is when t
   assert.equal(fake.offset(user), top);
   assert.equal(scroller.contentBelow(), false);
   assert.equal(scroller.mode, "static");
-  // Its answer folding shorter gives nothing back to the room: the browser clamps the view.
+  // Its answer folding shorter gives the room as much: its message never moves.
   fake.rows.at(-1)!.height -= 20;
   scroller.scrolled();
   scroller.resized();
-  assert.equal(fake.room, room);
-  assert.equal(fake.scrollTop, fake.max);
-  assert.equal(fake.offset(user), top + 19);
+  assert.equal(fake.room, room + 20);
+  assert.equal(fake.offset(user), top);
 });
 
 test("at the bottom, a resize of the view keeps it at the bottom", () => {
