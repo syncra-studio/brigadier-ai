@@ -13,7 +13,7 @@ use brigadier_providers::{
 };
 use serde_json::Value;
 
-use super::cli_tests::{brigadier, wait};
+use super::cli_tests::{brigadier, join_queued, wait};
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
 use crate::manager::seam::SeamConfig;
 use crate::model::PermissionLevel;
@@ -222,6 +222,7 @@ async fn parent(turn: Turn, seen: Arc<Seen>) -> Reply {
         std::fs::write(note, "Doing now: nothing.\nNext: wait for the workers.").unwrap();
         return Reply::text("Handed off.");
     }
+    join_queued(&turn).await;
     let said = crate::manager::seam::without_handoff(&turn.input);
     if said.contains("Grow.") {
         turn.report_context(70_000).await;

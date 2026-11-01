@@ -36,6 +36,16 @@ pub(super) fn short(id: &str) -> String {
     id[id.len() - 8..].to_owned()
 }
 
+/// Judges `join` every queued message the turn was given to judge, as a real CLI working on it
+/// would (D72: nothing joins one by itself).
+pub(super) async fn join_queued(turn: &Turn) {
+    let judge = regex::Regex::new(r"\[queued message (\S{8}) · [^\]]*judge it").unwrap();
+    for found in judge.captures_iter(&turn.input) {
+        let (id, judgment) = (found[1].to_owned(), brigadier_cli::protocol::Judgment::Join);
+        brigadier(turn, CliRequest::Queue { id, judgment }).await;
+    }
+}
+
 /// Runs `brigadier <request>` as a command of the turn would: as the session and with the grant
 /// its CLI's environment names. Checks the answer against the command's schema; an error answer
 /// comes back as `{"error": …}`.
@@ -2468,6 +2478,7 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
             ) {
                 return Reply::text("Done.");
             }
+            join_queued(&turn).await;
             let review = |reviewing: &[&str]| StartRequest {
                 reviewing: reviewing.iter().map(|id| (*id).to_owned()).collect(),
                 local: true,

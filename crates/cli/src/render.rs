@@ -636,10 +636,6 @@ pub fn continue_on(output: &crate::protocol::ContinueOnOutput) -> String {
 pub fn queue(output: &QueueOutput) -> String {
     let id = &output.id;
     match output.state {
-        QueueState::Joined if output.already => format!(
-            "{id} had already joined this work, unjudged: it is the user's message here; act on \
-             it and answer it with the rest.\n"
-        ),
         QueueState::Joined => {
             format!("{id} joined this work: act on it and answer it with the rest.\n")
         }

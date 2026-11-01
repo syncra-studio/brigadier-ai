@@ -4917,7 +4917,11 @@ impl SessionManager {
                     state.transition_turn_started = true;
                     std::mem::take(&mut state.opens_block)
                 };
-                if opens_block {
+                // Only when something waits: most turns open a block with an empty queue.
+                let waiting = opens_block
+                    && (self.core.board(&conv.id).await)
+                        .is_ok_and(|board| !board.queue.items.is_empty());
+                if waiting {
                     let (manager, conv) = (self.arc(), conv.clone());
                     self.spawn(async move { manager.judge_waiting(&conv, false).await });
                 }
