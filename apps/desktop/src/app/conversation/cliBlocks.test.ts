@@ -1481,7 +1481,7 @@ test("D68: a follow-up is in the rail or in the thread, exactly once, at every s
   for (const [name, steps] of Object.entries(paths)) {
     let shownAs: string | null = null;
     steps.forEach(([entries, turns, messages, inRail, seams], step) => {
-      const tree = cliThreadTree({ entries, turns, seams }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [{ ...item, delivered: name !== "plain" }] : [] }, running);
+      const tree = cliThreadTree({ entries, turns, ...(seams && { seams }) }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [{ ...item, delivered: name !== "plain" }] : [] }, running);
       const nodes = shown(tree).filter(([, , said]) => JSON.stringify(said).includes(words));
       const count = nodes.reduce((sum, [, , said]) => sum + JSON.stringify(said).split(words).length - 1, 0);
       assert.equal(count + (inRail ? 1 : 0), name === "handOff" && !inRail ? 0 : 1, `${name} step ${step}: ${JSON.stringify(shown(tree))}`);
