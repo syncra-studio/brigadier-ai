@@ -1531,12 +1531,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::RunQueuedHere {
             queue: heap(|| sessions.run_queued_here(&conversation_id, &item_id)).await?,
         },
-        Request::DismissSent {
-            conversation_id,
-            item_id,
-        } => Response::DismissSent {
-            queue: heap(|| core.dismiss_sent(&conversation_id, &item_id)).await?,
-        },
         Request::DismissNotice {
             conversation_id,
             at_ms,

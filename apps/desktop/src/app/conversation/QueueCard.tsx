@@ -25,11 +25,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
-import type { AttachmentRef, QueuedMessage, SentToWorker } from "@/ipc/generated";
+import type { AttachmentRef, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { deleteQueued, dismissSent, openQueuedAsSession, openQueuedInSideChat, resumeQueue, runQueuedHere } from "@/state/actions";
+import { deleteQueued, openQueuedAsSession, openQueuedInSideChat, resumeQueue, runQueuedHere } from "@/state/actions";
 import { HeldNote } from "@/app/conversation/HeldNote";
-import { SentToWorkerNotice } from "@/app/conversation/SentToWorkerNotice";
 import { useBoard } from "@/state/board";
 import { useQueueRows, type QueueRow } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
@@ -38,7 +37,6 @@ import { setDirectTo, useDirectTo } from "@/state/directTo";
 import { useWorkerName } from "@/app/conversation/workerNames";
 
 const NO_ITEMS: QueuedMessage[] = [];
-const NO_SENT: SentToWorker[] = [];
 
 function useQueueItems(conversationId: string | null): QueuedMessage[] {
   return useBoard((s) =>
@@ -98,7 +96,7 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
  * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. A message
  * sent while the session works shows Deciding while the session judges it (run2-D40); one it
  * judged could run apart waits for the user's pick, "Open as a new session" or "Run here"; one
- * it sent on to a worker leaves a one-line notice. Its ⋯ edits
+ * it sent on to a worker just leaves (D90). Its ⋯ edits
  * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
  * so follow-ups steer into the turn.
  * Steering, moving and deleting go through assistant-ui's queue (the view's adapter talks to
@@ -108,7 +106,6 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   const aui = useAui();
   // A message just sent shows at once; its row does nothing until the daemon has it.
   const { queue, rows: items } = useQueueRows(conversationId);
-  const sent = queue?.sent ?? NO_SENT;
   // Behind the row now `to - 1` (the front for 0), in assistant-ui's terms.
   const moveTo = (id: string, to: number) => {
     if (items.find((item) => item.id === id)?.local) return;
@@ -133,7 +130,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   const sideChats = !view.embedded && view.conversation?.kind === "session" && !view.conversation.sideOf;
   // Its workers by name, as the composer's chips show them; the text it sends keeps `@task-N`.
   const named = useNamedMentions();
-  if (items.length === 0 && sent.length === 0) return null;
+  if (items.length === 0) return null;
 
   return (
     <ComposerRailItem label="Message queue">
@@ -270,13 +267,6 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
             </MessageQueueItem>
           );
         })}
-        {sent.map((notice) => (
-          <SentToWorkerNotice
-            key={notice.id}
-            notice={notice}
-            onDismiss={() => action.run(() => dismissSent(conversationId, notice.id))}
-          />
-        ))}
       </MessageQueue>
       {action.error && (
         <p role="alert" className="text-destructive px-3 pb-1 text-xs">

@@ -1459,21 +1459,6 @@ pub struct QueuedMessage {
     pub worker: Option<TaskId>,
 }
 
-/// A queued message the session sent on to one of its workers (`brigadier queue <id> worker
-/// <worker-id>`, run2-D40/D38): the one-line notice the rail keeps until the user dismisses it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SentToWorker {
-    /// The queued message's id.
-    pub id: String,
-    pub text: String,
-    pub worker: TaskId,
-    /// The worker's number and title then.
-    pub worker_number: u32,
-    pub worker_title: String,
-    pub sent_at_ms: i64,
-}
-
 /// The thread's command that a message sent into its running turn waits behind: the thread
 /// can't read it before the command ends, so the app says when it will be read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1491,10 +1476,6 @@ pub struct MessageQueue {
     pub items: Vec<QueuedMessage>,
     /// The user interrupted the turn; nothing is sent until they resume.
     pub paused: bool,
-    /// What the session sent on to its workers: notices, never sent from here.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[ts(as = "Option<Vec<SentToWorker>>", optional)]
-    pub sent: Vec<SentToWorker>,
 }
 
 impl MessageQueue {

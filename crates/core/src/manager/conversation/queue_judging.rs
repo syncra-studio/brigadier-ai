@@ -25,11 +25,11 @@ use brigadier_cli::protocol::{CliReply, ErrorCode, Judgment, QueueOutput, QueueS
 use regex::Regex;
 
 use super::{ConvLive, SendOutcome};
+use crate::Result;
 use crate::manager::SessionManager;
 use crate::manager::cli::{CliCaller, MIN_ID, short};
 use crate::model::{Conversation, Mention, Message, MessageRole};
-use crate::work::{AttachmentRef, QueuedMessage, SentToWorker};
-use crate::{Result, now_ms};
+use crate::work::{AttachmentRef, QueuedMessage};
 
 /// How a queued message's frame begins in its CLI; the app's thread hides it (run2-D44).
 pub(crate) const FRAME: &str = "[queued message ";
@@ -770,27 +770,12 @@ impl SessionManager {
             ));
         }
         self.core.take_queued(&conv.id, &item.id).await?;
-        let kept = self
-            .core
-            .keep_sent(
-                &conv.id,
-                SentToWorker {
-                    id: item.id.clone(),
-                    text: item.text.clone(),
-                    worker: task.id.clone(),
-                    worker_number: task.number,
-                    worker_title: task.title.clone(),
-                    sent_at_ms: now_ms(),
-                },
-            )
-            .await;
         {
             let mut state = conv.state.lock().await;
             state.claimed.remove(&item.id);
             state.deciding.retain(|id| id != &item.id);
             state.held_items.retain(|id| id != &item.id);
         }
-        kept?;
         self.kick(conv);
         Ok(CliReply::ok(&QueueOutput {
             id: shown,

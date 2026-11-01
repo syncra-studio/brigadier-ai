@@ -557,11 +557,6 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
-    /// Dismisses the notice of a queued message the session sent on to one of its workers.
-    DismissSent {
-        conversation_id: ConversationId,
-        item_id: String,
-    },
     /// Dismisses the notice above the composer made at `at_ms` (D51).
     DismissNotice {
         conversation_id: ConversationId,
@@ -1642,9 +1637,6 @@ pub enum Response {
         queue: MessageQueue,
     },
     RunQueuedHere {
-        queue: MessageQueue,
-    },
-    DismissSent {
         queue: MessageQueue,
     },
     DismissNotice,

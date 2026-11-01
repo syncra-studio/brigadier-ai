@@ -3,7 +3,7 @@
 import "@/fixtures/flow";
 import { mockIPC } from "@tauri-apps/api/mocks";
 
-import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome, SentToWorker } from "@/ipc/generated";
+import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";
 import { applyActivityNews, useActivity } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
@@ -40,8 +40,8 @@ function apply(events: EventEnvelope["event"][]) {
   applyEvents(batch);
   applyBoardEvents(batch);
 }
-function queued(items: QueuedMessage[], sent: SentToWorker[] = []): EventEnvelope["event"] {
-  return { type: "queueChanged", conversationId: id, queue: { items, paused: false, sent } };
+function queued(items: QueuedMessage[]): EventEnvelope["event"] {
+  return { type: "queueChanged", conversationId: id, queue: { items, paused: false } };
 }
 const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
 /** The row's state as the rail shows it (run2-D40). */
@@ -92,7 +92,8 @@ async function drive() {
   apply([queued([{ ...item, delivered: true, offerSession: true }])]);
   await pause();
   const offered = railState();
-  apply([queued([], [{ id: item.id, text, worker: "task-2", workerNumber: 2, workerTitle: "Docs", sentAtMs: Date.now() }])]);
+  // Sent on to a worker, it just leaves the rail: no notice of it (D90).
+  apply([queued([])]);
   await pause();
   const sentToWorker = { ...railState(), ...view() };
   apply([queued([])]);

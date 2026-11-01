@@ -21,7 +21,7 @@ use crate::projection::Projection;
 
 use crate::work::{
     AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, QueuedMessage,
-    RequestState, RequestUndo, SentToWorker, Task, TaskId, UserRequest,
+    RequestState, RequestUndo, Task, TaskId, UserRequest,
 };
 use crate::{Error, Result, now_ms};
 
@@ -2167,17 +2167,6 @@ impl Core {
         .map(|_| ())
     }
 
-    /// Keeps the notice of a queued message the session sent on to one of its workers.
-    pub(crate) async fn keep_sent(&self, id: &ConversationId, sent: SentToWorker) -> Result<()> {
-        self.change_queue(id, |queue| {
-            queue.sent.retain(|kept| kept.id != sent.id);
-            queue.sent.push(sent);
-            Ok(())
-        })
-        .await
-        .map(|_| ())
-    }
-
     /// The user dismissed the notice made at `at_ms` (D51): no read or redraw shows it again.
     pub async fn dismiss_notice(&self, id: &ConversationId, at_ms: i64) -> Result<()> {
         if !self
@@ -2194,19 +2183,6 @@ impl Core {
             at_ms,
         };
         self.record_conversation(id, vec![event]).await.map(|_| ())
-    }
-
-    /// The user dismissed the notice of sent message `item_id`.
-    pub async fn dismiss_sent(&self, id: &ConversationId, item_id: &str) -> Result<MessageQueue> {
-        self.change_queue(id, |queue| {
-            let before = queue.sent.len();
-            queue.sent.retain(|sent| sent.id != item_id);
-            if queue.sent.len() == before {
-                return Err(Error::NotFound(format!("sent message {item_id}")));
-            }
-            Ok(())
-        })
-        .await
     }
 
     /// The next message to send, unless the queue is paused or holds none ready (the next one

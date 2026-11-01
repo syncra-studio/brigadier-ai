@@ -1085,12 +1085,6 @@ export async function dismissNotice(conversationId: string, atMs: number): Promi
   await request({ method: "dismissNotice", conversationId, atMs });
 }
 
-/** Dismisses the notice of a queued message the session sent on to one of its workers. */
-export async function dismissSent(conversationId: string, itemId: string): Promise<void> {
-  const { queue } = await request({ method: "dismissSent", conversationId, itemId });
-  showQueue(conversationId, queue);
-}
-
 export async function resumeQueue(conversationId: string): Promise<void> {
   const { queue } = await request({ method: "resumeQueue", conversationId });
   showQueue(conversationId, queue);

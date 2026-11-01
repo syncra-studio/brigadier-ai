@@ -429,10 +429,10 @@ async fn new_session_offers_it_and_run_here_sends_it() {
 }
 
 /// `worker`: Brigadier gives the user's words to that worker of the session's (run2-D38),
-/// and the rail keeps a notice of where it went until the user dismisses it. A worker has no
+/// and it leaves the rail with no notice of where it went (D90). A worker has no
 /// queue to judge.
 #[tokio::test]
-async fn worker_sends_it_to_the_sessions_worker_and_keeps_a_notice() {
+async fn worker_sends_it_to_the_sessions_worker_and_leaves_no_notice() {
     let judging = Judging::start(
         "queue-worker",
         Options::default(),
@@ -455,16 +455,15 @@ async fn worker_sends_it_to_the_sessions_worker_and_keeps_a_notice() {
     );
     let board = judging.flow.board().await;
     assert!(board.queue.items.is_empty(), "{:?}", board.queue);
-    assert_eq!(board.queue.sent.len(), 1, "{:?}", board.queue);
-    let sent = &board.queue.sent[0];
+    // It leaves no notice above the composer (D90).
     assert_eq!(
-        (sent.id.as_str(), sent.text.as_str()),
-        (item.id.as_str(), ASKED)
+        serde_json::to_value(&board.queue).unwrap(),
+        json!({ "items": [], "paused": false }),
     );
-    assert_eq!(sent.worker_number, 1);
     assert_eq!(
-        judged["worker"],
-        json!(&sent.worker.0[sent.worker.0.len() - 8..])
+        judged["worker"].as_str().map(str::len),
+        Some(8),
+        "{judged:#}"
     );
     judging.gate.notify_one();
     judging.flow.settled().await;
@@ -475,13 +474,6 @@ async fn worker_sends_it_to_the_sessions_worker_and_keeps_a_notice() {
         "the session got it once: {inputs:#?}"
     );
     assert!(!board.requests.contains_key(&item.id));
-    let queue = judging
-        .flow
-        .core
-        .dismiss_sent(&judging.flow.conversation, &item.id)
-        .await
-        .unwrap();
-    assert!(queue.sent.is_empty());
     judging.flow.stop().await;
 }
 
@@ -546,7 +538,6 @@ async fn stale_worker_judgment(winner: &str) {
         assert_eq!(judging.answer("worker heard"), ASKED);
         let board = judging.flow.board().await;
         assert!(board.queue.items.is_empty(), "{:?}", board.queue);
-        assert_eq!(board.queue.sent.len(), 1, "{:?}", board.queue);
         assert!(!board.requests.contains_key(&item.id), "never joined");
         judging.gate.notify_one();
         judging.flow.stop().await;
@@ -558,7 +549,6 @@ async fn stale_worker_judgment(winner: &str) {
         "the worker must not receive the joined message"
     );
     let board = judging.flow.board().await;
-    assert!(board.queue.sent.is_empty(), "{:?}", board.queue);
     if winner == "delete" {
         assert!(!board.requests.contains_key(&item.id));
     } else {
@@ -666,7 +656,6 @@ async fn a_hand_off_that_fails_puts_it_back_waiting() {
     let queued = &board.queue.items[0];
     assert_eq!(queued.id, item.id);
     assert!(!queued.deciding, "{queued:?}");
-    assert!(board.queue.sent.is_empty());
     judging.gate.notify_one();
     judging
         .flow
@@ -1130,11 +1119,12 @@ async fn a_message_going_to_a_starting_worker_is_left_to_that_hand_off() {
     );
     super::eventually("the worker to hear it", || judging.has("worker heard")).await;
     assert_eq!(judging.answer("worker heard"), ASKED);
-    let board = judging
+    judging
         .flow
-        .until("its notice", |board| board.queue.sent.len() == 1)
+        .until("it to leave the queue", |board| {
+            board.queue.items.is_empty()
+        })
         .await;
-    assert!(board.queue.items.is_empty(), "{:?}", board.queue);
     judging.flow.stop().await;
 }
 
