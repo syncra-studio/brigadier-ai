@@ -386,7 +386,7 @@ impl SessionManager {
         }
         let message = conv
             .user_write(async {
-                let item = self.core.take_queued(&conv.id, item_id).await?;
+                let item = self.core.queued(&conv.id, item_id).await?;
                 self.core.append_queued(conv.id.clone(), item).await
             })
             .await?;

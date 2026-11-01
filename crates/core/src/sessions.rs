@@ -734,11 +734,12 @@ impl Core {
             .await
     }
 
-    /// Sends queued message `item` as the user's message. A merge card answered in the words
-    /// it carries points at the message from now on. One the session already has (given to it
-    /// to judge, run2-D40) keeps the queued message's id, so its thread names it once.
+    /// Sends queued message `item` as the user's message, taking it out of the queue in the
+    /// same write: never in both, never in neither, after a crash or on screen (D73). The
+    /// message keeps the queued message's id, so the thread knows it while the rail still has
+    /// it, and one the session already has (given to it to judge, run2-D40) is named once. A
+    /// merge card answered in the words it carries points at the message from now on.
     pub async fn append_queued(&self, id: ConversationId, item: QueuedMessage) -> Result<Message> {
-        let message_id = item.delivered.then(|| item.id.clone());
         let message = self
             .append_user_message_as(
                 id.clone(),
@@ -746,7 +747,7 @@ impl Core {
                 item.attachments,
                 item.mentions,
                 None,
-                message_id,
+                Some(item.id.clone()),
             )
             .await?;
         let board = self.board(&id).await?;
@@ -782,8 +783,8 @@ impl Core {
             .await
     }
 
-    /// [`Self::append_user_message_under`], with the message's id given (`message_id`) rather
-    /// than a new one.
+    /// [`Self::append_user_message_under`], for queued message `queued`: the message takes its
+    /// id, and it leaves the queue in the same write.
     async fn append_user_message_as(
         &self,
         id: ConversationId,
@@ -791,7 +792,7 @@ impl Core {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
         parent: Option<String>,
-        message_id: Option<String>,
+        queued: Option<String>,
     ) -> Result<Message> {
         let mut titles = self.titles.lock().await;
         let conversation = self.conversation(&id)?;
@@ -804,7 +805,9 @@ impl Core {
             .new_message(
                 &id,
                 MessageRole::User,
-                message_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+                queued
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
                 text,
             )
             .await?;
@@ -904,7 +907,7 @@ impl Core {
                 },
             ));
         }
-        let stored = self.record_with_board(&id, events).await?;
+        let stored = self.record_taking(&id, events, queued.as_deref()).await?;
         titles.claimed.insert(id.clone());
         if let Some(request) = &title_request {
             titles.pending.insert(id.clone(), request.nonce.clone());
@@ -1431,11 +1434,41 @@ impl Core {
         id: &ConversationId,
         events: Vec<(String, DomainEvent)>,
     ) -> Result<Vec<i64>> {
+        self.record_taking(id, events, None).await
+    }
+
+    /// [`Self::record_with_board`], with queued message `take` taken out of the queue in the
+    /// same write, after the events: the thread has it before the rail lets it go.
+    async fn record_taking(
+        &self,
+        id: &ConversationId,
+        mut events: Vec<(String, DomainEvent)>,
+        take: Option<&str>,
+    ) -> Result<Vec<i64>> {
         let stream = streams::conversation(id);
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
             let board = self.load_board(id).await?;
             boards.insert(id.clone(), board);
+        }
+        if let Some(item_id) = take {
+            let mut queue = boards
+                .get(id)
+                .map(|board| board.queue.clone())
+                .unwrap_or_default();
+            let index = queue
+                .items
+                .iter()
+                .position(|item| item.id == item_id)
+                .ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))?;
+            queue.items.remove(index);
+            events.push((
+                stream.clone(),
+                DomainEvent::QueueChanged {
+                    conversation_id: id.clone(),
+                    queue,
+                },
+            ));
         }
         let stored = self.record(events.clone()).await?;
         if let Some(board) = boards.get_mut(id) {
@@ -2176,18 +2209,25 @@ impl Core {
         .await
     }
 
-    /// Takes the next message to send, unless the queue is paused or holds none ready (the
-    /// next one is still Deciding).
-    pub async fn pop_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
+    /// The next message to send, unless the queue is paused or holds none ready (the next one
+    /// is still Deciding). [`Self::append_queued`] takes it out.
+    pub async fn next_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
         let board = self.board(id).await?;
         if board.queue.paused {
             return Ok(None);
         }
-        let Some(next) = board.queue.ready_to_send() else {
-            return Ok(None);
-        };
-        let next = next.id.clone();
-        self.take_queued(id, &next).await.map(Some)
+        Ok(board.queue.ready_to_send().cloned())
+    }
+
+    /// Queued message `item_id` as it stands; [`Self::append_queued`] takes it out.
+    pub(crate) async fn queued(&self, id: &ConversationId, item_id: &str) -> Result<QueuedMessage> {
+        self.board(id)
+            .await?
+            .queue
+            .items
+            .into_iter()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
     pub async fn set_queue_paused(
@@ -3362,6 +3402,57 @@ mod tests {
             "前[image][image][image:unknown][image:row][image:svg][Image:a][image:broken[image]後[image:unclosed"
         );
         assert_eq!(display_text(text, &[]), text);
+    }
+
+    /// A queued message sent leaves the queue in the same write, after its message, under the
+    /// item's id (D73): never in both or in neither, and never sent twice.
+    #[tokio::test]
+    async fn a_queued_message_sent_leaves_the_queue_in_the_same_write() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-queued-{}", uuid::Uuid::now_v7())));
+        let store = Store::open(brigadier_store::StoreConfig {
+            db_path: dir.join("test.db"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        let core = Core::load(store).await.unwrap();
+        let id = core
+            .create_conversation(
+                ConversationId::generate(),
+                ConversationKind::Chat,
+                None,
+                None,
+                None,
+                Origin::default(),
+            )
+            .await
+            .unwrap()
+            .id;
+        let item = core
+            .enqueue(&id, "Also the docs.".into(), vec![], vec![], None)
+            .await
+            .unwrap();
+        let mut feed = core.store.subscribe();
+        let message = core.append_queued(id.clone(), item.clone()).await.unwrap();
+        assert_eq!(message.id, item.id);
+        assert!(core.board(&id).await.unwrap().queue.items.is_empty());
+        let mut written = Vec::new();
+        while let Ok(event) = feed.try_recv() {
+            written.push((event.seq, event.kind.clone()));
+        }
+        let at = |kind: &str| written.iter().find(|(_, each)| each == kind).unwrap().0;
+        assert!(at("message.appended") < at("queue.changed"), "{written:?}");
+        let seqs: Vec<_> = written.iter().map(|(seq, _)| *seq).collect();
+        assert!(
+            seqs.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "{written:?}"
+        );
+        // A stale caller sending it again finds it gone: no second message.
+        assert!(matches!(
+            core.append_queued(id.clone(), item).await,
+            Err(Error::NotFound(_))
+        ));
     }
 
     /// Find in pages the thread hasn't loaded: the messages before the oldest one shown, on

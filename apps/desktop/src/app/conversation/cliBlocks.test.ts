@@ -1362,7 +1362,7 @@ test("a sent message's turn keeps one start from sending it to the CLI saying it
   assert.deepEqual(start({ entries: [...before.entries, said], turns: [...before.turns, { ...turn("cli-m1", 6500, null, null), requests: ["m1"] }] }), onItsWay);
 });
 
-test("D68: a follow-up is in the rail or in the thread, exactly once, at every step of its join, steer, own turn and hand-off, and never moves once shown", () => {
+test("D68: a follow-up is in the rail or in the thread, exactly once, at every step of its join, steer, own turn and hand-off, and never moves once shown (D73: sent, it is kept before the rail lets it go)", () => {
   const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
   const words = "Also the docs.";
   const running = { state: "running", error: null } as const;
@@ -1379,18 +1379,26 @@ test("D68: a follow-up is in the rail or in the thread, exactly once, at every s
   type Step = [FileEntry[], ThreadTurn[], Message[], boolean];
   const paths: Record<string, Step[]> = {
     // Judged join: out of the rail, kept, then named by the running turn.
-    join: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
+    join: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
     // Steered in after it waited, in the turn that read it: named, then read again.
-    steer: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false], [[...judged, steered], open(["r1", id]), kept(taken), false]],
+    steer: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false], [[...judged, steered], open(["r1", id]), kept(taken), false]],
     // Waited, then on its own turn once the block closed: on its way, then heading that turn.
-    ownTurn: [[judged, done(["r1"]), kept(), true], [judged, done(["r1"]), kept(taken), false], [[...judged, ownTurn], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false]],
+    ownTurn: [[judged, done(["r1"]), kept(), true], [judged, done(["r1"]), kept(taken), true], [judged, done(["r1"]), kept(taken), false], [[...judged, ownTurn], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false]],
+    // Queued while the turn ran, never given to the CLI, then sent on its own turn: on its way,
+    // then heading that turn.
+    plain: [
+      [[user("u1", "Fix the test", 1000)], done(["r1"]), kept(), true],
+      [[user("u1", "Fix the test", 1000)], done(["r1"]), kept(taken), true],
+      [[user("u1", "Fix the test", 1000)], done(["r1"]), kept(taken), false],
+      [[user("u1", "Fix the test", 1000), user("u2", words, 3000)], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false],
+    ],
     // Handed to a worker: out of the rail, never kept here, never a bubble in this thread.
     handOff: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(), false]],
   };
   for (const [name, steps] of Object.entries(paths)) {
     let shownAs: string | null = null;
     steps.forEach(([entries, turns, messages, inRail], step) => {
-      const tree = cliThreadTree({ entries, turns }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [item] : [] }, running);
+      const tree = cliThreadTree({ entries, turns }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [{ ...item, delivered: name !== "plain" }] : [] }, running);
       const nodes = shown(tree).filter(([, , said]) => JSON.stringify(said).includes(words));
       const count = nodes.reduce((sum, [, , said]) => sum + JSON.stringify(said).split(words).length - 1, 0);
       assert.equal(count + (inRail ? 1 : 0), name === "handOff" && !inRail ? 0 : 1, `${name} step ${step}: ${JSON.stringify(shown(tree))}`);

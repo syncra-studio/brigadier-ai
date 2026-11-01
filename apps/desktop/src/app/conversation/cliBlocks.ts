@@ -1094,8 +1094,10 @@ export function cliThreadTree(
     0,
     ...view.entries.flatMap((entry) => (entry.event.type === "message" && entry.event.role === "user" && !entry.parent ? [entry.atMs ?? 0] : [])),
   );
+  // A queued message keeps its id when it is sent; until the rail lets it go it shows there only.
+  const queued = new Set((board.queueItems ?? []).map((item) => item.id));
   for (const message of stored) {
-    if (message.role !== "user" || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id)) continue;
+    if (message.role !== "user" || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id) || queued.has(message.id)) continue;
     const text = fullText[message.id] ?? message.text;
     blocks.push(onItsWay(message.id, { kind: "message", message, text }, message.createdAtMs, run));
   }

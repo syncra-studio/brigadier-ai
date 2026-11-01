@@ -1453,7 +1453,7 @@ impl SessionManager {
         let mut delivered = false;
         let message = conv
             .user_write(async {
-                let item = self.core.take_queued(&id, &item_id).await?;
+                let item = self.core.queued(&id, &item_id).await?;
                 delivered = item.delivered;
                 self.core.append_queued(id.clone(), item).await
             })
@@ -1752,7 +1752,7 @@ impl SessionManager {
         // The queue's next item becomes the user's message in one step for a merge's look.
         let popped = conv
             .user_write(async {
-                let Some(item) = self.core.pop_queued(&conv.id).await? else {
+                let Some(item) = self.core.next_queued(&conv.id).await? else {
                     return Ok(None);
                 };
                 conv.goes_on_own_turn(&item);
@@ -2568,7 +2568,7 @@ impl SessionManager {
             };
             // A Chat's waiting message, too, waits for the block to close (D25).
             if users.is_empty() && envelopes.is_empty() && !session && !holds {
-                match self.core.pop_queued(&conv.id).await {
+                match self.core.next_queued(&conv.id).await {
                     Ok(Some(item)) => {
                         conv.goes_on_own_turn(&item);
                         match self.core.append_queued(conv.id.clone(), item).await {
