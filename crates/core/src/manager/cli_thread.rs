@@ -351,7 +351,8 @@ impl SessionManager {
                             waking_until: live.waking_until,
                             // Whether it goes on with the work before, known as Brigadier sent
                             // its message: the file may read the turn before the stream says it.
-                            joins: carried.as_ref().is_some_and(|(_, joins)| *joins),
+                            joins: carried.as_ref().is_some_and(|(_, joins, _)| *joins),
+                            own: carried.as_ref().is_some_and(|(_, _, own)| *own),
                             ..LiveTurn::default()
                         };
                     }
@@ -383,9 +384,12 @@ impl SessionManager {
                         live.awaiting_user = false;
                         live.waking_until = None;
                         live.user_message = Some(item_id.clone());
-                        live.joins = carried.as_ref().is_some_and(|(_, joins)| *joins);
+                        // A message steered into a turn the CLI began on its own, before
+                        // anything of it: that turn is the open block's, and so is it (D25, D74).
+                        live.joins =
+                            live.own || carried.as_ref().is_some_and(|(_, joins, _)| *joins);
                     }
-                    if let Some((carried, _)) = &carried {
+                    if let Some((carried, ..)) = &carried {
                         thread_view::add_requests(&mut live.requests, carried);
                         noted = Some(TurnRecord {
                             user_message: live.user_message.clone(),
@@ -451,7 +455,7 @@ impl SessionManager {
             if let Some(end) = ended {
                 live.open = false;
                 live.waking_until = None;
-                if let Some((carried, _)) = &carried {
+                if let Some((carried, ..)) = &carried {
                     thread_view::add_requests(&mut live.requests, carried);
                 }
                 noted = Some(TurnRecord {

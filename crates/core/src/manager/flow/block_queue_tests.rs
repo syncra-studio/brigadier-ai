@@ -533,3 +533,70 @@ async fn a_judge_turn_whose_first_item_comes_before_its_message_joins_the_block(
     .await;
     flow.stop().await;
 }
+
+/// O38, the other order: the CLI begins a turn of its own for its background job's end, and
+/// the first thing in it is a message Brigadier steered in. That turn is the open block's, and
+/// so is the message: it joins, drawing no second block (D25, D74).
+#[tokio::test]
+async fn a_message_steered_first_into_the_clis_own_turn_joins_the_block() {
+    use brigadier_providers::{ProviderEvent, Role, TurnStatus};
+    type Events = Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>>;
+    let say = |item: &str, role, text: &str| ProviderEvent::Message {
+        item_id: item.into(),
+        role,
+        text: text.into(),
+    };
+    let events: Events = Arc::default();
+    let script: Script = {
+        let events = events.clone();
+        Arc::new(move |turn| {
+            let events = events.clone();
+            Box::pin(async move {
+                let _ = turn
+                    .events
+                    .send(say("user-1", Role::User, &turn.input))
+                    .await;
+                let _ = (turn.events)
+                    .send(ProviderEvent::BackgroundJobs {
+                        running: vec!["job".into()],
+                    })
+                    .await;
+                *events.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started it in the background.")
+            })
+        })
+    };
+    let flow = Flow::start("block-steer-own-turn", Options::default(), script).await;
+    flow.say("Start the job.").await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually_async("the first turn to end", || conv.idle()).await;
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    for event in [
+        ProviderEvent::BackgroundJobs {
+            running: Vec::new(),
+        },
+        ProviderEvent::TurnStarted { turn_id: None },
+        say("user-2", Role::User, "What is 2+2?"),
+        say("reply", Role::Assistant, "4."),
+        ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: TurnStatus::Completed,
+            duration_ms: None,
+            usage: None,
+        },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually("its own turn to end", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        let answered = view.entries.iter().any(|entry| {
+            matches!(&entry.event, ProviderEvent::Message { item_id, .. } if item_id == "reply")
+        });
+        answered && view.turns.last().is_some_and(|turn| turn.end.is_some())
+    })
+    .await;
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    assert_eq!(view.turns.len(), 2, "{view:#?}");
+    assert!(view.turns[1].joins, "it joins the open block: {view:#?}");
+    flow.stop().await;
+}

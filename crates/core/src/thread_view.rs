@@ -434,6 +434,8 @@ pub(crate) struct LiveTurn {
     pub requests: Vec<String>,
     /// Its user message came while the work before it still held ([`ThreadTurn::joins`]).
     pub joins: bool,
+    /// Its CLI began it on its own (no turn of Brigadier's ran): it is the open block's.
+    pub own: bool,
     /// The CLI's background tasks: they outlast the turn that started them, so a turn that
     /// opens keeps them.
     pub background: Vec<BackgroundTask>,

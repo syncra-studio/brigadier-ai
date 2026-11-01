@@ -689,11 +689,15 @@ impl ConvLive {
     }
 
     /// Brigadier's requests its running turn carries ([`ConvState::carried_requests`]), and
-    /// whether that turn joins the work before it ([`ConvState::turn_joins`]): a turn the CLI
-    /// starts on its own, while no turn of Brigadier's runs, joins nothing.
-    pub(super) async fn carried_turn(&self) -> (Vec<String>, bool) {
+    /// whether that turn joins the work before it ([`ConvState::turn_joins`]), and whether no
+    /// turn of Brigadier's runs: one the CLI starts then is its own, sent nothing to join.
+    pub(super) async fn carried_turn(&self) -> (Vec<String>, bool, bool) {
         let state = self.state.lock().await;
-        (state.carried_requests(), state.busy && state.turn_joins)
+        (
+            state.carried_requests(),
+            state.busy && state.turn_joins,
+            !state.busy,
+        )
     }
 
     /// Tests: the request the rest of the turn answers, as a queued message joining it sets it.
