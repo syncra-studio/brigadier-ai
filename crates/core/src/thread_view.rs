@@ -532,6 +532,18 @@ impl LiveTurn {
             .collect()
     }
 
+    /// A subagent its CLI started that still runs after the turn that started it ended, its
+    /// CLI listing no task for it (Codex): it holds the turn's work as a background task does,
+    /// as the thread draws it (D24, D97).
+    pub(crate) fn subagent_running(&self) -> bool {
+        !self.open
+            && self.entries.iter().any(|entry| {
+                entry.parent.is_none()
+                    && matches!(&entry.event, ProviderEvent::ToolCall { name, status: brigadier_providers::ItemStatus::InProgress, .. }
+                        if brigadier_providers::adapters::ADAPTERS.iter().any(|cli| cli.subagent_tools.contains(&crate::digest::bare_tool_name(name))))
+            })
+    }
+
     /// What of its CLI's background work holds its turn now (`CliJobs`).
     pub(crate) fn jobs(&self, now: i64) -> CliJobs {
         let holding = self

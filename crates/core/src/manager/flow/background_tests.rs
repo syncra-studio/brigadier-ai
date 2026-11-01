@@ -729,6 +729,51 @@ async fn an_end_no_turn_follows_holds_no_work_once_nothing_runs() {
     flow.stop().await;
 }
 
+/// A subagent its CLI lists no task for (Codex's) still runs after its turn ended: the work
+/// holds, so the next message goes on in its block, as the thread draws it, until the
+/// subagent's end comes (D24, D25; seen live, w58).
+#[tokio::test]
+async fn a_subagent_running_past_its_turn_holds_the_work_until_it_ends() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let spawn = |status| ProviderEvent::ToolCall {
+        item_id: "spawn".into(),
+        name: "agents/spawnAgent".into(),
+        input: Some(r#"{"message":"sleep 40"}"#.into()),
+        status,
+        output: None,
+        kept: None,
+    };
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-subagent-holds",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                let _ = turn.events.send(spawn(ItemStatus::InProgress)).await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started a subagent; not waiting for it.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start a subagent in the background.").await;
+    rested(&flow).await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its subagent runs past its turn"
+    );
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    sender.send(spawn(ItemStatus::Completed)).await.unwrap();
+    super::eventually_async("the subagent's end", || async {
+        !flow.manager.work_holds(&conv).await
+    })
+    .await;
+    flow.stop().await;
+}
+
 /// A stopped request's job and a later request's job both end; the CLI's turn for the stopped
 /// one's end runs long. The later request still waits for its own job's turn meanwhile, and
 /// that turn answers in it (#3).

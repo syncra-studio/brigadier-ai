@@ -612,14 +612,15 @@ impl SessionManager {
         });
     }
 
-    /// Whether a background job of conversation `id`'s CLI ended and the turn its end starts
-    /// hasn't yet (`CliJobs::waking`).
-    pub(super) fn cli_waking(&self, id: &ConversationId) -> bool {
+    /// Whether conversation `id`'s CLI thread still holds its work past its turn: a background
+    /// job ended and the turn its end starts hasn't yet (`CliJobs::waking`), or a subagent it
+    /// lists no task for still runs (`LiveTurn::subagent_running`).
+    pub(super) fn cli_holds(&self, id: &ConversationId) -> bool {
         self.cli_threads
             .lock()
             .unwrap()
             .get(id)
-            .is_some_and(|live| live.jobs(now_ms()).waking)
+            .is_some_and(|live| live.jobs(now_ms()).waking || live.subagent_running())
     }
 
     /// The next news number: taken under `cli_threads`' lock, after the change it numbers, so a

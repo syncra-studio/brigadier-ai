@@ -1605,7 +1605,7 @@ impl SessionManager {
         // A job's end holds it only until the CLI's turn for it starts, as the thread reads
         // it: an end no turn of the session's follows (a subagent's own command) holds nothing.
         if conv.runs_cli_work().await
-            || self.cli_waking(&conv.id)
+            || self.cli_holds(&conv.id)
             || self.has_running_workers(&conv.id).await
         {
             return true;
