@@ -1109,6 +1109,9 @@ export function cliThreadTree(
 
   const nodes: ThreadNode[] = [];
   let parent: string | null = null;
+  // A follow-up woken to be judged, judged wait, then sent on its own turn leads two turns: the
+  // one that shows it keeps its request's id (a repeated id makes assistant-ui throw and blanks the app).
+  const showing = new Set(blocks.flatMap((block) => (block.user?.kind === "message" ? [shownIdOf(block.user.message.id)] : [])));
   for (const block of blocks) {
     // A message sent from here keeps the id it showed under while pending (`shownIdOf`), so
     // its bubble isn't mounted afresh when it is stored and its turn is placed once it shows.
@@ -1121,9 +1124,8 @@ export function cliThreadTree(
     // Its turn by its message too, else by the request the CLI's message it began with carries
     // (one not shown yet): the same from sending it to the CLI saying it to its turn read.
     const lead = sent.get(block.key);
-    // A follow-up woken to be judged, then sent on its own turn, leads two turns: the later one
-    // goes by its own key (a repeated id makes assistant-ui throw and blanks the app).
-    const wanted = `request:${shown || (lead ? shownIdOf(lead) : block.key)}`;
+    const wanted = `request:${shown || (lead && !showing.has(shownIdOf(lead)) ? shownIdOf(lead) : block.key)}`;
+    // Two turns leading with it before either shows it: the later goes by its own key.
     const id = nodes.some((node) => node.id === wanted) ? `request:${block.key}` : wanted;
     nodes.push({ id, parentId: parent, kind: "block", block, head: null });
     parent = id;
