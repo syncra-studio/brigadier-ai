@@ -3,7 +3,7 @@
 //! the keep-instructions (run2-D7); its own auto-compaction is the backstop. Codex compacts by
 //! itself at its own point (run2-D6). Nothing goes back into the conversation after a compaction
 //! (D13): the thread pulls what it needs with `brigadier context`. After
-//! [`SESSION_HANDOFF_AFTER`] compactions in one CLI session (D16), or when compaction fails or
+//! [`HANDOFF_AFTER`] compactions in one CLI session (D16), or when compaction fails or
 //! loops (run2-D10), the session goes on in a fresh one at its seam.
 
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Cli, ConvLive, ConvState};
 use crate::manager::SessionManager;
-use crate::manager::long_sessions::SESSION_HANDOFF_AFTER;
+use crate::manager::long_sessions::HANDOFF_AFTER;
 use crate::manager::seam::Phase;
 use crate::work::RunState;
 
@@ -183,7 +183,7 @@ impl SessionManager {
     /// The CLI compacted a long session's context: its size is the one after, when the CLI
     /// says, else unknown until it reports one. Nothing goes back into the conversation (D13).
     /// A failed compaction, one that leaves the context near its point, or the
-    /// [`SESSION_HANDOFF_AFTER`]th in this CLI session (D16) hands off to a fresh one.
+    /// [`HANDOFF_AFTER`]th in this CLI session (D16) hands off to a fresh one.
     pub(super) async fn long_compacted(
         &self,
         conv: &Arc<ConvLive>,
@@ -225,7 +225,7 @@ impl SessionManager {
         })
         .await
         .unwrap_or(0);
-        if count >= SESSION_HANDOFF_AFTER {
+        if count >= HANDOFF_AFTER {
             let why = format!("it compacted {count} times in a row");
             self.long_handoff(conv, cli, &why, false).await;
         }

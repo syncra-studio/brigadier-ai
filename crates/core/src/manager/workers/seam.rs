@@ -1,5 +1,5 @@
 //! A worker's hand-off to a fresh CLI session (D14). Its CLI compacts by itself. After
-//! [`WORKER_HANDOFF_AFTER`] compactions in one CLI session, once its turn ends (and its session
+//! [`HANDOFF_AFTER`] compactions in one CLI session, once its turn ends (and its session
 //! heard that end as any other), it is asked for a hand-off note in a turn of its own; its
 //! CLI then closes, and the next message its session sends starts a fresh session of the same
 //! CLI as the same worker, in the same workspace, from the note and the `brigadier context`
@@ -26,10 +26,10 @@ use brigadier_providers::{ErrorKind, Origin, ProviderError, TurnInput, TurnStatu
 use super::TaskLive;
 use crate::manager::conversation::Cli;
 use crate::manager::conversation::long::{LongFile, read_long, thrashing, write_long};
-use crate::manager::long_sessions::WORKER_HANDOFF_AFTER;
+use crate::manager::long_sessions::HANDOFF_AFTER;
 use crate::manager::seam::{
-    Boot, CARRY_ON, LONG_NOTE, Phase, Reason, SeamEnd, SeamFile, TailBudget, bootstrap, complete,
-    handoff_line, note_path, nudge, read_seam, start_path, write_seam,
+    Boot, CARRY_ON, LONG_NOTE, NOTE_FIXES, Phase, Reason, SeamEnd, SeamFile, TailBudget, bootstrap,
+    check_note, complete, handoff_line, note_path, nudge, read_seam, start_path, write_seam,
 };
 use crate::manager::{SessionManager, blocking};
 use crate::work::{AttemptEnd, Task};
@@ -46,8 +46,9 @@ const RESTARTED: &str = "Brigadier restarted before it wrote one";
 pub(super) enum SeamLive {
     /// The note is asked for once the running turn ends.
     Owed { carry_on: bool },
-    /// Its note turn runs: messages wait for the successor.
-    Nudged { carry_on: bool },
+    /// Its note turn runs: messages wait for the successor. `fixes`: how many times it was
+    /// asked to fix a note that failed goal 13's check.
+    Nudged { carry_on: bool, fixes: u32 },
     /// It hands off without a note when its turn ends (`death`: why).
     Due { death: String },
 }
@@ -60,7 +61,7 @@ impl SeamLive {
 }
 
 impl SessionManager {
-    /// One compaction of the worker's CLI ended: the [`WORKER_HANDOFF_AFTER`]th in this CLI
+    /// One compaction of the worker's CLI ended: the [`HANDOFF_AFTER`]th in this CLI
     /// session owes a hand-off once its turn ends; a failed one cuts its work off (D14).
     pub(super) async fn worker_compacted(
         &self,
@@ -85,7 +86,7 @@ impl SessionManager {
         })
         .await
         .unwrap_or(0);
-        if count >= WORKER_HANDOFF_AFTER {
+        if count >= HANDOFF_AFTER {
             Self::owe_seam(live, cli, SeamLive::Owed { carry_on: false }).await;
         }
     }
@@ -160,7 +161,7 @@ impl SessionManager {
                 if !carry_on {
                     // Its session's messages wait for the successor from before it hears the
                     // turn end: one sent at once would start a turn the note's then cuts off.
-                    live.state.lock().await.seam = Some(SeamLive::Nudged { carry_on });
+                    live.state.lock().await.seam = Some(SeamLive::Nudged { carry_on, fixes: 0 });
                     self.plain_turn_ended(live, task, status).await;
                 }
                 if self.worker_seam_nudge(live, task, carry_on).await {
@@ -169,7 +170,17 @@ impl SessionManager {
                 // Asked nothing, it hands off without a note.
                 (carry_on, Some("it couldn't be asked for one".to_owned()))
             }
-            SeamLive::Nudged { carry_on } => (carry_on, None),
+            SeamLive::Nudged { carry_on, fixes } => {
+                // Goal 13 (core-goals D9): a note that leaves out an open item, or no note, is
+                // fixed by the worker itself while it can still act.
+                if status == TurnStatus::Completed
+                    && fixes < NOTE_FIXES
+                    && self.worker_note_fix(live, task, carry_on, fixes).await
+                {
+                    return;
+                }
+                (carry_on, None)
+            }
             SeamLive::Due { death } => (true, Some(death)),
         };
         let predecessor = live.cli().await.map(|cli| cli.session.native_id());
@@ -246,10 +257,46 @@ impl SessionManager {
         };
         let text = format!("{}{LONG_NOTE}", nudge(&note));
         let mut state = live.state.lock().await;
-        state.seam = Some(SeamLive::Nudged { carry_on });
+        state.seam = Some(SeamLive::Nudged { carry_on, fixes: 0 });
         state.busy = true;
         if let Err(err) = cli.session.send(TurnInput::text(text)).await {
             tracing::warn!(task = %live.id, error = %err, "could not ask the worker for its note");
+            state.busy = false;
+            return false;
+        }
+        true
+    }
+
+    /// Asks the worker, in a turn of its own, to fix its note when it fails goal 13's check:
+    /// whether it was asked.
+    async fn worker_note_fix(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        carry_on: bool,
+        fixes: u32,
+    ) -> bool {
+        let Some(cli) = live.cli().await else {
+            return false;
+        };
+        let record = self.worker_record(task);
+        let fix = blocking(move || {
+            let note = note_path(&record, read_seam(&record).generation);
+            Ok(check_note(&record, &note).fix(&note))
+        })
+        .await;
+        let Ok(Some(fix)) = fix else {
+            return false;
+        };
+        let mut state = live.state.lock().await;
+        state.seam = Some(SeamLive::Nudged {
+            carry_on,
+            fixes: fixes + 1,
+        });
+        state.busy = true;
+        if let Err(err) = cli.session.send(TurnInput::text(fix)).await {
+            tracing::warn!(task = %live.id, error = %err, "could not ask the worker to fix its note");
+            state.seam = Some(SeamLive::Nudged { carry_on, fixes });
             state.busy = false;
             return false;
         }
@@ -295,6 +342,7 @@ impl SessionManager {
             write_seam(&at, &file)?;
             let note_at = note_path(&at, n);
             let note = std::fs::read_to_string(&note_at).ok();
+            let check = check_note(&at, &note_at).line();
             let start = start_path(&at, n);
             let text = bootstrap(&Boot {
                 n,
@@ -313,6 +361,7 @@ impl SessionManager {
                     Some(_) => None,
                     None => Some(end.death.as_deref().unwrap_or(NO_NOTE)),
                 },
+                check: &check,
                 entries: &[],
                 blobs: &at,
             });

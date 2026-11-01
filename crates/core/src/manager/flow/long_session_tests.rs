@@ -1,7 +1,7 @@
 //! Long sessions (run2-D2, D15): by default a session's thread compacts in place with its CLI's
 //! own compaction instead of going on in a fresh session at a size, and nothing goes back into
 //! the conversation after it (D13); the test-only `seams` opt-out keeps the seam as before. After
-//! five compactions in one CLI session it goes on in a fresh one (D16).
+//! three compactions in one CLI session it goes on in a fresh one (core-goals D9).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -347,7 +347,7 @@ async fn codex_compacting(name: &str, error: Option<&str>, after: i64) -> (Flow,
                     .unwrap()
                     .push((turn.provider, turn.input.clone()));
                 if turn.input.starts_with(NUDGE_MARK) {
-                    std::fs::write(note_of(&turn.input), "Doing now: nothing.").unwrap();
+                    std::fs::write(note_of(&turn.input), "Doing now: nothing. Open: L4.").unwrap();
                     return Reply::text("Handed off.");
                 }
                 if without_handoff(&turn.input).contains("Grow.") {
@@ -430,17 +430,20 @@ async fn a_compaction_well_under_half_the_point_keeps_the_session() {
     flow.stop().await;
 }
 
-/// D16: the fifth compaction in one CLI session hands off to a fresh one, under the hood (no
-/// notice, run2-D44); the fourth doesn't, and the successor counts from none.
+/// core-goals D9: the third compaction in one CLI session hands off to a fresh one, under the
+/// hood (no notice, run2-D44); the second doesn't, and the successor counts from none.
 #[tokio::test]
-async fn the_fifth_compaction_in_a_row_hands_off_to_a_fresh_session() {
-    let (flow, inputs) = codex_compacting("long-codex-five", None, 25_000).await;
+async fn the_third_compaction_in_a_row_hands_off_to_a_fresh_session() {
+    let (flow, inputs) = codex_compacting("long-codex-three", None, 25_000).await;
     flow.idle().await;
-    for _ in 2..crate::manager::long_sessions::SESSION_HANDOFF_AFTER {
+    for _ in 2..crate::manager::long_sessions::HANDOFF_AFTER {
         flow.say("Grow.").await;
         flow.idle().await;
     }
-    assert_eq!(read_long(&record(&flow)).compactions, 4);
+    assert_eq!(
+        read_long(&record(&flow)).compactions,
+        crate::manager::long_sessions::HANDOFF_AFTER - 1
+    );
     assert_eq!(read_seam(&record(&flow)).generation, 1);
     flow.say("Grow.").await;
     until_successor(&flow).await;
@@ -751,5 +754,220 @@ async fn a_steer_while_compacting_waits_in_the_queue_until_compaction_is_done() 
         1,
         "{seen:#?}"
     );
+    flow.stop().await;
+}
+
+/// What the goals 2 + 13 cycle plants: a rule and a decision, which stay in the ledger for
+/// `brigadier context`, and an open question and promise, which each hand-off must carry.
+const PLANTED: &str = "- L1 · 11-01 21:00 · gen 1 · Rule from the user: never push to main
+- L2 · 11-01 21:01 · gen 1 · Decision: store it in SQLite
+- L3 · 11-01 21:02 · gen 1 · Open: question for the user, which port?
+- L4 · 11-01 21:03 · gen 1 · Open: promise to rerun the flaky test
+";
+
+/// One CLI's cycle: three compactions, a rebirth, three more, a second rebirth. Each first note
+/// leaves the open items out; the check asks once, and the session names them.
+async fn cycle(provider: ProviderKind) {
+    let inputs: Inputs = Arc::default();
+    let note: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::default();
+    let (seen, at) = (inputs.clone(), note.clone());
+    let mut flow = Flow::start(
+        &format!("long-cycle-{provider}"),
+        options(provider),
+        script(move |turn| {
+            let (inputs, note) = (seen.clone(), at.clone());
+            async move {
+                inputs
+                    .lock()
+                    .unwrap()
+                    .push((turn.provider, turn.input.clone()));
+                if turn.input.starts_with(NUDGE_MARK) {
+                    if turn.input.contains("Hand-off check") {
+                        let path = note.lock().unwrap().clone().expect("a note asked first");
+                        let text = std::fs::read_to_string(&path).unwrap();
+                        std::fs::write(&path, format!("{text}\nCarrying L3 and L4.")).unwrap();
+                        return Reply::text("Fixed.");
+                    }
+                    let path = note_of(&turn.input);
+                    std::fs::write(&path, "Doing now: growing.").unwrap();
+                    *note.lock().unwrap() = Some(path);
+                    return Reply::text("Handed off.");
+                }
+                if without_handoff(&turn.input).contains("Grow.") {
+                    turn.report_context(70_000).await;
+                    turn.emit(ProviderEvent::CompactionStarted { automatic: true })
+                        .await;
+                    turn.emit(ProviderEvent::CompactionEnded {
+                        automatic: true,
+                        tokens_before: Some(70_000),
+                        tokens_after: Some(12_000),
+                        error: None,
+                        native_id: Some("compaction".into()),
+                    })
+                    .await;
+                    turn.report_context(12_000).await;
+                    return Reply::text("Grown.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    switch(&mut flow, LongSessions::parse(""));
+    write_ledger(&flow, PLANTED);
+    flow.say("Start.").await;
+    flow.settled().await;
+    for generation in [2, 3] {
+        for _ in 0..crate::manager::long_sessions::HANDOFF_AFTER {
+            flow.say("Grow.").await;
+            flow.idle().await;
+        }
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while read_seam(&record(&flow)).generation < generation {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{provider}: generation {generation}"));
+        flow.idle().await;
+    }
+    let seen = inputs.lock().unwrap().clone();
+    let given = |needle: &str| -> Vec<String> {
+        seen.iter()
+            .filter(|(_, input)| input.contains(needle))
+            .map(|(_, input)| input.clone())
+            .collect()
+    };
+    // Each generation: one nudge, and one fix naming exactly what its note left out.
+    let fixes = given("Hand-off check: your hand-off note at");
+    assert_eq!(fixes.len(), 2, "{provider}: {seen:#?}");
+    for fix in &fixes {
+        assert!(fix.starts_with(NUDGE_MARK), "{fix}");
+        assert!(fix.contains("L3 · 11-01 21:02") && fix.contains("L4 · 11-01 21:03"));
+        assert!(!fix.contains("L1 ·") && !fix.contains("L2 ·"), "{fix}");
+    }
+    // Each successor's one injected message: the note, fixed, and the check that passed.
+    let starts = given(crate::thread_view::HANDOFF_MARK);
+    assert_eq!(starts.len(), 2, "{provider}: {seen:#?}");
+    for start in &starts {
+        assert!(start.contains("Carrying L3 and L4."), "{start}");
+        assert!(
+            start.contains("Hand-off check: every open item of the ledger (2) is in the note"),
+            "{start}"
+        );
+        assert!(start.contains(crate::manager::seam::CONTEXT_POINTER));
+    }
+    // The rule and the decision are pulled, never pushed: still standing in the ledger.
+    let ledger = crate::manager::cli_ledger::Ledger::read(&record(&flow)).unwrap();
+    let standing: Vec<_> = ledger.rules().iter().filter_map(|entry| entry.id).collect();
+    assert_eq!(standing, [1, 2]);
+    assert_eq!(ledger.open().len(), 2);
+    let file = read_seam(&record(&flow));
+    assert_eq!((file.generation, file.seams.len()), (3, 2));
+    // Both seams in the thread, each once; the fix is Brigadier's, never the user's bubble.
+    // The fake keeps only Claude's file shape; the marks are the same code for every CLI.
+    if provider == ProviderKind::Claude {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        assert_eq!(view.seams.len(), 2);
+        assert!(
+            view.seams
+                .iter()
+                .all(|seam| seam.at.is_some() && seam.nudge.is_some()),
+            "{:#?}",
+            view.seams
+        );
+        let said = flow.said_in_thread("Hand-off check: your hand-off note");
+        assert_eq!(said.len(), 2);
+        assert!(
+            said.iter()
+                .all(|said| said == &Some(brigadier_providers::session_file::Said::Brigadier))
+        );
+    }
+    flow.stop().await;
+}
+
+/// Goals 2 + 13, every CLI the same (core-goals D1, D9).
+#[tokio::test]
+async fn two_rebirths_each_fix_a_note_that_leaves_out_an_open_item_on_every_cli() {
+    for provider in [
+        ProviderKind::Claude,
+        ProviderKind::Codex,
+        ProviderKind::OpenCode,
+    ] {
+        cycle(provider).await;
+    }
+}
+
+/// core-goals D121: a note still leaving open items out after the one re-ask hands off anyway,
+/// those items word for word in the successor's first message; never asked again.
+#[tokio::test]
+async fn a_note_still_short_after_the_one_fix_hands_off_with_the_items_word_for_word() {
+    let inputs: Inputs = Arc::default();
+    let seen = inputs.clone();
+    let mut flow = Flow::start(
+        "long-check-fallback",
+        options(ProviderKind::Codex),
+        script(move |turn| {
+            let inputs = seen.clone();
+            async move {
+                inputs
+                    .lock()
+                    .unwrap()
+                    .push((turn.provider, turn.input.clone()));
+                if turn.input.starts_with(NUDGE_MARK) {
+                    if !turn.input.contains("Hand-off check") {
+                        std::fs::write(note_of(&turn.input), "Doing now: growing. L3 asked.")
+                            .unwrap();
+                    }
+                    return Reply::text("Handed off.");
+                }
+                if without_handoff(&turn.input).contains("Grow.") {
+                    turn.report_context(70_000).await;
+                    turn.emit(ProviderEvent::CompactionEnded {
+                        automatic: true,
+                        tokens_before: Some(70_000),
+                        tokens_after: Some(12_000),
+                        error: None,
+                        native_id: None,
+                    })
+                    .await;
+                    turn.report_context(12_000).await;
+                    return Reply::text("Grown.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    switch(&mut flow, LongSessions::parse(""));
+    write_ledger(&flow, PLANTED);
+    flow.say("Start.").await;
+    flow.settled().await;
+    for _ in 0..crate::manager::long_sessions::HANDOFF_AFTER {
+        flow.say("Grow.").await;
+        flow.idle().await;
+    }
+    until_successor(&flow).await;
+    let seen = inputs.lock().unwrap().clone();
+    let fixes: Vec<_> = seen
+        .iter()
+        .filter(|(_, input)| input.contains("Hand-off check: your hand-off note at"))
+        .collect();
+    assert_eq!(fixes.len(), 1, "{seen:#?}");
+    // L3 is in the note by id; only the promise is carried for it.
+    assert!(fixes[0].1.contains("L4 · 11-01 21:03") && !fixes[0].1.contains("L3 ·"));
+    let start = seen
+        .iter()
+        .find(|(_, input)| input.starts_with(crate::thread_view::HANDOFF_MARK))
+        .expect("a successor");
+    assert!(
+        start.1.contains(
+            "Hand-off check: the note leaves out these open items of the ledger, word for word:\n\
+             - L4 · 11-01 21:03 · gen 1 · Open: promise to rerun the flaky test"
+        ),
+        "{}",
+        start.1
+    );
+    assert!(!start.1.contains("Hand-off check: your"), "{}", start.1);
     flow.stop().await;
 }

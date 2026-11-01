@@ -21,6 +21,7 @@ use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, ProviderKind, Role};
 use serde::{Deserialize, Serialize};
 
+use super::cli_ledger::{Ledger, handoff_gaps};
 use super::long_sessions::LongSessions;
 use super::records::{READ_MAX, entry_text};
 use super::session_dir::{LineageEntry, write_atomic};
@@ -323,8 +324,8 @@ pub(crate) fn nudge(note: &Path) -> String {
          status to the user. Keep the note concise; reference transcript entries instead of \
          copying transcripts or command outputs. Finish the step you are on, at a boundary you \
          choose; don't start new \
-         work.\nUpdate the ledger. Run `brigadier ledger show --open --rules`: close or carry \
-         each open item by id, and check your last steps kept each rule; write any slip as a \
+         work.\nUpdate the ledger. Run `brigadier ledger show --open --rules`: close each open \
+         item that is done and name every other one by its id (L<n>) in the note, and check your last steps kept each rule; write any slip as a \
          Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
          \"read A,B,C; next D,E\", stale ledger entries. Don't restate rules or decisions; the \
          next session reads them with `brigadier context`. Absolute paths only.\nAdd a \"Skills to use next\" section when any \
@@ -334,6 +335,105 @@ pub(crate) fn nudge(note: &Path) -> String {
          row that is still reading, say so in the note and propose splitting the work.",
         note.display()
     )
+}
+
+/// How many times a session or worker is asked to fix a note that fails goal 13's check before
+/// its generation ends anyway, with what the note leaves out carried word for word in its
+/// successor's first message: never asked again (core-goals D121).
+pub(crate) const NOTE_FIXES: u32 = 1;
+
+/// Goal 13's check of a generation's hand-off note against the ledger beside it (core-goals
+/// D9): every open item (a question or a promise) is in the note by its id, or closed. Plumbing:
+/// what the note says stays the session's own judgement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NoteCheck {
+    /// A note with something in it was there to read.
+    pub written: bool,
+    /// The open items, all of them.
+    pub open: usize,
+    /// The open items the note leaves out (all of them without a note), verbatim.
+    pub gaps: Vec<String>,
+}
+
+/// Checks `note` against the ledger in `record`.
+pub(crate) fn check_note(record: &Path, note: &Path) -> NoteCheck {
+    let text = std::fs::read_to_string(note)
+        .ok()
+        .filter(|text| !text.trim().is_empty());
+    let (open, gaps) = match Ledger::read(record) {
+        Ok(ledger) => (
+            ledger.open().len(),
+            handoff_gaps(&ledger, text.as_deref().unwrap_or_default())
+                .into_iter()
+                .map(|entry| entry.text.clone())
+                .collect(),
+        ),
+        Err(err) => (0, vec![format!("(the ledger could not be read: {err})")]),
+    };
+    NoteCheck {
+        written: text.is_some(),
+        open,
+        gaps,
+    }
+}
+
+impl NoteCheck {
+    pub(crate) fn passed(&self) -> bool {
+        self.written && self.gaps.is_empty()
+    }
+
+    /// What the old session is asked to fix while it can still act; `None` when it passed. Its
+    /// first words are the nudge's, so the thread keeps it under the hood as the nudge.
+    pub(crate) fn fix(&self, note: &Path) -> Option<String> {
+        if self.passed() {
+            return None;
+        }
+        let list = self.gaps.join("\n");
+        let what = if self.written {
+            format!(
+                "your hand-off note at {} leaves out these open items of the ledger:\n{list}\n",
+                note.display()
+            )
+        } else if self.gaps.is_empty() {
+            format!(
+                "there is no hand-off note at {} yet: write it now as asked.",
+                note.display()
+            )
+        } else {
+            format!(
+                "there is no hand-off note at {} yet: write it now as asked. The ledger's open \
+                 items:\n{list}\n",
+                note.display()
+            )
+        };
+        Some(format!(
+            "{NUDGE_MARK} Hand-off check: {what} Name each open item in the note by its id \
+             (L<n>), or close it with `brigadier ledger close <id> \"<how>\"` when it is done. \
+             Then stop."
+        ))
+    }
+
+    /// The check's result in the successor's first message: what the note leaves out is
+    /// carried word for word, so no open item is lost.
+    pub(crate) fn line(&self) -> String {
+        match (self.written, self.gaps.is_empty()) {
+            (_, true) if self.open == 0 => "Hand-off check: the ledger has no open items.".into(),
+            (true, true) => format!(
+                "Hand-off check: every open item of the ledger ({}) is in the note or closed.",
+                self.open
+            ),
+            (written, false) => format!(
+                "Hand-off check: {} these open items of the ledger, word for word:\n{}",
+                if written {
+                    "the note leaves out"
+                } else {
+                    "there is no note to carry"
+                },
+                self.gaps.join("\n")
+            ),
+            (false, true) => "Hand-off check: there is no note.".into(),
+        }
+    }
 }
 
 /// What a hand-off note adds in a long session (P3 b and e, the default since D15): there a seam
@@ -395,6 +495,8 @@ pub(crate) struct Boot<'a> {
     pub note: Option<&'a str>,
     pub start_path: &'a Path,
     pub death: Option<&'a str>,
+    /// Goal 13's check of the note ([`NoteCheck::line`]).
+    pub check: &'a str,
     /// The session's transcript, every generation, as `brigadier brain read` numbers it.
     pub entries: &'a [FileEntry],
     pub blobs: &'a Path,
@@ -425,6 +527,7 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
                 out.push('\n');
             }
         }
+        out.push_str(&format!("\n{}\n", boot.check));
         let mut out = out.replace(HANDOFF_END, QUOTED_END);
         out.push_str(&format!("\n{HANDOFF_END}"));
         return out;
@@ -523,6 +626,7 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         out.push_str(note.trim());
         out.push('\n');
     }
+    out.push_str(&format!("\n{}\n", boot.check));
 
     // Every message of the user's, verbatim: the first and the latest always, the rest
     // newest first within the budget, shown oldest first.

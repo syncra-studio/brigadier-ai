@@ -28,8 +28,8 @@ use brigadier_providers::{Origin, ProviderKind, TurnInput};
 use super::{Cli, ConvLive, Envelope};
 use crate::manager::SessionManager;
 use crate::manager::seam::{
-    Boot, Phase, SeamEnd, SeamFile, TailBudget, bootstrap, complete, handoff_line, note_path,
-    nudge, read_seam, start_path, write_seam,
+    Boot, NOTE_FIXES, Phase, SeamEnd, SeamFile, TailBudget, bootstrap, check_note, complete,
+    handoff_line, note_path, nudge, read_seam, start_path, write_seam,
 };
 use crate::manager::session_dir::read_lineage;
 use crate::model::{ConversationId, ConversationKind, Message, ModelChoice, Setup};
@@ -52,6 +52,8 @@ pub(super) struct SeamLive {
     force: bool,
     /// Counts the hold timers armed; only the newest acts.
     hold_timer: u64,
+    /// The session was asked to fix its note this many times (goal 13).
+    fixes: u32,
     hold_armed: bool,
     /// The session id the next CLI starts under (a successor's, reserved in `seam.json`).
     pub(super) reserved: Option<String>,
@@ -321,6 +323,24 @@ impl SessionManager {
                     self.arm_seam_hold(conv).await;
                     return false;
                 }
+                // Goal 13 (core-goals D9): a note that leaves out an open item, or no note, is
+                // fixed by the session itself while it can still act, before its generation ends.
+                // A fix still due (the turn that ended was the CLI's own, a nudge steered in
+                // late) is checked again, never counted twice.
+                let (pending, fixes) = {
+                    let state = conv.state.lock().await;
+                    (state.seam.nudge_due.is_some(), state.seam.fixes)
+                };
+                if !force && why == NO_NOTE && (pending || fixes < NOTE_FIXES) {
+                    let fix = self.note_fix(&conv.id, &note).await;
+                    let mut state = conv.state.lock().await;
+                    if let Some(fix) = fix {
+                        state.seam.fixes += u32::from(!pending);
+                        state.seam.nudge_due = Some(fix);
+                        return false;
+                    }
+                    state.seam.nudge_due = None;
+                }
                 let death = (!written).then(|| if force { HELD_TOO_LONG.into() } else { why });
                 self.close_seam(conv, file, Some(at_ms), death, stopped)
                     .await
@@ -350,6 +370,16 @@ impl SessionManager {
             }
             Phase::Closed { .. } | Phase::Starting { .. } => false,
         }
+    }
+
+    /// What the session is asked so its note `note` passes goal 13's check; `None`: it passes.
+    async fn note_fix(&self, id: &ConversationId, note: &std::path::Path) -> Option<String> {
+        let record = self.session_dir(id).record();
+        let at = note.to_path_buf();
+        crate::manager::blocking(move || Ok(check_note(&record, &at).fix(&at)))
+            .await
+            .ok()
+            .flatten()
     }
 
     /// Ends generation `file.generation`: `closed`, with `death` when it left no note. Its
@@ -408,6 +438,9 @@ impl SessionManager {
         state.seam.held = false;
         state.seam.seen = false;
         state.seam.force = false;
+        state.seam.fixes = 0;
+        // A fix still due belongs to the generation that ended, never to its successor.
+        state.seam.nudge_due = None;
         state.seam.hold_armed = false;
         state.seam.hold_timer += 1;
         state.seam.carry_on = !stopped;
@@ -823,6 +856,7 @@ impl SessionManager {
             let entries = crate::manager::records::transcript(&files);
             let note_at = note_path(&record, n);
             let note = std::fs::read_to_string(&note_at).ok();
+            let check = check_note(&record, &note_at).line();
             let start = start_path(&record, n);
             let text = bootstrap(&Boot {
                 n,
@@ -838,6 +872,7 @@ impl SessionManager {
                 } else {
                     Some(death.as_deref().unwrap_or(NO_NOTE))
                 },
+                check: &check,
                 entries: &entries,
                 blobs: &blobs,
             });

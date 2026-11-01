@@ -11,7 +11,7 @@
 //! - **instructions**: Claude's `/compact` at the compaction point carries what its summary must
 //!   keep, ending on the pointer to `brigadier context` (run2-D7, D71, D13). Codex's summary
 //!   takes none.
-//! - **hand-off after 5 compactions** in one CLI session (D16), and as the rare fallback when
+//! - **hand-off after 3 compactions** in one CLI session (core-goals D9), and as the rare fallback when
 //!   compaction fails or loops (run2-D10): the fresh-session seam.
 //!
 //! The fresh-session seam also stays for moves to another CLI (D46) and quota fallback to
@@ -34,13 +34,10 @@ use crate::{Error, Result};
 /// The test-only opt-out, read once when the daemon starts.
 pub(crate) const SWITCH_ENV: &str = "BRIGADIER_LONG_SESSIONS";
 
-/// How many compactions in a row one CLI session of a session's thread takes before a fresh
-/// one goes on from its hand-off note (D16: each compaction summarises the one before).
-pub(crate) const SESSION_HANDOFF_AFTER: u32 = 5;
-
-/// How many compactions in a row one CLI session of a worker takes before a fresh one goes on
-/// from its hand-off note (D14).
-pub(crate) const WORKER_HANDOFF_AFTER: u32 = 3;
+/// How many compactions in a row one CLI session takes, a session's thread's or a worker's,
+/// before a fresh one goes on from its hand-off note (core-goals D9, replacing the older plan's
+/// 5 for a thread: each compaction summarises the one before).
+pub(crate) const HANDOFF_AFTER: u32 = 3;
 
 /// What a session does at long contexts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

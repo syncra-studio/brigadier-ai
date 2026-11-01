@@ -73,6 +73,7 @@ fn boot_tail(
         note,
         start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
         death,
+        check: "Hand-off check: the ledger has no open items.",
         entries,
         blobs: Path::new("/nowhere"),
     })
@@ -673,4 +674,79 @@ fn an_expanded_tail_cuts_an_earlier_item_too_big_for_it_and_keeps_it() {
     assert!(shown(&text).contains(&at), "the big item, cut");
     assert!(text.contains("[cut at "), "its cut line");
     assert!(text.len() <= 360_000 + 2_000, "{}", text.len());
+}
+
+/// Goal 13 (core-goals D9, D121): no note, an empty one, or one with gaps fails the check; the
+/// fix asks once in the nudge's own words; the successor's line carries what is missing.
+#[test]
+fn a_note_with_gaps_or_none_fails_the_check_and_its_line_carries_what_is_left_out() {
+    let record =
+        std::env::temp_dir().join(format!("brigadier-note-check-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(record.join("handoff")).unwrap();
+    std::fs::write(
+        record.join(super::super::session_dir::LEDGER_FILE),
+        "- L1 · 11-01 20:00 · gen 1 · Decision: SQLite\n\
+         - L2 · 11-01 20:01 · gen 1 · Open: promise to rerun the test\n",
+    )
+    .unwrap();
+    let note = note_path(&record, 1);
+
+    let missing = check_note(&record, &note);
+    assert!(!missing.passed() && !missing.written);
+    let fix = missing.fix(&note).unwrap();
+    assert!(fix.starts_with(crate::thread_view::NUDGE_MARK), "{fix}");
+    assert!(
+        fix.contains("there is no hand-off note at") && fix.contains("L2 ·"),
+        "{fix}"
+    );
+    assert!(missing.line().contains("there is no note to carry"));
+
+    std::fs::write(&note, "  \n").unwrap();
+    assert!(!check_note(&record, &note).written);
+
+    std::fs::write(&note, "Doing now: the test.").unwrap();
+    let gaps = check_note(&record, &note);
+    assert!(!gaps.passed());
+    assert!(
+        gaps.fix(&note)
+            .unwrap()
+            .contains("leaves out these open items")
+    );
+    assert_eq!(
+        gaps.line(),
+        "Hand-off check: the note leaves out these open items of the ledger, word for word:\n\
+         - L2 · 11-01 20:01 · gen 1 · Open: promise to rerun the test"
+    );
+
+    std::fs::write(&note, "Doing now: the test. Next: L2.").unwrap();
+    let passed = check_note(&record, &note);
+    assert!(passed.passed() && passed.fix(&note).is_none());
+    assert_eq!(
+        passed.line(),
+        "Hand-off check: every open item of the ledger (1) is in the note or closed."
+    );
+    // The line goes right under the note in a same-CLI hand-off.
+    let boot = bootstrap(&Boot {
+        n: 1,
+        tail: TailBudget {
+            reason: Reason::Size,
+            hot_tokens: None,
+            target_window: None,
+        },
+        key: "abcd1234",
+        folder: &record,
+        lineage: &[],
+        note_path: &note,
+        note: Some("Next: L2."),
+        start_path: &start_path(&record, 1),
+        death: None,
+        check: &passed.line(),
+        entries: &[],
+        blobs: &record,
+    });
+    assert!(
+        boot.contains("## Hand-off note\nNext: L2.\n\nHand-off check: every open item"),
+        "{boot}"
+    );
+    std::fs::remove_dir_all(&record).unwrap();
 }

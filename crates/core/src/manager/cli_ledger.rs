@@ -580,6 +580,23 @@ pub(crate) fn check(ledger: &Ledger, file: &str, text: &str) -> LedgerCheck {
     }
 }
 
+/// Goal 13's check of a hand-off note (core-goals D9): the open items (questions and promises)
+/// still open that `note` doesn't name by id. One with no id must be in it word for word.
+pub(crate) fn handoff_gaps<'a>(ledger: &'a Ledger, note: &str) -> Vec<&'a Entry> {
+    let cites = cited(note);
+    ledger
+        .open()
+        .into_iter()
+        .filter(|entry| match entry.id {
+            Some(id) => !cites.contains(&id),
+            None => {
+                let line = entry.text.lines().next().unwrap_or_default().trim_start();
+                !note.contains(list_body(line).unwrap_or(line).trim())
+            }
+        })
+        .collect()
+}
+
 /// `check`'s text: each list that isn't empty, entries verbatim.
 pub(crate) fn render(check: &LedgerCheck) -> String {
     let mut out = format!("{} against the ledger:\n", check.file);
