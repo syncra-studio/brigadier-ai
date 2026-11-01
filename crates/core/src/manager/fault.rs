@@ -8,7 +8,7 @@
 //! any kind), it fires:
 //! 1. the quota monitor holds the provider at a limit until the chosen reset, so no read can
 //!    lift it early;
-//! 2. the session's transcript gets a notice saying a limit was injected;
+//! 2. the daemon's log says a limit was injected (the thread shows only what a real limit shows);
 //! 3. the CLI's running turn is interrupted, so its in-flight tool activity stops;
 //! 4. when that turn ends, the session reports the limit (a rate-limit notification and a
 //!    usage-limit error) just before the turn's end, as a CLI at its limit would. An injected
@@ -26,8 +26,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use brigadier_providers::{
-    ErrorKind, ItemStatus, LimitHit, LimitKind, NoticeLevel, ProviderError, ProviderEvent,
-    ProviderKind, TurnStatus,
+    ErrorKind, ItemStatus, LimitHit, LimitKind, ProviderError, ProviderEvent, ProviderKind,
+    TurnStatus,
 };
 
 use super::SessionManager;
@@ -322,27 +322,19 @@ impl SessionManager {
                     tracing::warn!(error = %err, "could not interrupt the session for an injected limit");
                 }
             });
-            let message = match &fault.what {
-                Injected::Limit(limit) => format!(
-                    "Development fault injection: {}'s {} window is treated as used up until \
-                     the chosen reset; the running turn is being interrupted.",
-                    fault.provider.label(),
-                    limit.window.as_deref().unwrap_or("usage")
+            // Logged, not shown: the thread shows only what a real limit shows (goal 1).
+            match &fault.what {
+                Injected::Limit(limit) => tracing::info!(
+                    provider = %fault.provider,
+                    window = limit.window.as_deref().unwrap_or("usage"),
+                    "injected usage limit fired; the running turn is being interrupted"
                 ),
-                Injected::Error(error) => format!(
-                    "Development fault injection: {} reports {error:?}; the running turn is \
-                     being interrupted.",
-                    fault.provider.label()
+                Injected::Error(error) => tracing::info!(
+                    provider = %fault.provider,
+                    ?error,
+                    "injected provider error fired; the running turn is being interrupted"
                 ),
-            };
-            let notice = ProviderEvent::Notice {
-                level: NoticeLevel::Warning,
-                message,
-            };
-            if !ends {
-                return vec![event, notice];
             }
-            before.push(notice);
         }
         if !ends {
             return vec![event];

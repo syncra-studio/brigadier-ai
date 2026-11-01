@@ -1,5 +1,5 @@
 import type { BlockOrchestratorStep, BlockSeam } from "@/app/conversation/blocks";
-import type { OrchestratorStep } from "@/ipc/generated";
+import type { ModelChoice, OrchestratorStep } from "@/ipc/generated";
 
 export type ProviderTransition = Extract<OrchestratorStep["kind"], { type: "providerTransition" }>;
 
@@ -39,3 +39,28 @@ export function transitionAccountLabel(transition: ProviderTransition): string |
   return !label || /^(?:this computer['’]?s login|a new account)$/i.test(label) ? null : label;
 }
 
+
+/** What the composer shows of a started session's model, and since when it holds an older one. */
+export type ShownChoice = { shown: ModelChoice; holdingSinceMs: number | null };
+
+/**
+ * A move to another CLI shows in the composer together with its switch row, not when the move is
+ * first recorded (goal 1): the CLI shown last is held until a switch row confirms the new one, or
+ * until the session stops running (a move that failed: what its next turn starts on shows).
+ */
+export function nextShown(
+  prev: ShownChoice | null,
+  current: ModelChoice,
+  transitions: readonly ProviderTransition[],
+  running: boolean,
+  nowMs: number,
+): ShownChoice {
+  if (!prev || prev.shown.provider === current.provider || !running) return { shown: current, holdingSinceMs: null };
+  const since = prev.holdingSinceMs ?? nowMs;
+  // The row can be confirmed a moment before the setup's event reaches the app.
+  const confirmed = transitions.some((transition) => transition.to.provider === current.provider
+    && transition.startedAtMs >= since - CONFIRM_SLACK_MS);
+  return confirmed ? { shown: current, holdingSinceMs: null } : { shown: prev.shown, holdingSinceMs: since };
+}
+
+const CONFIRM_SLACK_MS = 5_000;

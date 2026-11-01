@@ -372,6 +372,13 @@ async fn a_failed_worker_send_has_no_completed_transition() {
             .all(|step| !matches!(step.kind, OrchestratorStepKind::ProviderTransition { .. }))
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
+    // Its row keeps the model it was on: no switch shows that didn't happen (goal 1).
+    let rows = flow
+        .manager
+        .worker_rows_of(&flow.conversation, false)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].agent, ProviderKind::Claude);
     let task = worker(&flow).await;
     assert!(
         task.quota_wait

@@ -456,12 +456,18 @@ pub(crate) fn row(
     } else {
         background_of(&cli)
     };
+    // A switch shows with its switch row: until it is confirmed, the model the worker was on.
+    let shown = task
+        .quota_wait
+        .as_ref()
+        .and_then(|wait| wait.model.as_ref())
+        .unwrap_or(&task.route.choice);
     WorkerRow {
         id: task.id.clone(),
         number: task.number,
         title: task.title.clone(),
-        agent: task.route.choice.provider,
-        model: task.route.choice.model.clone(),
+        agent: shown.provider,
+        model: shown.model.clone(),
         started_at_ms: task.created_at_ms,
         working: working(task, Some(&cli)),
         last_end,

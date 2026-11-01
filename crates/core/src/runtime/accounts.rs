@@ -155,6 +155,14 @@ impl Runtime {
                 Some(entry.id.clone()),
             )));
         }
+        // Development builds only (goal 1 proof, D80): with `BRIGADIER_FAKE_ACCOUNTS` set, an
+        // extra account is the computer's own login under another id, so a switch between two
+        // accounts is shown with no second sign-in and no login copied. It makes no home of its
+        // own, so removing it signs nothing out.
+        #[cfg(debug_assertions)]
+        if std::env::var_os("BRIGADIER_FAKE_ACCOUNTS").is_some() {
+            return self.registered(entry.provider);
+        }
         let home = self.account_home(&entry.id);
         let for_account = adapters::adapter(entry.provider)
             .and_then(|adapter| adapter.home)
