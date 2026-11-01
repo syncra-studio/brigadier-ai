@@ -690,14 +690,16 @@ export function cliBlocks(
     if (!id) return;
     readIds.add(id);
     const takingTurn = takenIn.get(id);
+    // A turn begun while the taking one still ran (a CLI's queued input) is a read in it.
+    const taking = takingTurn !== undefined && (readIn === takingTurn || (readIn > takingTurn && (view.turns[readIn]?.startedAtMs ?? 0) <= (view.turns[takingTurn]?.endedAtMs ?? Number.POSITIVE_INFINITY)));
     if (takingTurn === undefined) {
       if (runs && readIn === running) lastTaken.set(id, position);
       else lastTaken.delete(id);
-    } else if (readIn < takingTurn || (takingTurn === readIn && !inTaking.has(id))) {
+    } else if (readIn < takingTurn || (taking && !inTaking.has(id))) {
       // Its last read before the turn that names it stands until that turn reads it: the live
       // turn's requests can name it a turn late.
       lastTaken.set(id, position);
-      if (takingTurn === readIn) inTaking.add(id);
+      if (taking) inTaking.add(id);
     }
   });
   // The steers that name no queued message answer the turn's other requests, in order.

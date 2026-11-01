@@ -970,31 +970,44 @@ test("D72: a follow-up asked again after its turn left it unjudged shows once, b
   assert.deepEqual(block!.steers.map((steer) => [steer.message.id, steer.text]), [[id, "Also the docs."]]);
 });
 
-test("goal 8: a follow-up woken to be judged, judged wait, then sent on its own turn gives every node of the tree its own id", () => {
-  // Seen live: both turns lead with the follow-up's request; one id twice made assistant-ui throw
-  // at the next message and blanked the app.
+test("goal 8: follow-ups woken to be judged, judged wait, then taken in after the work: each bubble once, where it went in, and every node its own id", () => {
+  // Seen live on Claude: both turns of the first lead with its request (one id twice made
+  // assistant-ui throw at the next message and blanked the app); the second, judged again in a
+  // turn begun while the first's own turn still ran, showed back where it waited.
   const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const id2 = "0192aaaa-bbbb-7ccc-8ddd-0000cafebabe";
+  const judge2 = "[queued message cafebabe · judge it: brigadier queue cafebabe join|wait|worker <id>|new-session; unjudged, it joins this work]\nReply with V1.";
   const thread: ThreadView = {
     entries: [
       user("u1", "Start a worker", 1000, { requests: ["r1"] }),
       at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
       user("q1", toJudge("Reply with U1."), 2000, { requests: [id] }),
-      at({ type: "message", itemId: "a2", role: "assistant", text: "That waits." }, 2100),
+      user("p1", judge2, 2100, { requests: [id2] }),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "Both wait." }, 2200),
       user("q2", "[queued message feedbeef, now on its own turn]\nReply with U1.", 5000, { requests: [id] }),
       at({ type: "message", itemId: "a3", role: "assistant", text: "U1" }, 5100),
+      user("p2", judge2, 5200, { requests: [id2] }),
+      at({ type: "message", itemId: "a4", role: "assistant", text: "V1" }, 5300),
       user("u2", "Next", 6000, { requests: ["r2"] }),
     ],
     turns: [
-      { ...turn("u1", 1000, 1200, "done"), requests: ["r1"] },
-      turn("q1", 2000, 2200, "done"),
-      { ...turn("q2", 5000, 5200, "done"), requests: [id] },
+      { ...turn("u1", 1000, 2500, "done"), requests: ["r1"] },
+      turn("q1", 2000, 2500, "done"),
+      turn("p1", 2100, 2500, "done"),
+      { ...turn("q2", 5000, 5400, "done"), requests: [id, id2] },
+      turn("p2", 5200, 5400, "done"),
       { ...turn("u2", 6000, null, null), requests: ["r2"] },
     ],
   };
-  const ids = cliThreadTree(thread, "conv", [stored("r1", 900), stored(id, 1900), stored("r2", 5900)], {}, [], { ...NO_BOARD, requests: { r1: {}, [id]: {}, r2: {} } }, { state: "running", error: null }).nodes.map((node) => node.id);
+  const stores = [stored("r1", 900), stored(id, 1900), stored(id2, 1950), stored("r2", 5900)];
+  const tree = cliThreadTree(thread, "conv", stores, {}, [], { ...NO_BOARD, requests: { r1: {}, [id]: {}, [id2]: {}, r2: {} } }, { state: "running", error: null });
+  const ids = tree.nodes.map((node) => node.id);
   assert.deepEqual(ids.filter((each, index) => ids.indexOf(each) !== index), []);
-  // Its bubble once, on the turn that took it.
-  assert.equal(ids.filter((each) => each === id).length, 1);
+  // Each bubble once, just before its answer, after the work that made them wait.
+  assert.deepEqual(
+    tree.nodes.flatMap((node) => (node.kind === "user" ? [node.id] : node.block.texts.map((text) => text.messageId))),
+    ["r1", "a1", "a2", id, "a3", id2, "a4", "r2"],
+  );
 });
 
 /** A queued message's words under the line giving them to the session to judge. */
