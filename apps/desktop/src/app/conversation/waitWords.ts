@@ -46,10 +46,9 @@ function callCommand(entry: FileEntry): string | null {
 /** The workers a `brigadier wait` call waits on: the ids it names (as `brigadier` reads a short id), else every one still working. */
 function waitedWorkers(command: string, workers: readonly WorkerRow[]): WorkerRow[] {
   const after = command.split(/\bbrigadier\s+wait\b/)[1] ?? "";
-  const ids = after.split(/[;&|\n]/)[0]!.trim().split(/\s+/).filter((word) => word && !word.startsWith("-") && !/^\d+$/.test(word));
-  const working = workers.filter((row) => !row.gone && (row.lastEnd === null || row.working));
-  if (ids.length === 0) return working;
-  return workers.filter((row) => ids.some((id) => row.id === id || (id.length >= 4 && row.id.slice(-8).startsWith(id))));
+  const ids = after.split(/[;&|\n]/)[0]!.replace(/['"]/g, "").trim().split(/\s+/).filter((word) => word && !word.startsWith("-") && !/^\d+$/.test(word));
+  const named = workers.filter((row) => ids.some((id) => row.id === id || (id.length >= 4 && row.id.slice(-8).startsWith(id))));
+  return named.length > 0 ? named : workers.filter((row) => !row.gone && (row.lastEnd === null || row.working));
 }
 
 /**

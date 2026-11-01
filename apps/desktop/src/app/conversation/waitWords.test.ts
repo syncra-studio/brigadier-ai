@@ -45,6 +45,9 @@ test("Codex's agent wait names its subagent; a brigadier wait names its worker, 
   const waiting: ThreadView = { entries: [command("c", "brigadier wait 823718cc", 1100)], turns: [turn(1000)], workers };
   assert.deepEqual(liveWait(waiting), { text: "Waiting for Fetch example.com", tone: "busy" });
   assert.deepEqual(liveWait({ ...waiting, entries: [command("c", "brigadier wait", 1100)] }), { text: "Waiting for 2 workers", tone: "busy" });
+  // In a shell wrapper with a timeout, after a start (seen live on Codex): the one working worker.
+  const wrapped = command("c", `/bin/zsh -c "brigadier start 'Curl it' --title 'Curl' && brigadier wait --timeout 60"`, 1100);
+  assert.deepEqual(liveWait({ ...waiting, entries: [wrapped], workers: [workers[0]!] }), { text: "Waiting for Fetch example.com", tone: "busy" });
 });
 
 test("the live line says the named wait where it said Thinking, and a held block names its one holder (D106)", () => {
