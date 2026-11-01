@@ -434,6 +434,53 @@ async fn a_quota_wait_keeps_wait_waiting_and_is_not_resumed() {
     bench.flow.stop().await;
 }
 
+/// A switch that finds nowhere to go leaves its quota wait as it was: it goes on at the reset.
+#[tokio::test]
+async fn a_refused_switch_keeps_its_quota_wait_going_on_at_the_reset() {
+    let bench = bench(
+        "manage-refused-switch",
+        start("Build it."),
+        Mode::LimitFirst,
+        false,
+    )
+    .await;
+    bench
+        .flow
+        .until("its quota wait", |board| {
+            Flow::task(board, 1).quota_wait.is_some()
+        })
+        .await;
+    let id = bench.id();
+    // Its own CLI and model, and no other account of it: nowhere to go.
+    let refused = bench.run(switch(&id, Some(bench.inputs()[0].0))).await;
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("can take it now"),
+        "{refused:#}"
+    );
+    let task = bench.task().await;
+    let account = task.quota_wait.as_ref().unwrap().account.clone().unwrap();
+    let now = crate::now_ms();
+    let monitor = bench.flow.manager.runtime.monitor();
+    let mut quota = monitor.current_for(&account, now).unwrap();
+    quota.limit.as_mut().unwrap().resets_at_ms = Some(now - 1);
+    for window in &mut quota.windows {
+        window.resets_at_ms = Some(now - 1);
+    }
+    quota.observed_at_ms = now;
+    monitor.note(&account, &quota, now);
+    bench.flow.manager.retry_waiting_workers().await;
+    bench
+        .flow
+        .until("it went on at the reset", |board| {
+            Flow::task(board, 1).quota_wait.is_none()
+        })
+        .await;
+    bench.flow.stop().await;
+}
+
 /// A resume right after a pause, before anything settled: one resumed turn, and the old turn's
 /// end never overwrites it.
 #[tokio::test]

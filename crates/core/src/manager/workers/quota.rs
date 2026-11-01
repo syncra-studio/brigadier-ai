@@ -647,16 +647,15 @@ impl SessionManager {
     ) -> Result<(ModelChoice, AccountRef)> {
         let live = self.task_live(task);
         let _managed = live.manage.lock().await;
-        {
-            let mut state = live.state.lock().await;
-            state.quota_cancelled = true;
-            state.quota_timer += 1;
-        }
+        let was_cancelled = live.cancel_quota().await;
         let settled = live.settle.lock().await;
         let rerouting = live.reroute.lock().await;
         let task = self.task_by_id(&task.conversation_id, &task.id).await?;
         if task.state.is_final() {
             return Err(Error::Invalid("the worker has ended".into()));
+        }
+        if let Some(why) = super::unsettled(&live, &task).await {
+            return Err(self.left_as_it_was(&live, &task, was_cancelled, why).await);
         }
         let wait = task.quota_wait.clone();
         let goes_on = !super::explicitly_paused(&task)
@@ -711,15 +710,22 @@ impl SessionManager {
             }
         }
         let Some((mut target, account)) = target else {
-            return Err(Error::Invalid(match &named {
-                Some(choice) => format!(
-                    "no account of {} can take it now",
-                    brigadier_providers::KindFacts::label(choice.provider)
-                ),
-                None => "no other account or routing row can take it now; name one with \
+            return Err(self
+                .left_as_it_was(
+                    &live,
+                    &task,
+                    was_cancelled,
+                    match &named {
+                        Some(choice) => format!(
+                            "no account of {} can take it now",
+                            brigadier_providers::KindFacts::label(choice.provider)
+                        ),
+                        None => "no other account or routing row can take it now; name one with \
                          --agent, --model or --effort"
-                    .into(),
-            }));
+                            .into(),
+                    },
+                )
+                .await);
         };
         target.account = Some(account.choice_id());
         self.cancel_worker_quota(&live, &task).await?;

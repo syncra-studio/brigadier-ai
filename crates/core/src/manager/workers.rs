@@ -236,6 +236,14 @@ impl TaskLive {
         state.busy = false;
     }
 
+    /// Stops its quota recovery (a pause or switch takes it over): whether it was stopped
+    /// already.
+    pub(crate) async fn cancel_quota(&self) -> bool {
+        let mut state = self.state.lock().await;
+        state.quota_timer += 1;
+        std::mem::replace(&mut state.quota_cancelled, true)
+    }
+
     pub async fn redactor(&self) -> Option<Arc<brigadier_providers::redact::Redactor>> {
         self.state.lock().await.redactor.clone()
     }
@@ -2458,11 +2466,7 @@ impl SessionManager {
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         let live = self.task_live(&task);
         let _managed = live.manage.lock().await;
-        {
-            let mut state = live.state.lock().await;
-            state.quota_cancelled = true;
-            state.quota_timer += 1;
-        }
+        let was_cancelled = live.cancel_quota().await;
         let _settled = live.settle.lock().await;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         if task.state.is_final() || task.plain.is_none() {
@@ -2470,6 +2474,9 @@ impl SessionManager {
         }
         if explicitly_paused(&task) {
             return Ok(false);
+        }
+        if let Some(why) = unsettled(&live, &task).await {
+            return Err(self.left_as_it_was(&live, &task, was_cancelled, why).await);
         }
         self.cancel_worker_quota(&live, &task).await?;
         // Recorded before its CLI goes: the turn end its close brings finds it paused.
@@ -2516,11 +2523,6 @@ impl SessionManager {
                 .into(),
             ));
         }
-        let held = task
-            .plain
-            .as_ref()
-            .map(|plain| plain.held.clone())
-            .unwrap_or_default();
         let set_paused = |paused: bool| {
             move |task: &mut Task| {
                 task.state = if paused {
@@ -2533,9 +2535,14 @@ impl SessionManager {
                 }
             }
         };
-        // Working before its input goes: a turn that ends at once ends as any turn does.
-        self.update_task(&conversation_id, &task_id, set_paused(false))
-            .await?;
+        // Working before its input goes: a turn that ends at once ends as any turn does. What
+        // it holds is read in the same step, so nothing held just before is cleared unsent.
+        let held = self
+            .update_task(&conversation_id, &task_id, set_paused(false))
+            .await?
+            .plain
+            .map(|plain| plain.held)
+            .unwrap_or_default();
         let text = held
             .iter()
             .map(String::as_str)
@@ -2563,6 +2570,21 @@ impl SessionManager {
         self.orchestrator_step(&conversation_id, OrchestratorStepKind::Resumed { task_id })
             .await;
         Ok(())
+    }
+
+    /// A pause or switch that moved nothing: its quota recovery goes on as before it began.
+    pub(crate) async fn left_as_it_was(
+        &self,
+        live: &TaskLive,
+        task: &Task,
+        was_cancelled: bool,
+        why: impl Into<String>,
+    ) -> Error {
+        live.state.lock().await.quota_cancelled = was_cancelled;
+        if !was_cancelled {
+            self.arm_worker_quota_retry(task).await;
+        }
+        Error::Invalid(why.into())
     }
 
     pub(crate) async fn conversation_of_task(&self, task_id: &TaskId) -> Result<ConversationId> {
@@ -3128,6 +3150,22 @@ fn worker_step(
 
 /// What a paused worker hears when it is resumed, or moved on mid-turn (D7).
 pub(crate) const RESUME_WORDS: &str = "Continue where you stopped.";
+
+/// Why its session can't pause or switch the worker this moment: its first launch, or its
+/// hand-off note turn, would go on past the close.
+async fn unsettled(live: &TaskLive, task: &Task) -> Option<&'static str> {
+    if matches!(task.state, TaskState::Queued | TaskState::Starting) {
+        return Some("the worker is still starting; try again once it runs");
+    }
+    let seam = live
+        .state
+        .lock()
+        .await
+        .seam
+        .as_ref()
+        .is_some_and(|seam| seam.holds());
+    seam.then_some("the worker is handing off to a fresh session; try again in a moment")
+}
 
 /// Its session paused it (`brigadier pause`, D7), as a quota wait never does.
 pub(crate) fn explicitly_paused(task: &Task) -> bool {
