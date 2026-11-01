@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
+const seconds = (label: string | null) => Number(/(\d+)s$/.exec(label ?? "")?.[1] ?? NaN);
+
 test("a working block's header and the composer read the same time at every moment, from the message sent, not the CLI's later start (D94)", { timeout: 60000 }, async (t) => {
   const reads = JSON.parse(await renderFixturePage(t, "two-timers.html", "two-timers-result", 10000)) as [string | null, string | null][];
   for (const [header, composer] of reads) {
@@ -13,7 +15,6 @@ test("a working block's header and the composer read the same time at every mome
 
 test("a block its background subagent holds open after its turn reads the same time in its header and the composer, and keeps it once the subagent ends (D24, D94, D104)", { timeout: 60000 }, async (t) => {
   const { held, after } = JSON.parse(await renderFixturePage(t, "two-timers.html", "two-timers-held", 20000)) as { held: [string | null, string | null][]; after: [string | null, string | null] };
-  const seconds = (label: string | null) => Number(/(\d+)s$/.exec(label ?? "")?.[1] ?? NaN);
   for (const [header, composer] of held) {
     assert.match(header ?? "", /^Working for \d+s$/, JSON.stringify(held));
     assert.equal(composer, header, JSON.stringify(held));
