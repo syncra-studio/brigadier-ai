@@ -970,7 +970,7 @@ test("D72: a follow-up asked again after its turn left it unjudged shows once, b
   assert.deepEqual(block!.steers.map((steer) => [steer.message.id, steer.text]), [[id, "Also the docs."]]);
 });
 
-test("goal 8: follow-ups woken to be judged, judged wait, then taken in after the work: each bubble once, where it went in, and every node its own id", () => {
+test("goal 8: follow-ups woken to be judged, judged wait, then taken in after the work: each bubble once, where it went in, no block inside an open block, and every node its own id", () => {
   // Seen live on Claude: both turns of the first lead with its request (one id twice made
   // assistant-ui throw at the next message and blanked the app); the second, judged again in a
   // turn begun while the first's own turn still ran, showed back where it waited.
@@ -1003,10 +1003,11 @@ test("goal 8: follow-ups woken to be judged, judged wait, then taken in after th
   const tree = cliThreadTree(thread, "conv", stores, {}, [], { ...NO_BOARD, requests: { r1: {}, [id]: {}, [id2]: {}, r2: {} } }, { state: "running", error: null });
   const ids = tree.nodes.map((node) => node.id);
   assert.deepEqual(ids.filter((each, index) => ids.indexOf(each) !== index), []);
-  // Each bubble once, just before its answer, after the work that made them wait.
+  // Each bubble once, just before its answer, after the work that made them wait; the turns begun
+  // while the one before still ran go on in its block (D74): no block inside an open block.
   assert.deepEqual(
-    tree.nodes.flatMap((node) => (node.kind === "user" ? [node.id] : node.block.texts.map((text) => text.messageId))),
-    ["r1", "a1", "a2", id, "a3", id2, "a4", "r2"],
+    tree.nodes.map((node) => (node.kind === "user" ? ["user", node.id] : ["block", node.block.steers.map((steer) => steer.message.id), node.block.texts.map((text) => text.messageId)])),
+    [["user", "r1"], ["block", [], ["a1", "a2"]], ["user", id], ["block", [id2], ["a3", "a4"]], ["user", "r2"], ["block", [], []]],
   );
 });
 

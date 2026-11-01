@@ -642,7 +642,12 @@ export function cliBlocks(
   };
   // A turn the user's message started while the block before still held (its workers or its
   // CLI's background commands still ran) goes on in that block, as the daemon says.
-  const goesOn = (each: Block | null): each is Block => !!each && !internal.has(each) && !!view.turns[turn]?.joins;
+  // So does a turn begun while the turn before still ran (a CLI's input queued mid-turn, D74).
+  const overlaps = () => {
+    const [previous, now] = [view.turns[turn - 1], view.turns[turn]];
+    return !!previous && !!now && now.startedAtMs < (previous.endedAtMs ?? (previous.end == null ? Number.POSITIVE_INFINITY : 0));
+  };
+  const goesOn = (each: Block | null): each is Block => !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps());
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
