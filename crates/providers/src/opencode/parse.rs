@@ -604,6 +604,8 @@ pub(crate) fn read_transcript(path: &Path) -> std::io::Result<Vec<FileEntry>> {
     let mut entries = Vec::new();
     // When the running turn's first message came, while one runs.
     let mut turn: Option<i64> = None;
+    // Its last step was cut off (aborted) and no idle line said it ended: Brigadier quit mid-turn.
+    let mut cut = false;
     for line in text.lines() {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -620,12 +622,17 @@ pub(crate) fn read_transcript(path: &Path) -> std::io::Result<Vec<FileEntry>> {
                     },
                     at,
                 );
-                // Delivered while a turn ran: it joined that turn (a steer).
+                // Delivered while a turn ran: it joined that turn (a steer). After a cut-off
+                // turn it begins one of its own.
+                if std::mem::take(&mut cut) {
+                    turn = None;
+                }
                 entry.steer = turn.is_some();
                 turn = turn.or(at);
                 entries.push(entry);
             }
             "assistant" => {
+                cut = message.pointer("/error/type").and_then(Value::as_str) == Some("aborted");
                 let (mut texts, mut thoughts) = (0, 0);
                 for part in message["content"].as_array().into_iter().flatten() {
                     let part_at = part.pointer("/time/created").and_then(Value::as_i64).or(at);
@@ -696,6 +703,7 @@ pub(crate) fn read_transcript(path: &Path) -> std::io::Result<Vec<FileEntry>> {
                 at,
             )),
             "idle" => {
+                cut = false;
                 let status = match message["outcome"].as_str() {
                     Some("succeeded") => TurnStatus::Completed,
                     Some("interrupted") => TurnStatus::Interrupted,
@@ -1438,6 +1446,30 @@ mod tests {
             }
         ));
         assert_eq!(events.len(), 6);
+    }
+
+    /// Brigadier quit mid-turn: the turn's step was aborted and no idle line came. The next
+    /// user message (the word to go on) begins a turn of its own, never a steer into the cut one.
+    #[test]
+    fn a_message_after_a_turn_cut_off_by_a_quit_begins_a_turn() {
+        let messages = [
+            json!({"id": "msg_u1", "time": {"created": 1_000}, "text": "Hold.", "type": "user"}),
+            json!({"id": "msg_a1", "time": {"created": 1_010, "completed": 1_500}, "type": "assistant", "finish": "error", "error": {"type": "aborted", "message": "Step interrupted"}, "content": []}),
+            json!({"id": "msg_s", "time": {"created": 2_000}, "type": "system", "text": "The Code Mode tool catalog has changed."}),
+            json!({"id": "msg_u2", "time": {"created": 2_001}, "text": "[Brigadier restarted]", "type": "user"}),
+            json!({"id": "msg_a2", "time": {"created": 2_010}, "type": "assistant", "finish": "tool-calls", "content": []}),
+            json!({"id": "msg_u3", "time": {"created": 2_020}, "text": "Also this.", "type": "user"}),
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "opencode-transcript-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let lines: Vec<String> = messages.iter().map(Value::to_string).collect();
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let entries = read_transcript(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let steers: Vec<bool> = entries.iter().map(|entry| entry.steer).collect();
+        assert_eq!(steers, [false, false, true], "{entries:#?}");
     }
 
     /// Shapes as `GET /api/session/{id}/message` gave them (2.0.19, trimmed): a turn that runs
