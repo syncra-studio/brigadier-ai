@@ -11,6 +11,7 @@
 //!
 //! A stopped session keeps its CLI session so it can be resumed; closing it removes everything.
 
+#[cfg(debug_assertions)]
 use brigadier_providers::KindFacts as _;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
