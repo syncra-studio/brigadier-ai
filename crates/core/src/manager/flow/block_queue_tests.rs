@@ -112,6 +112,14 @@ async fn block_judging(
                     }
                     return Reply::text("Both done.");
                 }
+                // A rebirth's note turn (goals 2+13): it writes its note.
+                if turn.input.starts_with(crate::thread_view::NUDGE_MARK)
+                    && let Some(rest) = turn.input.split("write the hand-off note at ").nth(1)
+                {
+                    let note = rest.split(": doing now").next().unwrap();
+                    std::fs::write(note, "Doing now: the Fix worker runs.").unwrap();
+                    return Reply::text("Handed off.");
+                }
                 let judgment = if turn.input.contains("you didn't judge it") {
                     again
                 } else {
@@ -736,5 +744,76 @@ async fn a_message_waiting_on_a_subagent_goes_on_once_it_ends() {
     .await;
     flow.settled().await;
     assert!(flow.board().await.queue.items.is_empty());
+    flow.stop().await;
+}
+
+/// D113 across a rebirth (goals 2+13; D24, D73): the session goes on in a fresh one while its
+/// worker still holds the block; a message that then wakes the successor is answered in that
+/// block, joins it once and is never asked again.
+#[tokio::test]
+async fn a_message_after_a_rebirth_joins_the_still_open_block_once() {
+    use crate::manager::conversation::long::read_long;
+    use crate::manager::seam::{Phase, read_seam};
+    let (flow, answers, release) =
+        block_judging("block-rebirth", None, Some(Judgment::Wait), None).await;
+    let record = flow.manager.session_dir(&flow.conversation).record();
+    let key = || crate::manager::fault::FaultKey::Conversation(flow.conversation.clone());
+    for n in 1..=crate::manager::long_sessions::HANDOFF_AFTER {
+        flow.manager.debug_compact(key()).await.unwrap();
+        flow.until("the compaction counted", |_| {
+            read_long(&record).compactions == n
+        })
+        .await;
+        flow.idle().await;
+    }
+    // Its worker still works: the successor carries on by itself at once.
+    flow.until("its successor carried on", |_| {
+        let file = read_seam(&record);
+        file.generation == 2 && file.phase == Phase::Live
+    })
+    .await;
+    flow.idle().await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its worker still holds the work"
+    );
+    flow.say(FIRST).await;
+    let board = flow
+        .until("it to join", |board| {
+            board.queue.items.is_empty() && board.requests.len() == 2
+        })
+        .await;
+    flow.idle().await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    flow.idle().await;
+    assert_eq!(
+        read(&answers, "you didn't judge it"),
+        0,
+        "{:#?}",
+        inputs(&answers)
+    );
+    let given: Vec<_> = (inputs(&answers).into_iter())
+        .filter(|input| input.contains(FIRST))
+        .collect();
+    assert_eq!(given.len(), 1, "the successor reads it once: {given:#?}");
+    assert_eq!(
+        read(&answers, "[Brigadier hand-off 1"),
+        1,
+        "{:#?}",
+        inputs(&answers)
+    );
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    let item = (board.requests.keys())
+        .find(|id| !view.turns[0].requests.contains(id))
+        .unwrap();
+    let joining: Vec<_> = (view.turns.iter())
+        .filter(|turn| turn.requests.contains(item))
+        .collect();
+    assert!(
+        joining.len() == 1 && joining[0].joins,
+        "one turn, in the block: {view:#?}"
+    );
+    release.notify_one();
     flow.stop().await;
 }

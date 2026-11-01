@@ -1447,7 +1447,13 @@ test("D68: a follow-up is in the rail or in the thread, exactly once, at every s
   const taken = message(id, words, 2900);
   // Each step as the app may read it: the CLI's entries, its turns, Brigadier's kept messages
   // and whether the rail still has it.
-  type Step = [FileEntry[], ThreadTurn[], Message[], boolean];
+  type Step = [FileEntry[], ThreadTurn[], Message[], boolean, ThreadView["seams"]?];
+  // Reborn (core-goals goals 2+13, D24): it waits in the rail through the hidden note turn, then
+  // heads the successor's first turn after the hand-off.
+  const seam = { n: 1, open: true, at: null, carried: false, nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null, movedTo: null };
+  const noted = [user("u1", "Fix the test", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Fixed." }, 1200), user("n1", "[Brigadier] A fresh session will continue this work.", 1300), at({ type: "message", itemId: "a2", role: "assistant", text: "Handed off." }, 1400)];
+  const noteTurns = (end: number | null) => [...done(["r1"]), turn("n1", 1300, end, end ? "done" : null)];
+  const reborn = user("s1", `[Brigadier hand-off 2 · conv]\nthe note\n[End of the hand-off]\n\n[queued message feedbeef, now on its own turn]\n${words}`, 3000);
   const paths: Record<string, Step[]> = {
     // Judged join: out of the rail, kept, then named by the running turn.
     join: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
@@ -1463,13 +1469,19 @@ test("D68: a follow-up is in the rail or in the thread, exactly once, at every s
       [[user("u1", "Fix the test", 1000)], done(["r1"]), kept(taken), false],
       [[user("u1", "Fix the test", 1000), user("u2", words, 3000)], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false],
     ],
+    rebirth: [
+      [noted, noteTurns(null), kept(), true, [seam]],
+      [noted, noteTurns(1500), kept(taken), true, [seam]],
+      [noted, noteTurns(1500), kept(taken), false, [seam]],
+      [[...noted, reborn], [...noteTurns(1500), { ...turn("s1", 3000, null, null), requests: [id] }], kept(taken), false, [{ ...seam, open: false, at: "s1" }]],
+    ],
     // Handed to a worker: out of the rail, never kept here, never a bubble in this thread.
     handOff: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(), false]],
   };
   for (const [name, steps] of Object.entries(paths)) {
     let shownAs: string | null = null;
-    steps.forEach(([entries, turns, messages, inRail], step) => {
-      const tree = cliThreadTree({ entries, turns }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [{ ...item, delivered: name !== "plain" }] : [] }, running);
+    steps.forEach(([entries, turns, messages, inRail, seams], step) => {
+      const tree = cliThreadTree({ entries, turns, seams }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [{ ...item, delivered: name !== "plain" }] : [] }, running);
       const nodes = shown(tree).filter(([, , said]) => JSON.stringify(said).includes(words));
       const count = nodes.reduce((sum, [, , said]) => sum + JSON.stringify(said).split(words).length - 1, 0);
       assert.equal(count + (inRail ? 1 : 0), name === "handOff" && !inRail ? 0 : 1, `${name} step ${step}: ${JSON.stringify(shown(tree))}`);

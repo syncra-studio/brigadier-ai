@@ -477,6 +477,12 @@ const STEERED = /^\[steered in by the user: [^\]\n]*\]\n?/;
 const WITHDRAWN = /\n*\[queued message \S{8} (?:withdrawn|steered in by the user): [^\]\n]*\]\n*/g;
 
 /** The queue id a user message's frame names, if it has one. */
+/** A successor's first message without its hand-off: the user's words after it, if any. */
+function afterHandoff(text: string): string {
+  const end = text.trimStart().startsWith(HANDOFF_MARK) ? text.indexOf(HANDOFF_END) : -1;
+  return end >= 0 ? text.slice(end + HANDOFF_END.length).trimStart() : text;
+}
+
 function queuedId(text: string): string | null {
   return QUEUED.exec(text)?.[1] ?? null;
 }
@@ -701,7 +707,7 @@ export function cliBlocks(
   let readIn = -1;
   view.entries.forEach((entry, position) => {
     if (!entry.parent && startsTurn(entry)) readIn += 1;
-    const id = !entry.parent && entry.said?.by !== "user" && entry.event.type === "message" && entry.event.role === "user" ? queuedId(entry.event.text) : null;
+    const id = !entry.parent && entry.said?.by !== "user" && entry.event.type === "message" && entry.event.role === "user" ? queuedId(afterHandoff(entry.event.text)) : null;
     if (!id) return;
     readIds.add(id);
     const takingTurn = takenIn.get(id);
@@ -725,10 +731,7 @@ export function cliBlocks(
     let { event } = entry;
     // A successor's first message: the hand-off, then the user's words, if any.
     const handoff = entry.said?.by !== "user" && event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK);
-    if (handoff && event.type === "message") {
-      const end = event.text.indexOf(HANDOFF_END);
-      if (end >= 0) event = { ...event, text: event.text.slice(end + HANDOFF_END.length).trimStart() };
-    }
+    if (handoff && event.type === "message") event = { ...event, text: afterHandoff(event.text) };
     const asked = event.type === "message" && event.role === "user" ? event : null;
     // Who wrote it, as Brigadier noted when it sent it to the CLI (L12): its own words (a note,
     // a nudge, a frame, its `/compact`) are never a bubble, and of the user's words with its
