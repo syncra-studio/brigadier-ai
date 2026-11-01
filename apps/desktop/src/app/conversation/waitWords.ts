@@ -76,6 +76,11 @@ export function liveWait(view: ThreadView): StatusHead | null {
     const command = callCommand(entry);
     if (command && brigadierCalls(command).includes("wait")) return workersWait(waitedWorkers(command, view.workers ?? []), view.workers ?? []);
   }
+  // A wait the CLI went on from while it still runs (Codex's yielded command it polls): its worker still.
+  for (const task of backgroundOf(view)) {
+    const command = task.status === "running" ? taskCommand(task, view.entries) : null;
+    if (command && brigadierCalls(command).includes("wait")) return workersWait(waitedWorkers(command, view.workers ?? []), view.workers ?? []);
+  }
   return null;
 }
 
