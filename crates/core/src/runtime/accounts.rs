@@ -233,6 +233,12 @@ impl Runtime {
             return false;
         };
         let status = provider.status().await;
+        #[cfg(debug_assertions)]
+        let status = if std::env::var_os("BRIGADIER_FAKE_ACCOUNTS").is_some() {
+            fake_login(status, id)
+        } else {
+            status
+        };
         let mut error = None;
         if status.logged_in {
             match provider.quota().await {
@@ -815,6 +821,15 @@ pub fn sign_in_args(kind: ProviderKind) -> &'static [&'static str] {
     adapters::adapter(kind).map_or(&[], |adapter| adapter.sign_in)
 }
 
+/// Development builds only (D80): a fake account is the computer's own login under another
+/// id, so its status is told apart from the own login's; else Settings shows the two as one
+/// account (the same login added again is one row there) and the own login goes missing.
+#[cfg(debug_assertions)]
+fn fake_login(mut status: ProviderStatus, id: &str) -> ProviderStatus {
+    status.organization = Some(format!("fake account {id}"));
+    status
+}
+
 // Use only the provider identity already observed by the runtime. No credential/profile read.
 fn own_login_label(email: Option<&str>) -> String {
     match email.map(str::trim).filter(|email| !email.is_empty()) {
@@ -839,5 +854,24 @@ mod label_tests {
     fn an_unknown_own_identity_stays_generic() {
         assert_eq!(own_login_label(None), "this computer's login");
         assert_eq!(own_login_label(Some("  ")), "this computer's login");
+    }
+
+    #[test]
+    fn a_fake_account_is_not_the_own_login() {
+        let own = brigadier_providers::ProviderStatus {
+            provider: brigadier_providers::ProviderKind::Claude,
+            path: None,
+            version: None,
+            logged_in: true,
+            auth_method: None,
+            plan: None,
+            email: Some("me@example.com".into()),
+            organization: Some("Mine".into()),
+            guidance: None,
+            compacts: false,
+        };
+        let fake = super::fake_login(own.clone(), "second");
+        assert_eq!(fake.email, own.email);
+        assert_ne!(fake.organization, own.organization);
     }
 }
