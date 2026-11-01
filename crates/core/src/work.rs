@@ -1464,6 +1464,11 @@ pub struct QueuedMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub worker: Option<TaskId>,
+    /// Another session's message (goal 4): it is that session's, never the user's, and its id
+    /// is the message's own (`sm-…`), so it is queued once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub peer: Option<crate::model::PeerRef>,
 }
 
 /// The thread's command that a message sent into its running turn waits behind: the thread

@@ -35,6 +35,8 @@ import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 import { setDirectTo, useDirectTo } from "@/state/directTo";
 import { useWorkerName } from "@/app/conversation/workerNames";
+import { peerWords } from "@/app/conversation/cliBlocks";
+import { usePeerName } from "@/app/conversation/peerParts";
 
 const NO_ITEMS: QueuedMessage[] = [];
 
@@ -61,7 +63,8 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
       const item = items[at];
       const composer = aui.composer();
       // One the session has, or is being given, can't be written again (run2-D46).
-      if (!target || !conversationId || !item || item.delivered || item.deciding || !composer.getState().isEmpty) return;
+      // Another session's words are never the user's to write again (goal 4).
+      if (!target || !conversationId || !item || item.delivered || item.deciding || item.peer || !composer.getState().isEmpty) return;
       await deleteQueued(conversationId, item.id);
       target.queue.pulled.set(conversationId, at, item.mentions, item.worker ?? null);
       // One for a worker goes back to that worker (goal 8).
@@ -149,7 +152,8 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
       )}
       <MessageQueue ref={listRef} aria-label="Queued messages">
         {shown.map((item, index) => {
-          const words = normalizedImages(item.text, item.attachments);
+          const text = item.peer ? peerWords(item.text) : item.text;
+          const words = normalizedImages(text, item.attachments);
           const preview = namedImages(words.text, words.attachments.flatMap((ref) => ref.inline === null ? [] : [ref.inline]));
           const attached = attachmentLabel(item.attachments.filter((attachment) => attachment.inline == null));
           return (
@@ -173,15 +177,16 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
             >
               {/* The message comes first: with no room for both, the status note gives way, down to its first words (#447). */}
               <span data-slot="queue-item-text" className="min-w-0 flex-auto truncate" title={named(preview) || undefined}>
-                {item.text ? (
+                {text ? (
                   <>
-                    <InlineImageText text={named(item.text)} attachments={item.attachments} />
+                    <InlineImageText text={named(text)} attachments={item.attachments} />
                     {attached && <span className="text-muted-foreground"> · {attached}</span>}
                   </>
                 ) : (
                   <span className="text-muted-foreground">{attached}</span>
                 )}
               </span>
+              {item.peer && <FromPeer from={item.peer.from} />}
               {item.deciding && item.heldBy ? (
                 <HeldNote held={item.heldBy} className="min-w-24 shrink-8 truncate" />
               ) : item.deciding ? (
@@ -246,7 +251,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem
-                    disabled={!pull || !composerEmpty || !!item.local || !!item.delivered || !!item.deciding}
+                    disabled={!pull || !composerEmpty || !!item.local || !!item.delivered || !!item.deciding || !!item.peer}
                     onSelect={() => action.run(async () => pull?.(stored.indexOf(item)))}
                   >
                     <Pencil />
@@ -281,4 +286,10 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
 function ToWorker({ taskId }: { taskId: string }) {
   const name = useWorkerName(taskId);
   return <span className="text-muted-foreground min-w-0 shrink-8 truncate text-xs">To {name ?? "a worker"}</span>;
+}
+
+/** A row another session sent: who it is from (goal 4). */
+function FromPeer({ from }: { from: string }) {
+  const name = usePeerName(from);
+  return <span className="text-muted-foreground min-w-0 shrink-8 truncate text-xs">From {name?.title ?? "another session"}</span>;
 }

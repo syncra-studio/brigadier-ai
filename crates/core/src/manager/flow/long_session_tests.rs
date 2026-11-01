@@ -757,6 +757,72 @@ async fn a_steer_while_compacting_waits_in_the_queue_until_compaction_is_done() 
     flow.stop().await;
 }
 
+/// Another session's message while the session compacts (goal 4): it waits in the queue,
+/// never steered into the compaction, and goes once compaction is done, once, as that
+/// session's.
+#[tokio::test]
+async fn another_sessions_message_while_compacting_waits_until_compaction_is_done() {
+    const SAID: &str = "From the other session.";
+    let inputs: Inputs = Arc::default();
+    let options = options(ProviderKind::Claude);
+    let behavior = options.behavior.clone();
+    let hold = Arc::new(tokio::sync::Notify::new());
+    *behavior.hold_compaction.lock().unwrap() = Some(hold.clone());
+    let mut flow = Flow::start(
+        "long-peer-compacting",
+        options,
+        claude_thread(inputs.clone()),
+    )
+    .await;
+    switch(&mut flow, LongSessions::parse("native-bare"));
+    flow.say("Start.").await;
+    flow.settled().await;
+    let other = flow
+        .add_session("Other", Some("other"), ProviderKind::Claude)
+        .await;
+    flow.say("Grow.").await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while behavior.compactions.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a compaction at the point");
+    let from = flow.core.conversation(&other).unwrap();
+    let to = flow.core.conversation(&flow.conversation).unwrap();
+    let (id, _) = flow.manager.message_session(&from, &to, SAID).await;
+    let board = flow
+        .until("it to wait", |board| board.queue.items.len() == 1)
+        .await;
+    assert_eq!(board.queue.items[0].id, id);
+    assert!(
+        !board.queue.items[0].delivered,
+        "never given to the compaction"
+    );
+    hold.notify_one();
+    flow.until("it to go", |board| board.queue.items.is_empty())
+        .await;
+    flow.idle().await;
+    let seen: Vec<String> = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, input)| input.clone())
+        .collect();
+    let given: Vec<&String> = seen.iter().filter(|input| input.contains(SAID)).collect();
+    assert_eq!(given.len(), 1, "{seen:#?}");
+    assert!(
+        given[0].contains(&format!("({}) · {id}]", other.0)),
+        "{}",
+        given[0]
+    );
+    assert!(
+        flow.manager.session_messages_of(&flow.conversation)[&id],
+        "seen once it went"
+    );
+    flow.stop().await;
+}
+
 /// What the goals 2 + 13 cycle plants: a rule and a decision, which stay in the ledger for
 /// `brigadier context`, and an open question and promise, which each hand-off must carry.
 const PLANTED: &str = "- L1 · 11-01 21:00 · gen 1 · Rule from the user: never push to main

@@ -459,6 +459,11 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
  */
 const FROM_SESSION = /^\[message from session "[^"]*" \(([^)]+)\) · (sm-[0-9a-f]+)\]\n?/;
 
+/** Another session's message as its words, without the header naming who sent it (goal 4). */
+export function peerWords(text: string): string {
+  return text.replace(FROM_SESSION, "");
+}
+
 /**
  * A message the user sent while the session worked (run2-D40): Brigadier gives it to the CLI
  * under a line naming its queue id, `[queued message ‹id› · judge it: …]`, or, when it waited
@@ -794,7 +799,8 @@ export function cliBlocks(
     const carries = view.turns[turn]?.requests ?? [];
     const shownBefore = carries.length > 0 && carries.every((request) => blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === request));
     // Peer messages retain their authored content and sender; only automatic engine notices hide.
-    const peer = !!asked && FROM_SESSION.test(asked.text);
+    // Also judged from the queue, under its frame (goal 4).
+    const peer = !!asked && FROM_SESSION.test(asked.text.replace(QUEUED, ""));
     const says =
       !!asked && (said && !peer ? ours : !theirs && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore));
     // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
@@ -1071,7 +1077,8 @@ export function cliThreadTree(
   const stored = thread ? messages : messages.filter((message) => message.createdAtMs >= unreadSince);
   const named = new Set(view.turns.flatMap((turn) => turn.requests));
   const typed = stored.flatMap((message) => (message.role === "user" && !named.has(message.requestId ?? message.id) ? [(fullText[message.id] ?? message.text).trim()] : []));
-  const keptIds = stored.flatMap((message) => (message.role === "user" ? [message.requestId ?? message.id] : []));
+  // Another session's message the session took from its queue is kept as that session's (goal 4).
+  const keptIds = stored.flatMap((message) => (message.role === "user" || message.role === "peer" ? [message.requestId ?? message.id] : []));
   const blocks = cliBlocks(view, conversationId, board, session, typed, keptIds);
   // The user's own messages as Brigadier keeps them, by their request: a turn that names one
   // shows it as it was sent, its pasted chips, mentions and attachments with it. The first under
@@ -1094,6 +1101,8 @@ export function cliThreadTree(
     }
     block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
     for (const said of [...(block.user?.kind === "message" ? [block.user] : []), ...block.steers]) drawn.add(said.message.requestId ?? said.message.id);
+    // Another session's goes by its own id, the one it is kept under (goal 4).
+    for (const said of [...(block.user?.kind === "peer" ? [block.user] : []), ...block.steers]) if (said.message.role === "peer") drawn.add(said.message.id);
   }
   // A turn's message the CLI said under a request whose message isn't stored here yet (its word
   // beat the daemon's answer to sending it) is the one still being sent: its bubble stays that
@@ -1120,9 +1129,11 @@ export function cliThreadTree(
   // A queued message keeps its id when it is sent; until the rail lets it go it shows there only.
   const queued = new Set((board.queueItems ?? []).map((item) => item.id));
   for (const message of stored) {
-    if (message.role !== "user" || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id) || queued.has(message.id)) continue;
+    const peer = message.role === "peer";
+    if ((message.role !== "user" && !peer) || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id) || queued.has(message.id)) continue;
     const text = fullText[message.id] ?? message.text;
-    blocks.push(onItsWay(message.id, { kind: "message", message, text }, message.createdAtMs, run));
+    // Another session's, taken from the queue, is on its way as that session's (goal 4).
+    blocks.push(onItsWay(message.id, peer ? { kind: "peer", message, text: peerWords(text), earlier: false } : { kind: "message", message, text }, message.createdAtMs, run));
   }
   for (const entry of sending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs, { state: "running", error: null }));
 

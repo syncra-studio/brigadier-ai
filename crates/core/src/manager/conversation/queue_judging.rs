@@ -120,13 +120,18 @@ pub(crate) fn judges_queue(conversation: &Conversation) -> bool {
     conversation.side_of.is_none()
 }
 
-/// Queued `item` as the user's message it is read as, kept nowhere.
+/// Queued `item` as the user's message it is read as, kept nowhere; another session's stays
+/// that session's (goal 4).
 fn as_message(conversation_id: &crate::model::ConversationId, item: &QueuedMessage) -> Message {
     Message {
         id: item.id.clone(),
         conversation_id: conversation_id.clone(),
         seq: 0,
-        role: MessageRole::User,
+        role: if item.peer.is_some() {
+            MessageRole::Peer
+        } else {
+            MessageRole::User
+        },
         text: item.text.clone(),
         blob: None,
         created_at_ms: item.queued_at_ms,
@@ -135,7 +140,7 @@ fn as_message(conversation_id: &crate::model::ConversationId, item: &QueuedMessa
         model: None,
         request_id: None,
         parent_id: None,
-        peer: None,
+        peer: item.peer.clone().map(Box::new),
         answer_at_ms: None,
     }
 }
@@ -204,6 +209,48 @@ impl SessionManager {
         Ok(SendOutcome::Queued(
             self.deliver_to_judge(conv, item, wake).await,
         ))
+    }
+
+    /// Another session's message `text` (its header first), while `to` works or its block
+    /// holds (goal 4, D25/D68/D113): queued once under its own id and judged as the user's
+    /// follow-ups are, from the rail. At a seam, or with the queue paused, it waits there.
+    /// `None` when `to` rests with nothing holding (its message starts a turn as before), or
+    /// judges no queue (a side or tab chat); else whether a turn of `to` runs with it.
+    pub(crate) async fn queue_peer(
+        &self,
+        to: &crate::model::ConversationId,
+        peer: crate::model::PeerRef,
+        text: String,
+    ) -> Option<bool> {
+        if !judges_queue(&self.core.conversation(to).ok()?) {
+            return None;
+        }
+        let conv = self.conv(to).ok()?;
+        let paused = self.core.board(to).await.ok()?.queue.paused;
+        let (busy, held) = {
+            let state = conv.state.lock().await;
+            (state.busy, state.seam.held)
+        };
+        let holds = !busy && !held && !paused && self.work_holds(&conv).await;
+        if !busy && !held && !paused && !holds {
+            return None;
+        }
+        let deciding = !held && !paused;
+        let item = match self.core.enqueue_peer(to, peer, text, deciding).await {
+            Ok(Some(item)) => item,
+            // Queued already (sent again after a crash): it goes on from there.
+            Ok(None) => return Some(busy),
+            Err(err) => {
+                tracing::warn!(conversation = %to, error = %err, "could not queue a session's message");
+                return None;
+            }
+        };
+        if held {
+            self.arm_seam_hold(&conv).await;
+        } else if deciding {
+            self.deliver_to_judge(&conv, item, holds).await;
+        }
+        Some(busy)
     }
 
     async fn deliver_to_judge(
@@ -405,7 +452,7 @@ impl SessionManager {
         let message = conv
             .user_write(async {
                 let item = self.core.queued(&conv.id, item_id).await?;
-                self.core.append_queued(conv.id.clone(), item).await
+                self.append_queued(conv.id.clone(), item).await
             })
             .await?;
         let (into, held) = {
@@ -552,6 +599,9 @@ impl SessionManager {
                 "this message is being sent to a worker".into(),
             ));
         }
+        // Another session's message is removed for good before it leaves the queue: a crash
+        // between never sends it again.
+        self.peer_removed(id, &self.core.queued(id, item_id).await?);
         let item = self.core.take_queued(id, item_id).await?;
         if item.delivered {
             self.withdraw(&conv, item_id).await;
@@ -796,7 +846,13 @@ impl SessionManager {
                 ),
             ));
         }
-        self.core.take_queued(&conv.id, &item.id).await?;
+        if item.peer.is_some() {
+            // Another session's message stays in this thread, once, as that session's: this
+            // turn took it and gave it to its worker (goal 4).
+            self.join_delivered(conv, &item.id).await?;
+        } else {
+            self.core.take_queued(&conv.id, &item.id).await?;
+        }
         {
             let mut state = conv.state.lock().await;
             state.claimed.remove(&item.id);

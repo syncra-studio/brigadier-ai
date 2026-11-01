@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-test("the conversation moves a follow-up through its queue and admission without a duplicate, and its rail shows Deciding, held, offered, and gone with no notice once sent to a worker; a message while only its workers work waits there, Deciding, a Chat's too", async (t) => {
+test("the conversation moves a follow-up through its queue and admission without a duplicate, and its rail shows Deciding, held, offered, and gone with no notice once sent to a worker; a message while only its workers work waits there, Deciding, a Chat's too; another session's shows who sent it (goal 4)", async (t) => {
   const result = JSON.parse(await renderFixturePage(t, "follow-ups.html", "follow-ups-result", 10000)) as Record<string, unknown>;
   assert.deepEqual(result, {
     idle: { rail: 0, chat: 1 },
@@ -17,5 +17,6 @@ test("the conversation moves a follow-up through its queue and admission without
     sentToWorker: { deciding: false, note: null, buttons: [], notice: null, rail: 0, chat: 0 },
     whileWorkersWork: { rail: 1, chat: 0, deciding: true },
     chatWhileWorkersWork: { rail: 1, chat: 0, deciding: true },
+    fromPeer: { from: true, words: true, header: false, deciding: true },
   });
 });

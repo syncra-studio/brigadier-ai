@@ -1022,6 +1022,12 @@ pub enum EventKind {
     FreshContext,
     /// Its CLI said nothing for 20 minutes while it worked.
     Quiet,
+    /// A session waited on sent you a message: its answer, given here and not again as a
+    /// message (goal 4).
+    Answered,
+    /// The user of a session waited on removed your message from its queue before it was
+    /// read: no answer comes (goal 4).
+    Removed,
 }
 
 impl EventKind {
@@ -1035,6 +1041,8 @@ impl EventKind {
             Self::UsageLimit => "usage-limit",
             Self::FreshContext => "fresh-context",
             Self::Quiet => "quiet",
+            Self::Answered => "answered",
+            Self::Removed => "removed",
         }
     }
 }

@@ -1482,7 +1482,7 @@ impl SessionManager {
             .user_write(async {
                 let item = self.core.queued(&id, &item_id).await?;
                 delivered = item.delivered;
-                self.core.append_queued(id.clone(), item).await
+                self.append_queued(id.clone(), item).await
             })
             .await?;
         drop(routing);
@@ -1788,7 +1788,7 @@ impl SessionManager {
                     return Ok(None);
                 };
                 conv.goes_on_own_turn(&item);
-                Ok(Some(self.core.append_queued(conv.id.clone(), item).await))
+                Ok(Some(self.append_queued(conv.id.clone(), item).await))
             })
             .await;
         match popped {
@@ -2603,7 +2603,7 @@ impl SessionManager {
                 match self.core.next_queued(&conv.id).await {
                     Ok(Some(item)) => {
                         conv.goes_on_own_turn(&item);
-                        match self.core.append_queued(conv.id.clone(), item).await {
+                        match self.append_queued(conv.id.clone(), item).await {
                             Ok(message) => users.push(message),
                             Err(err) => {
                                 crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
@@ -3524,7 +3524,11 @@ impl SessionManager {
                 at += super::cli_thread::solid_len(&frame);
                 ordered.push(InputPart::Text(frame));
             }
-            user.extend(authored.into_iter().map(|(from, to)| (at + from, at + to)));
+            // Another session's words are never the user's (goal 4): the thread reads them by
+            // their header, as that session's.
+            if message.role != MessageRole::Peer {
+                user.extend(authored.into_iter().map(|(from, to)| (at + from, at + to)));
+            }
             for part in inline {
                 if let InputPart::Text(text) = &part {
                     let len = super::cli_thread::solid_len(text);

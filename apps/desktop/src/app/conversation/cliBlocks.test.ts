@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cliBlocks, cliThreadTree, exitOf, keptThread, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
+import { cliBlocks, cliThreadTree, exitOf, keptThread, peerWords, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { confirmPending } from "@/state/shownIds";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove, turnTime } from "@/app/conversation/blocks";
@@ -1497,4 +1497,53 @@ test("D68: a follow-up is in the rail or in the thread, exactly once, at every s
     shown(cliThreadTree({ entries: judged, turns: open(["r1", id]) }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: [], requests }, running));
   assert.ok(!JSON.stringify(woken(kept(), { r1: {} })).includes(words), JSON.stringify(woken(kept(), { r1: {} })));
   assert.equal(JSON.stringify(woken(kept(taken), { r1: {}, [id]: {} })).split(words).length - 1, 1);
+});
+
+/** What each node shows: a turn's head (the user's or a session's message) or its steers. */
+const shownWithPeers = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.map((node) => [node.id, node.kind, node.kind === "user" && node.block.user && "text" in node.block.user ? node.block.user.text : node.block.steers.map((steer) => steer.text)]);
+
+test("goal 4: another session's message judged from the queue is in the rail or in the thread, once, as that session's, at every step of its join, own turn and hand-off", () => {
+  const id = "sm-0123feedbeef";
+  const from = "c-0123456789abcdef";
+  const words = "Can you check the schema?";
+  const header = `[message from session "API work" (${from}) · ${id}]\n${words}`;
+  const running = { state: "running", error: null } as const;
+  const item = { id, text: header, attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, delivered: true, peer: { messageId: id, from } };
+  // Brigadier gives it to the CLI as its own words (no user's): the thread reads it by its header.
+  const judged = [user("u1", "Fix the test", 1000), user("j1", toJudge(header), 1100, { steer: true, said: { by: "brigadier" } }), at({ type: "message", itemId: "a1", role: "assistant", text: "Noted." }, 1200)];
+  const ownTurn = user("u2", `[queued message feedbeef, now on its own turn]\n${header}`, 3000, { said: { by: "brigadier" } });
+  const open = (requests: string[]) => [{ ...turn("u1", 1000, null, null), requests }];
+  const done = (requests: string[]) => [{ ...turn("u1", 1000, 1500, "done"), requests }];
+  const kept = (...more: Message[]) => [message("r1", "Fix the test", 990), ...more];
+  const taken: Message = { ...message(id, header, 2900), role: "peer", peer: { messageId: id, from } };
+  type Step = [FileEntry[], ThreadTurn[], Message[], boolean];
+  const paths: Record<string, Step[]> = {
+    join: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
+    ownTurn: [[judged, done(["r1"]), kept(), true], [judged, done(["r1"]), kept(taken), true], [judged, done(["r1"]), kept(taken), false], [[...judged, ownTurn], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false]],
+    // Handed to a worker: the turn took it and gave it on, so it stays in this thread, once.
+    handOff: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
+  };
+  for (const [name, steps] of Object.entries(paths)) {
+    let shownAs: string | null = null;
+    steps.forEach(([entries, turns, messages, inRail], step) => {
+      const tree = cliThreadTree({ entries, turns }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [item] : [] }, running, true);
+      const nodes = shownWithPeers(tree).filter(([, , said]) => JSON.stringify(said).includes(words));
+      const count = nodes.reduce((sum, [, , said]) => sum + JSON.stringify(said).split(words).length - 1, 0);
+      assert.equal(count + (inRail ? 1 : 0), 1, `${name} step ${step}: ${JSON.stringify(shownWithPeers(tree))}`);
+      // Never its header, never as the user's.
+      assert.ok(!JSON.stringify(shownWithPeers(tree)).includes("[message from session"), `${name} step ${step}`);
+      if (count === 0) return;
+      const where = String(nodes[0]![0]);
+      assert.ok(shownAs === null || shownAs === where, `${name} step ${step} moved from ${shownAs} to ${where}`);
+      shownAs = where;
+    });
+  }
+  // As that session's: a peer message naming its sender, inside the open block.
+  const [block] = cliBlocks({ entries: judged, turns: open(["r1", id]) }, "conv", NO_BOARD, true, [], ["r1", id]);
+  const steer = block!.steers.find((each) => each.text === words);
+  assert.equal(steer?.message.role, "peer");
+  assert.deepEqual(steer?.message.peer, { messageId: id, from });
+  // The rail row shows its words alone.
+  assert.equal(peerWords(header), words);
 });

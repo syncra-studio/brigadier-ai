@@ -38,12 +38,14 @@
               "gone",
               "usage-limit",
               "fresh-context",
-              "quiet"
+              "quiet",
+              "answered",
+              "removed"
             ]
           },
           "message": {
             "type": "string",
-            "description": "A turn's last message; why it failed, stopped or is gone; a usage limit; what runs while it is quiet."
+            "description": "A turn's last message; why it failed, stopped or is gone; a usage limit; what runs while it is quiet; a session's answer; why your message was removed."
           },
           "asks": {
             "type": "string",

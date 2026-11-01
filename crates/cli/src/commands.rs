@@ -383,9 +383,10 @@ pub const COMMANDS: &[Command] = &[
                   permission prompt.",
         details: "A message is queued into its turn if it is working, else it starts a turn. \
                   Another session (an id of `brigadier sessions --all`) gets it as a message \
-                  from this session, never as its user's, and may answer with `brigadier send` \
-                  back. Message another session only when the user asks, or when it is \
-                  absolutely needed. Another session's workers are out of reach. A worker's \
+                  from this session, never as its user's, and answers with `brigadier send` \
+                  back (`brigadier help sessions`). Message another session only when the user \
+                  asks, or when it is absolutely needed. Another session's workers are out of \
+                  reach. A worker's \
                   permission prompt (a `needs-input` event of `brigadier wait`) reaches only \
                   you, never the user: judge it yourself and answer it with --allow, or \
                   --deny <reason>; the worker waits until you do.",
@@ -412,7 +413,8 @@ pub const COMMANDS: &[Command] = &[
                   heard once, kept across a restart. Keep one running in the background while \
                   workers run: it wakes you when it returns. Given sessions instead, it returns \
                   at the end of their turn (once it took what you sent it), with its last \
-                  message.",
+                  message; or with its answer, when it sends you one meanwhile (given here only, not \
+                  again as a message), or `removed` when its user deleted your message unread.",
         args: &[
             rest("id", "The workers, or the sessions, to wait for.", false),
             flag("timeout", "SECONDS", "Give up after this long."),
@@ -1214,6 +1216,13 @@ pub const TOPICS: &[Topic] = &[
         name: "commands",
         summary: "The commands an orchestrator uses, with their flags.",
         text: include_str!("help/commands.md"),
+    },
+    // The reply rule (a session's answer goes to a `wait` on it, never also as a message) and a
+    // removed message ending that `wait` are proposed (goal 4, D122).
+    Topic {
+        name: "sessions",
+        summary: "Messaging another session, and answering one.",
+        text: include_str!("help/sessions.md"),
     },
     Topic {
         name: "fusion",

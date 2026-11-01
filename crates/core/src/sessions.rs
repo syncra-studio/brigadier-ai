@@ -14,8 +14,8 @@ use crate::board::{self, Board};
 use crate::model::{
     Catalog, Conversation, ConversationId, ConversationKind, ConversationView, DomainEvent,
     EnvironmentKind, ForkOrigin, Lifecycle, Message, MessageMatch, MessageMatches, MessagePage,
-    MessageRole, ModelChoice, Project, ProjectId, ProjectPatch, ProjectRepo, RawEntry, Settings,
-    Setup, WorkerPage, streams,
+    MessageRole, ModelChoice, PeerRef, Project, ProjectId, ProjectPatch, ProjectRepo, RawEntry,
+    Settings, Setup, WorkerPage, streams,
 };
 use crate::projection::Projection;
 
@@ -739,6 +739,7 @@ impl Core {
     /// message keeps the queued message's id, so the thread knows it while the rail still has
     /// it, and one the session already has (given to it to judge, run2-D40) is named once. A
     /// merge card answered in the words it carries points at the message from now on.
+    /// Another session's message stays that session's: a peer message, never the user's (goal 4).
     pub async fn append_queued(&self, id: ConversationId, item: QueuedMessage) -> Result<Message> {
         let message = self
             .append_user_message_as(
@@ -747,7 +748,7 @@ impl Core {
                 item.attachments,
                 item.mentions,
                 None,
-                Some(item.id.clone()),
+                Some((item.id.clone(), item.peer)),
             )
             .await?;
         let board = self.board(&id).await?;
@@ -784,7 +785,7 @@ impl Core {
     }
 
     /// [`Self::append_user_message_under`], for queued message `queued`: the message takes its
-    /// id, and it leaves the queue in the same write.
+    /// id, and it leaves the queue in the same write; another session's is that session's.
     async fn append_user_message_as(
         &self,
         id: ConversationId,
@@ -792,8 +793,12 @@ impl Core {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
         parent: Option<String>,
-        queued: Option<String>,
+        queued: Option<(String, Option<PeerRef>)>,
     ) -> Result<Message> {
+        let (queued, peer) = match queued {
+            Some((item, peer)) => (Some(item), peer),
+            None => (None, None),
+        };
         let mut titles = self.titles.lock().await;
         let conversation = self.conversation(&id)?;
         let trimmed = text.trim().to_owned();
@@ -804,13 +809,19 @@ impl Core {
         let mut message = self
             .new_message(
                 &id,
-                MessageRole::User,
+                if peer.is_some() {
+                    MessageRole::Peer
+                } else {
+                    MessageRole::User
+                },
                 queued
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
                 text,
             )
             .await?;
+        let from_peer = peer.as_ref().map(|peer| peer.from.clone());
+        message.peer = peer.map(Box::new);
         message.attachments = attachments;
         message.mentions = mentions;
         if parent.is_some() {
@@ -854,7 +865,7 @@ impl Core {
                         worked: Vec::new(),
                         quota_wait: false,
                         waiting_for: Vec::new(),
-                        from_peer: None,
+                        from_peer: from_peer.clone(),
                         held_by: None,
                         background_jobs: None,
                         changes: None,
@@ -863,7 +874,9 @@ impl Core {
                 },
             ),
         ];
-        let mut untitled = !titles.claimed.contains(&id)
+        // Another session's message never names this one.
+        let mut untitled = from_peer.is_none()
+            && !titles.claimed.contains(&id)
             && matches!(
                 conversation.title.as_str(),
                 NEW_SESSION_TITLE | NEW_CHAT_TITLE
@@ -908,7 +921,9 @@ impl Core {
             ));
         }
         let stored = self.record_taking(&id, events, queued.as_deref()).await?;
-        titles.claimed.insert(id.clone());
+        if from_peer.is_none() {
+            titles.claimed.insert(id.clone());
+        }
         if let Some(request) = &title_request {
             titles.pending.insert(id.clone(), request.nonce.clone());
         }
@@ -1947,6 +1962,7 @@ impl Core {
             held_by: None,
             offer_session: false,
             worker,
+            peer: None,
         };
         let queued = item.clone();
         self.change_queue(id, move |queue| {
@@ -1965,6 +1981,42 @@ impl Core {
         Ok(item)
     }
 
+    /// Queues another session's message `text` under its own id (`peer.message_id`), last:
+    /// once, so a message queued before a crash is never queued again (goal 4). `None` when
+    /// it is queued already.
+    pub(crate) async fn enqueue_peer(
+        &self,
+        id: &ConversationId,
+        peer: PeerRef,
+        text: String,
+        deciding: bool,
+    ) -> Result<Option<QueuedMessage>> {
+        let item = QueuedMessage {
+            id: peer.message_id.clone(),
+            text,
+            attachments: Vec::new(),
+            mentions: Vec::new(),
+            queued_at_ms: now_ms(),
+            edited_at_ms: None,
+            deciding,
+            delivered: false,
+            held_by: None,
+            offer_session: false,
+            worker: None,
+            peer: Some(peer),
+        };
+        let mut added = None;
+        self.change_queue(id, |queue| {
+            if queue.items.iter().all(|queued| queued.id != item.id) {
+                queue.items.push(item.clone());
+                added = Some(item);
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(added)
+    }
+
     pub async fn edit_queued(
         &self,
         id: &ConversationId,
@@ -1980,6 +2032,12 @@ impl Core {
         self.change_queue(id, |queue| {
             let item = find_queued(queue, item_id)?;
             // Being given to the session (Deciding) counts as had: the words it reads are fixed.
+            // Another session's words are never the user's to change.
+            if item.peer.is_some() {
+                return Err(Error::Invalid(
+                    "another session sent this message; delete it if it shouldn't go".into(),
+                ));
+            }
             if item.delivered || item.deciding {
                 return Err(Error::Invalid(
                     "the session already has this message; delete it and send it again".into(),

@@ -201,6 +201,9 @@ pub struct SessionManager {
     session_turns: tokio::sync::Notify,
     /// One writer at a time for the sessions' messages' files (S30).
     session_mail: std::sync::Mutex<()>,
+    /// The `brigadier wait <session>` calls running now: an answer they wait for goes back
+    /// to them, never as a message too (goal 4).
+    session_waits: session_messages::Waits,
     /// Its sessions' worker rows: their CLIs and git (S14).
     worker_rows: worker_rows::WorkerRows,
     /// The cards a `brigadier ask` waits on: their answers go back to it, not into the thread.
@@ -427,6 +430,7 @@ impl SessionManager {
             command_logs: Default::default(),
             session_turns: tokio::sync::Notify::new(),
             session_mail: std::sync::Mutex::new(()),
+            session_waits: Default::default(),
             worker_rows: Default::default(),
             cli_asks: Default::default(),
             cli_questions: Default::default(),
