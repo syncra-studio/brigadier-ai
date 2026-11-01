@@ -13,6 +13,8 @@ import {
 } from "@/app/conversation/blocks";
 import { sessionSent } from "@/app/conversation/sessionSend";
 import { INTERRUPTED } from "@/app/conversation/turnError";
+import { turnCommands } from "@/app/conversation/turnCommands";
+import { workingWorkers } from "@/app/conversation/turnWorkers";
 import type {
   BackgroundTask,
   FileChange,
@@ -647,7 +649,15 @@ export function cliBlocks(
     const [previous, now] = [view.turns[turn - 1], view.turns[turn]];
     return !!previous && now?.startedAtMs != null && now.startedAtMs < (previous.endedAtMs ?? (previous.end == null ? Number.POSITIVE_INFINITY : 0));
   };
-  const goesOn = (each: Block | null): each is Block => !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps());
+  // A turn the stream gave but no read has yet (its turn comes with the next one): it goes on in
+  // the block before while that block's workers or background commands still work, as the
+  // daemon will say (D24); for a second or two it showed as a block of its own (seen live).
+  const holds = (each: Block) => {
+    const starts = [...(joined.get(each) ?? []), turnOf.get(each)].flatMap((read) => (read?.startedAtMs != null ? [read.startedAtMs] : []));
+    return workingWorkers(view.workers ?? [], view.turns, starts) + turnCommands(view, view.turns, starts) > 0;
+  };
+  const goesOn = (each: Block | null): each is Block =>
+    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || (!view.turns[turn] && holds(each)));
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
