@@ -383,9 +383,8 @@ impl SessionManager {
                     }),
                 );
             }
-            self.core
-                .record_conversation(conversation_id, events)
-                .await?;
+            // Boxed: every worker change goes through here, deep in turn futures (stack).
+            Box::pin(self.core.record_conversation(conversation_id, events)).await?;
             task
         };
         self.workers_changed(conversation_id, false);
