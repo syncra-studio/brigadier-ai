@@ -15,6 +15,7 @@ import type {
   ConversationView,
   Decision,
   DiffStat,
+  ErrorKind,
   EventEnvelope,
   MachineStep,
   MessageQueue,
@@ -739,8 +740,20 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   WebFetch: "Reading a web page",
 };
 
+/**
+ * Why its CLI retries, in plain words, by the kind of error its adapter reported (D99): the same
+ * words on every CLI. A kind not listed just reconnects.
+ */
+const RETRY_REASON: Partial<Record<ErrorKind, string>> = {
+  rateLimit: "The model is busy, reconnecting",
+  overloaded: "The model is busy, reconnecting",
+  usageLimit: "The model is busy, reconnecting",
+  network: "The model didn't answer, reconnecting",
+  server: "The model's service failed, reconnecting",
+};
+
 /** What the orchestrator shows while its CLI retries a failed request on its own: "Reconnecting 2/5". */
-const RETRY_WORDS = /^(Reconnecting|The model is busy, reconnecting)( \d+\/\d+)?$/;
+const RETRY_WORDS = /^(Reconnecting|The model is busy, reconnecting|The model didn't answer, reconnecting|The model's service failed, reconnecting)( \d+\/\d+)?$/;
 
 /** Whether the orchestrator's activity is its CLI retrying on its own. */
 export const RETRYING = { has: (doing: string | null): boolean => doing !== null && RETRY_WORDS.test(doing) };
@@ -756,9 +769,7 @@ export function doingOf(event: ProviderEvent, current: string | null): string | 
   switch (event.type) {
     case "error":
       if (!event.error.willRetry) return current;
-      return ["rateLimit", "overloaded", "usageLimit"].includes(event.error.kind)
-        ? `The model is busy, reconnecting${attemptOf(event.error.message)}`
-        : `Reconnecting${attemptOf(event.error.message)}`;
+      return `${RETRY_REASON[event.error.kind] ?? "Reconnecting"}${attemptOf(event.error.message)}`;
     case "toolCall": {
       if (event.status !== "inProgress") return null;
       // Any other tool's step names itself on its own row; the line has nothing better to say.
