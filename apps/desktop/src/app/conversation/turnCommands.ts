@@ -21,8 +21,18 @@ export function turnCommands(
   starts: readonly number[],
   endedAtMs: number | null = null,
 ): number {
+  return turnCommandTasks(view, turns, starts, endedAtMs).length;
+}
+
+/** The commands of [`turnCommands`]: an ended one whose end's turn is owed counts once. */
+export function turnCommandTasks(
+  view: Pick<ThreadView, "background" | "entries" | "jobs">,
+  turns: readonly Pick<ThreadTurn, "startedAtMs">[],
+  starts: readonly number[],
+  endedAtMs: number | null = null,
+): BackgroundTask[] {
   const jobs = view.jobs;
-  if (starts.length === 0 || !jobs || (!jobs.holding?.length && !jobs.waking)) return 0;
+  if (starts.length === 0 || !jobs || (!jobs.holding?.length && !jobs.waking)) return [];
   const startedAtMs = Math.min(...starts);
   const next = nextTurnStart(turns, starts);
   const entries = view.entries;
@@ -32,11 +42,11 @@ export function turnCommands(
     const at = call?.atMs ?? task.startedAtMs;
     return at >= startedAtMs && (next === null || at < next) && (endedAtMs === null || at <= endedAtMs);
   };
-  const holding = background.filter((task) => jobs.holding?.includes(task.id) && ours(task)).length;
-  if (holding > 0 || !jobs.waking || next !== null) return holding;
+  const holding = background.filter((task) => jobs.holding?.includes(task.id) && ours(task));
+  if (holding.length > 0 || !jobs.waking || next !== null) return holding;
   // Its end owes the turn it starts: the newest block that started it waits for that turn.
-  const owed = background.some((task) => task.status !== "running" && task.kind !== "agent" && ours(task) && !excluded(task, entries));
-  return owed ? 1 : 0;
+  const owed = background.findLast((task) => task.status !== "running" && task.kind !== "agent" && ours(task) && !excluded(task, entries));
+  return owed ? [owed] : [];
 }
 
 /** A wait or a preview call: covered by the workers' own hold, or a row of its own. */

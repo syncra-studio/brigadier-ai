@@ -90,13 +90,23 @@ export function backgroundOf(view: ThreadView): readonly BackgroundTask[] {
  * running) started still work: while any does, its block stays open (D24).
  */
 export function runningSubagents(view: ThreadView, startedAtMs: number, endedAtMs: number | null): number {
+  return runningSubagentTasks(view, startedAtMs, endedAtMs).length;
+}
+
+/** The task of each subagent [`runningSubagents`] counts, as its Background row names it ("Subagent: <task>"). */
+export function runningSubagentTasks(view: ThreadView, startedAtMs: number, endedAtMs: number | null): string[] {
   const calls = subagentCalls(view);
   const at = [
-    ...calls.map(({ entry, task }) => ({ at: entry.atMs ?? task?.startedAtMs ?? 0, status: entry.event.type === "toolCall" ? entry.event.status : "", task })),
+    ...calls.map(({ entry, task }) => ({
+      at: entry.atMs ?? task?.startedAtMs ?? 0,
+      status: entry.event.type === "toolCall" ? entry.event.status : "",
+      task,
+      label: task?.label || (entry.event.type === "toolCall" ? agentDetail(entry.event.name, entry.event.input) : null) || "a subagent",
+    })),
     // A background agent whose call the thread doesn't hold (yet) counts from its start.
-    ...backgroundOf(view).filter((task) => task.kind === "agent" && !calls.some((call) => call.task === task)).map((task) => ({ at: task.startedAtMs, status: "", task })),
+    ...backgroundOf(view).filter((task) => task.kind === "agent" && !calls.some((call) => call.task === task)).map((task) => ({ at: task.startedAtMs, status: "", task, label: task.label || "a subagent" })),
   ];
-  return at.filter((call) => call.at >= startedAtMs && (endedAtMs === null || call.at <= endedAtMs) && works(view, call.at, call.status, call.task)).length;
+  return at.filter((call) => call.at >= startedAtMs && (endedAtMs === null || call.at <= endedAtMs) && works(view, call.at, call.status, call.task)).map((call) => call.label);
 }
 
 const shown = new Map<string, NativeWorker | null>();

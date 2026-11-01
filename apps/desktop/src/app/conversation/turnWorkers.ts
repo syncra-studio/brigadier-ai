@@ -28,7 +28,17 @@ export function workingWorkers(
   starts: readonly number[],
   endedAtMs: number | null = null,
 ): number {
-  if (starts.length === 0) return 0;
+  return workingWorkerRows(workers, turns, starts, endedAtMs).length;
+}
+
+/** The rows of [`workingWorkers`]. */
+export function workingWorkerRows(
+  workers: readonly WorkerRow[],
+  turns: readonly Pick<ThreadTurn, "startedAtMs">[],
+  starts: readonly number[],
+  endedAtMs: number | null = null,
+): WorkerRow[] {
+  if (starts.length === 0) return [];
   const startedAtMs = Math.min(...starts);
   const next = nextTurnStart(turns, starts);
   const newest = next === null;
@@ -37,7 +47,7 @@ export function workingWorkers(
     if (worker.startedAtMs < startedAtMs || (next !== null && worker.startedAtMs >= next) || (endedAtMs !== null && worker.startedAtMs > endedAtMs) || worker.gone) return false;
     if (worker.lastEnd === null) return true;
     return newest && (worker.working || worker.waiting.length > 0);
-  }).length;
+  });
 }
 
 /**
