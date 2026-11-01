@@ -389,6 +389,26 @@ impl SessionManager {
                         live.joins =
                             live.own || carried.as_ref().is_some_and(|(_, joins, _)| *joins);
                     }
+                    // Steered into a turn the CLI began on its own, Claude's file may hold it as
+                    // a turn's opening message: that turn goes on in the open block (D25, D74).
+                    if steer && live.continues {
+                        let joined = TurnRecord {
+                            user_message: Some(item_id.clone()),
+                            end: None,
+                            error: None,
+                            error_kind: None,
+                            provider: None,
+                            ended_at_ms: None,
+                            requests: Vec::new(),
+                            limit: None,
+                            context_window: None,
+                            joins: true,
+                        };
+                        let dir = self.session_dir(&conv.id).record();
+                        if let Err(err) = thread_view::append_turn(&dir, &joined) {
+                            crate::logging::private_trace!(conv.private_logs, warn, "could not note a turn"; conversation = %conv.id, error = %err);
+                        }
+                    }
                     if let Some((carried, ..)) = &carried {
                         thread_view::add_requests(&mut live.requests, carried);
                         noted = Some(TurnRecord {

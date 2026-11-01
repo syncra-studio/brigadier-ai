@@ -819,11 +819,13 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 _ => None,
             });
             let noted = recorded.remove(id.as_str());
-            // A turn no record names that began before the turn before it ended ran inside that
-            // one, as the stream said it: Claude writes Brigadier's `/compact` after the
-            // compaction, which the stream said in the turn before. It ended as that one did.
+            // A turn no record names (or names no end of) that began before the turn before it
+            // ended ran inside that one, as the stream said it: Claude writes Brigadier's
+            // `/compact` after the compaction, which the stream said in the turn before, and a
+            // message steered into the CLI's own turn as a turn's opening one. It ended as that
+            // one did.
             let within = before.filter(|record| {
-                noted.is_none()
+                noted.as_ref().is_none_or(|(_, end, _)| end.is_none())
                     && record
                         .ended_at_ms
                         .zip(turn.started_at_ms)

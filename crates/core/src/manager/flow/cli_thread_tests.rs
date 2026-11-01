@@ -376,8 +376,21 @@ async fn a_crash_mid_turn_keeps_the_cut_turn_interrupted(queued: bool) {
 /// opening message the thread has no turn of. Live, and after a restart.
 #[tokio::test]
 async fn a_message_joining_a_turn_the_cli_began_on_its_own_is_that_turns_request() {
+    own_turn_steer(false).await;
+}
+
+/// The same, with Claude's file holding the message as a turn's opening one (O38, seen live):
+/// that turn goes on in the open block, joining it, and the turn before ends where it ended.
+#[tokio::test]
+async fn a_message_steered_into_the_clis_own_turn_its_file_opens_a_turn_with_joins_it() {
+    own_turn_steer(true).await;
+}
+
+async fn own_turn_steer(file_line: bool) {
     use brigadier_providers::{ItemStatus, ProviderEvent, Role, TurnStatus};
 
+    let file: Arc<std::sync::Mutex<Option<std::path::PathBuf>>> = Arc::default();
+    let kept = file.clone();
     let mut flow = Flow::start(
         "cli-thread-on-its-own",
         Options {
@@ -387,7 +400,10 @@ async fn a_message_joining_a_turn_the_cli_began_on_its_own_is_that_turns_request
             }),
             ..Options::default()
         },
-        script(|_| async { Reply::text("Looked.") }),
+        script(move |turn| {
+            kept.lock().unwrap().clone_from(&turn.session_file);
+            async { Reply::text("Looked.") }
+        }),
     )
     .await;
     let id = flow.conversation.clone();
@@ -425,12 +441,19 @@ async fn a_message_joining_a_turn_the_cli_began_on_its_own_is_that_turns_request
     let running = flow.manager.thread_view(&id).unwrap();
     assert_eq!(running.turns.len(), 1, "{running:#?}");
     assert_eq!(running.turns[0].end, None);
+    let steered = "[queued message 2f334bc5 · judge it: brigadier queue 2f334bc5 join|wait|worker \
+                   <id>|new-session; unjudged, it joins this work]\nsure, do";
+    if file_line {
+        super::session_line(
+            file.lock().unwrap().as_ref().expect("a session file"),
+            serde_json::json!({"type": "user", "uuid": "65ae8f04-ec73-40e2-8ebc-0283dd40a248",
+                "message": {"role": "user", "content": steered}}),
+        );
+    }
     follow(ProviderEvent::Message {
         item_id: "65ae8f04-ec73-40e2-8ebc-0283dd40a248".into(),
         role: Role::User,
-        text: "[queued message 2f334bc5 · judge it: brigadier queue 2f334bc5 join|wait|worker \
-               <id>|new-session; unjudged, it joins this work]\nsure, do"
-            .into(),
+        text: steered.into(),
     })
     .await;
     // Judged: it joins, and the rest of the turn answers its request.
@@ -445,6 +468,23 @@ async fn a_message_joining_a_turn_the_cli_began_on_its_own_is_that_turns_request
     .await;
 
     let view = flow.manager.thread_view(&id).unwrap();
+    if file_line {
+        let joined_turn = |view: &ThreadView| {
+            assert_eq!(view.turns.len(), 2, "{view:#?}");
+            assert_eq!(view.turns[0].requests, [asked.clone(), joined.to_owned()]);
+            assert!(!view.turns[0].joins && view.turns[1].joins, "{view:#?}");
+            assert_eq!(view.turns[1].end, Some(TurnEnd::Done), "{view:#?}");
+            assert!(
+                view.turns[0].ended_at_ms <= view.turns[1].started_at_ms,
+                "{view:#?}"
+            );
+        };
+        joined_turn(&view);
+        flow.restart().await;
+        joined_turn(&flow.manager.thread_view(&id).unwrap());
+        flow.stop().await;
+        return;
+    }
     assert_eq!(view.turns.len(), 1, "{view:#?}");
     assert_eq!(view.turns[0].user_message, first.user_message);
     assert_eq!(view.turns[0].requests, [asked.clone(), joined.to_owned()]);
@@ -455,12 +495,14 @@ async fn a_message_joining_a_turn_the_cli_began_on_its_own_is_that_turns_request
         .find(|entry| matches!(&entry.event, ProviderEvent::Message { item_id, .. } if item_id.starts_with("65ae8f04")))
         .expect("the steer shows");
     assert!(steer.steer, "{steer:#?}");
-    // No turn is noted under the steer's id: the turn before's notes hold its request.
+    // The turn before's notes hold its request; the steer's id is noted only as joining, for
+    // a file that opens a turn with it.
     let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
     assert!(
-        records
-            .iter()
-            .all(|record| record.user_message.as_deref() == Some(first.user_message.as_str())),
+        records.iter().all(|record| {
+            record.user_message.as_deref() == Some(first.user_message.as_str())
+                || (record.joins && record.requests.is_empty() && record.end.is_none())
+        }),
         "{records:#?}"
     );
     flow.restart().await;
