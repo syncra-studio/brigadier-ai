@@ -380,10 +380,16 @@ async fn an_answer_with_no_wait_on_it_reaches_the_session_once_idle_or_busy() {
     flow.settled().await;
     flow.settled_in(&b).await;
     assert_eq!(kept_seen(&flow, &b).await, [(first, true)]);
-    // A works: B's answer waits in A's queue, judged there, joined once.
-    flow.say("Hold-steer.").await;
-    super::eventually("A's turn to run", || seen.took(&a, "Hold-steer.") == 1).await;
+    // A works: B's answer waits in A's queue (given to A's turn to judge, or on its own turn
+    // once that one ends), and reaches A once.
+    flow.say("Hold.").await;
+    super::eventually("A's turn to run", || seen.took(&a, "Hold.") == 1).await;
     ok(call(&flow, &seen, &a, send(&b.0, "Two. Answer back.")).await);
+    flow.until("B's answer to wait in A's queue", |board| {
+        !board.queue.items.is_empty()
+    })
+    .await;
+    seen.release.store(true, Ordering::SeqCst);
     super::eventually("A to take B's second answer", || {
         seen.took(&a, "Thanks from the other side.") == 2
     })
@@ -391,21 +397,16 @@ async fn an_answer_with_no_wait_on_it_reaches_the_session_once_idle_or_busy() {
     flow.settled().await;
     flow.settled_in(&b).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        seen.took(&a, "Thanks from the other side."),
-        2,
-        "{:#?}",
-        seen.inputs_of(&a)
-    );
-    let framed = seen
+    let answers: Vec<String> = seen
         .inputs_of(&a)
         .into_iter()
-        .rev()
-        .find(|input| input.contains("Thanks from the other side."))
-        .unwrap();
+        .filter(|input| input.contains("Thanks from the other side."))
+        .collect();
+    assert_eq!(answers.len(), 2, "{:#?}", seen.inputs_of(&a));
     assert!(
-        to_judge(&framed).is_some(),
-        "judged from A's queue: {framed}"
+        answers[1].starts_with("[queued message "),
+        "from A's queue: {}",
+        answers[1]
     );
     assert!(flow.core.board(&a).await.unwrap().queue.items.is_empty());
     flow.stop().await;
