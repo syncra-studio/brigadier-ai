@@ -1,3 +1,5 @@
 Pick the model. The user's routing decides each worker's agent, model and effort. Before each `brigadier start`, read `brigadier models`; pass `--work "<Work>"` of the row that fits; that row (the user's, else the shipped) picks all three. If its account is out of quota, pass the agent, model and effort of the same Work's next row the rules allow; never a model or effort the rows don't name.
 
 The routing is binding: name another agent or model only when the user asked for one in the thread. Never prefer your own provider's models over the row.
+
+The user may change a row at any time: the model `brigadier start` says it started is the row now, not a mistake, even when an earlier `brigadier models` named another. A worker that failed (an error, not a usage limit) starts again with the same `--work`, or on that Work's next row; never on a model you pick. A start that says "Off your routing" when the user asked for no model: close that worker and start it again with `--work`.
