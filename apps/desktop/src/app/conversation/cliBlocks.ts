@@ -1,5 +1,5 @@
 import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
-import { backgroundOf } from "@/state/nativeWorkers";
+import { backgroundOf, runningSubagents } from "@/state/nativeWorkers";
 import {
   type Block,
   type BlockCompaction,
@@ -644,7 +644,13 @@ export function cliBlocks(
   // A block's turns before its last: Brigadier's word of what its workers did joins the block
   // that started them, as one more turn of it.
   const joined = new Map<Block, ThreadTurn[]>();
-  const close = (each: Block) => settle(each, turnOf.get(each), joined.get(each));
+  // A turn a usage limit ended while its request still works is switching (goal 1): it reads
+  // working, not stopped with an error, until its carry-on goes on in the block.
+  const switching = (read: ThreadTurn | undefined): ThreadTurn | undefined =>
+    read && (read.errorKind === "usageLimit" || read.limit) && read.requests.some((request) => (board?.requests?.[request] as { state?: { type?: string } } | undefined)?.state?.type === "working")
+      ? { ...read, end: null, endedAtMs: null, error: null }
+      : read;
+  const close = (each: Block) => settle(each, switching(turnOf.get(each)), joined.get(each));
   // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
   // The block each message that joined one went on in (a seam's successor may start in one).
   const joinedBy = new Map<string, Block>();
@@ -667,12 +673,25 @@ export function cliBlocks(
   // A turn the stream gave but no read has yet (its turn comes with the next one): it goes on in
   // the block before while that block's workers or background commands still work, as the
   // daemon will say (D24); for a second or two it showed as a block of its own (seen live).
+  // The block's own work only, as its header reads it (`useBlockHold`): what started after its
+  // turns ended (the next turn's worker) never holds it (seen live: a finished block reopened).
   const holds = (each: Block) => {
     const starts = [...(joined.get(each) ?? []), turnOf.get(each)].flatMap((read) => (read?.startedAtMs != null ? [read.startedAtMs] : []));
-    return workingWorkers(view.workers ?? [], view.turns, starts) + turnCommands(view, view.turns, starts) > 0;
+    const endedAtMs = turnOf.get(each)?.endedAtMs ?? null;
+    return workingWorkers(view.workers ?? [], view.turns, starts, endedAtMs) + turnCommands(view, view.turns, starts, endedAtMs) + runningSubagents(view, each.startedAtMs, endedAtMs) > 0;
   };
-  const goesOn = (each: Block | null): each is Block =>
-    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || (!view.turns[turn] && holds(each)));
+  // A turn that carries on the request a usage limit cut (an account or CLI switch) goes on in
+  // its block: one block, one switch row, no stopped turn (goal 1). Its requests, else the ones
+  // the engine noted it sent, are all that turn's; one the user sent anew opens its own.
+  const carriesOn = (requests: readonly string[] = []) => {
+    const before = view.turns[turn - 1];
+    if (before?.errorKind !== "usageLimit" && !before?.limit) return false;
+    return (view.turns[turn]?.requests ?? requests).every((request) => before.requests.includes(request));
+  };
+  // While its turn runs, a turn begun while the block before held goes on in it (D24, D113):
+  // the daemon's `joins` may come only once the turn is judged or over.
+  const goesOn = (each: Block | null, requests?: readonly string[]): each is Block =>
+    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || carriesOn(requests) || (view.turns[turn]?.end == null && holds(each)));
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
@@ -829,7 +848,7 @@ export function cliBlocks(
           (compacting && noticed.has(turn)) ||
           // A queued message still in the rail that woke the session to judge it while the
           // block before held: that block's, no bubble until it joins.
-          goesOn(before));
+          goesOn(before, entry.requests ?? []));
       if (joins && block) {
         join(block, position, entry.atMs);
       } else if (startsTurn(entry)) {
@@ -869,9 +888,11 @@ export function cliBlocks(
       const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs);
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
-      if (goesOn(block)) {
+      if (goesOn(block, entry.requests ?? [])) {
         join(block, position, entry.atMs);
-        block.steers.push({ ...shown, position });
+        // One the block already shows (a switch's carry-on sends it again) shows once.
+        const ids = [block.user?.kind === "message" ? block.user.message.id : null, ...block.steers.map((steer) => steer.message.id)];
+        if (!ids.includes(shown.message.id)) block.steers.push({ ...shown, position });
         return;
       }
       if (block) close(block);
@@ -1151,7 +1172,9 @@ export function cliThreadTree(
   for (const block of blocks) {
     // A message sent from here keeps the id it showed under while pending (`shownIdOf`), so
     // its bubble isn't mounted afresh when it is stored and its turn is placed once it shows.
-    const shown = block.user && (block.user.kind === "pending" ? block.user.pending.localId : shownIdOf(block.user.message.id));
+    let shown = block.user && (block.user.kind === "pending" ? block.user.pending.localId : shownIdOf(block.user.message.id));
+    // A repeated id makes assistant-ui throw, which blanked the whole window (seen live at a switch).
+    if (shown && nodes.some((node) => node.id === shown)) shown = `${shown}:${block.key}`;
     if (shown) {
       nodes.push({ id: shown, parentId: parent, kind: "user", block, head: null });
       parent = shown;

@@ -1561,3 +1561,80 @@ test("goal 4: another session's message judged from the queue is in the rail or 
   // The rail row shows its words alone.
   assert.equal(peerWords(header), words);
 });
+
+/** demo8: a turn a usage limit cut, carried on after an account switch, then after a move to another CLI. */
+const limitTurns = (read: boolean): ThreadTurn[] => [
+  { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit", requests: ["r1"] },
+  { ...turn("k1", 1500, 2000, "done"), requests: ["r1"] },
+  { ...turn("u2", 3000, 3300, "failed", "seven_day usage limit"), errorKind: "usageLimit", requests: ["r2"] },
+  ...(read ? [{ ...turn("k2", 3500, null, null), requests: ["r2"] }] : []),
+];
+const limitEntries: FileEntry[] = [
+  user("u1", "Run six commands", 1000, { said: { by: "user" }, requests: ["r1"] }),
+  at({ type: "command", itemId: "c1", command: "echo mark 1", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 5 }, 1200),
+  at({ type: "turnCompleted" } as ProviderEvent, 1400),
+  user("k1", "[Your last turn stopped early: its account hit a usage limit. You now run on another account, in the same session. Carry on from where you stopped.]", 1500, { said: { by: "brigadier" } }),
+  at({ type: "message", itemId: "a1", role: "assistant", text: "DONE" }, 1900),
+  user("u2", "Run four more", 3000, { said: { by: "user" }, requests: ["r2"] }),
+  at({ type: "turnCompleted" } as ProviderEvent, 3300),
+  // The next CLI's first message: the hand-off with the user's words again, under the same request.
+  user("k2", "Run four more", 3500, { said: { by: "both", user: "Run four more" }, requests: ["r2"] }),
+  at({ type: "message", itemId: "a2", role: "assistant", text: "MOVED" }, 3700),
+];
+
+test("a turn carried on after a usage limit's switch goes on in its block: no stopped turn, no second bubble, never a repeated id (demo8, every CLI)", () => {
+  for (const read of [true, false]) {
+    const blocks = cliBlocks({ entries: limitEntries, turns: limitTurns(read) }, "conv");
+    assert.deepEqual(blocks.map((block) => block.key), ["u1", "u2"], `read ${read}`);
+    assert.equal(blocks[0]!.state, "done");
+    assert.equal(blocks[0]!.error, null);
+    assert.deepEqual(blocks[1]!.steers, [], `read ${read}`);
+    assert.deepEqual(blocks[1]!.texts.map((text) => text.text), ["MOVED"]);
+    const { nodes } = cliThreadTree({ entries: limitEntries, turns: limitTurns(read) }, "conv", [], {}, [], NO_BOARD, { state: "running", error: null });
+    assert.equal(new Set(nodes.map((node) => node.id)).size, nodes.length, `read ${read}: ${nodes.map((node) => node.id)}`);
+  }
+  // Between the limit and its carry-on, a request that still works is switching: no stopped turn, no error.
+  const gap = { entries: limitEntries.slice(0, 7), turns: limitTurns(false) };
+  const switching = cliBlocks(gap, "conv", { ...NO_BOARD, requests: { r2: { state: { type: "working" } } } });
+  assert.deepEqual([switching[1]!.state, switching[1]!.error, switching[1]!.endedAtMs], ["working", null, null]);
+  // One the limit ended for good (nothing to switch to) reads as it ended.
+  assert.equal(cliBlocks(gap, "conv", { ...NO_BOARD, requests: { r2: { state: { type: "failed", error: "limit" } } } })[1]!.state, "failed");
+  // A message the user sends anew after the limit opens its own block.
+  const fresh = [...limitEntries.slice(0, 7), user("n1", "Something else", 3500, { said: { by: "user" }, requests: ["r3"] })];
+  assert.deepEqual(cliBlocks({ entries: fresh, turns: limitTurns(false) }, "conv").map((block) => block.key), ["u1", "u2", "n1"]);
+});
+
+test("a thread whose turns repeat a message never repeats a node id", () => {
+  const entries = [user("u1", "Same", 1000, { requests: ["r1"] }), user("u2", "Same", 2000, { requests: ["r1"] })];
+  const { nodes } = cliThreadTree({ entries, turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1"] }] }, "conv", [], {}, [], NO_BOARD, { state: "idle", error: null });
+  assert.equal(new Set(nodes.map((node) => node.id)).size, nodes.length, `${nodes.map((node) => node.id)}`);
+});
+
+test("a message sent after a block finished never reopens it, though the worker its turn starts works before the turn is read (demo8)", () => {
+  const entries = [
+    user("u1", "Find the secret with a worker", 1000),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "ALPHA" }, 1400),
+    user("u2", "Count README lines with a worker", 9000),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "Started a worker." }, 9200),
+  ];
+  // Its first worker is done; the new turn's worker started before its turn is read.
+  const workers = [row("aa11bb22", 1100), { ...row("cc33dd44", 9100), working: true, lastEnd: null }];
+  const blocks = cliBlocks({ entries, turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }], workers }, "conv");
+  assert.deepEqual(blocks.map((block) => block.key), ["u1", "u2"]);
+  assert.deepEqual(blocks[0]!.steers, []);
+});
+
+test("a message woken for while only a background subagent holds the block goes on in it while its turn runs, before the daemon says it joined (D113, demo8)", () => {
+  const entries = [
+    user("u1", "Start a background subagent", 1000),
+    at(tool("ag1", "Agent", '{"description":"Sleep then print","run_in_background":true}', "completed", "Started."), 1100),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "It runs in the background." }, 1200),
+    user("q1", "[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\nWhat is 2+2?", 5000, { said: { by: "brigadier" } }),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "Four." }, 5200),
+  ];
+  const background = [{ id: "bg1", itemId: "ag1", kind: "agent" as const, label: "Sleep then print", status: "running" as const, startedAtMs: 1100, endedAtMs: null, outputFile: null, summary: null, lastLine: null }];
+  for (const turns of [[turn("u1", 1000, 1300, "done")], [turn("u1", 1000, 1300, "done"), turn("q1", 5000, null, null)]]) {
+    const blocks = cliBlocks({ entries, turns, background }, "conv");
+    assert.deepEqual(blocks.map((block) => block.key), ["u1"], `${turns.length} turns read`);
+  }
+});
