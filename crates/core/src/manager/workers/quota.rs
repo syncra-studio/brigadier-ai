@@ -274,13 +274,16 @@ impl SessionManager {
                 return;
             }
             let choices = self.worker_quota_choices(&task).await;
+            let session = self.last_worker_native_id(&task).await;
             let mut target = None;
             for choice in &choices {
                 let account = crate::accounts::ready(
                     &self.core.settings(),
                     choice.provider,
                     choice.model.as_deref(),
-                    &self.runtime.account_candidates(choice.provider),
+                    &self
+                        .runtime
+                        .resume_candidates(choice.provider, session.as_deref()),
                     &[],
                     now_ms(),
                 );

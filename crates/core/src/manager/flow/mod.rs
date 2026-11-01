@@ -637,6 +637,8 @@ pub(crate) struct FakeBehavior {
     /// Claude's startup window; unset keeps the fake's usual 1M window.
     pub claude_window: Option<Option<i64>>,
     pub signed_out: Mutex<Vec<ProviderKind>>,
+    /// Sessions the user's own login can't resume (`Provider::resumes`).
+    pub own_refuses: Mutex<Vec<String>>,
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
     /// Title-routing tests offer both small families, including an operate-only Haiku.
@@ -1016,6 +1018,17 @@ impl Provider for FakeCli {
             };
             Ok(Started { session, events })
         })
+    }
+
+    fn resumes(&self, native_id: &str) -> bool {
+        self.account.is_some()
+            || !self
+                .behavior
+                .own_refuses
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == native_id)
     }
 
     fn took_input(&self, native_id: &str, needle: &str) -> BoxFuture<'_, bool> {

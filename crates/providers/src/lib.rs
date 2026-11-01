@@ -169,6 +169,13 @@ pub trait Provider: Send + Sync {
         Box::pin(async { Vec::new() })
     }
 
+    /// Whether session `native_id` can be resumed on this adapter's account. A CLI whose
+    /// accounts share one history resumes any session on any of them.
+    fn resumes(&self, native_id: &str) -> bool {
+        let _ = native_id;
+        true
+    }
+
     /// Whether session `native_id` took `needle` as input, by its transcript: in a message
     /// sent or steered in, never in a tool's output or the model's own words (read, never
     /// changed).

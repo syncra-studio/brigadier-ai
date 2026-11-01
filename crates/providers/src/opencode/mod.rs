@@ -26,6 +26,13 @@
 //! OpenCode keeps its sessions in a database of its own, not in files: the adapter keeps each
 //! session's messages, as its API gives them, in a transcript file (`<data>/opencode/<id>.jsonl`,
 //! [`write_transcript`]) after every turn, which is the session file its thread is read back from.
+//!
+//! Its login is a row of that same database, so an extra account ([`crate::accounts`]) is a
+//! database of its own (`OPENCODE_DB=<account>/opencode.db`), holding its login and a copy of
+//! each session it ran. A session resumed or forked on an account that hasn't its newest copy is
+//! carried there first ([`OpenCode::carry`]): exported from the database that has it, imported
+//! under the same id. The user's own database is never written to: once a session's newest copy
+//! is an extra account's, the user's own login doesn't take it back ([`Provider::resumes`]).
 
 pub mod parse;
 
@@ -63,10 +70,11 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
         "npm i -g @opencode/cli@latest",
     ],
     login: "opencode auth login",
-    sign_in: &["auth", "login"],
-    sign_out: &["auth", "logout"],
-    // One login store, in its data folder's database.
-    home: None,
+    // Its own server: the background one may be the user's, on their own database.
+    sign_in: &["auth", "login", "--standalone"],
+    // None: the account's login is in its database, which goes with its folder.
+    sign_out: &[],
+    home: Some(&HOME),
     // Switching its built-in tools off isn't implemented.
     tools: &[],
     session_files: &[TRANSCRIPT],
@@ -147,6 +155,34 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     trust: None,
 };
 
+/// An extra account's database, in its folder.
+const DB: &str = "opencode.db";
+/// Each session opened on an extra account, in its folder: `<id>` holding when (ms).
+const OPENED: &str = "opened";
+
+static HOME: crate::accounts::Home = crate::accounts::Home {
+    var: "OPENCODE_DB",
+    file: Some(DB),
+    default_dir: ".local/share/opencode",
+    // The keys of its integrations that sign in with a login (its `GET /api/integration`,
+    // 2.2.3). shortcut: GITHUB_TOKEN, GITLAB_TOKEN and DIGITALOCEAN_ACCESS_TOKEN stay, as the
+    // session's own commands use them, so one in the environment signs Copilot, GitLab or
+    // DigitalOcean in on every account; drop them once one of those logins has limits to switch.
+    auth_vars: &[
+        "OPENCODE_API_KEY",
+        "OPENAI_API_KEY",
+        "XAI_API_KEY",
+        "POE_API_KEY",
+        "SNOWFLAKE_CORTEX_TOKEN",
+        "SNOWFLAKE_CORTEX_PAT",
+    ],
+    unset: &[],
+    // Its config, agents and skills are in `~/.config/opencode`, which an account doesn't move.
+    shared: &[],
+    seed: &[],
+    for_account: |platform, env, home| Arc::new(OpenCode::for_account(platform, env, home)),
+};
+
 const EVENTS: usize = 512;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 const START_TIMEOUT: Duration = Duration::from_secs(60);
@@ -160,11 +196,135 @@ const PAGE: usize = 200;
 pub struct OpenCode {
     platform: Arc<dyn Platform>,
     env: Arc<CliEnv>,
+    /// An extra account's: the user's own environment, whose database holds the sessions the
+    /// account hasn't run.
+    main_env: Option<Arc<CliEnv>>,
 }
 
 impl OpenCode {
     pub fn new(platform: Arc<dyn Platform>, env: Arc<CliEnv>) -> Self {
-        Self { platform, env }
+        Self {
+            platform,
+            env,
+            main_env: None,
+        }
+    }
+
+    /// The adapter for an extra account whose folder is `home` (made with
+    /// [`crate::accounts::prepare_home`]); `env` is the user's own environment.
+    pub fn for_account(platform: Arc<dyn Platform>, env: &CliEnv, home: &Path) -> Self {
+        Self {
+            platform,
+            env: Arc::new(env.for_account(ProviderKind::OpenCode, home)),
+            main_env: Some(Arc::new(env.clone())),
+        }
+    }
+
+    /// An extra account's folder, recorded with its sessions.
+    fn account_home(&self) -> Option<PathBuf> {
+        self.main_env.as_ref()?;
+        Some(Path::new(self.env.var(HOME.var)?).parent()?.to_owned())
+    }
+
+    /// The extra account whose database holds session `id`'s newest copy: the one it was
+    /// opened on last. `None`: the user's own database (it never left it).
+    fn newest_home(&self, id: &str) -> Option<PathBuf> {
+        if !plain_id(id) {
+            return None;
+        }
+        // Where the core keeps extra accounts' folders (`Runtime::account_home`).
+        let accounts = self.platform.paths().data_dir.join("accounts");
+        std::fs::read_dir(accounts)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let at = std::fs::read_to_string(entry.path().join(OPENED).join(id)).ok()?;
+                Some((at.trim().parse::<i64>().ok()?, entry.path()))
+            })
+            .max_by_key(|(at, _)| *at)
+            .map(|(_, home)| home)
+    }
+
+    /// Brings session `id`'s newest copy into this account's database, before it is resumed
+    /// or forked here: exported from the database that has it and imported under the same id,
+    /// after this database's older copy is deleted (an extra account's database is
+    /// Brigadier's). The user's own database is never written: a session whose newest copy is
+    /// elsewhere is refused there.
+    async fn carry(
+        &self,
+        server: &Server,
+        id: &str,
+        cwd: &Path,
+        ledger: &dyn Ledger,
+    ) -> Result<()> {
+        let newest = self.newest_home(id);
+        let (Some(main_env), Some(own)) = (&self.main_env, self.account_home()) else {
+            return match newest {
+                None => Ok(()),
+                Some(_) => Err(Error::Invalid(MOVED_ON.into())),
+            };
+        };
+        if newest.as_ref() == Some(&own) {
+            return Ok(());
+        }
+        let from = match &newest {
+            Some(home) => Arc::new(main_env.for_account(ProviderKind::OpenCode, home)),
+            None => main_env.clone(),
+        };
+        let path = format!("/api/experimental/session/{id}/export");
+        let copy = self
+            .control_in(&from, async |source: &Server| {
+                source.call(Method::GET, &path, None).await
+            })
+            .await?;
+        let copy = &copy["data"];
+        if copy["info"]["id"].as_str() != Some(id) {
+            return Err(Error::Protocol(format!(
+                "OpenCode exported no session {id}"
+            )));
+        }
+        // Recorded first, so removing the session finds this copy too.
+        ledger
+            .record(Artifact::Session {
+                provider: ProviderKind::OpenCode,
+                id: id.to_owned(),
+                home: Some(own.display().to_string()),
+                cwd: Some(cwd.display().to_string()),
+            })
+            .await?;
+        match server
+            .call(Method::DELETE, &format!("/api/session/{id}"), None)
+            .await
+        {
+            Ok(_) => {}
+            // No older copy here.
+            Err(Error::Rejected(message)) if message.contains("404") => {}
+            Err(err) => return Err(err),
+        }
+        let body = json!({
+            "info": copy["info"],
+            "messages": copy["messages"],
+            "location": { "directory": cwd.display().to_string() },
+        });
+        server
+            .call(
+                Method::POST,
+                "/api/experimental/session/import",
+                Some(&body),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Notes that session `id` was opened on this extra account now: its newest copy is here.
+    fn opened(&self, id: &str) -> Result<()> {
+        let Some(home) = self.account_home().filter(|_| plain_id(id)) else {
+            return Ok(());
+        };
+        let dir = home.join(OPENED);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join(id), now_ms().to_string())?;
+        Ok(())
     }
 
     fn binary(&self) -> Result<PathBuf> {
@@ -183,8 +343,17 @@ impl OpenCode {
 
     /// Runs `work` against a throwaway server with the user's own setup, then ends it.
     async fn control<T>(&self, work: impl AsyncFnOnce(&Server) -> Result<T>) -> Result<T> {
+        self.control_in(&self.env, work).await
+    }
+
+    /// [`Self::control`] in `env` (another account's database).
+    async fn control_in<T>(
+        &self,
+        env: &CliEnv,
+        work: impl AsyncFnOnce(&Server) -> Result<T>,
+    ) -> Result<T> {
         let cwd = self.platform.paths().data_dir.clone();
-        let mut spec = self.env.spec(&self.binary()?);
+        let mut spec = env.spec(&self.binary()?);
         spec.cwd = Some(cwd);
         let server = Server::start(
             self.platform.clone(),
@@ -500,6 +669,13 @@ fn removable(kind: &str, path: &Path) -> bool {
 
 const NOT_INSTALLED: &str = "OpenCode isn't installed. Install it from Settings › Providers.";
 const SIGNED_OUT: &str = "OpenCode isn't signed in. Sign in from Settings › Providers.";
+const MOVED_ON: &str =
+    "This chat went on on another OpenCode account, so this computer's login can't pick it up.";
+
+/// Whether `id` is a session id as OpenCode makes them, safe as a file name.
+fn plain_id(id: &str) -> bool {
+    id.starts_with("ses_") && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 
 impl Provider for OpenCode {
     fn kind(&self) -> ProviderKind {
@@ -531,6 +707,10 @@ impl Provider for OpenCode {
                     let listed = server.call(Method::GET, "/api/integration", None).await?;
                     if let ready @ (true, _) = signed_in(&listed, &[], &self.env) {
                         return Ok(ready);
+                    }
+                    // An extra account by its own login only: the free models are every one's.
+                    if self.main_env.is_some() {
+                        return Ok((false, None));
                     }
                     Ok(signed_in(&listed, &list_models(server).await?, &self.env))
                 })
@@ -659,11 +839,18 @@ impl Provider for OpenCode {
                     Artifact::Process { pid, started_at_ms }
                 })
                 .await;
+            let home = self.account_home().map(|home| home.display().to_string());
             let opened = match recorded {
-                Ok(()) => tokio::time::timeout(
-                    START_TIMEOUT,
-                    open_session(&server, &spec, &cwd, ledger.as_ref()),
-                )
+                Ok(()) => tokio::time::timeout(START_TIMEOUT, async {
+                    if let Origin::Resume { native_id } | Origin::Fork { native_id } = &spec.origin
+                    {
+                        self.carry(&server, native_id, &cwd, ledger.as_ref())
+                            .await?;
+                    }
+                    let opened = open_session(&server, &spec, &cwd, home, ledger.as_ref()).await?;
+                    self.opened(&opened.0)?;
+                    Ok(opened)
+                })
                 .await
                 .unwrap_or(Err(Error::Timeout("OpenCode to open the session"))),
                 Err(err) => Err(err),
@@ -773,6 +960,12 @@ impl Provider for OpenCode {
         })
     }
 
+    /// The user's own login doesn't take back a session whose newest copy is an extra
+    /// account's: its own database is never rewritten ([`OpenCode::carry`]).
+    fn resumes(&self, native_id: &str) -> bool {
+        self.main_env.is_some() || self.newest_home(native_id).is_none()
+    }
+
     fn replayer(&self) -> Box<dyn Replayer> {
         Box::new(OpenCodeReplayer {
             parser: Parser::new(None, None),
@@ -870,6 +1063,7 @@ async fn open_session(
     server: &Server,
     spec: &SessionSpec,
     cwd: &Path,
+    home: Option<String>,
     ledger: &dyn Ledger,
 ) -> Result<(String, Option<String>, Option<i64>)> {
     let folders: Vec<String> = spec
@@ -934,7 +1128,7 @@ async fn open_session(
         .record(Artifact::Session {
             provider: ProviderKind::OpenCode,
             id: id.clone(),
-            home: None,
+            home,
             cwd: Some(cwd.display().to_string()),
         })
         .await?;
@@ -1708,6 +1902,184 @@ sys.stdin.read()
                 ProviderEvent::Message { role: Role::User, text, .. } if text == "Hold.")),
             "{kept:#?}"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// An OpenCode whose database is a JSON file of sessions at `$OPENCODE_DB` (else the user's
+    /// own, under `$HOME`), written only by a request that changes it; every request is logged
+    /// with the database it went to.
+    const FAKE_DB_SERVER: &str = r#"#!/usr/bin/env python3
+import http.server, json, os, re, sys, threading
+db = os.environ.get("OPENCODE_DB") or os.path.join(os.environ["HOME"], ".local/share/opencode/opencode.db")
+log = open(os.environ["LOG"], "a")
+def load():
+    return json.load(open(db)) if os.path.exists(db) else {}
+def save(sessions):
+    json.dump(sessions, open(db, "w"))
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def answer(self, code, body=None):
+        self.send_response(code); self.send_header("content-type", "application/json"); self.end_headers()
+        if body is not None: self.wfile.write(json.dumps(body).encode())
+    def handle_any(self):
+        n = int(self.headers.get("content-length") or 0)
+        body = json.loads(self.rfile.read(n).decode()) if n else None
+        log.write(f"{db} {self.command} {self.path}\n"); log.flush()
+        sessions = load()
+        export = re.fullmatch(r"/api/experimental/session/(\w+)/export", self.path)
+        one = re.fullmatch(r"/api/session/(\w+)", self.path)
+        if export and self.command == "GET":
+            found = sessions.get(export.group(1))
+            self.answer(200, {"data": found}) if found else self.answer(404, {"message": "Session not found"})
+        elif one and self.command == "DELETE":
+            if one.group(1) in sessions:
+                del sessions[one.group(1)]; save(sessions); self.answer(204)
+            else:
+                self.answer(404, {"message": "Session not found"})
+        elif self.path == "/api/experimental/session/import" and self.command == "POST":
+            id = body["info"]["id"]
+            if id in sessions:
+                self.answer(409, {"message": "Session already exists"})
+            else:
+                sessions[id] = {"info": body["info"], "messages": body["messages"]}; save(sessions)
+                self.answer(200, {"data": body["info"]})
+        else:
+            self.answer(404, {"message": "not here"})
+    do_GET = do_POST = do_DELETE = do_PATCH = handle_any
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+print(json.dumps({"url": f"http://127.0.0.1:{server.server_address[1]}"}), flush=True)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+sys.stdin.read()
+"#;
+
+    /// A session moves from the user's own database to one account, on to another and back:
+    /// each move imports its newest copy under the same id, an account's older copy is
+    /// replaced, the user's own database is never written, and once the session went on
+    /// elsewhere the user's own login refuses it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_is_carried_to_an_account_and_never_written_back_to_the_users_own() {
+        use std::ffi::OsString;
+        use std::os::unix::fs::PermissionsExt;
+        struct Kept(Mutex<Vec<Artifact>>);
+        impl Ledger for Kept {
+            fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>> {
+                lock(&self.0).push(artifact);
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, artifact: &Artifact) -> bool {
+                lock(&self.0).contains(artifact)
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "brigadier-opencode-accounts-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let script = root.join("bin/opencode");
+        std::fs::write(&script, FAKE_DB_SERVER).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let main_db = root.join("home/.local/share/opencode/opencode.db");
+        std::fs::create_dir_all(main_db.parent().unwrap()).unwrap();
+        let id = "ses_carried1";
+        let session = |messages: &[&str]| json!({ "info": { "id": id, "title": "Carried" }, "messages": messages });
+        std::fs::write(&main_db, json!({ id: session(&["m1"]) }).to_string()).unwrap();
+        let before = (
+            std::fs::read(&main_db).unwrap(),
+            std::fs::metadata(&main_db).unwrap().modified().unwrap(),
+        );
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let log = root.join("log");
+        let env = CliEnv::from_vars([
+            (
+                OsString::from("PATH"),
+                OsString::from(format!("{}:/usr/bin:/bin", root.join("bin").display())),
+            ),
+            (OsString::from("HOME"), root.join("home").into_os_string()),
+            (OsString::from("LOG"), log.clone().into_os_string()),
+        ]);
+        let own = OpenCode::new(platform.clone(), Arc::new(env.clone()));
+        let account = |name: &str| {
+            let home = root.join("data/accounts").join(name);
+            let main = main_db.parent().unwrap();
+            crate::accounts::prepare_home(ProviderKind::OpenCode, main, &home).unwrap();
+            (OpenCode::for_account(platform.clone(), &env, &home), home)
+        };
+        let ((a, a_home), (b, b_home)) = (account("acct-a"), account("acct-b"));
+        let ledger = Kept(Mutex::new(Vec::new()));
+        let cwd = root.clone();
+        let carry = async |to: &OpenCode| {
+            let spec = to.env.spec(&to.binary().unwrap());
+            let server = Server::start(platform.clone(), spec, process::Options::default(), None)
+                .await
+                .unwrap();
+            let carried = to.carry(&server, id, &cwd, &ledger).await;
+            server.process.shutdown(EXIT_GRACE).await;
+            carried.map(|()| to.opened(id).unwrap())
+        };
+        let held = |home: &Path| -> Value {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(home.join(DB)).unwrap()).unwrap()
+                [id]
+                .clone()
+        };
+
+        // Never left the user's own database: every login resumes it.
+        assert!(own.resumes(id) && a.resumes(id));
+        carry(&a).await.unwrap();
+        assert_eq!(held(&a_home), session(&["m1"]));
+        assert!(ledger.holds(&Artifact::Session {
+            provider: ProviderKind::OpenCode,
+            id: id.into(),
+            home: Some(a_home.display().to_string()),
+            cwd: Some(cwd.display().to_string()),
+        }));
+        // Gone on there: the user's own login takes it no more; another session it still does.
+        assert!(!own.resumes(id) && a.resumes(id) && b.resumes(id));
+        assert!(own.resumes("ses_other"));
+        assert!(matches!(carry(&own).await, Err(Error::Invalid(_))));
+
+        // A turn on A, then on to B: A's copy is the newest.
+        std::fs::write(
+            a_home.join(DB),
+            json!({ id: session(&["m1", "m2"]) }).to_string(),
+        )
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        carry(&b).await.unwrap();
+        assert_eq!(held(&b_home), session(&["m1", "m2"]));
+
+        // A turn on B, then back to A: A's older copy is replaced, under the same id.
+        std::fs::write(
+            b_home.join(DB),
+            json!({ id: session(&["m1", "m2", "m3"]) }).to_string(),
+        )
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        carry(&a).await.unwrap();
+        assert_eq!(held(&a_home), session(&["m1", "m2", "m3"]));
+
+        // The user's own database: read for its copy once, never written.
+        let said = std::fs::read_to_string(&log).unwrap();
+        let main: Vec<_> = said
+            .lines()
+            .filter(|line| line.starts_with(&main_db.display().to_string()))
+            .collect();
+        assert_eq!(main.len(), 1, "{said}");
+        assert!(main[0].ends_with(&format!("GET /api/experimental/session/{id}/export")));
+        assert_eq!(
+            (
+                std::fs::read(&main_db).unwrap(),
+                std::fs::metadata(&main_db).unwrap().modified().unwrap(),
+            ),
+            before
+        );
+        // Already the newest copy where it opens: nothing is asked of any database.
+        std::fs::write(&log, "").unwrap();
+        carry(&a).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

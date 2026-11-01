@@ -4725,7 +4725,11 @@ impl SessionManager {
                     && !error.will_retry
                     && self
                         .runtime
-                        .switch_target(&cli.account, cli.model.model.as_deref())
+                        .switch_target(
+                            &cli.account,
+                            cli.model.model.as_deref(),
+                            Some(&cli.session.native_id()),
+                        )
                         .is_some();
                 let limited =
                     (error.kind == ErrorKind::UsageLimit && !error.will_retry) || account_bound;
@@ -5400,10 +5404,11 @@ impl SessionManager {
                 return;
             }
             // Another account of the provider first, with switching on.
-            if let Some(next) = self
-                .runtime
-                .switch_target(&cli.account, cli.model.model.as_deref())
-            {
+            if let Some(next) = self.runtime.switch_target(
+                &cli.account,
+                cli.model.model.as_deref(),
+                Some(&cli.session.native_id()),
+            ) {
                 // Its turn goes on there. Not from inside the CLI's own event pump: closing the
                 // CLI waits for it.
                 let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());

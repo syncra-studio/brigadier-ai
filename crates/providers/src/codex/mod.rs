@@ -165,6 +165,7 @@ fn cli_file(kind: &str, path: String) -> Artifact {
 /// Codex's account homes (`accounts`).
 static HOME: crate::accounts::Home = crate::accounts::Home {
     var: "CODEX_HOME",
+    file: None,
     default_dir: ".codex",
     // Its API keys and access token (named in codex-cli 0.161.0's binary).
     auth_vars: &["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],

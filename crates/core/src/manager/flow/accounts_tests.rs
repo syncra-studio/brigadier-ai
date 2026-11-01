@@ -303,7 +303,7 @@ async fn a_limit_uses_the_fourth_account_before_falling_back_to_codex() {
     flow.stop().await;
 }
 
-/// A CLI that takes no extra accounts refuses one before anything is saved.
+/// A CLI that takes no extra accounts (the test-only one) refuses one before anything is saved.
 #[tokio::test]
 async fn an_account_its_cli_cannot_take_is_refused_unsaved() {
     let flow = Flow::start(
@@ -312,7 +312,7 @@ async fn an_account_its_cli_cannot_take_is_refused_unsaved() {
         logging(&Log::default(), |_| Reply::text("Done.")),
     )
     .await;
-    let refused = flow.manager.add_account(ProviderKind::OpenCode).await;
+    let refused = flow.manager.add_account(ProviderKind::new("fakecli")).await;
     assert!(
         matches!(refused, Err(crate::Error::Invalid(_))),
         "{refused:?}"
@@ -779,7 +779,7 @@ async fn a_model_window_used_up_on_one_account_sends_that_models_work_to_another
     );
     assert_eq!(
         runtime
-            .switch_target(&own, None)
+            .switch_target(&own, None, None)
             .and_then(|next| next.account),
         Some("acct-b".into())
     );
@@ -787,8 +787,38 @@ async fn a_model_window_used_up_on_one_account_sends_that_models_work_to_another
     // Used up on both: no account takes it, so neither hands it to the other.
     note(Some("acct-b"), 100.0);
     assert_eq!(opus_left(runtime), 100.0);
-    assert_eq!(runtime.switch_target(&own, None), None);
-    assert_eq!(runtime.switch_target(&own, Some("opus")), None);
+    assert_eq!(runtime.switch_target(&own, None, None), None);
+    assert_eq!(runtime.switch_target(&own, Some("opus"), None), None);
+    flow.stop().await;
+}
+
+/// A session the user's own login can't resume (its CLI says so) never moves back there; any
+/// other session may.
+#[tokio::test]
+async fn a_limit_moves_no_session_to_an_account_that_cant_resume_it() {
+    use crate::accounts::AccountRef;
+    let flow = Flow::start(
+        "accounts-resumes",
+        Options::default(),
+        logging(&Log::default(), |_| Reply::text("Noted.")),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.behavior
+        .own_refuses
+        .lock()
+        .unwrap()
+        .push("moved-on".into());
+    let runtime = &flow.manager.runtime;
+    let extra = AccountRef::new(ProviderKind::Claude, Some("acct-b".into()));
+    let own = AccountRef::own(ProviderKind::Claude);
+    assert_eq!(runtime.switch_target(&extra, None, Some("moved-on")), None);
+    assert_eq!(
+        runtime.switch_target(&extra, None, Some("other")),
+        Some(own.clone())
+    );
+    assert_eq!(runtime.switch_target(&extra, None, None), Some(own));
     flow.stop().await;
 }
 

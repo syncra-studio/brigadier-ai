@@ -1,7 +1,8 @@
 //! More than one login per CLI: each extra account is a CLI home of its own that only Brigadier
-//! uses (`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex). The CLI keeps its own login
-//! in it, in its own way (Claude Code keys its Keychain entry on the folder; Codex writes
-//! `auth.json` or a keyring entry keyed on it); Brigadier never reads or writes a credential.
+//! uses (`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex, `OPENCODE_DB` for OpenCode's
+//! database in it). The CLI keeps its own login in it, in its own way (Claude Code keys its
+//! Keychain entry on the folder; Codex writes `auth.json` or a keyring entry keyed on it;
+//! OpenCode a row of its database); Brigadier never reads or writes a credential.
 //! The user's own login, the one their terminal uses, stays the first account and is never
 //! touched.
 //!
@@ -10,6 +11,10 @@
 //! their own home (Claude from `projects`, Codex from `sessions`), so the links are what let a
 //! conversation move from one account to another and still resume (checked with Claude Code
 //! 2.1.295 and codex-cli 0.161.0, `docs/evidence/2026-10-09-accounts.md`).
+//!
+//! OpenCode keeps its login and its sessions in one database, so nothing of it can be linked:
+//! its adapter carries a session into an account's database when the session moves there
+//! ([`crate::opencode`]). Its config stays the user's, being in a folder the account doesn't move.
 //!
 //! A login in the environment would win over the home's own login, so an account's processes
 //! run without the variables in [`auth_vars`].
@@ -27,6 +32,9 @@ use crate::model::ProviderKind;
 pub struct Home {
     /// The variable that moves the CLI's home (`CLAUDE_CONFIG_DIR`).
     pub var: &'static str,
+    /// The file in an account's folder the variable names, for a CLI whose variable names a
+    /// file rather than a folder (OpenCode's `OPENCODE_DB`); `None`: the folder itself.
+    pub file: Option<&'static str>,
     /// The home's folder in the user's home folder when the variable is unset (`.claude`).
     pub default_dir: &'static str,
     /// Variables that sign the CLI in on their own, ahead of the login kept in its home.
@@ -92,6 +100,8 @@ impl Shared {
 pub fn main_home(kind: ProviderKind, env: &CliEnv) -> Option<PathBuf> {
     let facts = home_of(kind)?;
     match env.var(facts.var).filter(|dir| !dir.is_empty()) {
+        // A file's variable: the folder it is in.
+        Some(file) if facts.file.is_some() => Path::new(file).parent().map(Path::to_owned),
         Some(dir) => Some(PathBuf::from(dir)),
         None => env.home().map(|home| home.join(facts.default_dir)),
     }
@@ -112,7 +122,9 @@ impl CliEnv {
                 })
             })
             .collect();
-        vars.push((home_var(kind).into(), home.as_os_str().to_owned()));
+        let file = home_of(kind).and_then(|facts| facts.file);
+        let value = file.map_or_else(|| home.to_owned(), |file| home.join(file));
+        vars.push((home_var(kind).into(), value.into_os_string()));
         self.with_vars(vars)
     }
 }
@@ -289,6 +301,47 @@ mod tests {
         assert_eq!(
             env.var("ANTHROPIC_API_KEY"),
             Some(std::ffi::OsStr::new("sentinel-key"))
+        );
+    }
+
+    /// An OpenCode account's variable names the database in its folder; the keys of its
+    /// sign-in integrations are dropped, a token the session's own commands use stays.
+    #[test]
+    fn an_opencode_account_runs_on_its_own_database_with_no_login_key() {
+        let env = CliEnv::from_vars([
+            (OsString::from("HOME"), OsString::from("/home/me")),
+            (
+                OsString::from("OPENCODE_API_KEY"),
+                OsString::from("sentinel"),
+            ),
+            (OsString::from("OPENAI_API_KEY"), OsString::from("sentinel")),
+            (OsString::from("GITHUB_TOKEN"), OsString::from("kept")),
+            (
+                OsString::from("OPENCODE_DB"),
+                OsString::from("/elsewhere/x.db"),
+            ),
+        ]);
+        let account = env.for_account(ProviderKind::OpenCode, Path::new("/data/accounts/a3"));
+        assert_eq!(
+            account.var("OPENCODE_DB"),
+            Some(std::ffi::OsStr::new("/data/accounts/a3/opencode.db"))
+        );
+        for name in auth_vars(ProviderKind::OpenCode) {
+            assert_eq!(account.var(name), None, "{name}");
+        }
+        assert_eq!(
+            account.var("GITHUB_TOKEN"),
+            Some(std::ffi::OsStr::new("kept"))
+        );
+        // The main home: the set database's folder, else OpenCode's data folder.
+        assert_eq!(
+            main_home(ProviderKind::OpenCode, &env),
+            Some(PathBuf::from("/elsewhere"))
+        );
+        let unset = CliEnv::from_vars([(OsString::from("HOME"), OsString::from("/home/me"))]);
+        assert_eq!(
+            main_home(ProviderKind::OpenCode, &unset),
+            Some(PathBuf::from("/home/me/.local/share/opencode"))
         );
     }
 

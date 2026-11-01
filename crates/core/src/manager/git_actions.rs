@@ -440,7 +440,7 @@ impl SessionManager {
                 // out until its reset.
                 match self
                     .runtime
-                    .switch_target(&account, choice.model.as_deref())
+                    .switch_target(&account, choice.model.as_deref(), None)
                     .filter(|next| !limited.contains(&(next.clone(), model.clone())))
                 {
                     Some(next) => account = next,
@@ -503,9 +503,11 @@ impl SessionManager {
             && self.provider_ready(chosen.provider)
             && switched_on(chosen)
             && !excluded(chosen.provider, chosen.model.as_deref())
-            && let Some(account) = self
-                .runtime
-                .switch_target(&self.runtime.account_for(chosen), chosen.model.as_deref())
+            && let Some(account) = self.runtime.switch_target(
+                &self.runtime.account_for(chosen),
+                chosen.model.as_deref(),
+                None,
+            )
         {
             return Ok((chosen.clone(), account, None));
         }

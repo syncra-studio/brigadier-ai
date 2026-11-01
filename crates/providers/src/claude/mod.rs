@@ -128,6 +128,7 @@ const BRIGADIER_ALLOWED: &str = "Bash(brigadier:*)";
 /// Claude Code's account homes (`accounts`).
 static HOME: crate::accounts::Home = crate::accounts::Home {
     var: "CLAUDE_CONFIG_DIR",
+    file: None,
     default_dir: ".claude",
     // Its API key, bearer token and long-lived OAuth token
     // (<https://code.claude.com/docs/en/authentication#authentication-precedence>).

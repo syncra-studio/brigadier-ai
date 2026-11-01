@@ -395,12 +395,35 @@ impl Runtime {
         }
     }
 
-    /// Where work on `from` goes on when `from` hit its limit: another account of the same
-    /// provider that can take it (with switching off, the one picked with Use first), so it
-    /// stays on its provider while one of its accounts has room (#505).
-    pub fn switch_target(&self, from: &AccountRef, model: Option<&str>) -> Option<AccountRef> {
+    /// [`Self::account_candidates`] that can resume session `native_id` there, as their CLI
+    /// says ([`brigadier_providers::Provider::resumes`]).
+    pub fn resume_candidates(
+        &self,
+        provider: ProviderKind,
+        native_id: Option<&str>,
+    ) -> Vec<Candidate> {
+        let mut candidates = self.account_candidates(provider);
+        if let Some(id) = native_id {
+            candidates.retain(|candidate| {
+                self.provider_for(&candidate.account)
+                    .map_or(true, |provider| provider.resumes(id))
+            });
+        }
+        candidates
+    }
+
+    /// Where work on `from` (in session `native_id`, when it goes on in it) goes on when `from`
+    /// hit its limit: another account of the same provider that can take it (with switching
+    /// off, the one picked with Use first), so it stays on its provider while one of its
+    /// accounts has room (#505).
+    pub fn switch_target(
+        &self,
+        from: &AccountRef,
+        model: Option<&str>,
+        native_id: Option<&str>,
+    ) -> Option<AccountRef> {
         let settings = self.core.settings();
-        let mut candidates = self.account_candidates(from.provider);
+        let mut candidates = self.resume_candidates(from.provider, native_id);
         if model.is_none() {
             // The CLI's own default model, unnamed here: a model's window that is used up on
             // `from` may be what stopped it, so an account with that window used up as well
