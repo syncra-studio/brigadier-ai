@@ -2,7 +2,6 @@ import { ComposerPrimitive, ComposerRail, ComposerRailItem, ComposerAttachments,
 import {
   memo,
   useContext,
-  useEffect,
   useRef,
   useState,
 } from "react";
@@ -54,6 +53,8 @@ import { cn } from "@/lib/utils";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { useOpenTurnStart } from "@/state/cliThread";
+import { useTicking } from "@/app/conversation/requestTime";
+import { ViewContext } from "@/app/conversation/viewContext";
 import { useDirectTo } from "@/state/directTo";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { loadModelRules, useModelRulesRead } from "@/state/modelRules";
@@ -255,10 +256,13 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
 /**
  * "Working for 2m 5s" while the conversation's CLI turn is open, from its first second on,
  * ticking each second; null otherwise, and while it only waits for the user's answer to its
- * question card (#366): nothing works then. The turn's start is its CLI's own timestamp.
+ * question card (#366): nothing works then. It reads what the work block's header reads (D94):
+ * the same start, on the same clock.
  */
 function useWorkingFor(conversationId: string | null): string | null {
-  const startedAtMs = useOpenTurnStart(conversationId);
+  const turnStart = useOpenTurnStart(conversationId);
+  const view = useContext(ViewContext);
+  const startedAtMs = turnStart !== null && view.conversation?.id === conversationId ? (view.workFrom ?? turnStart) : turnStart;
   const open = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false));
   const asking = useBoard((s) => {
     const board = s.board;
@@ -266,22 +270,9 @@ function useWorkingFor(conversationId: string | null): string | null {
     return Object.values(board.questions).some((question) => question.answer === null);
   });
   const from = open && !asking ? startedAtMs : null;
-  // The time, read as a turn starts (or the composer opens on one), then on each whole second of
-  // it; none shows until it was read for this turn.
-  const [clock, setClock] = useState<{ from: number | null; now: number }>(() => ({ from, now: Date.now() }));
-  useEffect(() => {
-    if (from === null) return;
-    let timer = 0;
-    const tick = () => {
-      const now = Date.now();
-      setClock({ from, now });
-      timer = window.setTimeout(tick, 1000 - (Math.max(0, now - from) % 1000));
-    };
-    timer = window.setTimeout(tick, 0);
-    return () => window.clearTimeout(timer);
-  }, [from]);
-  if (from === null || clock.from !== from) return null;
-  const elapsed = clock.now - from;
+  const now = useTicking(from !== null);
+  if (from === null) return null;
+  const elapsed = now - from;
   if (elapsed < 1000) return null;
   return `Working for ${formatDuration(elapsed)}`;
 }

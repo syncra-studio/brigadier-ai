@@ -1056,7 +1056,9 @@ export function ConversationView({
 
   // The same value while these stay: each change draws every message of the thread again.
   const draftModel = resolved.model;
-  const view = useMemo(() => ({ selection, conversation, embedded, draftModel }), [selection, conversation, embedded, draftModel]);
+  const newest = tree.nodes.findLast((node) => node.kind === "block")?.block;
+  const workFrom = newest?.endedAtMs === null && newest.worked.length ? Math.min(...newest.worked.map((span) => span.fromMs)) : undefined;
+  const view = useMemo(() => ({ selection, conversation, embedded, draftModel, workFrom }), [selection, conversation, embedded, draftModel, workFrom]);
   // Every standalone conversation and draft can show its context card.
   const summary = !embedded;
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).

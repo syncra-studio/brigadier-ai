@@ -3,14 +3,30 @@ import { useEffect, useState } from "react";
 import type { BlockState } from "@/app/conversation/blocks";
 import { formatDuration } from "@/lib/format";
 
-/** Now, ticking each second while `live`. */
+/** One clock for every live time on screen, so two of the same work read the same (D94). */
+const ticks = new Set<(now: number) => void>();
+let latest = Date.now();
+let timer = 0;
+function onTick(tick: (now: number) => void): () => void {
+  if (ticks.size === 0) {
+    latest = Date.now();
+    timer = window.setInterval(() => {
+      latest = Date.now();
+      for (const each of ticks) each(latest);
+    }, 1000);
+  }
+  ticks.add(tick);
+  tick(latest);
+  return () => {
+    ticks.delete(tick);
+    if (ticks.size === 0) window.clearInterval(timer);
+  };
+}
+
+/** Now, ticking each second while `live`, on the clock all live times share. */
 export function useTicking(live: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!live) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [live]);
+  const [now, setNow] = useState(() => (ticks.size > 0 ? latest : Date.now()));
+  useEffect(() => (live ? onTick(setNow) : undefined), [live]);
   return now;
 }
 

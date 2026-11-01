@@ -14,6 +14,8 @@ export const ViewContext = createContext<{
   embedded: boolean;
   /** A draft's model as its composer shows it: choosing another project keeps it. */
   draftModel?: ModelChoice;
+  /** When the thread's newest work block began while it works, as its header counts: the composer's "Working for" counts from it too (D94). */
+  workFrom?: number | undefined;
 }>({
   selection: { type: "none" },
   conversation: null,
