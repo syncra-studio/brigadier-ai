@@ -441,11 +441,17 @@ impl SessionManager {
         if unnamed {
             self.title_unnamed_worker(&task);
         }
+        let row = row.map(|row| cli::StartRow {
+            work: row.work,
+            source: row.source,
+            picked,
+        });
         self.orchestrator_step(
             &caller.conversation_id,
             crate::work::OrchestratorStepKind::Created {
                 task_id: task.id.clone(),
                 off_routing: off_routing.clone(),
+                row: row.as_ref().map(brigadier_cli::render::start_row),
             },
         )
         .await;
@@ -453,11 +459,7 @@ impl SessionManager {
             worker: worker_row(&task, &Default::default()),
             permission: permission_word(permission),
             base,
-            row: row.map(|row| cli::StartRow {
-                work: row.work,
-                source: row.source,
-                picked,
-            }),
+            row,
             review: review.map(|authors| cli::StartReview {
                 other_provider: !authors.providers.contains(&provider),
                 of: authors.ids,
@@ -1771,6 +1773,7 @@ impl SessionManager {
                 crate::work::OrchestratorStepKind::Created {
                     task_id: task.id.clone(),
                     off_routing: Some(line.clone()),
+                    row: None,
                 },
             )
             .await;

@@ -5,7 +5,7 @@ use base64::Engine as _;
 use crate::protocol::{
     Answer, AskOutput, Changes, CloseOutput, CommandFact, CommandStatus, GitFacts, Item, ItemKind,
     LibraryOutput, ManageOutput, MergeWord, QueueOutput, QueueState, ReadOutput, SendOutput,
-    SessionsOutput, ShowOutput, StartOutput, ToolOutput, TurnCommands, WaitOutput, WhyBy,
+    SessionsOutput, ShowOutput, StartOutput, StartRow, ToolOutput, TurnCommands, WaitOutput, WhyBy,
     WhyOutput, WorkerRow, WorkerState, WorkersOutput,
 };
 
@@ -499,6 +499,21 @@ pub fn read(output: &ReadOutput) -> String {
     out
 }
 
+/// What a start's `--work` row picked: "Your row "Plan" picked its agent, model and effort."
+/// Its reply says it, and the thread's start row (goal 12).
+pub fn start_row(row: &StartRow) -> String {
+    let whose = match row.source.as_str() {
+        "user" => "Your row",
+        _ => "The shipped row",
+    };
+    let picked = match row.picked.as_slice() {
+        [] => "nothing; your flags set it all".to_owned(),
+        [one] => format!("its {one}"),
+        [rest @ .., last] => format!("its {} and {last}", rest.join(", ")),
+    };
+    format!("{whose} \"{}\" picked {picked}.", row.work)
+}
+
 pub fn start(output: &StartOutput) -> String {
     let worker = &output.worker;
     let place = match (&worker.branch, &output.base) {
@@ -507,18 +522,10 @@ pub fn start(output: &StartOutput) -> String {
         (None, Some(base)) => format!("in a new worktree from {base}"),
         (None, None) => "in this session's checkout".into(),
     };
-    let row = output.row.as_ref().map_or(String::new(), |row| {
-        let whose = match row.source.as_str() {
-            "user" => "Your row",
-            _ => "The shipped row",
-        };
-        let picked = match row.picked.as_slice() {
-            [] => "nothing; your flags set it all".to_owned(),
-            [one] => format!("its {one}"),
-            [rest @ .., last] => format!("its {} and {last}", rest.join(", ")),
-        };
-        format!("{whose} \"{}\" picked {picked}.\n", row.work)
-    });
+    let row = output
+        .row
+        .as_ref()
+        .map_or(String::new(), |row| format!("{}\n", start_row(row)));
     let review = output.review.as_ref().map_or(String::new(), |review| {
         let authors: Vec<&str> = review.authors.iter().map(|agent| agent.id()).collect();
         let on = if review.other_provider {

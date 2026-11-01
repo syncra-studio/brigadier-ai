@@ -1,17 +1,26 @@
 import type { FC } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { QuietBrief } from "@/app/conversation/activity/QuietBrief";
 import { WorkerName } from "@/app/conversation/activity/WorkerName";
 import type { Task } from "@/ipc/generated";
+import { useBoard } from "@/state/board";
 
-/** A start's detail: each worker's brief, in a quiet box. */
-export const Briefs: FC<{ tasks: readonly Task[] }> = ({ tasks }) => (
-  <div className="flex flex-col gap-2">
-    {tasks.map((task) => (
-      <div key={task.id} className="flex flex-col gap-1">
-        {tasks.length > 1 && <WorkerName taskId={task.id} />}
-        <QuietBrief>{task.spec}</QuietBrief>
-      </div>
-    ))}
-  </div>
-);
+/** A start's detail: each worker's brief, in a quiet box, and what its routing row picked (goal 12). */
+export const Briefs: FC<{ tasks: readonly Task[] }> = ({ tasks }) => {
+  const rows = useBoard(useShallow((s) => tasks.map((task) => {
+    const start = s.board?.orchestratorSteps.find((step) => step.kind.type === "created" && step.kind.taskId === task.id);
+    return start?.kind.type === "created" ? start.kind.row : undefined;
+  })));
+  return (
+    <div className="flex flex-col gap-2">
+      {tasks.map((task, index) => (
+        <div key={task.id} className="flex flex-col gap-1">
+          {tasks.length > 1 && <WorkerName taskId={task.id} />}
+          <QuietBrief>{task.spec}</QuietBrief>
+          {rows[index] && <span>{rows[index]}</span>}
+        </div>
+      ))}
+    </div>
+  );
+};

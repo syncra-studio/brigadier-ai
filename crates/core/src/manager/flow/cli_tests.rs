@@ -2668,6 +2668,29 @@ async fn a_start_off_the_routing_runs_and_says_so() {
             .flatten()
             .all(|line| json!(line) == first || line == no_work)
     );
+    // Its start row says what the row picked, the reply's words; a start with no Work, nothing.
+    let rows: Vec<(Option<String>, Option<String>)> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            crate::work::OrchestratorStepKind::Created {
+                off_routing, row, ..
+            } => Some((off_routing.clone(), row.clone())),
+            _ => None,
+        })
+        .collect();
+    let picked_all = format!("Your row \"{WORK}\" picked its agent, model and effort.");
+    assert!(
+        rows.iter()
+            .any(|(_, row)| row.as_deref() == Some(picked_all.as_str())),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .filter(|(off, _)| off.as_deref() == Some(no_work))
+            .all(|(_, row)| row.is_none()),
+        "{rows:?}"
+    );
 
     // The first row's model out of quota: the next row is the routing's; the first still is too.
     let now = crate::now_ms();

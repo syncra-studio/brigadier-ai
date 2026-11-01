@@ -120,3 +120,22 @@ test("a worker started off the routing shows one row, runs off your routing, wit
     await server.close();
   }
 });
+
+test("a start's detail says what its routing row picked, the words its reply says; a start with no row says nothing more (goal 12)", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { Briefs } = await server.ssrLoadModule("/src/app/conversation/activity/Briefs.tsx");
+    const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
+    const task = { id: "t1", number: 1, title: "Count README lines", spec: "Count the lines of README.md.", kind: "implement", state: "running", createdAtMs: 1000, updatedAtMs: 1000, attempts: [] } as unknown as Task;
+    const picked = "Your row \"Mechanical changes and search\" picked its agent, model and effort.";
+    const text = (created: object) => {
+      const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task }, orchestratorSteps: [step(1, created)] }, orchestrator: null }));
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store }, React.createElement(Briefs, { tasks: [task] })))
+        .replace(/<[^>]+>/g, "").replaceAll("&quot;", "\"");
+    };
+    assert.equal(text({ type: "created", taskId: "t1", row: picked }), `Count the lines of README.md.${picked}`);
+    assert.equal(text({ type: "created", taskId: "t1" }), "Count the lines of README.md.");
+  } finally {
+    await server.close();
+  }
+});

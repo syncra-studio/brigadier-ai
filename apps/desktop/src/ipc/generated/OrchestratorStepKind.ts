@@ -70,7 +70,12 @@ text?: string, byUser?: boolean, } | { "type": "stopped", taskId: TaskId, reason
  * It runs on another agent, model or effort than the user's routing picks now for its
  * kind of work (D8, D77): the line that says so. It ran all the same.
  */
-offRouting?: string, } | { "type": "answered", taskId: TaskId, question: string, answer: string, why: string, } | { "type": "landed", taskIds: Array<TaskId>, commits: number, branch: string, head: string, } | { "type": "proof", id: string, 
+offRouting?: string, 
+/**
+ * What its `--work` row picked, as its start's reply says it ("Your row "Plan"
+ * picked its agent, model and effort."): its start row's detail (goal 12).
+ */
+row?: string, } | { "type": "answered", taskId: TaskId, question: string, answer: string, why: string, } | { "type": "landed", taskIds: Array<TaskId>, commits: number, branch: string, head: string, } | { "type": "proof", id: string, 
 /**
  * Its file name as the thread gave it.
  */

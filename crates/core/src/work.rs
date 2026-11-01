@@ -1841,6 +1841,11 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         off_routing: Option<String>,
+        /// What its `--work` row picked, as its start's reply says it ("Your row "Plan"
+        /// picked its agent, model and effort."): its start row's detail (goal 12).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        row: Option<String>,
     },
     /// "Answered {worker}: {answer} — {why}".
     Answered {
