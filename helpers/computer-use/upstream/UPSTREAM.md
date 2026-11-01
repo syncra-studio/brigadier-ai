@@ -198,6 +198,8 @@ Patches applied, in order:
 
 - `patches/0168-windows-edge-page-typing.diff`: Accept exact data document URLs and Edge's uniquely bound address-bar evidence for background caret insertion, preserving endpoint ownership and exact page/field checks; explain page mutation refusals with element-token alternatives.
 
+- `patches/0169-windows-typing-and-page-patches-formatted.diff`: Format the Windows typing and Edge page typing code from 0165 and 0168 so cargo fmt --check passes.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -5274,7 +5274,8 @@ impl Tool for TypeTextTool {
             move || {
                 let (worker_typed, worker_typing) = (typed.clone(), typing.clone());
                 crate::uia::windows_enum::run_uia_with_deadline_cancelable(
-                    "caret insertion", insert_limit,
+                    "caret insertion",
+                    insert_limit,
                     "unconfirmed insertion; no automatic retry",
                     move |cancelled| -> anyhow::Result<_> {
                         let _com = super::launch_browser::Apartment::new();
@@ -5287,28 +5288,39 @@ impl Tool for TypeTextTool {
                             use windows::core::Interface;
                             let element = std::mem::ManuallyDrop::new(unsafe {
                                 windows::Win32::UI::Accessibility::IUIAutomationElement::from_raw(
-                                    e.as_ptr() as *mut _
+                                    e.as_ptr() as *mut _,
                                 )
                             });
                             unsafe { element.CurrentNativeWindowHandle() }
-                                .ok().map(|h| h.0 as usize as u64)
+                                .ok()
+                                .map(|h| h.0 as usize as u64)
                         });
                         crate::uia::click::ensure_active(&cancelled)?;
                         let text_target = crate::input::keyboard::background_text_target(
-                            hwnd, native, admitted.as_ref().and_then(|e| e.rect), elem_idx.is_some(),
+                            hwnd,
+                            native,
+                            admitted.as_ref().and_then(|e| e.rect),
+                            elem_idx.is_some(),
                         )?;
                         // Stop at the user's own mouse or keyboard input between
                         // characters; never type on when it cannot be watched.
-                        let mut monitor = crate::input::inject::foreground_watch::UserInputMonitor::start(
-                            pid, hwnd as usize,
-                        );
+                        let mut monitor =
+                            crate::input::inject::foreground_watch::UserInputMonitor::start(
+                                pid,
+                                hwnd as usize,
+                            );
                         if monitor.is_none() {
                             let units = crate::input::text_policy::text_units(&text_for_post);
                             return Ok((
                                 Err(crate::input::text_policy::InsertStopped::at(
-                                    crate::input::text_policy::InsertStop::Unmonitored, &units, 0,
-                                ).into()),
-                                None, None, false,
+                                    crate::input::text_policy::InsertStop::Unmonitored,
+                                    &units,
+                                    0,
+                                )
+                                .into()),
+                                None,
+                                None,
+                                false,
                             ));
                         }
                         let read = |idx: Option<usize>| match idx {
@@ -5317,21 +5329,30 @@ impl Tool for TypeTextTool {
                         };
                         let before = read(verify_idx);
                         crate::uia::click::ensure_active(&cancelled)?;
-                        let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
-                            (|| -> anyhow::Result<()> {
-                                crate::uia::click::ensure_active(&cancelled)?;
-                                worker_typing.store(TYPING_STARTED, std::sync::atomic::Ordering::Release);
-                                let sent = crate::input::keyboard::post_insert_text_watched(
-                                    text_target, &text_for_post, _delay_ms.min(200), &cancelled,
-                                    Some(&worker_typed),
-                                    || monitor.as_mut().and_then(|monitor| monitor.check()),
-                                );
-                                worker_typing.store(TYPING_ENDED, std::sync::atomic::Ordering::Release);
-                                sent
-                            })()
-                        });
+                        let post_res =
+                            crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                                (|| -> anyhow::Result<()> {
+                                    crate::uia::click::ensure_active(&cancelled)?;
+                                    worker_typing.store(
+                                        TYPING_STARTED,
+                                        std::sync::atomic::Ordering::Release,
+                                    );
+                                    let sent = crate::input::keyboard::post_insert_text_watched(
+                                        text_target,
+                                        &text_for_post,
+                                        _delay_ms.min(200),
+                                        &cancelled,
+                                        Some(&worker_typed),
+                                        || monitor.as_mut().and_then(|monitor| monitor.check()),
+                                    );
+                                    worker_typing
+                                        .store(TYPING_ENDED, std::sync::atomic::Ordering::Release);
+                                    sent
+                                })()
+                            });
                         if post_res.as_ref().err().is_some_and(|e| {
-                            e.downcast_ref::<crate::input::text_policy::InsertStopped>().is_some()
+                            e.downcast_ref::<crate::input::text_policy::InsertStopped>()
+                                .is_some()
                         }) {
                             // Stopped part way: the reply reports what was typed.
                             return Ok((post_res, before, None, false));
@@ -5340,15 +5361,25 @@ impl Tool for TypeTextTool {
                         crate::uia::click::ensure_active(&cancelled)?;
                         let after = read(verify_idx);
                         let observed = post_message_readback_observed(
-                            before.as_deref(), after.as_deref(), &text_for_post,
+                            before.as_deref(),
+                            after.as_deref(),
+                            &text_for_post,
                         );
                         Ok((post_res, before, after, observed))
                     },
-                ).map_err(|error| anyhow::anyhow!(type_text_deadline_reply(
-                    error, insert_limit, &text_for_report, &typed, &typing,
-                )))?
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!(type_text_deadline_reply(
+                        error,
+                        insert_limit,
+                        &text_for_report,
+                        &typed,
+                        &typing,
+                    ))
+                })?
             }
-        }).await;
+        })
+        .await;
         match result {
             Ok(Ok((Ok(()), before, after, observed))) => {
                 // Three-way verdict. Crucially, "couldn't read the field" is NOT

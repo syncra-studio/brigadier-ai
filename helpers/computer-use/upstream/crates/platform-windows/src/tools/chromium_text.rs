@@ -216,7 +216,9 @@ unsafe fn read_field(hwnd: u64, retained: &RetainedElement) -> Result<Field> {
     // document with the field's ancestor before accepting this fallback.
     let url = url
         .or_else(|| unsafe { super::launch_browser::address_bar_url(&automation, &root) })
-        .context("the page does not expose its address; use set_value with the field token instead")?;
+        .context(
+            "the page does not expose its address; use set_value with the field token instead",
+        )?;
     if !super::browser_target::is_document_url(&url)
         && !super::browser_target::url_matches(&url, &url, true)
     {
@@ -464,7 +466,9 @@ mod tests {
         assert!(select_bound_target(&native, &[tab.clone(), second], &tab.url).is_err());
         let mut heuristic = tab;
         heuristic.bounds = None;
-        assert!(select_bound_target(&native, std::slice::from_ref(&heuristic), &heuristic.url).is_err());
+        assert!(
+            select_bound_target(&native, std::slice::from_ref(&heuristic), &heuristic.url).is_err()
+        );
     }
 
     #[tokio::test]

@@ -34,9 +34,8 @@ fn background_typing_watches_for_the_users_input_between_characters() {
     assert!(typing.contains("monitor.check()"));
     assert!(typing.contains("InsertStop::Unmonitored"));
     assert!(typing.contains("downcast_ref::<crate::input::text_policy::InsertStopped>()"));
-    let watch = include_str!(
-        "../../../upstream/crates/platform-windows/src/input/foreground_watch.rs"
-    );
+    let watch =
+        include_str!("../../../upstream/crates/platform-windows/src/input/foreground_watch.rs");
     // Pointer motion counts: the mouse hook notes input before filtering to buttons.
     let mouse = watch.split("fn mouse_event(").nth(1).unwrap();
     let noted = mouse.find("note_user_input(").unwrap();

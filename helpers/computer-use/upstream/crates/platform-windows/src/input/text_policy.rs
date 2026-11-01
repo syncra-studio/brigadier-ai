@@ -59,7 +59,10 @@ fn is_low_surrogate(unit: u16) -> bool {
 
 /// Characters in a run of whole UTF-16 characters.
 pub fn char_count(units: &[u16]) -> usize {
-    units.iter().filter(|unit| !is_low_surrogate(**unit)).count()
+    units
+        .iter()
+        .filter(|unit| !is_low_surrogate(**unit))
+        .count()
 }
 
 impl InsertStopped {
@@ -119,7 +122,10 @@ impl std::fmt::Display for InsertStopped {
             )?;
         }
         if self.reason == InsertStop::Unacknowledged {
-            write!(f, ", though the character the app did not acknowledge may have landed")?;
+            write!(
+                f,
+                ", though the character the app did not acknowledge may have landed"
+            )?;
         }
         write!(f, ". Read fresh state before continuing.")
     }
@@ -250,9 +256,15 @@ mod tests {
         assert_eq!((stopped.typed, stopped.total), (4, 11));
         assert_eq!(stopped.rest, "o world");
         let reply = stopped.to_string();
-        assert!(reply.contains("because the user used the mouse or keyboard"), "{reply}");
+        assert!(
+            reply.contains("because the user used the mouse or keyboard"),
+            "{reply}"
+        );
         assert!(reply.contains("Typed 4 of 11 characters"), "{reply}");
-        assert!(reply.contains("remaining 7 (starting \"o world\") were not typed"), "{reply}");
+        assert!(
+            reply.contains("remaining 7 (starting \"o world\") were not typed"),
+            "{reply}"
+        );
     }
 
     #[test]
@@ -286,8 +298,14 @@ mod tests {
         let units = text_units("x😀y");
         let progress = std::sync::atomic::AtomicUsize::new(0);
         let pauses = std::cell::Cell::new(0);
-        insert_units(&units, || None, |_| true, || pauses.set(pauses.get() + 1), Some(&progress))
-            .unwrap();
+        insert_units(
+            &units,
+            || None,
+            |_| true,
+            || pauses.set(pauses.get() + 1),
+            Some(&progress),
+        )
+        .unwrap();
         assert_eq!(progress.load(std::sync::atomic::Ordering::Acquire), 3);
         // Between characters only, not after the last one.
         assert_eq!(pauses.get(), 2);
@@ -339,7 +357,10 @@ mod tests {
             InsertStop::Unacknowledged,
         ] {
             let reply = InsertStopped::at(reason, &text_units("abc"), 1).to_string();
-            assert!(!reply.to_ascii_lowercase().contains("foreground"), "{reply}");
+            assert!(
+                !reply.to_ascii_lowercase().contains("foreground"),
+                "{reply}"
+            );
         }
     }
 }
