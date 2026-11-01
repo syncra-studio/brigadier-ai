@@ -28,7 +28,7 @@ const projectOf = (id: string, name: string) =>
 /** The repository at `path`: on main, but the detached one isn't on a branch. */
 const repoAt = (path: string): RepoInfo => ({
   path, name: path.split("/").at(-1)!, currentBranch: path.endsWith("detached") ? null : "main", dirty: false,
-  branches: [{ name: "main", commit: "a1", checkedOutAt: path.endsWith("detached") ? null : path }],
+  branches: [{ name: "main", commit: "a1", checkedOutAt: path.endsWith("detached") ? null : path, worker: false }],
 });
 const conversation = {
   id: "c1", kind: "session", projectId: "p1", title: "Earlier work", pinnedAtMs: null, createdAtMs: start, updatedAtMs: start,

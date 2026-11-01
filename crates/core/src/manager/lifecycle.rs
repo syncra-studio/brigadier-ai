@@ -755,6 +755,15 @@ impl SessionManager {
                 "This session has no worktree of its own to remove.".into(),
             ));
         };
+        // No session is let into the folder until it is gone (goal 9).
+        let _sharing = self.shared_workspaces.lock().await;
+        if self.joined(&conversation, Path::new(&path))
+            || !self.sharers(Path::new(&path), id).is_empty()
+        {
+            return Err(Error::Invalid(
+                "Another session works in this worktree too, so it stays.".into(),
+            ));
+        }
         self.quiet_for_close(id).await?;
         // No turn starts from here until the folder is gone: a message or a worker's report
         // that comes meanwhile waits for the turn after, in a fresh worktree.
@@ -929,15 +938,47 @@ impl SessionManager {
         // A tab chat's folder, and what runs in it, is its own owner's and goes with it: the
         // shared records never name it.
         let tab_chat = conversation.tab_chat.is_some();
+        // Held until its worktree is let go: no session is let into it meanwhile (goal 9).
+        let sharing = self.shared_workspaces.lock().await;
         if !tab_chat {
-            // Also stop detached commands in the session folder, including retained worktrees.
+            // Also stop detached commands in the session folder, including retained worktrees,
+            // but none in a folder of it another open session works in (goal 9).
             let folder_owner = super::session_dir::folder_owner(id);
-            let process = Artifact::ProcessesIn {
-                dir: self.session_dir(id).root().to_string_lossy().into_owned(),
-            };
+            let root = self.session_dir(id).root().to_path_buf();
+            let keeps: Vec<PathBuf> = self
+                .core
+                .catalog()
+                .conversations
+                .iter()
+                .filter(|other| {
+                    &other.id != id && other.lifecycle != Lifecycle::Archived && !other.deleting
+                })
+                .filter_map(|other| super::shared_workspace::folder_of(other.setup.as_ref()))
+                .filter(|folder| folder.starts_with(&root))
+                .collect();
             let ledger = self.runtime.ledger();
-            if let Err(err) = ledger.record(&folder_owner, process).await {
-                tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
+            let whole = Artifact::ProcessesIn {
+                dir: root.to_string_lossy().into_owned(),
+            };
+            if !keeps.is_empty()
+                && let Err(err) = ledger.unrecord(&folder_owner, whole.clone()).await
+            {
+                tracing::warn!(conversation = %id, error = %err, "could not narrow the session's process cleanup");
+            }
+            let sweeps = if keeps.is_empty() {
+                vec![whole]
+            } else {
+                super::shared_workspace::sweep_dirs(&root, &keeps)
+                    .into_iter()
+                    .map(|dir| Artifact::ProcessesIn {
+                        dir: dir.to_string_lossy().into_owned(),
+                    })
+                    .collect()
+            };
+            for process in sweeps {
+                if let Err(err) = ledger.record(&folder_owner, process).await {
+                    tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
+                }
             }
             let _ = ledger.stop_processes(&folder_owner).await;
         }
@@ -978,7 +1019,13 @@ impl SessionManager {
         if !self.runtime.ledger().artifacts(&previews).is_empty() {
             owners.push(previews);
         }
-        let session_worktree_goes = if deleting {
+        // Another open session works in its folder: what is uncommitted there is that session's
+        // too, so no WIP commit is made; the folder stays while that session uses it.
+        let shared = super::shared_workspace::folder_of(conversation.setup.as_ref())
+            .is_some_and(|folder| !self.sharers(&folder, id).is_empty());
+        let session_worktree_goes = if shared {
+            true
+        } else if deleting {
             self.keep_session_changes(conversation).await
         } else {
             match &conversation.setup {
@@ -1017,6 +1064,7 @@ impl SessionManager {
         if session_worktree_goes {
             self.forget_session_worktree(conversation).await;
         }
+        drop(sharing);
     }
 
     /// Archive retains unmerged or dirty worktrees, without making a WIP commit.
@@ -1176,6 +1224,13 @@ impl SessionManager {
         else {
             return false;
         };
+        // A folder it joined, or one another open session works in, isn't its to forget: its
+        // branch and record stay as they are (goal 9).
+        if let Some(folder) = super::shared_workspace::folder_of(conversation.setup.as_ref())
+            && (self.joined(conversation, &folder) || !self.sharers(&folder, id).is_empty())
+        {
+            return false;
+        }
         // The session worktree is gone. The branch stays while it holds work the base does
         // not have; a restored session creates it again from the base otherwise.
         let mut deleted_branch = false;
@@ -1289,24 +1344,10 @@ impl SessionManager {
                 "only an archived conversation can be restored".into(),
             ));
         }
-        let admitting = self.local_checkouts.lock().await;
-        if let Some(Setup::Session {
-            repo,
-            environment: Environment::LocalCheckout { .. },
-            ..
-        }) = &conversation.setup
-            && let Some(holder) = self.checkout_holder(repo, Some(&id))
-        {
-            return Err(Error::Invalid(format!(
-                "“{}” already works in this checkout. Archive it before restoring this session.",
-                holder.title
-            )));
-        }
         let restored = self
             .core
             .set_lifecycle(id.clone(), Lifecycle::Active)
             .await?;
-        drop(admitting);
         self.open_fence(&id);
         Ok(restored)
     }

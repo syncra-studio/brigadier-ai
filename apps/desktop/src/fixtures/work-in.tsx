@@ -1,7 +1,8 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a new session's
  * utility bar (project, Work in, branch) on a project whose folder has `feature-x` checked out,
- * IPC mocked. It opens Work in, picks Local checkout and then New worktree again, and writes the
+ * IPC mocked. It opens Work in, picks Local checkout, New worktree again, then Existing branch
+ * and a branch another session works on (goal 9), and writes the
  * menu's rows, the pills and the setup each asks for as JSON into `<pre id="work-in-result">`;
  * `stop=1` holds the page with the menu open for a screenshot, `stop=local` once Local checkout
  * is picked.
@@ -22,7 +23,12 @@ const query = new URLSearchParams(location.search);
 const project = { id: "p1", name: "todo-app", createdAtMs: 0, repos: [{ path: "/work/todo-app", name: "todo-app" }], prefs: {}, trust: [] } as unknown as Project;
 const repo: RepoInfo = {
   path: "/work/todo-app", name: "todo-app", currentBranch: "feature-x", dirty: true,
-  branches: [{ name: "main", commit: "a1", checkedOutAt: null }, { name: "feature-x", commit: "b2", checkedOutAt: "/work/todo-app" }],
+  branches: [
+    { name: "main", commit: "a1", checkedOutAt: null, worker: false },
+    { name: "feature-x", commit: "b2", checkedOutAt: "/work/todo-app", worker: false },
+    { name: "fix-login", commit: "c3", checkedOutAt: "/Users/me/.brigadier/s/ab12cd34/work", worker: false },
+    { name: "brigadier/ab12cd34/task-1", commit: "d4", checkedOutAt: "/Users/me/.brigadier/s/ab12cd34/workers/1/work", worker: true },
+  ],
 };
 
 mockIPC((command, payload) => {
@@ -51,6 +57,7 @@ async function until<T>(what: string, find: () => T | null | undefined, ms = 10_
 const pill = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const rows = () => [...document.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
 const row = (label: string) => rows().find((each) => each.textContent === label);
+const options = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
 const setup = () => JSON.parse(document.querySelector("#work-in-setup")?.textContent ?? "null") as unknown;
 const hint = () => document.querySelector("#work-in-hint")?.textContent ?? "";
 const press = (element: HTMLElement) => {
@@ -82,6 +89,20 @@ async function drive(): Promise<Record<string, unknown>> {
   press(row("New worktree")!);
   await until("the base branch pill again", () => pill("Base branch"));
   seen.backSetup = setup();
+  // Existing branch: nothing picked yet, then the branches with their folders.
+  press(pill("Work in")!);
+  await until("the Work in menu a third time", () => rows().length > 0);
+  press(row("Existing branch")!);
+  await until("the existing branch pill", () => pill("Branch"));
+  seen.existingPills = [pill("Work in")?.textContent, pill("Branch")?.textContent];
+  seen.existingProblem = setup();
+  press(pill("Branch")!);
+  await until("the branch list", () => options().length > 0);
+  seen.branchRows = options().map((each) => each.textContent);
+  if (query.get("stop") === "existing") return seen;
+  press(options().find((each) => each.textContent?.startsWith("fix-login"))!);
+  await until("the picked branch", () => pill("Branch")?.textContent === "fix-login");
+  seen.existingSetup = setup();
   return seen;
 }
 

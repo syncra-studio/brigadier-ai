@@ -131,6 +131,8 @@ impl SessionManager {
         };
         if self.recorded_workspace(id).is_none() {
             self.ensure_target(id, Path::new(repo), environment).await?;
+        } else {
+            self.check_joined(&conversation).await?;
         }
         self.recorded_workspace(id)
             .map(Some)

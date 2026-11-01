@@ -292,13 +292,42 @@ impl SessionManager {
         let owner = folder_owner(id);
         let ledger = self.runtime.ledger();
         let dir = self.session_dir(id);
-        let worktree_left = ledger.owners().into_iter().any(|(holder, artifacts, _)| {
-            holder != owner
-                && artifacts.iter().any(|artifact| {
-                    matches!(artifact, Artifact::Worktree { path, .. } if Path::new(path).starts_with(dir.root()))
+        let holders: Vec<String> = ledger
+            .owners()
+            .into_iter()
+            .filter(|(holder, artifacts, _)| {
+                *holder != owner
+                    && artifacts.iter().any(|artifact| {
+                        matches!(artifact, Artifact::Worktree { path, .. } if Path::new(path).starts_with(dir.root()))
+                    })
+            })
+            .map(|(holder, _, _)| holder)
+            .collect();
+        // Goal 9: an open session works in a worktree here; the folder is its to let go now,
+        // and goes with that session's own folder.
+        let sharer = holders.iter().find_map(|holder| {
+            let other = ConversationId(holder.strip_prefix("session:")?.to_owned());
+            self.core
+                .conversation(&other)
+                .is_ok_and(|other| {
+                    other.lifecycle != crate::model::Lifecycle::Archived && !other.deleting
                 })
+                .then_some(other)
         });
-        if worktree_left {
+        if let Some(other) = sharer {
+            for artifact in ledger.artifacts(&owner) {
+                if ledger
+                    .record(&folder_owner(&other), artifact.clone())
+                    .await
+                    .is_err()
+                    || ledger.unrecord(&owner, artifact).await.is_err()
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if !holders.is_empty() {
             tracing::warn!(conversation = %id, "a worktree stays in the deleted session's folder, so the folder stays");
             return false;
         }

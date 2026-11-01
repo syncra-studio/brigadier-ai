@@ -138,7 +138,7 @@ impl SessionManager {
         // Keep checkout admission locked from the environment's git side effects through
         // recording the new session, just as starting a local-checkout session does.
         let admitting = if place == ForkPlace::Workspace {
-            Some(self.local_checkouts.lock().await)
+            Some(self.shared_workspaces.lock().await)
         } else {
             None
         };
@@ -460,9 +460,6 @@ impl SessionManager {
                 start: Some(start.to_owned()),
             }),
             ForkPlace::Workspace => {
-                if let Some(holder) = self.checkout_holder(repo, None) {
-                    return Err(super::checkout_taken(&holder));
-                }
                 let (git, repo, start, same, name) = (
                     self.git.clone(),
                     repo.to_owned(),

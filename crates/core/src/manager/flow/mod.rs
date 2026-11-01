@@ -2648,6 +2648,8 @@ mod same_session_tests;
 #[cfg(unix)]
 mod search_tests;
 #[cfg(unix)]
+mod shared_worktree_tests;
+#[cfg(unix)]
 mod spare_worktree_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]

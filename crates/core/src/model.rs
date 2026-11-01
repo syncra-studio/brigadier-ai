@@ -290,6 +290,9 @@ pub enum EnvironmentRequest {
         /// The session branch's name. Absent: Brigadier names it (`brigadier/<session>/session`).
         branch: Option<String>,
     },
+    /// Work on an existing `branch` as it is (goal 9): in the folder that has it checked out,
+    /// shared with any session already there, or else in a worktree of its own on it.
+    Existing { branch: String },
 }
 
 /// A session's environment once set up.
@@ -451,6 +454,14 @@ impl Setup {
                         branch: branch
                             .filter(|branch| !branch.trim().is_empty())
                             .unwrap_or_else(|| format!("{prefix}{}/session", id.short())),
+                        path: None,
+                        start: None,
+                    },
+                    // Its folder and merge target are filled in when it is created
+                    // (`SessionManager::existing_place`); the branch is its own target until then.
+                    EnvironmentRequest::Existing { branch } => Environment::NewWorktree {
+                        base: branch.clone(),
+                        branch,
                         path: None,
                         start: None,
                     },
@@ -1466,6 +1477,9 @@ pub struct BranchInfo {
     pub commit: String,
     /// The worktree that has it checked out (the user's checkout or another), if any.
     pub checked_out_at: Option<String>,
+    /// A running worker works on it (its task branch), so no session is started there.
+    #[serde(default)]
+    pub worker: bool,
 }
 
 /// A repository's state, for the composer.

@@ -67,13 +67,18 @@ export type Selection =
  * The composer's choices for a conversation that does not exist yet. `null` fields follow
  * the resolution order: the project's remembered choice, then the global default.
  */
+/** Where a draft session works: a new worktree of its own (the default), the local checkout, or
+    an existing branch as it is, where it is checked out (goal 9). */
+export type DraftEnvironment = EnvironmentKind | "existingBranch";
+
 export type DraftSetup = {
   /** The project these choices were made for; they reset when the project changes. */
   projectId: string | null;
-  /** Where the session works: a new worktree of its own (the default) or the local checkout. */
-  environment: EnvironmentKind;
+  environment: DraftEnvironment;
   /** New worktree: the branch it starts from and merges into. Absent: the checked-out branch. */
   base: string | null;
+  /** Existing branch: the branch picked to work on. */
+  branch: string | null;
   /** New worktree: the session branch's name. Empty: Brigadier names it. */
   sessionBranch: string;
   permission: PermissionLevel | null;
@@ -87,6 +92,7 @@ export function emptyDraft(projectId: string | null): DraftSetup {
     projectId,
     environment: "newWorktree",
     base: null,
+    branch: null,
     sessionBranch: "",
     permission: null,
     model: null,

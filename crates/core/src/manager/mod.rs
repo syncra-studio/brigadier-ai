@@ -95,6 +95,7 @@ mod secrets;
 mod session_dir;
 mod session_messages;
 mod setup_script;
+mod shared_workspace;
 mod side_chat;
 mod sidecars;
 mod source_actions;
@@ -136,7 +137,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::model::{
     Conversation, ConversationId, ConversationKind, DomainEvent, Environment, EnvironmentRequest,
-    Lifecycle, ModelChoice, ProjectId, Rating, RepoInfo, Setup, SetupRequest,
+    ModelChoice, ProjectId, Rating, RepoInfo, Setup, SetupRequest,
 };
 use crate::runtime::{Runtime, Spawner};
 use crate::sessions::Origin;
@@ -211,9 +212,10 @@ pub struct SessionManager {
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
-    /// Held while a session is let into a project's own checkout (who works there looked for,
-    /// then the session recorded), so two can't both be let in.
-    local_checkouts: tokio::sync::Mutex<()>,
+    /// Held while a session is let into a folder another session may work in too (the folder
+    /// looked for, then the session recorded as using it) and while a closing session lets its
+    /// folder go, so a folder is never removed under a session just let into it (goal 9).
+    shared_workspaces: tokio::sync::Mutex<()>,
     /// Held while an open uncommitted-changes question is looked for and one opened, so two
     /// delegations at once open one card (#179).
     uncommitted_asks: tokio::sync::Mutex<()>,
@@ -430,7 +432,7 @@ impl SessionManager {
             cli_questions: Default::default(),
             fork_failures: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
-            local_checkouts: tokio::sync::Mutex::new(()),
+            shared_workspaces: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             turn_snapshots: turn_changes::TurnSnapshots::default(),
@@ -596,6 +598,7 @@ impl SessionManager {
     /// Branches and state of a repository, for the composer's pickers.
     pub async fn repo_info(&self, path: String) -> Result<RepoInfo> {
         let git = self.git.clone();
+        let workers = self.worker_branches(Path::new(&path)).await;
         blocking(move || {
             let repo = git.open(Path::new(&path)).map_err(git_error)?;
             let state = repo.state().map_err(git_error)?;
@@ -612,6 +615,7 @@ impl SessionManager {
                     .branches
                     .into_iter()
                     .map(|branch| crate::model::BranchInfo {
+                        worker: workers.contains(&branch.name),
                         name: branch.name,
                         commit: branch.commit.0,
                         checked_out_at: branch
@@ -744,7 +748,8 @@ impl SessionManager {
 
     /// Creates a session or Chat. A session starts a workspace of its own, as its first tab. A
     /// local-checkout session asked to start on a new branch gets that branch created from
-    /// `create_from` first.
+    /// `create_from` first. One on an existing branch works where that branch is checked out,
+    /// beside any session already there (goal 9), or in a worktree of its own on it.
     pub async fn create_conversation(
         &self,
         kind: ConversationKind,
@@ -760,16 +765,15 @@ impl SessionManager {
         if let Some(choice) = orchestrator {
             self.check_choice(choice)?;
         }
-        let _admitting = self.local_checkouts.lock().await;
-        if let Some(SetupRequest::Session {
-            repo,
-            environment: EnvironmentRequest::LocalCheckout { .. },
-            ..
-        }) = &setup
-            && let Some(holder) = self.checkout_holder(repo, None)
-        {
-            return Err(checkout_taken(&holder));
-        }
+        let _admitting = self.shared_workspaces.lock().await;
+        let existing = match &setup {
+            Some(SetupRequest::Session {
+                repo,
+                environment: EnvironmentRequest::Existing { branch },
+                ..
+            }) => Some(self.existing_place(repo, branch).await?),
+            _ => None,
+        };
         if let Some(SetupRequest::Session {
             repo,
             environment:
@@ -792,27 +796,20 @@ impl SessionManager {
         }
         let id = ConversationId::generate();
         let (prefix, _) = self.branch_prefix_of(project_id.as_ref());
-        let setup = setup.map(|request| Setup::from_request(request, &id, &prefix));
-        self.core
+        let mut setup = setup.map(|request| Setup::from_request(request, &id, &prefix));
+        if let (Some(place), Some(Setup::Session { environment, .. })) = (&existing, &mut setup) {
+            environment.clone_from(&place.environment);
+        }
+        let created = self
+            .core
             .create_conversation(id, kind, project_id, title, setup, Origin::default())
-            .await
-    }
-
-    /// The other session that works in `repo`'s own folder, if one does: an open one, or one
-    /// archived or deleted whose cleanup hasn't stopped it yet. Two sessions there would edit,
-    /// commit and switch branches over each other.
-    fn checkout_holder(&self, repo: &str, except: Option<&ConversationId>) -> Option<Conversation> {
-        self.core.catalog().conversations.into_iter().find(|other| {
-            Some(&other.id) != except
-                && (other.lifecycle != Lifecycle::Archived
-                    || other.cleanup_pending
-                    || other.deleting)
-                && matches!(&other.setup, Some(Setup::Session {
-                        repo: at,
-                        environment: Environment::LocalCheckout { .. },
-                        ..
-                    }) if at == repo)
-        })
+            .await?;
+        let created = match existing {
+            Some(place) => self.let_into(created, place).await?,
+            None => created,
+        };
+        self.tell_if_shared(&created).await?;
+        Ok(created)
     }
 
     fn arc(&self) -> Arc<Self> {
@@ -960,20 +957,6 @@ impl SessionManager {
         if !same_model {
             self.check_choice(setup.choice())?;
         }
-        // A session given its environment only now is let into the checkout as a new one is.
-        if current.is_none()
-            && let Setup::Session {
-                repo,
-                environment: Environment::LocalCheckout { .. },
-                ..
-            } = &setup
-        {
-            let _admitting = self.local_checkouts.lock().await;
-            if let Some(holder) = self.checkout_holder(repo, Some(&id)) {
-                return Err(checkout_taken(&holder));
-            }
-            return self.core.set_setup(id, setup).await;
-        }
         let before = current.as_ref().map(|setup| setup.choice().clone());
         let selected = setup.choice().clone();
         let conversation = self.core.set_setup(id.clone(), setup).await?;
@@ -998,14 +981,6 @@ impl SessionManager {
                 .current(kind, crate::now_ms())
                 .is_none_or(|quota| quota.limit.is_none())
     }
-}
-
-/// Why a new session can't work in the checkout `holder` works in.
-fn checkout_taken(holder: &Conversation) -> Error {
-    Error::Invalid(format!(
-        "“{}” already works in this checkout. Archive it, or start this session in a new worktree.",
-        holder.title
-    ))
 }
 
 /// Whose CLI session an event comes from (development builds route faults by it).
