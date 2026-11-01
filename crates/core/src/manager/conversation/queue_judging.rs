@@ -15,7 +15,8 @@
 //! Nothing judges for the session (D72): one still unjudged when its turn ends goes back to the
 //! queue, waiting; while its block is open, it is asked once more on a turn that joins the
 //! block, and after that, or once the block closed, it waits for its own turn like any waiting
-//! message. A message the session has can't be edited; deleted, the session hears it was taken
+//! message. One that woke the session while only background work held its block (D113) is
+//! that turn's own message: unjudged at its end, it joins. A message the session has can't be edited; deleted, the session hears it was taken
 //! back. Side chats and tab chats keep the plain queue.
 
 use std::collections::HashMap;
@@ -50,7 +51,7 @@ pub(crate) fn deciding_frame(shown: &str) -> String {
 pub(crate) fn background_frame(shown: &str) -> String {
     format!(
         "{FRAME}{shown} · only background work is in progress: answer it now, in this work: \
-         brigadier queue {shown} join, or worker <id> when it is a running worker's; unjudged, it stays queued]\n"
+         brigadier queue {shown} join, or worker <id> when it is a running worker's; unjudged, it joins this work]\n"
     )
 }
 
@@ -476,18 +477,27 @@ impl SessionManager {
     /// handed to a worker are left to that hand-off.
     pub(super) async fn end_judging(&self, conv: &Arc<ConvLive>, completed: bool) {
         let _routing = conv.queue_routing.lock().await;
-        let unjudged: Vec<String> = {
+        let (unjudged, answered): (Vec<String>, Vec<String>) = {
             let mut state = conv.state.lock().await;
             state.judging_ended = true;
-            state.woken.clear();
+            let woken = std::mem::take(&mut state.woken);
             let claimed = state.claimed.clone();
-            let (kept, unjudged) = std::mem::take(&mut state.deciding)
+            let (kept, unjudged): (Vec<String>, Vec<String>) = std::mem::take(&mut state.deciding)
                 .into_iter()
                 .partition(|id| claimed.contains(id));
             state.deciding = kept;
             state.held_items.retain(|id| claimed.contains(id));
-            unjudged
+            // Woken for it while only background work held (D113), the turn was its answer:
+            // it joins, never asked again. One woken to be asked again (D72) is judged as before.
+            unjudged.into_iter().partition(|id| {
+                !(completed && woken.contains(id) && !state.asked_again.contains(id))
+            })
         };
+        for item_id in &answered {
+            if let Err(err) = self.join_delivered(conv, item_id).await {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not join a message answered in its block"; conversation = %conv.id, error = %err);
+            }
+        }
         if unjudged.is_empty() {
             return;
         }
