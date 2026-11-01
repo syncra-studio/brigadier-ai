@@ -134,6 +134,9 @@ pub(crate) struct TaskLive {
     /// Held while the worker's CLI starts again, so two messages never start two CLIs.
     pub(crate) reroute: tokio::sync::Mutex<()>,
     quota_transition: tokio::sync::Mutex<()>,
+    /// Its turn end is being told: it reads Reported before its event is in, and a
+    /// `brigadier wait` must not end empty in between.
+    pub(crate) reporting: std::sync::atomic::AtomicBool,
 }
 
 impl TaskLive {
@@ -145,6 +148,7 @@ impl TaskLive {
             settle: tokio::sync::Mutex::new(()),
             reroute: tokio::sync::Mutex::new(()),
             quota_transition: tokio::sync::Mutex::new(()),
+            reporting: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

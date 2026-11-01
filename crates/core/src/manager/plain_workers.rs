@@ -767,6 +767,8 @@ impl SessionManager {
         // The turn finished, one way or another: a later cut-off may go on by itself again. An
         // interrupted one (a quit closing its CLI) is still the turn that was cut off (D9 a).
         let finished = status != TurnStatus::Interrupted;
+        live.reporting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let updated = self
             .update_task_with_step(&task.conversation_id, &task.id, step, |task| {
                 task.state = state;
@@ -799,6 +801,8 @@ impl SessionManager {
         // What git and its CLI showed as the turn ended, beside its own words (harness P1).
         self.with_facts(task, &mut event).await;
         self.worker_event(&task.conversation_id, &task.id, None, event);
+        live.reporting
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         // The user's next message for it goes now; after a stop or a failure it waits (§5.3).
         if kind == EventKind::TurnEnded {
             let (manager, conversation, worker) =
@@ -1470,6 +1474,18 @@ impl SessionManager {
             let added = self.worker_events.added.notified();
             tokio::pin!(added);
             added.as_mut().enable();
+            // Read before the events: one seen idle and no longer reporting has its event in.
+            let board = self.core.board(parent).await?;
+            // One that reported, or waits to land, is idle: it sends nothing until messaged.
+            let can_send = board.tasks.values().any(|task| {
+                task.plain.as_ref().is_some_and(|plain| !plain.closed)
+                    && !task.state.is_final()
+                    && (!matches!(task.state, TaskState::Reported | TaskState::ReadyToLand)
+                        || self.tasks_lock().get(&task.id).is_some_and(|live| {
+                            live.reporting.load(std::sync::atomic::Ordering::SeqCst)
+                        }))
+                    && (tasks.is_empty() || tasks.contains(&task.id))
+            });
             // Held and answered with no await in between: a wait cut off takes nothing.
             let events = self.hold_for_wait(parent, &tasks, &holder).await?;
             if !events.is_empty() {
@@ -1481,14 +1497,6 @@ impl SessionManager {
                     Some(self.held_events(parent, holder)),
                 ));
             }
-            let board = self.core.board(parent).await?;
-            // One that reported, or waits to land, is idle: it sends nothing until messaged.
-            let can_send = board.tasks.values().any(|task| {
-                task.plain.as_ref().is_some_and(|plain| !plain.closed)
-                    && !task.state.is_final()
-                    && !matches!(task.state, TaskState::Reported | TaskState::ReadyToLand)
-                    && (tasks.is_empty() || tasks.contains(&task.id))
-            });
             if !can_send {
                 break false;
             }
