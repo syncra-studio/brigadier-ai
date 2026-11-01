@@ -656,6 +656,79 @@ async fn a_job_turn_before_the_jobs_word_is_owed_once() {
     flow.stop().await;
 }
 
+/// A subagent's own command ends while no turn runs, and its end wakes the subagent, never the
+/// session: the CLI starts one turn, for the subagent's end. Once that turn is over nothing runs,
+/// so the work no longer holds, though the command's end still counts as owed its turn: the next
+/// message gets a block of its own, as the thread draws it (demo 6).
+#[tokio::test]
+async fn an_end_no_turn_follows_holds_no_work_once_nothing_runs() {
+    use brigadier_providers::ProviderEvent;
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-job-unwoken",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                let _ = turn
+                    .events
+                    .send(ProviderEvent::BackgroundJobs {
+                        running: vec!["agent".into(), "its-command".into()],
+                    })
+                    .await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started a subagent in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start a subagent.").await;
+    rested(&flow).await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(flow.manager.work_holds(&conv).await, "its jobs run");
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    for event in [
+        ProviderEvent::BackgroundJobs {
+            running: vec!["agent".into()],
+        },
+        ProviderEvent::BackgroundJobs {
+            running: Vec::new(),
+        },
+        ProviderEvent::TurnStarted { turn_id: None },
+        ProviderEvent::Message {
+            item_id: "agent-answer".into(),
+            role: brigadier_providers::Role::Assistant,
+            text: "The subagent printed 42.".into(),
+        },
+        ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: brigadier_providers::TurnStatus::Completed,
+            duration_ms: Some(1),
+            usage: None,
+        },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually_async("the subagent's answer", || async {
+        answers(&flow)
+            .await
+            .iter()
+            .any(|text| text == "The subagent printed 42.")
+    })
+    .await;
+    rested(&flow).await;
+    assert!(
+        !conv.request_activity().await.background.is_empty(),
+        "the command's end is still owed its turn"
+    );
+    assert!(
+        !flow.manager.work_holds(&conv).await,
+        "nothing runs: the block is closed"
+    );
+    flow.stop().await;
+}
+
 /// A stopped request's job and a later request's job both end; the CLI's turn for the stopped
 /// one's end runs long. The later request still waits for its own job's turn meanwhile, and
 /// that turn answers in it (#3).

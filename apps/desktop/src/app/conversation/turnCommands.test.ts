@@ -84,4 +84,6 @@ test("a held turn's one wait line names the user first: a question's answer or a
   assert.equal(liveHead({ text: "Thinking", tone: "busy" }, 0, 1)?.text, "Waiting for a command");
   assert.equal(liveHead({ text: "Thinking", tone: "busy" }, 1, 1)?.text, "Waiting for a worker");
   assert.equal(liveHead(null, 0, 0), null);
+  // Only a subagent holds it: it waits on it, never "Thinking" (D104).
+  assert.equal(liveHead({ text: "Thinking", tone: "busy" }, 0, 0, 1)?.text, "Waiting for a subagent");
 });

@@ -22,14 +22,18 @@ export const WorkHeader: FC<{
   quota: boolean;
   /** Its turn is over, but workers, subagents or background commands it started still hold it open (D24). */
   held: boolean;
+  /** When the last of the background subagents that held it ended, if after its turns (D53). */
+  heldUntil?: number | null;
   onToggle: () => void;
   /** Its calls the user denied: "{n} denied actions" on the right, which shows the first. */
   denied: number;
   onDenied: () => void;
-}> = ({ meta, open, foldable, quota, held, onToggle, denied, onDenied }) => {
+}> = ({ meta, open, foldable, quota, held, heldUntil = null, onToggle, denied, onDenied }) => {
   const now = useTicking(isLive(meta.state) || held);
-  // Held open, it still works: its clock goes on from its start, never restarts.
-  const elapsed = held ? Math.max(0, now - (meta.worked[0]?.fromMs ?? meta.startedAtMs)) : turnTime(meta, now);
+  // Held open, it still works: its clock goes on from its start, never restarts; once what held
+  // it ended, it worked until then, so the time never drops back (D53).
+  const from = meta.worked[0]?.fromMs ?? meta.startedAtMs;
+  const elapsed = held ? Math.max(0, now - from) : Math.max(turnTime(meta, now), meta.state === "done" && heldUntil !== null ? heldUntil - from : 0);
   // Waiting on its own question card, or held open by what it started, the turn still reads as working.
   const state = waitsOnCard(meta) || held ? "working" : meta.state;
   const failed = useAuiState((s) => {

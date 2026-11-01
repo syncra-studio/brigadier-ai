@@ -490,12 +490,18 @@ impl ConvState {
 
     /// Work holding a request; proven apps retain process ownership independently below.
     fn has_cli_work(&self) -> bool {
+        self.background
+            .as_ref()
+            .is_some_and(|jobs| !jobs.owed.is_empty())
+            || self.runs_cli_work()
+    }
+
+    /// Its CLI's work that still runs: a job, or a command past its turn.
+    fn runs_cli_work(&self) -> bool {
         self.background.as_ref().is_some_and(|jobs| {
-            !jobs.owed.is_empty()
-                || jobs
-                    .running
-                    .iter()
-                    .any(|(id, _)| !self.persistent_apps.contains(id))
+            jobs.running
+                .iter()
+                .any(|(id, _)| !self.persistent_apps.contains(id))
         }) || self
             .lingering
             .keys()
@@ -793,8 +799,8 @@ impl ConvLive {
         self.state.lock().await.has_cli_jobs()
     }
 
-    async fn has_cli_work(&self) -> bool {
-        self.state.lock().await.has_cli_work()
+    async fn runs_cli_work(&self) -> bool {
+        self.state.lock().await.runs_cli_work()
     }
 
     /// Tracks the thread's command `item` (`words`) by its `status` as what messages sent into
@@ -1584,7 +1590,7 @@ impl SessionManager {
     /// turn just ended, or is still starting) the next turn carries it.
     /// Whether a session's or a Chat's work still holds while no turn of its CLI runs: one of
     /// its workers still works (its own background commands count), or a background command of
-    /// its CLI still runs or owes the turn its end starts. Its block stays open meanwhile, and
+    /// its CLI still runs or one's end waits for the turn it starts (`CliJobs::waking`). Its block stays open meanwhile, and
     /// what the user sends goes on in it. A side chat's or a tab chat's never holds: it keeps
     /// the plain queue.
     pub(super) async fn work_holds(&self, conv: &ConvLive) -> bool {
@@ -1596,7 +1602,12 @@ impl SessionManager {
         if !brigade {
             return false;
         }
-        if conv.has_cli_work().await || self.has_running_workers(&conv.id).await {
+        // A job's end holds it only until the CLI's turn for it starts, as the thread reads
+        // it: an end no turn of the session's follows (a subagent's own command) holds nothing.
+        if conv.runs_cli_work().await
+            || self.cli_waking(&conv.id)
+            || self.has_running_workers(&conv.id).await
+        {
             return true;
         }
         self.core

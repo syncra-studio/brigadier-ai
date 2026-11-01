@@ -147,9 +147,11 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
  * The one line a live turn says what it waits on with: what waits on the user (a question's
  * answer, an approval) first, then the workers and commands holding it over, else `head`.
  */
-export function liveHead(head: StatusHead | null, workers: number, commands: number): StatusHead | null {
+export function liveHead(head: StatusHead | null, workers: number, commands: number, subagents = 0): StatusHead | null {
   if (head?.tone === "needsYou") return head;
   if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" };
   if (commands > 0) return { text: commandsWaitWords(commands), tone: "still" };
+  // Only its subagents hold it: it waits on them, it doesn't think (D24).
+  if (subagents > 0) return { text: subagents === 1 ? "Waiting for a subagent" : `Waiting for ${subagents} subagents`, tone: "still" };
   return head;
 }

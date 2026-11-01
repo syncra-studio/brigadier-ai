@@ -612,6 +612,16 @@ impl SessionManager {
         });
     }
 
+    /// Whether a background job of conversation `id`'s CLI ended and the turn its end starts
+    /// hasn't yet (`CliJobs::waking`).
+    pub(super) fn cli_waking(&self, id: &ConversationId) -> bool {
+        self.cli_threads
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|live| live.jobs(now_ms()).waking)
+    }
+
     /// The next news number: taken under `cli_threads`' lock, after the change it numbers, so a
     /// read made under it ([`Self::thread_view`]) holds exactly the news numbered up to then.
     fn next_news_seq(&self) -> u64 {

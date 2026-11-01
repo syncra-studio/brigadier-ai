@@ -10,3 +10,16 @@ test("a working block's header and the composer read the same time at every mome
     assert.equal(composer, header, JSON.stringify(reads));
   }
 });
+
+test("a block its background subagent holds open after its turn reads the same time in its header and the composer, and keeps it once the subagent ends (D24, D94, D104)", { timeout: 60000 }, async (t) => {
+  const { held, after } = JSON.parse(await renderFixturePage(t, "two-timers.html", "two-timers-held", 20000)) as { held: [string | null, string | null][]; after: [string | null, string | null] };
+  const seconds = (label: string | null) => Number(/(\d+)s$/.exec(label ?? "")?.[1] ?? NaN);
+  for (const [header, composer] of held) {
+    assert.match(header ?? "", /^Working for \d+s$/, JSON.stringify(held));
+    assert.equal(composer, header, JSON.stringify(held));
+  }
+  // Over, it worked until the subagent ended: the time never drops back to the turn's own.
+  assert.match(after[0] ?? "", /^Worked for \d+s$/, JSON.stringify(after));
+  assert.ok(seconds(after[0]) >= seconds(held.at(-1)![0]), JSON.stringify({ held, after }));
+  assert.doesNotMatch(after[1] ?? "", /Working for/, JSON.stringify(after));
+});

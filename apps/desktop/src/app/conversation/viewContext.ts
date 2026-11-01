@@ -16,6 +16,8 @@ export const ViewContext = createContext<{
   draftModel?: ModelChoice;
   /** When the thread's newest work block began while it works, as its header counts: the composer's "Working for" counts from it too (D94). */
   workFrom?: number | undefined;
+  /** Its newest block's turn is over, but what it started still holds it open (D24): the composer still says it works. */
+  workHeld?: boolean;
 }>({
   selection: { type: "none" },
   conversation: null,

@@ -254,7 +254,8 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
 });
 
 /**
- * "Working for 2m 5s" while the conversation's CLI turn is open, from its first second on,
+ * "Working for 2m 5s" while the conversation's CLI turn is open, or its block is held open by
+ * what that turn started (D24), from its first second on,
  * ticking each second; null otherwise, and while it only waits for the user's answer to its
  * question card (#366): nothing works then. It reads what the work block's header reads (D94):
  * the same start, on the same clock.
@@ -262,8 +263,11 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
 function useWorkingFor(conversationId: string | null): string | null {
   const turnStart = useOpenTurnStart(conversationId);
   const view = useContext(ViewContext);
-  const startedAtMs = turnStart !== null && view.conversation?.id === conversationId ? (view.workFrom ?? turnStart) : turnStart;
-  const open = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false));
+  const own = view.conversation?.id === conversationId;
+  // Held open by what its turn started, the block still works, from the same start (D24, D94).
+  const held = own && !!view.workHeld;
+  const startedAtMs = own && (turnStart !== null || held) ? (view.workFrom ?? turnStart) : turnStart;
+  const open = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false)) || held;
   const asking = useBoard((s) => {
     const board = s.board;
     if (!conversationId || board?.conversationId !== conversationId) return false;

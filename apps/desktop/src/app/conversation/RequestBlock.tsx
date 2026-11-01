@@ -17,6 +17,7 @@ import { entryKey, loadCardBody, SequenceEntry } from "@/app/conversation/Sequen
 import { TurnEnd } from "@/app/conversation/TurnEnd";
 import { UpdateText } from "@/app/conversation/UpdateText";
 import { WorkHeader } from "@/app/conversation/WorkHeader";
+import { useBlockHold } from "@/app/conversation/blockHold";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { turnParts, type WorkPart } from "@/app/conversation/workParts";
@@ -40,7 +41,6 @@ import {
   blockSequence,
   foldsAway,
   foldsWork,
-  isFinal,
   isLive,
   liveAnswer,
   sentMessageIds,
@@ -53,7 +53,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { useOpenTurnStart, useTurnCommands, useTurnSubagents, useTurnWorkers } from "@/state/cliThread";
+import { useOpenTurnStart } from "@/state/cliThread";
 import { useRevealing } from "@/state/reveal";
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
@@ -164,26 +164,14 @@ export const RequestBlock: FC = () => {
   const { wait: quotaWait, recovered: quotaRecovered } = useBlockQuotaRecovery(meta);
   const requestIds = meta?.requestIds;
   const changed = useTurnChanged(requestIds ?? []);
-  const workersActive = useBoard((s) =>
-    Object.values(s.board?.tasks ?? {}).some(
-      (task) => task.requestId !== null && !!requestIds?.includes(task.requestId) && !isFinal(task),
-    ),
-  );
   // Its model's turn runs now: what that turn offers waits for it to end, not for its workers.
   const turnRuns = useBoard((s) => {
     const board = s.board;
     return !quotaWait && !!board && (board.run === "running" || board.run === "starting") && !!board.runRequest && !!requestIds?.includes(board.runRequest);
   });
-  // The workers its turn started that still work: over, it stays live until they finish (its own
-  // wake-ups when they do are in the same turn), with no end cards yet, and its work doesn't
-  // fold by itself meanwhile.
-  const starts = meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS;
-  const holding = useTurnWorkers(conversationId, starts, meta?.endedAtMs ?? null);
-  // So do the background commands it started (a CI watch, a Monitor) until the turn their end
-  // starts is over (D21), though its work folds as it would without them.
-  const commands = useTurnCommands(conversationId, starts, meta?.endedAtMs ?? null);
-  // Its CLI's own subagents that still work, foreground or in the background, hold it too (D24, D97).
-  const subagents = useTurnSubagents(conversationId, meta?.startedAtMs ?? Infinity, meta?.endedAtMs ?? null);
+  // What its turns started that still works holds it open, with no end cards yet, and its work
+  // doesn't fold by itself meanwhile (D24).
+  const { workers: holding, commands, subagents, held, heldUntil } = useBlockHold(conversationId, meta);
   const openStart = useOpenTurnStart(conversationId);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
@@ -192,8 +180,6 @@ export const RequestBlock: FC = () => {
   }, [hasCards]);
   if (!meta) return null;
 
-  // Its own subagents, workers and background commands that still work hold it open (D24).
-  const held = holding > 0 || commands > 0 || workersActive || subagents > 0;
   const again = reopened(openStart, meta.startedAtMs, meta.endedAtMs);
   const live = isLive(meta.state) || again || held || quotaWait !== null || (quotaRecovered && turnRuns);
   const last = meta.texts.length - 1;
@@ -240,7 +226,7 @@ export const RequestBlock: FC = () => {
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
     // Over, its line says what it waits on: its workers, then its commands; a subagent's own row says it runs (D96).
-    ...(held && { workers: holding, commands }),
+    ...(held && { workers: holding, commands, subagents }),
   };
 
   return (
@@ -272,6 +258,7 @@ export const RequestBlock: FC = () => {
             quota={quotaWait !== null}
             // Over, it works on while what it started runs (L3, D24).
             held={held && meta.state === "done"}
+            heldUntil={heldUntil}
             onToggle={() => fold.set(!open)}
             denied={deniedCount}
             onDenied={() => {
@@ -389,7 +376,6 @@ export const RequestBlock: FC = () => {
 };
 
 /** No turns. */
-const NO_STARTS: readonly number[] = [];
 
 /** The user's open or closed choice per turn, by request: kept while the app runs, through a thread switch. */
 const folds = new Map<string, boolean>();

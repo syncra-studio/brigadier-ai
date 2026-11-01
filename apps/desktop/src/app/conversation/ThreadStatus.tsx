@@ -19,6 +19,8 @@ export type ThreadStatusProps = {
   workers?: number;
   /** The turn is over, and this many background commands it started still hold it (D21). */
   commands?: number;
+  /** The turn is over, and this many subagents it started still work (D24). */
+  subagents?: number;
 };
 
 /** What a live turn's last line says now, its workers by name; `null` when nothing. */
@@ -35,7 +37,8 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const head = view?.head;
   const workers = props?.workers ?? 0;
   const commands = props?.commands ?? 0;
-  return useMemo(() => liveHead(head ? { ...head, text: words } : null, workers, commands), [head, words, workers, commands]);
+  const subagents = props?.subagents ?? 0;
+  return useMemo(() => liveHead(head ? { ...head, text: words } : null, workers, commands, subagents), [head, words, workers, commands, subagents]);
 }
 
 
