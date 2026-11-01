@@ -600,6 +600,12 @@ async fn a_worker_waiting_for_quota_switches_now() {
         })
         .await;
     assert_eq!(bench.switch_rows().await, 1);
+    // D126: its switch row tells it went on; no "started working" beside it.
+    let lifecycle = bench.lifecycle().await;
+    assert!(
+        !lifecycle.contains(&WorkerStepKind::Resumed),
+        "{lifecycle:?}"
+    );
     bench.flow.stop().await;
 }
 

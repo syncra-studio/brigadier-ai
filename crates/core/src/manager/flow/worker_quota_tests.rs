@@ -243,6 +243,16 @@ async fn a_worker_reset_resumes_native_history_and_confirms_once() {
     let turns = seen.lock().unwrap().clone();
     assert_eq!(turns.len(), 2);
     assert_eq!(turns[0].2, turns[1].2);
+    // D126: its "Resumed on" row tells it went on; no "started working" beside it.
+    let board = flow.board().await;
+    assert!(
+        !board
+            .worker_steps
+            .iter()
+            .any(|step| step.kind == crate::work::WorkerStepKind::Resumed),
+        "{:?}",
+        board.worker_steps
+    );
     let resumed = worker(&flow).await;
     assert_eq!(task.workspace, resumed.workspace);
     assert!(resumed.quota_wait.is_none());

@@ -364,14 +364,24 @@ impl SessionManager {
             let was = task.state;
             let reported = task.report.is_some();
             let was_paused = explicitly_paused(&task);
+            // A plain worker paused but not by its session waits for quota (its wait may be
+            // cancelled already, as a switch does before it moves it).
+            let was_waiting = was == TaskState::Paused && !was_paused && task.plain.is_some();
             change(&mut task);
             task.updated_at_ms = now_ms();
             let mut events = vec![DomainEvent::TaskUpdated {
                 task: Box::new(task.clone()),
             }];
-            // Its session's pause or resume shows as that row ("Paused ‹worker›"), not twice.
+            // Its session's pause or resume shows as that row ("Paused ‹worker›"), not twice;
+            // so does going on out of a quota wait, as its switch or "Resumed on" row (D126).
             if was_paused == explicitly_paused(&task) {
-                events.extend(worker_step(&task, Some(was), reported, step));
+                events.extend(
+                    worker_step(&task, Some(was), reported, step).filter(|event| {
+                        !(was_waiting
+                            && matches!(event, DomainEvent::WorkerStepped { step }
+                                if step.kind == WorkerStepKind::Resumed))
+                    }),
+                );
             }
             self.core
                 .record_conversation(conversation_id, events)
