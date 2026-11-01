@@ -454,14 +454,15 @@ mod tests {
     /// rule; proposed). Chat-only, user-started Fusion adds 253 bytes and one line (L7, L9).
     /// The old orchestrator skill's must-follow rules moved in (D58): routing, waiting, workers'
     /// prompts, asking, and the help topics to read first. The fully expanded text (Codex,
-    /// default settings) measured 4,926 bytes: the cap.
+    /// default settings) measured 4,926 bytes. Goal 11's pointer to `brigadier mcp` (D5): 4,978,
+    /// the cap.
     #[test]
     fn the_standing_instructions_stay_short() {
         let full = standing_text(&session_instructions(
             &Settings::default(),
             ProviderKind::Codex,
         ));
-        assert!(full.len() <= 4_926, "{}", full.len());
+        assert!(full.len() <= 4_978, "{}", full.len());
         assert!(STANDING_INSTRUCTIONS.lines().count() <= 23);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [
@@ -471,7 +472,7 @@ mod tests {
             "`brigadier --help`",
             "run `brigadier help <topic>` for it first",
             // D13: everything about the job is pulled, never put in.
-            "skills, MCP servers, project and routing are in `brigadier context`.",
+            "skills, MCP servers, project and routing are in `brigadier context`; call any of those MCP servers with `brigadier mcp`.",
             "Run it when you start and after any compaction.",
             // Disposable output goes in the session's $TMPDIR, never its record, which is for
             // resuming; a file the user asks for goes where they say.
@@ -591,7 +592,7 @@ mod tests {
             "| `brigadier session propose --title \"2-4 words\" \"<self-contained brief>\"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise. |",
             "| `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |",
             "| `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |",
-            "A worker is naked: none of your setup but the project's instruction file, MCP servers only by `--mcp` (`brigadier context mcps` lists them), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.",
+            "A worker is naked: its CLI loads none of your setup but the project's instruction file, MCP servers only by `--mcp` (for heavy use), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`, and calls any MCP server of the setup with `brigadier mcp`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.",
             // Pick the model.
             "The user's routing decides each worker's agent, model and effort. Before each `brigadier start`, read `brigadier models`; pass `--work \"<Work>\"` of the row that fits; that row (the user's, else the shipped) picks all three. If its account is out of quota, pass the agent, model and effort of the same Work's next row the rules allow; never a model or effort the rows don't name.",
             // Brief.

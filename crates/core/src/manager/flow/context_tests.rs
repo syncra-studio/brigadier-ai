@@ -23,13 +23,14 @@ const CHECKPOINT: &str = "Goal: move to the new store.\nNext: count the call sit
 const HIT: &str = "quokkacompass";
 const TAIL: &str = "lemurtrellis";
 
-fn context(part: Option<ContextPart>) -> CliRequest {
+pub(super) fn context(part: Option<ContextPart>) -> CliRequest {
     CliRequest::Context {
         part,
         name: None,
         grep: None,
         last: None,
         item: None,
+        session: false,
     }
 }
 
@@ -40,6 +41,7 @@ fn transcript(grep: Option<&str>, last: Option<u32>, item: Option<&str>) -> CliR
         grep: grep.map(Into::into),
         last,
         item: item.map(Into::into),
+        session: false,
     }
 }
 
@@ -53,16 +55,21 @@ fn ids(output: &Value, source: &str) -> Vec<String> {
         .collect()
 }
 
-fn write(path: &Path, text: &str) {
+pub(super) fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
 
 /// A Claude session file of one user message and one long reply, listed in `record`'s lineage.
 fn plant_transcript(record: &Path) {
+    plant_transcript_of(record, HIT);
+}
+
+/// [`plant_transcript`], its reply starting with `hit`.
+pub(super) fn plant_transcript_of(record: &Path, hit: &str) {
     let file = record.join("cli").join("w.jsonl");
     let at = "2026-10-25T10:00:00.000Z";
-    let reply = format!("{HIT} {} {TAIL}", "filler ".repeat(1200));
+    let reply = format!("{hit} {} {TAIL}", "filler ".repeat(1200));
     let lines = [
         json!({"type": "user", "timestamp": at, "uuid": "u-1",
                "message": {"role": "user", "content": SPEC}}),
@@ -442,6 +449,7 @@ async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versio
                                 grep: None,
                                 last: None,
                                 item: None,
+                                session: false,
                             },
                         )
                         .await;

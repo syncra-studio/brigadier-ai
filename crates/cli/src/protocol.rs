@@ -127,6 +127,9 @@ pub enum CliRequest {
         /// `transcript`: one exact item, as a search hit names it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<String>,
+        /// `transcript`: a worker's session's thread rather than its own records.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        session: bool,
     },
 }
 
@@ -214,6 +217,7 @@ pub enum Tool {
     Fusion,
     Session,
     Approval,
+    Mcp,
 }
 
 impl Tool {
@@ -236,6 +240,7 @@ impl Tool {
         Self::Fusion,
         Self::Session,
         Self::Approval,
+        Self::Mcp,
     ];
 
     /// Its subcommand's name.
@@ -258,6 +263,7 @@ impl Tool {
             Self::Fusion => "fusion",
             Self::Session => "session",
             Self::Approval => "approval",
+            Self::Mcp => "mcp",
         }
     }
 

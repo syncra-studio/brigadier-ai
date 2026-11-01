@@ -53,6 +53,9 @@ pub(crate) struct RecordSearch {
     pub role: Option<String>,
     #[serde(default)]
     pub tool: Option<String>,
+    /// Only `session` itself, never its workers': a worker reading its session's thread.
+    #[serde(skip)]
+    pub exact: bool,
 }
 
 /// `brigadier brain read` and `transcript read`.
@@ -189,12 +192,13 @@ impl SessionManager {
             }
             (None, None) => None,
         };
+        let exact = args.exact;
         let synced: Vec<RecordSession> = sessions
             .into_iter()
             .filter(|session| {
-                scope
-                    .as_deref()
-                    .is_none_or(|scope| within(&session.key, scope))
+                scope.as_deref().is_none_or(|scope| {
+                    session.key == scope || !exact && within(&session.key, scope)
+                })
             })
             .collect();
         let limit = args.limit.unwrap_or(HITS).clamp(1, HITS_MAX);
@@ -212,6 +216,11 @@ impl SessionManager {
                     args.tool.as_deref(),
                 )
                 .map_err(super::brains::brain_error)?;
+            // shortcut: hits are cut to `limit` before this, so an exact search may show
+            // fewer; filter in the index query if a worker's session search comes up short.
+            if exact {
+                hits.retain(|hit| synced.iter().any(|session| session.key == hit.session));
+            }
             for hit in &mut hits {
                 mark_stale(hit);
                 if let Some(session) = synced.iter().find(|session| session.key == hit.session) {

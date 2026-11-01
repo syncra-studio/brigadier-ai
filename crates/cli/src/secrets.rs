@@ -95,7 +95,8 @@ pub fn run_local(
                 let _ = stdout.flush();
                 std::process::exit(code)
             }),
-        ["mcp", ..] => Err(USAGE.to_owned()),
+        // `mcp list | tools | call` go to the daemon.
+        ["mcp", "run", ..] => Err(USAGE.to_owned()),
         _ => return None,
     };
     Some(match result {

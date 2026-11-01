@@ -2538,12 +2538,16 @@ mod engine_tests;
 #[cfg(unix)]
 mod ledger_tests;
 #[cfg(unix)]
+mod mcp_proxy_tests;
+#[cfg(unix)]
 mod no_skill_tests;
 #[cfg(unix)]
 mod open_in_app_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod records_tests;
+#[cfg(unix)]
+mod scope_tests;
 #[cfg(unix)]
 mod standing_tests;
 #[cfg(unix)]

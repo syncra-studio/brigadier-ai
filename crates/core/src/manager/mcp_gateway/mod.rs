@@ -4,6 +4,8 @@ mod manager;
 mod oauth;
 mod prompts;
 pub mod store;
+/// One JSON-RPC answer read from a streamable-HTTP response, JSON or SSE (`brigadier mcp`).
+pub(in crate::manager) use prompts::response_value;
 #[cfg(test)]
 pub(super) mod tests;
 

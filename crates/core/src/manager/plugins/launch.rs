@@ -67,6 +67,13 @@ impl SessionManager {
             })
             .collect();
         let project = registered_root(&registered, project, cwd);
+        // A linked worktree's own project setup (its branch's files) is read beside the
+        // registered root's and wins per name; settings stay keyed by the registered root.
+        let own_checkout = cwd
+            .ancestors()
+            .find(|path| path.join(".git").exists())
+            .map(Path::to_owned)
+            .filter(|checkout| project.as_ref().is_some_and(|root| root != checkout));
         let (cwd, data_dir) = (cwd.to_owned(), self.data_dir.clone());
         let secrets = CliSecretStore {
             cli: self.brigadier_cli(),
@@ -79,7 +86,19 @@ impl SessionManager {
             Role::Worker { grants } => Some(grants.to_vec()),
         };
         blocking(move || {
-            let mut rows = Catalog::read_rows_with_library(&roots, &registered, &data_dir);
+            let sources: Vec<PathBuf> = registered
+                .iter()
+                .cloned()
+                .chain(own_checkout.clone())
+                .collect();
+            let mut rows = Catalog::read_rows_with_library(&roots, &sources, &data_dir);
+            if let (Some(checkout), Some(root)) = (&own_checkout, &project) {
+                for definition in rows.iter_mut().flat_map(|row| &mut row.definitions) {
+                    if definition.provenance.project.as_ref() == Some(checkout) {
+                        definition.provenance.project = Some(root.clone());
+                    }
+                }
+            }
             let choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
             let warnings = if grants.is_none() {
                 fill_library_values(&mut rows, &data_dir, &choices, project.as_deref(), &secrets)

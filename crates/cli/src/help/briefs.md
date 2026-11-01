@@ -11,4 +11,4 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope."
 - Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.
 - A plan or brief built from decisions cites their ids. Lines of your own say "proposed", and a gap the decisions don't cover goes to the user, never a silent fill.
 
-A worker is naked: none of your setup but the project's instruction file, MCP servers only by `--mcp` (`brigadier context mcps` lists them), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.
+A worker is naked: its CLI loads none of your setup but the project's instruction file, MCP servers only by `--mcp` (for heavy use), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`, and calls any MCP server of the setup with `brigadier mcp`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.

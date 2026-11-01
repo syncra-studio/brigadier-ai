@@ -171,10 +171,11 @@ pub const COMMANDS: &[Command] = &[
                   `open`: open items and the cards waiting on the user. `ledger`: the whole \
                   ledger. A worker reads its session's ledger (read-only) and then its own. \
                   `checkpoint`: the session's checkpoint. `transcript`: your own records, the \
-                  last items, `--grep` hits or one `--item`. `skills [<name>]`: the skills of \
-                  your agent's setup, or one skill's whole text. `mcps`: the MCP servers that \
-                  exist and which you have (a worker has only the ones it was started with, \
-                  D18). `project`: the checkout's own CLAUDE.md and AGENTS.md (D17) and the \
+                  last items, `--grep` hits or one `--item`; a worker's `--session` reads its \
+                  session's thread. `skills [<name>]`: the skills of your session's setup, or \
+                  one skill's whole text (a worker's CLI loads none: it pulls one here). \
+                  `mcps`: the setup's MCP servers and which were loaded at your launch; \
+                  `brigadier mcp` calls any of them. `project`: the checkout's own CLAUDE.md and AGENTS.md (D17) and the \
                   project's facts. `routing`: `brigadier models`' guidance.",
         args: &[
             Arg::Positional {
@@ -213,6 +214,10 @@ pub const COMMANDS: &[Command] = &[
                 "item",
                 "ID",
                 "transcript: one exact item, as a search hit names it.",
+            ),
+            switch(
+                "session",
+                "transcript: a worker reads its session's thread instead of its own records.",
             ),
         ],
         available: true,
@@ -793,6 +798,28 @@ pub const COMMANDS: &[Command] = &[
         ],
         available: true,
         schema: include_str!("../schemas/brain.schema.json"),
+    },
+    Command {
+        name: "mcp",
+        summary: "Call any MCP server of your session's setup, loaded at your launch or not.",
+        details: "The same on every CLI, for a session's thread and every worker, with no \
+                  restart (D5). `list`: the setup's servers, and which your CLI loaded at \
+                  launch. `tools <server>`: its tools, each with its input schema. `call \
+                  <server> <tool> [<json>]`: runs one tool with the JSON object of its \
+                  arguments (none: `{}`) and prints all it \
+                  answered; an error it answers exits non-zero. One connection per server is \
+                  kept for you while you use it, so what a call opens or returns stays good \
+                  for your next call. `mcp run` is the local wrapper the CLIs' configs name.",
+        args: &[
+            action(&["list", "tools", "call"], "What to do."),
+            rest(
+                "args",
+                "tools: <server>; call: <server> <tool> [<json>].",
+                false,
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/mcp.schema.json"),
     },
     Command {
         name: "transcript",

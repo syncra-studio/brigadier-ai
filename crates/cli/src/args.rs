@@ -467,11 +467,12 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 return Err(error("only `context skills` takes a name".into()));
             }
             let (grep, last, item) = (given("grep"), number("last")?, given("item"));
-            if (grep.is_some() || last.is_some() || item.is_some())
+            let session = args.switch("session");
+            if (grep.is_some() || last.is_some() || item.is_some() || session)
                 && part != Some(ContextPart::Transcript)
             {
                 return Err(error(
-                    "--grep, --last and --item go with `context transcript`".into(),
+                    "--grep, --last, --item and --session go with `context transcript`".into(),
                 ));
             }
             if [grep.is_some(), last.is_some(), item.is_some()]
@@ -490,6 +491,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 grep,
                 last,
                 item,
+                session,
             }
         }
         name if Tool::of_command(name).is_some() => tool_request(command, args)?,
@@ -955,6 +957,27 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                 put("project", Some(json!(path.display().to_string())));
             }
             Tool::Library
+        }
+        "mcp" => {
+            match (action.as_str(), words.as_slice()) {
+                ("list", []) => {}
+                ("tools", [server]) => put("server", Some(json!(server))),
+                ("call", [server, tool, rest @ ..]) if rest.len() <= 1 => {
+                    let given = rest.first().map_or("{}", String::as_str);
+                    let arguments: Value = serde_json::from_str(given)
+                        .map_err(|err| error(&format!("<json> is not JSON: {err}")))?;
+                    if !arguments.is_object() {
+                        return Err(error("<json> is a JSON object of the tool's arguments"));
+                    }
+                    put("server", Some(json!(server)));
+                    put("tool", Some(json!(tool)));
+                    put("arguments", Some(arguments));
+                }
+                ("list", _) => return Err(error("mcp list takes no arguments")),
+                ("tools", _) => return Err(error("usage: mcp tools <server>")),
+                _ => return Err(error("usage: mcp call <server> <tool> [<json>]")),
+            }
+            Tool::Mcp
         }
         "report" => {
             let Some(title) = args.flag("title") else {

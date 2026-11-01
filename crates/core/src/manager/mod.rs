@@ -29,6 +29,7 @@ mod cli_cards;
 mod cli_commands;
 mod cli_context;
 mod cli_ledger;
+mod cli_mcp;
 mod cli_thread;
 mod cli_tools;
 mod cli_why;
@@ -256,6 +257,8 @@ pub struct SessionManager {
     /// Tasks being stopped: a landing that fails meanwhile (its worktree going away under
     /// it) is no news for the orchestrator.
     stopping: Mutex<HashSet<TaskId>>,
+    /// `brigadier mcp`'s kept connections.
+    mcp_pool: cli_mcp::McpPool,
     /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
     /// moment the stop starts: the thread may no longer message, steer or approve them.
     user_stops: Mutex<HashSet<TaskId>>,
@@ -448,6 +451,7 @@ impl SessionManager {
             feedback_sign_in: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
+            mcp_pool: cli_mcp::McpPool::default(),
             user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),

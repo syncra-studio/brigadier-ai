@@ -78,12 +78,14 @@ fn relevant(definition: &Definition, ctx: &Context<'_>) -> bool {
 fn rank(
     definition: &Definition,
     ctx: &Context<'_>,
-) -> (bool, bool, bool, std::cmp::Reverse<PathBuf>) {
+) -> (bool, bool, bool, bool, std::cmp::Reverse<PathBuf>) {
     let origin = &definition.provenance;
     (
         origin.project.as_deref().is_some_and(|project| {
             Some(project) == ctx.project_root || project == checkout(ctx.cwd)
         }),
+        // The caller's own checkout (its branch) beats the registered root's copy.
+        origin.project.is_some() && origin.file.starts_with(checkout(ctx.cwd)),
         origin.project.is_none(),
         origin.agent == Some(ctx.agent),
         std::cmp::Reverse(origin.file.clone()),

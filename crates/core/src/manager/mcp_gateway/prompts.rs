@@ -256,7 +256,7 @@ impl Session<'_> {
         };
         let value = tokio::select! {
             _ = cancelled.cancelled() => return Err(()),
-            value = response_value(response, id) => value?,
+            value = response_value(response, id, MAX_RESPONSE) => value?,
         };
         if !self.valid() || value.get("error").is_some() {
             return Err(());
@@ -332,7 +332,11 @@ impl Session<'_> {
 
 /// Read JSON or SSE until this RPC's response, ignoring notifications and other event IDs.
 /// Incremental line parsing handles CRLF, multiline data, and arbitrary HTTP chunk splits.
-async fn response_value(mut response: reqwest::Response, id: u64) -> Result<Value, ()> {
+pub(in crate::manager) async fn response_value(
+    mut response: reqwest::Response,
+    id: u64,
+    max: usize,
+) -> Result<Value, ()> {
     let sse = response
         .headers()
         .get("content-type")
@@ -348,7 +352,7 @@ async fn response_value(mut response: reqwest::Response, id: u64) -> Result<Valu
     let mut received = 0usize;
     while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
         received = received.checked_add(chunk.len()).ok_or(())?;
-        if received > MAX_RESPONSE {
+        if received > max {
             return Err(());
         }
         bytes.extend_from_slice(&chunk);

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier mcp --json",
+  "type": "object",
+  "required": [
+    "action",
+    "text"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "list",
+        "tools",
+        "call"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "description": "What the server answered: the servers, the tools with their input schemas, or the call's whole result."
+    },
+    "images": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Images the call answered, as data: URLs."
+    },
+    "saved": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

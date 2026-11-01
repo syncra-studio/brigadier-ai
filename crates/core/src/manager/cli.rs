@@ -443,7 +443,11 @@ impl SessionManager {
                 grep,
                 last,
                 item,
-            } => self.cli_context(caller, part, name, grep, last, item).await,
+                session,
+            } => {
+                self.cli_context(caller, part, name, (grep, last, item, session))
+                    .await
+            }
         };
         reply.unwrap_or_else(failed)
     }

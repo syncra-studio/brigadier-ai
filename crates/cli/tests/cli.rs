@@ -973,6 +973,9 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["code", "refs", "cli_call", "--json"],
         &["code", "map", "--json"],
         &["library", "list", "--json"],
+        &["mcp", "list", "--json"],
+        &["mcp", "tools", "fake", "--json"],
+        &["mcp", "call", "fake", "recall", "{\"a\": 1}", "--json"],
         &["library", "list", "--project", ".", "--json"],
         &[
             "library",
@@ -1523,14 +1526,16 @@ fn context_sends_each_part_and_prints_its_text() {
             grep,
             last,
             item,
+            session,
         } = request
         else {
             panic!("expected a context call: {request:?}");
         };
         let mut output = context_sample(*part, name);
         output.text = format!(
-            "{} name={name:?} grep={grep:?} last={last:?} item={item:?}\n",
-            output.part
+            "{} name={name:?} grep={grep:?} last={last:?} item={item:?}{}\n",
+            output.part,
+            if *session { " session" } else { "" }
         );
         CliReply::ok(&output)
     }
@@ -1558,6 +1563,10 @@ fn context_sends_each_part_and_prints_its_text() {
         (
             &["context", "transcript", "--item", "u-1"],
             "transcript name=None grep=None last=None item=Some(\"u-1\")\n",
+        ),
+        (
+            &["context", "transcript", "--session", "--last", "2"],
+            "transcript name=None grep=None last=Some(2) item=None session\n",
         ),
     ];
     let dir = DataDir::new("context");
@@ -1602,4 +1611,65 @@ fn context_sends_each_part_and_prints_its_text() {
     ] {
         assert!(help.contains(word), "{word} missing from:\n{help}");
     }
+}
+
+/// `brigadier mcp list | tools | call` reach the daemon through the executable, their
+/// arguments checked first; `mcp run` stays the local wrapper the CLIs' configs name.
+#[test]
+fn mcp_calls_reach_the_daemon_and_mcp_run_stays_local() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["mcp", "list"], "Mcp list: {}"),
+        (
+            &["mcp", "tools", "fake"],
+            "Mcp tools: {\"server\":\"fake\"}",
+        ),
+        (
+            &["mcp", "call", "fake", "recall"],
+            "Mcp call: {\"arguments\":{},\"server\":\"fake\",\"tool\":\"recall\"}",
+        ),
+        (
+            &["mcp", "call", "fake", "remember", "{\"value\": \"v1\"}"],
+            "Mcp call: {\"arguments\":{\"value\":\"v1\"},\"server\":\"fake\",\"tool\":\"remember\"}",
+        ),
+    ];
+    let dir = DataDir::new("mcp");
+    let daemon = stand_in_daemon(&dir.0, cases.len(), sample);
+    for (words, printed) in cases {
+        let output = brigadier(Some(&dir.0), Some(GRANT), words);
+        assert!(output.status.success(), "{words:?}: {output:?}");
+        assert!(
+            stdout(&output).contains(printed),
+            "{words:?}: {}",
+            stdout(&output)
+        );
+    }
+    daemon.join().unwrap();
+
+    for (words, says) in [
+        (
+            &["mcp", "call", "fake", "t", "not json"][..],
+            "<json> is not JSON",
+        ),
+        (&["mcp", "call", "fake", "t", "[1]"][..], "a JSON object"),
+        (&["mcp", "tools"][..], "mcp tools <server>"),
+        (&["mcp", "list", "extra"][..], "takes no arguments"),
+    ] {
+        let output = brigadier(Some(&dir.0), Some(GRANT), words);
+        assert_eq!(output.status.code(), Some(2), "{words:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(says),
+            "{words:?}: {output:?}"
+        );
+    }
+    // Local: no session needed, and it never reaches the daemon.
+    let output = brigadier(None, None, &["mcp", "run", "a/b"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("brigadier mcp run <server> --"));
+    // The daemon's: without a session's grant it is refused, not a local usage error.
+    let output = brigadier(None, None, &["mcp", "list"]);
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("brigadier secret set"),
+        "{output:?}"
+    );
+    assert_ne!(output.status.code(), Some(0));
 }
