@@ -2597,6 +2597,16 @@ async fn a_start_off_the_routing_runs_and_says_so() {
         picked_of(&seen["review"]),
         (json!("codex"), json!("gpt-6-astra"), json!("high"))
     );
+    // The quota pin holds the model it runs, never the family word, so recovery keeps it.
+    let pins: Vec<_> = flow
+        .board()
+        .await
+        .tasks
+        .values()
+        .filter_map(|t| t.plain.as_ref()?.quota_policy.as_ref()?.pin.model.clone())
+        .collect();
+    assert!(pins.iter().any(|m| m == "gpt-6-astra"), "{pins:?}");
+    assert!(!pins.iter().any(|m| m == "astra"), "{pins:?}");
     // Off the routing: it runs on what was asked, and says what the routing names.
     assert_eq!(
         picked_of(&seen["other model"]),

@@ -296,19 +296,6 @@ impl SessionManager {
                 }
             }
         };
-        let quota_policy = crate::work::WorkerQuotaPolicy {
-            work: work.clone(),
-            pin: brigadier_router::Pin {
-                provider: start.agent,
-                model: start.model.clone(),
-                effort: start.effort.clone(),
-                by_user: false,
-            },
-            avoid_providers: review
-                .as_ref()
-                .map(|authors| authors.providers.clone())
-                .unwrap_or_default(),
-        };
         let mut picked = Vec::new();
         let agent = start.agent.or_else(|| {
             let row = row.as_ref()?;
@@ -317,6 +304,7 @@ impl SessionManager {
         });
         let provider = agent.unwrap_or(own.provider);
         let chat = matches!(conversation.setup, Some(Setup::Chat { .. }));
+        let pinned_model = start.model.is_some();
         let model = match (start.model, &row) {
             // A family word (`astra`) runs as the model it names, as a row's does.
             (Some(model), _) => Some(self.listed_model(provider, &model)),
@@ -326,6 +314,21 @@ impl SessionManager {
                 (row.model != "default").then(|| self.listed_model(provider, &row.model))
             }
             (None, _) => None,
+        };
+        // The pin holds the model the worker runs (`gpt-6-astra` for `--model astra`), so its
+        // quota recovery keeps matching its own model.
+        let quota_policy = crate::work::WorkerQuotaPolicy {
+            work: work.clone(),
+            pin: brigadier_router::Pin {
+                provider: start.agent,
+                model: pinned_model.then(|| model.clone()).flatten(),
+                effort: start.effort.clone(),
+                by_user: false,
+            },
+            avoid_providers: review
+                .as_ref()
+                .map(|authors| authors.providers.clone())
+                .unwrap_or_default(),
         };
         let effort = start.effort.or_else(|| {
             let effort = row.as_ref()?.effort.clone()?;
@@ -477,11 +480,10 @@ impl SessionManager {
             {
                 continue;
             }
-            let same_model = match (&model, &choice.model) {
-                (Some(row), Some(given)) => row.eq_ignore_ascii_case(given),
-                (row, given) => row == given,
-            };
-            if row.agent == choice.provider && same_model && row.effort == choice.effort {
+            if row.agent == choice.provider
+                && self.same_model(row.agent, model.as_deref(), choice.model.as_deref())
+                && row.effort == choice.effort
+            {
                 return Ok(None);
             }
             let words = format!(

@@ -552,6 +552,16 @@ impl SessionManager {
             .max_by_key(|m| version(&m.id))
             .map_or_else(|| model.to_owned(), |m| m.id.clone())
     }
+    /// Whether two models of `provider` are one listed model (D77: no false off-routing line).
+    pub(super) fn same_model(
+        &self,
+        provider: ProviderKind,
+        a: Option<&str>,
+        b: Option<&str>,
+    ) -> bool {
+        let catalog = self.runtime.overview(provider).and_then(|o| o.models);
+        same_listed_model(catalog.as_ref(), a, b)
+    }
     pub(super) fn model_policy(&self) -> Result<Policy> {
         Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?)
     }
@@ -782,9 +792,75 @@ fn fit(windows: &[Usage], limited: Option<Option<i64>>) -> String {
         "ok".into()
     }
 }
+/// `opus` and the `claude-opus-5-5` it resolves to are one model; none is the CLI's default
+/// model; a model the catalog doesn't list is its own id.
+fn same_listed_model(
+    catalog: Option<&brigadier_providers::ModelCatalog>,
+    a: Option<&str>,
+    b: Option<&str>,
+) -> bool {
+    let identity = |model: Option<&str>| {
+        let listed = catalog.and_then(|c| {
+            c.models.iter().find(|m| {
+                model.map_or(m.is_default, |id| {
+                    m.id.eq_ignore_ascii_case(id)
+                        || m.resolved
+                            .as_deref()
+                            .is_some_and(|r| r.eq_ignore_ascii_case(id))
+                })
+            })
+        });
+        listed
+            .map(|m| m.resolved.as_deref().unwrap_or(&m.id))
+            .or(model)
+            .map(str::to_ascii_lowercase)
+    };
+    identity(a) == identity(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_alias_its_id_and_the_default_are_one_model() {
+        let model =
+            |id: &str, resolved: Option<&str>, is_default: bool| brigadier_providers::ModelInfo {
+                id: id.into(),
+                display_name: id.into(),
+                description: String::new(),
+                resolved: resolved.map(Into::into),
+                efforts: vec![],
+                default_effort: None,
+                is_default,
+                input_modalities: vec![],
+                fast: None,
+                legacy: false,
+            };
+        let catalog = brigadier_providers::ModelCatalog {
+            provider: ProviderKind::Claude,
+            models: vec![
+                model("opus", Some("claude-opus-5-5"), true),
+                model("claude-opus-5-5", None, false),
+                model("sonnet", Some("claude-sonnet-5-5"), false),
+            ],
+            cli_version: None,
+            fetched_at_ms: 0,
+        };
+        let same = |a, b| same_listed_model(Some(&catalog), a, b);
+        assert!(same(Some("opus"), Some("claude-opus-5-5")));
+        assert!(same(Some("Claude-Opus-5-5"), Some("opus")));
+        assert!(same(None, Some("claude-opus-5-5")));
+        assert!(!same(Some("sonnet"), Some("opus")));
+        assert!(!same(None, Some("sonnet")));
+        assert!(same(Some("unlisted"), Some("UNLISTED")));
+        assert!(!same(Some("unlisted"), None));
+        assert!(same_listed_model(None, Some("opus"), Some("opus")));
+        assert!(!same_listed_model(
+            None,
+            Some("opus"),
+            Some("claude-opus-5-5")
+        ));
+    }
     #[test]
     fn user_row_overrides_shipped_row() {
         let rows = guidance(
