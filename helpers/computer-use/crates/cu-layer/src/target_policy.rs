@@ -1003,7 +1003,10 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
         }
         RefusalReason::SecuritySurface if is_settings(identity) => SETTINGS_REFUSAL,
         RefusalReason::SecuritySurface => SECURITY_REFUSAL,
-        RefusalReason::StoreApp => "On Windows, Brigadier refuses apps identified as ApplicationFrameHost, the shared host for some Store apps. The helper identifies the shared host instead of the app inside it. Other Store apps are not refused as a group. Ask the user to do this step.",
+        RefusalReason::StoreApp => {
+            "Windows shows this app inside a shared frame window, so Brigadier can't tell \
+             which app it is and won't act on it. Ask the user to do this step."
+        }
     };
     let message = format!(
         "target_not_allowed: {tool} refused to target '{}' ({bundle}). {why}",
@@ -1412,7 +1415,10 @@ mod tests {
         let state = result.structured_content.unwrap();
         assert_eq!(state["reason"], "store_app_background_unsupported");
         let message = state["message"].as_str().unwrap();
-        assert!(message.contains("apps identified as ApplicationFrameHost"));
+        assert!(message.contains("Windows shows this app inside a shared frame window"));
+        assert!(message.contains("can't tell which app it is and won't act on it"));
+        assert!(!message.contains("shared host"));
+        assert!(!message.contains("the helper identifies"));
         assert!(message.contains("Ask the user to do this step"));
         assert!(!message.contains("credential"));
         for executable in ["calculatorapp", "notepad", "photos"] {

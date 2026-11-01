@@ -52,8 +52,8 @@ pub fn facts() -> Facts {
              Automation."
                 .to_owned(),
             "Apps running as administrator can block background input. On Windows, Brigadier \
-             also refuses apps identified as ApplicationFrameHost, the shared host for some \
-             Store apps. The helper identifies the shared host instead of the app inside it. Other Store apps are not refused as a group."
+             can use Store apps such as Calculator and Notepad. Apps Windows shows inside a \
+             shared frame window are refused if Brigadier can't tell which app is inside."
                 .to_owned(),
         ],
     }
@@ -262,8 +262,10 @@ mod tests {
     #[test]
     fn windows_notes_distinguish_shared_hosts_from_other_store_apps() {
         let notes = super::facts().notes.join(" ");
-        assert!(notes.contains("apps identified as ApplicationFrameHost"));
-        assert!(notes.contains("Other Store apps are not refused as a group"));
+        assert!(notes.contains("Store apps such as Calculator and Notepad"));
+        assert!(notes.contains("shared frame window are refused if Brigadier can't tell"));
+        assert!(!notes.contains("ApplicationFrameHost"));
+        assert!(!notes.contains("shared host"));
     }
 
     #[test]
