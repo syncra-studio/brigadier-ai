@@ -480,9 +480,14 @@ impl SessionManager {
             {
                 continue;
             }
+            let runs = self.runs_as(row.agent, model.as_deref(), row.effort.as_deref());
             if row.agent == choice.provider
-                && self.same_model(row.agent, model.as_deref(), choice.model.as_deref())
-                && row.effort == choice.effort
+                && runs
+                    == self.runs_as(
+                        choice.provider,
+                        choice.model.as_deref(),
+                        choice.effort.as_deref(),
+                    )
             {
                 return Ok(None);
             }
@@ -496,9 +501,10 @@ impl SessionManager {
                     .unwrap_or_default()
             );
             first.get_or_insert_with(|| words.clone());
+            // A `default` row's quota is its default model's, whose own windows count too.
             let row_choice = ModelChoice {
                 provider: row.agent,
-                model,
+                model: runs.0,
                 effort: row.effort.clone(),
                 fast: None,
                 account: None,

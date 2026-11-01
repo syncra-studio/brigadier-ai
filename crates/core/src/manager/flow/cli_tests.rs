@@ -2527,6 +2527,13 @@ async fn a_start_off_the_routing_runs_and_says_so() {
                         ..by(Some(WORK))
                     },
                 ));
+                starts.push((
+                    "default effort",
+                    StartRequest {
+                        effort: Some("high".into()),
+                        ..by(Some("Bounded implementation"))
+                    },
+                ));
                 starts.push(("no work", by(None)));
                 starts.push((
                     "review",
@@ -2542,6 +2549,13 @@ async fn a_start_off_the_routing_runs_and_says_so() {
                     StartRequest {
                         agent: Some(Agent::Claude),
                         ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "after a default row out",
+                    StartRequest {
+                        agent: Some(Agent::Claude),
+                        ..by(Some("Fallback"))
                     },
                 ));
             } else if turn.input.contains("Route C.") || turn.input.contains("Route D.") {
@@ -2565,7 +2579,7 @@ async fn a_start_off_the_routing_runs_and_says_so() {
     std::fs::write(
         flow.manager.models_rules_path(),
         format!(
-            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Independent review | codex | astra | high | Other. |\n| Independent review | claude | opus | high | Own. |\n"
+            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Independent review | codex | astra | high | Other. |\n| Independent review | claude | opus | high | Own. |\n| Bounded implementation | codex | astra |  | Its default effort. |\n| Fallback | codex | default | medium | Its default model. |\n| Fallback | claude | sonnet | low | Next. |\n"
         ),
     )
     .unwrap();
@@ -2578,14 +2592,15 @@ async fn a_start_off_the_routing_runs_and_says_so() {
         }
     };
     flow.say("Route A.").await;
-    flow.until("every start reported", reported(8)).await;
+    flow.until("every start reported", reported(9)).await;
     flow.settled().await;
     let seen = answers.lock().unwrap().clone();
     let off = |name: &str| seen[name]["offRouting"].clone();
     let first = json!(format!(
         "Off your routing: its {WORK} row names Codex gpt-6-astra · medium."
     ));
-    for name in ["row", "family word", "model id", "review"] {
+    // A row with no effort runs its model's default one: `--effort high` names the same.
+    for name in ["row", "family word", "model id", "review", "default effort"] {
         assert!(seen[name]["worker"].is_object(), "{name}: {seen:#?}");
         assert_eq!(off(name), Value::Null, "{name}: {seen:#?}");
     }
@@ -2638,7 +2653,7 @@ async fn a_start_off_the_routing_runs_and_says_so() {
         })
         .collect();
     let no_work = "Off your routing: no kind of work was named, so no routing row picked it.";
-    assert_eq!(lines.len(), 8, "{lines:?}");
+    assert_eq!(lines.len(), 9, "{lines:?}");
     assert_eq!(lines.iter().filter(|line| line.is_some()).count(), 4);
     assert!(
         lines
@@ -2669,11 +2684,13 @@ async fn a_start_off_the_routing_runs_and_says_so() {
         now,
     );
     flow.say("Route B.").await;
-    flow.until("the quota starts reported", reported(10)).await;
+    flow.until("the quota starts reported", reported(12)).await;
     flow.settled().await;
     let seen = answers.lock().unwrap().clone();
     assert_eq!(seen["next row"]["offRouting"], Value::Null, "{seen:#?}");
     assert_eq!(seen["first row out"]["offRouting"], Value::Null);
+    // A `default` row's model is out by its own window: the next row is the routing's too.
+    assert_eq!(seen["after a default row out"]["offRouting"], Value::Null);
 
     // Settings › Routing changes the row: `brigadier models` and the next start follow it.
     let user_row = |model: &str, effort: &str| crate::model::GuidanceRow {
@@ -2687,13 +2704,13 @@ async fn a_start_off_the_routing_runs_and_says_so() {
         .set_model_rules(&[user_row("opus", "high")], &[])
         .unwrap();
     flow.say("Route C.").await;
-    flow.until("the start after the change reported", reported(11))
+    flow.until("the start after the change reported", reported(13))
         .await;
     flow.settled().await;
     // Automatic again: no row of the user's, so the shipped one.
     flow.manager.set_model_rules(&[], &[]).unwrap();
     flow.say("Route D.").await;
-    flow.until("the start on Automatic reported", reported(12))
+    flow.until("the start on Automatic reported", reported(14))
         .await;
     flow.settled().await;
     let seen = answers.lock().unwrap().clone();
