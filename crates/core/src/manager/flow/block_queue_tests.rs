@@ -403,6 +403,9 @@ async fn a_message_left_unjudged_twice_stays_queued() {
         board.queue.items.is_empty() && board.requests.contains_key(&item.id)
     })
     .await;
-    assert_eq!(read(&answers, "now on its own turn"), 1);
+    super::eventually("its own turn", || {
+        read(&answers, "now on its own turn") == 1
+    })
+    .await;
     flow.stop().await;
 }

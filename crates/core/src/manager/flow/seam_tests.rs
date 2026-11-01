@@ -278,7 +278,12 @@ async fn a_message_during_the_note_turn_reaches_the_successor_once() {
     flow.idle().await;
     // It starts the successor, with its hand-off; nothing else is said to carry on.
     let meanwhile = given(&inputs, "Meanwhile.");
-    assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
+    assert_eq!(
+        meanwhile.len(),
+        1,
+        "{meanwhile:#?} successor {}",
+        file.seams[0].successor
+    );
     assert_eq!(meanwhile[0].0, file.seams[0].successor);
     assert!(meanwhile[0].1.starts_with(HANDOFF_MARK));
     // Only the user's words show of it: the hand-off before them is Brigadier's (L12).
@@ -398,16 +403,22 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
         file.seams[0].end.death.as_deref(),
         Some("it was still working a minute after a message came")
     );
-    // It reached the working thread at once, Deciding (run2-D40), and joined that work; the
-    // successor reads it with `brigadier context` (D13), and nothing sends it again.
+    // It reached the working thread at once, Deciding (run2-D40); left unjudged, it is never
+    // counted as joined (D72): it goes back to the queue and on its own turn, in the successor.
     let meanwhile = given(&inputs, "Meanwhile.");
-    assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
+    assert_eq!(meanwhile.len(), 2, "{meanwhile:#?}");
     assert_ne!(meanwhile[0].0, file.seams[0].successor, "{meanwhile:#?}",);
     assert!(
         meanwhile[0].1.starts_with("[queued message "),
         "{meanwhile:?}"
     );
-    assert!(!given(&inputs, CARRY_ON).is_empty());
+    assert_eq!(meanwhile[1].0, file.seams[0].successor, "{meanwhile:#?}");
+    assert!(
+        meanwhile[1].1.contains(", now on its own turn]"),
+        "{meanwhile:?}"
+    );
+    // The message starts the successor's work: no bare carry-on.
+    assert!(given(&inputs, CARRY_ON).is_empty());
     flow.stop().await;
 }
 
