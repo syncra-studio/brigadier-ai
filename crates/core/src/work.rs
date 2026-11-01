@@ -1837,7 +1837,14 @@ pub enum OrchestratorStepKind {
     /// "Read {page}" (a Chat).
     ReadPage { url: String },
     /// "Created {worker} with the instructions: …" (the task holds its spec).
-    Created { task_id: TaskId },
+    Created {
+        task_id: TaskId,
+        /// It runs on another agent, model or effort than the user's routing picks now for its
+        /// kind of work (D8, D77): the line that says so. It ran all the same.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        off_routing: Option<String>,
+    },
     /// "Answered {worker}: {answer} — {why}".
     Answered {
         task_id: TaskId,

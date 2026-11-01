@@ -318,7 +318,8 @@ impl SessionManager {
         let provider = agent.unwrap_or(own.provider);
         let chat = matches!(conversation.setup, Some(Setup::Chat { .. }));
         let model = match (start.model, &row) {
-            (Some(model), _) => Some(model),
+            // A family word (`astra`) runs as the model it names, as a row's does.
+            (Some(model), _) => Some(self.listed_model(provider, &model)),
             // A row's model is its agent's: another agent keeps its own default.
             (None, Some(row)) if agent == Some(row.agent) => {
                 picked.push("model".to_owned());
@@ -387,6 +388,9 @@ impl SessionManager {
             fast: None,
             account: None,
         };
+        let off_routing = self
+            .off_routing(work.as_deref(), review.as_ref(), &choice)
+            .await?;
         let plain = PlainWorker {
             quota_policy: Some(quota_policy),
             permission,
@@ -418,6 +422,7 @@ impl SessionManager {
             &caller.conversation_id,
             crate::work::OrchestratorStepKind::Created {
                 task_id: task.id.clone(),
+                off_routing: off_routing.clone(),
             },
         )
         .await;
@@ -435,6 +440,76 @@ impl SessionManager {
                 of: authors.ids,
                 authors: authors.providers,
             }),
+            off_routing,
+        }))
+    }
+
+    /// D8, D77: whether `choice` is what the user's routing picks now for `work`: the first
+    /// row of its order the rules allow, or a later one while each allowed row before it is
+    /// out of quota (a review's order puts the authors' providers last). `None` when it is;
+    /// else the line that says what the routing names. It never refuses or changes the start.
+    async fn off_routing(
+        &self,
+        work: Option<&str>,
+        review: Option<&ReviewAuthors>,
+        choice: &ModelChoice,
+    ) -> Result<Option<String>> {
+        let Some(work) = work else {
+            return Ok(Some(
+                "Off your routing: no kind of work was named, so no routing row picked it.".into(),
+            ));
+        };
+        let mut rows = self.work_rows(work)?;
+        if let Some(authors) = review {
+            rows.sort_by_key(|row| authors.providers.contains(&row.agent));
+        }
+        let (mut first, mut named) = (None, None);
+        for row in &rows {
+            let model = (row.model != "default").then(|| self.listed_model(row.agent, &row.model));
+            if self
+                .model_refusal(
+                    row.agent,
+                    model.as_deref(),
+                    row.effort.as_deref(),
+                    Some(work),
+                )?
+                .is_some()
+            {
+                continue;
+            }
+            let same_model = match (&model, &choice.model) {
+                (Some(row), Some(given)) => row.eq_ignore_ascii_case(given),
+                (row, given) => row == given,
+            };
+            if row.agent == choice.provider && same_model && row.effort == choice.effort {
+                return Ok(None);
+            }
+            let words = format!(
+                "{} {}{}",
+                brigadier_providers::KindFacts::label(row.agent),
+                model.as_deref().unwrap_or("its default model"),
+                row.effort
+                    .as_deref()
+                    .map(|effort| format!(" · {effort}"))
+                    .unwrap_or_default()
+            );
+            first.get_or_insert_with(|| words.clone());
+            let row_choice = ModelChoice {
+                provider: row.agent,
+                model,
+                effort: row.effort.clone(),
+                fast: None,
+                account: None,
+            };
+            if self.choice_available(&row_choice).await {
+                named = Some(words);
+                break;
+            }
+        }
+        let work = rows.first().map_or(work, |row| row.work.as_str());
+        Ok(Some(match named.or(first) {
+            Some(words) => format!("Off your routing: its {work} row names {words}."),
+            None => format!("Off your routing: no row for {work} is allowed now."),
         }))
     }
 

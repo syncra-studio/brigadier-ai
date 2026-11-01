@@ -535,8 +535,11 @@ pub fn start(output: &StartOutput) -> String {
             authors.join(", ")
         )
     });
+    let off = output.off_routing.as_ref().map_or(String::new(), |line| {
+        format!("{line} It runs all the same.\n")
+    });
     format!(
-        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}{review}Keep `brigadier wait` \
+        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}{review}{off}Keep `brigadier wait` \
          running in the background: it returns with its events and wakes you.\n",
         worker.id,
         worker.number,

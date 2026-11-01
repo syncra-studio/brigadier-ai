@@ -468,7 +468,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
     if (OLD_RECORDS.has(step.kind.type)) continue;
     // A run's own steps show as its phases, but a refused message, a usage limit's reset or
     // switch and a proof the thread attached have no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "providerTransition" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
+    if ((ON_TASK_ROW.has(step.kind.type) && !(step.kind.type === "created" && step.kind.offRouting)) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "providerTransition" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
     items.push({
       kind: "orchestrator",
       position: step.position,

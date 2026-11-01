@@ -89,3 +89,29 @@ test("a worker the user stopped reads that they stopped it; one the lead stopped
     await server.close();
   }
 });
+
+/** A board step of the lead at `position`. */
+const step = (position: number, kind: object) => ({ position, requestId: null, atMs: 1000 + position, kind });
+
+test("a worker started off the routing shows one row, runs off your routing, with what the routing names; one on it shows none (D77)", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { TeamStep, isTeamStep } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
+    const { boardItems, emptyBoard, BoardStoreContext } = { ...(await server.ssrLoadModule("/src/app/conversation/blocks.ts")), ...(await server.ssrLoadModule("/src/state/board.ts")) };
+    const task = { id: "t1", number: 1, title: "Map the routes", kind: "implement", state: "running", createdAtMs: 1000, updatedAtMs: 1000, attempts: [] } as unknown as Task;
+    const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task } }, orchestrator: null }));
+    const line = "Off your routing: its Mechanical changes and search row names Codex gpt-6-astra · medium.";
+    const off = { type: "created", taskId: "t1", offRouting: line };
+    assert.equal(isTeamStep(off), true);
+    assert.equal(isTeamStep({ type: "created", taskId: "t1" }), false);
+    const html = ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store }, React.createElement(TeamStep, { kind: off })));
+    assert.equal(html.replace(/<[^>]+>/g, "").startsWith("Map the routes runs off your routing"), true, html);
+    // Only the off-routing start reaches the thread's items; an on-routing one stays a team sentence's.
+    const board = { ...emptyBoard("c"), tasks: { t1: task }, orchestratorSteps: [step(1, { type: "created", taskId: "t1" }), step(2, off)] };
+    const created = boardItems(board).filter((item: { kind: string; step?: { kind: { type: string } } }) => item.kind === "orchestrator" && item.step?.kind.type === "created");
+    assert.equal(created.length, 1);
+    assert.equal(created[0].step.kind.offRouting, line);
+  } finally {
+    await server.close();
+  }
+});

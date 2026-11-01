@@ -11,7 +11,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import { workedBy } from "@/app/side-panel/WorkerThread";
 import { ROW, ROW_DETAIL, ThreadActivity } from "@/components/conversation";
-import { CheckCircle, Chat, Commit, StopCircle } from "@/components/icons";
+import { CheckCircle, Chat, Commit, ListOrderedIcon, StopCircle } from "@/components/icons";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";
@@ -131,11 +131,11 @@ function lifecycleWordOf(task: Task): ReturnType<typeof lifecycleWord> {
 /** The reason the engine files with a worker the user stopped (`USER_STOP_REASON` there). */
 const USER_STOP_REASON = "Stopped by the user";
 
-/** The lead's actions on its team that show as rows. */
-export type TeamStepKind = Extract<OrchestratorStepKind, { type: "messaged" | "answered" | "stopped" | "landed" | "reviewed" }>;
+/** The lead's actions on its team that show as rows; a worker started shows only when it is off the routing (D77). */
+export type TeamStepKind = Extract<OrchestratorStepKind, { type: "messaged" | "answered" | "stopped" | "landed" | "reviewed" | "created" }>;
 
-export function isTeamStep(kind: { type: string }): kind is TeamStepKind {
-  return ["messaged", "answered", "stopped", "landed", "reviewed"].includes(kind.type);
+export function isTeamStep(kind: { type: string; offRouting?: string | undefined }): kind is TeamStepKind {
+  return ["messaged", "answered", "stopped", "landed", "reviewed"].includes(kind.type) || (kind.type === "created" && !!kind.offRouting);
 }
 
 /** "the change from", "the changes from": what a Landed or Reviewed row names before its workers. */
@@ -167,6 +167,11 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
       line = kind.byUser ? <>You messaged <WorkerName taskId={kind.taskId} /></> : <>Messaged <WorkerName taskId={kind.taskId} /></>;
       detail = kind.text ? <QuietBrief>{kind.text}</QuietBrief> : undefined;
+      break;
+    case "created":
+      icon = <ListOrderedIcon aria-hidden className="size-4 shrink-0" />;
+      line = <><WorkerName taskId={kind.taskId} /> runs off your routing</>;
+      detail = kind.offRouting ? <QuietBrief>{kind.offRouting}</QuietBrief> : undefined;
       break;
     case "answered":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;

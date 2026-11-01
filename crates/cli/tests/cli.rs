@@ -418,6 +418,9 @@ fn sample(request: &CliRequest) -> CliReply {
                 authors: vec![ProviderKind::Claude],
                 other_provider: true,
             }),
+            off_routing: start.model.as_ref().map(|_| {
+                "Off your routing: its Review row names Codex gpt-6-astra · medium.".into()
+            }),
         }),
         CliRequest::Send { id, answer, .. } => CliReply::ok(&SendOutput {
             id: id.clone(),
@@ -1126,6 +1129,15 @@ fn text_output_reads_well() {
         by_work.contains("\nYour row \"Independent review\" picked its agent and effort.\n"),
         "{by_work}"
     );
+    // A pick off the routing still starts; the receipt says what the routing names (D77).
+    assert!(
+        by_work.contains(
+            "\nOff your routing: its Review row names Codex gpt-6-astra · medium. It runs all \
+             the same.\n"
+        ),
+        "{by_work}"
+    );
+    assert!(!start.contains("Off your routing"), "{start}");
     // `--reviewing` says whose work it reviews and on which CLI (harness D22).
     let review = stdout(&brigadier(
         Some(&dir.0),

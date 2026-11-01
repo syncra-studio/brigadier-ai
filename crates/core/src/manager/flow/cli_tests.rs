@@ -2462,6 +2462,258 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
     flow.stop().await;
 }
 
+/// Goal 12 (D8, D77): a worker the routing doesn't pick now for its work still starts, and
+/// its start says what the routing names, to the session and in the thread; one it picks says
+/// nothing. A family word reads as the model it names; a review's work counts when only
+/// `--reviewing` names it; a lower row counts only while each row above it is out of quota; a
+/// Settings change is the next start's routing, and Automatic again is the shipped row.
+#[tokio::test]
+async fn a_start_off_the_routing_runs_and_says_so() {
+    const WORK: &str = "Mechanical changes and search";
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("Done.");
+            }
+            // A round said while workers still run comes queued: it joins this work.
+            join_queued(&turn).await;
+            let by = |work: Option<&str>| StartRequest {
+                work: work.map(str::to_owned),
+                local: true,
+                ..start("Reply once.")
+            };
+            let mut starts: Vec<(&str, StartRequest)> = Vec::new();
+            if turn.input.contains("Route A.") {
+                starts.push(("row", by(Some(WORK))));
+                starts.push((
+                    "family word",
+                    StartRequest {
+                        agent: Some(Agent::Codex),
+                        model: Some("astra".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "model id",
+                    StartRequest {
+                        model: Some("gpt-6-astra".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "other model",
+                    StartRequest {
+                        model: Some("gpt-6-luna".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "other effort",
+                    StartRequest {
+                        effort: Some("high".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "lower row",
+                    StartRequest {
+                        agent: Some(Agent::Claude),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push(("no work", by(None)));
+                starts.push((
+                    "review",
+                    StartRequest {
+                        reviewing: vec!["session".into()],
+                        ..by(None)
+                    },
+                ));
+            } else if turn.input.contains("Route B.") {
+                starts.push(("first row out", by(Some(WORK))));
+                starts.push((
+                    "next row",
+                    StartRequest {
+                        agent: Some(Agent::Claude),
+                        ..by(Some(WORK))
+                    },
+                ));
+            } else if turn.input.contains("Route C.") || turn.input.contains("Route D.") {
+                let at = if turn.input.contains("Route C.") {
+                    "C"
+                } else {
+                    "D"
+                };
+                let models = brigadier(&turn, CliRequest::Models).await;
+                seen.lock().unwrap().insert(format!("models {at}"), models);
+                starts.push((at, by(Some(WORK))));
+            }
+            for (name, request) in starts {
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock().unwrap().insert(name.into(), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-start-off-routing", Options::default(), script).await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        format!(
+            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Independent review | codex | astra | high | Other. |\n| Independent review | claude | opus | high | Own. |\n"
+        ),
+    )
+    .unwrap();
+    let reported = |n: usize| {
+        move |b: &crate::board::Board| {
+            b.tasks.len() == n
+                && b.tasks
+                    .values()
+                    .all(|t| t.state == crate::work::TaskState::Reported)
+        }
+    };
+    flow.say("Route A.").await;
+    flow.until("every start reported", reported(8)).await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    let off = |name: &str| seen[name]["offRouting"].clone();
+    let first = json!(format!(
+        "Off your routing: its {WORK} row names Codex gpt-6-astra · medium."
+    ));
+    for name in ["row", "family word", "model id", "review"] {
+        assert!(seen[name]["worker"].is_object(), "{name}: {seen:#?}");
+        assert_eq!(off(name), Value::Null, "{name}: {seen:#?}");
+    }
+    assert_eq!(
+        picked_of(&seen["family word"]),
+        (json!("codex"), json!("gpt-6-astra"), json!("medium"))
+    );
+    assert_eq!(
+        picked_of(&seen["review"]),
+        (json!("codex"), json!("gpt-6-astra"), json!("high"))
+    );
+    // Off the routing: it runs on what was asked, and says what the routing names.
+    assert_eq!(
+        picked_of(&seen["other model"]),
+        (json!("codex"), json!("gpt-6-luna"), json!("medium"))
+    );
+    assert_eq!(off("other model"), first, "{seen:#?}");
+    assert_eq!(off("other effort"), first);
+    // A lower row while the first is free: its own provider is no reason (D8).
+    // (The fake Claude lists no sonnet model: the family word runs as written.)
+    assert_eq!(
+        picked_of(&seen["lower row"]),
+        (json!("claude"), json!("sonnet"), json!("low"))
+    );
+    assert_eq!(off("lower row"), first);
+    assert_eq!(
+        off("no work"),
+        json!("Off your routing: no kind of work was named, so no routing row picked it.")
+    );
+    // The thread's line comes from the start's step, the same words.
+    let board = flow.board().await;
+    let lines: Vec<Option<String>> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            crate::work::OrchestratorStepKind::Created { off_routing, .. } => {
+                Some(off_routing.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let no_work = "Off your routing: no kind of work was named, so no routing row picked it.";
+    assert_eq!(lines.len(), 8, "{lines:?}");
+    assert_eq!(lines.iter().filter(|line| line.is_some()).count(), 4);
+    assert!(
+        lines
+            .iter()
+            .flatten()
+            .all(|line| json!(line) == first || line == no_work)
+    );
+
+    // The first row's model out of quota: the next row is the routing's; the first still is too.
+    let now = crate::now_ms();
+    flow.manager.runtime.monitor().note(
+        &crate::accounts::AccountRef::new(ProviderKind::Codex, None),
+        &brigadier_providers::QuotaSnapshot {
+            provider: ProviderKind::Codex,
+            windows: vec![brigadier_providers::QuotaWindow {
+                id: "astra_week".into(),
+                label: "astra_week".into(),
+                used_percent: 100.0,
+                resets_at_ms: Some(now + 3_600_000),
+                window_minutes: Some(7 * 24 * 60),
+                bucket: None,
+                model: Some("gpt-6-astra".into()),
+            }],
+            limit: None,
+            observed_at_ms: now,
+            source: brigadier_providers::QuotaSource::Read,
+        },
+        now,
+    );
+    flow.say("Route B.").await;
+    flow.until("the quota starts reported", reported(10)).await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(seen["next row"]["offRouting"], Value::Null, "{seen:#?}");
+    assert_eq!(seen["first row out"]["offRouting"], Value::Null);
+
+    // Settings › Routing changes the row: `brigadier models` and the next start follow it.
+    let user_row = |model: &str, effort: &str| crate::model::GuidanceRow {
+        work: WORK.into(),
+        agent: ProviderKind::Claude,
+        model: model.into(),
+        effort: Some(effort.into()),
+        reason: "Mine.".into(),
+    };
+    flow.manager
+        .set_model_rules(&[user_row("opus", "high")], &[])
+        .unwrap();
+    flow.say("Route C.").await;
+    flow.until("the start after the change reported", reported(11))
+        .await;
+    flow.settled().await;
+    // Automatic again: no row of the user's, so the shipped one.
+    flow.manager.set_model_rules(&[], &[]).unwrap();
+    flow.say("Route D.").await;
+    flow.until("the start on Automatic reported", reported(12))
+        .await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    let row_of = |at: &str| {
+        seen[&format!("models {at}")]["guidance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["work"] == WORK)
+            .map(|row| (row["model"].clone(), row["source"].clone()))
+    };
+    assert_eq!(
+        row_of("C"),
+        Some((json!("opus"), json!("user"))),
+        "{seen:#?}"
+    );
+    assert_eq!(
+        picked_of(&seen["C"]),
+        (json!("claude"), json!("claude-opus-5-5"), json!("high"))
+    );
+    assert_eq!(seen["C"]["offRouting"], Value::Null);
+    assert_eq!(row_of("D"), Some((json!("sonnet"), json!("shipped"))));
+    assert_eq!(
+        picked_of(&seen["D"]),
+        (json!("claude"), json!("sonnet"), json!("medium"))
+    );
+    assert_eq!(seen["D"]["offRouting"], Value::Null);
+    flow.stop().await;
+}
+
 /// An independent review (harness D22): `--reviewing` names whose work it is (a worker, or
 /// `session`, the default for the work "Independent review"); the reviewer runs on another
 /// provider than the authors' whose row the rules allow and whose model is free now, else a

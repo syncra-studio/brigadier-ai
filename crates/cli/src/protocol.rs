@@ -902,6 +902,10 @@ pub struct StartOutput {
     /// An independent review's: whose work and which provider reviews it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<StartReview>,
+    /// It runs on another agent, model or effort than the routing picks now for its work:
+    /// what the routing names. It runs all the same (D8, D77).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_routing: Option<String>,
 }
 
 /// Whose work an independent review covers, and on what (harness D22).

@@ -84,6 +84,10 @@
           "type": "boolean"
         }
       }
+    },
+    "offRouting": {
+      "type": "string",
+      "description": "It runs on another agent, model or effort than the routing picks now for its work: what the routing names. It runs all the same."
     }
   },
   "$defs": {
