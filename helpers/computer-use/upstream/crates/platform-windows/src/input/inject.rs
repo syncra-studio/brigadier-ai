@@ -8,7 +8,7 @@
 use anyhow::{bail, Result};
 use std::sync::Mutex;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
@@ -16,9 +16,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-    LockSetForegroundWindow, SetForegroundWindow, SetWindowLongPtrW, GA_ROOT, GWL_EXSTYLE,
-    LSFW_LOCK, LSFW_UNLOCK, WS_EX_NOACTIVATE,
+    GetAncestor, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+    IsHungAppWindow, IsIconic, IsWindowVisible, IsZoomed, LockSetForegroundWindow,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GA_ROOT, GWL_EXSTYLE,
+    GWL_STYLE, GW_HWNDNEXT, LSFW_LOCK, LSFW_UNLOCK, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SW_MINIMIZE, SW_SHOWNOACTIVATE,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MINIMIZEBOX,
 };
 
 #[path = "foreground_watch.rs"]
@@ -131,6 +134,80 @@ pub(crate) unsafe fn hand_back_foreground(
         let _ = unsafe { AttachThreadInput(my_tid, tid, false) };
     }
     (unsafe { GetForegroundWindow() }) == prior
+}
+
+const Z_ONLY: SET_WINDOW_POS_FLAGS =
+    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_NOOWNERZORDER.0);
+
+/// Put `window` directly under `prior` without activating either. Z-order is
+/// not subject to the foreground lock; posted so a busy app cannot block us.
+pub(crate) unsafe fn place_behind(window: HWND, prior: HWND) -> bool {
+    unsafe { SetWindowPos(window, prior, 0, 0, 0, 0, Z_ONLY | SWP_ASYNCWINDOWPOS) }.is_ok()
+}
+
+/// Facts for [`foreground_watch::policy::may_minimize_for_hand_back`].
+pub(crate) unsafe fn minimize_facts(
+    prior: HWND,
+    displaced: HWND,
+) -> foreground_watch::policy::MinimizeFacts {
+    let style = unsafe { GetWindowLongPtrW(displaced, GWL_STYLE) } as u32;
+    let ex = unsafe { GetWindowLongPtrW(displaced, GWL_EXSTYLE) } as u32;
+    foreground_watch::policy::MinimizeFacts {
+        visible: unsafe { IsWindowVisible(displaced) }.as_bool(),
+        iconic: unsafe { IsIconic(displaced) }.as_bool(),
+        zoomed: unsafe { IsZoomed(displaced) }.as_bool(),
+        minimizable: style & WS_MINIMIZEBOX.0 != 0,
+        topmost: ex & WS_EX_TOPMOST.0 != 0,
+        tool: ex & WS_EX_TOOLWINDOW.0 != 0,
+        prior_next: unsafe { GetWindow(displaced, GW_HWNDNEXT) }.ok() == Some(prior),
+        prior_hung: unsafe { IsHungAppWindow(prior) }.as_bool(),
+    }
+}
+
+/// Second hand-back route, for when Windows refuses `hand_back_foreground`
+/// because this process holds no foreground right. Windows itself activates
+/// the next window when the front window is minimized, so place the user's
+/// window right under the displaced one, minimize it, then show it again
+/// without activation under the user's window. The app window is always shown
+/// again, whatever happened. Live (2026-11-01, Windows 11 26300): Notepad's
+/// cold launch handed back within 20 ms and stayed behind; an Explorer folder
+/// window kept the front while minimized, so that case is reported refused.
+pub(crate) unsafe fn hand_back_by_minimizing(
+    prior: HWND,
+    displaced: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    if unsafe { IsHungAppWindow(prior) }.as_bool() {
+        return false;
+    }
+    // Synchronous: the user's window must be next before the minimize.
+    let _ = unsafe { SetWindowPos(prior, displaced, 0, 0, 0, 0, Z_ONLY) };
+    let facts = unsafe { minimize_facts(prior, displaced) };
+    if !foreground_watch::policy::may_minimize_for_hand_back(facts)
+        || !allowed()
+        || unsafe { GetForegroundWindow() } != displaced
+    {
+        return false;
+    }
+    // Both requests are posted to the app's thread and run in order there.
+    let _ = unsafe { ShowWindowAsync(displaced, SW_MINIMIZE) };
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline && unsafe { GetForegroundWindow() } != prior && allowed() {
+        sleep(Duration::from_millis(2));
+    }
+    let _ = unsafe { ShowWindowAsync(displaced, SW_SHOWNOACTIVATE) };
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline && unsafe { IsIconic(displaced) }.as_bool() {
+        sleep(Duration::from_millis(2));
+    }
+    let handed = unsafe { GetForegroundWindow() } == prior;
+    if handed {
+        let _ = unsafe { place_behind(displaced, prior) };
+    }
+    handed
 }
 
 impl Drop for ForegroundLockGuard {

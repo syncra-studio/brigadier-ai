@@ -8,10 +8,23 @@ pub(crate) struct Observation {
     pub monitoring: bool,
     pub interrupted: bool,
     pub user_input: bool,
+    /// The front was handed back and Windows refused every route.
+    pub refused: bool,
+    /// A launched window that opened over the user's window was put under it.
+    pub placed_behind: bool,
 }
 
 impl Observation {
     pub(crate) fn report(self) -> (&'static str, bool) {
+        if self.activated
+            && self.foreground_seen
+            && !self.restored
+            && self.refused
+            && !self.user_input
+            && !self.interrupted
+        {
+            return ("The launched app took the front, and Windows refused to give it back to your window: the app is in front of your window now. Click your window to continue. The app itself opened.", true);
+        }
         if self.user_input {
             return ("Real user input ended automatic focus restoration; any recorded activation may reflect your own actions. Keeping the original window in front is unconfirmed.", true);
         }
@@ -31,6 +44,8 @@ impl Observation {
                 "App activation was observed; your previous window could not be confirmed in front. Opening and keeping your window in front are separate results.", true),
             (false, _, _, true) => (
                 "Monitoring stopped after user input or the previous window closed; keeping your window in front is unconfirmed.", true),
+            (false, _, true, false) if self.placed_behind => (
+                "No app activation has been recorded before this reply. The app's window opened on top of yours and was placed behind your window. Monitoring continues for up to 8 seconds after the call; this does not guarantee a flash-free launch.", false),
             (false, _, true, false) => (
                 "No app activation has been recorded before this reply. Monitoring continues for up to 8 seconds after the call; this does not guarantee a flash-free launch.", false),
             _ => ("Window activation observation was unavailable or its bounded watch expired; preservation is unconfirmed.", true),
@@ -45,6 +60,51 @@ pub(crate) fn may_hand_back(
     still_front: bool,
 ) -> bool {
     prior_valid && input_unchanged && target && still_front
+}
+
+/// A launched window that Windows let take the front may be minimized once so
+/// that Windows itself activates the user's window, which must be next below
+/// it. A process without foreground rights may still minimize a window, while
+/// SetForegroundWindow, AttachThreadInput and SwitchToThisWindow are refused
+/// (Windows 11, 2026-11-01). Maximized windows are left alone: they could not
+/// be restored maximized without activation.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MinimizeFacts {
+    pub visible: bool,
+    pub iconic: bool,
+    pub zoomed: bool,
+    pub minimizable: bool,
+    pub topmost: bool,
+    pub tool: bool,
+    pub prior_next: bool,
+    pub prior_hung: bool,
+}
+
+pub(crate) fn may_minimize_for_hand_back(facts: MinimizeFacts) -> bool {
+    facts.visible
+        && !facts.iconic
+        && !facts.zoomed
+        && facts.minimizable
+        && !facts.topmost
+        && !facts.tool
+        && facts.prior_next
+        && !facts.prior_hung
+}
+
+/// A launched window shown without activation still opens on top of the
+/// z-order. Place it under the user's window while that window is in front.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CoverFacts {
+    pub visible: bool,
+    pub root: bool,
+    pub iconic: bool,
+    pub topmost: bool,
+    pub tool: bool,
+    pub target: bool,
+}
+
+pub(crate) fn place_behind_prior(facts: CoverFacts) -> bool {
+    facts.visible && facts.root && !facts.iconic && !facts.topmost && !facts.tool && facts.target
 }
 
 pub(crate) fn expired(elapsed_ms: u128, since_end_ms: Option<u128>) -> bool {
@@ -109,6 +169,10 @@ impl ActivationEvidence {
             self.pending.push(pid);
         }
         false
+    }
+
+    pub(crate) fn is_known(&self, pid: u32) -> bool {
+        pid != 0 && self.known.contains(&pid)
     }
 
     pub(crate) fn bind(&mut self, pid: u32) {
@@ -382,5 +446,153 @@ mod input_time_tests {
         .report()
         .0
         .starts_with("Real user input ended"));
+    }
+}
+
+#[cfg(test)]
+mod launch_hand_back_tests {
+    use super::*;
+
+    fn kept_front() -> Observation {
+        Observation {
+            activated: true,
+            foreground_seen: true,
+            monitoring: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_refused_hand_back_says_the_app_is_in_front_of_your_window() {
+        let (note, failed) = Observation {
+            refused: true,
+            ..kept_front()
+        }
+        .report();
+        assert!(failed);
+        assert!(note.contains("Windows refused to give it back to your window"));
+        assert!(note.contains("Click your window"));
+        // Restored, or ended by the user's own input: never the refusal.
+        assert!(Observation {
+            refused: true,
+            restored: true,
+            ..kept_front()
+        }
+        .report()
+        .0
+        .contains("A focus change occurred"));
+        assert!(Observation {
+            refused: true,
+            user_input: true,
+            ..kept_front()
+        }
+        .report()
+        .0
+        .starts_with("Real user input ended"));
+        assert!(Observation {
+            monitoring: true,
+            placed_behind: true,
+            ..Default::default()
+        }
+        .report()
+        .0
+        .contains("placed behind your window"));
+        // Not attempted yet: the earlier unconfirmed wording stays.
+        assert!(kept_front().report().0.contains("could not be confirmed"));
+    }
+
+    #[test]
+    fn minimizing_is_only_for_a_plain_window_with_your_window_next_below() {
+        let plain = MinimizeFacts {
+            visible: true,
+            minimizable: true,
+            prior_next: true,
+            ..Default::default()
+        };
+        assert!(may_minimize_for_hand_back(plain));
+        for blocked in [
+            MinimizeFacts {
+                visible: false,
+                ..plain
+            },
+            MinimizeFacts {
+                iconic: true,
+                ..plain
+            },
+            MinimizeFacts {
+                zoomed: true,
+                ..plain
+            },
+            MinimizeFacts {
+                minimizable: false,
+                ..plain
+            },
+            MinimizeFacts {
+                topmost: true,
+                ..plain
+            },
+            MinimizeFacts {
+                tool: true,
+                ..plain
+            },
+            MinimizeFacts {
+                prior_next: false,
+                ..plain
+            },
+            MinimizeFacts {
+                prior_hung: true,
+                ..plain
+            },
+        ] {
+            assert!(!may_minimize_for_hand_back(blocked), "{blocked:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_launched_apps_ordinary_windows_are_placed_behind_yours() {
+        let window = CoverFacts {
+            visible: true,
+            root: true,
+            target: true,
+            ..Default::default()
+        };
+        assert!(place_behind_prior(window));
+        for kept in [
+            CoverFacts {
+                target: false,
+                ..window
+            },
+            CoverFacts {
+                topmost: true,
+                ..window
+            },
+            CoverFacts {
+                tool: true,
+                ..window
+            },
+            CoverFacts {
+                iconic: true,
+                ..window
+            },
+            CoverFacts {
+                root: false,
+                ..window
+            },
+            CoverFacts {
+                visible: false,
+                ..window
+            },
+        ] {
+            assert!(!place_behind_prior(kept), "{kept:?}");
+        }
+    }
+
+    #[test]
+    fn bound_launch_pids_are_known_and_zero_never_is() {
+        let mut evidence = ActivationEvidence::default();
+        evidence.bind(42);
+        assert!(evidence.is_known(42));
+        assert!(!evidence.is_known(7));
+        assert!(!evidence.is_known(0));
     }
 }

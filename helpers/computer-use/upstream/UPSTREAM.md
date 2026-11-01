@@ -192,6 +192,8 @@ Patches applied, in order:
 
 - `patches/0165-windows-typing-stops-on-user-input.diff`: Background per-character typing on Windows (the WM_CHAR route native and XAML editors such as Notepad use) checks for the user's own mouse and keyboard input, pointer motion included, before every character and stops at once with a reply saying how much was typed; its deadline is sized to the text, and reaching it says how far typing got instead of reporting a provider timeout.
 
+- `patches/0166-windows-launch-hands-front-back-and-stays-behind.diff`: Windows refuses SetForegroundWindow to a helper without a foreground right even when attached to the front thread, so a launched app that took the front kept it, and a window shown without activation still opened on top of the user's window. Keep the launched app's new windows under the user's window, hand the front back by minimizing the launched window once (Windows then activates the user's window; the app is shown again behind it), and say plainly when Windows refused.
+
 - `patches/0167-windows-hotkey-closed-menu-accelerators.diff`: Search UIA-expandable menus and owned WinUI popups for hotkey accelerators, clean up menus opened by the search, and refuse unmatched shortcuts without keyboard injection.
 
 - `patches/0168-windows-edge-page-typing.diff`: Accept exact data document URLs and Edge's uniquely bound address-bar evidence for background caret insertion, preserving endpoint ownership and exact page/field checks; explain page mutation refusals with element-token alternatives.
