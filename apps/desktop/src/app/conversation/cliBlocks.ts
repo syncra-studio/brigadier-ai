@@ -481,13 +481,13 @@ const STEERED = /^\[steered in by the user: [^\]\n]*\]\n?/;
  */
 const WITHDRAWN = /\n*\[queued message \S{8} (?:withdrawn|steered in by the user): [^\]\n]*\]\n*/g;
 
-/** The queue id a user message's frame names, if it has one. */
 /** A successor's first message without its hand-off: the user's words after it, if any. */
 function afterHandoff(text: string): string {
   const end = text.trimStart().startsWith(HANDOFF_MARK) ? text.indexOf(HANDOFF_END) : -1;
   return end >= 0 ? text.slice(end + HANDOFF_END.length).trimStart() : text;
 }
 
+/** The queue id a user message's frame names, if it has one. */
 function queuedId(text: string): string | null {
   return QUEUED.exec(text)?.[1] ?? null;
 }
@@ -646,7 +646,11 @@ export function cliBlocks(
   const joined = new Map<Block, ThreadTurn[]>();
   const close = (each: Block) => settle(each, turnOf.get(each), joined.get(each));
   // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
+  // The block each message that joined one went on in (a seam's successor may start in one).
+  const joinedBy = new Map<string, Block>();
   const join = (each: Block, position: number, atMs: number | undefined) => {
+    const item = view.entries[position]?.event;
+    if (item?.type === "message") joinedBy.set(item.itemId, each);
     const last = turnOf.get(each);
     joined.set(each, [...(joined.get(each) ?? []), ...(last ? [last] : [])]);
     turnOf.set(each, view.turns[turn]);
@@ -992,7 +996,9 @@ export function cliBlocks(
   // turn while the successor is still to come.
   for (const seam of seams) {
     if (seam.open) continue;
-    const next = seam.at === null ? blocks.length : blocks.findIndex((each) => each.key === seam.at);
+    // A successor whose first message joined a block that still held: after that block.
+    const into = seam.at === null ? undefined : joinedBy.get(seam.at);
+    const next = seam.at === null ? blocks.length : into ? blocks.indexOf(into) + 1 : blocks.findIndex((each) => each.key === seam.at);
     // Never the note turn's own block, which the thread doesn't show.
     const before = next < 0 ? undefined : blocks.slice(0, next).findLast((each) => !internal.has(each));
     if (!before) continue;

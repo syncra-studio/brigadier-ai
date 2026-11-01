@@ -830,6 +830,20 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
       ["u3", null, [], 0],
     ],
   );
+  // A successor whose first message joined the block that still held: the divider stays, once,
+  // after that block.
+  const joinedSeam = cliBlocks(
+    {
+      ...steered,
+      entries: [...steered.entries.slice(0, 7), user("u3", "[Brigadier hand-off 2 · conv]\nthe note\n[End of the hand-off]\n\nAfter", 2000)],
+      turns: [turn("u1", 1000, 1300, "done"), { ...turn("u3", 2000, null, null), joins: true }],
+    },
+    "conv",
+  );
+  assert.deepEqual(
+    joinedSeam.map((block) => [block.key, block.seams.length]),
+    [["u1", 1]],
+  );
   const withoutMetadata = cliBlocks({ ...own, seams: [] }, "conv");
   assert.deepEqual(withoutMetadata.map((block) => block.key), ["u1"]);
   assert.deepEqual(withoutMetadata[0]?.texts.map((text) => text.text), ["Big."]);
