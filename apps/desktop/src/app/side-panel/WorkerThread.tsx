@@ -129,8 +129,9 @@ function BrigadierWorkerThread({ conversationId, row }: { conversationId: string
 /**
  * A subagent's thread: its entries in its session's thread, as that thread is kept (read, live
  * news, read again at its turn's end), so its last words show even when they come after its call
- * ended. Its entries come only from its session's files, which live news doesn't carry: while it
- * works they are read every 1.5 s too, and the fuller of the two shows (a transcript only grows).
+ * ended. Its entries come only from its session's files, which live news doesn't carry: they are
+ * read on open, every 1.5 s while it works and as it ends, and the fuller of the two shows (a
+ * transcript only grows).
  */
 function NativeWorkerThread({ conversationId, row }: { conversationId: string; row: NativeWorker }) {
   const callId = row.native.callId;
@@ -141,8 +142,9 @@ function NativeWorkerThread({ conversationId, row }: { conversationId: string; r
     const parent = s.views[conversationId];
     return parent ? JSON.stringify(ownEntries(parent, callId)) : null;
   });
+  // Read once on open and once as it ends too: its lead's turn may run on long after it, and
+  // only that turn's end reads the session's thread again (D50, D69).
   useEffect(() => {
-    if (!row.working) return;
     let current = true;
     const read = () =>
       request({ method: "threadView", conversationId }).then(
@@ -150,6 +152,7 @@ function NativeWorkerThread({ conversationId, row }: { conversationId: string; r
         (cause: unknown) => current && setError(cause instanceof Error ? cause.message : String(cause)),
       );
     void read();
+    if (!row.working) return () => void (current = false);
     const timer = window.setInterval(() => void read(), WORKER_THREAD_EVERY_MS);
     return () => {
       current = false;
