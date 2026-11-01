@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive } from "@/fixtures/headless";
 
 type Seen = { steps: string[]; workers: string[]; background: string[] | null; panel: string | null };
 
 test("a subagent is a row of its block that opens its transcript, never a worker; a background one is a Background row that stays once over (D96, D97, D98)", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "subagent-rows.html", "subagent-rows-result", 15000)) as {
+  const seen = JSON.parse(await renderFixtureLive(t, "subagent-rows.html", "subagent-rows-result", 30000)) as {
     running: Seen; foreground: string; background: string; ended: Seen; forgotten: Seen; reopened: string;
   };
   const { running, ended, forgotten } = seen;

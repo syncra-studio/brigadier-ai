@@ -15,6 +15,7 @@ import type { BackgroundTask, Conversation, FileEntry, ProviderEvent, Request, T
 import { applyActivityNews } from "@/state/activity";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
+import { fixtureInput } from "@/fixtures/input";
 import { emptyThread, useApp } from "@/state/store";
 
 const id = "subagent-rows";
@@ -131,6 +132,8 @@ function Page() {
 }
 
 async function drive() {
+  // Wide enough that the side panel a row opens leaves the summary card beside the thread.
+  await fixtureInput({ type: "viewport", width: 2000, height: 1000 });
   await pause();
   await openWork();
   const running = seen();

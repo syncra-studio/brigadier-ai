@@ -16,7 +16,7 @@ import { stopBackgroundTask, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread, useWorkerRows } from "@/state/cliThread";
 import { openLink } from "@/state/links";
-import { subagentPanel } from "@/state/nativeWorkers";
+import { backgroundOf, subagentPanel } from "@/state/nativeWorkers";
 import { openPanelTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
@@ -65,7 +65,7 @@ const NO_PREVIEWS: readonly Preview[] = [];
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
   const workers = useWorkerRows(conversationId);
-  const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
+  const cliTasks = useCliThread((s) => (s.views[conversationId] ? backgroundOf(s.views[conversationId]) : NO_TASKS));
   const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
   const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
   // Every background command and subagent, the session's and its workers' (D51, D97); ended ones

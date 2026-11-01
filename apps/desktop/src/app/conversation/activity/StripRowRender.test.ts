@@ -53,25 +53,23 @@ test("a subagent's strip row is a worker's: its glyph, its name, what it does an
   }
 });
 
-test("a subagent's panel is headed by its name as its rows say it, as a worker's is (D50), and shows its last words from its session's thread", async () => {
+test("a subagent's panel, opened from its row, is headed by its task as its row says it and shows its last words from its session's thread (D96)", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { WorkersTab } = await server.ssrLoadModule("/src/app/side-panel/Agents.tsx");
     const { AgentsPanelContext } = await server.ssrLoadModule("/src/app/conversation/WorkerChip.tsx");
     const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
     const { useCliThread } = await server.ssrLoadModule("/src/state/cliThread.ts");
-    const subagent = (call: string, number: number) => ({
-      ...row({ id: `native:c:${call}`, number, title: "Run sleep then ls src" }),
-      native: { conversationId: "c", callId: call, backgroundId: null, prompt: "" },
-    });
+    const call = { event: { type: "toolCall", itemId: "call2", name: "Agent", input: JSON.stringify({ description: "Run sleep then ls src", prompt: "Run it." }), status: "completed", output: null }, atMs: NOW - 5000, updatedAtMs: NOW };
     // Its last words came after its call ended: the session's thread holds them once read again.
     const said = { event: { type: "message", itemId: "s1", role: "assistant", text: "Ran it: greet.js, index.js" }, atMs: NOW, parent: "call2" };
-    Object.assign(useCliThread.getInitialState().views, { c: { entries: [said], turns: [], workers: [subagent("call1", 1), { ...subagent("call2", 2), working: false, lastEnd: "done", gone: true }] } });
+    const turn = { userMessage: "u1", startedAtMs: NOW - 6000, endedAtMs: NOW + 10, end: "done", error: null, requests: [] };
+    Object.assign(useCliThread.getInitialState().views, { c: { entries: [call, said], turns: [turn], workers: [] } });
     const html = ReactDOMServer.renderToStaticMarkup(
       React.createElement(TooltipProvider, null, React.createElement(AgentsPanelContext.Provider, { value: { panel: "native:c:call2", setPanel: () => {} } },
         React.createElement(WorkersTab as React.FC<{ conversationId: string }>, { conversationId: "c" }))),
     );
-    assert.match(html, /<h2[^>]*>Run sleep then 2<\/h2>/);
+    assert.match(html, /<h2[^>]*>Run sleep then ls src<\/h2>/);
     assert.match(html, /Ran it: greet\.js, index\.js/);
   } finally {
     await server.close();

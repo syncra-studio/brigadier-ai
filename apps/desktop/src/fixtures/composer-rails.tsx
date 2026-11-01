@@ -2,7 +2,7 @@
 /**
  * A standalone Vite entry, excluded from the production build: the strips above the composer
  * (`ComposerStatusSlot` in a real rail over the composer's card) from synthetic thread views:
- * the session's workers and its own subagents (its CLI's Agent calls), one Workers strip (D50); its own
+ * the session's workers in one Workers strip, its CLI's own subagents never in it (D96); its own
  * commands show no strip (D24: the open work block says them). `?scene=` shows one of them alone
  * (`subagents`, `checks`, `all`, `long`, `empty`). `drive=1` opens each strip, presses Stop all,
  * and writes what it saw as JSON into

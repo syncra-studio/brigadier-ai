@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { FileEntry, ThreadTurn, ThreadView } from "@/ipc/generated";
-import { runningSubagents, subagentPanel, subagentPanelOf, subagentRow } from "@/state/nativeWorkers";
+import { backgroundOf, runningSubagents, subagentPanel, subagentPanelOf, subagentRow } from "@/state/nativeWorkers";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
 
 const agentCall = (itemId: string, atMs: number): FileEntry => ({
@@ -58,4 +58,24 @@ test("a background agent that ended after its lead's turn holds its block until 
   assert.equal(runningSubagents(woken as never, 1000, 1050), 0, "its turn started: done");
   const running = { ...view, background: [{ ...(task as object), status: "running", endedAtMs: null }] };
   assert.equal(runningSubagents(running as never, 1000, 1050), 1, "running in the background: holds");
+});
+
+test("a subagent call its CLI lists no task for that outlives its turn's own end ran in the background, on every CLI (D97)", () => {
+  // Turn 1000–1050 ended done; its spawn, made at 1010, still runs.
+  const spawn = agentCall("bg", 1010);
+  assert.ok(spawn.event.type === "toolCall");
+  spawn.event.name = "agents/spawnAgent";
+  const view: ThreadView = { entries: [user("u1", 1000), spawn], turns: [turn("u1", 1000, "done")] };
+  assert.deepEqual(backgroundOf(view).map((task) => [task.itemId, task.kind, task.status, task.endedAtMs]), [["bg", "agent", "running", null]]);
+  assert.equal(runningSubagents(view, 1000, 1050), 1, "it holds its block (D24)");
+  // It ends after its turn: still listed, as over (D98).
+  const ended = { ...view, entries: [user("u1", 1000), { ...spawn, event: { ...spawn.event, status: "completed" as const }, updatedAtMs: 1900 }] };
+  assert.deepEqual(backgroundOf(ended).map((task) => [task.status, task.endedAtMs]), [["completed", 1900]]);
+  assert.equal(runningSubagents(ended, 1000, 1050), 0);
+  // One its turn waited for, or one a stopped turn left unfinished, never ran in the background.
+  assert.deepEqual(backgroundOf({ ...ended, entries: [user("u1", 1000), { ...ended.entries[1]!, updatedAtMs: 1040 }] }), []);
+  assert.deepEqual(backgroundOf({ ...view, turns: [turn("u1", 1000, "stopped")] }), []);
+  // One its CLI lists a task for is that task.
+  const listed = { id: "t1", itemId: "bg", kind: "agent", label: "bg", status: "running", startedAtMs: 1020, endedAtMs: null, outputFile: null, summary: null, lastLine: null } as const;
+  assert.deepEqual(backgroundOf({ ...view, background: [listed] }), [listed]);
 });

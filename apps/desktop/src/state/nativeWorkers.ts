@@ -40,13 +40,49 @@ function works(view: ThreadView, at: number, status: string, task: BackgroundTas
   return status === "inProgress" && at >= (last && last.end === null ? (last.startedAtMs ?? 0) : Infinity);
 }
 
-/** The thread's own subagent calls, with their background tasks. */
+/** The thread's own subagent calls, with their background tasks (`backgroundOf`). */
 function subagentCalls(view: ThreadView): { entry: FileEntry; task: BackgroundTask | undefined }[] {
+  const background = backgroundOf(view);
   return view.entries.flatMap((entry) => {
     const event = entry.event;
     if (entry.parent || event.type !== "toolCall" || !isSubagentStart(event.name)) return [];
-    return [{ entry, task: view.background?.find((task) => task.kind === "agent" && task.itemId === event.itemId) }];
+    return [{ entry, task: background.find((task) => task.kind === "agent" && task.itemId === event.itemId) }];
   });
+}
+
+const NO_TASKS: readonly BackgroundTask[] = [];
+const lastBackground = new WeakMap<readonly FileEntry[], readonly BackgroundTask[]>();
+
+/**
+ * The thread's background tasks as its CLI lists them, plus a background task for each subagent
+ * call its CLI lists none for that went on past its turn's own end (a CLI whose every subagent
+ * runs on its own, the parent waiting only if it chooses): it ran in the background (D97). The
+ * same list while nothing of it changes.
+ */
+export function backgroundOf(view: ThreadView): readonly BackgroundTask[] {
+  const listed = view.background ?? NO_TASKS;
+  const own = new Set(listed.map((task) => task.itemId));
+  const outlived = view.entries.flatMap((entry): BackgroundTask[] => {
+    const event = entry.event;
+    if (entry.parent || event.type !== "toolCall" || !isSubagentStart(event.name) || own.has(event.itemId) || entry.atMs === undefined) return [];
+    const at = entry.atMs;
+    const turn = view.turns.findLast((each) => (each.startedAtMs ?? 0) <= at);
+    if (turn?.end !== "done" || turn.endedAtMs === null) return [];
+    const running = event.status === "inProgress";
+    const ended = entry.updatedAtMs ?? at;
+    if (!running && ended <= turn.endedAtMs) return [];
+    return [{
+      id: event.itemId, itemId: event.itemId, kind: "agent", label: agentDetail(event.name, event.input) ?? "Subagent",
+      status: running ? "running" : event.status === "completed" ? "completed" : "failed", startedAtMs: at, endedAtMs: running ? null : ended,
+      outputFile: null, summary: null, lastLine: null,
+    }];
+  });
+  if (outlived.length === 0) return listed;
+  const all = [...listed, ...outlived];
+  const held = lastBackground.get(view.entries);
+  if (held && JSON.stringify(held) === JSON.stringify(all)) return held;
+  lastBackground.set(view.entries, all);
+  return all;
 }
 
 /**
@@ -58,7 +94,7 @@ export function runningSubagents(view: ThreadView, startedAtMs: number, endedAtM
   const at = [
     ...calls.map(({ entry, task }) => ({ at: entry.atMs ?? task?.startedAtMs ?? 0, status: entry.event.type === "toolCall" ? entry.event.status : "", task })),
     // A background agent whose call the thread doesn't hold (yet) counts from its start.
-    ...(view.background ?? []).filter((task) => task.kind === "agent" && !calls.some((call) => call.task === task)).map((task) => ({ at: task.startedAtMs, status: "", task })),
+    ...backgroundOf(view).filter((task) => task.kind === "agent" && !calls.some((call) => call.task === task)).map((task) => ({ at: task.startedAtMs, status: "", task })),
   ];
   return at.filter((call) => call.at >= startedAtMs && (endedAtMs === null || call.at <= endedAtMs) && works(view, call.at, call.status, call.task)).length;
 }

@@ -1,4 +1,5 @@
 import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { backgroundOf } from "@/state/nativeWorkers";
 import {
   type Block,
   type BlockCompaction,
@@ -958,7 +959,7 @@ export function cliBlocks(
       }
       default: {
         if (readsOnly(event, waited)) return;
-        const tool = keptToolStep(entry, turnOf.get(current) ?? null, view.background);
+        const tool = keptToolStep(entry, turnOf.get(current) ?? null, backgroundOf(view));
         // Its `brigadier send` to another session is the row of the message it sent (S30).
         const kind = sessionSent(tool, event, board) ?? tool;
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });

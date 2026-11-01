@@ -10,7 +10,8 @@ for (const failed of [false, true]) test(`quota recovery ${failed ? "after nativ
   assert.equal(seen.pills, 0);
   assert.equal(seen.quotaErrors, 0);
   assert.equal(seen.rawEnd, failed ? "failed" : null, "presentation never rewrites native failure to interruption");
-  assert.match(seen.native, /workers? working/);
+  // Its CLI's own running subagent is no worker: no Workers strip for it (D96).
+  assert.equal(seen.native, null);
   assert.match(seen.initial, /Usage limit reached · Resets/);
   assert.doesNotMatch(seen.initial, /automatically|Resumes/, "old metadata supplies no automatic recovery promise");
   assert.match(seen.unknown, /Reset time unavailable/);

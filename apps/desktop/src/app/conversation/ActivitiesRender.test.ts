@@ -34,14 +34,14 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.deepEqual(seen.left, ["preview-2"], "what the user stopped left the card");
 });
 
-test("a Background row leaves as soon as its process ends, failed, finished or stopped: no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
+test("an app's Background row leaves as soon as it ends, failed, finished or stopped, the section staying (D98): no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
     running: string[]; ended: string[]; section: boolean; restartOrDismiss: number;
   };
   assert.deepEqual(seen.running, ["preview-14", "preview-13", "preview-12", "preview-11"]);
   // A crash, a non-zero exit, a clean exit and a Stop all take their row off at once.
   assert.deepEqual(seen.ended, []);
-  assert.equal(seen.section, false, "nothing runs any more: no Background section (D24)");
+  assert.equal(seen.section, true, "once shown, the Background section stays (D98)");
   assert.equal(seen.restartOrDismiss, 0);
 });
 
@@ -66,15 +66,15 @@ test("Background rows: a spinner while a process is on its way, a green live dot
   }
 });
 
-test("a running background command is a Background row, the session's or a worker's; the section goes once nothing runs (D51)", { timeout: 90000 }, async (t) => {
-  for (const [scenario, row] of [["tasks", "task:bdza4j3ng"], ["workerTasks", "task:task-2:b7dev"]] as const) {
+test("a background command is a Background row, the session's or a worker's (D51), a background subagent too (D97); ended, each stays, saying how (D98)", { timeout: 90000 }, async (t) => {
+  for (const [scenario, rows] of [["tasks", ["task:a0c79", "task:bdza4j3ng"]], ["workerTasks", ["task:task-2:b7dev"]]] as const) {
     const seen = JSON.parse(await renderFixtureLive(t, `activities.html?${scenario}=1`, "activities-result", 60000)) as { running: string[]; ended: string[]; history: boolean; liveSection: boolean };
-    // A subagent is shown as a worker, never here (D50).
-    assert.deepEqual(seen.running, [row]);
+    // The session's background subagent is here (D97); a worker's is in its panel.
+    assert.deepEqual(seen.running, rows);
     assert.equal(seen.liveSection, true);
-    assert.deepEqual(seen.ended, []);
-    // Nothing runs any more: no Background section, its history link with it (D24).
-    assert.equal(seen.history, false);
+    assert.deepEqual(seen.ended, rows);
+    // Nothing runs any more: the section and its history link stay (D98).
+    assert.equal(seen.history, true);
   }
 });
 
@@ -120,7 +120,7 @@ test("raw session/worker commands use Background once and stop only their exact 
   assert.deepEqual(seen.running, ["task:raw-browser", "task:raw-dev", "task:task-2:worker-test", "task:raw-tests", "task:task-2:b7dev"]);
   assert.equal(seen.workerName, "Demo of the fixes");
   assert.match(seen.output, /^panel:output:task:raw-browser:\d+$/, "terminal output remains invocation-bound");
-  assert.deepEqual(seen.ended, [], "completed, failed and stopped commands leave immediately");
+  assert.deepEqual(seen.ended, ["task:raw-browser", "task:raw-dev", "task:raw-tests", "task:task-2:b7dev"], "completed, failed and stopped commands stay, saying how (D98)");
   // The worker's app still runs: the section and its history link stay.
   assert.equal(seen.history, true);
   assert.deepEqual(seen.stops, [
