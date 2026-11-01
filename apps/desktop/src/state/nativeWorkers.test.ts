@@ -79,3 +79,18 @@ test("a subagent call its CLI lists no task for that outlives its turn's own end
   const listed = { id: "t1", itemId: "bg", kind: "agent", label: "bg", status: "running", startedAtMs: 1020, endedAtMs: null, outputFile: null, summary: null, lastLine: null } as const;
   assert.deepEqual(backgroundOf({ ...view, background: [listed] }), [listed]);
 });
+
+test("a subagent its CLI said ended still works while a job it started runs: its row, block and Background read it running (D97)", () => {
+  const agent = { id: "a1", itemId: "bg", kind: "agent", label: "bg", status: "completed", startedAtMs: 1020, endedAtMs: 1500, provider: "claude" } as never;
+  const job = { id: "j1", itemId: "own", kind: "shell", label: "sleep 40", status: "running", startedAtMs: 1100, endedAtMs: null, provider: "claude" } as never;
+  const inside: FileEntry = {
+    event: { type: "command", itemId: "own", command: "sleep 40 && python3 -c 'print(6*7)'", cwd: "/w", status: "inProgress", exitCode: null, output: null, durationMs: null },
+    atMs: 1100, parent: "bg",
+  };
+  const view = { entries: [user("u1", 1000), agentCall("bg", 1010), inside], turns: [turn("u1", 1000, "done")], background: [agent, job] } as never as ThreadView;
+  assert.deepEqual(backgroundOf(view).map((task) => [task.id, task.status, task.endedAtMs]), [["a1", "running", null], ["j1", "running", null]]);
+  assert.equal(backgroundOf(view), backgroundOf(view), "the same list while nothing changes");
+  assert.equal(runningSubagents(view, 1000, 1050), 1, "it holds its block");
+  const ended = { ...view, background: [agent, { ...(job as object), status: "completed", endedAtMs: 1600 }] } as never as ThreadView;
+  assert.deepEqual(backgroundOf(ended).map((task) => task.status), ["completed", "completed"]);
+});

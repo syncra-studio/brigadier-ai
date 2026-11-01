@@ -77,12 +77,29 @@ export function backgroundOf(view: ThreadView): readonly BackgroundTask[] {
       outputFile: null, summary: null, lastLine: null,
     }];
   });
-  if (outlived.length === 0) return listed;
-  const all = [...listed, ...outlived];
+  const all = withOwnJobs(outlived.length === 0 ? listed : [...listed, ...outlived], view.entries);
+  if (all === listed) return listed;
   const held = lastBackground.get(view.entries);
   if (held && JSON.stringify(held) === JSON.stringify(all)) return held;
   lastBackground.set(view.entries, all);
   return all;
+}
+
+/** The subagent call whose own work `task` is (the call that started it runs inside one), if any. */
+export function subagentOf(task: BackgroundTask, tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): string | undefined {
+  const parent = task.itemId === null ? undefined : entries.find(({ event }) => (event.type === "command" || event.type === "toolCall") && event.itemId === task.itemId)?.parent;
+  return parent !== undefined && tasks.some((each) => each.kind === "agent" && each.itemId === parent) ? parent : undefined;
+}
+
+/**
+ * A subagent works while a job it started still runs, though its CLI said it ended (Claude ends
+ * the subagent's turn first and takes it up again once the job ends): its row, its Background
+ * row, its block and the live line all read it running (D97). `tasks` itself when none is.
+ */
+function withOwnJobs(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): readonly BackgroundTask[] {
+  const busy = new Set(tasks.flatMap((task) => (task.status === "running" ? [subagentOf(task, tasks, entries)] : [])));
+  const still = (task: BackgroundTask) => task.kind === "agent" && task.status !== "running" && task.itemId !== null && busy.has(task.itemId);
+  return tasks.some(still) ? tasks.map((task) => (still(task) ? { ...task, status: "running", endedAtMs: null } : task)) : tasks;
 }
 
 /**
