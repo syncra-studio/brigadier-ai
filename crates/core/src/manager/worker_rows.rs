@@ -65,6 +65,9 @@ pub(crate) struct WorkerCli {
     pub context: Option<(i64, Option<i64>)>,
     /// The open turn had an error the CLI won't retry.
     errored: bool,
+    /// Brigadier closes its CLI mid-turn (a pause or a switch, D124): that turn ends
+    /// interrupted, not stopped by the user.
+    cut: bool,
     /// The open turn's user message, once its CLI said it.
     user_message: Option<String>,
     /// The line the last event adds to the worker's `record/turns.jsonl`: its turn's start, or
@@ -110,6 +113,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.fresh_context = false;
                 cli.limit = None;
                 cli.errored = false;
+                cli.cut = false;
                 cli.user_message = None;
                 cli.steps.clear();
                 cli.doing = None;
@@ -126,6 +130,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.fresh_context = false;
                 cli.limit = None;
                 cli.errored = false;
+                cli.cut = false;
                 cli.steps.clear();
             }
             cli.user_message = Some(item_id.clone());
@@ -149,6 +154,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
             cli.last_end = Some(match status {
                 TurnStatus::Completed if cli.errored => TurnEnd::Failed,
                 TurnStatus::Completed => TurnEnd::Done,
+                TurnStatus::Interrupted if cli.cut => TurnEnd::Interrupted,
                 TurnStatus::Interrupted => TurnEnd::Stopped,
                 TurnStatus::Failed => TurnEnd::Failed,
             });
@@ -556,6 +562,14 @@ impl SessionManager {
             used_tokens,
             window_tokens: self.model_window(choice.provider, choice.model.as_deref(), reported),
         })
+    }
+
+    /// Brigadier is about to close worker `task`'s CLI itself (a pause or a switch, D124): its
+    /// open turn's end reads interrupted.
+    pub(crate) fn note_worker_cut(&self, task: &TaskId) {
+        if let Some(cli) = self.worker_rows.cli.lock().unwrap().get_mut(task) {
+            cli.cut = cli.open;
+        }
     }
 
     /// Follows an event of worker `task`'s CLI (of session `conversation`) into its row.
@@ -1050,6 +1064,15 @@ mod tests {
         assert_eq!((cli.open, cli.last_end), (false, Some(TurnEnd::Done)));
         follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 3);
         follow(&mut cli, &turn_end(TurnStatus::Interrupted), 4);
+        assert_eq!(cli.last_end, Some(TurnEnd::Stopped));
+        // Brigadier closing it mid-turn (a pause or a switch, D124) is no Stop of the user's;
+        // the next turn's own Stop is again.
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 5);
+        cli.cut = cli.open;
+        follow(&mut cli, &turn_end(TurnStatus::Interrupted), 6);
+        assert_eq!(cli.last_end, Some(TurnEnd::Interrupted));
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 7);
+        follow(&mut cli, &turn_end(TurnStatus::Interrupted), 8);
         assert_eq!(cli.last_end, Some(TurnEnd::Stopped));
         follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 5);
         follow(&mut cli, &error(ErrorKind::Overloaded, None), 6);

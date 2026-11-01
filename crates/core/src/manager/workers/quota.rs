@@ -574,6 +574,7 @@ impl SessionManager {
             .await
             .map(|cli| cli.session.native_id())
             .or(task.native_session.clone());
+        self.note_worker_cut(&task.id);
         live.close_cli().await;
         live.allow_revival().await;
         if live.state.lock().await.quota_cancelled {

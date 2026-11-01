@@ -2470,6 +2470,7 @@ impl SessionManager {
             }
         })
         .await?;
+        self.note_worker_cut(&task_id);
         live.close_cli().await;
         live.allow_revival().await;
         self.orchestrator_step(

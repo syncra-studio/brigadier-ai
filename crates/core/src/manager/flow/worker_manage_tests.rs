@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use super::cli_tests::{brigadier, start};
 use super::{FakeBehavior, Flow, Options, Reply};
+use crate::thread_view::TurnEnd;
 use crate::work::{OrchestratorStepKind, ProviderTransitionCause, Task, TaskState, WorkerStepKind};
 
 const WORDS: &str = "Continue where you stopped.";
@@ -160,6 +161,24 @@ impl Bench {
             .to_owned()
     }
 
+    /// How its first turn ends in its own thread, once it has.
+    async fn first_turn_end(&self) -> Option<TurnEnd> {
+        let task = self.task().await;
+        for _ in 0..50 {
+            let view = self
+                .flow
+                .manager
+                .worker_thread(&self.flow.conversation, &task.id)
+                .await
+                .unwrap();
+            if let Some(end) = view.turns.first().and_then(|turn| turn.end) {
+                return Some(end);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        None
+    }
+
     async fn task(&self) -> Task {
         Flow::task(&self.flow.board().await, 1).clone()
     }
@@ -289,6 +308,11 @@ async fn a_pause_ends_the_turn_holds_messages_and_a_resume_goes_on_once() {
         "its cut turn's end changes nothing"
     );
     assert!(task.plain.as_ref().unwrap().paused);
+    assert_eq!(
+        bench.first_turn_end().await,
+        Some(TurnEnd::Interrupted),
+        "D124: not 'You stopped'"
+    );
     // A real CLI may still report the cut turn's end after its close: it changes nothing.
     let steps = bench.flow.board().await.worker_steps.len();
     let live = bench.flow.manager.task_live(&task);
@@ -453,6 +477,11 @@ async fn a_switch_moves_a_working_worker_once_and_its_pins_follow() {
     assert!(
         moved["to"].as_str().unwrap().starts_with("Codex"),
         "{moved:#}"
+    );
+    assert_eq!(
+        bench.first_turn_end().await,
+        Some(TurnEnd::Interrupted),
+        "D124: not 'You stopped'"
     );
     super::eventually("its turn on Codex", || {
         bench
