@@ -151,12 +151,10 @@ const SCENARIOS: Record<string, RegExp> = {
  *   phase (D55). The end views compared here don't see it.
  * - (c) Claude's model ends its turn while its background subagent runs, and a second CLI
  *   turn answers when it is done, joined to the same block; Codex waits in one turn (D27, D57).
- *   With lifecycle rows hidden (L1), only Claude has commentary to fold before its answer.
  */
 const EXEMPT = {
   /** (c): Claude's subagent block holds two replies, Codex's one. */
   subagentReplies: { claude: 2, codex: 1 },
-  subagentFold: { claude: true, codex: false },
 };
 function compare(scenario: string, source: "live" | "persisted") {
   const prompts = SCENARIOS[scenario]!;
@@ -167,10 +165,10 @@ function compare(scenario: string, source: "live" | "persisted") {
   const right = seen(withCodexTerminalEnd(withBackground(codexView, codex.events)), prompts);
   assert.ok(right.length > 0, `${scenario}: no turn compared`);
   if (scenario === "subagent") {
-    assert.deepEqual(left.map((block) => block.folded), [EXEMPT.subagentFold.claude], source);
-    assert.deepEqual(right.map((block) => block.folded), [EXEMPT.subagentFold.codex], source);
-    assert.deepEqual(left.map((block) => block.shown), [[]], "subagent lifecycle rows stay out of the main thread");
-    assert.deepEqual(left.map((block) => ({ ...block, folded: false })), right.map((block) => ({ ...block, folded: false })), `${scenario} (${source}) differs beyond its recorded commentary`);
+    // (a): the row's task is the model's own words.
+    const unnamed = (blocks: typeof left) => blocks.map((block) => ({ ...block, shown: block.shown.map((each) => each.replace(/^(Ran a subagent):.*/, "$1")) }));
+    assert.deepEqual(unnamed(left).map((block) => block.shown), [["Ran a subagent"]], "the subagent is one row of its parent's work (D96)");
+    assert.deepEqual(unnamed(left), unnamed(right), `${scenario} (${source}) differs beyond its recorded commentary`);
     return;
   }
   assert.deepEqual(left, right, `${scenario} (${source}) reads differently on Claude and Codex`);
