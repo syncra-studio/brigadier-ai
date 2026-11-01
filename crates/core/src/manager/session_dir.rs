@@ -292,13 +292,25 @@ impl SessionManager {
         let owner = folder_owner(id);
         let ledger = self.runtime.ledger();
         let dir = self.session_dir(id);
+        // Its own folder and any it took over from a session deleted before it (goal 9).
+        let roots: Vec<PathBuf> = std::iter::once(dir.root().to_path_buf())
+            .chain(
+                ledger
+                    .artifacts(&owner)
+                    .into_iter()
+                    .filter_map(|artifact| match artifact {
+                        Artifact::ScratchDir { path } => Some(PathBuf::from(path)),
+                        _ => None,
+                    }),
+            )
+            .collect();
         let holders: Vec<String> = ledger
             .owners()
             .into_iter()
             .filter(|(holder, artifacts, _)| {
                 *holder != owner
                     && artifacts.iter().any(|artifact| {
-                        matches!(artifact, Artifact::Worktree { path, .. } if Path::new(path).starts_with(dir.root()))
+                        matches!(artifact, Artifact::Worktree { path, .. } if roots.iter().any(|root| Path::new(path).starts_with(root)))
                     })
             })
             .map(|(holder, _, _)| holder)

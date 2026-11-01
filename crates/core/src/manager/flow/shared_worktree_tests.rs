@@ -110,6 +110,15 @@ async fn archived(flow: &Flow, conversation: &Conversation) {
     .await;
 }
 
+async fn deleted(flow: &Flow, conversation: &Conversation) {
+    flow.manager.delete(conversation.id.clone()).await.unwrap();
+    super::eventually("the delete", || {
+        flow.core.conversation(&conversation.id).is_err()
+    })
+    .await;
+    flow.manager.cleanup_finished(&conversation.id).await;
+}
+
 /// B starts on A's branch: it works in A's worktree, merges where A does, hears once that it
 /// shares the folder, and neither hears the other's messages. A command B runs there outlives
 /// A's archive, the folder and branch stay for B, and B's archive, the last, removes them.
@@ -159,7 +168,17 @@ async fn a_session_on_another_sessions_branch_works_beside_it() {
     flow.settled_in(&b.id).await;
     assert_eq!(heard_in(&heard, "B: again.").1, folder);
 
+    // B's archive, the last, stops what still runs there and lets the folder go.
+    let mut left = std::process::Command::new("sleep")
+        .arg("60")
+        .current_dir(&folder)
+        .spawn()
+        .unwrap();
     archived(&flow, &b).await;
+    assert!(
+        left.try_wait().unwrap().is_some(),
+        "a command outlived the folder"
+    );
     assert!(!folder.exists(), "the last session using it lets it go");
     flow.stop().await;
 }
@@ -189,6 +208,19 @@ async fn deleting_a_session_keeps_the_folder_and_work_of_the_one_beside_it() {
         worktree_of(&flow.core.conversation(&b.id).unwrap()).2,
         folder
     );
+    // B commits its work: the next launch's orphan sweep never takes a clean folder B works in.
+    git(&folder, &["add", "b.txt"]);
+    git(&folder, &["commit", "-qm", "B's work"]);
+    let swept = flow.manager.sweep_orphans().await;
+    assert!(
+        folder.join(".git").is_file(),
+        "B's folder survives the sweep"
+    );
+    assert!(
+        swept.kept_branches.is_empty(),
+        "B's branch isn't a leftover: {swept:?}"
+    );
+    assert_eq!(git(&folder, &["branch", "--show-current"]), branch);
     // A's folder went to B: B's delete, the last, removes it.
     let root = flow.manager.session_dir(&a.id).root().to_path_buf();
     flow.manager.delete(b.id.clone()).await.unwrap();
@@ -278,8 +310,25 @@ async fn a_free_branch_the_checkouts_branch_and_a_users_worktree() {
         .unwrap_err()
         .to_string();
     assert!(refused.contains("no longer on `mine`"), "{refused}");
-    archived(&flow, &users).await;
+    // Nor does a turn start there.
+    flow.say_to(&users.id, "U: again.").await;
+    flow.settled_in(&users.id).await;
+    assert!(
+        !heard
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(input, _)| input.contains("U: again.")),
+        "a turn ran off the branch"
+    );
+    // Its delete commits nothing in the user's folder and leaves it.
+    std::fs::write(mine.join("theirs.txt"), "the user's\n").unwrap();
+    let head = git(&mine, &["rev-parse", "HEAD"]);
+    flow.manager.delete(users.id.clone()).await.unwrap();
+    super::eventually("Users to go", || flow.core.conversation(&users.id).is_err()).await;
+    flow.manager.cleanup_finished(&users.id).await;
     assert!(mine.join(".git").is_file(), "a folder the user made stays");
+    assert_eq!(git(&mine, &["rev-parse", "HEAD"]), head, "no WIP commit");
 
     let gone = start(&flow, "Gone", "no-such-branch").await.unwrap_err();
     assert!(
@@ -359,11 +408,69 @@ async fn a_running_workers_branch_is_marked_for_the_composer() {
     release.notify_waiters();
     flow.settled().await;
     assert_eq!(marked().await.len(), 1);
+    // Nor can a session be started there while it is.
+    let held = marked().await.remove(0);
+    let refused = start(&flow, "On the worker's", &held).await.unwrap_err();
+    assert!(refused.to_string().contains("running worker"), "{refused}");
     let task = flow.board().await.tasks.keys().next().unwrap().clone();
     flow.manager.stop_task(task).await.unwrap();
     super::eventually_async("the branch offered again", || async {
         marked().await.is_empty()
     })
     .await;
+    flow.stop().await;
+}
+
+/// A, archived beside B and restored, works in the folder again: B's archive leaves it to A.
+#[tokio::test]
+async fn a_restored_session_keeps_the_folder_it_shares() {
+    let flow = Flow::start(
+        "shared-restore",
+        Options::default(),
+        script(Heard::default()),
+    )
+    .await;
+    flow.say("A: look around.").await;
+    flow.settled().await;
+    let a = flow.core.conversation(&flow.conversation).unwrap();
+    let (_, branch, folder) = worktree_of(&a);
+    let b = start(&flow, "B", &branch).await.unwrap();
+    archived(&flow, &a).await;
+    flow.manager.restore(a.id.clone()).await.unwrap();
+    std::fs::write(folder.join("a.txt"), "A's work\n").unwrap();
+    archived(&flow, &b).await;
+    assert!(
+        folder.join("a.txt").is_file(),
+        "B's archive removed A's folder"
+    );
+    flow.stop().await;
+}
+
+/// A folder passed on by one delete passes on again: B, given A's, deleted while C works
+/// there, never removes C's folder.
+#[tokio::test]
+async fn a_folder_passed_on_twice_stays_for_the_last_session() {
+    let flow = Flow::start(
+        "shared-inherit",
+        Options::default(),
+        script(Heard::default()),
+    )
+    .await;
+    git(&flow.repo, &["branch", "feature"]);
+    let a = start(&flow, "A", "feature").await.unwrap();
+    let folder = worktree_of(&a).2;
+    let b = start(&flow, "B", "feature").await.unwrap();
+    for (one, says) in [(&a, "A: hello."), (&b, "B: hello.")] {
+        flow.say_to(&one.id, says).await;
+        flow.settled_in(&one.id).await;
+    }
+    deleted(&flow, &a).await;
+    start(&flow, "C", "feature").await.unwrap();
+    std::fs::write(folder.join("c.txt"), "C's work\n").unwrap();
+    deleted(&flow, &b).await;
+    assert!(
+        folder.join("c.txt").is_file(),
+        "B's delete removed C's folder"
+    );
     flow.stop().await;
 }

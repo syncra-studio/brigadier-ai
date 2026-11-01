@@ -2722,7 +2722,17 @@ impl SessionManager {
         } else {
             None
         };
-        let cli = match self.ensure_cli(&conv).await {
+        // A joined folder gone or off its branch: no turn starts, report-only ones too (goal 9).
+        let joined = match self.core.conversation(&conv.id) {
+            Ok(conversation) if session => self.check_joined(&conversation).await,
+            _ => Ok(()),
+        };
+        let cli = match async {
+            joined?;
+            self.ensure_cli(&conv).await
+        }
+        .await
+        {
             Ok(cli) => cli,
             // Archived or deleted meanwhile: its cleanup took this turn's work along (a
             // restored one starts over from what is in its log).

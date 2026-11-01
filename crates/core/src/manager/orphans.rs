@@ -116,8 +116,22 @@ impl SessionManager {
         // Read again after its folders: a session made meanwhile is in the catalog before its
         // folder exists. One its records name is swept only once they say it was deleted.
         let live = self.live_shorts();
-        deleted
-            .retain(|short, found| !live.contains(short) && (found.id.is_none() || found.proven));
+        // A folder another session still works in (goal 9: one let into a deleted session's
+        // worktree) isn't left over.
+        let used: Vec<PathBuf> = self
+            .core
+            .catalog()
+            .conversations
+            .iter()
+            .filter_map(|c| super::shared_workspace::folder_of(c.setup.as_ref()))
+            .collect();
+        deleted.retain(|short, found| {
+            !live.contains(short)
+                && (found.id.is_none() || found.proven)
+                && !used
+                    .iter()
+                    .any(|at| at.starts_with(sessions_dir.join(short)))
+        });
         if deleted.is_empty() {
             return sweep;
         }

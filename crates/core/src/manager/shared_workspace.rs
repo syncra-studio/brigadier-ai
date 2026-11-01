@@ -100,6 +100,17 @@ impl SessionManager {
     /// into, else the target git records for the branch, else nowhere until the user says
     /// (its base is the branch itself). Called holding `shared_workspaces`.
     pub(super) async fn existing_place(&self, repo: &str, branch: &str) -> Result<ExistingPlace> {
+        // As the composer offers them: a running worker's branch is that worker's.
+        if self
+            .worker_branches(Path::new(repo))
+            .await
+            .iter()
+            .any(|b| b == branch)
+        {
+            return Err(Error::Invalid(format!(
+                "A running worker works on `{branch}`. Pick another branch."
+            )));
+        }
         let (git, at, name) = (self.git.clone(), PathBuf::from(repo), branch.to_owned());
         let (folder, main, recorded) = blocking(move || {
             let repo = git.open(&at).map_err(git_error)?;

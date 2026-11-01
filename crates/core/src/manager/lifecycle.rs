@@ -965,7 +965,7 @@ impl SessionManager {
             {
                 tracing::warn!(conversation = %id, error = %err, "could not narrow the session's process cleanup");
             }
-            let sweeps = if keeps.is_empty() {
+            let mut sweeps = if keeps.is_empty() {
                 vec![whole]
             } else {
                 super::shared_workspace::sweep_dirs(&root, &keeps)
@@ -975,6 +975,21 @@ impl SessionManager {
                     })
                     .collect()
             };
+            // A worktree it was let into elsewhere, once no other open session works there.
+            sweeps.extend(
+                ledger
+                    .artifacts(&format!("session:{id}"))
+                    .into_iter()
+                    .filter_map(|artifact| match artifact {
+                        Artifact::Worktree { path, .. }
+                            if !Path::new(&path).starts_with(&root)
+                                && self.sharers(Path::new(&path), id).is_empty() =>
+                        {
+                            Some(Artifact::ProcessesIn { dir: path })
+                        }
+                        _ => None,
+                    }),
+            );
             for process in sweeps {
                 if let Err(err) = ledger.record(&folder_owner, process).await {
                     tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
@@ -1020,10 +1035,39 @@ impl SessionManager {
             owners.push(previews);
         }
         // Another open session works in its folder: what is uncommitted there is that session's
-        // too, so no WIP commit is made; the folder stays while that session uses it.
-        let shared = super::shared_workspace::folder_of(conversation.setup.as_ref())
-            .is_some_and(|folder| !self.sharers(&folder, id).is_empty());
-        let session_worktree_goes = if shared {
+        // too, so no WIP commit is made, and the folder passes to it, to stay while it works
+        // there (a restored session too). A folder it was let into that no Brigadier session
+        // made is the user's: nothing is committed or removed there (goal 9).
+        let ledger = self.runtime.ledger();
+        let folder = super::shared_workspace::folder_of(conversation.setup.as_ref());
+        let sharers = folder
+            .as_deref()
+            .map(|folder| self.sharers(folder, id))
+            .unwrap_or_default();
+        let held: Vec<Artifact> = ledger
+            .artifacts(&format!("session:{id}"))
+            .into_iter()
+            .filter(|artifact| matches!(artifact, Artifact::Worktree { .. }))
+            .collect();
+        let mut handed = true;
+        if let Some(heir) = sharers.first() {
+            let theirs = format!("session:{}", heir.id);
+            for artifact in &held {
+                if !ledger.artifacts(&theirs).contains(artifact)
+                    && let Err(err) = ledger.record(&theirs, artifact.clone()).await
+                {
+                    tracing::warn!(conversation = %id, error = %err, "could not pass the shared worktree on; it stays");
+                    handed = false;
+                }
+            }
+        }
+        let users_own = held.is_empty()
+            && folder
+                .as_deref()
+                .is_some_and(|folder| self.joined(conversation, folder));
+        let session_worktree_goes = if !sharers.is_empty() {
+            handed
+        } else if users_own {
             true
         } else if deleting {
             self.keep_session_changes(conversation).await
@@ -1727,6 +1771,9 @@ impl SessionManager {
         let id = &conversation.id;
         let ledger = self.runtime.ledger().clone();
         let doomed = delete_owner(id);
+        // Its folder's branch and files are another open session's too while it works there.
+        let shared = super::shared_workspace::folder_of(conversation.setup.as_ref())
+            .is_some_and(|folder| !self.sharers(&folder, id).is_empty());
         let mut spaces: Vec<(String, String)> = ledger
             .artifacts(&super::branch_names::branches_owner(id))
             .into_iter()
@@ -1752,6 +1799,7 @@ impl SessionManager {
                     }
                 }
                 if let Environment::NewWorktree { branch, .. } = environment
+                    && !shared
                     && self
                         .runtime
                         .ledger()
@@ -1856,6 +1904,7 @@ impl SessionManager {
             environment: Environment::LocalCheckout { .. },
             ..
         }) = &conversation.setup
+            && !shared
             && Path::new(repo).exists()
         {
             let (git, at, session) = (self.git.clone(), PathBuf::from(repo), id.0.clone());
