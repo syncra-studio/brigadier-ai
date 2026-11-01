@@ -741,3 +741,134 @@ async fn a_pause_and_what_it_holds_survive_a_restart() {
     assert_eq!(bench.with("Use blue.").len(), 1);
     bench.flow.stop().await;
 }
+
+/// A resume is durable before sending; a daemon exit on either side of acceptance delivers
+/// the held batch once. The existing CLI input record reconciles an unrecorded acceptance.
+#[tokio::test]
+async fn a_resume_cut_off_before_or_after_acceptance_delivers_held_messages_once() {
+    for accepted in [false, true] {
+        let mut bench = bench(
+            &format!("20261030-1141-core-goals-w79-resume-{accepted}"),
+            start("Build it."),
+            Mode::Hold,
+            false,
+        )
+        .await;
+        let task = bench.task().await;
+        let manager = bench.flow.manager.clone();
+        manager.pause_task(task.id.clone()).await.unwrap();
+        bench.run(send(&bench.id(), "Use blue.")).await;
+        let live = manager.task_live(&task);
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let settled = if accepted {
+            *bench.flow.behavior.hold_send.lock().unwrap() =
+                Some((reached.clone(), release.clone()));
+            None
+        } else {
+            Some(live.settle.lock().await)
+        };
+        let resume_id = task.id.clone();
+        let resuming = tokio::spawn(async move { manager.resume_task(resume_id).await });
+        if accepted {
+            reached.notified().await;
+        } else {
+            bench
+                .flow
+                .until("unpaused before its send", |board| {
+                    Flow::task(board, 1).state == TaskState::Running
+                })
+                .await;
+        }
+        // Killing the request drops its locks, as the old daemon dying would.
+        resuming.abort();
+        assert!(resuming.await.unwrap_err().is_cancelled());
+        drop(settled);
+        bench.flow.crash().await;
+        bench
+            .flow
+            .until("its recovered turn's end", |board| {
+                Flow::task(board, 1).state == TaskState::Reported
+            })
+            .await;
+        let recovered = bench.task().await;
+        let plain = recovered.plain.as_ref().unwrap();
+        assert!(plain.held.is_empty(), "{plain:?}");
+        assert!(plain.resume_input.is_none(), "{plain:?}");
+        let transcript = bench
+            .flow
+            .dir
+            .join("data/transcripts")
+            .join(recovered.native_session.as_ref().unwrap());
+        let inputs = std::fs::read_to_string(&transcript).unwrap();
+        assert_eq!(inputs.matches("Use blue.").count(), 1, "{inputs}");
+        assert_eq!(inputs.matches(WORDS).count(), 1, "{inputs}");
+        // A second restart must not replay an already reconciled resume.
+        bench.flow.restart().await;
+        let inputs = std::fs::read_to_string(transcript).unwrap();
+        assert_eq!(inputs.matches("Use blue.").count(), 1, "{inputs}");
+        bench.flow.stop().await;
+    }
+}
+
+/// The composer's direct delivery holds settle while reviving an idle CLI. Pause must
+/// refuse before cancelling that launch, and may be retried once the message is taken.
+#[tokio::test]
+async fn a_pause_during_an_idle_workers_revival_says_try_again() {
+    let bench = bench(
+        "20261030-1141-core-goals-w79-revive-pause",
+        start("Build it."),
+        Mode::Hold,
+        false,
+    )
+    .await;
+    bench.release.notify_waiters();
+    bench
+        .flow
+        .until("its idle worker", |board| {
+            Flow::task(board, 1).state == TaskState::Reported
+        })
+        .await;
+    let task = bench.task().await;
+    let live = bench.flow.manager.task_live(&task);
+    live.close_cli().await;
+    live.allow_revival().await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *bench.flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release.clone()));
+    let manager = bench.flow.manager.clone();
+    let recipient = task.clone();
+    let sending = tokio::spawn(async move {
+        manager
+            .deliver_direct(
+                &recipient.conversation_id,
+                &recipient,
+                "Use blue.",
+                &[],
+                &[],
+            )
+            .await
+    });
+    reached.notified().await;
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bench.flow.manager.pause_task(task.id.clone()),
+    )
+    .await
+    .expect("pause must answer while its CLI is starting");
+    assert!(answer.unwrap_err().to_string().contains("try again"));
+    release.notify_one();
+    sending.await.unwrap().unwrap();
+    bench
+        .flow
+        .until("its message turn's end", |board| {
+            Flow::task(board, 1).state == TaskState::Reported
+        })
+        .await;
+    assert_eq!(bench.with("Use blue.").len(), 1);
+    assert_eq!(bench.steps(paused).await, 0);
+    assert!(bench.flow.manager.pause_task(task.id).await.unwrap());
+    assert_eq!(bench.task().await.state, TaskState::Paused);
+    assert_eq!(bench.steps(paused).await, 1);
+    bench.flow.stop().await;
+}

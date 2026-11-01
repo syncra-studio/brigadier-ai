@@ -2466,8 +2466,11 @@ impl SessionManager {
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         let live = self.task_live(&task);
         let _managed = live.manage.lock().await;
+        // A message may be reviving its CLI under settle, without taking manage.
+        let _settled = live.settle.try_lock().map_err(|_| {
+            Error::Invalid("the worker is taking a message; try again in a moment".into())
+        })?;
         let was_cancelled = live.cancel_quota().await;
-        let _settled = live.settle.lock().await;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         if task.state.is_final() || task.plain.is_none() {
             return Err(Error::Invalid("the worker has ended".into()));
@@ -2523,52 +2526,109 @@ impl SessionManager {
                 .into(),
             ));
         }
-        let set_paused = |paused: bool| {
-            move |task: &mut Task| {
-                task.state = if paused {
-                    TaskState::Paused
-                } else {
-                    TaskState::Running
-                };
+        // The intent and held batch are recorded with the unpause, before anything sends.
+        let marker = format!("[Worker resume {}]", uuid::Uuid::new_v4());
+        let task = self
+            .update_task(&conversation_id, &task_id, |task| {
+                task.state = TaskState::Running;
                 if let Some(plain) = &mut task.plain {
-                    plain.paused = paused;
+                    plain.paused = false;
+                    plain.auto_resumed = false;
+                    plain.resume_input = Some(
+                        std::iter::once(marker.as_str())
+                            .chain(plain.held.iter().map(String::as_str))
+                            .chain([RESUME_WORDS])
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                    );
                 }
-            }
-        };
-        // Working before its input goes: a turn that ends at once ends as any turn does. What
-        // it holds is read in the same step, so nothing held just before is cleared unsent.
-        let held = self
-            .update_task(&conversation_id, &task_id, set_paused(false))
-            .await?
-            .plain
-            .map(|plain| plain.held)
-            .unwrap_or_default();
-        let text = held
-            .iter()
-            .map(String::as_str)
-            .chain([RESUME_WORDS])
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        if let Err(err) = self.message_worker(&conversation_id, &task, text).await {
-            // Still paused, holding what it held.
-            let _ = self
-                .update_task_if(
-                    &conversation_id,
-                    &task_id,
-                    |task| !task.state.is_final(),
-                    set_paused(true),
-                )
-                .await;
+            })
+            .await?;
+        let input = task.plain.as_ref().unwrap().resume_input.clone().unwrap();
+        if let Err(err) = self
+            .message_worker(&conversation_id, &task, input.clone())
+            .await
+        {
+            // Still paused, holding what it held. A later resume makes a new intent.
+            self.update_task_if(
+                &conversation_id,
+                &task_id,
+                |task| !task.state.is_final(),
+                |task| {
+                    task.state = TaskState::Paused;
+                    if let Some(plain) = &mut task.plain {
+                        plain.paused = true;
+                        plain.resume_input = None;
+                    }
+                },
+            )
+            .await?;
             return Err(err);
         }
-        self.update_task(&conversation_id, &task_id, |task| {
-            if let Some(plain) = &mut task.plain {
+        self.worker_resume_taken(&task, &input).await?;
+        self.orchestrator_step(&conversation_id, OrchestratorStepKind::Resumed { task_id })
+            .await;
+        Ok(())
+    }
+
+    /// Reconcile a resume the daemon stopped during, before ordinary turn recovery.
+    /// Its CLI's input record closes the send/ack crash window without sending it twice.
+    pub(crate) async fn recover_worker_resume(&self, task: &Task) -> Result<bool> {
+        let Some(input) = task
+            .plain
+            .as_ref()
+            .and_then(|plain| plain.resume_input.as_ref())
+        else {
+            return Ok(false);
+        };
+        let live = self.task_live(task);
+        let _managed = live.manage.lock().await;
+        let _settled = live.settle.lock().await;
+        if let Some(native_id) = self.last_worker_native_id(task).await {
+            // The preferred account may have changed while the daemon was down.
+            for candidate in self.runtime.account_candidates(task.route.choice.provider) {
+                if let Ok(provider) = self.runtime.provider_for(&candidate.account)
+                    && provider
+                        .took_input(&native_id, input.lines().next().unwrap())
+                        .await
+                {
+                    self.worker_resume_taken(task, input).await?;
+                    return Ok(false);
+                }
+            }
+        }
+        let (manager, task, input) = (self.arc(), task.clone(), input.clone());
+        self.spawn(async move {
+            let live = manager.task_live(&task);
+            let _managed = live.manage.lock().await;
+            let _settled = live.settle.lock().await;
+            let task = match manager.task_by_id(&task.conversation_id, &task.id).await {
+                Ok(task) if !task.state.is_final() && !explicitly_paused(&task)
+                    && task.plain.as_ref().and_then(|plain| plain.resume_input.as_ref()) == Some(&input) => task,
+                _ => return,
+            };
+            let sent = manager.send_worker_text(&task.conversation_id, &task, input.clone()).await;
+            let result = match sent {
+                Ok(()) => manager.worker_resume_taken(&task, &input).await,
+                Err(err) => Err(err),
+            };
+            if let Err(err) = result {
+                tracing::warn!(task = %task.id, error = %err, "could not deliver a recovered worker resume");
+            }
+        });
+        Ok(true)
+    }
+
+    async fn worker_resume_taken(&self, task: &Task, input: &str) -> Result<()> {
+        self.update_task(&task.conversation_id, &task.id, |task| {
+            if let Some(plain) = &mut task.plain
+                && plain.resume_input.as_deref() == Some(input)
+            {
+                plain.resume_input = None;
                 plain.held.clear();
             }
         })
         .await?;
-        self.orchestrator_step(&conversation_id, OrchestratorStepKind::Resumed { task_id })
-            .await;
         Ok(())
     }
 

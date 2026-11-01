@@ -1076,6 +1076,9 @@ pub struct PlainWorker {
     /// What reached it while paused, given with its resume.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub held: Vec<String>,
+    /// A requested resume, kept until its CLI took this uniquely marked input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_input: Option<String>,
 }
 
 /// A worker's use of the project's Brain, shown on its row and in the Inspector

@@ -425,6 +425,7 @@ impl SessionManager {
             auto_resumed: false,
             paused: false,
             held: Vec::new(),
+            resume_input: None,
         };
         let mockup = start.mockup.then_some(MockupPart::Builds);
         let task = crate::heap(|| {

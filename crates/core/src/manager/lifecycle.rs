@@ -188,6 +188,16 @@ impl SessionManager {
                 {
                     crate::heap(|| self.recover_worker_seam(&task)).await;
                 }
+                if conversation.lifecycle == Lifecycle::Active {
+                    match self.recover_worker_resume(&task).await {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(err) => {
+                            tracing::warn!(task = %task.id, error = %err, "could not recover a worker resume");
+                            continue;
+                        }
+                    }
+                }
                 match task.state {
                     // Its worktree is intact; the worker resumes when its session sends it more.
                     TaskState::Reported | TaskState::ReadyToLand if task.kind.writes() => continue,
