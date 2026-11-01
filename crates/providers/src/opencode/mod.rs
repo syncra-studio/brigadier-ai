@@ -693,6 +693,7 @@ impl Provider for OpenCode {
                 events: Arc::new(Events::new(events_tx, spec.redactor.clone())),
                 window,
                 steered: Arc::new(Mutex::new(Vec::new())),
+                transcript: transcript.clone(),
             });
             // Listening before anything is sent: a turn's first events are never missed.
             let (connected, listening) = oneshot::channel();
@@ -1123,6 +1124,8 @@ pub struct OpenCodeSession {
     /// The inbox items [`ProviderSession::steer_running`] gave the running turn that it hasn't
     /// taken yet.
     steered: Arc<Mutex<Vec<String>>>,
+    /// Its transcript ([`write_transcript`]).
+    transcript: PathBuf,
 }
 
 impl OpenCodeSession {
@@ -1340,6 +1343,16 @@ impl ProviderSession for OpenCodeSession {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
+            // Closed mid-turn (Brigadier quits), no turn end writes the transcript: kept now, so
+            // its thread still reads what the turn holds.
+            let kept = tokio::time::timeout(
+                EXIT_GRACE,
+                write_transcript(&self.server, &self.id, &self.transcript),
+            )
+            .await;
+            if !matches!(kept, Ok(Ok(()))) {
+                tracing::warn!(?kept, "could not keep OpenCode's transcript as it closed");
+            }
             self.server.process.shutdown(EXIT_GRACE).await;
         })
     }
@@ -1562,6 +1575,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self.answer(200, {"data": {"ses_1": {"type": "running"}} if os.path.exists(os.environ["ACTIVE"]) else {}})
         elif self.path.endswith("/prompt"):
             self.answer(200, {"data": {"id": "msg_1", "type": "user", "delivery": "steer"}})
+        elif self.path.startswith("/api/session/ses_1/message"):
+            self.answer(200, {"data": [{"id": "msg_1", "type": "user", "text": "Hold."}]})
         elif self.path == "/api/model/default":
             self.answer(200, {"data": {"id": "big-pickle", "providerID": "opencode"}})
         elif self.path.startswith("/api/command"):
@@ -1579,6 +1594,7 @@ sys.stdin.read()
 
     /// A turn that isn't running never takes a steer: OpenCode admits it without starting one,
     /// and it is taken back out. A running turn keeps it. The `/` commands are OpenCode's own.
+    /// Closed, it keeps its transcript.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_steer_without_a_running_turn_is_refused_and_commands_are_opencodes() {
@@ -1609,6 +1625,7 @@ sys.stdin.read()
             events: Arc::new(Events::new(events, None)),
             window: None,
             steered: Arc::new(Mutex::new(Vec::new())),
+            transcript: root.join("ses_1.jsonl"),
         };
         let said = || std::fs::read_to_string(&log).unwrap();
 
@@ -1683,7 +1700,14 @@ sys.stdin.read()
                 Some(default)
             );
         }
+        // Closed with a turn running (Brigadier quits): what the session holds is kept.
         session.close().await;
+        let kept = parse::read_transcript(&root.join("ses_1.jsonl")).unwrap();
+        assert!(
+            kept.iter().any(|entry| matches!(&entry.event,
+                ProviderEvent::Message { role: Role::User, text, .. } if text == "Hold.")),
+            "{kept:#?}"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
