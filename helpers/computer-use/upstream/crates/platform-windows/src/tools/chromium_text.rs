@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn confirmed_browser_result_includes_the_required_execution_record() {
-        let result = confirmed_result(8);
+        let result = confirmed_result(8, false);
         let record = result
             .action_record
             .as_ref()
@@ -600,7 +600,7 @@ fn matches_after(state: &Value, field: &Field, text: &str) -> bool {
             .is_some_and(|url| same_url(url, &field.url))
 }
 
-fn confirmed_result(count: usize) -> ToolResult {
+fn confirmed_result(count: usize, front_changed: bool) -> ToolResult {
     let record = ActionExecutionRecord::builder(
         ActionEffect::Confirmed, ActionTransport::BrowserCdpInputKey, RequestedDelivery::Background,
     )
@@ -610,7 +610,12 @@ fn confirmed_result(count: usize) -> ToolResult {
         kind: EvidenceKind::BrowserReadback,
         detail: "complete field value and collapsed caret match the original selection insertion, after focus emulation ended".into(),
     }).build().expect("complete browser value/caret evidence is a valid confirmed action record");
-    ToolResult::text(format!("Inserted {count} character(s) into the exact background page field; confirmed the complete value and caret."))
+    let front = if front_changed {
+        " The active window changed during this insertion and was not switched back; whether your window stayed active is unconfirmed."
+    } else {
+        ""
+    };
+    ToolResult::text(format!("Inserted {count} character(s) into the exact background page field; confirmed the complete value and caret.{front}"))
         .with_structured(json!({"route":"cdp_caret_insertion","effect":"confirmed","verified":true,"verify":"complete_value_and_caret","characters":count}))
         .with_action_record(record)
 }
@@ -650,13 +655,15 @@ pub(super) async fn insert(
     );
     let prior =
         unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as usize;
-    let _observer = crate::input::inject::foreground_watch::ForegroundWatch::start_observing(
+    let observer = crate::input::inject::foreground_watch::ForegroundWatch::start_observing(
         prior,
         crate::input::inject::foreground_watch::Target::Processes(vec![pid], vec![hwnd as usize]),
     );
     let generation = crate::input::inject::foreground_generation();
     let mut attempted = false;
     let result = tokio::time::timeout(Duration::from_secs(20), async {
+        // Without live hooks the generation checks below cannot see the user's input.
+        if !observer.monitoring() { bail!("the user's own keyboard and mouse input could not be monitored during insertion"); }
         let retained = retained.context("Chromium background insertion requires an exact field element_token")?;
         let field = field_snapshot(hwnd, retained.clone()).await?;
         let platform = WindowsBrowserPlatform::default();
@@ -739,7 +746,11 @@ pub(super) async fn insert(
         operation.and(cleaned)
     }).await;
     match result {
-        Ok(Ok(())) => confirmed_result(text.chars().count()),
+        Ok(Ok(())) => confirmed_result(
+            text.chars().count(),
+            unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as usize
+                != prior,
+        ),
         failure => {
             let why = match failure {
                 Ok(Err(e)) => e.to_string(),

@@ -451,6 +451,12 @@ impl ForegroundWatch {
         Self { watch, requests }
     }
 
+    /// Whether the input hooks are live. Input-generation checks only see
+    /// the user's own input while they are.
+    pub(crate) fn monitoring(&self) -> bool {
+        self.watch.state.lock().unwrap().observation.monitoring
+    }
+
     pub(crate) fn register_pid(&self, pid: u32) {
         if pid != 0 {
             let mut state = self.watch.state.lock().unwrap();

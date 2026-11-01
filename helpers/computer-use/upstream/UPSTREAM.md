@@ -182,6 +182,8 @@ Patches applied, in order:
 
 - `patches/0160-windows-enable-window-outside-shared-lock.diff`: Call EnableWindow outside the shared disable-lease lock (reading the initial state with IsWindowEnabled, which sends no message), so one hung target window blocks only its own action instead of every later guarded action and every guard's release.
 
+- `patches/0161-windows-chromium-insert-needs-input-monitoring.diff`: Refuse background Chromium text insertion before any input when the user's own keyboard and mouse input cannot be monitored (the interruption checks would otherwise pass silently), and say in the reply when the active window changed during the insertion.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
