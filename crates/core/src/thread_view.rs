@@ -81,11 +81,16 @@ pub struct CliJobs {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub waking: bool,
+    /// A subagent its CLI started still runs while no turn of its CLI's is open: it holds the
+    /// work as its block's header reads it, so a message sent meanwhile goes on in that block (D113).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub subagents: bool,
 }
 
 impl CliJobs {
     pub fn is_empty(&self) -> bool {
-        self.holding.is_empty() && !self.waking
+        self.holding.is_empty() && !self.waking && !self.subagents
     }
 }
 
@@ -584,6 +589,12 @@ impl LiveTurn {
             holding,
             waking: (!self.open || self.awaiting_user)
                 && self.waking_until.is_some_and(|until| now < until),
+            subagents: self.subagent_running()
+                || !self.open
+                    && self.background.iter().any(|task| {
+                        task.kind == BackgroundTaskKind::Agent
+                            && task.status == BackgroundTaskStatus::Running
+                    }),
         }
     }
 }
@@ -679,7 +690,8 @@ pub(crate) fn view(
     for entry in entries.iter_mut().filter(|entry| entry.parent.is_none()) {
         entry.wake = wake_of(&entry.event);
     }
-    let mut turns = turns(&entries, records, running);
+    let awaiting = live.is_some_and(|live| live.awaiting_user);
+    let mut turns = turns(&entries, records, running, awaiting);
     if running
         && let Some(live) = live
         && let Some(turn) = turns.last_mut()
@@ -792,7 +804,12 @@ fn turn_starts(entries: &[FileEntry]) -> Vec<usize> {
 }
 
 /// The turns `entries` hold: each user message that isn't a steer starts one.
-fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<ThreadTurn> {
+fn turns(
+    entries: &[FileEntry],
+    records: &[TurnRecord],
+    running: bool,
+    awaiting: bool,
+) -> Vec<ThreadTurn> {
     let starts = turn_starts(entries);
     // A turn's lines, added up: its requests, and its end. A turn with lines but no end never
     // ended: the CLI or Brigadier went under it (#557).
@@ -863,7 +880,10 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             // Internal inputs and background notifications continue the same visible turn.
             // A prior attempt's error stays in the native file after an account switch;
             // only errors since the preceding end can describe this continuation.
-            let running = last && running;
+            // A turn its record ended isn't the one running while the live turn awaits its own
+            // message: that turn comes after it (a limit's carry-on keeps the cut turn's error).
+            let running =
+                last && running && !(awaiting && record.is_some_and(|record| record.end.is_some()));
             let completed = record.is_some_and(|record| record.end == Some(TurnEnd::Done));
             let since = ends.get(id.as_str()).and_then(|ends| {
                 ends.iter()
@@ -1133,6 +1153,46 @@ mod tests {
     use brigadier_providers::{ItemStatus, TurnStatus};
 
     use super::*;
+
+    /// A background subagent holds its work once its turn ended, as a background command does:
+    /// a task the CLI lists (Claude) or a call still running (Codex), every CLI alike (demo8
+    /// item 2: what was sent meanwhile drew a second block).
+    #[test]
+    fn a_background_subagent_holds_its_work() {
+        let agent = BackgroundTask {
+            command: None,
+            provider: None,
+            id: "agent".into(),
+            item_id: Some("call".into()),
+            kind: BackgroundTaskKind::Agent,
+            label: "background calculation".into(),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: 1,
+            ended_at_ms: None,
+            output_file: None,
+            summary: None,
+            last_line: None,
+        };
+        let mut listed = LiveTurn {
+            background: vec![agent.clone()],
+            ..Default::default()
+        };
+        assert!(listed.jobs(2).subagents && !listed.jobs(2).is_empty());
+        assert!(
+            listed.jobs(2).holding.is_empty(),
+            "a subagent is no command"
+        );
+        listed.open = true;
+        assert!(listed.jobs(2).is_empty(), "its open turn holds it");
+        listed.open = false;
+        listed.background[0].status = BackgroundTaskStatus::Completed;
+        assert!(listed.jobs(2).is_empty());
+        let called = LiveTurn {
+            subagents: vec!["call".into()],
+            ..Default::default()
+        };
+        assert!(called.jobs(2).subagents);
+    }
 
     /// Brigadier's own word that a command ended after its turn says the job's end, as a CLI's
     /// notice does; a message of the user's says none.
@@ -1418,6 +1478,46 @@ mod tests {
         );
         assert_eq!(failed.turns[0].error.as_deref(), Some("Connection lost."));
         assert_eq!(failed.turns[0].limit, None);
+    }
+
+    /// The CLI's next turn started and hasn't said its message yet (a limit's carry-on on the
+    /// account or CLI switched to): the cut turn still reads as the limit ended it, never as
+    /// failed with no word of why (demo8 item 4, seen on Codex for a second).
+    #[test]
+    fn a_cut_turn_keeps_its_limit_while_the_next_awaits_its_message() {
+        let limit = LimitHit {
+            window: Some("primary".into()),
+            resets_at_ms: Some(1793100600000),
+            kind: Default::default(),
+        };
+        let entries = Arc::new(vec![message("user", Role::User)]);
+        let cut = TurnRecord {
+            user_message: Some("user".into()),
+            end: Some(TurnEnd::Failed),
+            ended_at_ms: Some(2),
+            error: Some("Codex's primary usage limit was reached".into()),
+            error_kind: Some(ErrorKind::UsageLimit),
+            provider: None,
+            limit: Some(limit.clone()),
+            requests: vec!["r1".into()],
+            context_window: None,
+            joins: false,
+        };
+        let live = LiveTurn {
+            open: true,
+            awaiting_user: true,
+            user_message: Some("user".into()),
+            ..Default::default()
+        };
+        let view = view(vec![entries], Some(&live), std::slice::from_ref(&cut));
+        assert_eq!(view.turns.len(), 1);
+        assert_eq!(view.turns[0].end, Some(TurnEnd::Failed));
+        assert_eq!(
+            view.turns[0].error_kind,
+            Some(ErrorKind::UsageLimit),
+            "{view:#?}"
+        );
+        assert_eq!(view.turns[0].limit, Some(limit));
     }
 
     fn command(id: &str, status: ItemStatus) -> FileEntry {

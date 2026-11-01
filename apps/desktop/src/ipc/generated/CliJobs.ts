@@ -15,4 +15,9 @@ holding?: Array<string>,
  * One ended while no turn of its CLI's was open, and the turn its end starts hasn't yet:
  * until it does, or a grace of a minute passes.
  */
-waking?: boolean, };
+waking?: boolean, 
+/**
+ * A subagent its CLI started still runs while no turn of its CLI's is open: it holds the
+ * work as its block's header reads it, so a message sent meanwhile goes on in that block (D113).
+ */
+subagents?: boolean, };

@@ -691,9 +691,10 @@ async fn a_subagent_ending_after_its_turn_owes_the_turn_its_end_starts() {
         Some(TurnEnd::Done)
     );
     assert!(
-        view.jobs.is_empty(),
+        view.jobs.holding.is_empty(),
         "a running subagent shows as a worker, not a command"
     );
+    assert!(view.jobs.subagents, "it holds the turn's work");
 
     // The subagent works: its own items, in the lead's stream.
     let view = follow(&[

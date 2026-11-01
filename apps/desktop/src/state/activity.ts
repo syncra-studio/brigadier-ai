@@ -296,7 +296,7 @@ export function applyActivityNews(news: ThreadNews): void {
       }
     : news.opened ? { ...current, turnOpen: true, ended: null } : current;
   const workers = news.workers === undefined ? turn : { ...turn, workersWorking: news.workers.some((worker) => worker.working) };
-  const next = news.jobs === undefined ? workers : { ...workers, commandsWorking: !!news.jobs.holding?.length || !!news.jobs.waking };
+  const next = news.jobs === undefined ? workers : { ...workers, commandsWorking: !!news.jobs.holding?.length || !!news.jobs.waking || !!news.jobs.subagents };
   if (next.turnOpen === current.turnOpen && next.ended === current.ended && next.workersWorking === current.workersWorking
     && next.commandsWorking === current.commandsWorking && next.turnEndedAtMs === current.turnEndedAtMs) return;
   activityStore.setState({ byConversation: { ...byConversation, [news.conversationId]: next } });

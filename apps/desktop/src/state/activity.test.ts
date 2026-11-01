@@ -172,6 +172,15 @@ test("a session stays Working while its CLI's background commands hold its turn,
   assert.equal(rowActivity({ ...snapshot, commandsWorking: false }).running, false);
 });
 
+test("a background subagent of its CLI holds its work past its turn: what is sent meanwhile waits in its block (D113)", () => {
+  const id = "subagent";
+  applyActivityNews({ conversationId: id, entries: [], opened: true });
+  applyActivityNews({ conversationId: id, entries: [], ended: "done", jobs: { subagents: true } });
+  assert.equal(workHolds(useActivity.getState().byConversation[id]), true, "the send path queues it, as the daemon does");
+  applyActivityNews({ conversationId: id, entries: [], jobs: {} });
+  assert.equal(workHolds(useActivity.getState().byConversation[id]), false);
+});
+
 test("a session's work holds with no turn running while one of its workers or its CLI's background commands still work", () => {
   const idle = fromSnapshot({ conversationId: "h1", run: "idle", tasks: [], approvals: [], questions: [], signIns: [] } as never);
   assert.equal(workHolds(idle), false);
