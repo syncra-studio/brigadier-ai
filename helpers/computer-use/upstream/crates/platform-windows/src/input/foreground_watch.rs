@@ -638,9 +638,15 @@ impl ForegroundWatch {
 
     pub(crate) fn report(&self) -> (&'static str, bool, usize) {
         let (reply, receive) = mpsc::sync_channel(1);
+        // The worker answers within a poll (about 2 ms). A launch watch may be
+        // inside the one-time minimize hand-back (up to about 500 ms), so its
+        // reply waits for that result; other watches keep the short bound.
+        let wait = match self.watch.target {
+            Target::Launch(_) => Duration::from_millis(600),
+            Target::Processes(_, _) => Duration::from_millis(100),
+        };
         if self.requests.send(reply).is_ok() {
-            if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(600))
-            {
+            if let Ok((observation, foreground)) = receive.recv_timeout(wait) {
                 let (note, failed) = self.describe(observation);
                 return (note, failed, foreground);
             }
