@@ -983,6 +983,7 @@ impl SessionManager {
         self.arm_env_fault(&task.id, provider).await;
         let manager = self.arc();
         let pumped = (live.clone(), cli.clone());
+        let events = self.session_events(EventSource::Task(&task.id), &cli, events);
         self.spawn(async move { manager.pump_worker(pumped.0, pumped.1, events).await });
         // A Stop while its CLI started ends it before its first message, and it stays stopped
         // (#457).
@@ -1580,18 +1581,16 @@ impl SessionManager {
                         // Stored whole before it is recorded cut (BUILD-PLAN D2.1).
                         self.keep_output(&mut event).await;
                         let mut exited = false;
-                        for event in self.session_events(EventSource::Task(&live.id), &cli, event) {
-                            if let ProviderEvent::Exited {
-                                code,
-                                signal,
-                                stderr_tail,
-                            } = &event
-                            {
-                                exited = true;
-                                exit = Some(exit_words(*code, *signal, stderr_tail.as_deref()));
-                            }
-                            self.on_worker_event(&live, &cli, event).await;
+                        if let ProviderEvent::Exited {
+                            code,
+                            signal,
+                            stderr_tail,
+                        } = &event
+                        {
+                            exited = true;
+                            exit = Some(exit_words(*code, *signal, stderr_tail.as_deref()));
                         }
+                        self.on_worker_event(&live, &cli, event).await;
                         if exited {
                             break;
                         }

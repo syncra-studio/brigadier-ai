@@ -3396,6 +3396,7 @@ impl SessionManager {
         let manager = self.arc();
         let pumped = cli.clone();
         let pumping = conv.clone();
+        let events = self.session_events(EventSource::Conversation(&conv.id), &cli, events);
         self.spawn(async move { manager.pump_conversation(pumping, pumped, events).await });
         Ok(cli)
     }
@@ -4199,16 +4200,11 @@ impl SessionManager {
                         ) {
                             self.record_held_looked(&conv).await;
                         }
-                        let mut exited = false;
-                        for event in
-                            self.session_events(EventSource::Conversation(&conv.id), &cli, event)
-                        {
-                            exited |= matches!(event, ProviderEvent::Exited { .. });
-                            self.snapshot_event(&conv.id, &event).await;
-                            let classify = matches!(event, ProviderEvent::Command { .. } | ProviderEvent::ToolCall { .. } | ProviderEvent::BackgroundTask { .. });
-                            crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
-                            if classify { self.classify_persistent_apps(&conv).await; }
-                        }
+                        let exited = matches!(event, ProviderEvent::Exited { .. });
+                        self.snapshot_event(&conv.id, &event).await;
+                        let classify = matches!(event, ProviderEvent::Command { .. } | ProviderEvent::ToolCall { .. } | ProviderEvent::BackgroundTask { .. });
+                        crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
+                        if classify { self.classify_persistent_apps(&conv).await; }
                         if exited {
                             break;
                         }

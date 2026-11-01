@@ -902,26 +902,38 @@ impl SessionManager {
         }
     }
 
-    /// A CLI session's event as its handlers get it: in development builds, with what an
-    /// armed fault ([`fault`]) adds around it.
+    /// A CLI session's events as its handlers get them: in development builds, with what an
+    /// armed fault ([`fault`]) adds around them, before anything reads them, so every reader
+    /// sees what a real CLI at its limit sends.
     fn session_events(
         &self,
         source: EventSource<'_>,
         cli: &Arc<conversation::Cli>,
-        event: ProviderEvent,
-    ) -> Vec<ProviderEvent> {
+        events: tokio::sync::mpsc::Receiver<ProviderEvent>,
+    ) -> tokio::sync::mpsc::Receiver<ProviderEvent> {
         #[cfg(debug_assertions)]
         {
             let key = match source {
                 EventSource::Task(id) => fault::FaultKey::Task(id.clone()),
                 EventSource::Conversation(id) => fault::FaultKey::Conversation(id.clone()),
             };
-            self.fault_events(key, cli, event)
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            let (manager, cli, mut events) = (self.arc(), cli.clone(), events);
+            self.spawn(async move {
+                while let Some(event) = events.recv().await {
+                    for event in manager.fault_events(key.clone(), &cli, event) {
+                        if tx.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+            rx
         }
         #[cfg(not(debug_assertions))]
         {
             let _ = (source, cli);
-            vec![event]
+            events
         }
     }
 
