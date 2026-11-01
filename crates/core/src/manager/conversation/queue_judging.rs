@@ -38,8 +38,9 @@ pub(crate) const FRAME: &str = "[queued message ";
 pub(crate) fn deciding_frame(shown: &str) -> String {
     format!(
         "{FRAME}{shown} · before acting on it, judge it: brigadier queue {shown} join|wait|worker <id>|new-session \
-         (join, or worker, when it is part of the work in progress; wait when it is other work, \
-         which comes back once that is done); unjudged, it stays queued]\n"
+         (join, or worker, when it is part of the work in progress: a change to it, a fix in it, \
+         a question about it; wait when it is other work, even a quick question or a one-line \
+         reply: it comes back once the work in progress is done); unjudged, it stays queued]\n"
     )
 }
 
