@@ -164,7 +164,7 @@ async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
         format!(
             "[queued message {shown} · before acting on it, judge it: brigadier queue {shown} \
              join|wait|worker <id>|new-session (join, or worker, when it is part of the work \
-             in progress: a change to it, a fix in it, a question about it; wait when it is \
+             in progress, yours or a running worker's: a change to it, a fix in it, a question about it; wait when it is \
              other work, even a quick question or a one-line reply: it comes back once the work \
              in progress is done); unjudged, it stays queued]\n\
              Also check the formatting."

@@ -955,7 +955,7 @@ test("a queued message shows once, as the user's, its frame gone: in the rail wh
 
 test("D72: a follow-up asked again after its turn left it unjudged shows once, both frames gone", () => {
   const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
-  const first = "[queued message feedbeef · before acting on it, judge it: brigadier queue feedbeef join|wait|worker <id>|new-session (join, or worker, when it is part of the work in progress: a change to it, a fix in it, a question about it; wait when it is other work, even a quick question or a one-line reply: it comes back once the work in progress is done); unjudged, it stays queued]\nAlso the docs.";
+  const first = "[queued message feedbeef · before acting on it, judge it: brigadier queue feedbeef join|wait|worker <id>|new-session (join, or worker, when it is part of the work in progress, yours or a running worker's: a change to it, a fix in it, a question about it; wait when it is other work, even a quick question or a one-line reply: it comes back once the work in progress is done); unjudged, it stays queued]\nAlso the docs.";
   const again = "[queued message feedbeef · you didn't judge it before your turn ended: judge it now with brigadier queue feedbeef join|wait|worker <id>|new-session; join if you already did it]\nAlso the docs.";
   const asked: ThreadView = {
     entries: [
