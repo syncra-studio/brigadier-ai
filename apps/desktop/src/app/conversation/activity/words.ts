@@ -121,8 +121,11 @@ const SEARCHERS = new Set(["rg", "grep", "ag", "ack"]);
  * `/bin/zsh -c 'wc -l notes.py'` and `cd /tmp/wt && wc -l notes.py` → `wc -l notes.py`.
  */
 export function unwrapCommand(command: string): string {
-  const wrapped = /^(?:\/\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(command.trim());
-  return (wrapped?.[2] ?? command).trim().replace(/^(?:cd\s+(?:'[^']*'|"[^"]*"|\S+)\s*&&\s*)+/, "");
+  const trimmed = command.trim();
+  const wrapped = /^(?:\/\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(trimmed)?.[2]
+    // A wrapper whose quotes close and reopen inside (`'… "$(cat <<'"'EOF' …"`): what follows its first quote.
+    ?? /^(?:\/\S*\/)?(?:ba|z)?sh\s+-l?c\s+['"]([\s\S]*)$/.exec(trimmed)?.[1];
+  return (wrapped ?? command).trim().replace(/^(?:cd\s+(?:'[^']*'|"[^"]*"|\S+)\s*&&\s*)+/, "");
 }
 
 export function basename(path: string): string {

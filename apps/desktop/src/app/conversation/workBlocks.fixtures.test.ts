@@ -324,6 +324,8 @@ test("the thread's own brigadier wait and start are no rows, and a wait's end no
   assert.equal(load("claude-2.1.310", "background").persisted.entries.filter((entry) => entry.event.type === "taskNotice").length, 1);
   assert.equal(cliBlocks(load("claude-2.1.310", "background").persisted, "recorded-thread").flatMap((block) => block.taskNotices).length, 1);
   assert.equal(asBrigadier("interrupt", 'cd /repo && brigadier start "Fix the parser" --title Parser').step, undefined);
+  // Codex's shell wrapper around a heredoc brief, its quotes reopened inside (seen live, w58).
+  assert.equal(asBrigadier("interrupt", `/bin/zsh -c 'brigadier start "$(cat <<'"'BRIEF'\nFix it\nBRIEF\n)\\" --title \\"Parser\\""`).step, undefined);
 });
 
 test("the thread's read of its own wait's output file is part of the wait: no row; other reads keep theirs (D38, D58)", () => {
