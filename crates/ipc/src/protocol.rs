@@ -571,8 +571,8 @@ pub enum Request {
     Interrupt {
         conversation_id: ConversationId,
     },
-    /// Continues the latest request after it was stopped, in the same block; the queue
-    /// unpauses and runs after it.
+    /// Continues the latest request after it was stopped, as a block of its own (the stopped one
+    /// keeps its end); the queue unpauses and runs after it.
     Resume {
         conversation_id: ConversationId,
     },
