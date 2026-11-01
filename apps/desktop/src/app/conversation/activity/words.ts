@@ -221,7 +221,6 @@ const BRIGADIER: Record<string, [doing: string, done: string]> = {
   why: ["Checking why a line changed", "Checked why a line changed"],
   send: ["Messaging workers", "Messaged workers"],
   close: ["Closing a worker", "Closed a worker"],
-  queue: ["Queueing a message", "Queued a message"],
   context: ["Reading the brigadier context", "Read the brigadier context"],
   ask: ["Asking questions", "Asked questions"],
   preview: ["Working on the preview", "Worked on the preview"],
@@ -250,10 +249,13 @@ function brigadierWords(sub: string, command: string): StepWords {
   return { kind: "other", doing, done, phrase: done };
 }
 
-/** A call that is no row of its own: the thread's `brigadier wait` and `brigadier start` (D47). */
+/**
+ * A call that is no row of its own: the thread's `brigadier wait` and `brigadier start` (D47),
+ * and its `brigadier queue` judging, which the queue rail shows (D68).
+ */
 export function brigadierUnshown(command: string): boolean {
   const [sub] = brigadierCalls(command);
-  return sub === "wait" || sub === "start";
+  return sub === "wait" || sub === "start" || sub === "queue";
 }
 
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */

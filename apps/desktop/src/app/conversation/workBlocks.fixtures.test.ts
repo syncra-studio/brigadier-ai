@@ -316,7 +316,7 @@ function messaged(atMs: number, requestId: string): BoardDigest {
   return { ...NO_BOARD, orchestratorSteps: [{ requestId, atMs: atMs + 300, position: 0, kind: { type: "messaged", taskId: "b36f2e6e", text: "Go on." } }] };
 }
 
-test("the thread's own brigadier wait and start are no rows, and a wait's end no line (D38, D47)", () => {
+test("the thread's own brigadier wait, start and queue are no rows, and a wait's end no line (D38, D47)", () => {
   const waited = asBrigadier("background", "brigadier wait --any --timeout 600");
   assert.equal(waited.step, undefined);
   assert.deepEqual(waited.blocks.flatMap((block) => block.taskNotices), []);
@@ -324,6 +324,8 @@ test("the thread's own brigadier wait and start are no rows, and a wait's end no
   assert.equal(load("claude-2.1.310", "background").persisted.entries.filter((entry) => entry.event.type === "taskNotice").length, 1);
   assert.equal(cliBlocks(load("claude-2.1.310", "background").persisted, "recorded-thread").flatMap((block) => block.taskNotices).length, 1);
   assert.equal(asBrigadier("interrupt", 'cd /repo && brigadier start "Fix the parser" --title Parser').step, undefined);
+  // Its judging of a queued message is the rail's, no row (D68).
+  assert.equal(asBrigadier("interrupt", "brigadier queue 1a2b3c4d join").step, undefined);
   // Codex's shell wrapper around a heredoc brief, its quotes reopened inside (seen live, w58).
   assert.equal(asBrigadier("interrupt", `/bin/zsh -c 'brigadier start "$(cat <<'"'BRIEF'\nFix it\nBRIEF\n)\\" --title \\"Parser\\""`).step, undefined);
 });

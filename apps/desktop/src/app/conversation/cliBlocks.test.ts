@@ -1086,6 +1086,7 @@ test("a queued message the CLI began its own turn with shows once, heading that 
     // The engine noted the request it was sent for: its turn keeps one id while judged, joined and over.
     user("5cf7b32d", `[queued message d9f90994 · judge it: brigadier queue d9f90994 join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`, 412_300, { requests: [id] }),
     at({ type: "command", itemId: "c1", command: "brigadier queue d9f90994 join", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 40 }, 417_900),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "One card per round from now on." }, 418_000),
   ];
   const live: ThreadView = {
     entries,
