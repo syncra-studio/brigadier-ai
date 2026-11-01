@@ -1119,7 +1119,10 @@ export function cliThreadTree(
     // Its turn by its message too, else by the request the CLI's message it began with carries
     // (one not shown yet): the same from sending it to the CLI saying it to its turn read.
     const lead = sent.get(block.key);
-    const id = `request:${shown || (lead ? shownIdOf(lead) : block.key)}`;
+    // A follow-up woken to be judged, then sent on its own turn, leads two turns: the later one
+    // goes by its own key (a repeated id makes assistant-ui throw and blanks the app).
+    const wanted = `request:${shown || (lead ? shownIdOf(lead) : block.key)}`;
+    const id = nodes.some((node) => node.id === wanted) ? `request:${block.key}` : wanted;
     nodes.push({ id, parentId: parent, kind: "block", block, head: null });
     parent = id;
   }

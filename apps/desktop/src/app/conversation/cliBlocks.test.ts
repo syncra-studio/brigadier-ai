@@ -970,6 +970,33 @@ test("D72: a follow-up asked again after its turn left it unjudged shows once, b
   assert.deepEqual(block!.steers.map((steer) => [steer.message.id, steer.text]), [[id, "Also the docs."]]);
 });
 
+test("goal 8: a follow-up woken to be judged, judged wait, then sent on its own turn gives every node of the tree its own id", () => {
+  // Seen live: both turns lead with the follow-up's request; one id twice made assistant-ui throw
+  // at the next message and blanked the app.
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const thread: ThreadView = {
+    entries: [
+      user("u1", "Start a worker", 1000, { requests: ["r1"] }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
+      user("q1", toJudge("Reply with U1."), 2000, { requests: [id] }),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "That waits." }, 2100),
+      user("q2", "[queued message feedbeef, now on its own turn]\nReply with U1.", 5000, { requests: [id] }),
+      at({ type: "message", itemId: "a3", role: "assistant", text: "U1" }, 5100),
+      user("u2", "Next", 6000, { requests: ["r2"] }),
+    ],
+    turns: [
+      { ...turn("u1", 1000, 1200, "done"), requests: ["r1"] },
+      turn("q1", 2000, 2200, "done"),
+      { ...turn("q2", 5000, 5200, "done"), requests: [id] },
+      { ...turn("u2", 6000, null, null), requests: ["r2"] },
+    ],
+  };
+  const ids = cliThreadTree(thread, "conv", [stored("r1", 900), stored(id, 1900), stored("r2", 5900)], {}, [], { ...NO_BOARD, requests: { r1: {}, [id]: {}, r2: {} } }, { state: "running", error: null }).nodes.map((node) => node.id);
+  assert.deepEqual(ids.filter((each, index) => ids.indexOf(each) !== index), []);
+  // Its bubble once, on the turn that took it.
+  assert.equal(ids.filter((each) => each === id).length, 1);
+});
+
 /** A queued message's words under the line giving them to the session to judge. */
 const toJudge = (words: string) => `[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`;
 
