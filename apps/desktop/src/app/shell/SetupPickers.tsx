@@ -1,4 +1,4 @@
-import { type FC, useId, useRef, useState } from "react";
+import { type FC, useId, useMemo, useRef, useState } from "react";
 
 import { leadTransitions, nextShown, type ShownChoice } from "@/app/conversation/providerTransitions";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
@@ -318,9 +318,12 @@ export function FullAccessDialog({
 function useShownChoice(conversationId: string, current: ModelChoice): ModelChoice {
   const steps = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.orchestratorSteps : null));
   const running = useBoard((s) => s.board?.conversationId === conversationId && s.board.run !== "idle" && s.board.run !== "failed");
-  const last = useRef<ShownChoice | null>(null);
-  last.current = nextShown(last.current, current, steps ? leadTransitions(steps) : [], running, Date.now());
-  return last.current.shown;
+  const transitions = useMemo(() => (steps ? leadTransitions(steps) : []), [steps]);
+  const [held, setHeld] = useState<ShownChoice | null>(null);
+  const next = nextShown(held, current, transitions, running);
+  // Derived during render, so the pill and the row change in the same paint.
+  if (next !== held) setHeld(next);
+  return next.shown;
 }
 
 export function ConversationModelPicker({
@@ -349,7 +352,9 @@ export function ConversationModelPicker({
         : fallback;
   // A session created before setups existed gets one on first use; until then it can't change.
   const fixed = setup === null && conversation.kind === "session";
-  const shownChoice = useShownChoice(conversation.id, current);
+  const held = useShownChoice(conversation.id, current);
+  // Only a started session moves between CLIs (S38c).
+  const shownChoice = setup?.type === "session" ? held : current;
   const all = useModelGroups();
   const shown = withChoice(groups, all, shownChoice);
   const refusals = useRuleRefusals(all);

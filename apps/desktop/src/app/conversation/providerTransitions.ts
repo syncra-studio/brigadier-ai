@@ -41,30 +41,34 @@ export function transitionAccountLabel(transition: ProviderTransition): string |
 }
 
 
-/** What the composer shows of a started session's model, and since when it holds an older one. */
-export type ShownChoice = { shown: ModelChoice; holdingSinceMs: number | null };
+/**
+ * What the composer shows of a started session's model; while it holds an older CLI, how many
+ * switch rows to the new one there were when it began holding.
+ */
+export type ShownChoice = { shown: ModelChoice; rowsBefore: number | null };
+
+const same = (a: ModelChoice, b: ModelChoice) =>
+  a.provider === b.provider && a.model === b.model && a.effort === b.effort && a.account === b.account;
 
 /**
  * A move to another CLI shows in the composer together with its switch row, not when the move is
- * first recorded (goal 1): the CLI shown last is held until a switch row confirms the new one, or
- * until the session stops running (a move that failed: what its next turn starts on shows).
+ * first recorded (goal 1): the CLI shown last is held until a new switch row confirms the new
+ * one, or until the session stops running (a move that failed: what its next turn starts on
+ * shows). `prev` comes back when nothing changed.
  */
 export function nextShown(
   prev: ShownChoice | null,
   current: ModelChoice,
   transitions: readonly ProviderTransition[],
   running: boolean,
-  nowMs: number,
 ): ShownChoice {
-  if (!prev || prev.shown.provider === current.provider || !running) return { shown: current, holdingSinceMs: null };
-  const since = prev.holdingSinceMs ?? nowMs;
-  // The row can be confirmed a moment before the setup's event reaches the app.
-  const confirmed = transitions.some((transition) => transition.to.provider === current.provider
-    && transition.startedAtMs >= since - CONFIRM_SLACK_MS);
-  return confirmed ? { shown: current, holdingSinceMs: null } : { shown: prev.shown, holdingSinceMs: since };
+  if (!prev || prev.shown.provider === current.provider || !running) {
+    return prev && prev.rowsBefore === null && same(prev.shown, current) ? prev : { shown: current, rowsBefore: null };
+  }
+  const rows = transitions.filter((transition) => transition.to.provider === current.provider).length;
+  if (prev.rowsBefore === null) return { shown: prev.shown, rowsBefore: rows };
+  return rows > prev.rowsBefore ? { shown: current, rowsBefore: null } : prev;
 }
-
-const CONFIRM_SLACK_MS = 5_000;
 
 /** The words Brigadier resumes a worker with after a limit (`workers/quota.rs`, `retry_worker_quota`). */
 const QUOTA_RESUME = "[Quota is available again.";
