@@ -134,8 +134,9 @@ const NO_SUB_AGENTS: &str = "agents.enabled=false";
 /// own).
 const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use"];
 
-/// Where naked workers' own `CODEX_HOME`s are, in Brigadier's data folder ([`Codex::worker_home`]).
-const WORKER_HOMES: &str = "codex-worker-homes";
+/// Where Brigadier's own `CODEX_HOME`s are, in its data folder ([`Codex::own_home`]). The name
+/// predates sessions running there too; threads recorded in one are removed from it.
+const OWN_HOMES: &str = "codex-worker-homes";
 
 /// Codex's own memory, off for every Brigadier session and connection (core-goals D9):
 /// Brigadier's ledger, decisions and transcripts are the memory.
@@ -513,25 +514,36 @@ impl Codex {
         self.codex_home().map(|dir| dir.display().to_string())
     }
 
-    /// A naked worker's own `CODEX_HOME` (core-goals D2), when the account's home holds the
-    /// user's global instructions (`AGENTS.md`, `AGENTS.override.md`): Codex has no way to leave
-    /// them out while keeping the repository's (no config key, thread field, feature or variable;
-    /// `project_doc_max_bytes=0` drops the repository's instead, checked to 0.166.0). The home
-    /// links what an extra account's links ([`crate::accounts::shared`]) but the instructions,
-    /// and the account's login: `auth.json`, which Codex rewrites in place, through the link
-    /// (checked on 0.166.0), and `auth.lock`, so a token refresh is still one at a time across
-    /// every session of the account. It keeps its own state, as an extra account does. `None`:
-    /// the worker runs in the account's own home (nothing to keep out, or a login kept in the
-    /// keyring, which a home of its own wouldn't have).
-    fn worker_home(&self) -> Option<PathBuf> {
+    /// Brigadier's own `CODEX_HOME` for a thread of this account, or `None` to run in the
+    /// account's own home. Two reasons for one:
+    /// - The user's own home (not an extra account's, which is Brigadier's already): its thread
+    ///   records (`state_5.sqlite`) are what the user's own Codex apps list, and the desktop
+    ///   app keeps every thread it once listed until its own app-server tells it the thread was
+    ///   archived or deleted, which Brigadier's app-servers can't. A thread Brigadier later
+    ///   archived or deleted stayed there, dead ("no rollout found"). A home of its own keeps
+    ///   its own records; the app-server sets no thread apart otherwise (every thread it starts
+    ///   is a `vscode` one, checked to 0.166.0). A thread lives in one home all its life: a
+    ///   home whose records still point at a rollout another home moved can't resume it.
+    /// - A naked worker (core-goals D2) when the home holds the user's global instructions
+    ///   (`AGENTS.md`, `AGENTS.override.md`): Codex has no way to leave them out while keeping
+    ///   the repository's (no config key, thread field, feature or variable;
+    ///   `project_doc_max_bytes=0` drops the repository's instead, checked to 0.166.0).
+    ///
+    /// The home links what an extra account's links ([`crate::accounts::shared`]), the
+    /// instructions only when not left out, and the account's login: `auth.json`, which Codex
+    /// rewrites in place, through the link (checked on 0.166.0), `auth.lock`, so a token refresh
+    /// is still one at a time across every session of the account, and the MCP sign-ins file.
+    /// `None` also for a login kept in the keyring, which a home of its own wouldn't have.
+    fn own_home(&self, naked: bool) -> Option<PathBuf> {
         const OWN: [&str; 2] = ["AGENTS.md", "AGENTS.override.md"];
         let source = self.codex_home()?;
-        if !OWN.iter().any(|name| source.join(name).exists()) {
+        let leave_out = naked && OWN.iter().any(|name| source.join(name).exists());
+        if self.main_home.is_some() && !leave_out {
             return None;
         }
         if !source.join("auth.json").is_file() {
             tracing::warn!(
-                "a naked Codex worker reads the user's AGENTS.md: its login isn't in auth.json"
+                "a Codex session runs in the user's own Codex home: its login isn't in auth.json"
             );
             return None;
         }
@@ -539,12 +551,17 @@ impl Codex {
         let key = {
             use sha2::{Digest, Sha256};
             let digest = Sha256::digest(source.as_os_str().as_encoded_bytes());
-            digest[..8]
+            let hex = digest[..8]
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
+                .collect::<String>();
+            if leave_out {
+                format!("{hex}-naked")
+            } else {
+                hex
+            }
         };
-        let home = self.platform.paths().data_dir.join(WORKER_HOMES).join(key);
+        let home = self.platform.paths().data_dir.join(OWN_HOMES).join(key);
         let made = (|| -> std::io::Result<()> {
             crate::accounts::create_private_dir(&home)?;
             let lock = source.join("auth.lock");
@@ -553,12 +570,17 @@ impl Codex {
             }
             let shared = crate::accounts::shared(ProviderKind::Codex)
                 .iter()
-                .map(|entry| (main.join(entry.name()), entry.name()))
-                .filter(|(_, name)| !OWN.contains(name));
-            let login = ["auth.json", "auth.lock"].map(|name| (source.join(name), name));
-            for (target, name) in shared.chain(login) {
+                .map(|entry| (main.join(entry.name()), entry.name()));
+            let own = [
+                "auth.json",
+                "auth.lock",
+                ".credentials.json",
+                "AGENTS.override.md",
+            ]
+            .map(|name| (source.join(name), name));
+            for (target, name) in shared.chain(own) {
                 let link = home.join(name);
-                if std::fs::symlink_metadata(&link).is_ok() {
+                if (leave_out && OWN.contains(&name)) || std::fs::symlink_metadata(&link).is_ok() {
                     continue;
                 }
                 let Ok(meta) = std::fs::metadata(&target) else {
@@ -571,14 +593,14 @@ impl Codex {
         match made {
             Ok(()) => Some(home),
             Err(err) => {
-                tracing::warn!(error = %err, "a naked Codex worker reads the user's AGENTS.md: no home of its own");
+                tracing::warn!(error = %err, "a Codex session runs in the account's own Codex home: no home of its own");
                 None
             }
         }
     }
 
-    /// This adapter run from another `CODEX_HOME` of the same account (a naked worker's,
-    /// [`Self::worker_home`]), its login and history still the account's.
+    /// This adapter run from another `CODEX_HOME` of the same account (Brigadier's own,
+    /// [`Self::own_home`]), its login and history still the account's.
     fn in_home(&self, home: &Path) -> Codex {
         let mut vars = self.env.vars();
         vars.retain(|(key, _)| key != "CODEX_HOME");
@@ -848,7 +870,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     };
     // A naked worker (D13, D17) goes without the user's plugins and hooks, as a sealed session
     // does; its user skills go by file and its servers in its thread's config, below. The user's
-    // own `$CODEX_HOME/AGENTS.md` it is kept from by a home of its own ([`Codex::worker_home`]).
+    // own `$CODEX_HOME/AGENTS.md` it is kept from by a home of its own ([`Codex::own_home`]).
     let naked = user_setup_naked(session);
     let user_setup = tools.user_setup();
     let sealed: &[&str] = if user_setup && !naked {
@@ -1308,9 +1330,7 @@ impl Provider for Codex {
         ledger: Arc<dyn Ledger>,
     ) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
-            if user_setup_naked(Some(&spec))
-                && let Some(home) = self.worker_home()
-            {
+            if let Some(home) = self.own_home(user_setup_naked(Some(&spec))) {
                 return self.in_home(&home).start(spec, ledger).await;
             }
             if stop_hook_of(Some(&spec)).is_some() && !self.trust_stop_hook(&spec).await {
@@ -1459,7 +1479,16 @@ impl Provider for Codex {
         private_logs: bool,
         open: Box<dyn Fn(&str) -> bool + Send + Sync + 'a>,
     ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(self.archive_threads(ids, private_logs, open))
+        Box::pin(async move {
+            match self.own_home(false) {
+                Some(home) => {
+                    self.in_home(&home)
+                        .archive_threads(ids, private_logs, open)
+                        .await
+                }
+                None => self.archive_threads(ids, private_logs, open).await,
+            }
+        })
     }
 
     fn remove_with_privacy(
@@ -1468,8 +1497,8 @@ impl Provider for Codex {
         private_logs: bool,
     ) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
-            // A naked worker's threads are removed from the home they ran in.
-            let workers = self.platform.paths().data_dir.join(WORKER_HOMES);
+            // A thread of Brigadier's own home is removed from the home it ran in.
+            let workers = self.platform.paths().data_dir.join(OWN_HOMES);
             let own = self.codex_home();
             let mut elsewhere: HashMap<PathBuf, Vec<Artifact>> = HashMap::new();
             let mut artifacts = artifacts;
@@ -1579,6 +1608,9 @@ impl Provider for Codex {
 
     fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
         Box::pin(async move {
+            if let Some(home) = self.own_home(user_setup_naked(Some(&spec))) {
+                return self.in_home(&home).terminal(spec, cwd).await;
+            }
             let Origin::Resume { native_id } = &spec.origin else {
                 return Err(Error::Invalid(
                     "only a session that exists can open in a terminal".into(),
@@ -4482,17 +4514,19 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// core-goals D2: a naked worker gets a home of its own only when the account's home holds
-    /// the user's global instructions; it links the account's history, config and login (its
-    /// lock too) but never those instructions.
+    /// A thread of the user's own Codex home runs in a home of Brigadier's, with records of its
+    /// own, so the user's Codex apps never list it (and never keep it dead once Brigadier
+    /// archives or deletes it); it links the user's history, config, instructions and login.
+    /// A naked worker's (core-goals D2) leaves out the user's global instructions; an extra
+    /// account's home is Brigadier's already.
     #[cfg(unix)]
     #[test]
-    fn a_naked_worker_home_leaves_out_the_users_agents_md() {
+    fn brigadier_threads_never_land_in_the_users_own_codex_records() {
         let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
         let user = dir.join(".codex");
         std::fs::create_dir_all(user.join("sessions")).unwrap();
         std::fs::write(user.join("config.toml"), "").unwrap();
-        std::fs::write(user.join("auth.json"), "{}").unwrap();
+        std::fs::write(user.join("state_5.sqlite"), "").unwrap();
         let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
             data_dir: Some(dir.join("data")),
         })
@@ -4504,28 +4538,151 @@ mod tests {
                 dir.as_os_str().to_owned(),
             )])),
         );
-        assert_eq!(codex.worker_home(), None, "nothing to leave out");
-        std::fs::write(user.join("AGENTS.md"), "user rules").unwrap();
-        let home = codex.worker_home().unwrap();
-        assert!(home.starts_with(dir.join("data").join(WORKER_HOMES)));
-        for name in ["sessions", "config.toml", "auth.json", "auth.lock"] {
+        assert_eq!(codex.own_home(false), None, "a login in the keyring");
+        std::fs::write(user.join("auth.json"), "{}").unwrap();
+        let home = codex.own_home(false).unwrap();
+        assert!(home.starts_with(dir.join("data").join(OWN_HOMES)));
+        assert_eq!(
+            codex.own_home(true),
+            Some(home.clone()),
+            "nothing to leave out"
+        );
+        assert!(std::fs::symlink_metadata(home.join("state_5.sqlite")).is_err());
+        let links = ["sessions", "config.toml", "auth.json", "auth.lock"];
+        for name in links {
             assert_eq!(
                 std::fs::read_link(home.join(name)).unwrap(),
                 user.join(name),
                 "{name}"
             );
         }
-        assert!(std::fs::symlink_metadata(home.join("AGENTS.md")).is_err());
         assert_eq!(
-            codex.worker_home(),
+            codex.own_home(false),
             Some(home.clone()),
             "made once, then reused"
         );
-        let worker = codex.in_home(&home);
-        assert_eq!(worker.codex_home(), Some(home.clone()));
-        assert_eq!(worker.history_home(), Some(user));
-        assert_eq!(worker.worker_home(), None, "its own home has no AGENTS.md");
+        let session = codex.in_home(&home);
+        assert_eq!(session.codex_home(), Some(home.clone()));
+        assert_eq!(session.history_home(), Some(user.clone()));
+        assert_eq!(session.own_home(false), None, "it is the home");
+
+        std::fs::write(user.join("AGENTS.md"), "user rules").unwrap();
+        let naked = codex.own_home(true).unwrap();
+        assert_ne!(naked, home);
+        assert!(std::fs::symlink_metadata(naked.join("AGENTS.md")).is_err());
+        assert_eq!(
+            std::fs::read_link(naked.join("sessions")).unwrap(),
+            user.join("sessions")
+        );
+        let home = codex.own_home(false).unwrap();
+        assert_eq!(
+            std::fs::read_link(home.join("AGENTS.md")).unwrap(),
+            user.join("AGENTS.md")
+        );
+        assert_eq!(codex.in_home(&naked).own_home(true), None, "it is the home");
+        assert_eq!(codex.in_home(&home).own_home(false), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Live: a session and a naked worker on the user's own Codex login run, close (archived)
+    /// and are removed, and neither ever shows in the user's own Codex records, which the
+    /// user's Codex apps list (`~/.codex/state_5.sqlite`, opened read-only):
+    /// `BRIGADIER_LIVE_CODEX=1 cargo test -p brigadier-providers --lib -- --ignored live_codex_threads --nocapture`
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "runs the real Codex CLI on the user's login"]
+    async fn live_codex_threads_stay_out_of_the_users_codex_records() {
+        use rusqlite::{Connection, OpenFlags, OptionalExtension};
+        struct Made(std::sync::Mutex<Vec<Artifact>>);
+        impl Ledger for Made {
+            fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>> {
+                self.0.lock().unwrap().push(artifact);
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, _: &Artifact) -> bool {
+                false
+            }
+        }
+        if std::env::var_os("BRIGADIER_LIVE_CODEX").is_none() {
+            return;
+        }
+        let root = PathBuf::from(format!("/tmp/core-goals-w46-live-{}", uuid::Uuid::new_v4()));
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let codex = Codex::new(platform.clone(), Arc::new(CliEnv::capture(&platform)));
+        let user = codex.codex_home().unwrap();
+        let archived = |db: &Path, id: &str| -> Option<i64> {
+            let db = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            db.query_row("SELECT archived FROM threads WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .unwrap()
+        };
+        for (tools, naked) in [(ToolSet::Thread, false), (ToolSet::Lean, true)] {
+            let spec = SessionSpec {
+                cwd: work.clone(),
+                effort: Some("low".into()),
+                naked_worker: naked,
+                ..spec(tools, None)
+            };
+            let ledger = Arc::new(Made(Default::default()));
+            let started = codex.start(spec, ledger.clone()).await.expect("started");
+            let mut events = started.events;
+            started
+                .session
+                .send(TurnInput::text("Reply with just: ok"))
+                .await
+                .unwrap();
+            let turn = async {
+                while let Some(event) = events.recv().await {
+                    if matches!(event, ProviderEvent::TurnCompleted { .. }) {
+                        break;
+                    }
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(300), turn)
+                .await
+                .expect("the turn ended");
+            started.session.close().await;
+            let made = ledger.0.lock().unwrap().clone();
+            let Some(Artifact::Session {
+                id,
+                home: Some(home),
+                ..
+            }) = made
+                .iter()
+                .find(|artifact| matches!(artifact, Artifact::Session { .. }))
+                .cloned()
+            else {
+                panic!("a thread recorded with its own home: {made:?}");
+            };
+            let home = PathBuf::from(home);
+            eprintln!("{tools:?} naked={naked}: thread {id} in {}", home.display());
+            assert!(home.starts_with(root.join("data").join(OWN_HOMES)));
+            assert_eq!(
+                archived(&home.join("state_5.sqlite"), &id),
+                Some(1),
+                "archived on close"
+            );
+            assert_eq!(
+                archived(&user.join("state_5.sqlite"), &id),
+                None,
+                "not the user's"
+            );
+            codex.remove(made).await.unwrap();
+            assert_eq!(archived(&home.join("state_5.sqlite"), &id), None, "removed");
+            assert_eq!(
+                archived(&user.join("state_5.sqlite"), &id),
+                None,
+                "not the user's"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// Missing or signed out, the status points at Connect in plain words: no command to run,
