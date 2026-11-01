@@ -35,8 +35,8 @@ type RequestRecord = Pick<UserRequest, "id" | "state">;
 /**
  * An interrupted turn read by its requests as the daemon has them: the thread says a turn its
  * CLI never ended was cut by a quit, which only its requests can tell. `error`: the words its
- * block says, a request's own when it failed for another reason (or the CLI's end, when none
- * failed: a turn of Brigadier's own); `resumable`: Continue picks it up, as the daemon's
+ * block says, a request's own when it failed for another reason (or the CLI's end for a turn of
+ * Brigadier's own, which no request names); `resumable`: Continue picks it up, as the daemon's
  * resume does only for the newest request, stopped or cut by a quit.
  */
 export function cutOff(error: string, own: readonly RequestRecord[], latest: RequestRecord | null): { error: string; resumable: boolean } {
@@ -47,7 +47,9 @@ export function cutOff(error: string, own: readonly RequestRecord[], latest: Req
   if (cut?.state.type === "failed") return { error: cut.state.error, resumable };
   if (resumable) return { error, resumable };
   const failed = own.findLast((request) => request.state.type === "failed");
-  return { error: failed?.state.type === "failed" ? failed.state.error : CLI_ENDED, resumable: false };
+  if (failed?.state.type === "failed") return { error: failed.state.error, resumable: false };
+  // Its request went on in a block of its own after the quit (the auto-resume, or Continue): still cut by a quit.
+  return { error: own.length > 0 ? error : CLI_ENDED, resumable: false };
 }
 
 /** The kind an error's raw words read as, for a turn recorded before its CLI's adapter classed it. */
