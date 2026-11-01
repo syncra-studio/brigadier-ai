@@ -1397,3 +1397,66 @@ async fn a_chat_whose_workers_work_judges_a_message_too() {
     );
     flow.stop().await;
 }
+
+/// One turn waits two follow-ups, then, as its work ends, joins both in one go and ends (seen
+/// live on Codex): each is answered by that turn and done; none stays working.
+#[tokio::test]
+async fn two_waited_follow_ups_joined_as_the_turn_ends_are_both_done() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let running = Arc::new(tokio::sync::Notify::new());
+    let (release, started) = (gate.clone(), running.clone());
+    let flow = Flow::start(
+        "queue-join-two-at-the-end",
+        Options::default(),
+        Arc::new(move |turn| {
+            let (gate, started) = (gate.clone(), started.clone());
+            Box::pin(async move {
+                if !turn.input.contains("Run the tests.") {
+                    return Reply::text("Noted.");
+                }
+                started.notify_one();
+                let mut ids = Vec::new();
+                for _ in 0..2 {
+                    let id = shown_in(&turn.steered().await.unwrap());
+                    let judgment = Judgment::Wait;
+                    brigadier(
+                        &turn,
+                        CliRequest::Queue {
+                            id: id.clone(),
+                            judgment,
+                        },
+                    )
+                    .await;
+                    ids.push(id);
+                }
+                gate.notified().await;
+                for id in ids {
+                    let judgment = Judgment::Join;
+                    brigadier(&turn, CliRequest::Queue { id, judgment }).await;
+                }
+                Reply::text("Both done.")
+            })
+        }),
+    )
+    .await;
+    flow.say("Run the tests.").await;
+    running.notified().await;
+    flow.say("Also check the formatting.").await;
+    flow.say("And the lints.").await;
+    flow.until("both to wait", |board| {
+        board.queue.items.len() == 2 && board.queue.items.iter().all(|item| !item.deciding)
+    })
+    .await;
+    release.notify_one();
+    let board = flow.idle().await;
+    assert!(board.queue.items.is_empty(), "{:?}", board.queue);
+    for (id, request) in &board.requests {
+        assert_eq!(
+            request.state,
+            crate::work::RequestState::Done,
+            "{id}: {request:?}"
+        );
+    }
+    assert_eq!(board.requests.len(), 3, "{:?}", board.requests);
+    flow.stop().await;
+}

@@ -839,6 +839,8 @@ impl SessionManager {
     pub(super) fn forget_worker_events(&self, conversation: &ConversationId, task: &TaskId) {
         let record = self.events_record(conversation);
         self.worker_events.forget(conversation, &record, task);
+        // A bare `brigadier wait` looks again: with no worker left that can send, it ends.
+        self.worker_events.added.notify_waiters();
         self.worker_quiet.forget(task);
         self.forget_worker_commands(task);
     }

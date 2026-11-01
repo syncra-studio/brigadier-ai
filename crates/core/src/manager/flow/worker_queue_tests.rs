@@ -9,7 +9,7 @@ use std::sync::Arc;
 use brigadier_cli::protocol::CliRequest;
 use serde_json::{Value, json};
 
-use super::cli_tests::{Answers, brigadier, start};
+use super::cli_tests::{Answers, brigadier, id_of, start, wait};
 use super::{FakeBehavior, Flow, Options, Reply, Script};
 use crate::work::{QueuedMessage, TaskState};
 
@@ -322,6 +322,57 @@ async fn a_workers_queued_message_survives_a_restart_and_goes_on() {
             .filter(|input| input.contains("Use blue."))
             .count(),
         1
+    );
+    flow.stop().await;
+}
+
+/// A bare `brigadier wait` ends once its session's last worker that could send is closed (seen
+/// live on Codex: a `wait <id>` took the worker's event, the worker was closed, and the bare
+/// wait beside it held the turn's command, and the block, open for good).
+#[tokio::test]
+async fn a_bare_wait_ends_when_the_last_worker_is_closed() {
+    let answers = Answers::default();
+    let kept = answers.clone();
+    let flow = Flow::start(
+        "bare-wait-close",
+        Options::default(),
+        Arc::new(move |turn| {
+            let answers = kept.clone();
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    return Reply::text("Done.");
+                }
+                let id =
+                    id_of(&brigadier(&turn, CliRequest::Start(Box::new(start("Say hi.")))).await);
+                let took = brigadier(&turn, wait(&[&id], Some(60))).await;
+                assert_eq!(took["timedOut"], false, "{took:#}");
+                let close = async {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    brigadier(&turn, CliRequest::Close { id: id.clone() }).await
+                };
+                let bare = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    brigadier(&turn, wait(&[], None)),
+                );
+                let (bare, _) = tokio::join!(bare, close);
+                answers
+                    .lock()
+                    .unwrap()
+                    .insert("bare".into(), json!(bare.is_ok()));
+                Reply::text("Closed.")
+            })
+        }),
+    )
+    .await;
+    flow.say("Go.").await;
+    super::eventually("the bare wait to end", || {
+        answers.lock().unwrap().contains_key("bare")
+    })
+    .await;
+    assert_eq!(
+        answers.lock().unwrap()["bare"],
+        json!(true),
+        "the bare wait never ended"
     );
     flow.stop().await;
 }
