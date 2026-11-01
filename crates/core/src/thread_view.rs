@@ -668,7 +668,10 @@ pub(crate) fn view(
             turn.limit.clone_from(&live.limit);
         }
         add_requests(&mut turn.requests, &live.requests);
-        turn.joins |= live.joins;
+        // Still awaiting its own message, the live turn is the one read after the turn before.
+        if !live.awaiting_user || live.user_message.as_deref() != Some(turn.user_message.as_str()) {
+            turn.joins |= live.joins;
+        }
     }
     ThreadView {
         entries,
@@ -1526,6 +1529,28 @@ mod tests {
             &[ended(10)],
         );
         assert_eq!(next.turns[0].end, Some(TurnEnd::Done));
+        // Sent while the work before held, it joins that work from its start (goal 8): the turn
+        // the file reads before the stream gives its message, never the one before it.
+        let joining = LiveTurn {
+            joins: true,
+            ..starting
+        };
+        let before = view(
+            vec![Arc::new(vec![message("u1", Role::User)])],
+            Some(&joining),
+            &[ended(10)],
+        );
+        assert!(!before.turns[0].joins);
+        let read = view(
+            vec![Arc::new(vec![
+                message("u1", Role::User),
+                message("u2", Role::User),
+            ])],
+            Some(&joining),
+            &[ended(10)],
+        );
+        assert!(!read.turns[0].joins);
+        assert!(read.turns[1].joins);
     }
 
     /// Brigadier's `/compact` after a turn: the stream said the compaction in that turn, so its

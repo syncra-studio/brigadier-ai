@@ -224,6 +224,7 @@ impl SessionManager {
                 ProviderEvent::Message {
                     role: Role::User, ..
                 }
+                | ProviderEvent::TurnStarted { .. }
                 | ProviderEvent::TurnCompleted { .. }
                 | ProviderEvent::Exited { .. },
             )
@@ -313,6 +314,8 @@ impl SessionManager {
             if on_its_own {
                 live.awaiting_user = false;
                 live.continues = true;
+                // It goes on with the turn before, which says whether it joined.
+                live.joins = false;
                 live.waking_until = None;
                 // The thread reads its turns again: that turn is open once more.
                 opened = true;
@@ -344,6 +347,9 @@ impl SessionManager {
                             context_window: live.context_window,
                             // Still owed until it says whose it is: its first item, or a user message.
                             waking_until: live.waking_until,
+                            // Whether it goes on with the work before, known as Brigadier sent
+                            // its message: the file may read the turn before the stream says it.
+                            joins: carried.as_ref().is_some_and(|(_, joins)| *joins),
                             ..LiveTurn::default()
                         };
                     }
