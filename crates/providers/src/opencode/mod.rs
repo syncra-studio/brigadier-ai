@@ -1225,17 +1225,28 @@ impl Server {
             let sent = json!({ "method": method.as_str(), "path": path, "body": body });
             recorder.record(Direction::In, &sent.to_string());
         }
-        let mut request = self.request(method, path).timeout(REQUEST_TIMEOUT);
-        if let Some(body) = body {
-            request = request.json(body);
-        }
         let failed = |err: reqwest::Error| match self.process.is_running() {
             true => Error::Protocol(format!("OpenCode didn't answer: {err}")),
             false => Error::Closed,
         };
-        let response = request.send().await.map_err(failed)?;
-        let status = response.status();
-        let text = response.text().await.map_err(failed)?;
+        // A folder's plugins still activating answer 503 (2.2.3, slow on a busy machine): asked
+        // again until they are, as long as a start may take.
+        let deadline = tokio::time::Instant::now() + START_TIMEOUT;
+        let (status, text) = loop {
+            let mut request = self.request(method.clone(), path).timeout(REQUEST_TIMEOUT);
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            let response = request.send().await.map_err(failed)?;
+            let status = response.status();
+            let text = response.text().await.map_err(failed)?;
+            if status != reqwest::StatusCode::SERVICE_UNAVAILABLE
+                || tokio::time::Instant::now() >= deadline
+            {
+                break (status, text);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
         if !status.is_success() {
             let said: Value = serde_json::from_str(&text).unwrap_or_default();
             let message = said["message"].as_str().unwrap_or(&text);
@@ -1951,6 +1962,54 @@ print(json.dumps({"url": f"http://127.0.0.1:{server.server_address[1]}"}), flush
 threading.Thread(target=server.serve_forever, daemon=True).start()
 sys.stdin.read()
 "#;
+
+    /// A server whose folder's plugins are still activating (503) is asked again until it
+    /// answers; any other refusal is said at once.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_request_waits_out_plugins_still_activating() {
+        use std::os::unix::fs::PermissionsExt;
+        const BUSY_SERVER: &str = r#"#!/usr/bin/env python3
+import http.server, json, sys, threading
+asked = {"n": 0}
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        asked["n"] += 1
+        busy = self.path == "/api/x" and asked["n"] <= 2
+        code = 503 if busy else (200 if self.path == "/api/x" else 400)
+        self.send_response(code); self.send_header("content-type", "application/json"); self.end_headers()
+        self.wfile.write(json.dumps({"message": "Location plugins did not finish activating"} if busy else {"asked": asked["n"]}).encode())
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+print(json.dumps({"url": f"http://127.0.0.1:{server.server_address[1]}"}), flush=True)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+sys.stdin.read()
+"#;
+        let root = std::env::temp_dir().join(format!(
+            "brigadier-opencode-busy-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("opencode");
+        std::fs::write(&script, BUSY_SERVER).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let spec = CliEnv::from_vars([]).spec(&script);
+        let server = Server::start(platform, spec, process::Options::default(), None)
+            .await
+            .unwrap();
+        let answer = server.call(Method::GET, "/api/x", None).await.unwrap();
+        assert_eq!(answer["asked"], 3);
+        assert!(matches!(
+            server.call(Method::GET, "/api/other", None).await,
+            Err(Error::Rejected(said)) if said.starts_with("400")
+        ));
+        server.process.shutdown(EXIT_GRACE).await;
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     /// A session moves from the user's own database to one account, on to another and back:
     /// each move imports its newest copy under the same id, an account's older copy is
