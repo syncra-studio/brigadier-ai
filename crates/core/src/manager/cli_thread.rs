@@ -297,9 +297,11 @@ impl SessionManager {
             // it ends, and its end is that turn's; a message the user sends meanwhile is a steer
             // of that turn, its request one more of that turn's. A compaction is no such item:
             // Claude says `/compact`'s (or the message it compacted for) only after it, and
-            // that message starts the turn.
+            // that message starts the turn. Nor is a turn Brigadier sent a message for while the
+            // work held (`joins`): its message may come after the CLI's first items (D25, D72).
             let on_its_own = live.open
                 && live.awaiting_user
+                && !live.joins
                 && event.is_some_and(|event| {
                     shown_live(event)
                         && !matches!(
@@ -462,7 +464,8 @@ impl SessionManager {
                     requests: live.requests.clone(),
                     limit: live.limit.take(),
                     context_window: live.context_window,
-                    joins: live.joins,
+                    // Its message never came: it went on with the turn before, joining nothing.
+                    joins: live.joins && !live.awaiting_user,
                 });
             }
             if let Some(record) = &noted

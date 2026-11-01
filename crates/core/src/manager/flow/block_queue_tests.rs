@@ -409,3 +409,127 @@ async fn a_message_left_unjudged_twice_stays_queued() {
     .await;
     flow.stop().await;
 }
+
+/// O38: Claude may stream the first item of a judge turn before it echoes the message that
+/// woke it. That turn is still Brigadier's and joins the open block as a turn of its own,
+/// never one the CLI began on its own going on with the turn before (D25, D72); a turn the CLI
+/// then begins on its own still goes on with it.
+#[tokio::test]
+async fn a_judge_turn_whose_first_item_comes_before_its_message_joins_the_block() {
+    use brigadier_providers::{ItemStatus, ProviderEvent, Role, TurnStatus};
+    type Events = Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>>;
+    let spawn = |status| ProviderEvent::ToolCall {
+        item_id: "spawn".into(),
+        name: "agents/spawnAgent".into(),
+        input: Some(r#"{"message":"sleep 40"}"#.into()),
+        status,
+        output: None,
+        kept: None,
+    };
+    let say = |item: &str, role, text: &str| ProviderEvent::Message {
+        item_id: item.into(),
+        role,
+        text: text.into(),
+    };
+    let events: Events = Arc::default();
+    let script: Script = {
+        let events = events.clone();
+        Arc::new(move |turn| {
+            let events = events.clone();
+            Box::pin(async move {
+                let ids = to_judge(&turn.input);
+                if ids.is_empty() {
+                    let _ = turn
+                        .events
+                        .send(say("user-1", Role::User, &turn.input))
+                        .await;
+                    let _ = turn.events.send(spawn(ItemStatus::InProgress)).await;
+                    *events.lock().unwrap() = Some(turn.events.clone());
+                    return Reply::text("Started a subagent; not waiting for it.");
+                }
+                // Its first item, then the message it took.
+                let _ = turn
+                    .events
+                    .send(say("first", Role::Assistant, "Looking."))
+                    .await;
+                let _ = turn
+                    .events
+                    .send(say("user-2", Role::User, &turn.input))
+                    .await;
+                for id in ids {
+                    brigadier(
+                        &turn,
+                        CliRequest::Queue {
+                            id,
+                            judgment: Judgment::Join,
+                        },
+                    )
+                    .await;
+                }
+                Reply::text("4.")
+            })
+        })
+    };
+    let flow = Flow::start("block-judge-item-first", Options::default(), script).await;
+    flow.say("Start a subagent in the background.").await;
+    flow.settled().await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually_async("the first turn to end", || conv.idle()).await;
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its subagent holds the work"
+    );
+
+    flow.say("What is 2+2?").await;
+    super::eventually("the judge turn to end", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        let answered = view.entries.iter().any(
+            |entry| matches!(&entry.event, ProviderEvent::Message { text, .. } if text == "4."),
+        );
+        answered && view.turns.last().is_some_and(|turn| turn.end.is_some())
+    })
+    .await;
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    assert_eq!(view.turns.len(), 2, "{view:#?}");
+    assert_eq!(view.turns[1].user_message, "user-2", "{view:#?}");
+    assert!(view.turns[1].joins, "it joins the open block: {view:#?}");
+    assert!(!view.entries.iter().any(|entry| entry.steer), "{view:#?}");
+
+    // The subagent ends; the CLI's own turn for it goes on with the judge turn.
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    for event in [
+        spawn(ItemStatus::Completed),
+        ProviderEvent::TurnStarted { turn_id: None },
+        say("wake", Role::Assistant, "The subagent printed 42."),
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually("the wake turn's item", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.entries.iter().any(|entry| {
+            matches!(&entry.event, ProviderEvent::Message { item_id, .. } if item_id == "wake")
+        })
+    })
+    .await;
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    assert_eq!(view.turns.len(), 2, "{view:#?}");
+    assert!(
+        view.turns[1].end.is_none(),
+        "the judge turn runs again: {view:#?}"
+    );
+    sender
+        .send(ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: TurnStatus::Completed,
+            duration_ms: None,
+            usage: None,
+        })
+        .await
+        .unwrap();
+    super::eventually("the wake turn to end", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == 2 && view.turns[1].end.is_some() && view.turns[1].joins
+    })
+    .await;
+    flow.stop().await;
+}
