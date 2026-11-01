@@ -247,6 +247,7 @@ impl SessionManager {
             let live = threads.entry(conv.id.clone()).or_default();
             if let Some(event) = event {
                 live.note_command(event);
+                live.note_subagent(event);
             }
             match event {
                 Some(ProviderEvent::BackgroundTask { task }) => {
@@ -286,10 +287,13 @@ impl SessionManager {
                 }
                 _ => {}
             }
-            // So do its MCP servers.
-            if matches!(event, Some(ProviderEvent::Exited { .. }) | None) && !live.mcp.is_empty() {
-                live.mcp.clear();
-                mcp = Some(Vec::new());
+            // So do its subagents and its MCP servers.
+            if matches!(event, Some(ProviderEvent::Exited { .. }) | None) {
+                live.subagents.clear();
+                if !live.mcp.is_empty() {
+                    live.mcp.clear();
+                    mcp = Some(Vec::new());
+                }
             }
             // A turn the CLI began on its own for a background job's end: its notice, or the
             // first item of its own before any user message (Claude's stream doesn't say the
@@ -344,6 +348,7 @@ impl SessionManager {
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
                             commands: std::mem::take(&mut live.commands),
+                            subagents: std::mem::take(&mut live.subagents),
                             jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
                             context_window: live.context_window,
@@ -375,6 +380,7 @@ impl SessionManager {
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
                             commands: std::mem::take(&mut live.commands),
+                            subagents: std::mem::take(&mut live.subagents),
                             jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
                             ..LiveTurn::default()
@@ -441,6 +447,10 @@ impl SessionManager {
                     news.push(entry(event.cloned(), at));
                 }
                 Some(ProviderEvent::TurnCompleted { status, .. }) if live.open => {
+                    // A stopped or failed turn's subagents went with it, said ended or not.
+                    if *status != TurnStatus::Completed {
+                        live.subagents.clear();
+                    }
                     let end = match status {
                         TurnStatus::Completed if live.error.is_some() => TurnEnd::Failed,
                         TurnStatus::Completed => TurnEnd::Done,

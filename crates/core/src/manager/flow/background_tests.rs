@@ -766,6 +766,35 @@ async fn a_subagent_running_past_its_turn_holds_the_work_until_it_ends() {
         "its subagent runs past its turn"
     );
     let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    // A later turn (the session woken to judge a follow-up) ends while it still runs: it still
+    // holds the work, so the next message goes on in the block (O38, seen live on Codex).
+    for event in [
+        ProviderEvent::TurnStarted { turn_id: None },
+        ProviderEvent::Message {
+            item_id: "judged".into(),
+            role: brigadier_providers::Role::Assistant,
+            text: "It waits.".into(),
+        },
+        ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: brigadier_providers::TurnStatus::Completed,
+            duration_ms: None,
+            usage: None,
+        },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually("the later turn's end", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.entries.iter().any(|entry| {
+            matches!(&entry.event, ProviderEvent::Message { item_id, .. } if item_id == "judged")
+        }) && view.turns.iter().all(|turn| turn.end.is_some())
+    })
+    .await;
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its subagent runs past the later turn too"
+    );
     sender.send(spawn(ItemStatus::Completed)).await.unwrap();
     super::eventually_async("the subagent's end", || async {
         !flow.manager.work_holds(&conv).await

@@ -447,6 +447,8 @@ pub(crate) struct LiveTurn {
     /// background (Claude moves a running command there): a background task is named by its
     /// call. Those of its background tasks are kept while the tasks are.
     pub commands: Vec<(String, String)>,
+    /// Its CLI's subagent calls still running, by item id: they outlast the turn too.
+    pub subagents: Vec<String>,
     /// A background command ended while no turn was open: until when the turn its end starts
     /// is owed (`CliJobs::waking`), a turn begun meanwhile included until it says whose it is.
     pub waking_until: Option<i64>,
@@ -536,14 +538,29 @@ impl LiveTurn {
 
     /// A subagent its CLI started that still runs after the turn that started it ended, its
     /// CLI listing no task for it (Codex): it holds the turn's work as a background task does,
-    /// as the thread draws it (D24, D97).
+    /// as the thread draws it (D24, D97), past later turns too.
     pub(crate) fn subagent_running(&self) -> bool {
-        !self.open
-            && self.entries.iter().any(|entry| {
-                entry.parent.is_none()
-                    && matches!(&entry.event, ProviderEvent::ToolCall { name, status: brigadier_providers::ItemStatus::InProgress, .. }
-                        if brigadier_providers::adapters::ADAPTERS.iter().any(|cli| cli.subagent_tools.contains(&crate::digest::bare_tool_name(name))))
+        !self.open && !self.subagents.is_empty()
+    }
+
+    /// Notes a subagent call's start or end ([`Self::subagents`]).
+    pub(crate) fn note_subagent(&mut self, event: &ProviderEvent) {
+        if let ProviderEvent::ToolCall {
+            item_id,
+            name,
+            status,
+            ..
+        } = event
+            && brigadier_providers::adapters::ADAPTERS.iter().any(|cli| {
+                cli.subagent_tools
+                    .contains(&crate::digest::bare_tool_name(name))
             })
+        {
+            self.subagents.retain(|id| id != item_id);
+            if *status == brigadier_providers::ItemStatus::InProgress {
+                self.subagents.push(item_id.clone());
+            }
+        }
     }
 
     /// What of its CLI's background work holds its turn now (`CliJobs`).
