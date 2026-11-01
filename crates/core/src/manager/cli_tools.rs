@@ -262,6 +262,15 @@ impl SessionManager {
                     Err(err) => return CliReply::error(ErrorCode::Failed, err.to_string()),
                 }
             }
+            // Its earlier sessions' transcripts are in its own records (core-goals D121).
+            (Some(Role::Worker { .. }), Some(_), Tool::Brain) => {
+                return CliReply::error(
+                    ErrorCode::Refused,
+                    "This tool is not available to this session: a worker reads its own \
+                     records, its earlier sessions' transcripts included, with `brigadier \
+                     transcript search|read`.",
+                );
+            }
             _ => return not_theirs(),
         };
         let answer = match action {

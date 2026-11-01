@@ -216,6 +216,14 @@ async fn the_threads_moved_tools_run_behind_brigadier_and_its_workers_are_refuse
     for name in ["worker brain", "worker report", "worker approval"] {
         assert_eq!(answers[name]["error"]["code"], "refused", "{name}");
     }
+    // …and is told where its own records are, its earlier sessions' included.
+    assert!(
+        answers["worker brain"]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("brigadier transcript search|read")),
+        "{:#}",
+        answers["worker brain"]
+    );
     flow.stop().await;
 }
 
