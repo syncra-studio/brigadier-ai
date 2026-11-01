@@ -180,6 +180,8 @@ Patches applied, in order:
 
 - `patches/0151-windows-task-manager-refusal-reason.diff`: Correct the Task Manager refusal reason with the user-approved RunAsInvoker evidence: it relaunches itself elevated even from a non-elevated start, so the helper could not read or move its window and that window would cover the user's work.
 
+- `patches/0160-windows-enable-window-outside-shared-lock.diff`: Call EnableWindow outside the shared disable-lease lock (reading the initial state with IsWindowEnabled, which sends no message), so one hung target window blocks only its own action instead of every later guarded action and every guard's release.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

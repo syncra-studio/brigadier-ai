@@ -1,0 +1,80 @@
+Why: Call EnableWindow outside the shared disable-lease lock (reading the initial state with IsWindowEnabled, which sends no message), so one hung target window blocks only its own action instead of every later guarded action and every guard's release.
+
+diff --git a/crates/platform-windows/src/uia/fg_bypass.rs b/crates/platform-windows/src/uia/fg_bypass.rs
+index 539690d73..148d453da 100644
+--- a/crates/platform-windows/src/uia/fg_bypass.rs
++++ b/crates/platform-windows/src/uia/fg_bypass.rs
+@@ -32,7 +32,7 @@
+ use std::collections::BTreeMap;
+ use std::sync::Mutex;
+ use windows::Win32::Foundation::HWND;
+-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
++use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
+ use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetWindowThreadProcessId, GA_ROOT};
+ 
+ /// RAII guard that disables a window on construction and restores its
+@@ -62,16 +62,26 @@ impl DisabledHwndGuard {
+         let Some(key) = window_key(hwnd) else {
+             return Self { key: None };
+         };
+-        let mut leases = DISABLE_LEASES.lock().unwrap_or_else(|e| e.into_inner());
+-        let lease = leases.entry(key).or_insert_with(|| {
+-            // EnableWindow returns nonzero iff the window was previously disabled.
+-            let was_enabled = !unsafe { EnableWindow(hwnd, false).as_bool() };
+-            DisableLease {
+-                holders: 0,
+-                was_enabled,
++        // EnableWindow sends messages to the owning thread and waits for them;
++        // it runs outside the shared lock so one hung window blocks only its call.
++        let disable_now = {
++            let mut leases = DISABLE_LEASES.lock().unwrap_or_else(|e| e.into_inner());
++            let mut first = false;
++            let lease = leases.entry(key).or_insert_with(|| {
++                first = true;
++                DisableLease {
++                    holders: 0,
++                    was_enabled: unsafe { IsWindowEnabled(hwnd).as_bool() },
++                }
++            });
++            lease.holders += 1;
++            first && lease.was_enabled
++        };
++        if disable_now {
++            unsafe {
++                let _ = EnableWindow(hwnd, false);
+             }
+-        });
+-        lease.holders += 1;
++        }
+         Self { key: Some(key) }
+     }
+ }
+@@ -79,16 +89,19 @@ impl DisabledHwndGuard {
+ impl Drop for DisabledHwndGuard {
+     fn drop(&mut self) {
+         let Some(key) = self.key else { return };
+-        let mut leases = DISABLE_LEASES.lock().unwrap_or_else(|e| e.into_inner());
+-        let Some(lease) = leases.get_mut(&key) else {
+-            return;
++        let was_enabled = {
++            let mut leases = DISABLE_LEASES.lock().unwrap_or_else(|e| e.into_inner());
++            let Some(lease) = leases.get_mut(&key) else {
++                return;
++            };
++            lease.holders -= 1;
++            if lease.holders != 0 {
++                return;
++            }
++            let was_enabled = lease.was_enabled;
++            leases.remove(&key);
++            was_enabled
+         };
+-        lease.holders -= 1;
+-        if lease.holders != 0 {
+-            return;
+-        }
+-        let was_enabled = lease.was_enabled;
+-        leases.remove(&key);
+         let hwnd = HWND(key.0 as *mut _);
+         // A destroyed/recycled window must not inherit another window's restoration.
+         if was_enabled && window_key(hwnd) == Some(key) {
