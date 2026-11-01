@@ -2781,7 +2781,7 @@ impl Tool for LaunchAppTool {
             .is_some_and(|guard| !guard.acquired())
         {
             return ToolResult::error(
-                "Background launch is unavailable because Windows did not grant the activation-prevention lock required for this launch. No process was started.",
+                "Background launch is unavailable because the activation-prevention lock it requires is not held: Windows refused it, or an overlapping background action released it to hand your window back. No process was started. Retry after the other action finishes.",
             )
             .with_structured(json!({
                 "code": "background_unavailable",

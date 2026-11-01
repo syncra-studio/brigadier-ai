@@ -188,6 +188,8 @@ Patches applied, in order:
 
 - `patches/0163-windows-reuse-task-browser-without-second-start.diff`: When a live task-owned browser is re-proven for reuse, open the requested pages through its endpoint without starting the executable again; a second start hands the command line to the running browser, which opens and activates a new window over the user's.
 
+- `patches/0164-windows-foreground-lock-refusal-reason.diff`: State the real reason a start_minimized launch is refused when the activation-prevention lock is not held: Windows may have refused it, or an overlapping action released it to hand the user's window back, in which case Windows was never asked.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
