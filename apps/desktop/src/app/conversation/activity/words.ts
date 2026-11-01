@@ -26,7 +26,7 @@ export type StepWords = {
   object?: string;
   /** For `other`: the summary's words for it ("Asked for a review"). */
   phrase?: string;
-  /** For `other`: the summary's words for several of it ("Ran agents"), where they differ. */
+  /** For `other`: the summary's words for several of it ("Ran subagents"), where they differ. */
   many?: string;
   /** It reads the web (a search, a page, a plain GET of a public page): drawn with a globe. */
   web?: boolean;
@@ -76,7 +76,7 @@ export function isPlumbing(name: string): boolean {
 /** A subagent's start: each CLI's own tool for it. */
 const AGENTS = new Set(CLIS.flatMap((cli) => cli.subagentTools));
 
-/** A subagent's lifecycle is shown in its composer strip and History, outside the main work. */
+/** A subagent's start: one row of its parent's work, which opens its transcript (D96). */
 export function isSubagentStart(name: string): boolean {
   return AGENTS.has(toolName(name));
 }
@@ -345,11 +345,11 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   if (CODE_SEARCH.has(short)) return searchedCode(detail);
   if (LISTINGS.has(short)) return listed(detail ? basename(detail) : null);
   if (WEB_SEARCH.has(short)) return webSearchWords(detail);
-  // "Ran agent: Find the parser", "Used skill brigade" (B1).
+  // "Running a subagent", then "Ran a subagent: Find the parser" (D96); "Used skill brigade" (B1).
   if (AGENTS.has(short)) {
     return detail
-      ? { kind: "other", doing: `Running agent: ${detail}`, done: `Ran agent: ${detail}`, object: detail, phrase: "Ran an agent", many: "Ran agents" }
-      : { kind: "other", doing: "Running an agent", done: "Ran an agent", phrase: "Ran an agent", many: "Ran agents" };
+      ? { kind: "other", doing: "Running a subagent", done: `Ran a subagent: ${detail}`, object: detail, phrase: "Ran a subagent", many: "Ran subagents" }
+      : { kind: "other", doing: "Running a subagent", done: "Ran a subagent", phrase: "Ran a subagent", many: "Ran subagents" };
   }
   if (SKILLS.has(short)) {
     return detail

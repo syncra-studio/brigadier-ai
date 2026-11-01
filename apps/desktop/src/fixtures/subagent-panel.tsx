@@ -35,7 +35,7 @@ const row = (working: boolean, callId = "call1"): NativeWorker => ({
   id: `native:${id}:${callId}`, number: 1, title: "Count the lines", agent: "claude", model: null, startedAtMs: 1000,
   working, lastEnd: working ? null : "done", gone: false, lastEventAtMs: Date.now(), limit: null, freshContext: false, waiting: [], mcp: [],
   branch: null, base: null, diff: null, ahead: 0, merged: false,
-  native: { conversationId: id, callId, backgroundId: null, prompt: "Count the lines." },
+  native: { conversationId: id, owner: id, callId, backgroundId: null, prompt: "Count the lines." },
 } as WorkerRow as NativeWorker);
 
 function until(check: () => boolean, timeoutMs = 6000): Promise<void> {

@@ -8,7 +8,7 @@ import { Button } from "@/components/controls";
 import { ChevronRight, StopCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useNow } from "@/hooks/use-now";
-import { stopBackgroundTask, stopWorkers } from "@/state/actions";
+import { stopWorkers } from "@/state/actions";
 import { useWorkerRows } from "@/state/cliThread";
 
 /** The Workers strip's view, live from the session's worker rows: `null` while it has nothing to show. */
@@ -63,7 +63,7 @@ export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ 
                 variant="ghost"
                 data-slot="workers-stop-all"
                 disabled={stop.busy}
-                onClick={() => stop.run(() => Promise.all([stopWorkers(conversationId), ...view.subagents.map(([id, startedAtMs]) => stopBackgroundTask(conversationId, id, undefined, startedAtMs))]))}
+                onClick={() => stop.run(() => stopWorkers(conversationId))}
                 className="text-foreground/60 hover:text-foreground"
               >
                 <StopCircle />

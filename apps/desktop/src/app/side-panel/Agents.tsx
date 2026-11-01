@@ -16,7 +16,7 @@ import type { Task, WorkerRow } from "@/ipc/generated";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { useBoard } from "@/state/board";
 import { isNativeWorker } from "@/state/nativeWorkers";
-import { useWorkerRows } from "@/state/cliThread";
+import { useSubagentRow, useWorkerRows } from "@/state/cliThread";
 
 export { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 
@@ -42,7 +42,6 @@ function WorkerDetails({ task, model }: { task: Task; model: string }) {
 /** One worker: its glyph, name, model and state in the header, from its row; its thread below. */
 function WorkerDetail({ conversationId, row, headerActions }: { conversationId: string; row: WorkerRow; headerActions?: ReactNode }) {
   const { setPanel } = useContext(AgentsPanelContext);
-  // Named as its rows name it, a subagent like any worker (D50).
   const name = useWorkerName(row.id);
   const [details, setDetails] = useState(false);
   // Its details page is the task's it was started for, while the board holds it.
@@ -59,7 +58,8 @@ function WorkerDetail({ conversationId, row, headerActions }: { conversationId: 
         model={model}
         state={state}
         details={details}
-        onBack={() => details ? setDetails(false) : setPanel(null)}
+        // A worker's own subagent goes back to its worker.
+        onBack={() => details ? setDetails(false) : setPanel(isNativeWorker(row) && row.native.owner !== conversationId ? row.native.owner : null)}
         onToggleDetails={task || isNativeWorker(row) ? () => setDetails((open) => !open) : undefined}
         headerActions={headerActions}
       />
@@ -73,10 +73,11 @@ function WorkerDetail({ conversationId, row, headerActions }: { conversationId: 
   );
 }
 
-/** The Workers tab of the side panel: every worker of the session, or one of them working. */
+/** The Workers tab of the side panel: every worker of the session, or one of them, or a subagent's transcript, opened from its row (D96). */
 export function WorkersTab({ conversationId, headerActions }: { conversationId: string; headerActions?: ReactNode }) {
   const { panel } = useContext(AgentsPanelContext);
-  const selected = useWorkerRows(conversationId).find((row) => row.id === panel);
+  const subagent = useSubagentRow(conversationId, panel);
+  const selected = useWorkerRows(conversationId).find((row) => row.id === panel) ?? subagent;
   if (selected) return <WorkerDetail key={selected.id} conversationId={conversationId} row={selected} headerActions={headerActions} />;
   return <WorkerList conversationId={conversationId} />;
 }

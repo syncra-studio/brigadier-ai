@@ -5,7 +5,7 @@ import { turnCommands } from "@/app/conversation/turnCommands";
 import { workingWorkers } from "@/app/conversation/turnWorkers";
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
-import { workersOf } from "@/state/nativeWorkers";
+import { type NativeWorker, runningSubagents, subagentPanelOf, subagentRow } from "@/state/nativeWorkers";
 import type { AttachmentRef, FileEntry, FileImage, McpServerState, ProviderEvent, ThreadNews, ThreadView, WorkerRow } from "@/ipc/generated";
 
 /**
@@ -513,16 +513,42 @@ export function useOpenTurnStart(conversationId: string | null): number | null {
 const NO_ROWS: readonly WorkerRow[] = [];
 const NO_SERVERS: readonly McpServerState[] = [];
 
-/** A session's own workers, as their CLIs and git show them (S14), newest first. */
+/** A session's own workers, as their CLIs and git show them (S14), newest first: never its CLI's own subagents (D96). */
 export function useWorkerRows(conversationId: string | null): readonly WorkerRow[] {
-  return useCliThread((s) => (conversationId ? (s.views[conversationId] ? workersOf(conversationId, s.views[conversationId]) : NO_ROWS) : NO_ROWS));
+  return useCliThread((s) => (conversationId ? (s.views[conversationId]?.workers ?? NO_ROWS) : NO_ROWS));
+}
+
+/**
+ * The subagent panel `panel` of session `conversationId` shows (`subagentPanel`): one of the
+ * session's own, or of one of its workers, from that thread as last read; else `null`.
+ */
+export function useSubagentRow(conversationId: string | null, panel: string | null | undefined): NativeWorker | null {
+  const lead = useCliThread((s) => {
+    const of = subagentPanelOf(panel);
+    const view = conversationId && of?.owner === conversationId ? s.views[conversationId] : undefined;
+    return view && of ? subagentRow(conversationId!, of.owner, view, of.callId) : null;
+  });
+  const worker = useWorkerThreads((s) => {
+    const of = subagentPanelOf(panel);
+    const view = conversationId && of && of.owner !== conversationId ? s.views[of.owner] : undefined;
+    return view && of ? subagentRow(conversationId!, of.owner, view, of.callId) : null;
+  });
+  return lead ?? worker;
+}
+
+/** How many of its CLI's own subagents a session's block that ran from `startedAtMs` to `endedAtMs` started still work (`runningSubagents`). */
+export function useTurnSubagents(conversationId: string | null, startedAtMs: number, endedAtMs: number | null): number {
+  return useCliThread((s) => {
+    const view = conversationId ? s.views[conversationId] : undefined;
+    return view ? runningSubagents(view, startedAtMs, endedAtMs) : 0;
+  });
 }
 
 /** How many of the workers a session's block, its turns started at `starts`, started still work (`workingWorkers`). */
 export function useTurnWorkers(conversationId: string | null, starts: readonly number[], endedAtMs: number | null = null): number {
   return useCliThread((s) => {
     const view = conversationId && starts.length > 0 ? s.views[conversationId] : undefined;
-    return view ? workingWorkers(workersOf(conversationId!, view), view.turns, starts, endedAtMs) : 0;
+    return view ? workingWorkers(view.workers ?? NO_ROWS, view.turns, starts, endedAtMs) : 0;
   });
 }
 
@@ -542,7 +568,7 @@ export function useSessionMcp(conversationId: string): readonly McpServerState[]
 /** A worker's row, in whichever session's thread lists it. */
 export function workerRowIn(views: Readonly<Record<string, ThreadView>>, taskId: string): { conversationId: string; row: WorkerRow } | null {
   for (const [conversationId, view] of Object.entries(views)) {
-    const row = workersOf(conversationId, view).find((each) => each.id === taskId);
+    const row = view.workers?.find((each) => each.id === taskId);
     if (row) return { conversationId, row };
   }
   return null;

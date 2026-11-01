@@ -1,5 +1,6 @@
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import {
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -11,10 +12,12 @@ import { ActionRow, exitOf } from "@/app/side-panel/ActionRow";
 import { EntryView } from "@/app/side-panel/EntryView";
 import { WorkerBrief } from "@/app/side-panel/WorkerBrief";
 import { rowFinished, workerStateOf } from "@/app/conversation/activity/workerState";
-import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
+import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
-import { itemCall, stepWords } from "@/app/conversation/activity/words";
+import { type ActionItem, isSubagentStart, itemCall, stepWords } from "@/app/conversation/activity/words";
+import { ranFor } from "@/app/conversation/activity/LeadStep";
+import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { foldTranscript, type ThreadEntry, threadEntries } from "@/components/conversation";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import { ChevronRight } from "@/components/icons";
@@ -24,7 +27,7 @@ import { formatDuration } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { request } from "@/ipc/client";
-import { isNativeWorker, type NativeWorker } from "@/state/nativeWorkers";
+import { isNativeWorker, type NativeWorker, subagentPanel } from "@/state/nativeWorkers";
 import { loadWorkerThread, useCliThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
@@ -127,28 +130,39 @@ function BrigadierWorkerThread({ conversationId, row }: { conversationId: string
 }
 
 /**
- * A subagent's thread: its entries in its session's thread, as that thread is kept (read, live
- * news, read again at its turn's end), so its last words show even when they come after its call
- * ended. Its entries come only from its session's files, which live news doesn't carry: they are
- * read on open, every 1.5 s while it works and as it ends, and the fuller of the two shows (a
- * transcript only grows).
+ * A subagent's thread: its entries in its parent's thread (its session's, or a worker's), as that
+ * thread is kept (read, live news, read again at its turn's end), so its last words show even
+ * when they come after its call ended. Its entries come only from its parent's files, which live
+ * news doesn't carry: they are read on open, every 1.5 s while it works and as it ends, and the
+ * fuller of the two shows (a transcript only grows).
  */
 function NativeWorkerThread({ conversationId, row }: { conversationId: string; row: NativeWorker }) {
-  const callId = row.native.callId;
+  const { callId, owner } = row.native;
+  // A worker's own subagent: its entries are in that worker's thread (`workerThread`).
+  const ofWorker = owner !== conversationId;
   const [polled, setPolled] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // A string, so a change of the session's thread that is not the subagent's repaints nothing.
-  const json = useCliThread((s) => {
-    const parent = s.views[conversationId];
+  // A string, so a change of the parent's thread that is not the subagent's repaints nothing.
+  const lead = useCliThread((s) => {
+    const parent = ofWorker ? undefined : s.views[conversationId];
     return parent ? JSON.stringify(ownEntries(parent, callId)) : null;
   });
+  const worker = useWorkerThreads((s) => {
+    const parent = ofWorker ? s.views[owner] : undefined;
+    return parent ? JSON.stringify(ownEntries(parent, callId)) : null;
+  });
+  const json = lead ?? worker;
   // Read once on open and once as it ends too: its lead's turn may run on long after it, and
   // only that turn's end reads the session's thread again (D50, D69).
   useEffect(() => {
     let current = true;
     const read = () =>
-      request({ method: "threadView", conversationId }).then(
-        ({ view: parent }) => current && (setPolled(JSON.stringify(ownEntries(parent, callId))), setError(null)),
+      (ofWorker ? loadWorkerThread(conversationId, owner).then(() => null) : request({ method: "threadView", conversationId }).then(({ view: parent }) => JSON.stringify(ownEntries(parent, callId)))).then(
+        (entries) => {
+          if (!current) return;
+          if (entries !== null) setPolled(entries);
+          setError(null);
+        },
         (cause: unknown) => current && setError(cause instanceof Error ? cause.message : String(cause)),
       );
     void read();
@@ -158,7 +172,7 @@ function NativeWorkerThread({ conversationId, row }: { conversationId: string; r
       current = false;
       window.clearInterval(timer);
     };
-  }, [conversationId, callId, row.working]);
+  }, [conversationId, ofWorker, owner, callId, row.working]);
   const view = useMemo<ThreadView | null>(() => {
     const held = json === null ? null : (JSON.parse(json) as ThreadView["entries"]);
     const read = polled === null ? null : (JSON.parse(polled) as ThreadView["entries"]);
@@ -168,9 +182,19 @@ function NativeWorkerThread({ conversationId, row }: { conversationId: string; r
   return <WorkerTranscript row={row} view={view} error={view ? null : error} native />;
 }
 
-/** A subagent's own entries in its session's thread `parent`. */
-function ownEntries(parent: ThreadView, callId: string | null): ThreadView["entries"] {
-  return callId ? parent.entries.filter((entry) => entry.parent === callId) : [];
+/** A subagent's own entries in its parent's thread `parent`. */
+function ownEntries(parent: ThreadView, callId: string): ThreadView["entries"] {
+  return parent.entries.filter((entry) => entry.parent === callId);
+}
+
+/** A worker's own subagent's call, as the lead's same row reads (D96): it opens its transcript. */
+function SubagentActionRow({ item, owner, view }: { item: Extract<ActionItem, { kind: "tool" }>; owner: string; view: ThreadView | null }) {
+  const { setPanel } = useContext(AgentsPanelContext);
+  const call = itemCall(item);
+  const entry = view?.entries.find(({ event, parent }) => !parent && event.type === "toolCall" && `tool:${event.itemId}` === item.key);
+  const callId = entry?.event.type === "toolCall" ? entry.event.itemId : null;
+  const ran = item.status === "inProgress" || entry?.atMs === undefined ? undefined : (entry.updatedAtMs ?? entry.atMs) - entry.atMs;
+  return <StepRow words={stepWords(call)} status={call.status} trail={ranFor(ran)} onOpen={callId === null ? undefined : () => setPanel(subagentPanel(owner, callId))} />;
 }
 
 function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow; view: ThreadView | null; error: string | null; native?: boolean }) {
@@ -211,7 +235,9 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
           const call = itemCall(step);
           return { words: stepWords(call), status: call.status, exit: exitOf(step) };
         }}
-        renderStep={(step, key) => <ActionRow key={key} item={step} />}
+        renderStep={(step, key) => !native && step.kind === "tool" && isSubagentStart(step.name)
+          ? <SubagentActionRow key={key} item={step} owner={row.id} view={view} />
+          : <ActionRow key={key} item={step} />}
       />
     ) : (
       <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} sent={[]} />

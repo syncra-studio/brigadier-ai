@@ -62,8 +62,10 @@ export function stoppedLabel(words: StepWords): string {
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words: said, status, exit = null, startedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
+export function StepRow({ words: said, status, exit = null, startedAtMs, stopped: stoppedCall = false, detail, onOpen, suffix, slot, objectNode, trail }: Described & {
   detail?: ReactNode;
+  /** With no detail: what a click on it opens elsewhere (`ThreadActivity`). */
+  onOpen?: (() => void) | undefined;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
   slot?: string;
@@ -95,6 +97,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, stopped
       data-kind={words.kind}
       data-step-state={stopped ? "stopped" : paused ? "paused" : running ? "running" : status === "declined" ? "declined" : undefined}
       detail={detail}
+      onOpen={onOpen}
       onOpenChange={setOpen}
       // In a group its detail doesn't scroll on its own: the group's list scrolls it, a diff's header kept in view.
       detailClassName={cn(ROW_DETAIL, "ps-0", inGroup && "max-h-none overflow-visible")}

@@ -7,7 +7,6 @@ import { WorkerGlyph } from "@/components/conversation";
 import { RowTime } from "@/app/conversation/RowTime";
 import { useNow } from "@/hooks/use-now";
 import type { WorkerRow } from "@/ipc/generated";
-import { isNativeWorker } from "@/state/nativeWorkers";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,7 +19,7 @@ export const AgentRow = memo(function AgentRow({ row }: { row: WorkerRow }) {
   const { setPanel } = useContext(AgentsPanelContext);
   const now = useNow(30_000);
   const state = workerStateOf(row, now);
-  const stoppable = !row.gone && !rowFinished(row, now) && (!isNativeWorker(row) || row.native.backgroundId !== null);
+  const stoppable = !row.gone && !rowFinished(row, now);
   return (
     <li className="group/row relative flex min-w-0">
       <button

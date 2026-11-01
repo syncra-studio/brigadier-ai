@@ -57,7 +57,7 @@ test("rows sort newest first", () => {
 
 const nativeApp = (id: string, label: string, status: BackgroundTask["status"] = "running"): BackgroundTask => ({ id, itemId: `call-${id}`, kind: "shell", label, status, startedAtMs: 10, endedAtMs: null, outputFile: null, summary: null, lastLine: null });
 
-test("every running command is a Background row, the session's and its workers' (D51); subagents, waits and ended ones are not", async () => {
+test("every command is a Background row, the session's and its workers' (D51), ended ones too (D98); the session's background subagents are (D97), a worker's and waits are not", async () => {
   const { taskRows, workerTaskRows } = await import("./backgroundRows");
 
   const sleep = nativeApp("sleep", "sleep 25 && echo done"), app = nativeApp("app", "Show the website"), wait = nativeApp("wait", "brigadier wait");
@@ -67,10 +67,10 @@ test("every running command is a Background row, the session's and its workers' 
   ];
   const source = [sleep, app, wait, agent];
   const before = structuredClone(source);
-  assert.deepEqual(taskRows(source, entries, 20).map((row) => row.id), ["task:sleep", "task:app"]);
+  assert.deepEqual(taskRows(source, entries).map((row) => row.id), ["task:sleep", "task:app", "task:agent"]);
   const worker = { id: "worker", background: [{ task: sleep, command: "sleep 25" }, { task: agent, command: null }] } as WorkerRow;
-  assert.deepEqual(workerTaskRows([worker], () => "Site worker", 20).map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:sleep", { id: "worker", name: "Site worker" }]]);
-  assert.deepEqual(taskRows([{ ...sleep, status: "completed" }], entries, 20), []);
-  assert.deepEqual(workerTaskRows([{ ...worker, background: [{ task: { ...sleep, status: "stopped" }, command: "sleep 25" }] }], () => "Site worker", 20), []);
+  assert.deepEqual(workerTaskRows([worker], () => "Site worker").map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:sleep", { id: "worker", name: "Site worker" }]]);
+  assert.deepEqual(taskRows([{ ...sleep, status: "completed" }], entries).map((row) => row.state), ["finished"]);
+  assert.deepEqual(workerTaskRows([{ ...worker, background: [{ task: { ...sleep, status: "stopped" }, command: "sleep 25" }] }], () => "Site worker").map((row) => row.state), ["stopped"]);
   assert.deepEqual(source, before, "native records/history stay intact");
 });

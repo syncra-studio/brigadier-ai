@@ -1,27 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { AGENT_STAYS_MS, COMMAND_STAYS_MS, endWords, taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
+import { endWords, taskEnd } from "@/app/conversation/backgroundTasks";
 import { taskRows } from "@/app/conversation/backgroundRows";
 import type { BackgroundTask } from "@/ipc/generated";
 
 const task = (kind: BackgroundTask["kind"], status: BackgroundTask["status"], endedAtMs: number | null = null, summary: string | null = null): BackgroundTask => ({
   id: "t", itemId: null, kind, label: "t", status, startedAtMs: 0, endedAtMs, outputFile: null, summary, lastLine: null,
-});
-
-test("only running tasks have live rows; ended records remain untouched for History", () => {
-  const now = 1_000_000;
-  for (const kind of ["shell", "terminal", "agent", "other"] as const) {
-    assert.equal(taskShown(task(kind, "running"), now), true, `a running ${kind} shows`);
-  }
-  for (const kind of ["shell", "terminal", "other"] as const) {
-    for (const status of ["completed", "failed", "stopped"] as const) {
-      assert.equal(taskShown(task(kind, status, now - COMMAND_STAYS_MS + 1), now), false, `a ${status} ${kind} leaves at once`);
-      assert.equal(taskShown(task(kind, status, now - COMMAND_STAYS_MS), now), false, `a ${status} ${kind} goes after 5 min`);
-    }
-  }
-  assert.equal(taskShown(task("agent", "completed", now - AGENT_STAYS_MS + 1), now), false);
-  assert.equal(taskShown(task("agent", "completed", now - AGENT_STAYS_MS), now), false);
 });
 
 const words = (status: BackgroundTask["status"], summary: string | null) => {
@@ -39,13 +24,13 @@ test("a task that ended says how, with its exit code when the CLI said one", () 
   assert.equal(words("completed", null), "finished");
 });
 
-test("task row projection excludes ended work immediately", () => {
+test("task rows keep ended work, saying how it ended (D98)", () => {
   const now = 1_000_000;
   const tasks = [
     { ...task("shell", "running"), id: "a" },
     { ...task("shell", "completed", now - 1000, 'Background command "x" completed (exit code 0)'), id: "b" },
     { ...task("terminal", "completed", now - 1000), id: "c" },
-    { ...task("shell", "stopped", now - COMMAND_STAYS_MS), id: "d" },
+    { ...task("shell", "stopped", now), id: "d" },
   ];
-  assert.deepEqual(taskRows(tasks, [], now).map((row) => [row.id, row.state]), [["task:a", "running"]]);
+  assert.deepEqual(taskRows(tasks, []).map((row) => [row.id, row.state]), [["task:a", "running"], ["task:b", "finished"], ["task:c", "finished"], ["task:d", "stopped"]]);
 });

@@ -205,13 +205,13 @@ test("Claude's plan written to its own plan file is the plan card's, no row; a f
   }
 });
 
-test("subagent starts and completion notices stay out of the thread, live and reloaded", () => {
+test("a subagent is its call's row, whose end says it: no completion notice, live and reloaded (D57, D96)", () => {
   const fixture = load("claude-2.1.310", "subagent");
   for (const source of ["live", "persisted"] as const) {
     const view = fixture[source];
     const [block] = cliBlocks(view, "recorded-thread");
     assert.deepEqual(block?.taskNotices, [], source);
-    assert.ok(block && !toolSteps(block).some((kind) => kind.name === "Agent"), source);
+    assert.ok(block && toolSteps(block).some((kind) => kind.name === "Agent"), source);
     // Completion notices stay hidden even if the start is absent from loaded history.
     const notice = view.entries.find((entry) => entry.event.type === "taskNotice");
     assert.ok(notice?.event.type === "taskNotice", source);
@@ -407,10 +407,13 @@ function recordedCallAs(name: string, input: string): ToolStep | undefined {
   return cliBlocks({ ...view, entries }, "recorded-thread").flatMap(toolSteps).find((kind) => kind.itemId === itemId);
 }
 
-test("subagent lifecycle rows stay in the strip and History while skill calls remain work", () => {
-  for (const name of ["Agent", "Task", "agents/spawnAgent", "spawn_agent", "agents/wait"]) {
-    assert.equal(recordedCallAs(name, JSON.stringify({ description: "Find the parser", prompt: "Look in src." })), undefined, name);
+test("a subagent's row names its task on every CLI and a skill's its name; Codex's wait for its agents is no row (D44, B1, D96)", () => {
+  for (const name of ["Agent", "Task", "agents/spawnAgent", "spawn_agent"]) {
+    const agent = recordedCallAs(name, JSON.stringify({ description: "Find the parser", prompt: "Look in src." }));
+    assert.ok(agent, name);
+    assert.equal(rowWords(agent), "Ran a subagent: Find the parser", name);
   }
+  assert.equal(recordedCallAs("agents/wait", "{}"), undefined);
   const skill = recordedCallAs("Skill", JSON.stringify({ skill: "brigade" }));
   assert.ok(skill);
   assert.equal(rowWords(skill), "Used skill brigade");

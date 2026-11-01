@@ -84,12 +84,6 @@ test("a worker whose turn ended while background commands of its own still run h
   assert.equal(workingWorkers([worker("w1", 1500, { lastEnd: "done", working: false })], turns, [1000, 5000]), 0);
 });
 
-test("the session CLI's own subagents never hold a turn nor count among the workers it waits for", () => {
-  const subagent = { ...worker("native:c:call1", 1500), native: { conversationId: "c", callId: "call1", backgroundId: "b1", prompt: "" } };
-  assert.equal(workingWorkers([subagent], turns, [1000, 5000]), 0);
-  assert.equal(workingWorkers([subagent, worker("w1", 1500)], turns, [1000, 5000]), 1);
-});
-
 test("a turn its background job's end woke is open again for its block, a later turn never is (D24)", () => {
   // The turn ran 1000–5000; the subagent's end reopens it, its start unchanged.
   assert.equal(reopened(1000, 1000, 5000), true);

@@ -1,4 +1,4 @@
-import { taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
+import { taskEnd } from "@/app/conversation/backgroundTasks";
 import { brigadierCalls } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
 import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/generated";
@@ -10,7 +10,7 @@ import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/genera
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
- * A preview's row leaves as soon as it ends. Ended tasks are retained by durable History, never live Background rows.
+ * A preview's row leaves as soon as it ends; a task's stays, saying how it ended (D98).
  */
 
 export type BackgroundState =
@@ -88,22 +88,22 @@ export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[])
 }
 
 /**
- * Running CLI tasks (`taskShown`), excluding subagents (shown as workers, D50) and the session's
- * worker wait already covered by the workers card.
+ * The CLI's background tasks, running or ended, its background subagents among them (D97, D98),
+ * except the session's worker wait already covered by the workers card.
  */
-export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
-  return tasks.filter((task) => taskShown(task, now) && task.kind !== "agent" && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
+export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): BackgroundRow[] {
+  return tasks.filter((task) => !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
     type: "task", id: `task:${task.id}`, command: taskCommand(task, entries), startedAtMs: task.startedAtMs, task, state: taskState(task), worker: null,
   }));
 }
 
 /**
- * The workers' CLIs' background tasks, by the same rules as the session's own: no row for a
- * subagent or a `brigadier wait`, each named by its worker.
+ * The workers' CLIs' background tasks, by the same rules as the session's own, each named by its
+ * worker: no row for a `brigadier wait`, nor for a subagent, whose row is in its worker's panel.
  */
-export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskId: string) => string | null, now: number): BackgroundRow[] {
+export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskId: string) => string | null): BackgroundRow[] {
   return workers.flatMap((worker) => (worker.background ?? [])
-    .filter(({ task, command }) => taskShown(task, now) && task.kind !== "agent"
+    .filter(({ task, command }) => task.kind !== "agent"
       && !runsBrigadierWait(command ?? (task.kind === "terminal" ? task.label : "")))
     .map(({ task, command }): BackgroundRow => ({
       type: "task", id: `task:${worker.id}:${task.id}`, command, startedAtMs: task.startedAtMs, task, state: taskState(task),

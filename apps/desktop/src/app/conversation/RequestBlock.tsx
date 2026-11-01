@@ -20,7 +20,7 @@ import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { turnParts, type WorkPart } from "@/app/conversation/workParts";
-import { reopened, runningSubagents } from "@/app/conversation/turnWorkers";
+import { reopened } from "@/app/conversation/turnWorkers";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -53,7 +53,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { useOpenTurnStart, useTurnCommands, useTurnWorkers, useWorkerRows } from "@/state/cliThread";
+import { useOpenTurnStart, useTurnCommands, useTurnSubagents, useTurnWorkers } from "@/state/cliThread";
 import { useRevealing } from "@/state/reveal";
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
@@ -182,8 +182,8 @@ export const RequestBlock: FC = () => {
   // So do the background commands it started (a CI watch, a Monitor) until the turn their end
   // starts is over (D21), though its work folds as it would without them.
   const commands = useTurnCommands(conversationId, starts, meta?.endedAtMs ?? null);
-  // Its CLI's own subagents, which keep its work from folding by itself while they work.
-  const workerRows = useWorkerRows(conversationId);
+  // Its CLI's own subagents that still work, foreground or in the background, hold it too (D24, D97).
+  const subagents = useTurnSubagents(conversationId, meta?.startedAtMs ?? Infinity, meta?.endedAtMs ?? null);
   const openStart = useOpenTurnStart(conversationId);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
@@ -193,7 +193,6 @@ export const RequestBlock: FC = () => {
   if (!meta) return null;
 
   // Its own subagents, workers and background commands that still work hold it open (D24).
-  const subagents = runningSubagents(workerRows, meta.startedAtMs, meta.endedAtMs);
   const held = holding > 0 || commands > 0 || workersActive || subagents > 0;
   const again = reopened(openStart, meta.startedAtMs, meta.endedAtMs);
   const live = isLive(meta.state) || again || held || quotaWait !== null || (quotaRecovered && turnRuns);
@@ -240,8 +239,8 @@ export const RequestBlock: FC = () => {
     thinkingLive: !!liveThought,
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
-    // Over, its line says what it waits on: its workers (subagents too, D50), then its commands.
-    ...(held && { workers: holding + (meta.state === "done" ? subagents : 0), commands }),
+    // Over, its line says what it waits on: its workers, then its commands; a subagent's own row says it runs (D96).
+    ...(held && { workers: holding, commands }),
   };
 
   return (

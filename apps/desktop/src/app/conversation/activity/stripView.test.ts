@@ -43,23 +43,3 @@ test("the collapsed strip counts in one line, naming workers once", () => {
   assert.equal(stripWords({ working: 0, waiting: 3 }), "3 workers waiting");
 });
 
-/** One of the session CLI's own agents, as `workersOf` makes its row. */
-const native = (patch: Partial<WorkerRow> = {}, backgroundId: string | null = "bg") => {
-  const base = row(patch);
-  return { ...base, native: { conversationId: "c", callId: base.id, backgroundId, prompt: "" } };
-};
-
-test("the session's own subagents are in the Workers strip like any worker (D50)", () => {
-  const worker = row();
-  const agent = native();
-  assert.deepEqual(workersStrip([worker, agent], NOW)?.rows, [worker.id, agent.id]);
-  assert.deepEqual(workersStrip([agent], NOW)?.rows, [agent.id]);
-  assert.equal(stripWords(workersStrip([worker, agent], NOW)!), "2 workers working");
-  // A finished one leaves it at once, as a worker does.
-  assert.equal(workersStrip([native({ working: false, lastEnd: "done", gone: true })], NOW), null);
-});
-
-test("Stop all stops the subagents the CLI can stop, with the workers", () => {
-  assert.deepEqual(workersStrip([native({ startedAtMs: 5 }, "bg")], NOW)?.subagents, [["bg", 5]]);
-  assert.deepEqual(workersStrip([native({}, null)], NOW)?.subagents, []);
-});

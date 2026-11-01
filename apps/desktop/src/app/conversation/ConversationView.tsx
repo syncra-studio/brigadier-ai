@@ -106,7 +106,6 @@ import { holdDirect } from "@/state/heldDirect";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { loadWorkerThread, readSessionImageBlob, sessionImageOf, unreadSince, useThreadUnreadable, useThreadView, useWorkerRows } from "@/state/cliThread";
-import { isNativeWorker } from "@/state/nativeWorkers";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
@@ -481,12 +480,12 @@ const EMPTY_DIGEST: BoardDigest = {
 
 /**
  * Those of `targets` the composer's next message can go to directly: the session's own
- * workers whose CLI still runs (not the CLI's own agents, not one gone or closed).
+ * workers whose CLI still runs (not one gone or closed).
  */
 function useDirectTargets(conversationId: string | null, targets: readonly MentionTarget[]): MentionTarget[] {
   const rows = useWorkerRows(conversationId);
   return useMemo(() => {
-    const live = new Set(rows.filter((row) => !isNativeWorker(row) && !row.gone).map((row) => row.id));
+    const live = new Set(rows.filter((row) => !row.gone).map((row) => row.id));
     return targets.filter((target) => live.has(target.id));
   }, [rows, targets]);
 }

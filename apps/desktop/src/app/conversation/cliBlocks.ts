@@ -1,4 +1,4 @@
-import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, isSubagentStart, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import {
   type Block,
   type BlockCompaction,
@@ -381,7 +381,6 @@ const madeSteps = new WeakMap<FileEntry, { made: string; step: ToolStep | null }
 
 /** `toolStep`, made once per entry and what it depends on: the thread is made again with each streamed word. */
 function keptToolStep(entry: FileEntry, turn: ThreadTurn | null, background: readonly BackgroundTask[] | undefined): ToolStep | null {
-  if (entry.event.type === "toolCall" && isSubagentStart(entry.event.name)) return null;
   const itemId = "itemId" in entry.event ? entry.event.itemId : undefined;
   const task = itemId === undefined ? undefined : background?.find((each) => each.itemId === itemId);
   const made = `${turn?.end ?? ""}|${turn?.endedAtMs ?? ""}|${task?.status ?? ""}|${task?.endedAtMs ?? ""}`;
@@ -609,8 +608,8 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
 
 /**
  * A thread's turns as blocks, oldest first, with Brigadier's own items placed in them
- * (`board`). Subagent lifecycle calls and their child items stay in their strip and History;
- * their source entries are retained for those views. `session`: the thread is a session's, where
+ * (`board`). A subagent is its call's row; its own items (`parent`) are not drawn: that row opens
+ * them (D96). `session`: the thread is a session's, where
  * Brigadier compacts a long one itself. `typed`: the words of the user's own messages that no
  * turn read names yet.
  */
@@ -931,7 +930,7 @@ export function cliBlocks(
       // The CLI's line for a background job's end: one plain line in the work the turn it starts
       // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
       case "taskNotice": {
-        // An agent's end belongs to its strip and History, like its start call.
+        // An agent's end is its row's to say, as Codex's is none (D57, D96).
         const ended = entry.wake;
         if (ended && (ended.job === "agent" || waitEnded(ended, view))) return;
         current.taskNotices.push({ position, id: event.itemId, text: ended ? wakeWords(ended) : event.text, detail: event.text, inWork: true });

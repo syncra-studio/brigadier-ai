@@ -1,5 +1,4 @@
 import type { ThreadTurn, WorkerRow } from "@/ipc/generated";
-import { isNativeWorker } from "@/state/nativeWorkers";
 
 /**
  * The workers a turn started that still work: its work group stays open and live until they
@@ -11,9 +10,6 @@ import { isNativeWorker } from "@/state/nativeWorkers";
  * A worker still works while its CLI is on the run it was started for, or waits on the user. In
  * the newest turn, a worker the turn sent back to work counts again; an older turn's worker
  * that a later turn sent more work never opens the older turn again.
- *
- * Its CLI's own subagents are not workers: they never hold a turn or count as one it waits for
- * (`runningSubagents` counts them); a turn whose subagents run is still the lead's turn, working.
  */
 /**
  * When the turn after a block's, its turns started at `starts`, began; `null` for the newest
@@ -37,23 +33,11 @@ export function workingWorkers(
   const next = nextTurnStart(turns, starts);
   const newest = next === null;
   return workers.filter((worker) => {
-    if (isNativeWorker(worker)) return false;
     // None started after its turns ended is its: the next turn may not be in `turns` yet.
     if (worker.startedAtMs < startedAtMs || (next !== null && worker.startedAtMs >= next) || (endedAtMs !== null && worker.startedAtMs > endedAtMs) || worker.gone) return false;
     if (worker.lastEnd === null) return true;
     return newest && (worker.working || worker.waiting.length > 0);
   }).length;
-}
-
-/**
- * How many of its CLI's own subagents a turn that ran from `startedAtMs` to `endedAtMs` (null:
- * still running) started that still work: while any does, its work doesn't fold by itself when
- * its answer starts (the user still can).
- */
-export function runningSubagents(workers: readonly WorkerRow[], startedAtMs: number, endedAtMs: number | null): number {
-  return workers.filter(
-    (worker) => isNativeWorker(worker) && worker.working && worker.startedAtMs >= startedAtMs && (endedAtMs === null || worker.startedAtMs <= endedAtMs),
-  ).length;
 }
 
 /**

@@ -1,5 +1,4 @@
 import { rowFinished, rowWaiting } from "@/app/conversation/activity/workerState";
-import { isNativeWorker } from "@/state/nativeWorkers";
 import type { WorkerRow } from "@/ipc/generated";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5): the workers at it. */
@@ -10,8 +9,6 @@ export type StripView = {
   waiting: number;
   /** Whether Stop all has anything to stop. */
   stoppable: boolean;
-  /** The CLI's own running subagents Stop all stops too: their background ids and starts. */
-  subagents: [string, number][];
 };
 
 /**
@@ -20,7 +17,6 @@ export type StripView = {
  * it at once and stay in the context card. `null` when none are at work, so it hides.
  */
 export function workersStrip(rows: readonly WorkerRow[], now: number): StripView | null {
-  // The CLI's own subagents are workers like any other (D50).
   const live = rows.filter((row) => !rowFinished(row, now)).toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.number - b.number);
   if (live.length === 0) return null;
   const waiting = live.filter((row) => rowWaiting(row, now)).length;
@@ -29,8 +25,7 @@ export function workersStrip(rows: readonly WorkerRow[], now: number): StripView
     working: live.length - waiting,
     waiting,
     // The daemon's `stop_workers` stops every worker whose CLI still runs.
-    stoppable: live.some((row) => !row.gone && (!isNativeWorker(row) || row.native.backgroundId !== null)),
-    subagents: live.filter(isNativeWorker).filter((row) => !row.gone && row.native.backgroundId !== null).map((row) => [row.native.backgroundId!, row.startedAtMs]),
+    stoppable: live.some((row) => !row.gone),
   };
 }
 
