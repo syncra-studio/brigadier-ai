@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { nextShown, placeSwitches, type ProviderTransition } from "@/app/conversation/providerTransitions";
+import { nextShown, placeSwitches, type ProviderTransition, transitionCoversSeam } from "@/app/conversation/providerTransitions";
 import type { ModelChoice } from "@/ipc/generated";
 
 const claude: ModelChoice = { provider: "claude", model: "opus", effort: "high" };
@@ -73,4 +73,15 @@ test("a switch whose resume carries messages held for the worker first stays at 
   const placed = placeSwitches([first, second], entries);
   assert.deepEqual([...placed.at.entries()], [["r1", first], ["r2", second]]);
   assert.deepEqual(placed.rest, []);
+});
+
+test("a usage limit's move to another CLI shows as its switch row only, not also as a fresh session (demo8 item 1)", () => {
+  const move = { from: claude, to: codex } as ProviderTransition;
+  const limit = { n: 1, note: null, start: "/s/1-start.md", death: "usage limit on Claude Code · continued on Codex", movedTo: null };
+  assert.equal(transitionCoversSeam(move, limit), true);
+  assert.equal(transitionCoversSeam(move, { ...limit, death: null, movedTo: "codex" }), true, "a move asked for");
+  // A hand-off with its note is a rebirth: its divider stays.
+  assert.equal(transitionCoversSeam(move, { ...limit, note: "/s/1.md", death: null }), false);
+  // A switch on the same CLI (another account) covers no seam.
+  assert.equal(transitionCoversSeam({ from: claude, to: claude } as ProviderTransition, limit), false);
 });

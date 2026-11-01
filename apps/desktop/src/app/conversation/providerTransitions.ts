@@ -29,9 +29,14 @@ export function leadTransitions(steps: readonly BlockOrchestratorStep[]): Provid
   return transitionSteps(steps).flatMap((step) => step.kind.type === "providerTransition" && !step.kind.taskId ? [step.kind] : []);
 }
 
-/** A seam attached to this request is replaced only by its confirmed cross-provider move. */
+/**
+ * A seam attached to this request is replaced only by its confirmed cross-provider move: one
+ * asked for (`movedTo`), or a usage limit's, which ends the generation with no hand-off note
+ * (goal 1: one switch shows once, never also as a fresh session).
+ */
 export function transitionCoversSeam(transition: ProviderTransition, seam: BlockSeam): boolean {
-  return !transition.taskId && transition.from.provider !== transition.to.provider && transition.to.provider === seam.movedTo;
+  const limitMove = seam.movedTo === null && seam.note === null && seam.death !== null;
+  return !transition.taskId && transition.from.provider !== transition.to.provider && (transition.to.provider === seam.movedTo || limitMove);
 }
 
 /** Generic backend fallbacks describe account ownership, not a recorded historical name. */
