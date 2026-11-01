@@ -4229,13 +4229,21 @@ impl SessionManager {
         cli.plugin_lease.release();
         self.grants.revoke(&cli.grants);
         conv.items().cli_ended();
-        let (was_busy, closing, failed, jobs, current) = {
+        let (was_busy, closing, failed, jobs, current, cut) = {
             let mut state = conv.state.lock().await;
             // No CLI that took over since: its MCP servers ended with it.
             let current = state
                 .cli
                 .as_ref()
                 .is_none_or(|current| Arc::ptr_eq(current, &cli));
+            // Its commands still running ended with it, their ends never to come: none is
+            // taken for the next CLI's to linger past that one's turn.
+            let cut = if current {
+                state.command_words.clear();
+                std::mem::take(&mut state.commands)
+            } else {
+                HashSet::new()
+            };
             if state
                 .cli
                 .as_ref()
@@ -4316,8 +4324,13 @@ impl SessionManager {
                 failed,
                 jobs,
                 current,
+                cut,
             )
         };
+        if !cut.is_empty() {
+            self.end_running_calls(&conv, false, |item, _| cut.contains(item))
+                .await;
+        }
         if current {
             self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::Ended)
                 .await;
@@ -5179,6 +5192,18 @@ impl SessionManager {
         let Some(turn) = conv.items().turn() else {
             return;
         };
+        self.end_running_calls(conv, true, |_, of| of == Some(turn))
+            .await;
+    }
+
+    /// Ends, failed (`stopped`: by the user's Stop), the rows of the calls still running that
+    /// `ends` picks by item and turn.
+    async fn end_running_calls(
+        &self,
+        conv: &Arc<ConvLive>,
+        stopped: bool,
+        ends: impl Fn(&str, Option<i64>) -> bool,
+    ) {
         let Ok(board) = self.core.board(&conv.id).await else {
             return;
         };
@@ -5186,17 +5211,18 @@ impl SessionManager {
         for step in &board.orchestrator_steps {
             let mut kind = step.kind.clone();
             if let OrchestratorStepKind::Tool {
+                item_id,
                 status: status @ ItemStatus::InProgress,
-                stopped,
+                stopped: was_stopped,
                 through_position,
                 ended_at_ms,
-                turn: Some(of),
+                turn,
                 ..
             } = &mut kind
-                && *of == turn
+                && ends(item_id, *turn)
             {
                 *status = ItemStatus::Failed;
-                *stopped = true;
+                *was_stopped = stopped;
                 *through_position = 0;
                 *ended_at_ms = Some(now);
                 self.orchestrator_step_in(&conv.id, step.request_id.clone(), kind)

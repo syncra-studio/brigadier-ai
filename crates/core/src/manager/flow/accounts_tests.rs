@@ -3160,3 +3160,130 @@ async fn at_startup_the_models_listed_are_the_account_in_uses_from_the_first() {
     release.notify_one();
     flow.stop().await;
 }
+
+/// Goal 1 (D25): a command the CLI started just before an account switch retired it never
+/// gets its end from that CLI. The turn goes on on the other account and finishes; that
+/// dead command holds no work after it, so a follow-up queued meanwhile gets its own turn,
+/// once, and no request is left working.
+#[tokio::test]
+async fn a_command_cut_by_an_account_switch_holds_no_work_after_it() {
+    use crate::work::OrchestratorStepKind;
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    type Sender = tokio::sync::mpsc::Sender<ProviderEvent>;
+    let log = Log::default();
+    let behavior = Arc::new(super::FakeBehavior::default());
+    let late: Arc<Mutex<Option<Sender>>> = Arc::default();
+    let (closing, close) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let script: Script = {
+        let (log, behavior, late) = (log.clone(), behavior.clone(), late.clone());
+        let (closing, close) = (closing.clone(), close.clone());
+        Arc::new(move |turn: Turn| {
+            let (log, behavior, late) = (log.clone(), behavior.clone(), late.clone());
+            let (closing, close) = (closing.clone(), close.clone());
+            Box::pin(async move {
+                log.lock().unwrap().push(Seen {
+                    provider: turn.provider,
+                    account: turn.account.clone(),
+                    native_id: turn.native_id.clone(),
+                    input: turn.input.clone(),
+                });
+                if turn.account.is_none() {
+                    // Its CLI starts one more command as the switch closes it.
+                    *late.lock().unwrap() = Some(turn.events.clone());
+                    *behavior.hold_close.lock().unwrap() = Some((closing, close));
+                    return Reply::limited();
+                }
+                if turn.input.contains(CONTINUE_ON_ACCOUNT) {
+                    turn.host
+                        .send_message(
+                            turn.conversation().unwrap(),
+                            "Follow-up.".into(),
+                            vec![],
+                            vec![],
+                            false,
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                    return Reply::text("Marks done.");
+                }
+                Reply::text("Answered.")
+            })
+        })
+    };
+    let flow = Flow::start(
+        "accounts-cut-command",
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.say("Run the marks.").await;
+    closing.notified().await;
+    let sender = late.lock().unwrap().clone().unwrap();
+    sender
+        .send(ProviderEvent::Command {
+            item_id: "late-cmd".into(),
+            command: "brigadier queue 1a2b3c4d join".into(),
+            cwd: None,
+            status: ItemStatus::InProgress,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        })
+        .await
+        .unwrap();
+    let late_row = |board: &super::Board| {
+        board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Tool {
+                    item_id, status, ..
+                } if item_id == "late-cmd" => Some(*status),
+                _ => None,
+            })
+    };
+    flow.until("the late command runs", |board| late_row(board).is_some())
+        .await;
+    close.notify_one();
+    let own_turn = |turn: &Seen| {
+        turn.input.contains("Follow-up.") && turn.input.contains("now on its own turn")
+    };
+    flow.until("the follow-up gets its own turn", |_| {
+        seen(&log).iter().any(own_turn)
+    })
+    .await;
+    let board = flow.settled().await;
+    let turns = seen(&log);
+    assert_eq!(
+        turns.iter().filter(|turn| own_turn(turn)).count(),
+        1,
+        "{turns:?}"
+    );
+    assert!(board.queue.items.is_empty(), "{:?}", board.queue.items);
+    let states = request_states(&flow, &flow.conversation).await;
+    assert!(
+        states
+            .iter()
+            .all(|(_, state)| *state != RequestState::Working),
+        "{states:?}"
+    );
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(!flow.manager.work_holds(&conv).await);
+    assert_ne!(
+        late_row(&board),
+        Some(ItemStatus::InProgress),
+        "{:?}",
+        late_row(&board)
+    );
+    flow.stop().await;
+}
