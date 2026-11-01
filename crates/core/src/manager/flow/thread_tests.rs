@@ -1155,7 +1155,7 @@ type Offered = Arc<Mutex<Vec<(String, bool, String)>>>;
 
 /// Asked to report several things at once, the thread offers a card for each (#483): up to ten
 /// in a request, each title once, each answered on its own. A card unanswered or dismissed holds
-/// back only its own report: a different one is offered (D131).
+/// back only its own report: a different one is offered (D131), unasked in one request too.
 #[tokio::test]
 async fn several_feedback_cards_are_offered_when_asked() {
     let replies: Offered = Arc::default();
@@ -1179,6 +1179,17 @@ async fn several_feedback_cards_are_offered_when_asked() {
                             )
                             .await;
                         log.lock().unwrap().push((title, reply.is_error, reply.text));
+                    }
+                } else if turn.is_orchestrator() && turn.input.contains("worker died") {
+                    // Two incidents in one request, unasked: each its own card (D131).
+                    for title in ["Context hangs", "Worker killed"] {
+                        let reply = turn
+                            .call(
+                                "offer_feedback",
+                                json!({"kind": "bug", "title": title, "body": "It broke."}),
+                            )
+                            .await;
+                        log.lock().unwrap().push((title.into(), reply.is_error, reply.text));
                     }
                 } else if turn.is_orchestrator() {
                     let reply = turn
@@ -1277,6 +1288,16 @@ async fn several_feedback_cards_are_offered_when_asked() {
         "{third:?}"
     );
     assert_eq!(offers(&board).len(), 11);
+
+    // Two different incidents in one request, unasked: both are offered.
+    flow.say("Context was slow and the worker died.").await;
+    let board = flow.settled().await;
+    let fourth = taken(&replies);
+    assert!(
+        fourth.len() == 2 && fourth.iter().all(|reply| !reply.1),
+        "{fourth:?}"
+    );
+    assert_eq!(offers(&board).len(), 13);
     flow.stop().await;
 }
 

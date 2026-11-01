@@ -198,7 +198,7 @@ impl SessionManager {
     /// the user sends or dismisses (the thread judges they are annoyed, or that they asked;
     /// this only plumbs). One offer per incident: unless they asked for this one, never again a
     /// report whose card is unanswered or that they dismissed (by its title; a different incident
-    /// still gets its own, D131), and one in a request unless they asked (then up to [`FEEDBACK_OFFERS_MAX`], each title once, #483). An offer
+    /// still gets its own, D131, even in the same request), up to [`FEEDBACK_OFFERS_MAX`] in a request, each title once (#483). An offer
     /// from an attempt the user asked to redo, or from a message they edited away, counts for nothing.
     pub(crate) async fn offer_feedback(
         &self,
@@ -258,11 +258,6 @@ impl SessionManager {
                 }
                 _ => {}
             }
-        }
-        if !here.is_empty() && !args.asked {
-            return Err(Error::Invalid(
-                "Feedback was already offered for this request: don't offer it again.".into(),
-            ));
         }
         if here
             .iter()
