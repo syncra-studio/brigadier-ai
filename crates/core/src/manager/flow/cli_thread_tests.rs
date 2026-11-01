@@ -275,9 +275,22 @@ fn texts(view: &ThreadView) -> Vec<String> {
 }
 
 /// The daemon dies mid-turn, and the thread goes on with another turn: the cut turn, which
-/// the CLI never ended, reads interrupted, not done (#557).
+/// the CLI never ended, reads interrupted, not done (#557). It had begun (its run recorded
+/// running), so it goes on by itself in a turn of its own, never merged into the cut one.
 #[tokio::test]
 async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
+    a_crash_mid_turn_keeps_the_cut_turn_interrupted(false).await;
+}
+
+/// The same with a follow-up queued behind the cut turn: it runs after the resumed turn.
+#[tokio::test]
+async fn a_turn_cut_by_a_crash_with_a_queued_follow_up_reads_interrupted() {
+    a_crash_mid_turn_keeps_the_cut_turn_interrupted(true).await;
+}
+
+async fn a_crash_mid_turn_keeps_the_cut_turn_interrupted(queued: bool) {
+    use crate::work::RunState;
+
     let holding = Arc::new(tokio::sync::Notify::new());
     let held = holding.clone();
     let mut flow = Flow::start(
@@ -303,15 +316,26 @@ async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
     .await;
     flow.say("Hold.").await;
     holding.notified().await;
+    flow.until("the turn running", |board| board.run == RunState::Running)
+        .await;
+    if queued {
+        flow.say("Look again.").await;
+        flow.until("the follow-up queued", |board| {
+            !board.queue.items.is_empty()
+        })
+        .await;
+    }
     flow.crash().await;
     flow.settled().await;
-    // The cut-off turn goes on by itself (D9 a), then the next.
-    eventually("the cut-off turn goes on", || {
-        let view = flow.manager.thread_view(&flow.conversation).unwrap();
-        view.turns.len() == 2 && view.turns[1].end.is_some()
-    })
-    .await;
-    flow.say("Look again.").await;
+    if !queued {
+        // The cut-off turn goes on by itself (D9 a), then the next.
+        eventually("the cut-off turn goes on", || {
+            let view = flow.manager.thread_view(&flow.conversation).unwrap();
+            view.turns.len() == 2 && view.turns[1].end.is_some()
+        })
+        .await;
+        flow.say("Look again.").await;
+    }
     eventually("the next turn ends", || {
         let view = flow.manager.thread_view(&flow.conversation).unwrap();
         view.turns.len() == 3 && view.turns[2].end.is_some()
@@ -326,6 +350,20 @@ async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
             Some(TurnEnd::Done),
             Some(TurnEnd::Done)
         ],
+        "{view:#?}"
+    );
+    // The resumed turn starts with Brigadier's word, which the thread draws as no bubble.
+    let resumed = view
+        .entries
+        .iter()
+        .find(|entry| {
+            matches!(&entry.event, brigadier_providers::ProviderEvent::Message { item_id, .. }
+                if *item_id == view.turns[1].user_message)
+        })
+        .unwrap();
+    assert_eq!(
+        resumed.said,
+        Some(brigadier_providers::session_file::Said::Brigadier),
         "{view:#?}"
     );
     flow.stop().await;

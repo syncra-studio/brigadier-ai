@@ -76,13 +76,19 @@ fn save(record: &Path, registrations: &[Registration]) -> Result<()> {
         &serde_json::to_vec(registrations).map_err(|e| Error::Invalid(e.to_string()))?,
     )
 }
+/// Whether a send of `kinds` is newly hidden from the thread: a resume's word is not, as it
+/// starts a turn of its own and the turn it goes on with keeps how it ended (cut, stopped).
+/// Resumes hidden before this stay so.
+fn hides(kinds: &[InjectionKind]) -> bool {
+    internal(kinds) && !kinds.contains(&InjectionKind::Resume)
+}
 /// Caller proves the absence of authored text. Shape and kind checks add a conservative guard.
 pub(super) fn register(
     record: &Path,
     kinds: &[InjectionKind],
     input: &mut TurnInput,
 ) -> Result<()> {
-    if !internal(kinds) || !input.files.is_empty() {
+    if !hides(kinds) || !input.files.is_empty() {
         return Ok(());
     }
     let [InputPart::Text(text)] = input.parts.as_mut_slice() else {
@@ -141,7 +147,7 @@ pub(super) fn bind_legacy(
     text: &str,
     native: &str,
 ) -> Result<bool> {
-    if !internal(&[kind]) {
+    if !hides(&[kind]) {
         return Ok(false);
     }
     let disk = disk(record);
