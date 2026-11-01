@@ -19,6 +19,7 @@ import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { rowOf, threadOf } from "@/fixtures/workerRows";
 import type { Conversation, ConversationView as View, Project, QueuedMessage, Request, Task } from "@/ipc/generated";
 import { restoreQueued, select } from "@/state/actions";
+import { directSendingOf } from "@/state/directTo";
 import { useApp } from "@/state/store";
 
 const id = "direct-session";
@@ -347,6 +348,13 @@ async function drive() {
     await revisit();
     await until("the To: back", () => chip() !== null);
     seen.editedBack = { text: typed(), chip: chip()!.textContent };
+    field()!.focus();
+    // Refused first: it comes back with its slot, so Enter puts it back there, not steered.
+    next = "fail";
+    await key("Enter");
+    await until("the edit refused", () => typed() === forWorker.text && chip() !== null && !directSendingOf(id));
+    const refused = directCalls().at(-1)!;
+    seen.editRefused = { steer: refused.steer, queueIndex: refused.queueIndex };
     field()!.focus();
     await key("Enter");
     await until("the edit sent", () => chip() === null);

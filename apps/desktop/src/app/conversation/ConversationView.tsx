@@ -786,8 +786,12 @@ export function ConversationView({
       const generation = directGenerationOf(from);
       // This visit, and the To: it was sent with, still showing.
       const unchanged = () => visit.current === here && directGenerationOf(from) === generation;
+      let slot: ReturnType<typeof pulled.take> = null;
       const keep = (cause: unknown) => {
-        if (!(unchanged() && restoreDraft(from, draft))) holdDirect(from, taskId, draft);
+        // Back in the composer, a pulled message keeps its slot: Enter puts it back there again.
+        if (unchanged() && restoreDraft(from, draft)) {
+          if (slot) pulled.set(from, slot.index, slot.mentions, slot.worker);
+        } else holdDirect(from, taskId, draft);
         if (visit.current === here) fail(cause);
         else toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
       };
@@ -800,7 +804,7 @@ export function ConversationView({
         keep(new Error("Your message to the worker is still on its way"));
         return;
       }
-      const slot = pulled.take(from);
+      slot = pulled.take(from);
       // Busy, the worker gets it the follow-up's way (Queue or Steer, goal 8), as sendLane picks.
       const steer = sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp }) === "steer";
       setError(null);

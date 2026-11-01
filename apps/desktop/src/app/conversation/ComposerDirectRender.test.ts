@@ -42,6 +42,7 @@ test("the composer's To: sends one message straight to a live worker: picked fro
   assert.deepEqual(seen.rowSteer, ["q2"]);
   assert.deepEqual(seen.edited, { chip: "To Build the importer", deleted: ["q2"] });
   assert.deepEqual(seen.editedBack, { text: "for the importer", chip: "To Build the importer" });
+  assert.deepEqual(seen.editRefused, { steer: false, queueIndex: 1 });
   assert.deepEqual(seen.editSent, { taskId: "task-live", text: "for the importer", steer: false, queueIndex: 1 });
   assert.deepEqual(seen.undo, { taskId: "task-live", text: "for the importer", steer: null, queueIndex: 1 });
 });
