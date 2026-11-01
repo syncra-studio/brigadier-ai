@@ -17,7 +17,7 @@ import { entryKey, loadCardBody, SequenceEntry } from "@/app/conversation/Sequen
 import { TurnEnd } from "@/app/conversation/TurnEnd";
 import { UpdateText } from "@/app/conversation/UpdateText";
 import { WorkHeader } from "@/app/conversation/WorkHeader";
-import { useBlockHold } from "@/app/conversation/blockHold";
+import { useBlockHold, useLiveWait } from "@/app/conversation/blockHold";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { turnParts, type WorkPart } from "@/app/conversation/workParts";
@@ -171,7 +171,8 @@ export const RequestBlock: FC = () => {
   });
   // What its turns started that still works holds it open, with no end cards yet, and its work
   // doesn't fold by itself meanwhile (D24).
-  const { workers: holding, commands, subagents, held, heldUntil } = useBlockHold(conversationId, meta);
+  const { workers: holding, commands, subagents, held, heldUntil, named } = useBlockHold(conversationId, meta);
+  const wait = useLiveWait(conversationId);
   const openStart = useOpenTurnStart(conversationId);
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
@@ -225,8 +226,9 @@ export const RequestBlock: FC = () => {
     thinkingLive: !!liveThought,
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
+    wait,
     // Over, its line says what it waits on: its workers, then its commands; a subagent's own row says it runs (D96).
-    ...(held && { workers: holding, commands, subagents }),
+    ...(held && { workers: holding, commands, subagents, named }),
   };
 
   return (

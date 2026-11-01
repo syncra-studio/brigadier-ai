@@ -35,6 +35,8 @@ export type StatusInput = {
   compacting: boolean;
   /** The conversation's messages wait for quota. */
   quotaWait: QuotaWait | null;
+  /** What its CLI is blocked on right now, named (`liveWait`, D106): said rather than "Thinking". */
+  wait?: StatusHead | null;
 };
 
 function quotaWords(resetsAtMs: number | null): string {
@@ -77,7 +79,7 @@ function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, work
 }
 
 /** What the lead's own turn shows at the end of the work, or `null` when its rows already do. */
-function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput): StatusHead | null {
+function leadHead({ board, requestIds, thinkingLive, compacting, wait }: StatusInput): StatusHead | null {
   // A retry stalls whatever streamed so far: say so over it.
   if (board.doing && RETRYING.has(board.doing)) return { text: board.doing, tone: "busy" };
   const runRequest = board.runRequest;
@@ -89,6 +91,8 @@ function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput):
   const sending = Object.values(board.peerMessages).some((message) => message.outgoing
     && message.requestId === runRequest && message.state.type === "pending");
   if (toolRunning || thinkingLive || compacting || streaming || sending) return null;
+  // Its CLI waits on something it started: it doesn't think (D106).
+  if (wait) return wait;
   if (board.doing) return { text: board.doing, tone: "busy" };
   return { text: board.run === "starting" ? "Starting" : "Thinking", tone: "busy" };
 }
@@ -140,15 +144,17 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
   // lead's text waits for nothing; the user is asked on cards.
   if (state === "waiting") return none;
   // Between the lead's turns (a message just sent, a change being landed): it still works.
-  return { head: { text: "Thinking", tone: "busy" } };
+  return { head: input.wait ?? { text: "Thinking", tone: "busy" } };
 }
 
 /**
  * The one line a live turn says what it waits on with: what waits on the user (a question's
- * answer, an approval) first, then the workers and commands holding it over, else `head`.
+ * answer, an approval) first, then what holds it over: by name when it is one thing (`named`,
+ * D106), else the workers and commands holding it, else `head`.
  */
-export function liveHead(head: StatusHead | null, workers: number, commands: number, subagents = 0): StatusHead | null {
+export function liveHead(head: StatusHead | null, workers: number, commands: number, subagents = 0, named: StatusHead | null = null): StatusHead | null {
   if (head?.tone === "needsYou") return head;
+  if (named && workers + commands + subagents > 0) return named;
   if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" };
   if (commands > 0) return { text: commandsWaitWords(commands), tone: "still" };
   // Only its subagents hold it: it waits on them, it doesn't think (D24).

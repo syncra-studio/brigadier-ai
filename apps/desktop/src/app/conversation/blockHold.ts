@@ -1,4 +1,8 @@
+import { useMemo } from "react";
+
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
+import type { StatusHead } from "@/app/conversation/liveStatus";
+import { heldWait, liveWait } from "@/app/conversation/waitWords";
 import type { WorkSpan } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 import { useCliThread, useTurnCommands, useTurnSubagents, useTurnWorkers } from "@/state/cliThread";
@@ -38,5 +42,20 @@ export function useBlockHold(conversationId: string | null, meta: HeldBlock | nu
       .flatMap((task) => (task.endedAtMs != null ? [task.endedAtMs] : []));
     return ends.length > 0 ? Math.max(...ends) : null;
   });
-  return { workers, commands, subagents, held: workers > 0 || commands > 0 || workersActive || subagents > 0, heldUntil };
+  // What holds it, named when it is one thing (D106); a string, so it stays the same while that does.
+  const named = useCliThread((s) => {
+    const view = conversationId && meta ? s.views[conversationId] : undefined;
+    return view ? JSON.stringify(heldWait(view, starts, meta!.startedAtMs, meta!.endedAtMs)) : "null";
+  });
+  const held = workers > 0 || commands > 0 || workersActive || subagents > 0;
+  return { workers, commands, subagents, held, heldUntil, named: useMemo(() => JSON.parse(named) as StatusHead | null, [named]) };
+}
+
+/** What the open turn of a session's CLI is blocked on now, named (`liveWait`); `null` when nothing. */
+export function useLiveWait(conversationId: string | null): StatusHead | null {
+  const json = useCliThread((s) => {
+    const view = conversationId ? s.views[conversationId] : undefined;
+    return view ? JSON.stringify(liveWait(view)) : "null";
+  });
+  return useMemo(() => JSON.parse(json) as StatusHead | null, [json]);
 }

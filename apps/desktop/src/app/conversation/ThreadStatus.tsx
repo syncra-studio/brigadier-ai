@@ -21,6 +21,10 @@ export type ThreadStatusProps = {
   commands?: number;
   /** The turn is over, and this many subagents it started still work (D24). */
   subagents?: number;
+  /** What holds it over, named when it is one thing (`heldWait`, D106). */
+  named?: StatusHead | null;
+  /** What its CLI is blocked on in its open turn, named (`liveWait`, D106). */
+  wait?: StatusHead | null;
 };
 
 /** What a live turn's last line says now, its workers by name; `null` when nothing. */
@@ -38,7 +42,8 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const workers = props?.workers ?? 0;
   const commands = props?.commands ?? 0;
   const subagents = props?.subagents ?? 0;
-  return useMemo(() => liveHead(head ? { ...head, text: words } : null, workers, commands, subagents), [head, words, workers, commands, subagents]);
+  const named = props?.named ?? null;
+  return useMemo(() => liveHead(head ? { ...head, text: words } : null, workers, commands, subagents, named), [head, words, workers, commands, subagents, named]);
 }
 
 
