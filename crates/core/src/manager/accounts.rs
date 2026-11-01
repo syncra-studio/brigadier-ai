@@ -72,6 +72,8 @@ impl SessionManager {
                     .into(),
             ));
         }
+        // Kept first: an account whose chats couldn't be kept stays (D111).
+        self.runtime.keep_account_sessions(id).await?;
         if let Err(err) = self.runtime.sign_out(&entry).await {
             tracing::warn!(account = id, error = %err, "the account's CLI didn't sign out");
         }

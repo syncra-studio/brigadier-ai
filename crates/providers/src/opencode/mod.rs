@@ -159,6 +159,8 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
 const DB: &str = "opencode.db";
 /// Each session opened on an extra account, in its folder: `<id>` holding when (ms).
 const OPENED: &str = "opened";
+/// The folder of [`OpenCode::kept_home`]: no account's id starts with a dot.
+const KEPT: &str = ".kept";
 
 static HOME: crate::accounts::Home = crate::accounts::Home {
     var: "OPENCODE_DB",
@@ -271,18 +273,6 @@ impl OpenCode {
             Some(home) => Arc::new(main_env.for_account(ProviderKind::OpenCode, home)),
             None => main_env.clone(),
         };
-        let path = format!("/api/experimental/session/{id}/export");
-        let copy = self
-            .control_in(&from, async |source: &Server| {
-                source.call(Method::GET, &path, None).await
-            })
-            .await?;
-        let copy = &copy["data"];
-        if copy["info"]["id"].as_str() != Some(id) {
-            return Err(Error::Protocol(format!(
-                "OpenCode exported no session {id}"
-            )));
-        }
         // Recorded first, so removing the session finds this copy too.
         ledger
             .record(Artifact::Session {
@@ -292,19 +282,39 @@ impl OpenCode {
                 cwd: Some(cwd.display().to_string()),
             })
             .await?;
-        match server
-            .call(Method::DELETE, &format!("/api/session/{id}"), None)
-            .await
-        {
-            Ok(_) => {}
-            // No older copy here.
-            Err(Error::Rejected(message)) if message.contains("404") => {}
-            Err(err) => return Err(err),
+        self.copy_in(server, &from, id, Some(cwd)).await
+    }
+
+    /// Imports session `id`'s copy from the database `from` names into `server`'s under the
+    /// same id, after that database's older copy is deleted: in `cwd`, else where it ran.
+    async fn copy_in(
+        &self,
+        server: &Server,
+        from: &CliEnv,
+        id: &str,
+        cwd: Option<&Path>,
+    ) -> Result<()> {
+        let path = format!("/api/experimental/session/{id}/export");
+        let copy = self
+            .control_in(from, async |source: &Server| {
+                source.call(Method::GET, &path, None).await
+            })
+            .await?;
+        let copy = &copy["data"];
+        if copy["info"]["id"].as_str() != Some(id) {
+            return Err(Error::Protocol(format!(
+                "OpenCode exported no session {id}"
+            )));
         }
+        delete_sessions(server, &[id.to_owned()]).await?;
+        let location = match cwd {
+            Some(cwd) => json!({ "directory": cwd.display().to_string() }),
+            None => copy["info"]["location"].clone(),
+        };
         let body = json!({
             "info": copy["info"],
             "messages": copy["messages"],
-            "location": { "directory": cwd.display().to_string() },
+            "location": location,
         });
         server
             .call(
@@ -314,6 +324,12 @@ impl OpenCode {
             )
             .await?;
         Ok(())
+    }
+
+    /// Where an extra account's sessions are kept when it is removed: a database of Brigadier's
+    /// with no login, beside the accounts' folders, found like theirs (D111).
+    fn kept_home(&self) -> PathBuf {
+        self.platform.paths().data_dir.join("accounts").join(KEPT)
     }
 
     /// Notes that session `id` was opened on this extra account now: its newest copy is here.
@@ -677,6 +693,22 @@ fn plain_id(id: &str) -> bool {
     id.starts_with("ses_") && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Deletes sessions `ids` from `server`'s database; one it doesn't hold is fine.
+async fn delete_sessions(server: &Server, ids: &[String]) -> Result<()> {
+    for id in ids {
+        match server
+            .call(Method::DELETE, &format!("/api/session/{id}"), None)
+            .await
+        {
+            Ok(_) => {}
+            // Never saved, or deleted before: nothing to do.
+            Err(Error::Rejected(message)) if message.contains("404") => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
 impl Provider for OpenCode {
     fn kind(&self) -> ProviderKind {
         ProviderKind::OpenCode
@@ -942,17 +974,57 @@ impl Provider for OpenCode {
             if sessions.is_empty() {
                 return Ok(());
             }
-            self.control(async |server: &Server| {
-                for id in &sessions {
-                    match server
-                        .call(Method::DELETE, &format!("/api/session/{id}"), None)
-                        .await
-                    {
-                        Ok(_) => {}
-                        // Never saved, or deleted before: nothing to do.
-                        Err(Error::Rejected(message)) if message.contains("404") => {}
-                        Err(err) => return Err(err),
-                    }
+            self.control(async |server: &Server| delete_sessions(server, &sessions).await)
+                .await?;
+            // A removed account's copies kept for them go with them (D111).
+            let home = self.kept_home();
+            let kept: Vec<String> = sessions
+                .into_iter()
+                .filter(|id| plain_id(id) && home.join(OPENED).join(id).is_file())
+                .collect();
+            if kept.is_empty() {
+                return Ok(());
+            }
+            let main = self.main_env.as_deref().unwrap_or(&self.env);
+            self.control_in(
+                &main.for_account(ProviderKind::OpenCode, &home),
+                async |server: &Server| delete_sessions(server, &kept).await,
+            )
+            .await?;
+            for id in &kept {
+                std::fs::remove_file(home.join(OPENED).join(id))?;
+            }
+            Ok(())
+        })
+    }
+
+    fn keep_sessions(&self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let (Some(main), Some(own)) = (&self.main_env, self.account_home()) else {
+                return Ok(());
+            };
+            // The sessions whose newest copy is this account's, each with when it opened here.
+            let ids: Vec<(String, String)> = std::fs::read_dir(own.join(OPENED))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|entry| {
+                    let at = std::fs::read_to_string(entry.path()).ok()?;
+                    Some((entry.file_name().into_string().ok()?, at))
+                })
+                .filter(|(id, _)| self.newest_home(id).as_ref() == Some(&own))
+                .collect();
+            if ids.is_empty() {
+                return Ok(());
+            }
+            let home = self.kept_home();
+            crate::accounts::create_private_dir(&home.join(OPENED))?;
+            let kept = OpenCode::for_account(self.platform.clone(), main, &home);
+            kept.control(async |server: &Server| {
+                for (id, at) in &ids {
+                    kept.copy_in(server, &self.env, id, None).await?;
+                    // Its time stays: a copy opened on another account since stays newer.
+                    std::fs::write(home.join(OPENED).join(id), at)?;
                 }
                 Ok(())
             })
@@ -2139,6 +2211,33 @@ sys.stdin.read()
         std::fs::write(&log, "").unwrap();
         carry(&a).await.unwrap();
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "");
+
+        // A is removed while it holds the newest copy (D111): kept first in Brigadier's database
+        // with no login, so B goes on from it, not from B's older copy.
+        std::fs::write(
+            a_home.join(DB),
+            json!({ id: session(&["m1", "m2", "m3", "m4"]) }).to_string(),
+        )
+        .unwrap();
+        b.keep_sessions().await.unwrap();
+        let kept = root.join("data/accounts").join(KEPT);
+        assert!(!kept.exists(), "B holds no newest copy: nothing kept");
+        a.keep_sessions().await.unwrap();
+        std::fs::remove_dir_all(&a_home).unwrap();
+        assert_eq!(held(&kept), session(&["m1", "m2", "m3", "m4"]));
+        assert!(!own.resumes(id));
+        carry(&b).await.unwrap();
+        assert_eq!(held(&b_home), session(&["m1", "m2", "m3", "m4"]));
+        // Deleting the chat takes the kept copy too.
+        own.remove(vec![Artifact::Session {
+            provider: ProviderKind::OpenCode,
+            id: id.into(),
+            home: Some(a_home.display().to_string()),
+            cwd: Some(cwd.display().to_string()),
+        }])
+        .await
+        .unwrap();
+        assert!(held(&kept).is_null() && !kept.join(OPENED).join(id).exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

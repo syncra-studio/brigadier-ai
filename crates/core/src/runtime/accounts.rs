@@ -747,6 +747,19 @@ impl Runtime {
         }
     }
 
+    /// Before extra account `id`'s home goes: its CLI keeps what only that home holds of its
+    /// sessions (D111).
+    pub async fn keep_account_sessions(&self, id: &str) -> Result<()> {
+        let provider = self.accounts().get(id).map(|live| live.provider.clone());
+        match provider {
+            Some(provider) => provider
+                .keep_sessions()
+                .await
+                .map_err(|err| Error::Invalid(format!("couldn't keep the account's chats: {err}"))),
+            None => Ok(()),
+        }
+    }
+
     /// Removes a removed account's home: the folder trust Brigadier wrote in it is undone
     /// first, then the folder goes (its links, never what they point to).
     pub async fn remove_account_home(&self, id: &str) -> Result<()> {

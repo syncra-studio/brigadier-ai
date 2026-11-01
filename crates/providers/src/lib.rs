@@ -169,6 +169,13 @@ pub trait Provider: Send + Sync {
         Box::pin(async { Vec::new() })
     }
 
+    /// Before this extra account's home is deleted: what only that home holds of its sessions is
+    /// kept where its other accounts still find it, with no login (D111). Nothing for a CLI
+    /// whose accounts share one history.
+    fn keep_sessions(&self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Whether session `native_id` can be resumed on this adapter's account. A CLI whose
     /// accounts share one history resumes any session on any of them.
     fn resumes(&self, native_id: &str) -> bool {
