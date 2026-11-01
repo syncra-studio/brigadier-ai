@@ -1228,6 +1228,12 @@ async fn a_message_sent_while_only_its_workers_work_wakes_the_session_to_judge_i
             && inputs[1].contains(ASKED),
         "it woke the session under its frame: {inputs:#?}"
     );
+    // Only background work holds the block: the session answers it now, in it (D113).
+    assert!(
+        inputs[1].contains("only background work is in progress: answer it now")
+            && !inputs[1].contains("wait when it is other work"),
+        "{inputs:#?}"
+    );
 
     // The worker ends; the work is over.
     release.notify_one();

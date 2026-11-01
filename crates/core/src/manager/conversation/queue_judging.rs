@@ -44,6 +44,16 @@ pub(crate) fn deciding_frame(shown: &str) -> String {
     )
 }
 
+/// The line a queued message wakes the session under when no turn of its runs and only
+/// background work (its commands, subagents or workers) holds its block: it is answered now, in
+/// that block (D113).
+pub(crate) fn background_frame(shown: &str) -> String {
+    format!(
+        "{FRAME}{shown} · only background work is in progress: answer it now, in this work: \
+         brigadier queue {shown} join, or worker <id> when it is a running worker's; unjudged, it stays queued]\n"
+    )
+}
+
 /// The line a queued message the session left unjudged at its turn's end is asked again under
 /// (D72), on a turn that joins its open block.
 pub(crate) fn unjudged_frame(shown: &str) -> String {
@@ -253,7 +263,14 @@ impl SessionManager {
             && !state.seam.held
             && state.hand_over.is_none();
         if woke {
-            conv.frame(&item.id, frame);
+            conv.frame(
+                &item.id,
+                if again {
+                    frame
+                } else {
+                    background_frame(&shown)
+                },
+            );
             state.woken.insert(item.id.clone());
             // The turn serves the request it becomes once joined (its id is the item's): what
             // the turn starts before the session judges it (a job, a worker) is that request's.
