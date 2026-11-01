@@ -1,7 +1,7 @@
 Why: Windows refuses SetForegroundWindow to a helper without a foreground right even when attached to the front thread, so a launched app that took the front kept it, and a window shown without activation still opened on top of the user's window. Keep the launched app's new windows under the user's window, hand the front back by minimizing the launched window once (Windows then activates the user's window; the app is shown again behind it), and say plainly when Windows refused.
 
 diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
-index 90ad73739..f5d3b3877 100644
+index dbbaa0442..1c3428899 100644
 --- a/crates/platform-windows/src/input/foreground_policy.rs
 +++ b/crates/platform-windows/src/input/foreground_policy.rs
 @@ -8,10 +8,23 @@ pub(crate) struct Observation {
@@ -89,7 +89,7 @@ index 90ad73739..f5d3b3877 100644
  pub(crate) fn expired(elapsed_ms: u128, since_end_ms: Option<u128>) -> bool {
      elapsed_ms >= 30_000 || since_end_ms.is_some_and(|ms| ms >= 8_000)
  }
-@@ -105,6 +165,10 @@ impl ActivationEvidence {
+@@ -111,6 +171,10 @@ impl ActivationEvidence {
          false
      }
  
@@ -100,7 +100,7 @@ index 90ad73739..f5d3b3877 100644
      pub(crate) fn bind(&mut self, pid: u32) {
          if pid == 0 {
              return;
-@@ -372,3 +436,151 @@ mod input_time_tests {
+@@ -384,3 +448,151 @@ mod input_time_tests {
          .starts_with("Real user input ended"));
      }
  }
@@ -253,7 +253,7 @@ index 90ad73739..f5d3b3877 100644
 +    }
 +}
 diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
-index 5faf9110c..21cd287d0 100644
+index ee9eb3735..2269dce28 100644
 --- a/crates/platform-windows/src/input/foreground_watch.rs
 +++ b/crates/platform-windows/src/input/foreground_watch.rs
 @@ -13,13 +13,14 @@ use windows::Win32::System::Threading::{
@@ -396,7 +396,7 @@ index 5faf9110c..21cd287d0 100644
          }
      }
  
-@@ -356,6 +443,8 @@ impl ForegroundWatch {
+@@ -425,6 +512,8 @@ impl ForegroundWatch {
                  ended: None,
                  evidence: policy::ActivationEvidence::default(),
                  holders: 1,
@@ -405,7 +405,7 @@ index 5faf9110c..21cd287d0 100644
              }),
          });
          let (requests, receive) = mpsc::channel::<mpsc::SyncSender<(policy::Observation, usize)>>();
-@@ -387,12 +476,21 @@ impl ForegroundWatch {
+@@ -456,12 +545,21 @@ impl ForegroundWatch {
                  && keyboard.is_some()
                  && prior != 0
                  && unsafe { GetForegroundWindow() }.0 as usize == prior;
@@ -428,7 +428,7 @@ index 5faf9110c..21cd287d0 100644
              while monitoring && !worker.cancelled.load(Ordering::Acquire) {
                  let mut message = MSG::default();
                  // Pump the hook's owning thread; callbacks are delivered here.
-@@ -407,6 +505,10 @@ impl ForegroundWatch {
+@@ -476,6 +574,10 @@ impl ForegroundWatch {
                      lock = None;
                  }
                  worker.observe(unsafe { GetForegroundWindow() }, None);
@@ -439,15 +439,24 @@ index 5faf9110c..21cd287d0 100644
                  for reply in receive.try_iter().take(128) {
                      let _ = reply.send(worker.snapshot());
                  }
-@@ -468,7 +570,7 @@ impl ForegroundWatch {
+@@ -536,9 +638,15 @@ impl ForegroundWatch {
+ 
      pub(crate) fn report(&self) -> (&'static str, bool, usize) {
          let (reply, receive) = mpsc::sync_channel(1);
++        // The worker answers within a poll (about 2 ms). A launch watch may be
++        // inside the one-time minimize hand-back (up to about 500 ms), so its
++        // reply waits for that result; other watches keep the short bound.
++        let wait = match self.watch.target {
++            Target::Launch(_) => Duration::from_millis(600),
++            Target::Processes(_, _) => Duration::from_millis(100),
++        };
          if self.requests.send(reply).is_ok() {
 -            if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(100))
-+            if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(600))
-             {
+-            {
++            if let Ok((observation, foreground)) = receive.recv_timeout(wait) {
                  let (note, failed) = self.describe(observation);
                  return (note, failed, foreground);
+             }
 diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
 index 8425b419b..9ddf13ca5 100644
 --- a/crates/platform-windows/src/input/inject.rs
