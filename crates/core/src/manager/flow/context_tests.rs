@@ -427,13 +427,11 @@ async fn context_reports_the_same_worktree_and_cross_agent_set_as_launch() {
 
 #[tokio::test]
 async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versions() {
-    // Only a CLI that takes more than one login has account homes.
-    for provider in brigadier_providers::adapters::kinds().filter(|kind| {
-        brigadier_providers::adapters::adapter(*kind)
-            .unwrap()
-            .home
-            .is_some()
-    }) {
+    // Only a CLI whose skills folder moves with its account home (OpenCode's home is just its
+    // database, its skills are shared).
+    for provider in brigadier_providers::adapters::kinds()
+        .filter(|kind| brigadier_registry::adapter::adapter(*kind).is_some())
+    {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let script: Script = {
             let captured = captured.clone();
