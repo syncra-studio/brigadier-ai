@@ -6151,12 +6151,9 @@ impl Tool for HotkeyTool {
                      could not find a UIA AcceleratorKey or `(Ctrl+X)`-style name hint \
                      matching `{key_display_for_result}` (scanned {scanned} element(s)). \
                      PostMessage WM_KEYDOWN/UP is ignored by this target's input pipeline. \
-                     Common cause: the action is nested behind a closed menu (e.g. modern \
-                     Notepad's Save under the File menu) — its element isn't in the visible \
-                     subtree until the menu is opened. Call \
-                     `get_window_state(pid={raw_pid}, window_id={hwnd})` to inspect available \
-                     UIA actions, then use an exposed accelerator or `click` the matching \
-                     element directly."
+                     No matching action was found in the window or its UIA-expandable menus. \
+                     No fallback keyboard input was sent. Inspect fresh window state or use \
+                     `invoke_menu` with an explicit menu path."
                 )),
                 Ok(Err(e)) => ToolResult::error(format!("hotkey (UIA path): {e}")),
                 Err(e) => ToolResult::error(format!("Task error: {e}")),

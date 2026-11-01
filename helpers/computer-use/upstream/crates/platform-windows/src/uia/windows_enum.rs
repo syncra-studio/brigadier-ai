@@ -644,6 +644,27 @@ fn try_invoke_accelerator_in_window_unbounded(
         let root = uia
             .ElementFromHandle(HWND(hwnd as *mut _))
             .with_context(|| format!("ElementFromHandle(0x{hwnd:x}) failed"))?;
+        let (matched, mut scanned) = scan_accelerator_scope(&uia, &root, hwnd, &target, cancelled)?;
+        if matched {
+            return Ok((true, scanned));
+        }
+        let matched = super::menu::search_accelerator(&uia, &root, hwnd, cancelled, |scope| {
+            let (matched, count) = scan_accelerator_scope(&uia, scope, hwnd, &target, cancelled)?;
+            scanned += count;
+            Ok(matched)
+        })?;
+        Ok((matched, scanned))
+    }
+}
+
+fn scan_accelerator_scope(
+    uia: &IUIAutomation,
+    root: &IUIAutomationElement,
+    hwnd: isize,
+    target: &str,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<(bool, usize)> {
+    unsafe {
         let cond = uia
             .CreateTrueCondition()
             .context("CreateTrueCondition failed")?;
@@ -653,45 +674,39 @@ fn try_invoke_accelerator_in_window_unbounded(
         let count = arr.Length().unwrap_or(0);
         let mut matched_failure: Option<String> = None;
 
+        if count > 5000 {
+            bail!("accelerator tree exceeded 5000 elements");
+        }
         for i in 0..count {
+            super::click::ensure_active(cancelled)?;
             let elem = match arr.GetElement(i) {
                 Ok(e) => e,
                 Err(e) => {
                     tracing::debug!(
                         target: "uia_windows_enum",
-                        "GetElement({i}) failed while scanning accelerator {combo}: {e}"
+                        "GetElement({i}) failed while scanning accelerator {target}: {e}"
                     );
                     continue;
                 }
             };
-            // Primary match: the UIA AcceleratorKey property — the conventional
-            // place a WinUI / XAML control advertises its shortcut.
-            let mut accelerator: Option<String> =
-                read_current_bstr(&elem, UIA_AcceleratorKeyPropertyId);
-            // Fallback match: many shipping XAML apps (e.g. modern Notepad)
-            // don't set AcceleratorKey at all and instead encode the shortcut
-            // in the visible element name as a parenthetical hint like
-            // "Bold (Ctrl+B)". Scan the Name property for that pattern so
-            // toolbar buttons remain reachable via hotkey.
-            if accelerator.is_none() {
-                if let Some(name) =
-                    read_current_bstr(&elem, windows::Win32::UI::Accessibility::UIA_NamePropertyId)
-                {
-                    if let Some(extracted) = extract_shortcut_from_name(&name) {
-                        accelerator = Some(extracted);
-                    }
-                }
-            }
-            let accelerator = match accelerator {
-                Some(a) => a,
-                None => continue,
-            };
-            let Some(candidate) = canonical_accelerator(&accelerator) else {
-                continue;
-            };
-            if candidate != target {
+            if elem
+                .CurrentIsOffscreen()
+                .map(|v| v.as_bool())
+                .unwrap_or(true)
+                || !elem
+                    .CurrentIsEnabled()
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false)
+            {
                 continue;
             }
+            let accelerator = read_current_bstr(&elem, UIA_AcceleratorKeyPropertyId);
+            let name =
+                read_current_bstr(&elem, windows::Win32::UI::Accessibility::UIA_NamePropertyId);
+            if !accelerator_matches(accelerator.as_deref(), name.as_deref(), target) {
+                continue;
+            }
+            let accelerator = accelerator.or(name).unwrap_or_default();
 
             if cancelled.load(Ordering::Acquire) {
                 tracing::debug!(
@@ -750,6 +765,43 @@ fn read_current_bstr(
         } else {
             None
         }
+    }
+}
+
+fn accelerator_matches(accelerator: Option<&str>, name: Option<&str>, target: &str) -> bool {
+    accelerator.and_then(canonical_accelerator).as_deref() == Some(target)
+        || name
+            .and_then(extract_shortcut_from_name)
+            .and_then(|hint| canonical_accelerator(&hint))
+            .as_deref()
+            == Some(target)
+}
+
+#[cfg(test)]
+mod accelerator_menu_tests {
+    use super::*;
+
+    #[test]
+    fn menu_accelerators_match_property_or_name_exactly() {
+        assert!(accelerator_matches(Some("Control+S"), None, "ctrl+s"));
+        assert!(accelerator_matches(None, Some("Save (Ctrl+S)"), "ctrl+s"));
+        assert!(accelerator_matches(
+            Some("Alt+S"),
+            Some("Save (Ctrl+S)"),
+            "ctrl+s"
+        ));
+        assert!(!accelerator_matches(
+            None,
+            Some("Save as (Ctrl+Shift+S)"),
+            "ctrl+s"
+        ));
+        assert!(!accelerator_matches(None, Some("Save"), "ctrl+s"));
+        assert!(!accelerator_matches(None, Some("Save (2)"), "ctrl+s"));
+    }
+
+    #[test]
+    fn invalid_window_refuses_without_any_menu_or_input() {
+        assert!(try_invoke_accelerator_in_window(0, "ctrl+s").is_err());
     }
 }
 
