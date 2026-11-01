@@ -229,14 +229,21 @@ const BRIGADIER: Record<string, [doing: string, done: string]> = {
 function brigadierWords(sub: string, command: string): StepWords {
   const words = wordsOf(command);
   const ledger = words[words.indexOf("ledger") + 1];
+  // Its manual, by topic: `brigadier help workers`, `brigadier send --help`, `brigadier --help` (D58).
+  const after = words.slice(words.indexOf(sub) + 1);
+  const help = sub === "help" || sub === "--help" || sub === "-h" || after[0] === "--help" || after[0] === "-h";
+  const topic = [sub === "help" ? after[0] : help ? sub : undefined].find((word) => !!word && /^[a-z][\w-]*$/i.test(word));
+  const asked = `brigadier help${topic ? ` ${topic}` : ""}`;
   const [doing, done] =
-    sub === "ledger"
+    help
+      ? [`Running ${asked}`, `Ran ${asked}`]
+      : sub === "ledger"
       ? ledger === "add" || ledger === "close"
         ? ["Updating the ledger", "Updated the ledger"]
         : ledger === "check"
           ? ["Checking against the ledger", "Checked against the ledger"]
           : ["Reading the ledger", "Read the ledger"]
-      : (BRIGADIER[sub] ?? ["Using Brigadier", "Used Brigadier"]);
+      : (BRIGADIER[sub] ?? [`Running brigadier ${sub}`, `Ran brigadier ${sub}`]);
   return { kind: "other", doing, done, phrase: done };
 }
 

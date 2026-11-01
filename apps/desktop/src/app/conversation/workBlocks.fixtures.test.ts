@@ -363,6 +363,13 @@ test("the thread's other brigadier calls read in plain words, by the first briga
   assert.equal(doneWords("brigadier models; brigadier ledger show"), "Checked the models");
   assert.equal(doneWords("brigadier context"), "Read the brigadier context");
   assert.equal(doneWords("brigadier close b36f2e6e"), "Closed a worker");
+  // Its manual reads as the help it ran, never a vague "Used Brigadier" (D58).
+  assert.equal(doneWords("brigadier --help"), "Ran brigadier help");
+  assert.equal(doneWords("brigadier help workers 2>&1"), "Ran brigadier help workers");
+  assert.equal(doneWords("brigadier help 2>&1"), "Ran brigadier help");
+  assert.equal(doneWords("brigadier send --help"), "Ran brigadier help send");
+  assert.equal(doneWords("brigadier ledger --help"), "Ran brigadier help ledger");
+  assert.equal(doneWords("brigadier mcp list"), "Ran brigadier mcp");
   assert.equal(doneWords("brigadier send b36f2e6e \"$(cat <<'EOF'\nGo on.\nEOF\n)\""), "Messaged workers");
   // Words inside an argument are no call of brigadier's.
   assert.equal(doneWords('echo "brigadier ledger add"'), 'Ran echo "brigadier ledger add"');
