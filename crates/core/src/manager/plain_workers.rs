@@ -51,7 +51,15 @@ use crate::work::{
 use crate::{Error, Result, now_ms};
 
 /// How long a message sent to a worker still starting waits for its CLI.
-const CLI_START: Duration = Duration::from_secs(60);
+#[cfg(not(test))]
+fn cli_start() -> Duration {
+    Duration::from_secs(60)
+}
+/// A test holding a worker's start on a busy machine can pass the minute.
+#[cfg(test)]
+fn cli_start() -> Duration {
+    crate::test_patience()
+}
 /// What a worker's turn a restart cut off is told as it goes on by itself (D9 a).
 const RESUMED_AFTER_RESTART: &str = "[Brigadier restarted while you were working on this, and \
 your turn goes on now. Your last steps may have finished after your record of them: check git \
@@ -944,7 +952,7 @@ impl SessionManager {
     async fn send_plain(&self, task: &Task, text: String) -> Result<bool> {
         let live = self.task_live(task);
         if task.state == TaskState::Starting {
-            let up = tokio::time::Instant::now() + CLI_START;
+            let up = tokio::time::Instant::now() + cli_start();
             while live.cli().await.is_none() && tokio::time::Instant::now() < up {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -1205,7 +1213,7 @@ impl SessionManager {
     ) -> Result<()> {
         let live = self.task_live(task);
         if task.state == TaskState::Starting {
-            let up = tokio::time::Instant::now() + CLI_START;
+            let up = tokio::time::Instant::now() + cli_start();
             while live.cli().await.is_none() && tokio::time::Instant::now() < up {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }

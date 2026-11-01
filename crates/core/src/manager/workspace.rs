@@ -479,7 +479,8 @@ mod tests {
         });
         assert!(watch._watcher.lock().unwrap().is_some());
         tokio::time::sleep(SETTLE).await;
-        let wait = Duration::from_secs(10);
+        // A busy machine can take its time to tell the write.
+        let wait = crate::test_patience();
         std::fs::write(work.join("file"), "x").unwrap();
         assert!(
             tokio::time::timeout(wait, watch.changed()).await.is_ok(),

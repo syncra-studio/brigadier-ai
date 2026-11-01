@@ -1122,7 +1122,12 @@ async fn a_message_going_to_a_starting_worker_is_left_to_that_hand_off() {
     );
     go.notify_one();
     super::eventually("the hand-off to end", || judging.has("judged")).await;
-    assert_eq!(judging.answer("judged")["state"], "sent-to-worker");
+    assert_eq!(
+        judging.answer("judged")["state"],
+        "sent-to-worker",
+        "{:#}",
+        judging.answer("judged")
+    );
     super::eventually("the worker to hear it", || judging.has("worker heard")).await;
     assert_eq!(judging.answer("worker heard"), ASKED);
     let board = judging
