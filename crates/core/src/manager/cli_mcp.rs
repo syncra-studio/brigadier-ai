@@ -34,7 +34,9 @@ const SWEEP: Duration = Duration::from_secs(30);
 const START: Duration = Duration::from_secs(60);
 /// A tool call, unless the server's config names its own.
 const CALL: Duration = Duration::from_secs(10 * 60);
-const MAX_RESPONSE: usize = 32 * 1024 * 1024;
+/// The one reply frame that carries an answer to `brigadier` (`brigadier_ipc::MAX_FRAME_BYTES`).
+const MAX_REPLY: usize = 16 * 1024 * 1024;
+const MAX_RESPONSE: usize = MAX_REPLY;
 const MAX_PAGES: usize = 32;
 const VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 
@@ -55,13 +57,23 @@ pub(super) struct McpPool {
 }
 
 impl McpPool {
-    fn slot(&self, key: &Key) -> Slot {
-        self.slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(key.clone())
-            .or_default()
-            .clone()
+    fn slots(&self) -> std::sync::MutexGuard<'_, HashMap<Key, Slot>> {
+        self.slots.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// `key`'s connection, locked: never one the sweep dropped while this waited for it.
+    async fn hold(&self, key: &Key) -> tokio::sync::OwnedMutexGuard<Option<Conn>> {
+        loop {
+            let slot = self.slots().entry(key.clone()).or_default().clone();
+            let kept = slot.clone().lock_owned().await;
+            if self
+                .slots()
+                .get(key)
+                .is_some_and(|now| Arc::ptr_eq(now, &slot))
+            {
+                return kept;
+            }
+        }
     }
 }
 
@@ -98,6 +110,8 @@ enum Link {
 struct Conn {
     /// The server as the setup resolved it, before any lease: a changed config reconnects.
     server: McpServer,
+    /// Ends a stdio server's whole process tree, whatever it started too.
+    platform: Arc<dyn brigadier_sandbox::Platform>,
     link: Link,
     next: u64,
     version: Option<String>,
@@ -118,6 +132,7 @@ fn same(kept: &McpServer, now: &McpServer) -> bool {
 impl Conn {
     async fn open(
         server: McpServer,
+        platform: Arc<dyn brigadier_sandbox::Platform>,
         cwd: &Path,
         env: &[(String, String)],
         lease: Option<(Arc<SessionLease>, McpServer)>,
@@ -143,6 +158,9 @@ impl Conn {
                     .stdout(Stdio::piped())
                     .stderr(Stdio::null())
                     .kill_on_drop(true);
+                // Its own group, so what it leaves behind is ended with it.
+                #[cfg(unix)]
+                command_line.process_group(0);
                 let mut child = command_line
                     .spawn()
                     .map_err(|err| format!("couldn't start {}: {err}", command.display()))?;
@@ -164,6 +182,7 @@ impl Conn {
         };
         let mut conn = Self {
             server,
+            platform,
             link,
             next: 0,
             version: None,
@@ -352,11 +371,18 @@ impl Conn {
         match &mut self.link {
             Link::Stdio { child, stdin, .. } => {
                 drop(stdin.take());
+                let pid = child.id();
                 if tokio::time::timeout(Duration::from_secs(2), child.wait())
                     .await
                     .is_err()
                 {
+                    if let Some(pid) = pid {
+                        let _ = self.platform.processes().kill_tree(pid);
+                    }
                     let _ = child.kill().await;
+                }
+                if let Some(pid) = pid {
+                    let _ = self.platform.processes().kill_group(pid);
                 }
             }
             Link::Http {
@@ -378,6 +404,18 @@ impl Conn {
         }
         if let Some(lease) = self.lease.take() {
             lease.release();
+        }
+    }
+}
+
+impl Drop for Conn {
+    /// A connection dropped mid-call (its caller hung up) never went back to the pool: its
+    /// server's tree ends here.
+    fn drop(&mut self) {
+        if let Link::Stdio { child, .. } = &self.link
+            && let Some(pid) = child.id()
+        {
+            let _ = self.platform.processes().kill_tree(pid);
         }
     }
 }
@@ -431,29 +469,26 @@ impl SessionManager {
         action: &str,
         given: Value,
     ) -> CliReply {
+        let mut kept = self.mcp_pool.hold(&key).await;
         self.sweep_mcp_soon();
-        let slot = self.mcp_pool.slot(&key);
-        let mut kept = slot.lock().await;
-        if kept
-            .as_ref()
-            .is_some_and(|conn| !same(&conn.server, &server))
-            && let Some(old) = kept.take()
-        {
-            old.close().await;
-        }
-        if kept.is_none() {
-            let lease = lease(self.mcp_gateway(), &server);
-            let env = self.clis().env;
-            match Conn::open(server.clone(), cwd, &env, lease).await {
-                Ok(conn) => *kept = Some(conn),
-                Err(err) => return CliReply::error(ErrorCode::Failed, err),
+        // Out of the pool while in use: a call cut off mid-exchange never leaves it half-written.
+        let mut conn = match kept.take() {
+            Some(conn) if same(&conn.server, &server) => conn,
+            old => {
+                if let Some(old) = old {
+                    old.close().await;
+                }
+                let lease = lease(self.mcp_gateway(), &server);
+                let env = self.clis().env;
+                let platform = self.runtime.platform().clone();
+                match Conn::open(server.clone(), platform, cwd, &env, lease).await {
+                    Ok(conn) => conn,
+                    Err(err) => return CliReply::error(ErrorCode::Failed, err),
+                }
             }
-        }
-        let Some(conn) = kept.as_mut() else {
-            return CliReply::error(ErrorCode::Failed, "no connection");
         };
         let answer = match action {
-            "tools" => list_tools(conn, &server.name)
+            "tools" => list_tools(&mut conn, &server.name)
                 .await
                 .map(|text| (text, Vec::new())),
             _ => {
@@ -472,18 +507,18 @@ impl SessionManager {
                 }
             }
         };
+        if let Err(Failure::Broken(_)) = &answer {
+            conn.close().await;
+        } else {
+            *kept = Some(conn);
+        }
         match answer {
             Ok((text, images)) => reply(action, Ok(text), images),
             Err(Failure::Rpc(message)) => CliReply::error(ErrorCode::Failed, message),
-            Err(Failure::Broken(message)) => {
-                if let Some(conn) = kept.take() {
-                    conn.close().await;
-                }
-                CliReply::error(
-                    ErrorCode::Failed,
-                    format!("{message}; the next call starts the server afresh"),
-                )
-            }
+            Err(Failure::Broken(message)) => CliReply::error(
+                ErrorCode::Failed,
+                format!("{message}; the next call starts the server afresh"),
+            ),
         }
     }
 
@@ -499,7 +534,13 @@ impl SessionManager {
                 let Some(manager) = me.upgrade() else { return };
                 if manager.sweep_mcp().await == 0 {
                     manager.mcp_pool.sweeping.store(false, Ordering::Release);
-                    return;
+                    // A call that kept a connection just now, while this was still sweeping,
+                    // started no sweep of its own: this one goes on for it.
+                    if manager.mcp_pool.slots().is_empty()
+                        || manager.mcp_pool.sweeping.swap(true, Ordering::AcqRel)
+                    {
+                        return;
+                    }
                 }
             }
         });
@@ -510,9 +551,7 @@ impl SessionManager {
     pub(super) async fn sweep_mcp(&self) -> usize {
         let slots: Vec<(Key, Slot)> = self
             .mcp_pool
-            .slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .slots()
             .iter()
             .map(|(key, slot)| (key.clone(), slot.clone()))
             .collect();
@@ -529,22 +568,15 @@ impl SessionManager {
             if live && !idle {
                 continue;
             }
+            // Out of the map while still held: a caller waiting on it takes a fresh slot.
+            self.mcp_pool.slots().remove(&key);
             let conn = kept.take();
             drop(kept);
-            self.mcp_pool
-                .slots
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&key);
             if let Some(conn) = conn {
                 conn.close().await;
             }
         }
-        self.mcp_pool
-            .slots
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.mcp_pool.slots().len()
     }
 }
 
@@ -568,12 +600,21 @@ fn reply(action: &str, text: Result<String, String>, images: Vec<String>) -> Cli
             if !text.ends_with('\n') {
                 text.push('\n');
             }
-            CliReply::ok(&ToolOutput {
+            let output = ToolOutput {
                 action: action.to_owned(),
                 text,
                 images,
                 saved: Vec::new(),
-            })
+            };
+            let size = serde_json::to_vec(&output).map_or(0, |bytes| bytes.len());
+            // Room for the reply's own envelope.
+            if size > MAX_REPLY - 64 * 1024 {
+                return CliReply::error(
+                    ErrorCode::Failed,
+                    format!("the answer is {size} bytes, more than one reply carries"),
+                );
+            }
+            CliReply::ok(&output)
         }
         Err(message) => CliReply::error(ErrorCode::Failed, message),
     }
@@ -662,17 +703,14 @@ fn result_text(result: &Value) -> (String, Vec<String>) {
         let mime = block["mimeType"].as_str().unwrap_or("?");
         match block["type"].as_str() {
             Some("text") => text.push_str(block["text"].as_str().unwrap_or_default()),
-            Some("image") => {
+            // `brigadier` saves each to a file and prints its path.
+            Some(kind @ ("image" | "audio")) => {
                 images.push(format!(
                     "data:{mime};base64,{}",
                     block["data"].as_str().unwrap_or_default()
                 ));
-                text.push_str(&format!("[image {mime}]"));
+                text.push_str(&format!("[{kind} {mime}]"));
             }
-            Some("audio") => text.push_str(&format!(
-                "[audio {mime}, {} base64 bytes]",
-                block["data"].as_str().map_or(0, str::len)
-            )),
             Some("resource") => match block["resource"]["text"].as_str() {
                 Some(body) => text.push_str(&format!(
                     "[resource {}]\n{body}",

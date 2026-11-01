@@ -1398,3 +1398,33 @@ fn record_search_filters_before_limiting_and_orders_by_time_before_rank() {
         .unwrap();
     assert_eq!(hits[0].item_id.as_deref(), Some("old-output"));
 }
+
+#[test]
+fn a_session_only_search_filters_out_its_workers_before_limiting() {
+    let brain = TestBrain::new();
+    let mut own = record_entry(0, "assistant", "needle");
+    own.at_ms = Some(10);
+    brain
+        .sync_records(
+            record_file("s1", RecordSource::Transcript, "/r/s1/lineage.json", "a"),
+            vec![own],
+        )
+        .unwrap();
+    let mut newer = record_entry(0, "assistant", "needle");
+    newer.at_ms = Some(20);
+    brain
+        .sync_records(
+            record_file("s1/w1", RecordSource::Transcript, "/r/s1/w1.json", "b"),
+            vec![newer],
+        )
+        .unwrap();
+    let hits = brain
+        .search_records_filtered("needle", Some("s1"), 1, None, None)
+        .unwrap();
+    assert_eq!(hits[0].session, "s1/w1");
+    let hits = brain
+        .search_session_records("needle", "s1", 1, None, None)
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].session, "s1");
+}

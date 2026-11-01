@@ -1305,7 +1305,7 @@ impl Brain {
         session: Option<&str>,
         limit: u32,
     ) -> Result<Vec<RecordHit>> {
-        self.read(|conn| records::search(conn, query, session, limit, None, None))
+        self.read(|conn| records::search(conn, query, session, false, limit, None, None))
     }
 
     /// Newest matching items first, optionally filtered by origin and tool.
@@ -1317,7 +1317,20 @@ impl Brain {
         role: Option<&str>,
         tool: Option<&str>,
     ) -> Result<Vec<RecordHit>> {
-        self.read(|conn| records::search(conn, query, session, limit, role, tool))
+        self.read(|conn| records::search(conn, query, session, false, limit, role, tool))
+    }
+
+    /// As [`Self::search_records_filtered`], but only `session`'s own entries, never its
+    /// workers'.
+    pub fn search_session_records(
+        &self,
+        query: &str,
+        session: &str,
+        limit: u32,
+        role: Option<&str>,
+        tool: Option<&str>,
+    ) -> Result<Vec<RecordHit>> {
+        self.read(|conn| records::search(conn, query, Some(session), true, limit, role, tool))
     }
 
     /// Drops what was indexed from a conversation's records, its workers' too.

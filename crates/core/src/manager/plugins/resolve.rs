@@ -85,7 +85,10 @@ fn rank(
             Some(project) == ctx.project_root || project == checkout(ctx.cwd)
         }),
         // The caller's own checkout (its branch) beats the registered root's copy.
-        origin.project.is_some() && origin.file.starts_with(checkout(ctx.cwd)),
+        // (Never another registered project's copy that merely lies inside this checkout.)
+        origin.project.is_some()
+            && origin.project.as_deref() == ctx.project_root
+            && origin.file.starts_with(checkout(ctx.cwd)),
         origin.project.is_none(),
         origin.agent == Some(ctx.agent),
         std::cmp::Reverse(origin.file.clone()),

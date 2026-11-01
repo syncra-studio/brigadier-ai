@@ -73,7 +73,7 @@ impl SessionManager {
             .ancestors()
             .find(|path| path.join(".git").exists())
             .map(Path::to_owned)
-            .filter(|checkout| project.as_ref().is_some_and(|root| root != checkout));
+            .filter(|checkout| trusted && project.as_ref().is_some_and(|root| root != checkout));
         let (cwd, data_dir) = (cwd.to_owned(), self.data_dir.clone());
         let secrets = CliSecretStore {
             cli: self.brigadier_cli(),
@@ -93,11 +93,7 @@ impl SessionManager {
                 .collect();
             let mut rows = Catalog::read_rows_with_library(&roots, &sources, &data_dir);
             if let (Some(checkout), Some(root)) = (&own_checkout, &project) {
-                for definition in rows.iter_mut().flat_map(|row| &mut row.definitions) {
-                    if definition.provenance.project.as_ref() == Some(checkout) {
-                        definition.provenance.project = Some(root.clone());
-                    }
-                }
+                adopt_checkout(&mut rows, checkout, root);
             }
             let choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
             let warnings = if grants.is_none() {
@@ -162,9 +158,100 @@ fn suppress_native_plugin_servers(
     }
 }
 
+/// A linked checkout's definitions count as the registered root's. One the root has too (the
+/// same file and agent) joins the root's row, so the root's saved choice still applies even
+/// when its content (a stdio server's working folder) differs on the branch.
+fn adopt_checkout(rows: &mut Vec<brigadier_registry::catalog::Row>, checkout: &Path, root: &Path) {
+    let mut moves = Vec::new();
+    for (from, row) in rows.iter().enumerate() {
+        for (index, definition) in row.definitions.iter().enumerate() {
+            let origin = &definition.provenance;
+            let Ok(file) = origin.file.strip_prefix(checkout) else {
+                continue;
+            };
+            if origin.project.as_deref() != Some(checkout) {
+                continue;
+            }
+            let home = rows.iter().position(|other| {
+                other.kind == row.kind
+                    && other.name == row.name
+                    && other.definitions.iter().any(|known| {
+                        known.provenance.project.as_deref() == Some(root)
+                            && known.provenance.agent == origin.agent
+                            && known.provenance.file.strip_prefix(root).ok() == Some(file)
+                    })
+            });
+            if let Some(to) = home.filter(|to| *to != from) {
+                moves.push((from, index, to));
+            }
+        }
+    }
+    // Last first, so each index still points where it did.
+    for (from, index, to) in moves.into_iter().rev() {
+        let definition = rows[from].definitions.remove(index);
+        rows[to].definitions.push(definition);
+    }
+    rows.retain(|row| !row.definitions.is_empty());
+    for definition in rows.iter_mut().flat_map(|row| &mut row.definitions) {
+        if definition.provenance.project.as_deref() == Some(checkout) {
+            definition.provenance.project = Some(root.to_owned());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worktrees_copy_of_a_root_server_keeps_the_roots_row_and_choice() {
+        let dir = std::env::temp_dir().join(format!("plugins-adopt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let home = dir.join("home");
+        let roots = brigadier_registry::Roots::from_vars([
+            ("HOME".into(), home.display().to_string()),
+            ("USERPROFILE".into(), home.display().to_string()),
+        ])
+        .unwrap();
+        let (root, work) = (dir.join("repo"), dir.join("work"));
+        for (checkout, text) in [
+            (&root, r#"{"mcpServers":{"db":{"command":"db-server"}}}"#),
+            (
+                &work,
+                r#"{"mcpServers":{"db":{"command":"db-server"},"only":{"command":"x"}}}"#,
+            ),
+        ] {
+            std::fs::create_dir_all(checkout).unwrap();
+            std::fs::write(checkout.join(".mcp.json"), text).unwrap();
+        }
+        let before = Catalog::read_rows(&roots, std::slice::from_ref(&root));
+        let db = |rows: &[brigadier_registry::catalog::Row]| {
+            rows.iter()
+                .filter(|row| row.name == "db")
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut rows = Catalog::read_rows(&roots, &[root.clone(), work.clone()]);
+        assert_eq!(db(&rows).len(), 2, "the copies differ by working folder");
+        adopt_checkout(&mut rows, &work, &root);
+        assert_eq!(db(&rows), db(&before));
+        let row = rows.iter().find(|row| row.name == "db").unwrap();
+        assert_eq!(row.definitions.len(), 2);
+        assert!(
+            row.definitions
+                .iter()
+                .all(|known| known.provenance.project.as_deref() == Some(root.as_path()))
+        );
+        // A server only the branch has keeps a row of its own.
+        let only = rows.iter().find(|row| row.name == "only").unwrap();
+        assert_eq!(
+            only.definitions[0].provenance.project.as_deref(),
+            Some(root.as_path())
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn linked_worktree_uses_registered_root_without_reading_its_project_files() {
         let dir = std::env::temp_dir().join(format!("plugins-launch-{}", uuid::Uuid::new_v4()));

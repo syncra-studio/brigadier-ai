@@ -12,9 +12,9 @@ use axum::{
 
 /// A stdio MCP server: two pages of tools; `remember` and `recall` share the process's state;
 /// `pid` names it; `fail` answers an error result, `boom` a protocol error; `picture` an image;
-/// `ask` asks Brigadier a question of its own first. It logs a line on stdout as it starts.
+/// `ask` asks Brigadier a question of its own first; `spawn` starts a process of its own. It logs a line on stdout as it starts.
 pub(in crate::manager) const FAKE_SERVER: &str = r#"
-import json, os, sys
+import json, os, subprocess, sys
 kept = None
 pending = None
 TOOLS = [
@@ -59,6 +59,8 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": i, "result": {"content": [{"type": "text", "text": str(kept)}], "structuredContent": {"value": kept}}})
         elif name == "pid":
             text(i, str(os.getpid()))
+        elif name == "spawn":
+            text(i, str(subprocess.Popen(["sleep", "300"]).pid))
         elif name == "fail":
             text(i, "it broke", True)
         elif name == "boom":
@@ -88,6 +90,21 @@ fn stdio(script: &Path) -> McpServer {
     }
 }
 
+fn platform() -> Arc<dyn brigadier_sandbox::Platform> {
+    brigadier_sandbox::native(brigadier_sandbox::PlatformOptions { data_dir: None }).unwrap()
+}
+
+/// Whether `pid` is still there within a few seconds (an ended process may wait to be reaped).
+async fn outlives(pid: &str) -> bool {
+    for _ in 0..50 {
+        if !alive(pid) {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    true
+}
+
 fn here() -> Vec<(String, String)> {
     std::env::vars().collect()
 }
@@ -114,7 +131,7 @@ async fn a_stdio_server_pages_its_tools_keeps_its_state_and_says_its_errors() {
     let dir = super::super::flow::Scratch::new("mcp-stdio");
     let script = dir.join("fake.py");
     std::fs::write(&script, FAKE_SERVER).unwrap();
-    let mut conn = Conn::open(stdio(&script), &dir, &here(), None)
+    let mut conn = Conn::open(stdio(&script), platform(), &dir, &here(), None)
         .await
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(conn.version.as_deref(), Some("2025-06-18"));
@@ -183,9 +200,28 @@ async fn a_stdio_server_pages_its_tools_keeps_its_state_and_says_its_errors() {
     // Still the same process after every kind of answer.
     assert_eq!(first, pid(call(&mut conn, "pid", json!({})).await));
 
-    assert!(alive(&first));
+    let started = pid(call(&mut conn, "spawn", json!({})).await);
+    assert!(alive(&first) && alive(&started));
     conn.close().await;
-    assert!(!alive(&first), "the server outlived its connection");
+    assert!(
+        !outlives(&first).await,
+        "the server outlived its connection"
+    );
+    assert!(
+        !outlives(&started).await,
+        "what the server started outlived it"
+    );
+
+    // A connection dropped mid-use (its caller hung up) ends its server's tree too.
+    let mut conn = Conn::open(stdio(&script), platform(), &dir, &here(), None)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    let started = pid(call(&mut conn, "spawn", json!({})).await);
+    drop(conn);
+    assert!(
+        !outlives(&started).await,
+        "a dropped connection left its server's process"
+    );
 }
 
 #[derive(Default)]
@@ -268,7 +304,7 @@ async fn an_http_server_keeps_its_session_across_calls_and_is_ended_on_close() {
         trusted: false,
         always_load: false,
     };
-    let mut conn = Conn::open(server, Path::new("/"), &[], None)
+    let mut conn = Conn::open(server, platform(), Path::new("/"), &[], None)
         .await
         .unwrap_or_else(|err| panic!("{err}"));
     assert!(
@@ -326,7 +362,7 @@ async fn a_gateway_server_is_reached_through_its_own_lease_released_on_close() {
         other => panic!("{other:?}"),
     };
     assert!(!secret.1.is_empty());
-    let mut conn = Conn::open(server, Path::new("/"), &[], Some(leased))
+    let mut conn = Conn::open(server, platform(), Path::new("/"), &[], Some(leased))
         .await
         .unwrap_or_else(|err| panic!("{err}"));
     let Ok(tools) = list_tools(&mut conn, "remote").await else {

@@ -207,20 +207,14 @@ impl SessionManager {
             for session in &synced {
                 sync_session(&brain, session)?;
             }
-            let mut hits = brain
-                .search_records_filtered(
-                    &query,
-                    scope.as_deref(),
-                    limit,
-                    args.role.as_deref(),
-                    args.tool.as_deref(),
-                )
-                .map_err(super::brains::brain_error)?;
-            // shortcut: hits are cut to `limit` before this, so an exact search may show
-            // fewer; filter in the index query if a worker's session search comes up short.
-            if exact {
-                hits.retain(|hit| synced.iter().any(|session| session.key == hit.session));
+            let (role, tool) = (args.role.as_deref(), args.tool.as_deref());
+            let mut hits = match scope.as_deref() {
+                Some(session) if exact => {
+                    brain.search_session_records(&query, session, limit, role, tool)
+                }
+                scope => brain.search_records_filtered(&query, scope, limit, role, tool),
             }
+            .map_err(super::brains::brain_error)?;
             for hit in &mut hits {
                 mark_stale(hit);
                 if let Some(session) = synced.iter().find(|session| session.key == hit.session) {

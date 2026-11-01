@@ -753,6 +753,11 @@ pub fn saved_images(
         let extension = match head.trim_start_matches("data:") {
             "image/jpeg" => "jpg",
             "image/webp" => "webp",
+            // An MCP tool's audio (`brigadier mcp call`).
+            "audio/mpeg" => "mp3",
+            "audio/wav" | "audio/x-wav" => "wav",
+            "audio/ogg" => "ogg",
+            mime if mime.starts_with("audio/") => "audio",
             _ => "png",
         };
         let bytes = base64::engine::general_purpose::STANDARD
