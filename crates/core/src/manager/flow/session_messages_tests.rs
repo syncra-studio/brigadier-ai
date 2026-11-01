@@ -377,8 +377,9 @@ async fn an_answer_with_no_wait_on_it_reaches_the_session_once_idle_or_busy() {
         seen.took(&a, "Thanks from the other side.") == 1
     })
     .await;
-    flow.settled().await;
-    flow.settled_in(&b).await;
+    // Both turns quite over, so the next ones are turns of their own, not queued behind these.
+    flow.idle().await;
+    flow.idle_in(&b).await;
     assert_eq!(kept_seen(&flow, &b).await, [(first, true)]);
     // A works: B's answer waits in A's queue (given to A's turn to judge, or on its own turn
     // once that one ends), and reaches A once.
