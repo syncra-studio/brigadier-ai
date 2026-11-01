@@ -1,6 +1,5 @@
 import { useState } from "react";
 
-import { openPermissionsHelp } from "@/app/shell/SetupPickers";
 import { Button, TooltipIconButton } from "@/components/controls";
 import { ShieldExclamation, X } from "@/components/icons";
 import type { Conversation } from "@/ipc/generated";
@@ -50,11 +49,7 @@ export function FullAccessNotice({ conversation }: { conversation: Conversation 
             <p className="text-muted-foreground">
               Brigadier’s workers can edit any file and run commands with internet access without
               your approval. This increases the risk of data loss, exposed information, and
-              unexpected changes.{" "}
-              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={openPermissionsHelp}>
-                Learn more
-              </button>{" "}
-              about elevated risks.
+              unexpected changes.
             </p>
           </div>
         </div>

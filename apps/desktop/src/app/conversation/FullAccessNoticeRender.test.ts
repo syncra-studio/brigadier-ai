@@ -9,6 +9,7 @@ test("the Full access card is the full warning at nine tenths size, rounded like
   ) as {
     title: string | null;
     paragraphs: number;
+    warning: string | null;
     fontSize: number;
     padding: [number, number];
     icon: number;
@@ -23,6 +24,8 @@ test("the Full access card is the full warning at nine tenths size, rounded like
   // The card's title over its warning.
   assert.equal(seen.title, "Full access is on");
   assert.equal(seen.paragraphs, 2);
+  // It ends on the risks: no "Learn more about elevated risks." (D92).
+  assert.match(seen.warning ?? "", /unexpected changes\.$/);
   // Nine tenths of a card's text-sm, px-4 py-3 and 16px icon; heights on whole pixels.
   assert.equal(seen.fontSize, 12.6);
   assert.deepEqual(seen.padding, [11, 14.4]);
@@ -31,7 +34,7 @@ test("the Full access card is the full warning at nine tenths size, rounded like
   // Rounded like the composer under it.
   assert.equal(seen.radius, seen.composerRadius);
   assert.ok(seen.radius >= 18, `rounder than a card, was ${seen.radius}px`);
-  assert.deepEqual(seen.buttons, ["Learn more", "Don’t show again", "Close"]);
+  assert.deepEqual(seen.buttons, ["Don’t show again", "Close"]);
   // At the bottom, the thread's last row ends above the card: the footer's height is room.
   assert.ok(seen.lastBottom <= seen.noticeTop, `last row ${seen.lastBottom} under the card at ${seen.noticeTop}`);
   assert.equal(seen.closed, true);

@@ -104,6 +104,7 @@ async function run() {
   const seen: Record<string, unknown> = {
     title: line.querySelector("p")?.textContent ?? null,
     paragraphs: line.querySelectorAll("p").length,
+    warning: line.querySelectorAll("p")[1]?.textContent ?? null,
     fontSize: px(style.fontSize),
     padding: [px(style.paddingTop), px(style.paddingLeft)],
     icon: px(String(icon.width)),
