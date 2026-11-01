@@ -201,20 +201,29 @@ unsafe fn read_field(hwnd: u64, retained: &RetainedElement) -> Result<Field> {
             belongs = true;
             break;
         }
-        if url.is_none() && unsafe { parent.CurrentControlType()? } == UIA_DocumentControlTypeId {
+        if page.is_none() && unsafe { parent.CurrentControlType()? } == UIA_DocumentControlTypeId {
             url = unsafe { super::launch_browser::document_url(&parent) };
-            if url.is_some() {
-                page = Some(parent.clone());
-            }
+            page = Some(parent.clone());
         }
         parent = unsafe { walker.GetParentElement(&parent)? };
     }
     if !belongs {
         bail!("the field no longer belongs to the addressed window");
     }
-    let url = url.context("the field is not inside a URL-identified page")?;
+    let page = page.context("the field is not inside a page document")?;
+    // Edge may expose the URL only in browser chrome. matching_document still
+    // requires one visible document with no conflicting URL; compare that
+    // document with the field's ancestor before accepting this fallback.
+    let url = url
+        .or_else(|| unsafe { super::launch_browser::address_bar_url(&automation, &root) })
+        .context("the page does not expose its address; use set_value with the field token instead")?;
+    if !super::browser_target::is_document_url(&url)
+        && !super::browser_target::url_matches(&url, &url, true)
+    {
+        bail!("typing supports HTTP, HTTPS and data pages with a verified address; use set_value with the field token for this page kind");
+    }
     let (_, visible, _) = unsafe { super::launch_browser::matching_document(hwnd, &url, true)? };
-    if !unsafe { automation.CompareElements(&visible, &page.unwrap())? }.as_bool() {
+    if !unsafe { automation.CompareElements(&visible, &page)? }.as_bool() {
         bail!("the addressed field is not in the visible page");
     }
     Ok(Field {
@@ -251,13 +260,9 @@ async fn field_snapshot(hwnd: u64, retained: RetainedElement) -> Result<Field> {
 }
 
 fn same_url(a: &str, b: &str) -> bool {
-    fn root(url: &str) -> bool {
-        url.split_once("://")
-            .is_some_and(|(_, host)| !host.is_empty() && !host.contains(['/', '?', '#']))
-    }
-    a == b
-        || a.strip_suffix('/').is_some_and(|a| root(a) && a == b)
-        || b.strip_suffix('/').is_some_and(|b| root(b) && b == a)
+    // Edge's verified browser omnibox may omit the HTTP(S) scheme. Use the
+    // same identity rules as matching_document; data payloads remain exact.
+    super::browser_target::url_matches(a, b, true)
 }
 
 async fn bound_target(
@@ -394,6 +399,13 @@ mod tests {
 
     #[test]
     fn page_identity_does_not_conflate_path_slashes_query_or_fragment() {
+        assert!(same_url("https://fixture.test/", "fixture.test"));
+        assert!(!same_url("https://fixture.test/", "http://fixture.test/"));
+        assert!(same_url("data:text/plain,hello", "data:text/plain,hello"));
+        assert!(!same_url(
+            "data:text/plain,http://host/",
+            "data:text/plain,http://host"
+        ));
         assert!(same_url("https://fixture.test/", "https://fixture.test"));
         assert!(!same_url(
             "https://fixture.test/path/",
@@ -424,7 +436,7 @@ mod tests {
                 detail: None,
             },
         };
-        let tab = CdpWindowCandidate {
+        let mut tab = CdpWindowCandidate {
             cdp_target_id: "one".into(),
             cdp_window_id: Some(7),
             title: "Fixture".into(),
@@ -436,14 +448,23 @@ mod tests {
                 .unwrap(),
             "one"
         );
+        tab.url = "data:text/html,<input id=g>".into();
+        assert_eq!(
+            select_bound_target(&native, std::slice::from_ref(&tab), &tab.url).unwrap(),
+            "one"
+        );
+        assert!(select_bound_target(
+            &native,
+            std::slice::from_ref(&tab),
+            "data:text/html,<input id=h>"
+        )
+        .is_err());
         let mut second = tab.clone();
         second.cdp_target_id = "two".into();
-        assert!(
-            select_bound_target(&native, &[tab.clone(), second], "https://fixture.test/").is_err()
-        );
+        assert!(select_bound_target(&native, &[tab.clone(), second], &tab.url).is_err());
         let mut heuristic = tab;
         heuristic.bounds = None;
-        assert!(select_bound_target(&native, &[heuristic], "https://fixture.test/").is_err());
+        assert!(select_bound_target(&native, std::slice::from_ref(&heuristic), &heuristic.url).is_err());
     }
 
     #[tokio::test]

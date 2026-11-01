@@ -33,7 +33,7 @@ pub(super) unsafe fn document_url(document: &IUIAutomationElement) -> Option<Str
         .map(|s| s.to_string());
     if value
         .as_deref()
-        .is_some_and(super::browser_target::is_web_url)
+        .is_some_and(super::browser_target::is_document_url)
     {
         return value;
     }
@@ -43,7 +43,7 @@ pub(super) unsafe fn document_url(document: &IUIAutomationElement) -> Option<Str
         .cast()
         .ok()?;
     let value = pattern.CurrentValue().ok()?.to_string();
-    super::browser_target::is_web_url(&value).then_some(value)
+    super::browser_target::is_document_url(&value).then_some(value)
 }
 
 /// Only browser chrome can supply fallback URL evidence. A web page's own
@@ -76,7 +76,7 @@ unsafe fn inside_document(
     true
 }
 
-unsafe fn address_bar_url(
+pub(super) unsafe fn address_bar_url(
     automation: &IUIAutomation,
     root: &IUIAutomationElement,
 ) -> Option<String> {

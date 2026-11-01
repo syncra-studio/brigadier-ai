@@ -1,0 +1,236 @@
+Why: Accept exact data document identities and Edge address-bar evidence for background caret insertion, preserving document/window/endpoint proof and plain page-mutation refusals.
+
+diff --git a/crates/cua-driver-core/src/tool.rs b/crates/cua-driver-core/src/tool.rs
+index e1074cbde..39f29807f 100644
+--- a/crates/cua-driver-core/src/tool.rs
++++ b/crates/cua-driver-core/src/tool.rs
+@@ -1938,7 +1938,7 @@ impl ToolRegistry {
+                 None => {
+                     return protected_refusal(
+                         "unbounded_operation_requires_unrestricted",
+-                        "legacy page mutation is unbounded and requires unrestricted mode with trusted launch-time risk acceptance",
++                        "The page tool cannot click, type, or run scripts in this mode because it cannot verify the exact browser page it would change. Use get_window_state to find the control, then click, set_value, or type_text with its element token.",
+                     );
+                 }
+             }
+@@ -5121,6 +5121,22 @@ resources:
+                 .and_then(serde_json::Value::as_str),
+             Some("unbounded_operation_requires_unrestricted")
+         );
++        for action in ["click_element", "insert_text", "execute_javascript"] {
++            let refused = registry
++                .invoke_with_context(
++                    "page",
++                    serde_json::json!({"action": action, "pid": 42, "window_id": 7}),
++                    standard_context(),
++                )
++                .await;
++            let message = refused.structured_content.as_ref().unwrap()["refusal"]["message"]
++                .as_str()
++                .unwrap();
++            assert!(message.contains("cannot verify the exact browser page"));
++            assert!(message.contains("set_value, or type_text with its element token"));
++            assert!(!message.contains("unbounded"));
++            assert_eq!(hits.load(Ordering::SeqCst), 0);
++        }
+ 
+         let allowed = registry
+             .invoke_with_context(
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+index 073e3c861..ce3740d13 100644
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -18,6 +18,11 @@ pub(crate) fn is_web_url(url: &str) -> bool {
+     lower.starts_with("http://") || lower.starts_with("https://")
+ }
+ 
++/// A data document has an exact URL too; never normalize its payload as a host.
++pub(crate) fn is_document_url(url: &str) -> bool {
++    is_web_url(url) || url.starts_with("data:")
++}
++
+ /// Quote a single argv item using the Windows CommandLineToArgvW convention.
+ pub(crate) fn quote_argument(value: &str) -> String {
+     let mut output = String::from("\"");
+@@ -43,6 +48,15 @@ pub(crate) fn quote_argument(value: &str) -> String {
+ /// The omnibox may omit the scheme and the root slash. Preserve path/query
+ /// case and never equate two explicitly different schemes.
+ pub(crate) fn url_matches(actual: &str, requested: &str, exact: bool) -> bool {
++    if actual.starts_with("data:") || requested.starts_with("data:") {
++        return actual.starts_with("data:")
++            && !requested.is_empty()
++            && if exact {
++                actual == requested
++            } else {
++                actual.contains(requested)
++            };
++    }
+     fn parts(value: &str) -> Option<(Option<String>, String)> {
+         let value = value.trim();
+         if value.is_empty() || value.chars().any(char::is_whitespace) {
+@@ -123,6 +137,26 @@ pub(crate) fn omnibox_binds_document(
+ mod omnibox_tests {
+     use super::*;
+     #[test]
++    fn data_document_identity_preserves_payload_and_ambiguity_checks() {
++        let url = "data:text/html,<title>cu-edge-2</title><input id=g placeholder=second>";
++        assert!(is_document_url(url));
++        assert!(!is_document_url("cu-edge-2"));
++        assert!(url_matches(url, url, true));
++        assert!(url_matches(url, "cu-edge-2", false));
++        assert!(!url_matches(url, &url.to_uppercase(), true));
++        assert!(!url_matches(url, &format!("{url}/"), true));
++        assert!(!url_matches(url, "", false));
++        assert!(omnibox_binds_document(1, None, url, url, true));
++        assert!(!omnibox_binds_document(2, None, url, url, true));
++        assert!(!omnibox_binds_document(
++            1,
++            Some("https://other.test"),
++            url,
++            url,
++            true
++        ));
++    }
++    #[test]
+     fn edge_address_value_matches_displayed_scheme_and_root_slash_variants() {
+         for actual in [
+             "https://example.com",
+diff --git a/crates/platform-windows/src/tools/chromium_text.rs b/crates/platform-windows/src/tools/chromium_text.rs
+index 05497eda5..0255c7b34 100644
+--- a/crates/platform-windows/src/tools/chromium_text.rs
++++ b/crates/platform-windows/src/tools/chromium_text.rs
+@@ -201,20 +201,29 @@ unsafe fn read_field(hwnd: u64, retained: &RetainedElement) -> Result<Field> {
+             belongs = true;
+             break;
+         }
+-        if url.is_none() && unsafe { parent.CurrentControlType()? } == UIA_DocumentControlTypeId {
++        if page.is_none() && unsafe { parent.CurrentControlType()? } == UIA_DocumentControlTypeId {
+             url = unsafe { super::launch_browser::document_url(&parent) };
+-            if url.is_some() {
+-                page = Some(parent.clone());
+-            }
++            page = Some(parent.clone());
+         }
+         parent = unsafe { walker.GetParentElement(&parent)? };
+     }
+     if !belongs {
+         bail!("the field no longer belongs to the addressed window");
+     }
+-    let url = url.context("the field is not inside a URL-identified page")?;
++    let page = page.context("the field is not inside a page document")?;
++    // Edge may expose the URL only in browser chrome. matching_document still
++    // requires one visible document with no conflicting URL; compare that
++    // document with the field's ancestor before accepting this fallback.
++    let url = url
++        .or_else(|| unsafe { super::launch_browser::address_bar_url(&automation, &root) })
++        .context("the page does not expose its address; use set_value with the field token instead")?;
++    if !super::browser_target::is_document_url(&url)
++        && !super::browser_target::url_matches(&url, &url, true)
++    {
++        bail!("typing supports HTTP, HTTPS and data pages with a verified address; use set_value with the field token for this page kind");
++    }
+     let (_, visible, _) = unsafe { super::launch_browser::matching_document(hwnd, &url, true)? };
+-    if !unsafe { automation.CompareElements(&visible, &page.unwrap())? }.as_bool() {
++    if !unsafe { automation.CompareElements(&visible, &page)? }.as_bool() {
+         bail!("the addressed field is not in the visible page");
+     }
+     Ok(Field {
+@@ -251,13 +260,9 @@ async fn field_snapshot(hwnd: u64, retained: RetainedElement) -> Result<Field> {
+ }
+ 
+ fn same_url(a: &str, b: &str) -> bool {
+-    fn root(url: &str) -> bool {
+-        url.split_once("://")
+-            .is_some_and(|(_, host)| !host.is_empty() && !host.contains(['/', '?', '#']))
+-    }
+-    a == b
+-        || a.strip_suffix('/').is_some_and(|a| root(a) && a == b)
+-        || b.strip_suffix('/').is_some_and(|b| root(b) && b == a)
++    // Edge's verified browser omnibox may omit the HTTP(S) scheme. Use the
++    // same identity rules as matching_document; data payloads remain exact.
++    super::browser_target::url_matches(a, b, true)
+ }
+ 
+ async fn bound_target(
+@@ -394,6 +399,13 @@ mod tests {
+ 
+     #[test]
+     fn page_identity_does_not_conflate_path_slashes_query_or_fragment() {
++        assert!(same_url("https://fixture.test/", "fixture.test"));
++        assert!(!same_url("https://fixture.test/", "http://fixture.test/"));
++        assert!(same_url("data:text/plain,hello", "data:text/plain,hello"));
++        assert!(!same_url(
++            "data:text/plain,http://host/",
++            "data:text/plain,http://host"
++        ));
+         assert!(same_url("https://fixture.test/", "https://fixture.test"));
+         assert!(!same_url(
+             "https://fixture.test/path/",
+@@ -424,7 +436,7 @@ mod tests {
+                 detail: None,
+             },
+         };
+-        let tab = CdpWindowCandidate {
++        let mut tab = CdpWindowCandidate {
+             cdp_target_id: "one".into(),
+             cdp_window_id: Some(7),
+             title: "Fixture".into(),
+@@ -436,14 +448,23 @@ mod tests {
+                 .unwrap(),
+             "one"
+         );
++        tab.url = "data:text/html,<input id=g>".into();
++        assert_eq!(
++            select_bound_target(&native, std::slice::from_ref(&tab), &tab.url).unwrap(),
++            "one"
++        );
++        assert!(select_bound_target(
++            &native,
++            std::slice::from_ref(&tab),
++            "data:text/html,<input id=h>"
++        )
++        .is_err());
+         let mut second = tab.clone();
+         second.cdp_target_id = "two".into();
+-        assert!(
+-            select_bound_target(&native, &[tab.clone(), second], "https://fixture.test/").is_err()
+-        );
++        assert!(select_bound_target(&native, &[tab.clone(), second], &tab.url).is_err());
+         let mut heuristic = tab;
+         heuristic.bounds = None;
+-        assert!(select_bound_target(&native, &[heuristic], "https://fixture.test/").is_err());
++        assert!(select_bound_target(&native, std::slice::from_ref(&heuristic), &heuristic.url).is_err());
+     }
+ 
+     #[tokio::test]
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+index 84e4cf650..528f3c8e1 100644
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -33,7 +33,7 @@ pub(super) unsafe fn document_url(document: &IUIAutomationElement) -> Option<Str
+         .map(|s| s.to_string());
+     if value
+         .as_deref()
+-        .is_some_and(super::browser_target::is_web_url)
++        .is_some_and(super::browser_target::is_document_url)
+     {
+         return value;
+     }
+@@ -43,7 +43,7 @@ pub(super) unsafe fn document_url(document: &IUIAutomationElement) -> Option<Str
+         .cast()
+         .ok()?;
+     let value = pattern.CurrentValue().ok()?.to_string();
+-    super::browser_target::is_web_url(&value).then_some(value)
++    super::browser_target::is_document_url(&value).then_some(value)
+ }
+ 
+ /// Only browser chrome can supply fallback URL evidence. A web page's own
+@@ -76,7 +76,7 @@ unsafe fn inside_document(
+     true
+ }
+ 
+-unsafe fn address_bar_url(
++pub(super) unsafe fn address_bar_url(
+     automation: &IUIAutomation,
+     root: &IUIAutomationElement,
+ ) -> Option<String> {

@@ -190,6 +190,8 @@ Patches applied, in order:
 
 - `patches/0164-windows-foreground-lock-refusal-reason.diff`: State the real reason a start_minimized launch is refused when the activation-prevention lock is not held: Windows may have refused it, or an overlapping action released it to hand the user's window back, in which case Windows was never asked.
 
+- `patches/0168-windows-edge-page-typing.diff`: Accept exact data document URLs and Edge's uniquely bound address-bar evidence for background caret insertion, preserving endpoint ownership and exact page/field checks; explain page mutation refusals with element-token alternatives.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
