@@ -73,7 +73,7 @@ test("team rows name workers without possessives and with their avatars, say who
   }
 });
 
-test("a worker the user stopped reads that they stopped it; one the lead stopped keeps its reason", async () => {
+test("a worker the user stopped reads that they stopped it; one the lead stopped keeps its reason; its pause and resume read plainly", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { TeamStep } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
@@ -85,6 +85,11 @@ test("a worker the user stopped reads that they stopped it; one the lead stopped
       React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason }, atMs: 9000 }))).replace(/<[^>]+>/g, "");
     assert.equal(text("Stopped by the user"), "You stopped Add QIF exporter after 4s");
     assert.equal(text("Enough"), "Stopped Add QIF exporter after 4s");
+    // The lead's pause and resume (D7): one plain row each, in the same family.
+    const row = (type: "paused" | "resumed") => ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
+      React.createElement(TeamStep, { kind: { type, taskId: "t1" }, atMs: 9000 }))).replace(/<[^>]+>/g, "");
+    assert.equal(row("paused"), "Paused Add QIF exporter");
+    assert.equal(row("resumed"), "Resumed Add QIF exporter");
   } finally {
     await server.close();
   }

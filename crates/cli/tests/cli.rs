@@ -476,6 +476,18 @@ fn sample(request: &CliRequest) -> CliReply {
             id: id.clone(),
             closed: true,
         }),
+        CliRequest::Pause { id } | CliRequest::Resume { id } => CliReply::ok(&ManageOutput {
+            id: id.clone(),
+            done: true,
+            to: None,
+            off_routing: None,
+        }),
+        CliRequest::Switch { id, .. } => CliReply::ok(&ManageOutput {
+            id: id.clone(),
+            done: true,
+            to: Some("Codex gpt-6.1-sol · high on Work".into()),
+            off_routing: Some("Off your routing: its Fallback row names Claude opus.".into()),
+        }),
         CliRequest::Queue { id, judgment } => CliReply::ok(&QueueOutput {
             id: id.clone(),
             state: match judgment {
@@ -855,6 +867,9 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["wait", "--json"],
         &["wait", "a1b2", "--timeout", "1", "--json"],
         &["close", "a1b2", "--json"],
+        &["pause", "a1b2", "--json"],
+        &["resume", "a1b2", "--json"],
+        &["switch", "a1b2", "--agent", "codex", "--json"],
         &["queue", "9f8e7d6c", "join", "--json"],
         &["queue", "9f8e7d6c", "wait", "--json"],
         &["queue", "9f8e7d6c", "worker", "a1b2", "--json"],

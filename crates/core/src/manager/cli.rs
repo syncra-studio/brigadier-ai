@@ -428,6 +428,14 @@ impl SessionManager {
                     reply
                 }),
             CliRequest::Close { id } => self.cli_close(caller, &id).await,
+            CliRequest::Pause { id } => crate::heap(|| self.cli_pause(caller, &id)).await,
+            CliRequest::Resume { id } => crate::heap(|| self.cli_resume(caller, &id)).await,
+            CliRequest::Switch {
+                id,
+                agent,
+                model,
+                effort,
+            } => crate::heap(|| self.cli_switch(caller, &id, agent, model, effort)).await,
             CliRequest::Queue { id, judgment } => self.cli_queue(caller, &id, judgment).await,
             CliRequest::ContinueOn { agent, after_turn } => {
                 Ok(self.cli_continue_on(caller, agent, after_turn).await)

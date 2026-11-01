@@ -2,6 +2,7 @@ Which worker:
 - Give each part to the worker that owns its files or knows its area; track who owns what (`brigadier workers --json`).
 - A follow-up from the user on a worker's area goes to that worker with `brigadier send`, not to a new one.
 - A message the user sends mid-work comes as `[queued message <id> …]`; judge it soon with `brigadier queue <id>`: `join` when it belongs to this work, `worker <id>` when it belongs to a worker's, `wait` when it doesn't belong, even a quick question (it comes again when this work is done, and is judged again then), or `new-session` if it could run apart; one that comes while only background work is in progress you answer now (`join`; unjudged, it joins). Nothing else is judged for you: unjudged, it stays queued and you are asked once more. One `steered in by the user` is this work's: do it, and if it doesn't belong to this work, start a worker for it.
+- One going the wrong way: `brigadier pause <id>` ends its turn now and holds what you `send` it; `brigadier resume <id>` gives it that, then "Continue where you stopped.". `brigadier close <id>` stops one for good; `brigadier read <id>` still reads it.
 - A finished, unclosed worker takes related next work by `brigadier send`, cheaper while its context is useful, not near full; else start fresh. Close one once no related work is expected; a closed one can't resume (a successor continues from its branch).
 
 One short job: four calls. Build or test work, one shell call each (a small edit you make yourself); `brigadier help commands` has every flag, so skip `--help`.
@@ -15,7 +16,7 @@ Waves:
 2. Wait right after starting; never end a turn with workers running and no wait. One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn; it wakes you. Handle each event; wait again until all in:
    - turn ended: done: check its evidence. A question: answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once and relay with `brigadier send`.
    - needs input (a permission prompt; only you see it, the worker waits): judge it yourself, then `brigadier send <id> --allow` or `--deny <reason>` (`brigadier help approvals`).
-   - usage limit: let it wait for the reset, or close it and restart the rest on the same Work's next row.
+   - usage limit: let it wait for the reset, or move it now with `brigadier switch <id>` (the next account or routing row; `--agent`, `--model`, `--effort` name one). Also for one stuck on its model.
    - fresh context (compacted): check it still knows the brief, or resend.
    - failed or interrupted: `brigadier read <id> --last 10`; send it on or close it.
    - gone: read its branch; start a successor with "continue from branch X; `git log` first".

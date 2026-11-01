@@ -238,7 +238,6 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     brigadier_compacts: false,
     subagent_transcripts: false,
     output_hook: false,
-    pause_finishes_command: true,
     // Its auto-review (the "guardian") runs in a child thread.
     child_usage: Some(children::child_usage),
     // Through its own `thread/delete`, which also takes them off the Codex app's lists.

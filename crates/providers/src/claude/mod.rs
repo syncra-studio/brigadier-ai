@@ -211,7 +211,6 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     brigadier_compacts: true,
     subagent_transcripts: true,
     output_hook: true,
-    pause_finishes_command: false,
     child_usage: None,
     removes_by_id: false,
     sign_in_code_page: true,

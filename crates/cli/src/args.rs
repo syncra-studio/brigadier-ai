@@ -424,6 +424,26 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             timeout_secs: number("timeout")?,
         },
         "close" => CliRequest::Close { id: id() },
+        "pause" => CliRequest::Pause { id: id() },
+        "resume" => CliRequest::Resume { id: id() },
+        "switch" => {
+            let given = |name: &str| {
+                args.flag(name)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            };
+            CliRequest::Switch {
+                id: id(),
+                agent: args
+                    .flag("agent")
+                    .map(str::parse)
+                    .transpose()
+                    .map_err(error)?,
+                model: given("model"),
+                effort: given("effort"),
+            }
+        }
         "queue" => {
             let worker = args.one("worker").map(str::to_owned);
             let judgment = match (args.one("judgment"), worker) {
@@ -1272,6 +1292,35 @@ mod tests {
         assert_eq!(
             run(&["close", "ab12"]).0,
             CliRequest::Close { id: "ab12".into() }
+        );
+        assert_eq!(
+            run(&["pause", "ab12"]).0,
+            CliRequest::Pause { id: "ab12".into() }
+        );
+        assert_eq!(
+            run(&["resume", "ab12"]).0,
+            CliRequest::Resume { id: "ab12".into() }
+        );
+        assert_eq!(
+            run(&["switch", "ab12"]).0,
+            CliRequest::Switch {
+                id: "ab12".into(),
+                agent: None,
+                model: None,
+                effort: None
+            }
+        );
+        assert_eq!(
+            run(&[
+                "switch", "ab12", "--agent", "codex", "--model", "m", "--effort", "high"
+            ])
+            .0,
+            CliRequest::Switch {
+                id: "ab12".into(),
+                agent: Some(ProviderKind::Codex),
+                model: Some("m".into()),
+                effort: Some("high".into())
+            }
         );
         assert_eq!(
             run(&["continue-on", "codex", "--after-turn"]).0,

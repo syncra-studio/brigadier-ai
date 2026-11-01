@@ -1069,6 +1069,13 @@ pub struct PlainWorker {
     /// session sends it something new: cut off again meanwhile, it waits for a message.
     #[serde(default)]
     pub auto_resumed: bool,
+    /// Its session paused it (`brigadier pause`, D7): it waits for `brigadier resume`, never a
+    /// reset; a quota wait is [`Task::quota_wait`], not this.
+    #[serde(default)]
+    pub paused: bool,
+    /// What reached it while paused, given with its resume.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<String>,
 }
 
 /// A worker's use of the project's Brain, shown on its row and in the Inspector
@@ -1801,6 +1808,10 @@ pub enum OrchestratorStepKind {
     },
     /// "Stopped {worker}": the orchestrator's `stop_worker`, or the user's Stop all.
     Stopped { task_id: TaskId, reason: String },
+    /// "Paused {worker}": its session's `brigadier pause` (D7).
+    Paused { task_id: TaskId },
+    /// "Resumed {worker}": its session's `brigadier resume` (D7).
+    Resumed { task_id: TaskId },
     /// "Reviewed {worker}'s change": an older Brigadier's one-shot code review of the tasks'
     /// work ended with a verdict (clean, or `findings` problems found). Nothing records it now.
     Reviewed {

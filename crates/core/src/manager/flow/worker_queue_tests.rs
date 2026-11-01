@@ -88,6 +88,17 @@ async fn working(name: &str) -> (Flow, Answers, Arc<tokio::sync::Notify>, crate:
     (flow, answers, release, task)
 }
 
+/// The worker's turn stopped in its CLI, as the user's Esc there stops it (§5.3).
+async fn interrupt(flow: &Flow, task: &crate::work::Task) {
+    let cli = flow
+        .manager
+        .task_live(task)
+        .cli()
+        .await
+        .expect("its CLI runs");
+    cli.session.interrupt().await.unwrap();
+}
+
 async fn to_worker(flow: &Flow, task: &crate::work::Task, text: &str, steer: bool) -> bool {
     flow.manager
         .send_to_worker(
@@ -240,7 +251,7 @@ async fn a_steer_to_a_busy_worker_goes_into_its_running_turn() {
 async fn after_a_stop_the_workers_message_waits_until_steered() {
     let (flow, answers, _release, task) = working("worker-stopped").await;
     assert!(to_worker(&flow, &task, "Use blue.", false).await);
-    flow.manager.pause_task(task.id.clone()).await.unwrap();
+    interrupt(&flow, &task).await;
     flow.until("the turn to end", |board| {
         Flow::task(board, 1).state != TaskState::Running
     })
@@ -275,7 +286,7 @@ async fn after_a_stop_the_workers_message_waits_until_steered() {
 async fn a_worker_row_steered_twice_at_once_reaches_the_worker_once() {
     let (flow, answers, _release, task) = working("worker-row-once").await;
     assert!(to_worker(&flow, &task, "Use blue.", false).await);
-    flow.manager.pause_task(task.id.clone()).await.unwrap();
+    interrupt(&flow, &task).await;
     flow.until("the turn to end", |board| {
         Flow::task(board, 1).state != TaskState::Running
     })

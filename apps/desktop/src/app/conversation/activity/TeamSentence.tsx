@@ -11,7 +11,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import { workedBy } from "@/app/side-panel/WorkerThread";
 import { ROW, ROW_DETAIL, ThreadActivity } from "@/components/conversation";
-import { CheckCircle, Chat, Commit, ListOrderedIcon, StopCircle } from "@/components/icons";
+import { CheckCircle, Chat, Commit, ListOrderedIcon, PauseCircle, PlayCircle, StopCircle } from "@/components/icons";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";
@@ -132,10 +132,10 @@ function lifecycleWordOf(task: Task): ReturnType<typeof lifecycleWord> {
 const USER_STOP_REASON = "Stopped by the user";
 
 /** The lead's actions on its team that show as rows; a worker started shows only when it is off the routing (D77). */
-export type TeamStepKind = Extract<OrchestratorStepKind, { type: "messaged" | "answered" | "stopped" | "landed" | "reviewed" | "created" }>;
+export type TeamStepKind = Extract<OrchestratorStepKind, { type: "messaged" | "answered" | "stopped" | "paused" | "resumed" | "landed" | "reviewed" | "created" }>;
 
 export function isTeamStep(kind: { type: string; offRouting?: string | undefined }): kind is TeamStepKind {
-  return ["messaged", "answered", "stopped", "landed", "reviewed"].includes(kind.type) || (kind.type === "created" && !!kind.offRouting);
+  return ["messaged", "answered", "stopped", "paused", "resumed", "landed", "reviewed"].includes(kind.type) || (kind.type === "created" && !!kind.offRouting);
 }
 
 /** "the change from", "the changes from": what a Landed or Reviewed row names before its workers. */
@@ -207,6 +207,15 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       detail = kind.reason && !byUser ? <QuietBrief>{kind.reason}</QuietBrief> : undefined;
       break;
     }
+    // The lead's `brigadier pause` and `resume` (D7).
+    case "paused":
+      icon = <PauseCircle aria-hidden className="size-4 shrink-0" />;
+      line = <>Paused <WorkerName taskId={kind.taskId} /></>;
+      break;
+    case "resumed":
+      icon = <PlayCircle aria-hidden className="size-4 shrink-0" />;
+      line = <>Resumed <WorkerName taskId={kind.taskId} /></>;
+      break;
     case "landed":
       icon = <Commit aria-hidden className="size-4 shrink-0" />;
       line =

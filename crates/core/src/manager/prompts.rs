@@ -615,7 +615,8 @@ mod tests {
             "Wait right after starting; never end a turn with workers running and no wait. One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn; it wakes you. Handle each event; wait again until all in:",
             "A question: answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once and relay with `brigadier send`.",
             "needs input** (a permission prompt; only you see it, the worker waits): judge it yourself, then `brigadier send <id> --allow` or `--deny <reason>`",
-            "usage limit:** let it wait for the reset, or close it and restart the rest on the same Work's next row.",
+            // Goal 3 (D118): a worker is moved, not closed and restarted.
+            "usage limit:** let it wait for the reset, or move it now with `brigadier switch <id>`",
             "fresh context** (compacted): check it still knows the brief, or resend.",
             "failed** or **interrupted:** `brigadier read <id> --last 10`; send it on or close it.",
             "gone:** read its branch; start a successor with \"continue from branch X; `git log` first\".",

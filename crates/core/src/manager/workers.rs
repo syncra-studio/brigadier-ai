@@ -134,6 +134,9 @@ pub(crate) struct TaskLive {
     /// Held while the worker's CLI starts again, so two messages never start two CLIs.
     pub(crate) reroute: tokio::sync::Mutex<()>,
     quota_transition: tokio::sync::Mutex<()>,
+    /// Held by its session's pause, resume and switch, and a message on its way, so each
+    /// sees what the one before left.
+    pub(crate) manage: tokio::sync::Mutex<()>,
     /// Its turn end is being told: it reads Reported before its event is in, and a
     /// `brigadier wait` must not end empty in between.
     pub(crate) reporting: std::sync::atomic::AtomicBool,
@@ -148,6 +151,7 @@ impl TaskLive {
             settle: tokio::sync::Mutex::new(()),
             reroute: tokio::sync::Mutex::new(()),
             quota_transition: tokio::sync::Mutex::new(()),
+            manage: tokio::sync::Mutex::new(()),
             reporting: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -325,20 +329,6 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("the task changed meanwhile".into()))
     }
 
-    /// D44/D47: a plain worker stays available after a failed or interrupted turn, but its
-    /// thread step records the turn's outcome rather than inferring success from Reported.
-    pub(super) async fn update_task_with_step(
-        &self,
-        conversation_id: &ConversationId,
-        id: &TaskId,
-        step: Option<WorkerStepKind>,
-        change: impl FnOnce(&mut Task),
-    ) -> Result<Task> {
-        self.update_task_if_with_step(conversation_id, id, |_| true, step, change)
-            .await?
-            .ok_or_else(|| Error::Invalid("the task changed meanwhile".into()))
-    }
-
     /// [`Self::update_task`] when `still` holds for the task as it is now, checked and changed
     /// in one step (nothing else changes the task in between); `None`, and nothing recorded,
     /// when it no longer holds.
@@ -353,7 +343,7 @@ impl SessionManager {
             .await
     }
 
-    async fn update_task_if_with_step(
+    pub(super) async fn update_task_if_with_step(
         &self,
         conversation_id: &ConversationId,
         id: &TaskId,
@@ -370,12 +360,16 @@ impl SessionManager {
             }
             let was = task.state;
             let reported = task.report.is_some();
+            let was_paused = explicitly_paused(&task);
             change(&mut task);
             task.updated_at_ms = now_ms();
             let mut events = vec![DomainEvent::TaskUpdated {
                 task: Box::new(task.clone()),
             }];
-            events.extend(worker_step(&task, Some(was), reported, step));
+            // Its session's pause or resume shows as that row ("Paused ‹worker›"), not twice.
+            if was_paused == explicitly_paused(&task) {
+                events.extend(worker_step(&task, Some(was), reported, step));
+            }
             self.core
                 .record_conversation(conversation_id, events)
                 .await?;
@@ -2129,6 +2123,19 @@ impl SessionManager {
         if task.state.is_final() {
             return Err(Error::Invalid(format!("worker {} has ended", task.number)));
         }
+        // Paused by its session (D7): held for its resume, whoever sent it.
+        let held = held_text(&input);
+        if self
+            .update_task_if(conversation_id, &task.id, explicitly_paused, |task| {
+                if let Some(plain) = &mut task.plain {
+                    plain.held.push(held);
+                }
+            })
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
         let live = self.task_live(task);
         self.retire_outdated_worker(&live, task).await;
         let mut state = live.state.lock().await;
@@ -2426,12 +2433,15 @@ impl SessionManager {
         Ok(outcome)
     }
 
-    /// Pauses a worker: its turn is interrupted, the session stays.
-    pub async fn pause_task(&self, task_id: TaskId) -> Result<()> {
+    /// Pauses a worker (D7, `brigadier pause`): its turn ends at once, as Esc ends it, and its
+    /// CLI session is kept for its resume; whatever reaches it meanwhile is held. Its CLI is
+    /// closed, not only interrupted, so no command of its goes on (Codex finishes one after an
+    /// interrupt) and every CLI pauses alike. False when it was paused already.
+    pub async fn pause_task(&self, task_id: TaskId) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
-        let live = self
-            .existing_task_live(&task_id)
-            .ok_or_else(|| Error::Invalid("the worker has ended".into()))?;
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
+        let live = self.task_live(&task);
+        let _managed = live.manage.lock().await;
         {
             let mut state = live.state.lock().await;
             state.quota_cancelled = true;
@@ -2439,47 +2449,103 @@ impl SessionManager {
         }
         let _settled = live.settle.lock().await;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
+        if task.state.is_final() || task.plain.is_none() {
+            return Err(Error::Invalid("the worker has ended".into()));
+        }
+        if explicitly_paused(&task) {
+            return Ok(false);
+        }
         self.cancel_worker_quota(&live, &task).await?;
-        let cli = live.state.lock().await.cli.clone();
-        if let Some(cli) = cli {
-            cli.session
-                .interrupt()
-                .await
-                .map_err(|err| Error::Provider(err.to_string()))?;
-        }
-        self.set_task_state(&conversation_id, &task_id, TaskState::Paused)
-            .await?;
-        let finishing = live
-            .state
-            .lock()
-            .await
-            .cli
-            .as_ref()
-            .and_then(|c| brigadier_providers::adapters::adapter(c.provider))
-            .filter(|adapter| adapter.pause_finishes_command);
-        if let Some(adapter) = finishing {
-            self.notice(
-                &conversation_id,
-                brigadier_providers::NoticeLevel::Info,
-                &format!(
-                    "{} finishes the command it is running before it pauses.",
-                    adapter.label
-                ),
-            )
-            .await;
-        }
-        Ok(())
+        // Recorded before its CLI goes: the turn end its close brings finds it paused.
+        self.update_task(&conversation_id, &task_id, |task| {
+            task.state = TaskState::Paused;
+            task.blocked_reason = None;
+            if let Some(plain) = &mut task.plain {
+                plain.paused = true;
+            }
+        })
+        .await?;
+        live.close_cli().await;
+        live.allow_revival().await;
+        self.orchestrator_step(
+            &conversation_id,
+            OrchestratorStepKind::Paused {
+                task_id: task_id.clone(),
+            },
+        )
+        .await;
+        // A `brigadier wait` already waiting on it ends: it sends nothing until resumed.
+        self.worker_events.added.notify_waiters();
+        Ok(true)
     }
 
-    /// Resumes a paused worker: its turn continues, in its CLI or in its resumed session.
+    /// Resumes a paused worker (D7, `brigadier resume`): what was held for it, then "Continue
+    /// where you stopped.", as one turn of its kept CLI session (its successor's after a
+    /// switch to another CLI).
     pub async fn resume_task(&self, task_id: TaskId) -> Result<()> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
-        if task.state != TaskState::Paused {
-            return Err(Error::Invalid("the worker isn't paused".into()));
+        let live = self.task_live(&task);
+        let _managed = live.manage.lock().await;
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
+        if !explicitly_paused(&task) {
+            return Err(Error::Invalid(
+                if task.quota_wait.is_some() {
+                    "the worker waits for its usage limit and goes on by itself at the reset; \
+                     `brigadier switch` moves it now"
+                } else {
+                    "the worker isn't paused"
+                }
+                .into(),
+            ));
         }
-        self.message_worker(&conversation_id, &task, "Continue the task.".into())
-            .await
+        let held = task
+            .plain
+            .as_ref()
+            .map(|plain| plain.held.clone())
+            .unwrap_or_default();
+        let set_paused = |paused: bool| {
+            move |task: &mut Task| {
+                task.state = if paused {
+                    TaskState::Paused
+                } else {
+                    TaskState::Running
+                };
+                if let Some(plain) = &mut task.plain {
+                    plain.paused = paused;
+                }
+            }
+        };
+        // Working before its input goes: a turn that ends at once ends as any turn does.
+        self.update_task(&conversation_id, &task_id, set_paused(false))
+            .await?;
+        let text = held
+            .iter()
+            .map(String::as_str)
+            .chain([RESUME_WORDS])
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if let Err(err) = self.message_worker(&conversation_id, &task, text).await {
+            // Still paused, holding what it held.
+            let _ = self
+                .update_task_if(
+                    &conversation_id,
+                    &task_id,
+                    |task| !task.state.is_final(),
+                    set_paused(true),
+                )
+                .await;
+            return Err(err);
+        }
+        self.update_task(&conversation_id, &task_id, |task| {
+            if let Some(plain) = &mut task.plain {
+                plain.held.clear();
+            }
+        })
+        .await?;
+        self.orchestrator_step(&conversation_id, OrchestratorStepKind::Resumed { task_id })
+            .await;
+        Ok(())
     }
 
     pub(crate) async fn conversation_of_task(&self, task_id: &TaskId) -> Result<ConversationId> {
@@ -3041,6 +3107,14 @@ fn worker_step(
             position: 0,
         },
     })
+}
+
+/// What a paused worker hears when it is resumed, or moved on mid-turn (D7).
+pub(crate) const RESUME_WORDS: &str = "Continue where you stopped.";
+
+/// Its session paused it (`brigadier pause`, D7), as a quota wait never does.
+pub(crate) fn explicitly_paused(task: &Task) -> bool {
+    task.state == TaskState::Paused && task.plain.as_ref().is_some_and(|plain| plain.paused)
 }
 
 /// Marks a task as being stopped while it lives (the first of concurrent stops does).

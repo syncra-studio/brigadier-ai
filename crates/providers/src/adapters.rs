@@ -99,8 +99,6 @@ pub struct Adapter {
     pub subagent_transcripts: bool,
     /// A session gets Brigadier's output hook, which trims long command output.
     pub output_hook: bool,
-    /// Pausing lets the command it runs finish first.
-    pub pause_finishes_command: bool,
     /// The child sessions a session's thread started, each with what it used, when the
     /// parent's totals leave their use out (an auto-review's).
     pub child_usage: Option<ChildUsage>,

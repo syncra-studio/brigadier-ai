@@ -2638,6 +2638,8 @@ mod turn_changes_tests;
 #[cfg(unix)]
 mod why_tests;
 #[cfg(unix)]
+mod worker_manage_tests;
+#[cfg(unix)]
 mod worker_queue_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]

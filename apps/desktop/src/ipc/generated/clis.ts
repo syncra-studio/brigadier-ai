@@ -77,6 +77,6 @@ export const CLIS: readonly CliFacts[] = [
     oneSkillPerMessage: false,
     reportsCacheWrites: true,
     subagentTools: ["subagent"],
-    extraAccounts: false,
+    extraAccounts: true,
   },
 ];

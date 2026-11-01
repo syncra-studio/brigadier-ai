@@ -113,7 +113,6 @@ pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
     brigadier_compacts: true,
     subagent_transcripts: false,
     output_hook: false,
-    pause_finishes_command: false,
     child_usage: None,
     // Through its server's `DELETE /api/session/{id}`.
     removes_by_id: true,

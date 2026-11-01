@@ -4,9 +4,9 @@ use base64::Engine as _;
 
 use crate::protocol::{
     Answer, AskOutput, Changes, CloseOutput, CommandFact, CommandStatus, GitFacts, Item, ItemKind,
-    LibraryOutput, MergeWord, QueueOutput, QueueState, ReadOutput, SendOutput, SessionsOutput,
-    ShowOutput, StartOutput, ToolOutput, TurnCommands, WaitOutput, WhyBy, WhyOutput, WorkerRow,
-    WorkerState, WorkersOutput,
+    LibraryOutput, ManageOutput, MergeWord, QueueOutput, QueueState, ReadOutput, SendOutput,
+    SessionsOutput, ShowOutput, StartOutput, ToolOutput, TurnCommands, WaitOutput, WhyBy,
+    WhyOutput, WorkerRow, WorkerState, WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
@@ -663,6 +663,27 @@ pub fn close(output: &CloseOutput) -> String {
         format!("Closed {}.\n", output.id)
     } else {
         format!("{} had already ended.\n", output.id)
+    }
+}
+
+pub fn pause(output: &ManageOutput) -> String {
+    let id = &output.id;
+    if output.done {
+        format!("Paused {id}. What you send it waits for `brigadier resume {id}`.\n")
+    } else {
+        format!("{id} was paused already.\n")
+    }
+}
+
+pub fn resume(output: &ManageOutput) -> String {
+    format!("Resumed {}: it continues where it stopped.\n", output.id)
+}
+
+pub fn switch(output: &ManageOutput) -> String {
+    let to = output.to.as_deref().unwrap_or("its next choice");
+    match &output.off_routing {
+        Some(line) => format!("Moved {} to {to}.\n{line}\n", output.id),
+        None => format!("Moved {} to {to}.\n", output.id),
     }
 }
 

@@ -79,6 +79,17 @@ pub enum CliRequest {
     },
     /// Closes one of the caller's workers.
     Close { id: String },
+    /// Pauses one of the caller's workers (D7): its turn ends now, what is sent to it waits.
+    Pause { id: String },
+    /// Resumes a paused worker: what waited, then "Continue where you stopped."
+    Resume { id: String },
+    /// Moves one of the caller's workers to another account, agent, model or effort.
+    Switch {
+        id: String,
+        agent: Option<ProviderKind>,
+        model: Option<String>,
+        effort: Option<String>,
+    },
     /// Moves the calling session to another CLI, with a fresh context and a hand-off note
     /// (S38c); while a turn runs, only with `after_turn`, once it ends.
     ContinueOn {
@@ -1102,6 +1113,21 @@ pub struct CloseOutput {
     pub id: String,
     /// False when it had already ended.
     pub closed: bool,
+}
+
+/// `brigadier pause`, `resume` and `switch`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManageOutput {
+    pub id: String,
+    /// False when there was nothing to do: a `pause` of a worker paused already.
+    pub done: bool,
+    /// `switch`: where it runs now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// `switch`: its new place is off its routing (D8, D77), the line that says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_routing: Option<String>,
 }
 
 /// `brigadier preview`, `browser`, `app`, `page` and the other tools' subcommands: what the

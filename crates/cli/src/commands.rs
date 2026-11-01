@@ -430,6 +430,46 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/close.schema.json"),
     },
     Command {
+        name: "pause",
+        summary: "Pause one of this session's workers.",
+        details: "Its turn ends now, as Esc ends it, and its CLI session is kept. What you \
+                  send it meanwhile waits for `brigadier resume`; `brigadier wait` doesn't \
+                  wait on it.",
+        args: &[positional("id", "The worker.")],
+        available: true,
+        schema: include_str!("../schemas/pause.schema.json"),
+    },
+    Command {
+        name: "resume",
+        summary: "Resume a paused worker.",
+        details: "It gets what you sent it while paused, then \"Continue where you stopped.\", \
+                  in one turn of the same session.",
+        args: &[positional("id", "The worker.")],
+        available: true,
+        schema: include_str!("../schemas/resume.schema.json"),
+    },
+    Command {
+        name: "switch",
+        summary: "Move a worker that didn't switch on its own to another account, agent, \
+                  model or effort.",
+        details: "Without flags: the next account or routing row that can take it, in the \
+                  order a usage limit uses. A working worker, or one waiting for a reset, goes \
+                  on there at once with \"Continue where you stopped.\"; a paused one stays \
+                  paused until `brigadier resume`.",
+        args: &[
+            positional("id", "The worker."),
+            flag("agent", "AGENT", "The CLI it moves to."),
+            flag(
+                "model",
+                "MODEL",
+                "The model; another agent's default when not given.",
+            ),
+            flag("effort", "EFFORT", "The reasoning effort."),
+        ],
+        available: true,
+        schema: include_str!("../schemas/switch.schema.json"),
+    },
+    Command {
         name: "queue",
         summary: "Judge a message the user sent while you work: join, wait, worker or \
                   new-session.",

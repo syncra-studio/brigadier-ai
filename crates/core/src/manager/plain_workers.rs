@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use brigadier_cli::models::Guidance;
 use brigadier_cli::protocol::{
-    self as cli, Answer, Capability, CliReply, CloseOutput, ErrorCode, EventKind, SendOutput,
-    StartOutput, StartRequest, WaitEvent, WaitOutput,
+    self as cli, Answer, Capability, CliReply, CloseOutput, ErrorCode, EventKind, ManageOutput,
+    SendOutput, StartOutput, StartRequest, WaitEvent, WaitOutput,
 };
 use brigadier_git::WorktreeSpec;
 use brigadier_providers::{ApprovalDecision, ProviderKind, TurnStatus};
@@ -423,6 +423,8 @@ impl SessionManager {
             computer_use: start.with.contains(&Capability::ComputerUse),
             closed: false,
             auto_resumed: false,
+            paused: false,
+            held: Vec::new(),
         };
         let mockup = start.mockup.then_some(MockupPart::Builds);
         let task = crate::heap(|| {
@@ -878,23 +880,39 @@ impl SessionManager {
         let finished = status != TurnStatus::Interrupted;
         live.reporting
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Its session paused it meanwhile (D7): the pause took this turn's end, and its
+        // session hears nothing of it.
         let updated = self
-            .update_task_with_step(&task.conversation_id, &task.id, step, |task| {
-                task.state = state;
-                task.blocked_reason = blocked.clone();
-                if finished && let Some(plain) = &mut task.plain {
-                    plain.auto_resumed = false;
-                }
-                if error.is_some() {
-                    task.error = error.clone();
-                }
-                if let Some(outputs) = outputs {
-                    task.outputs = outputs;
-                }
-            })
+            .update_task_if_with_step(
+                &task.conversation_id,
+                &task.id,
+                |task| !super::workers::explicitly_paused(task),
+                step,
+                |task| {
+                    task.state = state;
+                    task.blocked_reason = blocked.clone();
+                    if finished && let Some(plain) = &mut task.plain {
+                        plain.auto_resumed = false;
+                    }
+                    if error.is_some() {
+                        task.error = error.clone();
+                    }
+                    if let Some(outputs) = outputs {
+                        task.outputs = outputs;
+                    }
+                },
+            )
             .await;
-        if let Err(err) = updated {
-            tracing::warn!(task = %task.id, error = %err, "could not record a worker's turn end");
+        match updated {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                live.reporting
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not record a worker's turn end");
+            }
         }
         let mut event = event(&task.id, kind);
         match &cutoff {
@@ -1052,13 +1070,15 @@ impl SessionManager {
     /// start` reaches its CLI once that is up. True when it went into a running turn.
     async fn send_plain(&self, task: &Task, text: String) -> Result<bool> {
         let live = self.task_live(task);
+        let _managed = live.manage.lock().await;
+        let task = &self.task_by_id(&task.conversation_id, &task.id).await?;
         if task.state == TaskState::Starting {
             let up = tokio::time::Instant::now() + cli_start();
             while live.cli().await.is_none() && tokio::time::Instant::now() < up {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
-        let queued = live.busy().await;
+        let queued = live.busy().await || super::workers::explicitly_paused(task);
         self.message_worker(&task.conversation_id, task, text)
             .await?;
         Ok(queued)
@@ -1149,7 +1169,10 @@ impl SessionManager {
                 )));
             }
         }
-        if !steer && self.task_live(&task).busy().await {
+        // Paused by its session (D7), even a steer waits in the queue for its resume.
+        if super::workers::explicitly_paused(&task)
+            || (!steer && self.task_live(&task).busy().await)
+        {
             self.core
                 .enqueue_as(
                     &conversation_id,
@@ -1586,8 +1609,11 @@ impl SessionManager {
             // Read before the events: one seen idle and no longer reporting has its event in.
             let board = self.core.board(parent).await?;
             // One that reported, or waits to land, is idle: it sends nothing until messaged.
+            // A worker its session paused sends nothing until resumed; a quota wait goes on.
             let can_send = board.tasks.values().any(|task| {
-                task.plain.as_ref().is_some_and(|plain| !plain.closed)
+                task.plain
+                    .as_ref()
+                    .is_some_and(|plain| !plain.closed && !plain.paused)
                     && !task.state.is_final()
                     && (!matches!(task.state, TaskState::Reported | TaskState::ReadyToLand)
                         || self.tasks_lock().get(&task.id).is_some_and(|live| {
@@ -1627,6 +1653,144 @@ impl SessionManager {
             }),
             None,
         ))
+    }
+
+    /// `brigadier pause` (D7).
+    pub(super) async fn cli_pause(&self, caller: &CliCaller, id: &str) -> Result<CliReply> {
+        let task = match self.own_worker(caller, id).await {
+            Ok(task) => task,
+            Err(reply) => return Ok(reply),
+        };
+        let done = self.pause_task(task.id.clone()).await?;
+        Ok(CliReply::ok(&ManageOutput {
+            id: short(&task.id.0),
+            done,
+            to: None,
+            off_routing: None,
+        }))
+    }
+
+    /// `brigadier resume` (D7).
+    pub(super) async fn cli_resume(&self, caller: &CliCaller, id: &str) -> Result<CliReply> {
+        let task = match self.own_worker(caller, id).await {
+            Ok(task) => task,
+            Err(reply) => return Ok(reply),
+        };
+        self.resume_task(task.id.clone()).await?;
+        Ok(CliReply::ok(&ManageOutput {
+            id: short(&task.id.0),
+            done: true,
+            to: None,
+            off_routing: None,
+        }))
+    }
+
+    /// `brigadier switch`: a flag not given keeps what it runs now on its own agent, and is
+    /// that agent's default on another. A place off its routing moves all the same, with the
+    /// one line a start off it gets (D8, D77).
+    pub(super) async fn cli_switch(
+        &self,
+        caller: &CliCaller,
+        id: &str,
+        agent: Option<ProviderKind>,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<CliReply> {
+        let task = match self.own_worker(caller, id).await {
+            Ok(task) => task,
+            Err(reply) => return Ok(reply),
+        };
+        if let Some(agent) = agent
+            && brigadier_providers::adapters::adapter(agent).is_none()
+        {
+            return Ok(CliReply::error(
+                ErrorCode::Usage,
+                super::cli::unknown_agent(agent),
+            ));
+        }
+        let now = &task.route.choice;
+        let named = (agent.is_some() || model.is_some() || effort.is_some()).then(|| {
+            let provider = agent.unwrap_or(now.provider);
+            let same = provider == now.provider;
+            ModelChoice {
+                provider,
+                model: match model {
+                    Some(model) => Some(self.listed_model(provider, &model)),
+                    None if same => now.model.clone(),
+                    None => None,
+                },
+                effort: effort.or_else(|| same.then(|| now.effort.clone()).flatten()),
+                fast: None,
+                account: None,
+            }
+        });
+        let work = task
+            .plain
+            .as_ref()
+            .and_then(|plain| plain.quota_policy.as_ref())
+            .and_then(|policy| policy.work.clone());
+        if let Some(choice) = &named {
+            if let Some(rule) = self.model_refusal(
+                choice.provider,
+                choice.model.as_deref(),
+                choice.effort.as_deref(),
+                work.as_deref(),
+            )? {
+                return Ok(refused(rule));
+            }
+            // D18: the servers it was granted, on its new CLI too.
+            if choice.provider != now.provider
+                && let (Some(plain), Some(workspace)) = (&task.plain, &task.workspace)
+            {
+                let cwd = workspace.worktree.as_deref().unwrap_or(&workspace.scratch);
+                if let Err(message) = self
+                    .worker_grants_named(
+                        &task.conversation_id,
+                        choice.provider,
+                        std::path::Path::new(cwd),
+                        &plain.mcps,
+                    )
+                    .await
+                {
+                    return Ok(CliReply::error(ErrorCode::NotFound, message));
+                }
+            }
+        }
+        let (to, account) = self.switch_worker(&task, named.clone()).await?;
+        let off_routing = match named {
+            Some(_) => {
+                let mut choice = to.clone();
+                choice.account = None;
+                self.off_routing(work.as_deref(), None, &choice).await?
+            }
+            None => None,
+        };
+        if let Some(line) = &off_routing {
+            self.orchestrator_step(
+                &caller.conversation_id,
+                crate::work::OrchestratorStepKind::Created {
+                    task_id: task.id.clone(),
+                    off_routing: Some(line.clone()),
+                },
+            )
+            .await;
+        }
+        let words = format!(
+            "{} {}{} on {}",
+            brigadier_providers::KindFacts::label(to.provider),
+            to.model.as_deref().unwrap_or("its default model"),
+            to.effort
+                .as_deref()
+                .map(|effort| format!(" · {effort}"))
+                .unwrap_or_default(),
+            self.runtime.account_label(&account),
+        );
+        Ok(CliReply::ok(&ManageOutput {
+            id: short(&task.id.0),
+            done: true,
+            to: Some(words),
+            off_routing,
+        }))
     }
 
     /// `brigadier close`: stops one of the caller's workers for good. Unfinished changes are
