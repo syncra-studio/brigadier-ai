@@ -935,8 +935,9 @@ pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
 }
 
 /// The thread offers a drafted report to Brigadier's developers once per incident: once in a
-/// request, none while the last offer is unanswered, again after the user sent it, never the
-/// report they dismissed again, but a new incident's (D131). The user's answer is kept once.
+/// request, never again while its card is unanswered or after they dismissed it, again after the
+/// user sent it, and a new incident's beside an unanswered card (D131). The user's answer is kept
+/// once.
 #[tokio::test]
 async fn the_thread_offers_feedback_once_per_incident() {
     let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
@@ -1049,14 +1050,14 @@ async fn the_thread_offers_feedback_once_per_incident() {
     let shown = offers(&board);
     assert_eq!(shown.len(), 1);
 
-    // Unanswered: no new offer.
+    // Unanswered: that report isn't offered again.
     flow.say("Still broken.").await;
     let board = flow.settled().await;
     let second = taken(&replies);
     assert!(
         second
             .iter()
-            .all(|reply| reply.0 && reply.1.contains("hasn't answered")),
+            .all(|reply| reply.0 && reply.1.contains("unanswered")),
         "{second:?}"
     );
     assert_eq!(offers(&board).len(), 1);
@@ -1140,12 +1141,7 @@ async fn the_thread_offers_feedback_once_per_incident() {
     assert!(fifth.iter().all(|reply| !reply.0), "{fifth:?}");
     assert_eq!(offers(&board).len(), 3);
 
-    // A new incident after the dismissal gets its own card, once the last one is answered.
-    let shown = offers(&board);
-    flow.manager
-        .answer_feedback_offer(&flow.conversation, &shown[2], true, Vec::new())
-        .await
-        .unwrap();
+    // A new incident gets its own card, beside the asked-for one still unanswered (D131).
     flow.say("Now the sidebar is empty.").await;
     let board = flow.settled().await;
     let sixth = taken(&replies);
@@ -1158,8 +1154,8 @@ async fn the_thread_offers_feedback_once_per_incident() {
 type Offered = Arc<Mutex<Vec<(String, bool, String)>>>;
 
 /// Asked to report several things at once, the thread offers a card for each (#483): up to ten
-/// in a request, each title once, each answered on its own. Any card of that request still
-/// unanswered holds back the next unasked offer; a dismissed one holds back only its own report.
+/// in a request, each title once, each answered on its own. A card unanswered or dismissed holds
+/// back only its own report: a different one is offered (D131).
 #[tokio::test]
 async fn several_feedback_cards_are_offered_when_asked() {
     let replies: Offered = Arc::default();
@@ -1261,16 +1257,14 @@ async fn several_feedback_cards_are_offered_when_asked() {
     assert_eq!(answered.len(), 9);
     assert!(!answered.contains(&shown[5]));
 
-    // One card of that request unanswered, though the last one was sent: no unasked offer.
+    // One card of that request unanswered: a different report is still offered (D131).
     flow.say("Ugh, still broken.").await;
-    flow.settled().await;
+    let board = flow.settled().await;
     let second = taken(&replies);
-    assert!(
-        second.len() == 1 && second[0].1 && second[0].2.contains("hasn't answered"),
-        "{second:?}"
-    );
+    assert!(second.len() == 1 && !second[0].1, "{second:?}");
+    assert_eq!(offers(&board).len(), 11);
 
-    // That one dismissed: a different report is offered (D131).
+    // Its own card unanswered: that report isn't offered again, a dismissal elsewhere aside.
     flow.manager
         .answer_feedback_offer(&flow.conversation, &shown[5], false, Vec::new())
         .await
@@ -1278,7 +1272,10 @@ async fn several_feedback_cards_are_offered_when_asked() {
     flow.say("Ugh.").await;
     let board = flow.settled().await;
     let third = taken(&replies);
-    assert!(third.len() == 1 && !third[0].1, "{third:?}");
+    assert!(
+        third.len() == 1 && third[0].1 && third[0].2.contains("unanswered"),
+        "{third:?}"
+    );
     assert_eq!(offers(&board).len(), 11);
     flow.stop().await;
 }

@@ -1033,8 +1033,8 @@ pub const COMMANDS: &[Command] = &[
                   click. body: what happened and what they \
                   expected, steps if known, a few plain lines in their words; no secrets, \
                   paths or project code. With no body, or `-`, it comes from standard input. \
-                  One offer per incident: unless --asked, refused while an earlier one is \
-                  unanswered, or for a report they dismissed.",
+                  One offer per incident: unless --asked, refused for a report still unanswered \
+                  on its card or that they dismissed.",
         args: &[
             action(&["offer"], "What to do."),
             choice(
