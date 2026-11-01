@@ -2198,15 +2198,18 @@ impl SessionManager {
     /// Stops a worker for good (`brigadier close`, or the user's stop button). Unfinished
     /// changes are kept on the task branch as a WIP commit.
     pub async fn stop_task(&self, task_id: TaskId) -> Result<()> {
-        self.stop_if(task_id, unfinished).await.map(drop)
+        self.stop_if(task_id, unfinished, false).await.map(drop)
     }
 
     /// [`Self::stop_task`] if its state still passes `eligible`, saying whether it stopped it.
-    /// Decided under its settle lock, so two stops never both take effect.
+    /// Decided under its settle lock, so two stops never both take effect. `done`: it finished
+    /// and is closed: its unfinished changes are kept as a stop's are, but it ends done, with
+    /// no "stopped" row (D104).
     pub(super) async fn stop_if(
         &self,
         task_id: TaskId,
         eligible: fn(TaskState) -> bool,
+        done: bool,
     ) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let live = self.existing_task_live(&task_id);
@@ -2232,7 +2235,9 @@ impl SessionManager {
         if let Some(live) = &live {
             live.close_cli().await;
         }
-        self.dispose_task(&task, stopped_state(&task)).await;
+        let kept_as = stopped_state(&task);
+        let state = if done { TaskState::Done } else { kept_as };
+        self.dispose_task_as(&task, kept_as, state).await;
         drop(settled);
         Ok(true)
     }
@@ -2260,7 +2265,7 @@ impl SessionManager {
         eligible: fn(TaskState) -> bool,
     ) -> Result<bool> {
         // It may have moved on since the caller looked: only a real stop is filed.
-        if !self.stop_if(task.id.clone(), eligible).await? {
+        if !self.stop_if(task.id.clone(), eligible, false).await? {
             return Ok(false);
         }
         self.orchestrator_step(
@@ -2518,6 +2523,11 @@ impl SessionManager {
     /// `task:<id>` is removed. Branches with unlanded work stay; a task branch with nothing to
     /// keep goes with the worktree.
     pub(crate) async fn dispose_task(&self, task: &Task, state: TaskState) {
+        self.dispose_task_as(task, state, state).await;
+    }
+
+    /// [`Self::dispose_task`], its changes kept as a task ending `kept_as` keeps them.
+    async fn dispose_task_as(&self, task: &Task, kept_as: TaskState, state: TaskState) {
         // A yes the user gave it in the browser goes with it.
         self.browser.forget_task(&task.conversation_id, &task.id);
         if let Some(live) = self.existing_task_live(&task.id) {
@@ -2527,7 +2537,7 @@ impl SessionManager {
         // unfinished work is kept, so none writes into the kept commit.
         self.stop_task_previews(&task.conversation_id, &task.id)
             .await;
-        let (kept, drop_branch) = match state {
+        let (kept, drop_branch) = match kept_as {
             TaskState::Stopped | TaskState::Failed => self.keep_unfinished(task).await,
             // A write task that ends done changed nothing that could land.
             TaskState::Done => (None, true),

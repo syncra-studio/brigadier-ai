@@ -1101,6 +1101,16 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
             by_user: false,
         },]
     );
+    // Nor a "‹worker› stopped" row of its own: it ends done (D104).
+    let stopped: Vec<_> = flow
+        .board()
+        .await
+        .worker_steps
+        .into_iter()
+        .filter(|step| step.task_id == a.id && step.kind == crate::work::WorkerStepKind::Stopped)
+        .collect();
+    assert_eq!(stopped, vec![], "{:?}", a.state);
+    assert_eq!(a.state, crate::work::TaskState::Done);
     flow.stop().await;
 }
 

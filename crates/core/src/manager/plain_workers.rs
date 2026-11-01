@@ -1641,7 +1641,7 @@ impl SessionManager {
         let done = self.worker_turn_done(&task.id);
         // A finished worker closed files no "Stopped" row: it finished (D104).
         let closed = if done {
-            self.stop_if(task.id.clone(), |state| !state.is_final())
+            self.stop_if(task.id.clone(), |state| !state.is_final(), true)
                 .await?
         } else {
             self.stop_worker(
@@ -1655,9 +1655,6 @@ impl SessionManager {
             self.update_task(&task.conversation_id, &task.id, |task| {
                 if let Some(plain) = &mut task.plain {
                     plain.closed = true;
-                }
-                if done && task.state == TaskState::Stopped {
-                    task.state = TaskState::Done;
                 }
             })
             .await?;
