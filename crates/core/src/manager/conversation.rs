@@ -4111,6 +4111,17 @@ impl SessionManager {
             };
             tokio::select! {
                 event = events.recv() => {
+                    // Brigadier quitting closes the CLI mid-turn: a CLI that says the turn was
+                    // interrupted on its way out reads as one whose process just ended, cut by
+                    // the quit (H1), never the user's Stop. The same for every CLI.
+                    if matches!(
+                        &event,
+                        Some(ProviderEvent::TurnCompleted { status: TurnStatus::Interrupted, .. })
+                    ) && !self.admitting.load(std::sync::atomic::Ordering::Acquire)
+                        && conv.state.lock().await.closing
+                    {
+                        continue;
+                    }
                     self.note_thread_progress(&conv, &cli, event.as_ref()).await;
                     // Auto-joined messages belong to this turn's final request list (#629).
                     // Settle them while it is still busy, before persisting its end.

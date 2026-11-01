@@ -652,6 +652,9 @@ pub(crate) struct FakeBehavior {
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
     /// Off, it is dropped.
     pub take_in_steers: bool,
+    /// Closed mid-turn, it says that turn was interrupted before it ends, as the Codex and
+    /// OpenCode CLIs do; off, its process just ends, as Claude Code's does.
+    pub interrupt_on_close: bool,
     pub cleanup: bool,
     /// Claude keeps each session's thread in a session file of its own shape, as Claude Code
     /// does ([`session_line`]), and names it at its start.
@@ -1607,8 +1610,19 @@ impl ProviderSession for FakeSession {
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 self.stops.1.notify_waiters();
             }
+            let running = *self.running.lock().unwrap();
             let tx = self.events.lock().unwrap().take();
             if let Some(tx) = tx {
+                if running && self.behavior.interrupt_on_close {
+                    let _ = tx
+                        .send(ProviderEvent::TurnCompleted {
+                            turn_id: None,
+                            status: TurnStatus::Interrupted,
+                            duration_ms: Some(1),
+                            usage: None,
+                        })
+                        .await;
+                }
                 let _ = tx
                     .send(ProviderEvent::Exited {
                         code: Some(0),

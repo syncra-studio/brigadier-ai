@@ -167,6 +167,29 @@ async fn a_quit_mid_turn_goes_on_by_itself_once() {
     flow.stop().await;
 }
 
+/// A CLI that says its turn was interrupted as Brigadier quits closes it (Codex, OpenCode)
+/// reads the same as one whose process just ends: cut by the quit, never the user's stop.
+#[tokio::test]
+async fn a_quit_mid_turn_goes_on_by_itself_once_when_its_cli_says_interrupted() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "interrupted-quit-said",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                interrupt_on_close: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        holding(seen.clone()),
+    )
+    .await;
+    let request = held_turn(&flow, &seen).await;
+    flow.restart().await;
+    went_on_by_itself(&flow, &request, &seen).await;
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_crash_mid_turn_goes_on_by_itself_once() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::default();
