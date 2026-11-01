@@ -219,7 +219,7 @@ index b80cc3ddf..849d6d4ad 100644
      fn an_invalid_window_cannot_invoke_a_menu() {
          assert!(super::invoke(0, &["File".into(), "Save as".into()]).is_err());
 diff --git a/crates/platform-windows/src/uia/windows_enum.rs b/crates/platform-windows/src/uia/windows_enum.rs
-index 2f671ebab..1da908790 100644
+index 2f671ebab..88ce0e492 100644
 --- a/crates/platform-windows/src/uia/windows_enum.rs
 +++ b/crates/platform-windows/src/uia/windows_enum.rs
 @@ -644,6 +644,27 @@ fn try_invoke_accelerator_in_window_unbounded(
@@ -250,13 +250,9 @@ index 2f671ebab..1da908790 100644
          let cond = uia
              .CreateTrueCondition()
              .context("CreateTrueCondition failed")?;
-@@ -653,45 +674,39 @@ fn try_invoke_accelerator_in_window_unbounded(
-         let count = arr.Length().unwrap_or(0);
+@@ -654,44 +675,34 @@ fn try_invoke_accelerator_in_window_unbounded(
          let mut matched_failure: Option<String> = None;
  
-+        if count > 5000 {
-+            bail!("accelerator tree exceeded 5000 elements");
-+        }
          for i in 0..count {
 +            super::click::ensure_active(cancelled)?;
              let elem = match arr.GetElement(i) {
@@ -293,14 +289,13 @@ index 2f671ebab..1da908790 100644
 -                None => continue,
 -            };
 -            let Some(candidate) = canonical_accelerator(&accelerator) else {
-+            if elem
-+                .CurrentIsOffscreen()
++            // UIA marks all descendants of minimized windows, and scrolled-out
++            // toolbar controls, offscreen. Their advertised shortcuts remain
++            // valid; visibility is only required for menu headers we expand.
++            if !elem
++                .CurrentIsEnabled()
 +                .map(|v| v.as_bool())
-+                .unwrap_or(true)
-+                || !elem
-+                    .CurrentIsEnabled()
-+                    .map(|v| v.as_bool())
-+                    .unwrap_or(false)
++                .unwrap_or(false)
 +            {
                  continue;
 -            };
@@ -316,7 +311,7 @@ index 2f671ebab..1da908790 100644
  
              if cancelled.load(Ordering::Acquire) {
                  tracing::debug!(
-@@ -753,6 +768,43 @@ fn read_current_bstr(
+@@ -753,6 +764,43 @@ fn read_current_bstr(
      }
  }
  

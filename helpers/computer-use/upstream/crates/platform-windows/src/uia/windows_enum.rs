@@ -674,9 +674,6 @@ fn scan_accelerator_scope(
         let count = arr.Length().unwrap_or(0);
         let mut matched_failure: Option<String> = None;
 
-        if count > 5000 {
-            bail!("accelerator tree exceeded 5000 elements");
-        }
         for i in 0..count {
             super::click::ensure_active(cancelled)?;
             let elem = match arr.GetElement(i) {
@@ -689,14 +686,13 @@ fn scan_accelerator_scope(
                     continue;
                 }
             };
-            if elem
-                .CurrentIsOffscreen()
+            // UIA marks all descendants of minimized windows, and scrolled-out
+            // toolbar controls, offscreen. Their advertised shortcuts remain
+            // valid; visibility is only required for menu headers we expand.
+            if !elem
+                .CurrentIsEnabled()
                 .map(|v| v.as_bool())
-                .unwrap_or(true)
-                || !elem
-                    .CurrentIsEnabled()
-                    .map(|v| v.as_bool())
-                    .unwrap_or(false)
+                .unwrap_or(false)
             {
                 continue;
             }
