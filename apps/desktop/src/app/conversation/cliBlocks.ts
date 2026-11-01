@@ -671,8 +671,10 @@ export function cliBlocks(
   // yet: where the CLI last read it in the turn running now (it joins that turn), else on its way.
   const inRail = new Set((board?.queueItems ?? []).flatMap((item) => (item.delivered ? [item.id.slice(-8)] : [])));
   // The queued messages the session took in (a turn names them, or Brigadier keeps them as the
-  // user's): one handed to a worker, or still judged, never shows in this thread (D68).
-  const tookIn = new Set([...view.turns.flatMap((each) => each.requests), ...kept].map((request) => request.slice(-8)));
+  // user's): one handed to a worker, or still judged, never shows in this thread (D68). A turn
+  // woken to judge one names it from the start; it took it in only once it is a request here.
+  const isRequest = (request: string) => !board?.requests || request in board.requests;
+  const tookIn = new Set([...view.turns.flatMap((each) => each.requests.filter(isRequest)), ...kept].map((request) => request.slice(-8)));
   const takenIn = new Map<string, number>();
   // The first turn naming it took it: a later turn may carry it on as its first request.
   view.turns.forEach((each, index) => each.requests.forEach((request) => !takenIn.has(request.slice(-8)) && takenIn.set(request.slice(-8), index)));

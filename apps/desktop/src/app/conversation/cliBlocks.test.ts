@@ -1408,4 +1408,10 @@ test("D68: a follow-up is in the rail or in the thread, exactly once, at every s
       shownAs = where;
     });
   }
+  // A turn woken to judge it names it from the start: handed to a worker from there, it never
+  // became a request here, so no bubble (seen live after a reload); joined there, one.
+  const woken = (messages: Message[], requests: Record<string, unknown>) =>
+    shown(cliThreadTree({ entries: judged, turns: open(["r1", id]) }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: [], requests }, running));
+  assert.ok(!JSON.stringify(woken(kept(), { r1: {} })).includes(words), JSON.stringify(woken(kept(), { r1: {} })));
+  assert.equal(JSON.stringify(woken(kept(taken), { r1: {}, [id]: {} })).split(words).length - 1, 1);
 });

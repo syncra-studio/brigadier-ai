@@ -296,6 +296,8 @@ export type BoardDigest = {
   peerMessages?: Readonly<Record<string, PeerMessage>>;
   /** The queue rail's messages: one the CLI already has shows there, not in the thread. */
   queueItems?: readonly QueuedMessage[];
+  /** The user's requests, by id: a follow-up handed to a worker never becomes one here. */
+  requests?: Readonly<Record<string, unknown>>;
 };
 
 const WORKING: ReadonlySet<Task["state"]> = new Set([

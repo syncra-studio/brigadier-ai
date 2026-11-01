@@ -572,6 +572,7 @@ export function ConversationView({
             compactions: s.board.compactions,
             peerMessages: s.board.peerMessages,
             queueItems: s.board.queue.items,
+            requests: s.board.requests,
           }
         : null,
     ),
