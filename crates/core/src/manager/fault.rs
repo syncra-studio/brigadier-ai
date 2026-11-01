@@ -345,31 +345,26 @@ impl SessionManager {
         };
         drop(armed);
         match fault.what {
-            Injected::Limit(limit) => {
-                before.extend(self.limit_report(fault.provider, limit));
-                before.push(event);
-            }
-            Injected::Error(error) => {
-                before.push(ProviderEvent::Error {
-                    error: error.error(fault.provider),
-                });
-                // A CLI that hit the error ends its turn failed, not stopped.
-                before.push(match event {
-                    ProviderEvent::TurnCompleted {
-                        turn_id,
-                        duration_ms,
-                        usage,
-                        ..
-                    } => ProviderEvent::TurnCompleted {
-                        turn_id,
-                        status: TurnStatus::Failed,
-                        duration_ms,
-                        usage,
-                    },
-                    other => other,
-                });
-            }
+            Injected::Limit(limit) => before.extend(self.limit_report(fault.provider, limit)),
+            Injected::Error(error) => before.push(ProviderEvent::Error {
+                error: error.error(fault.provider),
+            }),
         }
+        // A CLI that hit a limit or an error ends its turn failed, never as the user's Stop.
+        before.push(match event {
+            ProviderEvent::TurnCompleted {
+                turn_id,
+                duration_ms,
+                usage,
+                ..
+            } => ProviderEvent::TurnCompleted {
+                turn_id,
+                status: TurnStatus::Failed,
+                duration_ms,
+                usage,
+            },
+            other => other,
+        });
         before
     }
 
