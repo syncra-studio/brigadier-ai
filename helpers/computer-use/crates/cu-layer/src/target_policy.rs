@@ -193,8 +193,14 @@ fn check_pid(
                     .bundle_id
                     .as_ref()
                     .is_some_and(|id| allowed.iter().any(|entry| entry.eq_ignore_ascii_case(id)));
-                if !unlocked && process_hosts_terminal(pid) {
-                    return Err(refusal(tool, &identity, RefusalReason::Terminal));
+                if !unlocked {
+                    if let Some(evidence) = process_hosts_terminal(pid) {
+                        let identity = TargetIdentity {
+                            pid: identity.pid.or(Some(pid)),
+                            ..identity
+                        };
+                        return Err(console_host_refusal(tool, &identity, &evidence));
+                    }
                 }
             }
             Ok(())
@@ -606,15 +612,31 @@ struct ProcessFact {
     parent: i64,
     executable: String,
     has_tty: bool,
+    /// When the process started (on Windows a FILETIME), if known. Windows
+    /// keeps a dead parent's id in its children's records and reuses ids, so
+    /// a "parent" that started after its child is not the one that created it.
+    started: Option<u64>,
+}
+
+/// The console or shell process that made a target look like a terminal,
+/// and the processes between it and the target.
+#[cfg(any(not(target_os = "macos"), test))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConsoleEvidence {
+    pid: i64,
+    executable: String,
+    /// `(pid, executable)` from the evidence's parent up to, not including,
+    /// the target.
+    via: Vec<(i64, String)>,
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
-fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> bool {
-    let parents: std::collections::HashMap<i64, i64> = processes
+fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> Option<ConsoleEvidence> {
+    let by_pid: std::collections::HashMap<i64, &ProcessFact> = processes
         .iter()
-        .map(|process| (process.pid, process.parent))
+        .map(|process| (process.pid, process))
         .collect();
-    processes.iter().any(|process| {
+    processes.iter().find_map(|process| {
         let executable = process.executable.to_ascii_lowercase();
         let executable = executable.rsplit(['/', '\\']).next().unwrap_or(&executable);
         let executable = executable.strip_suffix(".exe").unwrap_or(executable);
@@ -627,41 +649,58 @@ fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> bool {
             process.has_tty && is_windows_or_linux_terminal(executable)
         };
         if !evidence {
-            return false;
+            return None;
         }
-        let mut ancestor = process.pid;
+        let mut via = Vec::new();
+        if process.pid == pid {
+            return Some(ConsoleEvidence {
+                pid: process.pid,
+                executable: process.executable.clone(),
+                via,
+            });
+        }
+        let mut child = process;
         // Bound traversal and tolerate exit races, cycles and reparenting.
         for _ in 0..128 {
-            if ancestor == pid {
-                return true;
+            if child.parent <= 0 || child.parent == child.pid {
+                return None;
             }
-            let Some(parent) = parents.get(&ancestor).copied() else {
-                return false;
-            };
-            if parent <= 0 || parent == ancestor {
-                return false;
+            let parent = by_pid.get(&child.parent).copied()?;
+            // A parent younger than its child holds a reused id: the real
+            // parent has exited. An unknown start time keeps the link, so a
+            // process that cannot be queried still fails closed.
+            if let (Some(parent_started), Some(child_started)) = (parent.started, child.started) {
+                if parent_started > child_started {
+                    return None;
+                }
             }
-            ancestor = parent;
+            if parent.pid == pid {
+                return Some(ConsoleEvidence {
+                    pid: process.pid,
+                    executable: process.executable.clone(),
+                    via,
+                });
+            }
+            via.push((parent.pid, parent.executable.clone()));
+            child = parent;
         }
-        false
+        None
     })
 }
 
 #[cfg(target_os = "linux")]
-fn process_hosts_terminal(pid: i64) -> bool {
+fn process_hosts_terminal(pid: i64) -> Option<ConsoleEvidence> {
     let Ok(mut child) = std::process::Command::new("/bin/ps")
         .args(["-A", "-o", "pid=,ppid=,tty=,comm="])
         .stdout(std::process::Stdio::piped())
         .spawn()
     else {
-        return false;
+        return None;
     };
     // Drain concurrently: a full stdout pipe must not turn the deadline into
     // a permanent refusal on machines with many processes.
     use std::io::Read;
-    let Some(mut stdout) = child.stdout.take() else {
-        return false;
-    };
+    let mut stdout = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -672,9 +711,8 @@ fn process_hosts_terminal(pid: i64) -> bool {
     // Even after stdout closes, do not wait indefinitely for ps to exit.
     let _ = child.kill();
     let _ = child.wait();
-    let Ok(output) = output else {
-        return false;
-    };
+    let output = output.ok()?;
+    // Linux reparents orphans, so `ppid` never names a dead parent.
     let processes: Vec<ProcessFact> = String::from_utf8_lossy(&output)
         .lines()
         .filter_map(|line| {
@@ -687,6 +725,7 @@ fn process_hosts_terminal(pid: i64) -> bool {
                 parent,
                 executable: fields.collect::<Vec<_>>().join(" "),
                 has_tty: !matches!(tty, "?" | "??" | "-"),
+                started: None,
             })
         })
         .collect();
@@ -694,23 +733,23 @@ fn process_hosts_terminal(pid: i64) -> bool {
 }
 
 #[cfg(windows)]
-fn process_hosts_terminal(pid: i64) -> bool {
+fn process_hosts_terminal(pid: i64) -> Option<ConsoleEvidence> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
+    let mut processes = Vec::new();
     // SAFETY: the snapshot is closed on every successful acquisition; each
     // PROCESSENTRY32W has the required size and a live, fixed-size name buffer.
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return false;
+            return None;
         };
         let mut entry = PROCESSENTRY32W {
             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
             ..Default::default()
         };
-        let mut processes = Vec::new();
         let mut next = Process32FirstW(snapshot, &mut entry);
         while next.is_ok() {
             let len = entry
@@ -723,12 +762,90 @@ fn process_hosts_terminal(pid: i64) -> bool {
                 parent: i64::from(entry.th32ParentProcessID),
                 executable: String::from_utf16_lossy(&entry.szExeFile[..len]),
                 has_tty: false,
+                started: None,
             });
             next = Process32NextW(snapshot, &mut entry);
         }
         let _ = CloseHandle(snapshot);
-        hosts_terminal(pid, &processes, true)
     }
+    // Toolhelp keeps a dead parent's id and Windows reuses ids, so a console
+    // whose creator exited can name an unrelated app as its parent. Start
+    // times are read only when the ids alone suggest a terminal host.
+    hosts_terminal(pid, &processes, true)?;
+    for process in &mut processes {
+        process.started = process_start_time(process.pid);
+    }
+    hosts_terminal(pid, &processes, true)
+}
+
+/// A process's creation time (FILETIME), read without attaching to it.
+#[cfg(windows)]
+fn process_start_time(pid: i64) -> Option<u64> {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let pid = u32::try_from(pid).ok().filter(|pid| *pid != 0)?;
+    let (mut created, mut exited, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    // SAFETY: a limited, read-only handle, closed after one query.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let read = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user);
+        let _ = CloseHandle(handle);
+        read.ok()?;
+    }
+    Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+/// A terminal refusal from process evidence rather than the app's identity.
+/// It says what was found, so a refused ordinary app can be diagnosed.
+#[cfg(any(not(target_os = "macos"), test))]
+fn console_host_refusal(
+    tool: &str,
+    identity: &TargetIdentity,
+    evidence: &ConsoleEvidence,
+) -> ToolResult {
+    let bundle = identity.bundle_id.as_deref().unwrap_or("unknown bundle");
+    let mut found = format!("{} (pid {})", evidence.executable, evidence.pid);
+    for (pid, executable) in &evidence.via {
+        found.push_str(&format!(", started by {executable} (pid {pid})"));
+    }
+    let target_pid = identity
+        .pid
+        .map(|pid| format!(" (pid {pid})"))
+        .unwrap_or_default();
+    let message = format!(
+        "target_not_allowed: {tool} refused to target '{name}' ({bundle}). '{name}' is not a \
+         known terminal app, but a console or shell process runs under it: {found}, started \
+         by '{name}'{target_pid}. Brigadier Computer Use treats an app that hosts a console as \
+         a terminal app and does not act on it by default. If this app is a terminal, run the \
+         command in your own shell instead; otherwise ask the user to do this step.",
+        name = identity.name
+    );
+    ToolResult::error(message.clone()).with_structured(json!({
+        "code": "target_not_allowed",
+        "reason": RefusalReason::Terminal.as_str(),
+        "detected": "console_in_process_tree",
+        "console": {
+            "pid": evidence.pid,
+            "executable": evidence.executable,
+            "via": evidence
+                .via
+                .iter()
+                .map(|(pid, executable)| json!({"pid": pid, "executable": executable}))
+                .collect::<Vec<_>>(),
+        },
+        "tool": tool,
+        "app": identity.name,
+        "bundle_id": identity.bundle_id,
+        "pid": identity.pid,
+        "message": message,
+    }))
 }
 
 /// Native launch aliases do not pass through the macOS `name`/`bundle_id`
@@ -983,6 +1100,7 @@ mod tests {
             parent,
             executable: executable.into(),
             has_tty,
+            started: None,
         }
     }
 
@@ -1050,20 +1168,136 @@ mod tests {
                 process(11, 10, "broker.exe", false),
                 process(12, 11, host, false),
             ];
-            assert!(hosts_terminal(10, &processes, true), "{host}");
-            assert!(!hosts_terminal(99, &processes, true));
+            assert!(hosts_terminal(10, &processes, true).is_some(), "{host}");
+            assert!(hosts_terminal(99, &processes, true).is_none());
         }
         let shell = [
             process(20, 1, "unknown-gui", false),
             process(21, 20, "/bin/zsh", true),
         ];
-        assert!(hosts_terminal(20, &shell, false));
+        assert!(hosts_terminal(20, &shell, false).is_some());
         let script = [
             process(20, 1, "ordinary-gui", false),
             process(21, 20, "/bin/zsh", false),
         ];
-        assert!(!hosts_terminal(20, &script, false));
-        assert!(!hosts_terminal(20, &[process(21, 21, "sh", true)], false));
+        assert!(hosts_terminal(20, &script, false).is_none());
+        assert!(hosts_terminal(20, &[process(21, 21, "sh", true)], false).is_none());
+    }
+
+    fn started(pid: i64, parent: i64, executable: &str, at: u64) -> ProcessFact {
+        ProcessFact {
+            started: Some(at),
+            ..process(pid, parent, executable, false)
+        }
+    }
+
+    /// A console whose creator exited still names the creator's id, and
+    /// Windows hands that id to the next process, here a task browser.
+    #[test]
+    fn a_console_naming_a_reused_parent_id_does_not_make_a_browser_a_terminal() {
+        let processes = [
+            started(4, 0, "System", 1),
+            // An orphaned shell and its console from a script that exited.
+            started(5428, 14164, "bash.exe", 100),
+            started(5429, 5428, "conhost.exe", 101),
+            // The task browser that later received id 14164, and its children.
+            started(21000, 4, "brigadier-cu.exe", 50),
+            started(14164, 21000, "chrome.exe", 200),
+            started(14170, 14164, "chrome.exe", 201),
+            started(14171, 14164, "chrome.exe", 202),
+        ];
+        assert_eq!(hosts_terminal(14164, &processes, true), None);
+        // A stale link part way up the chain breaks it too.
+        let deeper = [
+            started(30, 0, "explorer.exe", 1),
+            started(31, 30, "chrome.exe", 300),
+            started(32, 31, "broker.exe", 100),
+            started(33, 32, "OpenConsole.exe", 110),
+        ];
+        assert_eq!(hosts_terminal(31, &deeper, true), None);
+        // The same tree without start times (an unreadable process) still
+        // counts: unknown times fail closed.
+        let unknown: Vec<ProcessFact> = processes
+            .iter()
+            .map(|fact| process(fact.pid, fact.parent, &fact.executable, false))
+            .collect();
+        assert!(hosts_terminal(14164, &unknown, true).is_some());
+    }
+
+    #[test]
+    fn real_terminal_hosts_are_still_found_with_start_times() {
+        // Windows Terminal hosts OpenConsole and the shell as children.
+        let windows_terminal = [
+            started(40, 1, "explorer.exe", 1),
+            started(41, 40, "WindowsTerminal.exe", 10),
+            started(42, 41, "OpenConsole.exe", 11),
+            started(43, 41, "pwsh.exe", 11),
+        ];
+        assert!(hosts_terminal(41, &windows_terminal, true).is_some());
+        // A renamed terminal through a broker, with ordered start times.
+        let renamed = [
+            started(10, 1, "renamed-host.exe", 5),
+            started(11, 10, "broker.exe", 6),
+            started(12, 11, "conhost.exe", 7),
+        ];
+        let evidence = hosts_terminal(10, &renamed, true).unwrap();
+        assert_eq!(evidence.pid, 12);
+        assert_eq!(evidence.via, vec![(11, "broker.exe".to_owned())]);
+        // A conhost-hosted shell renamed to something unknown.
+        let hosted = [
+            started(50, 1, "my-shell.exe", 20),
+            started(51, 50, "conhost.exe", 20),
+        ];
+        assert!(hosts_terminal(50, &hosted, true).is_some());
+        // Real terminals keep their identity refusal regardless of the tree.
+        for name in ["WindowsTerminal", "conhost", "cmd", "pwsh"] {
+            assert_eq!(
+                classify(&exe_identity(name), &[]),
+                Some(RefusalReason::Terminal),
+                "{name}"
+            );
+        }
+        // The browser itself is not a terminal by identity.
+        assert_eq!(classify(&exe_identity("chrome"), &[]), None);
+    }
+
+    fn exe_identity(name: &str) -> TargetIdentity {
+        TargetIdentity {
+            name: name.into(),
+            bundle_id: Some(name.to_ascii_lowercase()),
+            pid: None,
+        }
+    }
+
+    #[test]
+    fn a_process_tree_refusal_says_which_console_was_found() {
+        let identity = TargetIdentity {
+            name: "chrome".into(),
+            bundle_id: Some("chrome".into()),
+            pid: Some(14164),
+        };
+        let evidence = ConsoleEvidence {
+            pid: 5429,
+            executable: "conhost.exe".into(),
+            via: vec![(5428, "bash.exe".into())],
+        };
+        let result = console_host_refusal("get_window_state", &identity, &evidence);
+        let structured = result.structured_content.clone().unwrap();
+        assert_eq!(structured["reason"], "terminal");
+        assert_eq!(structured["detected"], "console_in_process_tree");
+        assert_eq!(structured["console"]["pid"], 5429);
+        assert_eq!(structured["console"]["via"][0]["executable"], "bash.exe");
+        let message = structured["message"].as_str().unwrap();
+        assert!(message.starts_with("target_not_allowed: get_window_state refused"));
+        assert!(
+            message.contains("'chrome' is not a known terminal app"),
+            "{message}"
+        );
+        assert!(
+            message.contains("conhost.exe (pid 5429), started by bash.exe (pid 5428), started by 'chrome' (pid 14164)"),
+            "{message}"
+        );
+        assert!(!message.contains("does not act on terminal apps by default"));
     }
 
     #[test]
@@ -1136,7 +1370,35 @@ mod tests {
     fn windows_process_snapshot_does_not_attach_a_console() {
         // Only a read-only Toolhelp snapshot; the test harness has no terminal
         // descendants and looking up a nonexistent PID cannot find a host.
-        assert!(!process_hosts_terminal(i64::from(u32::MAX)));
+        assert!(process_hosts_terminal(i64::from(u32::MAX)).is_none());
+        // Start times read with a limited handle: this process has one, a
+        // nonexistent id has none.
+        assert!(process_start_time(i64::from(std::process::id())).is_some());
+        assert!(process_start_time(i64::from(u32::MAX - 3)).is_none());
+    }
+
+    /// A real console child is still found once start times are checked.
+    #[cfg(windows)]
+    #[test]
+    fn windows_a_live_console_child_is_still_found() {
+        use std::os::windows::process::CommandExt;
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let mut child = std::process::Command::new(format!(r"{system}\System32\cmd.exe"))
+            .args(["/d", "/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+            .spawn()
+            .unwrap();
+        let found = (0..50).find_map(|_| {
+            let found = process_hosts_terminal(i64::from(std::process::id()));
+            if found.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            found
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(found.is_some());
     }
 
     #[test]
