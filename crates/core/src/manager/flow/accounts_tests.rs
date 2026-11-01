@@ -2395,6 +2395,88 @@ async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_a
     flow.stop().await;
 }
 
+/// Goal 1 (D25, D68): a follow-up sent while a limited turn still runs waits in the queue
+/// through the account switch and the move to another agent, and reaches the CLI exactly once,
+/// after the switch, under the id it was sent with.
+#[tokio::test]
+async fn a_queued_follow_up_goes_once_through_an_account_switch_and_an_agent_move() {
+    let log = Log::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let script: Script = {
+        let (log, release) = (log.clone(), release.clone());
+        Arc::new(move |turn: Turn| {
+            let (log, release) = (log.clone(), release.clone());
+            Box::pin(async move {
+                let first = log.lock().unwrap().is_empty();
+                log.lock().unwrap().push(Seen {
+                    provider: turn.provider,
+                    account: turn.account.clone(),
+                    native_id: turn.native_id.clone(),
+                    input: turn.input.clone(),
+                });
+                match turn.provider {
+                    ProviderKind::Claude => {
+                        if first {
+                            release.notified().await;
+                        }
+                        Reply::limited()
+                    }
+                    _ => Reply::text("Done on Codex."),
+                }
+            })
+        })
+    };
+    let flow = Flow::start("accounts-queued-follow-up", Options::default(), script).await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Do the thing.").await;
+    flow.until("the first CLI takes the message", |_| seen(&log).len() == 1)
+        .await;
+    send(&flow, &flow.conversation, "And the follow-up.").await;
+    release.notify_one();
+    flow.until("the follow-up reaches Codex", |_| {
+        seen(&log).iter().any(|turn| {
+            turn.provider == ProviderKind::Codex && turn.input.contains("And the follow-up.")
+        })
+    })
+    .await;
+    flow.settled().await;
+    let turns = seen(&log);
+    let carrying: Vec<_> = turns
+        .iter()
+        .filter(|turn| turn.input.contains("And the follow-up."))
+        .map(|turn| (turn.provider, turn.account.clone()))
+        .collect();
+    assert!(
+        !turns[0].input.contains("And the follow-up."),
+        "it waited for its turn: {turns:?}"
+    );
+    // It reaches each CLI that takes the work once; the one that answers it is Codex.
+    assert_eq!(
+        carrying.last().map(|turn| turn.0),
+        Some(ProviderKind::Codex)
+    );
+    let codex_turns = turns
+        .iter()
+        .filter(|turn| {
+            turn.provider == ProviderKind::Codex && turn.input.contains("And the follow-up.")
+        })
+        .count();
+    assert_eq!(codex_turns, 1, "{turns:?}");
+    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+    let sent: Vec<_> = messages
+        .iter()
+        .filter(|message| message.text == "And the follow-up.")
+        .map(|message| message.id.clone())
+        .collect();
+    assert_eq!(sent.len(), 1, "one message, one id: {messages:?}");
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
+    flow.stop().await;
+}
+
 /// S38: a limit while writing the hand-off preserves the note already written, and the
 /// fallback successor reads it. The preceding successful turn rules out a first-turn death.
 #[tokio::test]
