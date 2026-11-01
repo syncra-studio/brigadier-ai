@@ -102,8 +102,8 @@ test("a turn the thread says was cut reads by its requests: a quit, with Continu
   assert.deepEqual(cutOff(quit, [], done), { error: "The CLI session ended unexpectedly.", resumable: false });
   // A quit cut it and its request went on in a block of its own (it went on by itself): the cut
   // turn still reads interrupted by the quit, never "stopped unexpectedly", and has no Continue.
-  assert.deepEqual(cutOff(quit, [done], done), { error: quit, resumable: false });
-  assert.deepEqual(cutOff(quit, [request("r1", { type: "working" })], null), { error: quit, resumable: false });
+  assert.deepEqual(cutOff(quit, [done], done), { error: quit, resumable: false, wentOn: true });
+  assert.deepEqual(cutOff(quit, [request("r1", { type: "working" })], null), { error: quit, resumable: false, wentOn: true });
   // Any other error is the turn's own.
   assert.deepEqual(cutOff("The API refused it.", [cut], cut), { error: "The API refused it.", resumable: false });
 });

@@ -37,9 +37,10 @@ type RequestRecord = Pick<UserRequest, "id" | "state">;
  * CLI never ended was cut by a quit, which only its requests can tell. `error`: the words its
  * block says, a request's own when it failed for another reason (or the CLI's end for a turn of
  * Brigadier's own, which no request names); `resumable`: Continue picks it up, as the daemon's
- * resume does only for the newest request, stopped or cut by a quit.
+ * resume does only for the newest request, stopped or cut by a quit; `wentOn`: its request went
+ * on in a block of its own after the quit, so nothing is left to do.
  */
-export function cutOff(error: string, own: readonly RequestRecord[], latest: RequestRecord | null): { error: string; resumable: boolean } {
+export function cutOff(error: string, own: readonly RequestRecord[], latest: RequestRecord | null): { error: string; resumable: boolean; wentOn?: true } {
   if (!interruptedByQuit(error)) return { error, resumable: false };
   const quit = (request: RequestRecord) => request.state.type === "failed" && interruptedByQuit(request.state.error);
   const resumable = !!latest && own.some((request) => request.id === latest.id) && (latest.state.type === "stopped" || quit(latest));
@@ -48,8 +49,9 @@ export function cutOff(error: string, own: readonly RequestRecord[], latest: Req
   if (resumable) return { error, resumable };
   const failed = own.findLast((request) => request.state.type === "failed");
   if (failed?.state.type === "failed") return { error: failed.state.error, resumable: false };
-  // Its request went on in a block of its own after the quit (the auto-resume, or Continue): still cut by a quit.
-  return { error: own.length > 0 ? error : CLI_ENDED, resumable: false };
+  // Its request went on in a block of its own after the quit (the auto-resume, or Continue):
+  // still cut by a quit, and `wentOn`, so the block says only where it picked up (D84).
+  return own.length > 0 ? { error, resumable: false, wentOn: true } : { error: CLI_ENDED, resumable: false };
 }
 
 /** The kind an error's raw words read as, for a turn recorded before its CLI's adapter classed it. */

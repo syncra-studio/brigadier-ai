@@ -5,6 +5,7 @@ import { isLive, isRunRequest } from "@/app/conversation/blocks";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
 import { latestRequest } from "@/app/conversation/rework";
 import { leadTransitions } from "@/app/conversation/providerTransitions";
+import { TaskNoticeRow } from "@/app/conversation/SeamRows";
 import { cutOff, describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { UsageLimitDivider } from "@/app/conversation/UsageLimitDivider";
 import { useAction } from "@/app/conversation/useAction";
@@ -45,7 +46,7 @@ export function useBlockQuotaRecovery(meta: BlockMeta | undefined) {
  * The block's error as its requests have it (`cutOff`): a turn the thread says was cut by a quit
  * reads so, with Continue, only when its request was; else its request's own error.
  */
-export function useBlockError(meta: BlockMeta | undefined, error: string | null): { error: string; resumable: boolean } | null {
+export function useBlockError(meta: BlockMeta | undefined, error: string | null): ReturnType<typeof cutOff> | null {
   const requests = useBoard(
     useShallow((s) => {
       if (!meta || !s.board || !interruptedByQuit(error)) return [];
@@ -82,6 +83,8 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
   const aui = useAui();
   const action = useAction();
   if (read === null || quotaCovered) return null;
+  // Brigadier quit under it and it went on by itself in the next block: one quiet line, no card (D84).
+  if (read.wentOn) return <TaskNoticeRow text="Brigadier reopened · picked up where it stopped" />;
   const { error, resumable } = read;
   const provider = turnProvider ?? (meta.texts.at(-1)?.model ?? meta.picked)?.provider;
   const { summary, limit } = describeTurnError(error, provider ? cliFacts(provider).vendor : undefined, kind);
