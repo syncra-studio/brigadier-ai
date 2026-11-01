@@ -343,13 +343,12 @@ impl SessionManager {
         if cfg!(test) {
             return self.data_dir.join("models.md");
         }
-        std::env::var_os("BRIGADIER_MODELS_FILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::home_dir()
-                    .unwrap_or_else(|| self.data_dir.clone())
-                    .join(".brigadier/models.md")
-            })
+        rules_file(
+            std::env::var_os("BRIGADIER_MODELS_FILE"),
+            std::env::var_os("BRIGADIER_DATA_DIR").is_some_and(|dir| !dir.is_empty()),
+            &self.data_dir,
+            std::env::home_dir(),
+        )
     }
     /// Settings › Routing's read of the rules file, as it is on disk now (S32).
     pub fn model_rules(&self) -> Result<ModelRules> {
@@ -817,8 +816,45 @@ fn runs_as(
     )
 }
 
+/// The rules file: the one `BRIGADIER_MODELS_FILE` names, else a scratch data dir's own (a
+/// development run, `BRIGADIER_DATA_DIR`), never the user's (D31), else the user's in their home.
+fn rules_file(
+    named: Option<std::ffi::OsString>,
+    scratch: bool,
+    data_dir: &std::path::Path,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    match named {
+        Some(file) => PathBuf::from(file),
+        None if scratch => data_dir.join("models.md"),
+        None => home
+            .unwrap_or_else(|| data_dir.to_owned())
+            .join(".brigadier/models.md"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// A development run on a scratch data dir keeps its own routing: setting a row there never
+    /// writes the user's (demo8 wrote it); the installed app keeps the user's own.
+    #[test]
+    fn a_scratch_data_dir_keeps_its_own_rules() {
+        let data = std::path::Path::new("/tmp/scratch-data");
+        let home = Some(PathBuf::from("/Users/me"));
+        assert_eq!(
+            super::rules_file(None, true, data, home.clone()),
+            data.join("models.md")
+        );
+        assert_eq!(
+            super::rules_file(None, false, data, home.clone()),
+            PathBuf::from("/Users/me/.brigadier/models.md")
+        );
+        assert_eq!(
+            super::rules_file(Some("/x/m.md".into()), true, data, home),
+            PathBuf::from("/x/m.md")
+        );
+    }
+
     use super::*;
     #[test]
     fn an_alias_its_id_the_default_and_its_effort_are_one_choice() {
