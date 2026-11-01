@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { nextShown, type ProviderTransition } from "@/app/conversation/providerTransitions";
+import { nextShown, placeSwitches, type ProviderTransition } from "@/app/conversation/providerTransitions";
 import type { ModelChoice } from "@/ipc/generated";
 
 const claude: ModelChoice = { provider: "claude", model: "opus", effort: "high" };
@@ -38,4 +38,21 @@ test("a change on the same CLI (another model or effort) shows at once", () => {
   const sonnet = { ...claude, model: "sonnet" };
   shown = nextShown(shown, sonnet, [], true, 2_000);
   assert.equal(shown.shown, sonnet);
+});
+
+test("a worker's switches show once each, in place of the words it was resumed with", () => {
+  const message = (key: string, text: string, role: "user" | "assistant" = "user") =>
+    ({ kind: "item", item: { kind: "message", key, role, text, streaming: false } }) as const;
+  const entries = [
+    message("brief", "Do the task"),
+    message("a1", "Working on it", "assistant"),
+    message("r1", "[Quota is available again. Check git status and git log first: …]"),
+    message("a2", "Carrying on", "assistant"),
+  ];
+  const first = { id: "t1", to: codex, startedAtMs: 1 } as ProviderTransition;
+  const second = { id: "t2", to: claude, startedAtMs: 2 } as ProviderTransition;
+  const placed = placeSwitches([first, second], entries);
+  assert.deepEqual([...placed.at.entries()], [["r1", first]]);
+  assert.deepEqual(placed.rest, [second]);
+  assert.deepEqual(placeSwitches([], entries).at.size, 0);
 });

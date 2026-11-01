@@ -8,9 +8,9 @@ import { useBoard } from "@/state/board";
 import { cliFacts } from "@/lib/providerKinds";
 
 /** Completed recovery, from provider acceptance; never a speculative picker selection. */
-export function ProviderTransitionDivider({ transition }: { transition: ProviderTransition }) {
+export function ProviderTransitionDivider({ transition, own = false }: { transition: ProviderTransition; /** In the worker's own panel: no name before it. */ own?: boolean }) {
   const groups = useModelGroups();
-  const worker = useBoard((s) => transition.taskId ? s.board?.tasks[transition.taskId]?.title ?? "Worker" : null);
+  const worker = useBoard((s) => transition.taskId && !own ? s.board?.tasks[transition.taskId]?.title ?? "Worker" : null);
   const action = transition.cause === "automaticFallback" ? "Switched automatically to"
     : transition.cause === "manualSwitch" ? "Switched to" : "Usage available · Resumed on";
   const label = transitionAccountLabel(transition);

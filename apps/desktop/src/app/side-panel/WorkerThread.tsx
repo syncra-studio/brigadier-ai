@@ -1,4 +1,7 @@
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
+import { ProviderTransitionDivider } from "@/app/conversation/activity/ProviderTransition";
+import { placeSwitches, transitionSteps } from "@/app/conversation/providerTransitions";
+import { useBoard } from "@/state/board";
 import {
   useContext,
   useEffect,
@@ -213,6 +216,7 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
   const brief = briefAt >= 0 ? all[briefAt] : undefined;
   const entries = useMemo(() => all.filter((_, index) => index !== briefAt), [all, briefAt]);
   const activity = workerActivity(entries);
+  const switches = useWorkerSwitches(row.id, entries);
   // As the lead's work does: all of it in view while it works (or was stopped), its history
   // folded once it is over, so no row moves into the fold while it is watched.
   const previous = working || state.kind === "stopped" ? [] : activity.slice(0, Math.max(0, activity.length - 3));
@@ -239,6 +243,8 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
           ? <SubagentActionRow key={key} item={step} owner={row.id} view={view} />
           : <ActionRow key={key} item={step} />}
       />
+    ) : item.entry.kind === "item" && switches.at.has(item.entry.item.key) ? (
+      <ProviderTransitionDivider key={item.entry.item.key} transition={switches.at.get(item.entry.item.key)!} own />
     ) : (
       <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} sent={[]} />
     );
@@ -287,6 +293,7 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
         {native && !view && !error && <p className="text-muted-foreground text-sm">Loading transcript…</p>}
         {native && view && all.length === 0 && !error && <p className="text-muted-foreground text-sm">The CLI has not made this agent’s transcript available.</p>}
         {recent.map((item, index) => show(item, previous.length + index))}
+        {switches.rest.map((transition) => <ProviderTransitionDivider key={transition.id} transition={transition} own />)}
         {thinking && <ThinkingLine text={thinking.text} />}
         {now && !nowInGroup && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
         {/* What it waits for, from its row: the user (in its session), or a limit's reset. */}
@@ -295,4 +302,11 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
       </StoppedBy.Provider>
     </div>
   );
+}
+
+/** Its confirmed switches (goal 1), each once, placed by `placeSwitches`. */
+function useWorkerSwitches(taskId: string, entries: readonly ThreadEntry[]) {
+  const steps = useBoard((s) => s.board?.orchestratorSteps);
+  return useMemo(() => placeSwitches(transitionSteps(steps ?? []).flatMap((step) =>
+    step.kind.type === "providerTransition" && step.kind.taskId === taskId ? [step.kind] : []), entries), [steps, taskId, entries]);
 }

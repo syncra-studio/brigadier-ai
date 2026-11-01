@@ -1,4 +1,5 @@
 import type { BlockOrchestratorStep, BlockSeam } from "@/app/conversation/blocks";
+import type { ThreadEntry } from "@/components/conversation";
 import type { ModelChoice, OrchestratorStep } from "@/ipc/generated";
 
 export type ProviderTransition = Extract<OrchestratorStep["kind"], { type: "providerTransition" }>;
@@ -64,3 +65,21 @@ export function nextShown(
 }
 
 const CONFIRM_SLACK_MS = 5_000;
+
+/** The words Brigadier resumes a worker with after a limit (`workers/quota.rs`, `retry_worker_quota`). */
+const QUOTA_RESUME = "[Quota is available again.";
+
+/**
+ * Where a worker's panel shows its confirmed switches, each once: in place of the message it was
+ * resumed with, in order (`at`, by entry key); one with no such message after its latest work.
+ */
+export function placeSwitches(transitions: readonly ProviderTransition[], entries: readonly ThreadEntry[]) {
+  const resumes = entries.flatMap((entry) =>
+    entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user" && entry.item.text.startsWith(QUOTA_RESUME) ? [entry.item.key] : []);
+  const at = new Map<string, ProviderTransition>();
+  resumes.forEach((key, index) => {
+    const transition = transitions[index];
+    if (transition) at.set(key, transition);
+  });
+  return { at, rest: transitions.slice(resumes.length) };
+}
