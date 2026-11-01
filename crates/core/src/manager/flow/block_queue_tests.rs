@@ -34,19 +34,25 @@ fn inputs(answers: &Answers) -> Vec<String> {
 }
 
 /// A session whose first turn starts a worker that runs until `release`. Every message given
-/// to judge while that block is open is judged `wait`; in a later block, `join`, or with `late`
-/// `wait` again, only once the first judging's time to join by itself has passed.
+/// to judge while that block is open is judged `wait`; in a later block, `join`.
 async fn block(name: &str) -> (Flow, Answers, Arc<tokio::sync::Notify>) {
-    block_judging(name, false).await
+    block_judging(name, Some(Judgment::Wait), None).await
 }
 
-async fn block_judging(name: &str, late: bool) -> (Flow, Answers, Arc<tokio::sync::Notify>) {
+/// [`block`], judging a message given to judge with `first` and one asked again after its turn
+/// ended unjudged (D72) with `again`; `None` leaves it unjudged.
+async fn block_judging(
+    name: &str,
+    first: Option<Judgment>,
+    again: Option<Judgment>,
+) -> (Flow, Answers, Arc<tokio::sync::Notify>) {
     let answers = Answers::default();
     let release = Arc::new(tokio::sync::Notify::new());
     let script: Script = {
         let (answers, release) = (answers.clone(), release.clone());
         Arc::new(move |turn| {
             let (answers, release) = (answers.clone(), release.clone());
+            let (first, again) = (first.clone(), again.clone());
             Box::pin(async move {
                 let keep = |name: &str, value: serde_json::Value| {
                     answers.lock().unwrap().insert(name.into(), value);
@@ -74,39 +80,24 @@ async fn block_judging(name: &str, late: bool) -> (Flow, Answers, Arc<tokio::syn
                 }
                 // Its own turn opens the next block: what still waits is given to judge again.
                 if turn.input.contains(", now on its own turn]") && turn.input.contains(FIRST) {
+                    let waiting = (turn.host.core)
+                        .board(&turn.conversation().unwrap())
+                        .await
+                        .unwrap()
+                        .queue
+                        .items
+                        .len();
+                    if waiting == 0 {
+                        return Reply::text("Done.");
+                    }
                     let again = turn.steered().await.unwrap_or_default();
                     keep("judged again", json!(again));
-                    if late {
-                        let first = answers.lock().unwrap()["first judged"].as_u64().unwrap();
-                        let due = first
-                            + crate::manager::conversation::queue_judging::DECIDING_WAIT.as_millis()
-                                as u64
-                            + 300;
-                        let now = crate::now_ms() as u64;
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            due.saturating_sub(now),
-                        ))
-                        .await;
-                        keep(
-                            "before late judgment",
-                            json!(
-                                turn.host
-                                    .core
-                                    .board(&turn.conversation().unwrap())
-                                    .await
-                                    .unwrap()
-                                    .queue
-                                    .items
-                                    .len()
-                            ),
-                        );
-                    }
                     for id in to_judge(&again) {
                         let judged = brigadier(
                             &turn,
                             CliRequest::Queue {
                                 id,
-                                judgment: if late { Judgment::Wait } else { Judgment::Join },
+                                judgment: Judgment::Join,
                             },
                         )
                         .await;
@@ -114,18 +105,17 @@ async fn block_judging(name: &str, late: bool) -> (Flow, Answers, Arc<tokio::syn
                     }
                     return Reply::text("Both done.");
                 }
+                let judgment = if turn.input.contains("you didn't judge it") {
+                    again
+                } else {
+                    first
+                };
                 for id in to_judge(&turn.input) {
-                    let judged = brigadier(
-                        &turn,
-                        CliRequest::Queue {
-                            id,
-                            judgment: Judgment::Wait,
-                        },
-                    )
-                    .await;
-                    assert_eq!(judged["state"], "waiting", "{judged:#}");
-                    // The latest first judging (the second message's) is the timer to outlast.
-                    keep("first judged", json!(crate::now_ms()));
+                    let Some(judgment) = judgment.clone() else {
+                        continue;
+                    };
+                    let judged = brigadier(&turn, CliRequest::Queue { id, judgment }).await;
+                    keep("judged", judged);
                 }
                 Reply::text("Noted.")
             })
@@ -310,39 +300,109 @@ async fn a_fresh_steer_while_the_block_is_open_is_taken_framed() {
     flow.stop().await;
 }
 
-/// A message judged again in the next block before its first judging's time ran out: that
-/// first judging's timer never settles the second; only the session's judgment does.
+/// How many of the session's turns had `words` in them.
+fn read(answers: &Answers, words: &str) -> usize {
+    inputs(answers)
+        .iter()
+        .filter(|input| input.contains(words))
+        .count()
+}
+
+/// Left unjudged while the block is open (D72): it goes back to the queue, never joined, and
+/// is asked once more on a turn that joins the block; judged `wait`, it stays queued until the
+/// block closes, then goes on its own turn.
 #[tokio::test]
-async fn an_earlier_judgings_timer_never_settles_the_judging_again() {
-    let (flow, answers, release) = block_judging("block-late", true).await;
+async fn an_unjudged_message_is_asked_once_more_and_waits() {
+    let (flow, answers, release) =
+        block_judging("block-unjudged-wait", None, Some(Judgment::Wait)).await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
     flow.say(FIRST).await;
-    waits(&flow, FIRST).await;
+    super::eventually("its second ask to be judged", || {
+        answers.lock().unwrap().contains_key("judged")
+    })
+    .await;
     flow.idle().await;
-    flow.say(SECOND).await;
-    let second = waits(&flow, SECOND).await;
-    flow.idle().await;
-    // The second's own judging again starts well after its first, so its own timer is due well
-    // after the first one's (a wide gap, so a loaded machine never closes it).
-    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    assert_eq!(answers.lock().unwrap()["judged"]["state"], "waiting");
+    assert_eq!(read(&answers, "you didn't judge it"), 1);
+    assert_eq!(read(&answers, FIRST), 2, "{:#?}", inputs(&answers));
+    assert!(flow.manager.work_holds(&conv).await);
+    let board = flow.board().await;
+    let item = board.queue.items[0].clone();
+    assert!(
+        board.queue.items.len() == 1 && !item.deciding,
+        "{:?}",
+        board.queue
+    );
+    assert!(!board.requests.contains_key(&item.id), "never joined");
     release.notify_one();
-    super::eventually("the late judgment", || {
-        answers.lock().unwrap().contains_key("joined")
+    flow.until("it to go on its own turn", |board| {
+        board.queue.items.is_empty() && board.requests.contains_key(&item.id)
     })
     .await;
-    let judged = answers.lock().unwrap()["joined"].clone();
-    assert_eq!(
-        judged["state"], "waiting",
-        "the first timer joined it: {judged:#}"
-    );
-    assert_eq!(
-        answers.lock().unwrap()["before late judgment"],
-        1,
-        "still queued"
-    );
-    // Waiting again, it goes once the new block closes: on its own turn.
-    flow.until("the second on its own turn", |board| {
-        board.requests.contains_key(&second.id)
+    flow.settled().await;
+    assert_eq!(read(&answers, "now on its own turn"), 1);
+    assert_eq!(read(&answers, FIRST), 3, "{:#?}", inputs(&answers));
+    flow.stop().await;
+}
+
+/// Left unjudged, then joined on its second ask: it joins the open block once, on a turn that
+/// goes on with that work, and nothing sends it again.
+#[tokio::test]
+async fn an_unjudged_message_asked_once_more_joins_once() {
+    let (flow, answers, release) =
+        block_judging("block-unjudged-join", None, Some(Judgment::Join)).await;
+    flow.say(FIRST).await;
+    let board = flow
+        .until("it to join", |board| {
+            board.queue.items.is_empty() && !board.requests.is_empty()
+        })
+        .await;
+    flow.idle().await;
+    assert_eq!(answers.lock().unwrap()["judged"]["state"], "joined");
+    assert_eq!(read(&answers, "you didn't judge it"), 1);
+    assert_eq!(read(&answers, FIRST), 2, "{:#?}", inputs(&answers));
+    assert_eq!(read(&answers, "now on its own turn"), 0);
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    let item = (board.requests.keys())
+        .find(|id| !view.turns[0].requests.contains(id))
+        .unwrap();
+    let joining = view
+        .turns
+        .iter()
+        .rfind(|turn| turn.requests.contains(item))
+        .unwrap();
+    assert!(joining.joins, "no new block: {view:#?}");
+    release.notify_one();
+    flow.stop().await;
+}
+
+/// Left unjudged twice: it stays queued and visible, never joined and never asked a third
+/// time while the block is open; once the block closes it goes on its own turn.
+#[tokio::test]
+async fn a_message_left_unjudged_twice_stays_queued() {
+    let (flow, answers, release) = block_judging("block-unjudged-twice", None, None).await;
+    flow.say(FIRST).await;
+    super::eventually("its second ask", || {
+        read(&answers, "you didn't judge it") == 1
     })
     .await;
+    flow.idle().await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    flow.idle().await;
+    assert_eq!(read(&answers, FIRST), 2, "{:#?}", inputs(&answers));
+    let board = flow.board().await;
+    let item = board.queue.items[0].clone();
+    assert!(
+        board.queue.items.len() == 1 && !item.deciding,
+        "{:?}",
+        board.queue
+    );
+    assert!(!board.requests.contains_key(&item.id), "never joined");
+    release.notify_one();
+    flow.until("it to go on its own turn", |board| {
+        board.queue.items.is_empty() && board.requests.contains_key(&item.id)
+    })
+    .await;
+    assert_eq!(read(&answers, "now on its own turn"), 1);
     flow.stop().await;
 }

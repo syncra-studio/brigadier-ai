@@ -434,8 +434,8 @@ pub const COMMANDS: &[Command] = &[
                   its own; it comes again on its own turn once this work is done. worker <id>: \
                   it belongs to the work of one of your workers (`brigadier workers`); its \
                   words go to that worker. new-session: a request of its own that could run \
-                  apart; the user is offered a new session for it. One left unjudged joins this \
-                  work by itself shortly, or when your turn ends.",
+                  apart; the user is offered a new session for it. Nothing judges it for you: \
+                  one left unjudged stays queued, and you are asked once more.",
         args: &[
             positional(
                 "id",

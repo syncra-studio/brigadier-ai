@@ -10,7 +10,7 @@ import type { TaskId } from "./TaskId";
 export type QueuedMessage = { id: string, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, queuedAtMs: number, editedAtMs: number | null, 
 /**
  * Sent while the session's turn works: the session has it and judges it with `brigadier
- * queue` (run2-D40); it waits here, Deciding, until it is judged or joins by itself.
+ * queue` (run2-D40); it waits here, Deciding, until it is judged.
  */
 deciding?: boolean, 
 /**

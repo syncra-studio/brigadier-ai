@@ -1433,7 +1433,7 @@ pub struct QueuedMessage {
     pub queued_at_ms: i64,
     pub edited_at_ms: Option<i64>,
     /// Sent while the session's turn works: the session has it and judges it with `brigadier
-    /// queue` (run2-D40); it waits here, Deciding, until it is judged or joins by itself.
+    /// queue` (run2-D40); it waits here, Deciding, until it is judged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub deciding: bool,

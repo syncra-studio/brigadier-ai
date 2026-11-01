@@ -22,7 +22,7 @@
     },
     "already": {
       "type": "boolean",
-      "description": "It had already joined the work by itself, unjudged, before this judgment came."
+      "description": "Always false: nothing joins a message by itself; kept so the output's names stay stable."
     },
     "worker": {
       "type": "string",

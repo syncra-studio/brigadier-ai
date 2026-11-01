@@ -743,8 +743,11 @@ async fn a_steer_while_compacting_waits_in_the_queue_until_compaction_is_done() 
         1,
         "{seen:#?}"
     );
+    // Read once to judge it (D72: unjudged, it then goes on its own turn), once answered.
     assert_eq!(
-        seen.iter().filter(|input| input.contains(SECOND)).count(),
+        seen.iter()
+            .filter(|input| input.contains(SECOND) && !input.contains("judge it"))
+            .count(),
         1,
         "{seen:#?}"
     );

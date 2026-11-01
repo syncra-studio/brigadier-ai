@@ -12,15 +12,14 @@
 //!   pump settles it meanwhile; a hand-off that fails puts it back, waiting.
 //! - new-session: it waits, offering the user "Open as a new session" or "Run here".
 //!
-//! Judging is optional (the earlier default, 7a3114dbd/027893857): one unjudged after
-//! [`DECIDING_WAIT`] joins the working answer, and so does one still unjudged when its turn
-//! completes; after a stop, a failure or a limit, and after a restart, it waits for its own
-//! turn. A message the session has can't be edited; deleted, the session hears it was taken
+//! Nothing judges for the session (D72): one still unjudged when its turn ends goes back to the
+//! queue, waiting; while its block is open, it is asked once more on a turn that joins the
+//! block, and after that, or once the block closed, it waits for its own turn like any waiting
+//! message. A message the session has can't be edited; deleted, the session hears it was taken
 //! back. Side chats and tab chats keep the plain queue.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
 use brigadier_cli::protocol::{CliReply, ErrorCode, Judgment, QueueOutput, QueueState};
 use regex::Regex;
@@ -32,23 +31,24 @@ use crate::model::{Conversation, Mention, Message, MessageRole};
 use crate::work::{AttachmentRef, QueuedMessage, SentToWorker};
 use crate::{Result, now_ms};
 
-/// How long a queued message waits for the session's judgment before it joins the working
-/// answer: a thread inside a long command can't judge it, and the user shouldn't watch it
-/// decide (7a3114dbd).
-pub(crate) const DECIDING_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 20 });
-
 /// How a queued message's frame begins in its CLI; the app's thread hides it (run2-D44).
 pub(crate) const FRAME: &str = "[queued message ";
-
-/// How many unjudged joins are remembered for a late judgment.
-const JOINED_KEPT: usize = 32;
 
 /// The line a queued message reaches the session under, to judge it.
 pub(crate) fn deciding_frame(shown: &str) -> String {
     format!(
         "{FRAME}{shown} · before acting on it, judge it: brigadier queue {shown} join|wait|worker <id>|new-session \
          (join, or worker, when it is part of the work in progress; wait when it is other work, \
-         which comes back once that is done); unjudged, it joins this work]\n"
+         which comes back once that is done); unjudged, it stays queued]\n"
+    )
+}
+
+/// The line a queued message the session left unjudged at its turn's end is asked again under
+/// (D72), on a turn that joins its open block.
+pub(crate) fn unjudged_frame(shown: &str) -> String {
+    format!(
+        "{FRAME}{shown} · you didn't judge it before your turn ended: judge it now with brigadier \
+         queue {shown} join|wait|worker <id>|new-session; join if you already did it]\n"
     )
 }
 
@@ -210,11 +210,17 @@ impl SessionManager {
                 && !state.interrupted
                 && !state.seam.held
         });
+        let again = state.ask_again.contains(&item.id);
+        let frame = if again {
+            unjudged_frame(&shown)
+        } else {
+            deciding_frame(&shown)
+        };
         let steered = match cli {
             Some(cli) => {
                 // The message the session reads, kept nowhere until it is judged.
                 let message = as_message(&conv.id, &item);
-                conv.frame(&item.id, deciding_frame(&shown));
+                conv.frame(&item.id, frame.clone());
                 let input = self
                     .turn_input(conv, std::slice::from_ref(&message), &[], &cli.account)
                     .await;
@@ -246,7 +252,7 @@ impl SessionManager {
             && !state.seam.held
             && state.hand_over.is_none();
         if woke {
-            conv.frame(&item.id, deciding_frame(&shown));
+            conv.frame(&item.id, frame);
             state.woken.insert(item.id.clone());
             // The turn serves the request it becomes once joined (its id is the item's): what
             // the turn starts before the session judges it (a job, a worker) is that request's.
@@ -270,11 +276,10 @@ impl SessionManager {
         }
         state.deciding.push(item.id.clone());
         state.judged_in_block.insert(item.id.clone());
-        let attempt = {
-            let attempt = state.judge_attempts.entry(item.id.clone()).or_default();
-            *attempt += 1;
-            *attempt
-        };
+        if again {
+            state.ask_again.remove(&item.id);
+            state.asked_again.insert(item.id.clone());
+        }
         // A command of the thread's running now holds it: it reads the message once that ends.
         let held = state.held_by();
         if held.is_some() {
@@ -298,7 +303,6 @@ impl SessionManager {
             self.mark_items_held(conv, std::slice::from_ref(&item.id), None)
                 .await;
         }
-        self.judge_within(conv, &item.id, attempt);
         if woke {
             self.kick(conv);
         }
@@ -368,64 +372,6 @@ impl SessionManager {
             };
             Box::pin(self.deliver_to_judge(conv, item, wake)).await;
         }
-    }
-
-    /// Gives the session [`DECIDING_WAIT`] to judge queued message `item_id`; one still
-    /// unjudged then joins the working answer.
-    /// Only `attempt`, this judging's, is settled by it: one judged again since has its own.
-    fn judge_within(&self, conv: &Arc<ConvLive>, item_id: &str, attempt: u64) {
-        let (manager, conv, item_id) = (self.arc(), conv.clone(), item_id.to_owned());
-        self.spawn(async move {
-            tokio::time::sleep(DECIDING_WAIT).await;
-            manager.join_unjudged(&conv, &item_id, attempt).await;
-        });
-    }
-
-    /// The command queued messages `items` waited behind ended: the session reads them now, and
-    /// each still Deciding gets its whole [`DECIDING_WAIT`] from now.
-    pub(super) async fn judge_from_now(&self, conv: &Arc<ConvLive>, items: &[String]) {
-        let mut attempts = Vec::new();
-        {
-            let mut state = conv.state.lock().await;
-            for id in items {
-                if state.deciding.contains(id) {
-                    let attempt = state.judge_attempts.entry(id.clone()).or_default();
-                    *attempt += 1;
-                    attempts.push((id.clone(), *attempt));
-                }
-            }
-        }
-        for (id, attempt) in attempts {
-            self.judge_within(conv, &id, attempt);
-        }
-    }
-
-    async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str, attempt: u64) {
-        let _routing = conv.queue_routing.lock().await;
-        {
-            let state = conv.state.lock().await;
-            // Behind a command, the session can't read it yet: its time starts once that ends.
-            if !state.deciding.iter().any(|id| id == item_id)
-                || state.claimed.contains(item_id)
-                || state.held_items.iter().any(|id| id == item_id)
-                || state.judge_attempts.get(item_id) != Some(&attempt)
-            {
-                return;
-            }
-        }
-        match self.join_delivered(conv, item_id).await {
-            Ok(()) => Self::remember_join(conv, item_id).await,
-            Err(err) => {
-                crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged queued message"; conversation = %conv.id, error = %err);
-            }
-        }
-    }
-
-    async fn remember_join(conv: &ConvLive, item_id: &str) {
-        let mut state = conv.state.lock().await;
-        state.joined_unjudged.push(item_id.to_owned());
-        let over = state.joined_unjudged.len().saturating_sub(JOINED_KEPT);
-        state.joined_unjudged.drain(..over);
     }
 
     /// Queued message `item_id`, which the session already has, joins the running turn as the
@@ -506,9 +452,10 @@ impl SessionManager {
         Ok(deciding)
     }
 
-    /// The turn ended: the queued messages it left unjudged join it when it got through
-    /// (`completed`), else wait for their own turn. Those being handed to a worker are left to
-    /// that hand-off.
+    /// The turn ended: the queued messages it left unjudged go back to the queue, waiting, never
+    /// joined (D72). After a completed turn each is asked once more while its block stays open
+    /// (the block's wake judges it again); one asked already waits for its own turn. Those being
+    /// handed to a worker are left to that hand-off.
     pub(super) async fn end_judging(&self, conv: &Arc<ConvLive>, completed: bool) {
         let _routing = conv.queue_routing.lock().await;
         let unjudged: Vec<String> = {
@@ -527,15 +474,17 @@ impl SessionManager {
             return;
         }
         if completed {
+            let mut state = conv.state.lock().await;
             for item_id in &unjudged {
-                match self.join_delivered(conv, item_id).await {
-                    Ok(()) => Self::remember_join(conv, item_id).await,
-                    Err(err) => {
-                        crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged queued message"; conversation = %conv.id, error = %err);
-                    }
+                if !state.asked_again.contains(item_id) {
+                    state.judged_in_block.remove(item_id);
+                    state.ask_again.insert(item_id.clone());
+                } else {
+                    crate::logging::private_trace!(conv.private_logs, warn, "a queued message was left unjudged twice; it waits for its own turn"; conversation = %conv.id, item = %item_id);
                 }
             }
-        } else if let Err(err) = self.core.settle_queued(&conv.id, &unjudged, false).await {
+        }
+        if let Err(err) = self.core.settle_queued(&conv.id, &unjudged, false).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not settle queued messages"; conversation = %conv.id, error = %err);
         }
     }
@@ -739,23 +688,12 @@ impl SessionManager {
         }))
     }
 
-    /// A late judgment hears whether the message auto-joined, including at turn end.
-    async fn queue_gone(conv: &ConvLive, id: &str) -> CliReply {
-        let state = conv.state.lock().await;
-        match state.joined_unjudged.iter().find(|joined| {
-            joined.as_str() == id || (id.len() >= MIN_ID && short(joined).starts_with(id))
-        }) {
-            Some(joined) => CliReply::ok(&QueueOutput {
-                id: short(joined),
-                state: QueueState::Joined,
-                already: true,
-                worker: None,
-            }),
-            None => CliReply::error(
-                ErrorCode::NotFound,
-                format!("no message {id} waits in the user's queue"),
-            ),
-        }
+    /// A judgment of a message no longer in the queue.
+    async fn queue_gone(_conv: &ConvLive, id: &str) -> CliReply {
+        CliReply::error(
+            ErrorCode::NotFound,
+            format!("no message {id} waits in the user's queue"),
+        )
     }
 
     /// Ends the judging of queued message `item_id` in the live state.

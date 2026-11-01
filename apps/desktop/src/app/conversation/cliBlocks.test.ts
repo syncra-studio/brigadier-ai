@@ -953,6 +953,23 @@ test("a queued message shows once, as the user's, its frame gone: in the rail wh
   assert.equal(second!.user?.kind === "message" && second!.user.message.id, id);
 });
 
+test("D72: a follow-up asked again after its turn left it unjudged shows once, both frames gone", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const first = "[queued message feedbeef · before acting on it, judge it: brigadier queue feedbeef join|wait|worker <id>|new-session (join, or worker, when it is part of the work in progress; wait when it is other work, which comes back once that is done); unjudged, it stays queued]\nAlso the docs.";
+  const again = "[queued message feedbeef · you didn't judge it before your turn ended: judge it now with brigadier queue feedbeef join|wait|worker <id>|new-session; join if you already did it]\nAlso the docs.";
+  const asked: ThreadView = {
+    entries: [
+      user("u1", "Fix the test", 1000),
+      user("s1", first, 1100, { steer: true }),
+      user("s2", again, 1600, { steer: true }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Fixed." }, 1700),
+    ],
+    turns: [{ ...turn("u1", 1000, 2000, "done"), requests: ["r1", id] }],
+  };
+  const [block] = cliBlocks(asked, "c1", NO_BOARD);
+  assert.deepEqual(block!.steers.map((steer) => [steer.message.id, steer.text]), [[id, "Also the docs."]]);
+});
+
 /** A queued message's words under the line giving them to the session to judge. */
 const toJudge = (words: string) => `[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`;
 

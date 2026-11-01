@@ -104,8 +104,8 @@ fn bash(command: &str, status: ItemStatus) -> ProviderEvent {
 }
 
 /// A message the user sends while a turn runs waits in the queue, Deciding, and reaches the
-/// thread once, as the user's words under a line naming its queue id (run2-D40). Left
-/// unjudged, it joins the turn that got through, and nothing sends it again.
+/// thread under a line naming its queue id (run2-D40). Left unjudged with no block open, it goes
+/// back to the queue and on its own turn, never counted as joined (D72).
 #[tokio::test]
 async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
     let gate = Arc::new(tokio::sync::Notify::new());
@@ -165,93 +165,25 @@ async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
             "[queued message {shown} · before acting on it, judge it: brigadier queue {shown} \
              join|wait|worker <id>|new-session (join, or worker, when it is part of the work \
              in progress; wait when it is other work, which comes back once that is done); \
-             unjudged, it joins this work]\n\
+             unjudged, it stays queued]\n\
              Also check the formatting."
         )
     );
-    // Its time to be judged starts once the command ends: held past it, it still waits.
-    tokio::time::sleep(
-        crate::manager::conversation::queue_judging::DECIDING_WAIT
-            + std::time::Duration::from_millis(800),
-    )
-    .await;
-    let board = flow.board().await;
-    assert!(
-        board
-            .queue
-            .items
-            .first()
-            .is_some_and(|queued| queued.deciding),
-        "joined while the command held it: {:?}",
-        board.queue
-    );
     release.notify_one();
     let board = flow
-        .until("the unjudged message to join the turn", |board| {
+        .until("the unjudged message to go on its own turn", |board| {
             board.queue.items.is_empty() && board.requests.contains_key(&item.id)
         })
         .await;
     flow.settled().await;
     let inputs = inputs.lock().unwrap().clone();
-    assert_eq!(inputs.len(), 1, "nothing sent it again: {inputs:#?}");
-    assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
-    flow.stop().await;
-}
-
-/// A message the thread read just before it started a command can't be judged until that
-/// ends: its time to be judged starts again then, so the fallback never joins it mid-command.
-#[tokio::test]
-async fn a_message_read_just_before_a_command_waits_for_its_judging_until_that_ends() {
-    let gate = Arc::new(tokio::sync::Notify::new());
-    let running = Arc::new(tokio::sync::Notify::new());
-    let inputs: Log = Default::default();
-    let (release, started, log) = (gate.clone(), running.clone(), inputs.clone());
-    let flow = Flow::start(
-        "honesty-queue-before-command",
-        Options::default(),
-        script(move |turn| {
-            let (gate, started, log) = (gate.clone(), started.clone(), log.clone());
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                if !turn.input.contains("Run the tests.") {
-                    return Reply::text("Formatted.");
-                }
-                turn.steered().await;
-                turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
-                    .await;
-                started.notify_one();
-                gate.notified().await;
-                turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
-                    .await;
-                Reply::text("The tests pass.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Run the tests.").await;
-    super::eventually("the turn to run", || !inputs.lock().unwrap().is_empty()).await;
-    flow.say("Also check the formatting.").await;
-    running.notified().await;
-    tokio::time::sleep(
-        crate::manager::conversation::queue_judging::DECIDING_WAIT
-            + std::time::Duration::from_millis(800),
-    )
-    .await;
-    let board = flow.board().await;
+    assert_eq!(inputs.len(), 2, "{inputs:#?}");
     assert!(
-        board
-            .queue
-            .items
-            .first()
-            .is_some_and(|queued| queued.deciding),
-        "joined while the command ran: {:?}",
-        board.queue
+        inputs[1].contains("now on its own turn")
+            && inputs[1].ends_with("Also check the formatting."),
+        "{inputs:#?}"
     );
-    release.notify_one();
-    flow.until("the unjudged message to join the turn", |board| {
-        board.queue.items.is_empty()
-    })
-    .await;
+    assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
     flow.stop().await;
 }
 

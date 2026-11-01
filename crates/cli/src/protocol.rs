@@ -1077,7 +1077,8 @@ pub enum QueueState {
 pub struct QueueOutput {
     pub id: String,
     pub state: QueueState,
-    /// It had already joined the work by itself, unjudged, before this judgment came.
+    /// Always false: nothing joins a message by itself any more (D72); kept so the output's
+    /// names stay stable.
     pub already: bool,
     /// For `sent-to-worker`: the worker's id.
     #[serde(default, skip_serializing_if = "Option::is_none")]

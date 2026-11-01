@@ -296,10 +296,10 @@ async fn join_takes_it_into_the_running_turn_without_sending_it_again() {
     judging.flow.stop().await;
 }
 
-/// #629: completing inside the judging window records the auto-joined request in the
-/// finished turn, so the app never invents a second, perpetually working turn for it.
+/// #629, D72: left unjudged by a completed turn with no block open, it is never counted as
+/// joined: it goes on a turn of its own, and both turns read the same after a restart.
 #[tokio::test]
-async fn an_unjudged_message_belongs_to_the_completed_turn_after_restart() {
+async fn an_unjudged_message_goes_on_its_own_turn_after_the_completed_one() {
     let mut judging = Judging::start(
         "queue-completed-requests",
         Options {
@@ -316,7 +316,7 @@ async fn an_unjudged_message_belongs_to_the_completed_turn_after_restart() {
     judging.gate.notify_one();
     judging
         .flow
-        .until("it to join at turn end", |board| joined(board, &item))
+        .until("it to go on its own turn", |board| joined(board, &item))
         .await;
     let board = judging.flow.settled().await;
     let view = judging
@@ -324,16 +324,24 @@ async fn an_unjudged_message_belongs_to_the_completed_turn_after_restart() {
         .manager
         .thread_view(&judging.flow.conversation)
         .unwrap();
-    assert_eq!(view.turns.len(), 1, "{view:#?}");
-    assert_eq!(view.turns[0].end, Some(crate::thread_view::TurnEnd::Done));
-    assert_eq!(view.turns[0].requests.len(), 2, "{view:#?}");
-    assert!(view.turns[0].requests.contains(&item.id), "{view:#?}");
-    assert!(board.requests[&item.id].steered_into.is_some());
+    assert_eq!(view.turns.len(), 2, "{view:#?}");
+    for turn in &view.turns {
+        assert_eq!(
+            turn.end,
+            Some(crate::thread_view::TurnEnd::Done),
+            "{view:#?}"
+        );
+        assert_eq!(turn.requests.len(), 1, "{view:#?}");
+    }
+    assert!(view.turns[1].requests.contains(&item.id), "{view:#?}");
+    assert!(board.requests[&item.id].steered_into.is_none());
     assert_eq!(
         board.requests[&item.id].state,
         crate::work::RequestState::Done
     );
-    assert_eq!(judging.inputs().len(), 1, "nothing sends it again");
+    let inputs = judging.inputs();
+    assert_eq!(inputs.len(), 2, "{inputs:#?}");
+    assert!(inputs[1].contains("now on its own turn"), "{inputs:#?}");
     judging.flow.restart().await;
     assert_eq!(
         judging
@@ -477,8 +485,9 @@ async fn worker_sends_it_to_the_sessions_worker_and_keeps_a_notice() {
     judging.flow.stop().await;
 }
 
-/// #630: the timeout may join an item after the worker judgment read it. That stale
-/// snapshot must never send the same request to the worker as well.
+/// #630: a steer or a delete may take an item after the worker judgment read it; that stale
+/// snapshot must never send it to the worker as well. The turn's end joins nothing (D72): the
+/// judgment still sends it to the worker, once.
 async fn stale_worker_judgment(winner: &str) {
     let judging = Judging::start(
         &format!("queue-worker-{winner}-race"),
@@ -518,7 +527,9 @@ async fn stale_worker_judgment(winner: &str) {
         "timeout" => {}
         _ => unreachable!(),
     }
-    if winner != "delete" {
+    if winner == "turn-end" {
+        judging.flow.idle().await;
+    } else if winner != "delete" {
         judging
             .flow
             .until("the item to join before reservation", |board| {
@@ -529,12 +540,19 @@ async fn stale_worker_judgment(winner: &str) {
     release.notify_one();
     super::eventually("the late judgment to finish", || judging.has("judged")).await;
     let judged = judging.answer("judged");
-    if matches!(winner, "timeout" | "turn-end") {
-        assert_eq!(judged["state"], "joined", "{judged:#}");
-        assert_eq!(judged["already"], true, "{judged:#}");
-    } else {
-        assert_eq!(judged["error"]["code"], "not-found", "{judged:#}");
+    if winner == "turn-end" {
+        assert_eq!(judged["state"], "sent-to-worker", "{judged:#}");
+        super::eventually("the worker to hear it", || judging.has("worker heard")).await;
+        assert_eq!(judging.answer("worker heard"), ASKED);
+        let board = judging.flow.board().await;
+        assert!(board.queue.items.is_empty(), "{:?}", board.queue);
+        assert_eq!(board.queue.sent.len(), 1, "{:?}", board.queue);
+        assert!(!board.requests.contains_key(&item.id), "never joined");
+        judging.gate.notify_one();
+        judging.flow.stop().await;
+        return;
     }
+    assert_eq!(judged["error"]["code"], "not-found", "{judged:#}");
     assert!(
         !judging.has("worker heard"),
         "the worker must not receive the joined message"
@@ -552,11 +570,6 @@ async fn stale_worker_judgment(winner: &str) {
 }
 
 #[tokio::test]
-async fn a_worker_judgment_cannot_send_a_message_the_timeout_already_joined() {
-    stale_worker_judgment("timeout").await;
-}
-
-#[tokio::test]
 async fn a_worker_judgment_cannot_send_a_message_the_user_already_steered() {
     stale_worker_judgment("steer").await;
 }
@@ -567,7 +580,7 @@ async fn a_worker_judgment_cannot_send_a_message_the_user_already_deleted() {
 }
 
 #[tokio::test]
-async fn a_worker_judgment_cannot_send_a_message_the_completed_turn_already_joined() {
+async fn a_worker_judgment_racing_the_turns_end_sends_it_to_the_worker_once() {
     stale_worker_judgment("turn-end").await;
 }
 
@@ -659,36 +672,6 @@ async fn a_hand_off_that_fails_puts_it_back_waiting() {
         .flow
         .until("it to go on its own turn", |board| joined(board, &item))
         .await;
-    judging.flow.stop().await;
-}
-
-/// Unjudged for a while, it joins the working answer by itself; a judgment that comes later
-/// hears it already joined.
-#[tokio::test]
-async fn unjudged_it_joins_the_working_answer_and_a_late_judgment_hears_so() {
-    let judging = Judging::start(
-        "queue-timeout",
-        Options::default(),
-        Plan {
-            judgment: Some(Judgment::Wait),
-            ..Plan::default()
-        },
-    )
-    .await;
-    let item = judging.send_while_working().await;
-    // Its request is recorded first and said to be inside the working answer just after.
-    judging
-        .flow
-        .until("it to join the working answer by itself", |board| {
-            joined(board, &item) && board.requests[&item.id].steered_into.is_some()
-        })
-        .await;
-    let judged = judging.judged().await;
-    assert_eq!(judged["state"], "joined", "{judged:#}");
-    assert_eq!(judged["already"], true);
-    judging.gate.notify_one();
-    judging.flow.settled().await;
-    assert_eq!(judging.inputs().len(), 1, "{:#?}", judging.inputs());
     judging.flow.stop().await;
 }
 

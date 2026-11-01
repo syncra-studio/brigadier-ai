@@ -364,8 +364,7 @@ struct ConvState {
     held_requests: Vec<String>,
     held_items: Vec<String>,
     /// Queued messages the session has to judge (run2-D40), given to it while a turn ran and
-    /// still Deciding: each joins by itself after [`queue_judging::DECIDING_WAIT`], or when its
-    /// turn completes.
+    /// still Deciding until it judges them; at its turn's end they go back to waiting (D72).
     deciding: Vec<String>,
     /// Those of them given to the session on a turn of their own, woken to judge them while
     /// its work held with no turn running: the pending message that starts that turn is the
@@ -383,13 +382,12 @@ struct ConvState {
     /// The turn being started opens a new block (no work held): once its CLI begins it, what
     /// still waits in the queue is judged again in it (D25).
     opens_block: bool,
-    /// Each judging's attempt, by queued message: a timer of an earlier attempt settles nothing.
-    judge_attempts: HashMap<String, u64>,
+    /// Queued messages left unjudged at a turn's end and asked once more (D72): never again.
+    asked_again: HashSet<String>,
+    /// Those left unjudged whose next judging in the open block is that second ask.
+    ask_again: HashSet<String>,
     /// Those being handed to a worker right now: no timer, turn end or pump settles them.
     claimed: HashSet<String>,
-    /// Queued messages that joined unjudged, newest last: the session's late judgment of one
-    /// hears so.
-    joined_unjudged: Vec<String>,
     /// Replies that were streaming when a message was steered in, and the request they
     /// answer (the one before the steer).
     replying_for: HashMap<String, String>,
@@ -813,13 +811,6 @@ impl ConvLive {
                     },
                 ));
             }
-            // What it is judging it can't judge while the command runs: its time starts again
-            // once that ends.
-            let judging: Vec<String> = (state.deciding.iter())
-                .filter(|id| !state.held_items.contains(id))
-                .cloned()
-                .collect();
-            state.held_items.extend(judging);
             return None;
         }
         state.holding.retain(|(of, _)| of != item);
@@ -1707,7 +1698,6 @@ impl SessionManager {
         if let Some((requests, items)) = conv.holding_command(item, words, status).await {
             self.mark_held(conv, &requests, None).await;
             self.mark_items_held(conv, &items, None).await;
-            self.judge_from_now(conv, &items).await;
         }
         if status != ItemStatus::InProgress {
             self.steer_held(conv).await;
@@ -2655,6 +2645,8 @@ impl SessionManager {
             state.opens_block = !holds && !users.is_empty();
             if state.opens_block {
                 state.judged_in_block.clear();
+                // Its second ask was for the block that closed: here it is judged like any other.
+                state.ask_again.clear();
             }
             // A queued message woken to be judged is no user message of a request yet: nothing
             // sends it again (it is in the queue, Deciding).
