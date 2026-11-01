@@ -665,6 +665,10 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) queue_judgment_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// Tests: pauses a worker row's drain after its worker took it, before it leaves the queue.
+    #[cfg(test)]
+    pub(super) worker_delivery_pause:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl ConvLive {
@@ -722,6 +726,8 @@ impl ConvLive {
             hand_over_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             queue_judgment_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            worker_delivery_pause: std::sync::Mutex::new(None),
         }
     }
 
@@ -1392,29 +1398,39 @@ impl SessionManager {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
     ) -> Result<crate::work::MessageQueue> {
-        self.conv(id)?
-            .user_write(
-                self.core
-                    .edit_queued(id, item_id, text, attachments, mentions),
-            )
-            .await
+        let conv = self.conv(id)?;
+        // A worker's row on its way to it is fixed: the delivery takes the words it read.
+        let _routing = conv.queue_routing.lock().await;
+        if conv.state.lock().await.claimed.contains(item_id) {
+            return Err(Error::Invalid(
+                "this message is on its way to its worker; delete it and send it again".into(),
+            ));
+        }
+        conv.user_write(
+            self.core
+                .edit_queued(id, item_id, text, attachments, mentions),
+        )
+        .await
     }
 
-    /// Reserves worker row `item_id` for one delivery: None when it left the queue or another
-    /// delivery (a drain, the user's Steer) has it.
+    /// Reserves worker row `item_id` for one delivery, with the row as it is now (an edit
+    /// before the claim goes with it; one after is refused): None when it left the queue or
+    /// another delivery (a drain, the user's Steer) has it.
     pub(super) async fn claim_worker_row(
         &self,
         conversation_id: &ConversationId,
         item_id: &str,
-    ) -> Option<Arc<ConvLive>> {
+    ) -> Option<(Arc<ConvLive>, crate::work::QueuedMessage)> {
         let conv = self.conv(conversation_id).ok()?;
         let _routing = conv.queue_routing.lock().await;
         let board = self.core.board(conversation_id).await.ok()?;
-        if !board.queue.items.iter().any(|item| item.id == item_id) {
-            return None;
-        }
+        let item = board
+            .queue
+            .items
+            .into_iter()
+            .find(|item| item.id == item_id)?;
         let fresh = conv.state.lock().await.claimed.insert(item_id.to_string());
-        fresh.then_some(conv.clone())
+        fresh.then_some((conv.clone(), item))
     }
 
     /// Sends a queued message now, into the running turn (or as a new turn when none runs); while

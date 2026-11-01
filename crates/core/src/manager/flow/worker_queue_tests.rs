@@ -421,3 +421,84 @@ async fn a_bare_wait_ends_when_the_last_worker_is_closed() {
     );
     flow.stop().await;
 }
+
+/// Pauses the next worker row delivery after its worker took it, before it leaves the queue.
+async fn pause_delivery(flow: &Flow) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    *conv.worker_delivery_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
+    (reached, release)
+}
+
+/// The worker's short turn ends while its row is still being taken out of the queue: that
+/// turn end drains nothing, so the next message still goes once the first has left.
+#[tokio::test]
+async fn the_next_worker_row_goes_when_a_turn_ends_while_the_first_is_still_leaving() {
+    let (flow, answers, release, task) = working("worker-row-next").await;
+    assert!(to_worker(&flow, &task, "Use blue.", false).await);
+    assert!(to_worker(&flow, &task, "Ship it.", false).await);
+    let (reached, resume) = pause_delivery(&flow).await;
+    release.notify_one();
+    reached.notified().await;
+    super::eventually("the worker's short turn on the first", || {
+        list(&answers, "worker")
+            .iter()
+            .any(|input| input.contains("Use blue."))
+    })
+    .await;
+    flow.until("its turn to end", |board| {
+        Flow::task(board, 1).state != TaskState::Running
+    })
+    .await;
+    // Its turn end's drain finds the first row still claimed.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    *conv.worker_delivery_pause.lock().unwrap() = None;
+    resume.notify_one();
+    super::eventually("the second to reach the worker", || {
+        list(&answers, "worker")
+            .iter()
+            .any(|input| input.contains("Ship it."))
+    })
+    .await;
+    flow.until("the queue to empty", |board| board.queue.items.is_empty())
+        .await;
+    flow.stop().await;
+}
+
+/// An edit while the worker's row is on its way to it is refused: never accepted and then
+/// lost when the delivery of the words read before takes the row.
+#[tokio::test]
+async fn editing_a_worker_row_on_its_way_is_refused() {
+    let (flow, answers, release, task) = working("worker-row-edit").await;
+    assert!(to_worker(&flow, &task, "Use blue.", false).await);
+    let id = flow.board().await.queue.items[0].id.clone();
+    let (reached, resume) = pause_delivery(&flow).await;
+    release.notify_one();
+    reached.notified().await;
+    let edited = flow
+        .manager
+        .edit_queued(
+            &flow.conversation,
+            &id,
+            "Use green.".into(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+    assert!(edited.is_err(), "accepted, then lost: {edited:?}");
+    resume.notify_one();
+    flow.until("the queue to empty", |board| board.queue.items.is_empty())
+        .await;
+    flow.idle().await;
+    let all = list(&answers, "worker");
+    assert_eq!(
+        all.iter()
+            .filter(|input| input.contains("Use blue."))
+            .count(),
+        1,
+        "{all:#?}"
+    );
+    flow.stop().await;
+}

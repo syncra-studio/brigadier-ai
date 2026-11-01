@@ -1080,7 +1080,7 @@ impl SessionManager {
         let Ok(board) = self.core.board(conversation_id).await else {
             return;
         };
-        let Some(item) = board
+        let Some(head) = board
             .queue
             .items
             .into_iter()
@@ -1088,10 +1088,10 @@ impl SessionManager {
         else {
             return;
         };
-        let Some(conv) = self.claim_worker_row(conversation_id, &item.id).await else {
+        let Some((conv, item)) = self.claim_worker_row(conversation_id, &head.id).await else {
             return;
         };
-        match self
+        let delivered = match self
             .deliver_direct(
                 conversation_id,
                 &task,
@@ -1102,15 +1102,29 @@ impl SessionManager {
             .await
         {
             Ok(()) => {
+                #[cfg(test)]
+                {
+                    let pause = conv.worker_delivery_pause.lock().unwrap().clone();
+                    if let Some((reached, release)) = pause {
+                        reached.notify_one();
+                        release.notified().await;
+                    }
+                }
                 if let Err(err) = self.core.take_queued(conversation_id, &item.id).await {
                     tracing::warn!(task = %task.id, error = %err, "could not take a message its worker took out of the queue");
                 }
+                true
             }
             Err(err) => {
                 tracing::warn!(task = %task.id, error = %err, "a queued message could not go to its worker; it waits");
+                false
             }
-        }
+        };
         conv.unclaim(&item.id).await;
+        // A turn end while this row was claimed found it taken and drained nothing: look again.
+        if delivered {
+            self.drain_worker_queue(conversation_id, task_id).await;
+        }
     }
 
     /// The user's Steer on their queued message for a worker: it goes to that worker now, into
@@ -1126,7 +1140,7 @@ impl SessionManager {
         };
         let task = self.direct_recipient(conversation_id, worker).await?;
         // Already on its way (a drain) or gone: it reaches the worker once.
-        let Some(conv) = self.claim_worker_row(conversation_id, &item.id).await else {
+        let Some((conv, item)) = self.claim_worker_row(conversation_id, &item.id).await else {
             return Ok(());
         };
         let sent = match self
@@ -1147,6 +1161,10 @@ impl SessionManager {
             Err(err) => Err(err),
         };
         conv.unclaim(&item.id).await;
+        // As in a drain: a turn end while this row was claimed drained nothing.
+        if sent.is_ok() {
+            self.drain_worker_queue(conversation_id, &task.id).await;
+        }
         sent
     }
 
