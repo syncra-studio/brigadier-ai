@@ -984,8 +984,9 @@ export function cliBlocks(
   for (const seam of seams) {
     if (seam.open) continue;
     const next = seam.at === null ? blocks.length : blocks.findIndex((each) => each.key === seam.at);
-    const before = blocks[next < 0 ? -1 : next - 1];
-    if (next < 0 || !before) continue;
+    // Never the note turn's own block, which the thread doesn't show.
+    const before = next < 0 ? undefined : blocks.slice(0, next).findLast((each) => !internal.has(each));
+    if (!before) continue;
     before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death, movedTo: seam.movedTo });
   }
   return blocks.filter((each) => !internal.has(each));

@@ -80,3 +80,22 @@ test("Brigadier's compaction as the app hears it moves nothing at the thread's b
   seen.steps.slice(1).forEach((step, index) => assert.ok(step.top >= seen.steps[index]!.top, `the view went back up at "${step.step}": ${JSON.stringify(seen.steps)}`));
   assert.deepEqual(seen.dividers, [REFRESHED]);
 });
+
+test("a rebirth is one quiet divider, drawn once the note is written and never moved or redrawn; the note turn and its fix never show (core-goals D120)", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "compaction-divider.html?case=rebirth", "compaction-divider-result", 90000)) as {
+    failed: string | null;
+    steps: { step: string; seams: (string | null)[]; asked: boolean; texts: string; order: string[] }[];
+  };
+  assert.equal(seen.failed, null);
+  for (const step of seen.steps) {
+    assert.equal(step.asked, false, `a note bubble at "${step.step}"`);
+    assert.doesNotMatch(step.texts, /Handed off|Fixed\.|Hand-off check/, `the note turn showed at "${step.step}"`);
+  }
+  const at = (name: string) => seen.steps.filter((step) => step.step === name);
+  for (const step of [...at("before"), ...at("writing")]) assert.deepEqual(step.seams, []);
+  // From the moment the generation closed: one divider, every frame, at the thread's end, then
+  // above the successor's answer, which carries on with no bubble of its own.
+  for (const step of at("closed")) assert.deepEqual([step.seams, step.order.at(-1)], [["Continued in a fresh session"], "seam"], JSON.stringify(seen.steps.map((each) => [each.step, each.seams, each.order])));
+  for (const step of at("successor")) assert.deepEqual([step.seams, step.order.slice(-2)], [["Continued in a fresh session"], ["seam", "answer"]]);
+  assert.match(at("successor").at(-1)!.texts, /Carrying on with step 6\./);
+});

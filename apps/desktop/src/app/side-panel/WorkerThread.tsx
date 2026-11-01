@@ -13,6 +13,7 @@ import {
 
 import { ActionRow, exitOf } from "@/app/side-panel/ActionRow";
 import { EntryView } from "@/app/side-panel/EntryView";
+import { withSeams } from "@/app/side-panel/workerSeams";
 import { WorkerBrief } from "@/app/side-panel/WorkerBrief";
 import { rowFinished, workerStateOf } from "@/app/conversation/activity/workerState";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
@@ -207,7 +208,7 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
   const failed = state.kind === "failed";
   // Its own items, not its subagents': their Agent call's row stands for them.
   const items = useMemo(
-    () => foldTranscript((view?.entries ?? []).filter((entry) => native || !entry.parent).map((entry, index) => ({ streamSeq: index, atMs: entry.atMs ?? 0, event: entry.event }))).items,
+    () => foldTranscript((view ? withSeams(view) : []).filter((entry) => native || !entry.parent).map((entry, index) => ({ streamSeq: index, atMs: entry.atMs ?? 0, event: entry.event }))).items,
     [view, native],
   );
   const all = useMemo(() => threadEntries(items).filter((entry) => !workerCliNotice(entry, failed)), [items, failed]);

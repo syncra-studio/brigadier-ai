@@ -1,8 +1,11 @@
 import { receivedMessage } from "@/app/conversation/workerPresentation";
+import { CompactionDivider } from "@/app/conversation/CompactionRow";
 import { ActionRow } from "@/app/side-panel/ActionRow";
+import { REBIRTH, REFRESHED } from "@/app/side-panel/workerSeams";
 import { WorkerMarkdown } from "@/app/side-panel/WorkerMarkdown";
 import { ROW, ErrorState, shownCommand, type ThreadEntry } from "@/components/conversation";
 import { ShieldCheck } from "@/components/icons";
+import { LabeledDivider } from "@/components/shared";
 import type { ErrorKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 
@@ -73,6 +76,9 @@ export function EntryView({ entry, sent }: { entry: ThreadEntry; sent: readonly 
         />
       );
     case "notice":
+      // Its compactions and rebirths, as the thread's dividers ([`withSeams`]).
+      if (item.text === REFRESHED) return <CompactionDivider compaction={{ id: item.key, inTurn: false, automatic: true, state: "done", error: null, position: 0, startedAtMs: 0, endedAtMs: 0 }} />;
+      if (item.text === REBIRTH) return <LabeledDivider data-slot="seam" role="status">{REBIRTH}</LabeledDivider>;
       return (
         <p className={cn("text-sm", item.level === "warning" ? "text-warning" : "text-muted-foreground")}>
           {item.text}

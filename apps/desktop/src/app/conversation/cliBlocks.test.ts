@@ -808,8 +808,10 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   );
   assert.deepEqual(
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.map((each) => each.death)]),
+    // Its divider ends the thread under the last shown turn, never with the hidden note turn
+    // (core-goals D120).
     [
-      ["u1", "message", [], []],
+      ["u1", "message", [], ["it ended its turn without writing one"]],
     ],
   );
   // A successor that carried on by itself: its first turn has no user bubble, under the divider.

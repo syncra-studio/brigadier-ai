@@ -3,16 +3,20 @@ import type { FC } from "react";
 import { type BlockSeam, seamMove } from "@/app/conversation/blocks";
 import { ROW } from "@/components/conversation";
 import { LabeledDivider } from "@/components/shared";
+import { REBIRTH } from "@/app/side-panel/workerSeams";
 import { cliFacts } from "@/lib/providerKinds";
 
-/** "Continued on Codex" where a thread went on in another CLI (S38c); nothing for a hand-off. */
+/**
+ * Where a thread went on: "Continued on Codex" in another CLI (S38c), else "Continued in a fresh
+ * session" at a hand-off (core-goals D120), its note turn under the hood.
+ */
 export const SeamDivider: FC<{ seam: BlockSeam }> = ({ seam }) => {
   const movedTo = seamMove(seam);
-  return movedTo ? (
+  return (
     <LabeledDivider data-slot="seam" role="status">
-      Continued on {cliFacts(movedTo).label}
+      {movedTo ? `Continued on ${cliFacts(movedTo).label}` : REBIRTH}
     </LabeledDivider>
-  ) : null;
+  );
 };
 
 /**

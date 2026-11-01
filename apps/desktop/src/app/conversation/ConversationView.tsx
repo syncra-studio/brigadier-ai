@@ -233,6 +233,8 @@ function signature(
     block.orchestratorSteps,
     block.thinking,
     block.compactions,
+    // A seam's divider comes to a block drawn before, when its generation closes (core-goals D120).
+    block.seams,
     block.steers.map((steer) => [steer.message.id, steer.text]),
     block.requestIds,
     picked,

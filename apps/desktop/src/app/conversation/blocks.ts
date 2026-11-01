@@ -181,8 +181,8 @@ export type BlockSeam = {
 };
 
 /**
- * What of a seam the thread shows: a hand-off is under the hood (run2-D44), its note and a
- * missing one alike; only the other CLI the thread went on in, which now answers.
+ * The other CLI a seam's thread went on in, which now answers; none for a hand-off on the same
+ * CLI, with its note or without (its divider says a fresh session took over, core-goals D120).
  */
 export function seamMove(seam: BlockSeam): ProviderKind | null {
   return seam.death ? null : seam.movedTo;
