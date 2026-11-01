@@ -1618,6 +1618,8 @@ impl SessionManager {
                 state.cli = None;
             }
             state.busy = false;
+            // A compaction cut off with its CLI never ends: the next turn is a real one.
+            state.compacting = false;
             (state.stopping, state.cli.is_some())
         };
         cli.ended.cancel();

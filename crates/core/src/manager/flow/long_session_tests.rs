@@ -1037,3 +1037,91 @@ async fn a_note_still_short_after_the_one_fix_hands_off_with_the_items_word_for_
     assert!(!start.1.contains("Hand-off check: your"), "{}", start.1);
     flow.stop().await;
 }
+
+/// The one fix ask never reaches the CLI (its send fails): the hand-off isn't stuck. The seam
+/// closes after its hold and the successor gets what the note leaves out word for word (D121).
+#[tokio::test]
+async fn a_fix_ask_that_cannot_be_sent_still_hands_off_with_the_items_word_for_word() {
+    let inputs: Inputs = Arc::default();
+    let seen = inputs.clone();
+    let opts = options(ProviderKind::Codex);
+    let behavior = opts.behavior.clone();
+    let mut flow = Flow::start(
+        "long-check-unsent-fix",
+        opts,
+        script(move |turn| {
+            let (inputs, behavior) = (seen.clone(), behavior.clone());
+            async move {
+                inputs
+                    .lock()
+                    .unwrap()
+                    .push((turn.provider, turn.input.clone()));
+                if turn.input.starts_with(NUDGE_MARK) {
+                    std::fs::write(note_of(&turn.input), "Doing now: growing. L3 asked.").unwrap();
+                    // The fix ask that follows is refused.
+                    behavior
+                        .refuse_sends
+                        .lock()
+                        .unwrap()
+                        .push(ProviderKind::Codex);
+                    return Reply::text("Handed off.");
+                }
+                if without_handoff(&turn.input).contains("Grow.") {
+                    turn.report_context(70_000).await;
+                    turn.emit(ProviderEvent::CompactionEnded {
+                        automatic: true,
+                        tokens_before: Some(70_000),
+                        tokens_after: Some(12_000),
+                        error: None,
+                        native_id: None,
+                    })
+                    .await;
+                    turn.report_context(12_000).await;
+                    return Reply::text("Grown.");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    switch(&mut flow, LongSessions::parse(""));
+    let config = SeamConfig {
+        hold: Duration::from_millis(300),
+        ..flow.seam.unwrap()
+    };
+    flow.seam = Some(config);
+    flow.manager.set_seam(config);
+    write_ledger(&flow, PLANTED);
+    flow.say("Start.").await;
+    flow.settled().await;
+    for _ in 0..crate::manager::long_sessions::HANDOFF_AFTER {
+        flow.say("Grow.").await;
+        flow.idle().await;
+    }
+    flow.until("the fix ask failed", |board| {
+        board.run == crate::work::RunState::Failed
+    })
+    .await;
+    flow.behavior.refuse_sends.lock().unwrap().clear();
+    until_successor(&flow).await;
+    let seen = inputs.lock().unwrap().clone();
+    assert!(
+        !seen
+            .iter()
+            .any(|(_, input)| input.contains("Hand-off check: your")),
+        "{seen:#?}"
+    );
+    let start = seen
+        .iter()
+        .find(|(_, input)| input.starts_with(crate::thread_view::HANDOFF_MARK))
+        .expect("a successor");
+    assert!(
+        start.1.contains(
+            "Hand-off check: the note leaves out these open items of the ledger, word for word:\n\
+             - L4 · 11-01 21:03 · gen 1 · Open: promise to rerun the flaky test"
+        ),
+        "{}",
+        start.1
+    );
+    flow.stop().await;
+}

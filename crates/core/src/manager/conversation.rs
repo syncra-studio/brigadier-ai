@@ -2889,6 +2889,12 @@ impl SessionManager {
         let mut users = users;
         let mut envelopes = envelopes;
         let mut message = message;
+        // A hand-off ask (the nudge or its fix) that never reached the CLI isn't sent again: the
+        // seam closes after its hold, the successor carrying what the note leaves out (D121).
+        let asked_note = envelopes
+            .iter()
+            .any(|(envelope, _)| Self::asks_for_note(envelope));
+        envelopes.retain(|(envelope, _)| !Self::asks_for_note(envelope));
         let failed = {
             let mut state = conv.state.lock().await;
             state.busy = false;
@@ -2930,6 +2936,9 @@ impl SessionManager {
             failed
         };
         self.end_judging(conv, false).await;
+        if asked_note {
+            self.arm_seam_hold(conv).await;
+        }
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
         if failed.is_none() {

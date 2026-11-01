@@ -589,10 +589,11 @@ pub(crate) fn handoff_gaps<'a>(ledger: &'a Ledger, note: &str) -> Vec<&'a Entry>
         .into_iter()
         .filter(|entry| match entry.id {
             Some(id) => !cites.contains(&id),
-            None => {
-                let line = entry.text.lines().next().unwrap_or_default().trim_start();
-                !note.contains(list_body(line).unwrap_or(line).trim())
-            }
+            // Every line of it, its list mark aside: a continuation line is part of the item.
+            None => !entry.text.lines().all(|line| {
+                let line = line.trim();
+                note.contains(list_body(line).unwrap_or(line).trim())
+            }),
         })
         .collect()
 }

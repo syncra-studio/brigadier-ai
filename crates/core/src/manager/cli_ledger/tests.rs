@@ -274,6 +274,7 @@ fn a_hand_off_note_leaves_out_only_the_open_items_it_neither_names_nor_closed() 
          - L4 · 11-01 20:03 · gen 1 · Open: promise done since\n\
          - L5 · 11-01 20:04 · gen 2 · Closed L4: reran it\n\
          - Open: the logo, written by hand\n\
+         \x20 in blue, not red\n\
          - L6 · 11-01 20:05 · gen 2 · Open: question, which colour?\n",
     );
     let gaps = |note: &str| -> Vec<String> {
@@ -286,10 +287,12 @@ fn a_hand_off_note_leaves_out_only_the_open_items_it_neither_names_nor_closed() 
         gaps("Next: L3 (rerun). L60 and XL6 are other words."),
         [
             "- L1 · 11-01 20:00 · gen 1 · Open: question, which port?",
-            "- Open: the logo, written by hand",
+            "- Open: the logo, written by hand\n  in blue, not red",
             "- L6 · 11-01 20:05 · gen 2 · Open: question, which colour?",
         ]
     );
-    assert!(gaps("L1, L3, L6; Open: the logo, written by hand").is_empty());
+    // Its continuation line is part of it.
+    assert_eq!(gaps("L1, L3, L6; Open: the logo, written by hand").len(), 1);
+    assert!(gaps("L1, L3, L6; Open: the logo, written by hand in blue, not red").is_empty());
     assert_eq!(gaps("").len(), 4);
 }

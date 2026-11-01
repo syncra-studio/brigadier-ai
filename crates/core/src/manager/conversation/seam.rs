@@ -74,6 +74,8 @@ pub(super) struct Successor {
     messages: Vec<String>,
 }
 
+/// The label of the envelope asking for the hand-off note or its fix.
+const NOTE_ASK: &str = "hand-off note";
 /// Why a generation ended without its note when the CLI said nothing better.
 const NO_NOTE: &str = "it ended its turn without writing one";
 const HELD_TOO_LONG: &str = "it was still working a minute after a message came";
@@ -276,13 +278,18 @@ impl SessionManager {
         Some((envelope, state.seam.carried_request.take()))
     }
 
+    /// Whether `envelope` asks for the hand-off note or its fix.
+    pub(super) fn asks_for_note(envelope: &Envelope) -> bool {
+        envelope.kind == InjectionKind::Seam && envelope.label == NOTE_ASK
+    }
+
     /// The nudge due as a turn of its own, taken for the next turn.
     pub(super) fn take_due_nudge(state: &mut super::ConvState) -> Option<Envelope> {
         let text = state.seam.nudge_due.take()?;
         state.seam.seen = true;
         Some(Envelope {
             kind: InjectionKind::Seam,
-            label: "hand-off note".into(),
+            label: NOTE_ASK.into(),
             task_id: None,
             text,
         })
