@@ -76,3 +76,20 @@ test("the live line says the named wait where it said Thinking, and a held block
   assert.equal(heldWait({ ...ended, background: [...ended.background!, task("b2", "x", "shell", "Other")], jobs: { holding: ["b1", "b2"] } }, [1000], 1000, 1500), null);
   assert.deepEqual(liveHead(null, 0, 2, 0, null), { text: "Waiting for 2 commands", tone: "still" });
 });
+
+const inner = (itemId: string, atMs: number): FileEntry => ({ ...command(itemId, "sleep 40 && python3 -c 'print(6*7)'", atMs), parent: "toolu_agent" });
+
+test("a held block a subagent's own jobs hold names that subagent, as on every CLI (D106, D97; seen live on Claude)", () => {
+  // Claude said the subagent ended while its own sleep and Monitor still run: they are its work.
+  const view: ThreadView = {
+    entries: [call("toolu_agent", "Agent", { description: "Run sleep then print", prompt: "p", run_in_background: true }, 1010, "completed"), inner("toolu_sleep", 1020), inner("toolu_monitor", 1030)],
+    turns: [turn(1000, "done")],
+    background: [
+      task("a1", "toolu_agent", "agent", "Run sleep then print", { status: "completed", endedAtMs: 1400 }),
+      task("b1", "toolu_sleep", "shell", "Wait 40 seconds"),
+      task("b2", "toolu_monitor", "shell", "output of the sleep"),
+    ],
+    jobs: { holding: ["b1", "b2"] },
+  };
+  assert.deepEqual(heldWait(view, [1000], 1000, 1500), { text: "Waiting for subagent: Run sleep then print", tone: "still" });
+});

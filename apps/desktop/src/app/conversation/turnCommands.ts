@@ -1,6 +1,7 @@
 import { runsBrigadier, taskCommand } from "@/app/conversation/backgroundRows";
 import { nextTurnStart } from "@/app/conversation/turnWorkers";
 import type { BackgroundTask, FileEntry, ThreadTurn, ThreadView } from "@/ipc/generated";
+import { subagentOf } from "@/state/nativeWorkers";
 
 /**
  * The background commands a session's block started that still hold it (D21), as its workers
@@ -42,10 +43,12 @@ export function turnCommandTasks(
     const at = call?.atMs ?? task.startedAtMs;
     return at >= startedAtMs && (next === null || at < next) && (endedAtMs === null || at <= endedAtMs);
   };
-  const holding = background.filter((task) => jobs.holding?.includes(task.id) && ours(task));
+  // A subagent's own job holds as that subagent, which runs while it does (`backgroundOf`).
+  const own = (task: BackgroundTask) => subagentOf(task, background, entries) !== undefined;
+  const holding = background.filter((task) => jobs.holding?.includes(task.id) && ours(task) && !own(task));
   if (holding.length > 0 || !jobs.waking || next !== null) return holding;
   // Its end owes the turn it starts: the newest block that started it waits for that turn.
-  const owed = background.findLast((task) => task.status !== "running" && task.kind !== "agent" && ours(task) && !excluded(task, entries));
+  const owed = background.findLast((task) => task.status !== "running" && task.kind !== "agent" && ours(task) && !own(task) && !excluded(task, entries));
   return owed ? [owed] : [];
 }
 
