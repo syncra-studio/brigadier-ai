@@ -89,12 +89,21 @@ export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[])
 
 /**
  * The CLI's background tasks, running or ended, its background subagents among them (D97, D98),
- * except the session's worker wait already covered by the workers card.
+ * except the session's worker wait already covered by the workers card. A job a subagent started
+ * is that subagent's work: no row of its own, and its subagent's row runs while it does.
  */
 export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): BackgroundRow[] {
-  return tasks.filter((task) => !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
-    type: "task", id: `task:${task.id}`, command: taskCommand(task, entries), startedAtMs: task.startedAtMs, task, state: taskState(task), worker: null,
-  }));
+  const subagents = new Set(tasks.flatMap((task) => (task.kind === "agent" && task.itemId !== null ? [task.itemId] : [])));
+  const subagentOf = (task: BackgroundTask) => {
+    const parent = task.itemId === null ? undefined : entries.find(({ event }) => (event.type === "command" || event.type === "toolCall") && event.itemId === task.itemId)?.parent;
+    return parent !== undefined && subagents.has(parent) ? parent : undefined;
+  };
+  const inner = new Map(tasks.flatMap((task) => { const parent = subagentOf(task); return parent ? [[task.id, parent] as const] : []; }));
+  return tasks.filter((task) => !inner.has(task.id) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => {
+    const busy = task.kind === "agent" && tasks.some((job) => job.status === "running" && inner.get(job.id) === task.itemId);
+    const shown: BackgroundTask = busy ? { ...task, status: "running", endedAtMs: null } : task;
+    return { type: "task", id: `task:${task.id}`, command: taskCommand(task, entries), startedAtMs: task.startedAtMs, task: shown, state: taskState(shown), worker: null };
+  });
 }
 
 /**

@@ -1013,13 +1013,22 @@ impl Parser {
             return;
         };
         let item_id = str_of(value, "tool_use_id");
+        let kind = task_kind(value);
+        // A subagent Claude takes up again (its own background job ended) is the same one: it
+        // keeps its start, so it stays one row whose time is all of its work.
+        let again = self
+            .tasks
+            .get(id)
+            .filter(|(task, _)| kind == BackgroundTaskKind::Agent && task.kind == kind);
         let task = BackgroundTask {
             id: id.to_owned(),
-            item_id: item_id.map(str::to_owned),
-            kind: task_kind(value),
+            item_id: item_id
+                .map(str::to_owned)
+                .or_else(|| again.and_then(|(task, _)| task.item_id.clone())),
+            kind,
             label: str_of(value, "description").unwrap_or_default().to_owned(),
             status: BackgroundTaskStatus::Running,
-            started_at_ms: now_ms(),
+            started_at_ms: again.map_or_else(now_ms, |(task, _)| task.started_at_ms),
             ended_at_ms: None,
             output_file: None,
             summary: None,
@@ -1031,7 +1040,8 @@ impl Parser {
                 .map(str::to_owned),
             provider: Some(ProviderKind::Claude),
         };
-        let backgrounded = value.get("is_backgrounded").and_then(Value::as_bool) == Some(true);
+        let backgrounded = value.get("is_backgrounded").and_then(Value::as_bool) == Some(true)
+            || again.is_some_and(|(_, backgrounded)| *backgrounded);
         self.tasks.insert(id.to_owned(), (task, backgrounded));
         self.report_task(id, out);
     }
@@ -3656,6 +3666,22 @@ mod tests {
                 Some("toolu_agent"),
                 "Reply with hi"
             )
+        );
+        // Claude takes the subagent up again once its own background job ended: the same
+        // task, running again from its first start (one Background row, D97, D98).
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let again = parser.feed(&json!({ "type": "system", "subtype": "task_started", "task_id": "a0c79",
+            "tool_use_id": "toolu_agent", "description": "Reply with hi", "subagent_type": "general-purpose",
+            "is_backgrounded": false, "task_type": "local_agent" }).to_string());
+        let Some(Output::Event(ProviderEvent::BackgroundTask { task: resumed })) = again
+            .into_iter()
+            .find(|output| matches!(output, Output::Event(ProviderEvent::BackgroundTask { .. })))
+        else {
+            panic!("the subagent taken up again is reported");
+        };
+        assert_eq!(
+            (resumed.status, resumed.started_at_ms),
+            (BackgroundTaskStatus::Running, task.started_at_ms)
         );
         let mut feed = |line: Value| tasks(parser.feed(&line.to_string()));
         // The command is stopped.

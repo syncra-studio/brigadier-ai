@@ -73,4 +73,13 @@ test("every command is a Background row, the session's and its workers' (D51), e
   assert.deepEqual(taskRows([{ ...sleep, status: "completed" }], entries).map((row) => row.state), ["finished"]);
   assert.deepEqual(workerTaskRows([{ ...worker, background: [{ task: { ...sleep, status: "stopped" }, command: "sleep 25" }] }], () => "Site worker").map((row) => row.state), ["stopped"]);
   assert.deepEqual(source, before, "native records/history stay intact");
+
+  // A job the subagent started itself is its work: one row, the subagent's, running until the job ends.
+  const done: BackgroundTask = { ...agent, status: "completed", endedAtMs: 30 };
+  const own = nativeApp("own", "Wait 40 seconds then print 6*7");
+  const inside: FileEntry[] = [
+    { event: { type: "command", itemId: "call-own", command: "sleep 40 && python3 -c 'print(6*7)'", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null }, parent: "call-agent" },
+  ];
+  assert.deepEqual(taskRows([done, own], inside).map((row) => [row.id, row.state]), [["task:agent", "running"]]);
+  assert.deepEqual(taskRows([done, { ...own, status: "completed", endedAtMs: 40 }], inside).map((row) => [row.id, row.state]), [["task:agent", "finished"]]);
 });
