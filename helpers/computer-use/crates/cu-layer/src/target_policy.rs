@@ -1003,7 +1003,7 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
         }
         RefusalReason::SecuritySurface if is_settings(identity) => SETTINGS_REFUSAL,
         RefusalReason::SecuritySurface => SECURITY_REFUSAL,
-        RefusalReason::StoreApp => "Store apps can't be driven in the background on Windows yet. Ask the user to do this step.",
+        RefusalReason::StoreApp => "On Windows, Brigadier refuses apps identified as ApplicationFrameHost, the shared host for some Store apps. The helper identifies the shared host instead of the app inside it. Other Store apps are not refused as a group. Ask the user to do this step.",
     };
     let message = format!(
         "target_not_allowed: {tool} refused to target '{}' ({bundle}). {why}",
@@ -1412,9 +1412,12 @@ mod tests {
         let state = result.structured_content.unwrap();
         assert_eq!(state["reason"], "store_app_background_unsupported");
         let message = state["message"].as_str().unwrap();
-        assert!(message.contains("Store apps can't be driven in the background on Windows yet"));
+        assert!(message.contains("apps identified as ApplicationFrameHost"));
         assert!(message.contains("Ask the user to do this step"));
         assert!(!message.contains("credential"));
+        for executable in ["calculatorapp", "notepad", "photos"] {
+            assert_eq!(classify(&app(executable, executable, 42), &[]), None);
+        }
     }
 
     #[cfg(target_os = "macos")]

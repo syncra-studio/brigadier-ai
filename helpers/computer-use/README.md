@@ -92,9 +92,12 @@ runs it from `<data dir>/computer/bin/`, and it asks for no permissions.
 | Apps named by | bundle id | executable name | executable name |
 
 What Windows and Linux can't do in the background is said plainly in the
-tool's answer: apps running as administrator and Store (UWP) apps on Windows
-(the driver's uiAccess worker, `cua-driver-uia`, is vendored but not built or
-shipped), and input in a pure Wayland session without XWayland on Linux (the
+tool's answer: higher-privilege apps can block background input on Windows.
+The Windows policy also refuses apps identified as `ApplicationFrameHost`, the
+shared host for some Store apps, rather than an individual app; other Store
+apps are not refused as a group. The driver's uiAccess worker, `cua-driver-uia`,
+is vendored but not built or shipped. Another limitation is input in a pure
+Wayland session without XWayland on Linux (the
 driver's experimental Wayland backend stays off). `cu-testkit`, and so
 `brigadier-cu`'s own tests, run on macOS only; CI runs clippy for both
 crates and `cu-layer`'s tests on Windows and Linux.
