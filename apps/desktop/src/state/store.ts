@@ -68,8 +68,8 @@ export type Selection =
  * the resolution order: the project's remembered choice, then the global default.
  */
 /** Where a draft session works: a new worktree of its own (the default), the local checkout, or
-    an existing branch as it is, where it is checked out (goal 9). */
-export type DraftEnvironment = EnvironmentKind | "existingBranch";
+    an existing worktree, on the branch it has checked out (goal 9, D130). */
+export type DraftEnvironment = EnvironmentKind | "existingWorktree";
 
 export type DraftSetup = {
   /** The project these choices were made for; they reset when the project changes. */
@@ -77,8 +77,8 @@ export type DraftSetup = {
   environment: DraftEnvironment;
   /** New worktree: the branch it starts from and merges into. Absent: the checked-out branch. */
   base: string | null;
-  /** Existing branch: the branch picked to work on. */
-  branch: string | null;
+  /** Existing worktree: the folder picked to work in. */
+  worktree: string | null;
   /** New worktree: the session branch's name. Empty: Brigadier names it. */
   sessionBranch: string;
   permission: PermissionLevel | null;
@@ -92,7 +92,7 @@ export function emptyDraft(projectId: string | null): DraftSetup {
     projectId,
     environment: "newWorktree",
     base: null,
-    branch: null,
+    worktree: null,
     sessionBranch: "",
     permission: null,
     model: null,

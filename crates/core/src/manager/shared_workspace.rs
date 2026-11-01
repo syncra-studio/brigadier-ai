@@ -1,9 +1,9 @@
-//! Several sessions in one folder (goal 9): a session started on an existing branch works where
-//! that branch is checked out, beside any session already there, or in a worktree of its own
-//! on it. Nothing is enforced between them; the session let in is told once that it shares
-//! the folder. A shared folder, its branch and what runs in it outlive any one session's
-//! archive or delete: the last session using a Brigadier-made worktree lets it go, and a
-//! folder Brigadier didn't make is never removed.
+//! Several sessions in one folder (goal 9, D130): a session started in an existing worktree
+//! works there, on its branch, beside any session already there. Nothing is enforced between
+//! them; the session let in is told once that it shares the folder. A shared folder, its
+//! branch and what runs in it outlive any one session's archive or delete: the last session
+//! using a Brigadier-made worktree lets it go, and a folder Brigadier didn't make is never
+//! removed.
 
 use std::path::{Path, PathBuf};
 
@@ -21,14 +21,12 @@ pub(super) fn shared_line(branch: &str) -> String {
     )
 }
 
-/// Where a session on an existing branch works, found when it is created.
+/// Where a session in an existing worktree works, found when it is created.
 pub(super) struct ExistingPlace {
     pub environment: Environment,
     /// The folder is a linked worktree whose removal some other owner records: the new session
     /// is recorded as using it too, so it stays while either does.
     record: Option<(String, String)>,
-    /// Checked out nowhere: its worktree is made now, on the branch itself.
-    make: bool,
 }
 
 /// The folder a session works in, once it has one.
@@ -95,127 +93,112 @@ impl SessionManager {
         !same(path, &self.session_worktree_path(conversation)) && !path.starts_with(&self.data_dir)
     }
 
-    /// Where a session on the existing `branch` of `repo` works: the folder that has it checked
-    /// out, or a worktree of its own on it. It merges into what the folder's session merges
-    /// into, else the target git records for the branch, else nowhere until the user says
-    /// (its base is the branch itself). Called holding `shared_workspaces`.
-    pub(super) async fn existing_place(&self, repo: &str, branch: &str) -> Result<ExistingPlace> {
-        // As the composer offers them: a running worker's branch is that worker's.
-        if self
-            .worker_branches(Path::new(repo))
-            .await
-            .iter()
-            .any(|b| b == branch)
-        {
-            return Err(Error::Invalid(format!(
-                "A running worker works on `{branch}`. Pick another branch."
-            )));
-        }
-        let (git, at, name) = (self.git.clone(), PathBuf::from(repo), branch.to_owned());
-        let (folder, main, recorded) = blocking(move || {
+    /// Where a session in the existing worktree `path` of `repo` works: that folder, on the
+    /// branch it has checked out (goal 9, D130). The folder must be one of the repository's
+    /// worktrees, not its own checkout (that is Local checkout), on a branch, and not a running
+    /// worker's. It merges into what the folder's session merges into, else the target git
+    /// records for the branch, else nowhere until the user says (its base is the branch
+    /// itself). Called holding `shared_workspaces`.
+    pub(super) async fn existing_place(&self, repo: &str, path: &str) -> Result<ExistingPlace> {
+        let (git, at, wanted) = (self.git.clone(), PathBuf::from(repo), PathBuf::from(path));
+        let (folder, branch, recorded) = blocking(move || {
             let repo = git.open(&at).map_err(git_error)?;
-            if repo.branch_tip(&name).map_err(git_error)?.is_none() {
-                return Err(Error::Invalid(format!(
-                    "The branch `{name}` isn't in this repository any more. Pick another one."
-                )));
-            }
-            let folder = repo
+            let worktree = repo
                 .worktrees()
                 .map_err(git_error)?
                 .into_iter()
-                .find(|worktree| !worktree.prunable && worktree.branch.as_deref() == Some(&name))
-                .map(|worktree| worktree.path);
-            let main = folder
-                .as_deref()
-                .is_some_and(|path| same(path, repo.root()));
-            let recorded = repo.merge_base_of(&name).map_err(git_error)?;
-            Ok((folder, main, recorded))
+                .find(|worktree| !worktree.prunable && same(&worktree.path, &wanted))
+                .ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "{} isn't a worktree of this repository any more. Pick another one.",
+                        wanted.display()
+                    ))
+                })?;
+            if same(&worktree.path, repo.root()) {
+                return Err(Error::Invalid(
+                    "That is the project's own checkout: pick Local checkout to work there.".into(),
+                ));
+            }
+            let branch = worktree.branch.ok_or_else(|| {
+                Error::Invalid(format!(
+                    "{} isn't on a branch. Check one out there first.",
+                    worktree.path.display()
+                ))
+            })?;
+            let recorded = repo.merge_base_of(&branch).map_err(git_error)?;
+            Ok((worktree.path, branch, recorded))
         })
         .await?;
-        if main {
-            return Ok(ExistingPlace {
-                environment: Environment::LocalCheckout {
-                    branch: branch.to_owned(),
-                },
-                record: None,
-                make: false,
-            });
+        // As the composer offers them: a running worker's folder is that worker's.
+        if self
+            .worker_branches(Path::new(repo))
+            .await
+            .contains(&branch)
+        {
+            return Err(Error::Invalid(
+                "A running worker works in that worktree. Pick another one.".into(),
+            ));
         }
         // The folder's session, if one works there: its path as it records it (paths are
         // compared as written elsewhere), and its target.
-        let session = folder.as_deref().and_then(|folder| {
-            self.core
-                .catalog()
-                .conversations
-                .into_iter()
-                .find_map(|other| match other.setup {
-                    Some(Setup::Session {
-                        environment:
-                            Environment::NewWorktree {
-                                base,
-                                path: Some(path),
-                                ..
-                            },
-                        ..
-                    }) if same(Path::new(&path), folder) => Some((path, base)),
-                    _ => None,
-                })
-        });
+        let session = self
+            .core
+            .catalog()
+            .conversations
+            .into_iter()
+            .find_map(|other| match other.setup {
+                Some(Setup::Session {
+                    environment:
+                        Environment::NewWorktree {
+                            base,
+                            path: Some(path),
+                            ..
+                        },
+                    ..
+                }) if same(Path::new(&path), &folder) => Some((path, base)),
+                _ => None,
+            });
         let (path, session_base) = match session {
-            Some((path, base)) => (Some(path), Some(base)),
-            None => (
-                folder.map(|folder| folder.to_string_lossy().into_owned()),
-                None,
-            ),
+            Some((path, base)) => (path, Some(base)),
+            None => (folder.to_string_lossy().into_owned(), None),
         };
         let base = session_base
-            .filter(|base| base != branch)
-            .or(recorded.filter(|base| base != branch))
-            .unwrap_or_else(|| branch.to_owned());
-        let record = path.as_ref().and_then(|path| {
-            let held = self.runtime.ledger().owners().into_iter().any(|(_, artifacts, _)| {
-                artifacts.iter().any(|artifact| {
-                    matches!(artifact, Artifact::Worktree { path: at, .. } if same(Path::new(at), Path::new(path)))
-                })
-            });
-            held.then(|| (repo.to_owned(), path.clone()))
+            .filter(|base| base != &branch)
+            .or(recorded.filter(|base| base != &branch))
+            .unwrap_or_else(|| branch.clone());
+        let held = self.runtime.ledger().owners().into_iter().any(|(_, artifacts, _)| {
+            artifacts.iter().any(|artifact| {
+                matches!(artifact, Artifact::Worktree { path: at, .. } if same(Path::new(at), Path::new(&path)))
+            })
         });
         Ok(ExistingPlace {
-            make: path.is_none(),
+            record: held.then(|| (repo.to_owned(), path.clone())),
             environment: Environment::NewWorktree {
                 base,
-                branch: branch.to_owned(),
-                path,
+                branch,
+                path: Some(path),
                 start: None,
             },
-            record,
         })
     }
 
-    /// Lets the session just created into its place: recorded as using a shared worktree, or
-    /// its own worktree made on the branch.
+    /// Lets the session just created into its place: recorded as using a shared worktree.
     /// Called holding `shared_workspaces`.
     pub(super) async fn let_into(
         &self,
         created: Conversation,
         place: ExistingPlace,
     ) -> Result<Conversation> {
-        let id = created.id.clone();
         if let Some((repo, path)) = place.record {
             self.runtime
                 .ledger()
-                .record(&format!("session:{id}"), Artifact::Worktree { repo, path })
+                .record(
+                    &format!("session:{}", created.id),
+                    Artifact::Worktree { repo, path },
+                )
                 .await?;
         }
-        if place.make
-            && let Some(Setup::Session {
-                repo, environment, ..
-            }) = &created.setup
-        {
-            self.ensure_target(&id, Path::new(repo), environment)
-                .await?;
-        }
-        self.core.conversation(&id)
+        Ok(created)
     }
 
     /// A new session working in a folder another open session works in hears so once, with
@@ -272,7 +255,8 @@ impl SessionManager {
         }
     }
 
-    /// The branches running workers work on in `repo`, so the composer offers no session there.
+    /// The branches running workers work on in `repo`, so the composer offers no session in
+    /// their folders.
     pub(super) async fn worker_branches(&self, repo: &Path) -> Vec<String> {
         let mut branches = Vec::new();
         for conversation in self.core.catalog().conversations {

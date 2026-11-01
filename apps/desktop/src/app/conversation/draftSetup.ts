@@ -90,10 +90,10 @@ export type ResolvedDraft = {
   repo: RepoState & { reload: () => void };
   draft: DraftSetup;
   /** Where the session works: a new worktree of its own, the project's own folder, or an
-      existing branch where it is checked out. */
+      existing worktree. */
   environment: DraftEnvironment;
   /** New worktree: the base branch. Local checkout: the branch the project's folder has checked
-      out. Existing branch: the branch picked. */
+      out. */
   base: string | null;
   permission: PermissionLevel;
   model: ModelChoice;
@@ -132,8 +132,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
     const permission = resolvePermission(draft.permission, settings);
     const { environment } = draft;
     const current = repo.info?.currentBranch ?? null;
-    const base =
-      environment === "localCheckout" ? current : environment === "existingBranch" ? draft.branch : (draft.base ?? current);
+    const base = environment === "localCheckout" ? current : environment === "existingWorktree" ? null : (draft.base ?? current);
 
     let problem: string | null = null;
     let waiting = false;

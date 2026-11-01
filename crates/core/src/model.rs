@@ -290,9 +290,9 @@ pub enum EnvironmentRequest {
         /// The session branch's name. Absent: Brigadier names it (`brigadier/<session>/session`).
         branch: Option<String>,
     },
-    /// Work on an existing `branch` as it is (goal 9): in the folder that has it checked out,
-    /// shared with any session already there, or else in a worktree of its own on it.
-    Existing { branch: String },
+    /// Work in an existing worktree of the repository, on the branch it has checked out (goal 9,
+    /// D130), beside any session already there. `path` is checked against `git worktree list`.
+    Existing { path: String },
 }
 
 /// A session's environment once set up.
@@ -457,12 +457,12 @@ impl Setup {
                         path: None,
                         start: None,
                     },
-                    // Its folder and merge target are filled in when it is created
-                    // (`SessionManager::existing_place`); the branch is its own target until then.
-                    EnvironmentRequest::Existing { branch } => Environment::NewWorktree {
-                        base: branch.clone(),
-                        branch,
-                        path: None,
+                    // Its branch and merge target are filled in when it is created
+                    // (`SessionManager::existing_place`).
+                    EnvironmentRequest::Existing { path } => Environment::NewWorktree {
+                        base: String::new(),
+                        branch: String::new(),
+                        path: Some(path),
                         start: None,
                     },
                 },

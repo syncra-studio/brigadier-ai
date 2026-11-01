@@ -11,4 +11,4 @@ createFrom: string | null, } | { "type": "newWorktree", base: string,
 /**
  * The session branch's name. Absent: Brigadier names it (`brigadier/<session>/session`).
  */
-branch: string | null, } | { "type": "existing", branch: string, };
+branch: string | null, } | { "type": "existing", path: string, };

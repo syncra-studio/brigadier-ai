@@ -1,9 +1,8 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a new session's
  * utility bar (project, Work in, branch) on a project whose folder has `feature-x` checked out,
- * IPC mocked. It opens Work in, picks Local checkout, New worktree again, then Existing branch
- * and a branch another session works on (goal 9), and writes the
- * menu's rows, the pills and the setup each asks for as JSON into `<pre id="work-in-result">`;
+ * IPC mocked. It opens Work in, picks Local checkout, New worktree again, then Existing worktree
+ * and the worktree another session works in (goal 9), and writes the menu's rows, the pills and the setup each asks for as JSON into `<pre id="work-in-result">`;
  * `stop=1` holds the page with the menu open for a screenshot, `stop=local` once Local checkout
  * is picked.
  */
@@ -27,6 +26,7 @@ const repo: RepoInfo = {
     { name: "main", commit: "a1", checkedOutAt: null, worker: false },
     { name: "feature-x", commit: "b2", checkedOutAt: "/work/todo-app", worker: false },
     { name: "fix-login", commit: "c3", checkedOutAt: "/Users/me/.brigadier/s/ab12cd34/work", worker: false },
+    { name: "hotfix", commit: "e5", checkedOutAt: "/work/todo-app-hotfix", worker: false },
     { name: "brigadier/ab12cd34/task-1", commit: "d4", checkedOutAt: "/Users/me/.brigadier/s/ab12cd34/workers/1/work", worker: true },
   ],
 };
@@ -89,19 +89,19 @@ async function drive(): Promise<Record<string, unknown>> {
   press(row("New worktree")!);
   await until("the base branch pill again", () => pill("Base branch"));
   seen.backSetup = setup();
-  // Existing branch: nothing picked yet, then the branches with their folders.
+  // Existing worktree: nothing picked yet, then the worktrees with their branches.
   press(pill("Work in")!);
   await until("the Work in menu a third time", () => rows().length > 0);
-  press(row("Existing branch")!);
-  await until("the existing branch pill", () => pill("Branch"));
-  seen.existingPills = [pill("Work in")?.textContent, pill("Branch")?.textContent];
+  press(row("Existing worktree")!);
+  await until("the worktree pill", () => pill("Worktree"));
+  seen.existingPills = [pill("Work in")?.textContent, pill("Worktree")?.textContent];
   seen.existingProblem = setup();
-  press(pill("Branch")!);
-  await until("the branch list", () => options().length > 0);
-  seen.branchRows = options().map((each) => each.textContent);
+  press(pill("Worktree")!);
+  await until("the worktree list", () => options().length > 0);
+  seen.worktreeRows = options().map((each) => each.textContent);
   if (query.get("stop") === "existing") return seen;
-  press(options().find((each) => each.textContent?.startsWith("fix-login"))!);
-  await until("the picked branch", () => pill("Branch")?.textContent === "fix-login");
+  press(options().find((each) => each.textContent?.endsWith("fix-login"))!);
+  await until("the picked worktree", () => pill("Worktree")?.textContent === "~/.brigadier/s/ab12cd34/work");
   seen.existingSetup = setup();
   return seen;
 }

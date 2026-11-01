@@ -1309,10 +1309,7 @@ impl SessionManager {
                     repo.add_worktree(&path, spec).map_err(git_error)?;
                     // What the session's branch merges into, for `gh pr create` and whoever
                     // reads the target later (S7): the base chosen on the rail.
-                    // Never over an existing branch's own (goal 9: work on a branch as it is).
-                    if made.is_some()
-                        && let Err(err) = repo.set_merge_base(&branch_name, &base_name)
-                    {
+                    if let Err(err) = repo.set_merge_base(&branch_name, &base_name) {
                         tracing::warn!(%err, "couldn't record the session branch's base in git config");
                     }
                     super::sidecars::stand_in_at(&git, &path);

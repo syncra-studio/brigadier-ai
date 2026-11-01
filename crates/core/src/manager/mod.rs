@@ -752,8 +752,8 @@ impl SessionManager {
 
     /// Creates a session or Chat. A session starts a workspace of its own, as its first tab. A
     /// local-checkout session asked to start on a new branch gets that branch created from
-    /// `create_from` first. One on an existing branch works where that branch is checked out,
-    /// beside any session already there (goal 9), or in a worktree of its own on it.
+    /// `create_from` first. One in an existing worktree works there, on its branch, beside any
+    /// session already there (goal 9).
     pub async fn create_conversation(
         &self,
         kind: ConversationKind,
@@ -773,9 +773,9 @@ impl SessionManager {
         let existing = match &setup {
             Some(SetupRequest::Session {
                 repo,
-                environment: EnvironmentRequest::Existing { branch },
+                environment: EnvironmentRequest::Existing { path },
                 ..
-            }) => Some(self.existing_place(repo, branch).await?),
+            }) => Some(self.existing_place(repo, path).await?),
             _ => None,
         };
         if let Some(SetupRequest::Session {

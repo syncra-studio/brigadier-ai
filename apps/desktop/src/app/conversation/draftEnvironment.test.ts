@@ -28,10 +28,10 @@ test("the local checkout works on the branch the project's folder has checked ou
   );
 });
 
-test("an existing branch is worked on as it is, wherever it is checked out (goal 9)", () => {
-  assert.deepEqual(environmentRequest({ ...place, environment: "existingBranch", branch: "fix-login", base: "main" }), {
-    request: { type: "existing", branch: "fix-login" },
+test("an existing worktree is worked in, the folder picked (goal 9, D130)", () => {
+  assert.deepEqual(environmentRequest({ ...place, environment: "existingWorktree", worktree: "/w/fix", base: "main" }), {
+    request: { type: "existing", path: "/w/fix" },
   });
-  assert.deepEqual(environmentRequest({ ...place, environment: "existingBranch" }), { problem: "Pick the branch to work on." });
-  assert.deepEqual(environmentRequest({ ...place, environment: "existingBranch", loading: true }), { problem: "Reading the repository…", waiting: true });
+  assert.deepEqual(environmentRequest({ ...place, environment: "existingWorktree" }), { problem: "Pick the worktree to work in." });
+  assert.deepEqual(environmentRequest({ ...place, environment: "existingWorktree", loading: true }), { problem: "Reading the repository…", waiting: true });
 });

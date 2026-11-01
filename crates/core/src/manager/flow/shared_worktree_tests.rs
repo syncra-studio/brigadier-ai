@@ -1,5 +1,5 @@
-//! Several sessions in one folder (goal 9, D123): a session started on an existing branch works
-//! where it is checked out, beside the session there, with its own context; the folder, its
+//! Several sessions in one folder (goal 9, D123, D130): a session started in an existing
+//! worktree works there, on its branch, beside the session there, with its own context; the folder, its
 //! branch, its uncommitted work and what runs in it outlive the other session's archive or
 //! delete, and only the last Brigadier session using a Brigadier-made worktree lets it go.
 
@@ -29,12 +29,12 @@ fn script(heard: Heard) -> Script {
     })
 }
 
-async fn start(flow: &Flow, title: &str, branch: &str) -> crate::Result<Conversation> {
+async fn start(flow: &Flow, title: &str, folder: &Path) -> crate::Result<Conversation> {
     start_in(
         flow,
         title,
         EnvironmentRequest::Existing {
-            branch: branch.into(),
+            path: folder.display().to_string(),
         },
     )
     .await
@@ -45,7 +45,14 @@ async fn start_in(
     title: &str,
     environment: EnvironmentRequest,
 ) -> crate::Result<Conversation> {
-    let first = flow.core.conversation(&flow.conversation).unwrap();
+    // Set up as any session still there is (the first may be deleted by now).
+    let first = flow
+        .core
+        .catalog()
+        .conversations
+        .into_iter()
+        .find(|other| other.setup.is_some())
+        .unwrap();
     let Some(Setup::Session {
         repo,
         permission,
@@ -119,7 +126,7 @@ async fn deleted(flow: &Flow, conversation: &Conversation) {
     flow.manager.cleanup_finished(&conversation.id).await;
 }
 
-/// B starts on A's branch: it works in A's worktree, merges where A does, hears once that it
+/// B starts in A's worktree: it works there on A's branch, merges where A does, hears once that it
 /// shares the folder, and neither hears the other's messages. A command B runs there outlives
 /// A's archive, the folder and branch stay for B, and B's archive, the last, removes them.
 #[tokio::test]
@@ -131,7 +138,7 @@ async fn a_session_on_another_sessions_branch_works_beside_it() {
     let a = flow.core.conversation(&flow.conversation).unwrap();
     let (base, branch, folder) = worktree_of(&a);
 
-    let b = start(&flow, "B", &branch).await.unwrap();
+    let b = start(&flow, "B", &folder).await.unwrap();
     assert_eq!(
         worktree_of(&b),
         (base.clone(), branch.clone(), folder.clone())
@@ -193,7 +200,7 @@ async fn deleting_a_session_keeps_the_folder_and_work_of_the_one_beside_it() {
     flow.settled().await;
     let a = flow.core.conversation(&flow.conversation).unwrap();
     let (_, branch, folder) = worktree_of(&a);
-    let b = start(&flow, "B", &branch).await.unwrap();
+    let b = start(&flow, "B", &folder).await.unwrap();
     std::fs::write(folder.join("b.txt"), "B's work\n").unwrap();
     let head = git(&folder, &["rev-parse", "HEAD"]);
 
@@ -233,40 +240,28 @@ async fn deleting_a_session_keeps_the_folder_and_work_of_the_one_beside_it() {
     flow.stop().await;
 }
 
-/// A branch checked out nowhere gets a worktree of its own on that branch (no new branch, its
-/// git config untouched); the checkout's branch is worked on in the checkout; a folder the
-/// user made is worked in, never removed, and a turn there is refused once it moved on.
+/// Only a worktree of the repository is worked in: not the project's own checkout (that is
+/// Local checkout) nor a folder git doesn't list. A folder the user made is worked in, never
+/// removed, and a turn there is refused once it moved on.
 #[tokio::test]
-async fn a_free_branch_the_checkouts_branch_and_a_users_worktree() {
+async fn the_users_worktree_the_checkout_and_a_folder_that_isnt_one() {
     let heard = Heard::default();
     let flow = Flow::start("shared-places", Options::default(), script(heard.clone())).await;
-    git(&flow.repo, &["branch", "feature"]);
-    let names = || git(&flow.repo, &["branch", "--format=%(refname:short)"]);
-    let branches = names();
-    let free = start(&flow, "Free", "feature").await.unwrap();
-    let (base, branch, folder) = worktree_of(&free);
-    assert_eq!((base.as_str(), branch.as_str()), ("feature", "feature"));
-    assert_eq!(folder, flow.manager.session_worktree_path(&free));
-    assert_eq!(git(&folder, &["branch", "--show-current"]), "feature");
-    assert_eq!(names(), branches, "no branch made");
-    let config = std::process::Command::new("git")
-        .args(["config", "--get", "branch.feature.gh-merge-base"])
-        .current_dir(&flow.repo)
-        .output()
-        .unwrap();
+    let checkout = start(&flow, "Checkout", &flow.repo).await.unwrap_err();
     assert!(
-        config.stdout.is_empty(),
-        "the branch's git config is left as it was"
+        checkout.to_string().contains("Local checkout"),
+        "{checkout}"
     );
-
-    let main = start(&flow, "Main", "main").await.unwrap();
-    assert!(matches!(
-        main.setup,
-        Some(Setup::Session {
-            environment: Environment::LocalCheckout { ref branch },
-            ..
-        }) if branch == "main"
-    ));
+    let main = start_in(
+        &flow,
+        "Main",
+        EnvironmentRequest::LocalCheckout {
+            branch: "main".into(),
+            create_from: None,
+        },
+    )
+    .await
+    .unwrap();
     // A plain Local checkout session beside it hears it shares the folder; the first didn't.
     let beside = start_in(
         &flow,
@@ -297,8 +292,12 @@ async fn a_free_branch_the_checkouts_branch_and_a_users_worktree() {
     );
     // As git names it.
     let mine = mine.canonicalize().unwrap();
-    let users = start(&flow, "Users", "mine").await.unwrap();
-    assert_eq!(worktree_of(&users).2, mine);
+    let users = start(&flow, "Users", &mine).await.unwrap();
+    let (base, branch, folder) = worktree_of(&users);
+    assert_eq!(
+        (base.as_str(), branch.as_str(), folder),
+        ("mine", "mine", mine.clone())
+    );
     flow.say_to(&users.id, "U: hello.").await;
     flow.settled_in(&users.id).await;
     assert_eq!(heard_in(&heard, "U: hello.").1, mine);
@@ -330,15 +329,14 @@ async fn a_free_branch_the_checkouts_branch_and_a_users_worktree() {
     assert!(mine.join(".git").is_file(), "a folder the user made stays");
     assert_eq!(git(&mine, &["rev-parse", "HEAD"]), head, "no WIP commit");
 
-    let gone = start(&flow, "Gone", "no-such-branch").await.unwrap_err();
-    assert!(
-        gone.to_string().contains("isn't in this repository"),
-        "{gone}"
-    );
+    let gone = start(&flow, "Gone", &flow.dir.join("no-such-worktree"))
+        .await
+        .unwrap_err();
+    assert!(gone.to_string().contains("isn't a worktree"), "{gone}");
     flow.stop().await;
 }
 
-/// A start on A's branch racing A's archive never ends with B in a removed folder.
+/// A start in A's worktree racing A's archive never ends with B in a removed folder.
 #[tokio::test]
 async fn starting_beside_a_session_while_it_is_archived_never_loses_the_folder() {
     let heard = Heard::default();
@@ -346,10 +344,10 @@ async fn starting_beside_a_session_while_it_is_archived_never_loses_the_folder()
     flow.say("A: look around.").await;
     flow.settled().await;
     let a = flow.core.conversation(&flow.conversation).unwrap();
-    let (_, branch, _) = worktree_of(&a);
+    let (_, branch, folder) = worktree_of(&a);
     let (archive, b) = tokio::join!(
         flow.manager.archive(a.id.clone()),
-        start(&flow, "B", &branch)
+        start(&flow, "B", &folder)
     );
     archive.unwrap();
     flow.manager.cleanup_finished(&a.id).await;
@@ -408,9 +406,20 @@ async fn a_running_workers_branch_is_marked_for_the_composer() {
     release.notify_waiters();
     flow.settled().await;
     assert_eq!(marked().await.len(), 1);
-    // Nor can a session be started there while it is.
-    let held = marked().await.remove(0);
-    let refused = start(&flow, "On the worker's", &held).await.unwrap_err();
+    // Nor can a session be started in its worktree while it is.
+    let held = flow
+        .manager
+        .repo_info(repo.clone())
+        .await
+        .unwrap()
+        .branches
+        .into_iter()
+        .find(|branch| branch.worker)
+        .and_then(|branch| branch.checked_out_at)
+        .unwrap();
+    let refused = start(&flow, "In the worker's", Path::new(&held))
+        .await
+        .unwrap_err();
     assert!(refused.to_string().contains("running worker"), "{refused}");
     let task = flow.board().await.tasks.keys().next().unwrap().clone();
     flow.manager.stop_task(task).await.unwrap();
@@ -433,8 +442,8 @@ async fn a_restored_session_keeps_the_folder_it_shares() {
     flow.say("A: look around.").await;
     flow.settled().await;
     let a = flow.core.conversation(&flow.conversation).unwrap();
-    let (_, branch, folder) = worktree_of(&a);
-    let b = start(&flow, "B", &branch).await.unwrap();
+    let folder = worktree_of(&a).2;
+    let b = start(&flow, "B", &folder).await.unwrap();
     archived(&flow, &a).await;
     flow.manager.restore(a.id.clone()).await.unwrap();
     std::fs::write(folder.join("a.txt"), "A's work\n").unwrap();
@@ -456,16 +465,15 @@ async fn a_folder_passed_on_twice_stays_for_the_last_session() {
         script(Heard::default()),
     )
     .await;
-    git(&flow.repo, &["branch", "feature"]);
-    let a = start(&flow, "A", "feature").await.unwrap();
+    flow.say("A: hello.").await;
+    flow.settled().await;
+    let a = flow.core.conversation(&flow.conversation).unwrap();
     let folder = worktree_of(&a).2;
-    let b = start(&flow, "B", "feature").await.unwrap();
-    for (one, says) in [(&a, "A: hello."), (&b, "B: hello.")] {
-        flow.say_to(&one.id, says).await;
-        flow.settled_in(&one.id).await;
-    }
+    let b = start(&flow, "B", &folder).await.unwrap();
+    flow.say_to(&b.id, "B: hello.").await;
+    flow.settled_in(&b.id).await;
     deleted(&flow, &a).await;
-    start(&flow, "C", "feature").await.unwrap();
+    start(&flow, "C", &folder).await.unwrap();
     std::fs::write(folder.join("c.txt"), "C's work\n").unwrap();
     deleted(&flow, &b).await;
     assert!(
