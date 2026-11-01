@@ -251,6 +251,11 @@ impl WorkspaceWatch {
                                     watch_status_dirs(watcher, &filter.root, &status_files);
                                 }
                                 filter.status_files = status_files;
+                                // Adding a watch restarts the stream, which drops events still
+                                // on their way (a switch's own HEAD write): read once more.
+                                if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
+                                    return;
+                                }
                             }
                         }
                         if thread_stop.load(Ordering::SeqCst) {
@@ -457,5 +462,34 @@ mod tests {
         // The thread's own stop reference goes away within its bounded receive/sleep.
         tokio::time::sleep(SETTLE * 3).await;
         assert_eq!(Arc::strong_count(&stop), 1);
+    }
+
+    /// A switched branch's folders are watched anew, which restarts the stream and drops what
+    /// was still on its way: the change after that is said again, with no further event.
+    #[tokio::test]
+    async fn new_watches_after_a_switch_say_one_more_change() {
+        let root =
+            std::env::temp_dir().join(format!("workspace-watch-rewatch-{}", uuid::Uuid::new_v4()));
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(root.join("common/refs/heads")).unwrap();
+        let switched = vec![root.join("common/refs/heads/topic")];
+        let mut watch = WorkspaceWatch::start(work.clone(), Vec::new(), Vec::new(), move || {
+            Some((Vec::new(), switched.clone()))
+        });
+        assert!(watch._watcher.lock().unwrap().is_some());
+        tokio::time::sleep(SETTLE).await;
+        let wait = Duration::from_secs(10);
+        std::fs::write(work.join("file"), "x").unwrap();
+        assert!(
+            tokio::time::timeout(wait, watch.changed()).await.is_ok(),
+            "the write"
+        );
+        assert!(
+            tokio::time::timeout(wait, watch.changed()).await.is_ok(),
+            "the read after the new watches"
+        );
+        drop(watch);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
