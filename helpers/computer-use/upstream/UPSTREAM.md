@@ -184,6 +184,8 @@ Patches applied, in order:
 
 - `patches/0161-windows-chromium-insert-needs-input-monitoring.diff`: Refuse background Chromium text insertion before any input when the user's own keyboard and mouse input cannot be monitored (the interruption checks would otherwise pass silently), and say in the reply when the active window changed during the insertion.
 
+- `patches/0162-windows-bounded-browser-powershell-probes.diff`: Bound the browser signature check (15 s, the child killed on expiry) and the browser command-line query (10 s, kill_on_drop) so a slow revocation check or WMI query cannot stall launch_app or leave a PowerShell process behind.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
