@@ -14,7 +14,7 @@ One short job: four calls. Build or test work, one shell call each (a small edit
 Waves:
 1. Start the wave: up to N workers on own files.
 2. Wait right after starting; never end a turn with workers running and no wait. One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn; it wakes you. Handle each event; wait again until all in:
-   - turn ended: done: check its evidence. A question: answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once and relay with `brigadier send`.
+   - turn ended: done: check its evidence; separate work it turned up goes to the user as a session offer (`brigadier session propose`), never a question in text. A question: answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once and relay with `brigadier send`.
    - needs input (a permission prompt; only you see it, the worker waits): judge it yourself, then `brigadier send <id> --allow` or `--deny <reason>` (`brigadier help approvals`).
    - usage limit: let it wait for the reset, or move it now with `brigadier switch <id>` (the next account or routing row; `--agent`, `--model`, `--effort` name one). Also for one stuck on its model.
    - fresh context (compacted): check it still knows the brief, or resend.
