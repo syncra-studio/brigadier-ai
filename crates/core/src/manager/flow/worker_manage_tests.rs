@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use brigadier_cli::protocol::{CliRequest, StartRequest};
-use brigadier_providers::{LimitHit, LimitKind, ProviderKind};
+use brigadier_providers::{LimitHit, LimitKind, ProviderKind, TurnStatus};
 use serde_json::{Value, json};
 
 use super::cli_tests::{brigadier, start};
@@ -289,6 +289,16 @@ async fn a_pause_ends_the_turn_holds_messages_and_a_resume_goes_on_once() {
         "its cut turn's end changes nothing"
     );
     assert!(task.plain.as_ref().unwrap().paused);
+    // A real CLI may still report the cut turn's end after its close: it changes nothing.
+    let steps = bench.flow.board().await.worker_steps.len();
+    let live = bench.flow.manager.task_live(&task);
+    bench
+        .flow
+        .manager
+        .plain_turn_ended(&live, &task, TurnStatus::Interrupted)
+        .await;
+    assert_eq!(bench.task().await.state, TaskState::Paused);
+    assert_eq!(bench.flow.board().await.worker_steps.len(), steps);
     assert_eq!(bench.run(pause(&id)).await["done"], false, "paused already");
     let sent = bench.run(send(&id, "Use blue.")).await;
     assert_eq!(sent["queued"], true, "{sent:#}");
