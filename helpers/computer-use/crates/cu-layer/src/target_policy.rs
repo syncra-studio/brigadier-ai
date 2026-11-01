@@ -665,22 +665,27 @@ fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> Option<
             if child.parent <= 0 || child.parent == child.pid {
                 return None;
             }
-            let parent = by_pid.get(&child.parent).copied()?;
+            let parent = by_pid.get(&child.parent).copied();
             // A parent younger than its child holds a reused id: the real
             // parent has exited. An unknown start time keeps the link, so a
             // process that cannot be queried still fails closed.
-            if let (Some(parent_started), Some(child_started)) = (parent.started, child.started) {
+            if let Some((Some(parent_started), Some(child_started))) =
+                parent.map(|parent| (parent.started, child.started))
+            {
                 if parent_started > child_started {
                     return None;
                 }
             }
-            if parent.pid == pid {
+            // The target need not be in the snapshot (it may have just
+            // exited); naming it as parent is enough, as before start times.
+            if child.parent == pid {
                 return Some(ConsoleEvidence {
                     pid: process.pid,
                     executable: process.executable.clone(),
                     via,
                 });
             }
+            let parent = parent?;
             via.push((parent.pid, parent.executable.clone()));
             child = parent;
         }
@@ -1185,6 +1190,8 @@ mod tests {
         ];
         assert!(hosts_terminal(20, &script, false).is_none());
         assert!(hosts_terminal(20, &[process(21, 21, "sh", true)], false).is_none());
+        // A target missing from the snapshot is still found through its child.
+        assert!(hosts_terminal(20, &shell[1..], false).is_some());
     }
 
     fn started(pid: i64, parent: i64, executable: &str, at: u64) -> ProcessFact {
