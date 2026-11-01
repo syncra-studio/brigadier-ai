@@ -1026,13 +1026,15 @@ pub const COMMANDS: &[Command] = &[
         name: "feedback",
         summary: "Offer the user a report to Brigadier's developers, on a card.",
         details: "`offer --kind bug|idea --title <title> <body…>`: when the user seems annoyed \
-                  with Brigadier itself (never their own project's code), or asks you to report \
-                  something to its developers. The card's Send files it on GitHub as the user; \
-                  nothing is sent without their click. body: what happened and what they \
+                  with Brigadier itself (never their own project's code), when Brigadier, a CLI, \
+                  you or a worker acts abnormally (a bug, stuck, looping, repeating, ending \
+                  wrong), or when the user asks you to report something to its developers. The \
+                  card's Send files it on GitHub as the user; nothing is sent without their \
+                  click. body: what happened and what they \
                   expected, steps if known, a few plain lines in their words; no secrets, \
                   paths or project code. With no body, or `-`, it comes from standard input. \
                   One offer per incident: unless --asked, refused while an earlier one is \
-                  unanswered or after they dismissed one.",
+                  unanswered, or for a report they dismissed.",
         args: &[
             action(&["offer"], "What to do."),
             choice(

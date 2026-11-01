@@ -1,7 +1,7 @@
 //! The tools behind `brigadier`, answered. Every reply the orchestrator reads is logged as a
 //! context injection.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use brigadier_providers::{FileSearch, SearchKind};
 
@@ -197,7 +197,8 @@ impl SessionManager {
     /// `offer_feedback`: a card in the thread with a report to Brigadier's developers, which
     /// the user sends or dismisses (the thread judges they are annoyed, or that they asked;
     /// this only plumbs). One offer per incident: none while a card of the latest request that
-    /// offered any is unanswered or dismissed unless they asked for this one, one in a request
+    /// offered any is unanswered unless they asked for this one, never a report they dismissed
+    /// again (by its title; a different incident still gets its own, D131), one in a request
     /// unless they asked (then up to [`FEEDBACK_OFFERS_MAX`], each title once, #483). An offer
     /// from an attempt the user asked to redo, or from a message they edited away, counts for nothing.
     pub(crate) async fn offer_feedback(
@@ -229,6 +230,9 @@ impl SessionManager {
         let mut last = None;
         let mut cards: Vec<(&str, Option<bool>)> = Vec::new();
         let mut here: Vec<&str> = Vec::new();
+        // Every offer in view by id, its title, for what the user dismissed.
+        let mut titles: HashMap<&str, &str> = HashMap::new();
+        let mut dismissed: Vec<&str> = Vec::new();
         // An offer from a request's earlier attempt (before a Try again) or from a message the
         // user edited away is out of view: it counts for nothing, as the thread shows it.
         let current = |step: &&crate::work::OrchestratorStep| match &step.request_id {
@@ -246,6 +250,7 @@ impl SessionManager {
                 OrchestratorStepKind::FeedbackOffered {
                     id, title: offered, ..
                 } => {
+                    titles.insert(id, offered);
                     if step.request_id == request {
                         here.push(offered);
                         continue;
@@ -257,6 +262,9 @@ impl SessionManager {
                     cards.push((id, None));
                 }
                 OrchestratorStepKind::FeedbackAnswered { id, sent, .. } => {
+                    if !*sent && let Some(offered) = titles.get(id.as_str()) {
+                        dismissed.push(offered);
+                    }
                     if let Some((_, answer)) = cards.iter_mut().find(|(offered, _)| offered == id) {
                         *answer = Some(*sent);
                     }
@@ -287,9 +295,14 @@ impl SessionManager {
                 "The user hasn't answered the feedback already offered in this session: don't offer another.".into(),
             ));
         }
-        if !args.asked && cards.iter().any(|(_, answer)| *answer == Some(false)) {
+        if !args.asked
+            && dismissed
+                .iter()
+                .any(|offered| offered.eq_ignore_ascii_case(title))
+        {
             return Err(Error::Invalid(
-                "The user dismissed the feedback offered earlier in this session: don't offer it again.".into(),
+                "The user dismissed this report earlier in this session: don't offer it again."
+                    .into(),
             ));
         }
         self.orchestrator_step_in(

@@ -21,6 +21,7 @@ Waves:
    - failed or interrupted: `brigadier read <id> --last 10`; send it on or close it.
    - gone: read its branch; start a successor with "continue from branch X; `git log` first".
    - quiet (20 min silent): read its last 10; nudge or close it.
+   - any event where Brigadier, its CLI or the worker acts abnormally (a crash or error that isn't the project's, stuck, looping, repeating, ending wrong): handle it as above, and offer the user feedback once (`brigadier feedback offer`).
 3. Next wave when this one is integrated.
 
 A hand-off gives each worker's id, branch, state, and what you wait on.

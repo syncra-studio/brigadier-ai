@@ -935,8 +935,8 @@ pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
 }
 
 /// The thread offers a drafted report to Brigadier's developers once per incident: once in a
-/// request, none while the last offer is unanswered, again after the user sent it, never after
-/// they dismissed one. The user's answer is kept once.
+/// request, none while the last offer is unanswered, again after the user sent it, never the
+/// report they dismissed again, but a new incident's (D131). The user's answer is kept once.
 #[tokio::test]
 async fn the_thread_offers_feedback_once_per_incident() {
     let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
@@ -956,6 +956,18 @@ async fn the_thread_offers_feedback_once_per_incident() {
                                 "title": "Stop leaves the tab spinning",
                                 "body": "After Stop the tab keeps its spinner.",
                                 "asked": true,
+                            }),
+                        )
+                        .await;
+                    log.lock().unwrap().push((reply.is_error, reply.text));
+                } else if turn.is_orchestrator() && turn.input.contains("sidebar") {
+                    let reply = turn
+                        .call(
+                            "offer_feedback",
+                            json!({
+                                "kind": "bug",
+                                "title": "The sidebar lost my sessions",
+                                "body": "The sidebar shows no sessions.",
                             }),
                         )
                         .await;
@@ -995,8 +1007,16 @@ async fn the_thread_offers_feedback_once_per_incident() {
                     body,
                 } => {
                     assert_eq!(*kind, crate::work::FeedbackKind::Bug);
-                    assert_eq!(title, "Stop leaves the tab spinning");
-                    assert_eq!(body, "After Stop the tab keeps its spinner.");
+                    assert!(matches!(
+                        (title.as_str(), body.as_str()),
+                        (
+                            "Stop leaves the tab spinning",
+                            "After Stop the tab keeps its spinner."
+                        ) | (
+                            "The sidebar lost my sessions",
+                            "The sidebar shows no sessions."
+                        )
+                    ));
                     assert!(step.request_id.is_some(), "under the user's request");
                     Some(id.clone())
                 }
@@ -1097,7 +1117,7 @@ async fn the_thread_offers_feedback_once_per_incident() {
         .collect();
     assert_eq!(answers, vec![(true, vec![filed(482), filed(483)])]);
 
-    // Dismissed: none again in this session.
+    // Dismissed: that report never again in this session.
     flow.manager
         .answer_feedback_offer(&flow.conversation, &shown[1], false, Vec::new())
         .await
@@ -1119,6 +1139,18 @@ async fn the_thread_offers_feedback_once_per_incident() {
     let fifth = taken(&replies);
     assert!(fifth.iter().all(|reply| !reply.0), "{fifth:?}");
     assert_eq!(offers(&board).len(), 3);
+
+    // A new incident after the dismissal gets its own card, once the last one is answered.
+    let shown = offers(&board);
+    flow.manager
+        .answer_feedback_offer(&flow.conversation, &shown[2], true, Vec::new())
+        .await
+        .unwrap();
+    flow.say("Now the sidebar is empty.").await;
+    let board = flow.settled().await;
+    let sixth = taken(&replies);
+    assert!(sixth.len() == 1 && !sixth[0].0, "{sixth:?}");
+    assert_eq!(offers(&board).len(), 4);
     flow.stop().await;
 }
 
@@ -1127,7 +1159,7 @@ type Offered = Arc<Mutex<Vec<(String, bool, String)>>>;
 
 /// Asked to report several things at once, the thread offers a card for each (#483): up to ten
 /// in a request, each title once, each answered on its own. Any card of that request still
-/// unanswered, or dismissed, holds back the next unasked offer.
+/// unanswered holds back the next unasked offer; a dismissed one holds back only its own report.
 #[tokio::test]
 async fn several_feedback_cards_are_offered_when_asked() {
     let replies: Offered = Arc::default();
@@ -1238,7 +1270,7 @@ async fn several_feedback_cards_are_offered_when_asked() {
         "{second:?}"
     );
 
-    // One of them dismissed: none either.
+    // That one dismissed: a different report is offered (D131).
     flow.manager
         .answer_feedback_offer(&flow.conversation, &shown[5], false, Vec::new())
         .await
@@ -1246,11 +1278,8 @@ async fn several_feedback_cards_are_offered_when_asked() {
     flow.say("Ugh.").await;
     let board = flow.settled().await;
     let third = taken(&replies);
-    assert!(
-        third.len() == 1 && third[0].1 && third[0].2.contains("dismissed"),
-        "{third:?}"
-    );
-    assert_eq!(offers(&board).len(), 10);
+    assert!(third.len() == 1 && !third[0].1, "{third:?}");
+    assert_eq!(offers(&board).len(), 11);
     flow.stop().await;
 }
 
