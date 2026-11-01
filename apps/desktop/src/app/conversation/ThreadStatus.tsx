@@ -41,7 +41,8 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const head = view?.head;
   const workers = props?.workers ?? 0;
   const commands = props?.commands ?? 0;
-  const subagents = props?.subagents ?? 0;
+  // The lead's own subagents wait with it: the recovery strip owns the lead's quota wait.
+  const subagents = props?.quotaWait ? 0 : (props?.subagents ?? 0);
   const named = props?.named ?? null;
   return useMemo(() => liveHead(head ? { ...head, text: words } : null, workers, commands, subagents, named), [head, words, workers, commands, subagents, named]);
 }
