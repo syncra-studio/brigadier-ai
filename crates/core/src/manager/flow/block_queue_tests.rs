@@ -17,7 +17,7 @@ const SECOND: &str = "Unrelated too: bump the version.";
 
 /// The ids of the queued messages `text` gives the session to judge.
 fn to_judge(text: &str) -> Vec<String> {
-    Regex::new(r"\[queued message (\S{8}) · judge it")
+    Regex::new(r"\[queued message (\S{8}) · [^\]]*judge it")
         .unwrap()
         .captures_iter(text)
         .map(|found| found[1].to_owned())
