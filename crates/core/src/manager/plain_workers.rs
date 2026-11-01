@@ -1464,9 +1464,11 @@ impl SessionManager {
                 ));
             }
             let board = self.core.board(parent).await?;
+            // One that reported, or waits to land, is idle: it sends nothing until messaged.
             let can_send = board.tasks.values().any(|task| {
                 task.plain.as_ref().is_some_and(|plain| !plain.closed)
                     && !task.state.is_final()
+                    && !matches!(task.state, TaskState::Reported | TaskState::ReadyToLand)
                     && (tasks.is_empty() || tasks.contains(&task.id))
             });
             if !can_send {

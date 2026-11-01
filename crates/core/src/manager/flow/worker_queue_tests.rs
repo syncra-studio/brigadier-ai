@@ -326,6 +326,51 @@ async fn a_workers_queued_message_survives_a_restart_and_goes_on() {
     flow.stop().await;
 }
 
+/// A wait on a worker that already reported ends at once: idle, it sends nothing until it is
+/// messaged, so the wait (seen live on Codex) held its command and the work block open for good.
+#[tokio::test]
+async fn a_wait_on_a_worker_that_already_reported_ends() {
+    let answers = Answers::default();
+    let kept = answers.clone();
+    let flow = Flow::start(
+        "wait-reported",
+        Options::default(),
+        Arc::new(move |turn| {
+            let answers = kept.clone();
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    return Reply::text("Done.");
+                }
+                let id =
+                    id_of(&brigadier(&turn, CliRequest::Start(Box::new(start("Say hi.")))).await);
+                let took = brigadier(&turn, wait(&[&id], Some(60))).await;
+                assert_eq!(took["timedOut"], false, "{took:#}");
+                let again = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    brigadier(&turn, wait(&[&id], None)),
+                )
+                .await;
+                answers
+                    .lock()
+                    .unwrap()
+                    .insert("again".into(), json!(again.is_ok()));
+                Reply::text("Waited.")
+            })
+        }),
+    )
+    .await;
+    flow.say("Go.").await;
+    super::eventually("the second wait to end", || {
+        answers.lock().unwrap().contains_key("again")
+    })
+    .await;
+    assert_eq!(
+        answers.lock().unwrap()["again"],
+        json!(true),
+        "the wait on a reported worker never ended"
+    );
+    flow.stop().await;
+}
 /// A bare `brigadier wait` ends once its session's last worker that could send is closed (seen
 /// live on Codex: a `wait <id>` took the worker's event, the worker was closed, and the bare
 /// wait beside it held the turn's command, and the block, open for good).

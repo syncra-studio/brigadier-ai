@@ -747,7 +747,7 @@ fn starting(answers: Answers) -> Script {
                 "send me",
                 brigadier(&turn, send(&me, Some("Hello."), None)).await,
             );
-            // b still lives, between turns: nothing more comes from it in a second.
+            // b still lives, idle between turns: nothing can come from it, so it ends at once.
             keep("wait idle", brigadier(&turn, wait(&[], Some(1))).await);
             // A server no setup has isn't granted (D18).
             keep(
@@ -1062,7 +1062,8 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     }
     assert_eq!(answers["worker starts"]["error"]["code"], "refused");
     assert_eq!(answers["worker workers"]["workers"], json!([]));
-    assert_eq!(answers["wait idle"]["timedOut"], true);
+    // Its workers idle (reported), nothing can come: it ends at once, not at its timeout.
+    assert_eq!(answers["wait idle"]["timedOut"], false);
     assert_eq!(answers["wait idle"]["events"], json!([]));
 
     // What `wait` took was not sent again; the one event no wait took (Docs's worker said hi)
