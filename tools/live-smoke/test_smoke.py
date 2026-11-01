@@ -43,5 +43,21 @@ class AnswerTests(unittest.TestCase):
                 self.assertFalse(self.verdict([("assistant", "request", text)]))
 
 
+class WorkerEventWordTests(unittest.TestCase):
+    def test_only_user_messages_with_the_word_count_in_either_content_shape(self):
+        import json, os, tempfile
+        rows = [
+            {"type": "user", "message": {"role": "user", "content": "[worker events wn-1] finished · CODE-R"}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "[worker events wn-2] x"}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "[worker events wn-3]"}]}},
+        ]
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
+        self.addCleanup(os.unlink, f.name)
+        self.assertEqual(smoke.worker_event_words(f.name),
+                         ["[worker events wn-1] finished · CODE-R", "[worker events wn-2] x"])
+
+
 if __name__ == "__main__":
     unittest.main()
