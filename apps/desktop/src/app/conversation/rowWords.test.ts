@@ -18,6 +18,8 @@ test("every worker uses a short plain unique job name, regardless of role", () =
   assert.equal(new Set(names).size, names.length);
   assert.ok(names.every((name) => !/task-\d+|Phase \d/.test(name)));
   assert.equal(shortWorkerName("Build search results with pagination"), "Build search results");
+  // A clause cut short keeps no comma at its end (D104).
+  assert.equal(shortWorkerName("TASK.md in this repo, step"), "TASK.md in this repo");
   assert.equal(workerName({}, { ...byNumber(1), title: "File summary", role: "lead" }), "File summary");
 });
 

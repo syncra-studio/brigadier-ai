@@ -2204,7 +2204,11 @@ impl SessionManager {
 
     /// [`Self::stop_task`] if its state still passes `eligible`, saying whether it stopped it.
     /// Decided under its settle lock, so two stops never both take effect.
-    async fn stop_if(&self, task_id: TaskId, eligible: fn(TaskState) -> bool) -> Result<bool> {
+    pub(super) async fn stop_if(
+        &self,
+        task_id: TaskId,
+        eligible: fn(TaskState) -> bool,
+    ) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let live = self.existing_task_live(&task_id);
         if let Some(live) = &live {

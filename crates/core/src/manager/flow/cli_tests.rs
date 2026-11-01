@@ -1076,9 +1076,9 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         "{net}"
     );
 
-    // The thread shows "Messaged ‹worker›" for the message that reached one, and "Stopped
-    // ‹worker›" for the close; an answer to a permission prompt, and a refused send or close,
-    // file nothing.
+    // The thread shows "Messaged ‹worker›" for the message that reached one; the close of a
+    // worker that finished files no "Stopped ‹worker›" (D104), and an answer to a permission
+    // prompt, and a refused send or close, file nothing.
     use crate::work::OrchestratorStepKind;
     let steps: Vec<OrchestratorStepKind> = flow
         .events()
@@ -1095,17 +1095,11 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         .collect();
     assert_eq!(
         steps,
-        vec![
-            OrchestratorStepKind::Messaged {
-                task_id: a.id.clone(),
-                text: Some("And stop.".into()),
-                by_user: false,
-            },
-            OrchestratorStepKind::Stopped {
-                task_id: a.id.clone(),
-                reason: "Closed by its session.".into(),
-            },
-        ]
+        vec![OrchestratorStepKind::Messaged {
+            task_id: a.id.clone(),
+            text: Some("And stop.".into()),
+            by_user: false,
+        },]
     );
     flow.stop().await;
 }

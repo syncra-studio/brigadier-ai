@@ -74,13 +74,14 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
   const active = rows.filter((row) => !rowFinished(row, now));
   const finished = finishedWords(rows, now);
   const avatars = active.length ? active : rows;
-  const lines = active.length > 0 && active.length <= WORKER_LINES;
+  // A few at work get a line each; so does a lone worker that finished, by its name (D104).
+  const lined = active.length > 0 && active.length <= WORKER_LINES ? active : rows.length === 1 ? rows : [];
   return (
     <SummarySection foldKey="workers" title={WORKERS_LABEL} aria-label="Session workers">
-      {lines ? (
+      {lined.length > 0 ? (
         <>
-          {active.map((row) => <WorkerLineRow key={row.id} conversationId={conversationId} row={row} now={now} />)}
-          {finished && (
+          {lined.map((row) => <WorkerLineRow key={row.id} conversationId={conversationId} row={row} now={now} />)}
+          {finished && lined === active && (
             <SummaryRowButton
               aria-label="Open workers"
               data-slot="workers-summary"

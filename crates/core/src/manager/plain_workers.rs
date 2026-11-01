@@ -113,11 +113,29 @@ fn title_of(given: Option<&str>, prompt: &str) -> String {
     if let Some(given) = given.map(str::trim).filter(|title| !title.is_empty()) {
         return given.to_owned();
     }
-    [prompt]
-        .into_iter()
-        .map(short_title)
-        .find(|title| !title.is_empty())
-        .unwrap_or_else(|| "Worker".to_owned())
+    let title = short_title(brief_lead(prompt));
+    if title.is_empty() {
+        "Worker".to_owned()
+    } else {
+        title
+    }
+}
+
+/// A brief's first words past its list number and short label: "1. Target: Fix the login" is
+/// "Fix the login" (`brigadier help briefs` numbers its parts).
+fn brief_lead(prompt: &str) -> &str {
+    let line = prompt.trim_start();
+    let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let line = match line[digits..].strip_prefix(['.', ')']) {
+        Some(rest) if digits > 0 && rest.starts_with(char::is_whitespace) => rest.trim_start(),
+        _ => line,
+    };
+    match line.find(": ") {
+        Some(at) if line[..at].split_whitespace().count() <= 2 && !line[..at].contains('\n') => {
+            line[at + 2..].trim_start()
+        }
+        _ => line,
+    }
 }
 
 fn refused(message: impl Into<String>) -> CliReply {
@@ -1621,13 +1639,18 @@ impl SessionManager {
         // A worker closed after a turn that ended done is done, not stopped: its row reads so
         // after a restart too, when no CLI event of its is held any more.
         let done = self.worker_turn_done(&task.id);
-        let closed = self
-            .stop_worker(
+        // A finished worker closed files no "Stopped" row: it finished (D104).
+        let closed = if done {
+            self.stop_if(task.id.clone(), |state| !state.is_final())
+                .await?
+        } else {
+            self.stop_worker(
                 &task.conversation_id,
                 &task,
                 "Closed by its session.".to_owned(),
             )
-            .await?;
+            .await?
+        };
         if task.plain.is_some() {
             self.update_task(&task.conversation_id, &task.id, |task| {
                 if let Some(plain) = &mut task.plain {
@@ -1673,5 +1696,22 @@ mod tests {
         );
         assert_eq!(title_of(Some("  "), "Fix it"), "Fix it");
         assert_eq!(title_of(None, "   "), "Worker");
+        // A numbered brief's first part names it, not its number (D104).
+        assert_eq!(
+            title_of(
+                None,
+                "1. Target: TASK.md in this repo, step 1 only (the curl). Outcome: x"
+            ),
+            "TASK.md in this repo, step"
+        );
+        assert_eq!(
+            title_of(None, "Target (proposed): Read TASK.md and report"),
+            "Read TASK.md and report"
+        );
+        assert_eq!(title_of(None, "3 bugs to fix in login"), "3 bugs to fix");
+        assert_eq!(
+            title_of(None, "Fix the login page: it fails"),
+            "Fix the login page"
+        );
     }
 }

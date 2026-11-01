@@ -63,6 +63,11 @@ test("the context card's Workers row names each worker at work by its row, with 
     assert.match(background, /1 done/);
     assert.doesNotMatch(background, /2 done/);
 
+    // A lone worker that finished: its own line, by name, never a bare "1 done" (D104).
+    const lone = text([row("t4", "Task curl output", { working: false, lastEnd: "done", gone: true })]);
+    assert.match(lone, /Task curl output/);
+    assert.doesNotMatch(lone, /1 done/);
+
     // More than a few: the one row of avatars with the count.
     const many = text(["t1", "t2", "t3", "t4"].map((id) => row(id, `Worker ${id}`)));
     assert.match(many, /4 working/);
