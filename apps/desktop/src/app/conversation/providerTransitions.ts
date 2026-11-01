@@ -42,10 +42,10 @@ export function transitionAccountLabel(transition: ProviderTransition): string |
 
 
 /**
- * What the composer shows of a started session's model; while it holds an older CLI, how many
- * switch rows to the new one there were when it began holding.
+ * What the composer shows of a started session's model, and how many switch rows there were when
+ * it last showed the current setup (while it holds an older CLI: before the setup changed).
  */
-export type ShownChoice = { shown: ModelChoice; rowsBefore: number | null };
+export type ShownChoice = { shown: ModelChoice; seen: number };
 
 const same = (a: ModelChoice, b: ModelChoice) =>
   a.provider === b.provider && a.model === b.model && a.effort === b.effort && a.account === b.account;
@@ -62,12 +62,14 @@ export function nextShown(
   transitions: readonly ProviderTransition[],
   running: boolean,
 ): ShownChoice {
+  const seen = transitions.length;
   if (!prev || prev.shown.provider === current.provider || !running) {
-    return prev && prev.rowsBefore === null && same(prev.shown, current) ? prev : { shown: current, rowsBefore: null };
+    return prev && prev.seen === seen && same(prev.shown, current) ? prev : { shown: current, seen };
   }
-  const rows = transitions.filter((transition) => transition.to.provider === current.provider).length;
-  if (prev.rowsBefore === null) return { shown: prev.shown, rowsBefore: rows };
-  return rows > prev.rowsBefore ? { shown: current, rowsBefore: null } : prev;
+  // A row to the new CLI since it last showed, even one that came in the same render as the setup.
+  return transitions.slice(prev.seen).some((transition) => transition.to.provider === current.provider)
+    ? { shown: current, seen }
+    : prev;
 }
 
 /** The words Brigadier resumes a worker with after a limit (`workers/quota.rs`, `retry_worker_quota`). */
@@ -75,11 +77,11 @@ const QUOTA_RESUME = "[Quota is available again.";
 
 /**
  * Where a worker's panel shows its confirmed switches, each once: in place of the message it was
- * resumed with, in order (`at`, by entry key); one with no such message after its latest work.
+ * resumed with (messages held for it may come first), in order (`at`, by entry key); one with no such message after its latest work.
  */
 export function placeSwitches(transitions: readonly ProviderTransition[], entries: readonly ThreadEntry[]) {
   const resumes = entries.flatMap((entry) =>
-    entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user" && entry.item.text.startsWith(QUOTA_RESUME) ? [entry.item.key] : []);
+    entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user" && entry.item.text.includes(QUOTA_RESUME) ? [entry.item.key] : []);
   const at = new Map<string, ProviderTransition>();
   resumes.forEach((key, index) => {
     const transition = transitions[index];

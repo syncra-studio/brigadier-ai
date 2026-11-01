@@ -14,13 +14,18 @@ test("a move to another CLI shows in the composer only with a new switch row", (
   assert.equal(nextShown(shown, claude, [], true), shown, "nothing changed: the same state");
   // The setup names Codex before Codex took the turn; an old move to Codex confirms nothing.
   const old = [toCodex("old")];
+  shown = nextShown(shown, claude, old, true);
   shown = nextShown(shown, codex, old, true);
   assert.equal(shown.shown, claude);
   assert.equal(nextShown(shown, codex, old, true), shown);
   // Its switch row: Codex shows, in the same render.
   shown = nextShown(shown, codex, [...old, toCodex("new")], true);
   assert.equal(shown.shown, codex);
-  assert.equal(shown.rowsBefore, null);
+});
+
+test("a switch row that comes in the same render as the setup shows the new CLI at once", () => {
+  const shown = nextShown(nextShown(null, claude, [], true), codex, [toCodex("new")], true);
+  assert.equal(shown.shown, codex);
 });
 
 test("a move that never took the turn shows what the next turn starts on once the session stops", () => {
@@ -54,4 +59,18 @@ test("a worker's switches show once each, in place of the words it was resumed w
   assert.deepEqual([...placed.at.entries()], [["r1", first]]);
   assert.deepEqual(placed.rest, [second]);
   assert.deepEqual(placeSwitches([], entries).at.size, 0);
+});
+
+test("a switch whose resume carries messages held for the worker first stays at its own resume", () => {
+  const entries = [
+    message("brief", "Do the task"),
+    message("r1", "Also check the docs\n\n[Quota is available again. Check git status and git log first: …]"),
+    message("a1", "Carrying on", "assistant"),
+    message("r2", "[Quota is available again. Check git status and git log first: …]"),
+  ];
+  const first = toCodex("t1");
+  const second = { id: "t2", to: claude } as ProviderTransition;
+  const placed = placeSwitches([first, second], entries);
+  assert.deepEqual([...placed.at.entries()], [["r1", first], ["r2", second]]);
+  assert.deepEqual(placed.rest, []);
 });
