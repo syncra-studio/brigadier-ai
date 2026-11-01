@@ -345,7 +345,7 @@ impl SessionManager {
         };
         drop(armed);
         match fault.what {
-            Injected::Limit(limit) => before.extend(self.limit_report(fault.provider, limit)),
+            Injected::Limit(limit) => before.extend(self.limit_report(cli, limit)),
             Injected::Error(error) => before.push(ProviderEvent::Error {
                 error: error.error(fault.provider),
             }),
@@ -368,10 +368,12 @@ impl SessionManager {
         before
     }
 
-    /// What a CLI at its limit reports: its quota with the limit, and a usage-limit error.
-    fn limit_report(&self, provider: ProviderKind, limit: LimitHit) -> Vec<ProviderEvent> {
+    /// What a CLI at its limit reports: its own account's quota with the limit, and a
+    /// usage-limit error.
+    fn limit_report(&self, cli: &Cli, limit: LimitHit) -> Vec<ProviderEvent> {
+        let provider = cli.provider;
         let mut events = Vec::new();
-        if let Some(quota) = self.runtime.monitor().current(provider, now_ms()) {
+        if let Some(quota) = self.runtime.monitor().current_for(&cli.account, now_ms()) {
             events.push(ProviderEvent::RateLimits { quota });
         }
         events.push(ProviderEvent::Error {
