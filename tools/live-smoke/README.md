@@ -49,7 +49,7 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
    --agent codex` with a code to reply, `brigadier wait` until its turn ends (answering a
    needs-input with `brigadier send <id> --allow`) and `brigadier close`. The request is done; the
    three commands ran and completed; the worker showed in the session's tasks (its Workers row)
-   and never in the sidebar's catalog; close stopped it ("Closed by its session."); the answer
+   and never in the sidebar's catalog; close ended it, and as it had finished it reads finished, with no "Stopped" row (D104); the answer
    carries the worker's code.
 4. **Stop during a wait.** C1 starts a Codex worker that sleeps 40 s before it answers, runs
    `brigadier wait`, and is stopped while the wait runs. The request is stopped and the wait ended

@@ -543,9 +543,11 @@ class Smoke:
                   f"{[st['status'] for st in ran]}")
         check(sc, "the worker shows in its session's Workers row", len(seen) == 1, f"{len(seen)} workers seen")
         check(sc, "the worker is never in the sidebar", not in_sidebar, f"in the sidebar: {sorted(in_sidebar)}")
-        closed = [st for st in v["orchestratorSteps"] if st["kind"].get("type") == "stopped"
-                  and st["kind"].get("taskId") in seen and st["kind"].get("reason") == "Closed by its session."]
-        check(sc, "close stopped the worker", len(closed) == 1, f"{len(closed)} closes")
+        closed = [t["id"] for t in v.get("tasks", []) if t["id"] in seen and (t.get("plain") or {}).get("closed")]
+        check(sc, "close ended the worker", len(closed) == 1, f"{len(closed)} closed")
+        # It had finished: its close files no "Stopped" row (D104).
+        stopped = [st for st in v["orchestratorSteps"] if st["kind"].get("type") == "stopped" and st["kind"].get("taskId") in seen]
+        check(sc, "the finished worker reads finished, not stopped", not stopped, f"{len(stopped)} Stopped rows")
         check(sc, "the answer carries the worker's reply", assistant_after(v, start, reply_code), f"no answer with {reply_code}")
 
     def scenario_workers(self):
