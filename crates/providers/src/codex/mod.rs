@@ -3625,6 +3625,9 @@ mod tests {
         );
         assert_eq!(plan_name(p::PlanType::Ent26), Some("Enterprise"));
         assert_eq!(plan_name(p::PlanType::Unknown), None);
+        // A plan a newer Codex names that these bindings don't know reads unknown, never an error.
+        let newer: p::PlanType = serde_json::from_str("\"sci_plus\"").unwrap();
+        assert_eq!(plan_name(newer), None);
     }
 
     /// Codex's own browser stays off for every session: agents never get a browser of their
