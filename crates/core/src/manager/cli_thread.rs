@@ -242,13 +242,17 @@ impl SessionManager {
         let jobs;
         let seq;
         let mut wake_owed = None;
+        let released;
         {
             let mut threads = self.cli_threads.lock().unwrap();
             let live = threads.entry(conv.id.clone()).or_default();
+            let held = live.subagent_running();
             if let Some(event) = event {
                 live.note_command(event);
                 live.note_subagent(event);
             }
+            // Its last subagent ended with no turn open: what waits for the block goes on now.
+            released = held && !live.subagent_running();
             match event {
                 Some(ProviderEvent::BackgroundTask { task }) => {
                     // A command or a subagent that ends while no turn is open starts one of its
@@ -537,6 +541,9 @@ impl SessionManager {
         }
         if let Some(until) = wake_owed {
             self.wake_grace(conv.id.clone(), until);
+        }
+        if released && let Ok(conv) = self.conv(&conv.id) {
+            self.kick(&conv);
         }
         // A command of the session may merge a worker's branch, or move its own.
         if matches!(

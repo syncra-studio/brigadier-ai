@@ -600,3 +600,75 @@ async fn a_message_steered_first_into_the_clis_own_turn_joins_the_block() {
     assert!(view.turns[1].joins, "it joins the open block: {view:#?}");
     flow.stop().await;
 }
+
+/// O38 on Codex: a follow-up judged `wait` while a subagent runs past its turn stays queued
+/// through the judge turn's end, and goes on its own turn once the subagent ends, with no turn
+/// open (D24, D25).
+#[tokio::test]
+async fn a_message_waiting_on_a_subagent_goes_on_once_it_ends() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    type Events = Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>>;
+    let spawn = |status| ProviderEvent::ToolCall {
+        item_id: "spawn".into(),
+        name: "agents/spawnAgent".into(),
+        input: Some(r#"{"message":"sleep 40"}"#.into()),
+        status,
+        output: None,
+        kept: None,
+    };
+    let events: Events = Arc::default();
+    let answers = Answers::default();
+    let script: Script = {
+        let (events, answers) = (events.clone(), answers.clone());
+        Arc::new(move |turn| {
+            let (events, answers) = (events.clone(), answers.clone());
+            Box::pin(async move {
+                if turn.input.contains("Start a subagent") {
+                    let _ = turn.events.send(spawn(ItemStatus::InProgress)).await;
+                    *events.lock().unwrap() = Some(turn.events.clone());
+                    return Reply::text("Started a subagent; not waiting for it.");
+                }
+                if turn.input.contains(", now on its own turn]") {
+                    answers
+                        .lock()
+                        .unwrap()
+                        .insert("own turn".into(), json!(true));
+                    return Reply::text("4.");
+                }
+                for id in to_judge(&turn.input) {
+                    brigadier(
+                        &turn,
+                        CliRequest::Queue {
+                            id,
+                            judgment: Judgment::Wait,
+                        },
+                    )
+                    .await;
+                }
+                Reply::text("Noted.")
+            })
+        })
+    };
+    let flow = Flow::start("block-subagent-wait", Options::default(), script).await;
+    flow.say("Start a subagent in the background.").await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually_async("the first turn to end", || conv.idle()).await;
+    flow.say(FIRST).await;
+    waits(&flow, FIRST).await;
+    super::eventually_async("the judge turn to end", || conv.idle()).await;
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its subagent still runs"
+    );
+    assert!(!answers.lock().unwrap().contains_key("own turn"));
+
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    sender.send(spawn(ItemStatus::Completed)).await.unwrap();
+    super::eventually("it to go on its own turn", || {
+        answers.lock().unwrap().contains_key("own turn")
+    })
+    .await;
+    flow.settled().await;
+    assert!(flow.board().await.queue.items.is_empty());
+    flow.stop().await;
+}
