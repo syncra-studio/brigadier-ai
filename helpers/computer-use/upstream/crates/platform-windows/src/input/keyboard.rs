@@ -352,31 +352,55 @@ pub fn post_insert_text_cancelable(
     delay_ms: u64,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<()> {
+    post_insert_text_watched(target, text, delay_ms, cancelled, None, || None)
+}
+
+/// Like [`post_insert_text_cancelable`], and `user_input` is asked before
+/// every character: the user's own mouse or keyboard input stops the run at
+/// once. A stop is an [`super::text_policy::InsertStopped`] error that says
+/// how much was typed; `progress` holds the characters accepted so far.
+pub fn post_insert_text_watched(
+    target: u64,
+    text: &str,
+    delay_ms: u64,
+    cancelled: &std::sync::atomic::AtomicBool,
+    progress: Option<&std::sync::atomic::AtomicUsize>,
+    mut user_input: impl FnMut() -> Option<super::text_policy::InsertStop>,
+) -> Result<()> {
+    use super::text_policy::InsertStop;
     if let Some(message) = crate::input::post_message_blocked_by_uipi(target) {
         bail!(message);
     }
-    for unit in super::text_policy::text_units(text) {
-        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-            bail!("Text insertion stopped at its deadline. Some text may have been inserted; read fresh state before retrying.");
-        }
-        let sent = unsafe {
-            windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
-                HWND(target as *mut _),
-                WM_CHAR,
-                WPARAM(unit as usize),
-                LPARAM(1),
-                windows::Win32::UI::WindowsAndMessaging::SMTO_ABORTIFHUNG,
-                1000,
-                None,
-            )
-        };
-        if sent.0 == 0 {
-            bail!("The target did not acknowledge a text character before the deadline. Some text may have been inserted; read fresh state before retrying. No alternate route was attempted.");
-        }
-        if delay_ms > 0 {
-            sleep(Duration::from_millis(delay_ms));
-        }
-    }
+    let units = super::text_policy::text_units(text);
+    super::text_policy::insert_units(
+        &units,
+        || {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Some(InsertStop::Deadline(None));
+            }
+            user_input()
+        },
+        |unit| {
+            let sent = unsafe {
+                windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+                    HWND(target as *mut _),
+                    WM_CHAR,
+                    WPARAM(unit as usize),
+                    LPARAM(1),
+                    windows::Win32::UI::WindowsAndMessaging::SMTO_ABORTIFHUNG,
+                    1000,
+                    None,
+                )
+            };
+            sent.0 != 0
+        },
+        || {
+            if delay_ms > 0 {
+                sleep(Duration::from_millis(delay_ms));
+            }
+        },
+        progress,
+    )?;
     Ok(())
 }
 

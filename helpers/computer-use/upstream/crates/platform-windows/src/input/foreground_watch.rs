@@ -202,9 +202,77 @@ unsafe extern "system" fn foreground_event(
     }
 }
 
+/// The user's own keyboard and mouse events, pointer motion included, seen by
+/// any live watch's hooks. Injected input (ours or any other program's
+/// SendInput) is flagged by Windows and never counted; posted messages never
+/// reach these hooks.
+static USER_INPUT_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn user_input_events() -> u64 {
+    USER_INPUT_EVENTS.load(Ordering::Acquire)
+}
+
+fn note_user_input(injected: bool) {
+    if policy::own_input(injected) {
+        USER_INPUT_EVENTS.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Watches for the user's own input across a long action, re-arming the
+/// hooks when a watch reaches the end of its bounded life.
+pub(crate) struct UserInputMonitor {
+    watch: ForegroundWatch,
+    baseline: u64,
+    pid: u32,
+    hwnd: usize,
+}
+
+impl UserInputMonitor {
+    /// None when the hooks could not be armed, so the user's input would go unseen.
+    pub(crate) fn start(pid: u32, hwnd: usize) -> Option<Self> {
+        let watch = Self::arm(pid, hwnd)?;
+        Some(Self {
+            watch,
+            baseline: user_input_events(),
+            pid,
+            hwnd,
+        })
+    }
+
+    fn arm(pid: u32, hwnd: usize) -> Option<ForegroundWatch> {
+        let prior = unsafe { GetForegroundWindow() }.0 as usize;
+        let watch =
+            ForegroundWatch::start_observing(prior, Target::Processes(vec![pid], vec![hwnd]));
+        watch.monitoring().then_some(watch)
+    }
+
+    /// Some(stop) once the user has used the mouse or keyboard since start,
+    /// or when their input can no longer be watched.
+    pub(crate) fn check(&mut self) -> Option<crate::input::text_policy::InsertStop> {
+        use crate::input::text_policy::InsertStop;
+        if user_input_events() != self.baseline {
+            return Some(InsertStop::UserInput);
+        }
+        if !self.watch.monitoring() {
+            match Self::arm(self.pid, self.hwnd) {
+                Some(watch) => self.watch = watch,
+                None => return Some(InsertStop::Unmonitored),
+            }
+            if user_input_events() != self.baseline {
+                return Some(InsertStop::UserInput);
+            }
+        }
+        None
+    }
+}
+
 // Read-only hooks distinguish real window selection from motion and from our
 // injected input. No event is swallowed and no input is synthesized.
 unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+        note_user_input(event.flags & LLMHF_INJECTED != 0);
+    }
     if code >= 0
         && matches!(
             wparam.0 as u32,
@@ -257,6 +325,7 @@ unsafe extern "system" fn keyboard_event(code: i32, wparam: WPARAM, lparam: LPAR
         )
     {
         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        note_user_input(event.flags.contains(LLKHF_INJECTED));
         if !event.flags.contains(LLKHF_INJECTED) {
             CURRENT.with(|slot| {
                 if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {

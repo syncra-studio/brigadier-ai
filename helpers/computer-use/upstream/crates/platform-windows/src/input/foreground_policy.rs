@@ -62,6 +62,12 @@ pub(crate) fn switch_click(injected: bool, clicked_prior: bool) -> bool {
     !injected && !clicked_prior
 }
 
+// Any event of the user's own, pointer motion included, interrupts typing.
+// Windows flags every SendInput event as injected, ours and other programs'.
+pub(crate) fn own_input(injected: bool) -> bool {
+    !injected
+}
+
 pub(crate) fn launch_names(mut expected: Vec<String>) -> Vec<String> {
     for name in expected.clone() {
         match name.as_str() {
@@ -119,6 +125,12 @@ impl ActivationEvidence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_users_own_input_interrupts_typing() {
+        assert!(own_input(false));
+        assert!(!own_input(true));
+    }
 
     #[test]
     fn a_broker_pid_binds_a_brief_event_recorded_before_activation_returned() {

@@ -190,6 +190,8 @@ Patches applied, in order:
 
 - `patches/0164-windows-foreground-lock-refusal-reason.diff`: State the real reason a start_minimized launch is refused when the activation-prevention lock is not held: Windows may have refused it, or an overlapping action released it to hand the user's window back, in which case Windows was never asked.
 
+- `patches/0165-windows-typing-stops-on-user-input.diff`: Background per-character typing on Windows (the WM_CHAR route native and XAML editors such as Notepad use) checks for the user's own mouse and keyboard input, pointer motion included, before every character and stops at once with a reply saying how much was typed; its deadline is sized to the text, and reaching it says how far typing got instead of reporting a provider timeout.
+
 - `patches/0167-windows-hotkey-closed-menu-accelerators.diff`: Search UIA-expandable menus and owned WinUI popups for hotkey accelerators, clean up menus opened by the search, and refuse unmatched shortcuts without keyboard injection.
 
 - `patches/0168-windows-edge-page-typing.diff`: Accept exact data document URLs and Edge's uniquely bound address-bar evidence for background caret insertion, preserving endpoint ownership and exact page/field checks; explain page mutation refusals with element-token alternatives.
