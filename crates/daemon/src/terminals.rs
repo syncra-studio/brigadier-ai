@@ -234,12 +234,7 @@ impl Terminals {
             command.arg("-l");
         }
         command.cwd(&cwd);
-        // The daemon's own settings are not the user's.
-        for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("BRIGADIER_") {
-                command.env_remove(key);
-            }
-        }
+        clean_native_environment(&mut command);
         // The builder's PATH is the system's and the user's from the registry, read now.
         if cfg!(windows)
             && let Some(path) = with_folders(command.get_env("PATH"), &self.agent_folders)
@@ -780,6 +775,18 @@ fn with_folders(path: Option<&OsStr>, folders: &[PathBuf]) -> Option<OsString> {
     Some(joined)
 }
 
+fn clean_native_environment(command: &mut CommandBuilder) {
+    // A dev daemon can itself have been started by an agent's capped shell.
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("BRIGADIER_") {
+            command.env_remove(key);
+        }
+    }
+    for key in brigadier_sandbox::build_slots::INJECTED_ENV {
+        command.env_remove(key);
+    }
+}
+
 /// The user's shell: `$SHELL` on macOS and Linux, PowerShell on Windows.
 fn default_shell() -> String {
     if cfg!(windows) {
@@ -887,6 +894,27 @@ mod tests {
         assert!(terminals.get(&other.id).is_ok());
         terminals.close_all();
         assert_eq!(terminals.count(), 0);
+    }
+
+    #[test]
+    fn native_shell_drops_every_injected_build_variable() {
+        use super::CommandBuilder;
+        use std::ffi::OsStr;
+        let mut command = CommandBuilder::new("shell");
+        for key in brigadier_sandbox::build_slots::INJECTED_ENV {
+            command.env(key, "inherited from a capped session");
+        }
+        command.env("PATH", "user path");
+        command.env("HOME", "user home");
+        super::clean_native_environment(&mut command);
+        for key in brigadier_sandbox::build_slots::INJECTED_ENV {
+            assert!(
+                command.get_env(key).is_none(),
+                "{key} leaked into the native shell"
+            );
+        }
+        assert_eq!(command.get_env("PATH"), Some(OsStr::new("user path")));
+        assert_eq!(command.get_env("HOME"), Some(OsStr::new("user home")));
     }
 
     /// Polls `check` for up to ten seconds.

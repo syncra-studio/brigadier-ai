@@ -102,7 +102,7 @@ async fn the_threads_worktree_gets_the_checkouts_dependencies_and_the_thread_is_
         .iter()
         .filter(|(input, _)| {
             input.contains(
-                "[workspace] Dependencies are already installed: `node_modules` was copied in from the user's checkout. Don't reinstall them."
+                "[workspace] Dependencies are already installed: `node_modules` was copied in from another checkout of this project. Don't reinstall them."
             )
         })
         .collect();

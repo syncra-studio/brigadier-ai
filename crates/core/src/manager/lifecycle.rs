@@ -75,6 +75,8 @@ impl SessionManager {
                 let git = git.clone();
                 Box::pin(async move {
                     tokio::task::spawn_blocking(move || {
+                        // A copy still warming it ends first, so none lands in or beside it.
+                        super::warm::stop(&path);
                         match git.open(&repo) {
                             Ok(repo) => {
                                 let same = |a: &std::path::Path| {

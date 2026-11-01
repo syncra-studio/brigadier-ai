@@ -630,19 +630,24 @@ impl SessionManager {
         self.note_branch_namespace(&task.conversation_id, &repo, &branch)
             .await?;
         let worktree = worker_dir;
-        let warmed = self
-            .make_worktree(
-                owner,
-                &repo,
-                &worktree,
-                WorktreeSpec::NewBranch {
-                    name: branch.clone(),
-                    start: start.clone(),
-                },
-                true,
-                &task.id,
-            )
-            .await?;
+        // Its caches come from its session's workspace first (a Chat's worker: `--repo`'s
+        // checkout).
+        let parent = match &plain.repo {
+            Some(checkout) => Some(PathBuf::from(checkout)),
+            None => self.checkout_dir(&conversation.id).ok().map(PathBuf::from),
+        };
+        self.make_worktree(
+            owner,
+            &repo,
+            &worktree,
+            WorktreeSpec::NewBranch {
+                name: branch.clone(),
+                start: start.clone(),
+            },
+            parent,
+            &task.id,
+        )
+        .await?;
         self.note_branch_made(&repo, &branch).await;
         // What `gh pr create` and the session read as the branch it merges into.
         let (git, repo_path, name, onto) =
@@ -659,7 +664,6 @@ impl SessionManager {
             branch: Some(branch),
             base: Some(start),
             target: Some(base),
-            warmed,
             ..empty(None)
         })
     }

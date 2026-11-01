@@ -2912,7 +2912,13 @@ impl SessionManager {
                     },
                 );
                 grant_values.push(grant.clone());
-                cli_env = self.cli_env(&conv.id.0, &grant);
+                cli_env = self.cli_env(
+                    &conv.id.0,
+                    &grant,
+                    workspace
+                        .as_ref()
+                        .map_or(dir.as_path(), |workspace| workspace.path.as_path()),
+                );
                 if self.thread_hooked(choice.provider) {
                     let hook_grant = self.grants.issue(
                         &owner,
@@ -2947,7 +2953,7 @@ impl SessionManager {
                         },
                     );
                     grant_values.push(grant.clone());
-                    cli_env = self.cli_env(&conv.id.0, &grant);
+                    cli_env = self.cli_env(&conv.id.0, &grant, &dir);
                 }
                 (model.clone(), prompt)
             }
@@ -2967,7 +2973,7 @@ impl SessionManager {
                     },
                 );
                 grant_values.push(grant.clone());
-                cli_env = self.cli_env(&conv.id.0, &grant);
+                cli_env = self.cli_env(&conv.id.0, &grant, &dir);
                 (model, prompts::chat(side))
             }
             (Some(Setup::Chat { .. }), ConversationKind::Session) => {

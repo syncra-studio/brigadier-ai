@@ -347,10 +347,10 @@ pub(crate) const NO_AI_COAUTHORS: &str =
     "Don't add Co-authored-by trailers that name an AI to commit messages.";
 
 /// What a worker or the thread is told about the dependency installs and build caches copied
-/// into its worktree from the user's checkout (`warm`).
+/// into its worktree from the project's checkout or another of its worktrees (`warm`).
 pub(crate) fn copied_in_line(warmed: &[String]) -> String {
     format!(
-        "Dependencies are already installed: {} {} copied in from the user's checkout. Don't reinstall them.",
+        "Dependencies are already installed: {} {} copied in from another checkout of this project. Don't reinstall them.",
         warmed
             .iter()
             .map(|folder| format!("`{folder}`"))

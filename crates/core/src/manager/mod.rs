@@ -168,6 +168,8 @@ pub struct ManagerConfig {
     /// The running `brigadierd`: CLIs run its hooks, and `brigadier` and the computer-use
     /// helper are found beside it.
     pub daemon_exe: PathBuf,
+    /// Whether this daemon prepared its compiler launcher and the shared slot pool.
+    pub build_slots_ready: bool,
     /// Tests: how sessions go on past a long context, in place of the environment's.
     #[cfg(test)]
     pub(crate) seam: Option<seam::SeamConfig>,
