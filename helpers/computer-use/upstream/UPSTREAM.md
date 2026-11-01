@@ -186,6 +186,8 @@ Patches applied, in order:
 
 - `patches/0162-windows-bounded-browser-powershell-probes.diff`: Bound the browser signature check (15 s, the child killed on expiry) and the browser command-line query (10 s, kill_on_drop) so a slow revocation check or WMI query cannot stall launch_app or leave a PowerShell process behind.
 
+- `patches/0163-windows-reuse-task-browser-without-second-start.diff`: When a live task-owned browser is re-proven for reuse, open the requested pages through its endpoint without starting the executable again; a second start hands the command line to the running browser, which opens and activates a new window over the user's.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

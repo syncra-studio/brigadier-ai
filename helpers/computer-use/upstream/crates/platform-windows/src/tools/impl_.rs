@@ -2630,12 +2630,17 @@ impl Tool for LaunchAppTool {
         } else {
             None
         };
+        // A re-proven live task browser opens its pages through its endpoint.
+        // Starting the executable again would hand the command line to that
+        // browser, which then opens and activates a new window.
+        let mut reused_task_pid = None;
         if let Some(profile) = task_profile.as_ref() {
             if let Some(pid) = profile.known_pid() {
                 if let Err(error) = profile.confirm(pid).await {
                     let closed = profile.terminate();
                     return ToolResult::error(format!("The existing task-browser transport could not be re-proven: {error}. No new launch was sent.{}", closed.note()));
                 }
+                reused_task_pid = Some(pid);
             }
             resolved_target = Some(profile.executable.clone());
             if let Some(position) = super::task_browser::offscreen_argument(&extra_args) {
@@ -2821,7 +2826,9 @@ impl Tool for LaunchAppTool {
         // ShellExecuteExW. Both branches still need to handle `urls`
         // (additional URLs always go through ShellExecuteExW since the
         // Start Menu doesn't activate by URL).
-        let pid = if let Some(aumid) = aumid_for_uwp.clone() {
+        let pid = if let Some(pid) = reused_task_pid {
+            pid
+        } else if let Some(aumid) = aumid_for_uwp.clone() {
             let aumid_clone = aumid.clone();
             let args_clone = extra_joined.clone();
             // Once submitted, a broker may still open the file after our
