@@ -128,6 +128,27 @@ impl SessionManager {
         }
     }
 
+    /// Compacts a session's orchestrator at its next turn boundary, the way a context past its
+    /// point does (goal 2's proofs).
+    #[cfg(debug_assertions)]
+    pub(crate) async fn debug_compact_session(
+        &self,
+        id: &crate::model::ConversationId,
+    ) -> crate::Result<()> {
+        let conv = self.conv(id)?;
+        {
+            let mut state = conv.state.lock().await;
+            if conv.kind != crate::model::ConversationKind::Session || state.cli.is_none() {
+                return Err(crate::Error::Invalid(
+                    "only a running session's orchestrator compacts this way".into(),
+                ));
+            }
+            state.long.compact_due = true;
+        }
+        self.kick(&conv);
+        Ok(())
+    }
+
     /// The compaction due before anything else the next turn would take: the CLI to compact,
     /// with the turn begun as one of its own for no request.
     pub(super) fn take_due_compaction(state: &mut ConvState) -> Option<Arc<Cli>> {

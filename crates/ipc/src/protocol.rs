@@ -1332,6 +1332,13 @@ pub enum Request {
         error: InjectedError,
         after_tool_calls: u32,
     },
+    /// Development builds only: compacts a conversation's orchestrator (at its next turn
+    /// boundary) or a task's idle worker through its CLI's own compaction; what follows is the
+    /// real path, a hand-off after the third.
+    #[cfg(debug_assertions)]
+    DebugCompact {
+        target: FaultTarget,
+    },
     /// Development builds only: adds `text` to the `learned` items of the next report a worker
     /// of the conversation submits (the continuity battery's false claim).
     #[cfg(debug_assertions)]
@@ -2020,6 +2027,8 @@ pub enum Response {
     DebugInjectLimit,
     #[cfg(debug_assertions)]
     DebugInjectError,
+    #[cfg(debug_assertions)]
+    DebugCompact,
     #[cfg(debug_assertions)]
     DebugPlantLearned,
     StartRawSession {

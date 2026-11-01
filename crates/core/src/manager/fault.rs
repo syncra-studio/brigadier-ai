@@ -186,6 +186,16 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Compacts a conversation's orchestrator (at its next turn boundary) or a task's idle
+    /// worker now, through its CLI's own compaction and the same path an automatic one takes.
+    pub async fn debug_compact(&self, key: FaultKey) -> Result<()> {
+        tracing::info!(?key, "a compaction asked for by a development build");
+        match key {
+            FaultKey::Conversation(id) => self.debug_compact_session(&id).await,
+            FaultKey::Task(id) => self.debug_compact_worker(&id).await,
+        }
+    }
+
     /// Makes storing a kept output fail (`on`), as on a full disk, or work again.
     pub fn debug_fail_kept_writes(&self, on: bool) {
         self.faults

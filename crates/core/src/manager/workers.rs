@@ -118,6 +118,9 @@ struct TaskLiveState {
     seam: Option<seam::SeamLive>,
     /// What its session sent while it hands off: its successor's first input carries it.
     seam_held: Vec<String>,
+    /// Its turn is a compaction of its own (development builds' `debugCompact`): its session
+    /// already heard its last turn end and hears nothing of this one.
+    compacting: bool,
     quota_timer: u64,
     quota_cancelled: bool,
     quota_send_accepted: bool,
@@ -1764,13 +1767,14 @@ impl SessionManager {
     /// The worker's turn ended: it waits for its session's next message, and its session's
     /// `brigadier wait` hears it.
     async fn worker_turn_completed(&self, live: &Arc<TaskLive>, status: TurnStatus) {
-        let seam = {
+        let (seam, compacted) = {
             let mut state = live.state.lock().await;
             state.busy = false;
+            let compacted = std::mem::take(&mut state.compacting);
             if state.stopping {
                 return;
             }
-            state.seam.clone()
+            (state.seam.clone(), compacted)
         };
         let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
             return;
@@ -1784,10 +1788,11 @@ impl SessionManager {
                 let (manager, live) = (self.arc(), live.clone());
                 self.spawn(async move {
                     manager
-                        .worker_seam_turn_end(&live, &task, seam, status)
+                        .worker_seam_turn_end(&live, &task, seam, status, compacted)
                         .await;
                 });
             }
+            None if compacted => {}
             None => self.plain_turn_ended(live, &task, status).await,
         }
     }

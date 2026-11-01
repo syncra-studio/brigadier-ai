@@ -91,6 +91,35 @@ impl SessionManager {
         }
     }
 
+    /// Compacts the idle worker of `task` now through its CLI's own compaction, in a turn of its
+    /// own its session doesn't hear: its end counts as any compaction (goal 2's proofs).
+    #[cfg(debug_assertions)]
+    pub(crate) async fn debug_compact_worker(&self, task: &crate::work::TaskId) -> Result<()> {
+        let live = self.tasks_lock().get(task).cloned();
+        let Some(live) = live else {
+            return Err(Error::Invalid("that worker isn't running".into()));
+        };
+        let mut state = live.state.lock().await;
+        let Some(cli) = state.cli.clone().filter(|cli| cli.session.can_compact()) else {
+            return Err(Error::Invalid(
+                "its CLI doesn't run or can't compact".into(),
+            ));
+        };
+        if state.busy || state.seam.is_some() {
+            return Err(Error::Invalid("wait until the worker is idle".into()));
+        }
+        state.busy = true;
+        state.compacting = true;
+        drop(state);
+        if let Err(err) = cli.session.compact(None).await {
+            let mut state = live.state.lock().await;
+            state.busy = false;
+            state.compacting = false;
+            return Err(Error::Provider(err.to_string()));
+        }
+        Ok(())
+    }
+
     /// A worker turn's error the hand-off takes, rather than its session: Claude's thrash stop
     /// owes the note; a context too long for the model hands off without one (D14).
     pub(super) async fn worker_seam_error(
@@ -141,6 +170,7 @@ impl SessionManager {
         task: &Task,
         seam: SeamLive,
         status: TurnStatus,
+        compacted: bool,
     ) {
         let record = self.worker_record(task);
         let cutoff = live.take_cutoff().await;
@@ -162,7 +192,9 @@ impl SessionManager {
                     // Its session's messages wait for the successor from before it hears the
                     // turn end: one sent at once would start a turn the note's then cuts off.
                     live.state.lock().await.seam = Some(SeamLive::Nudged { carry_on, fixes: 0 });
-                    self.plain_turn_ended(live, task, status).await;
+                    if !compacted {
+                        self.plain_turn_ended(live, task, status).await;
+                    }
                 }
                 if self.worker_seam_nudge(live, task, carry_on).await {
                     return;

@@ -850,3 +850,39 @@ async fn a_worker_goes_through_two_rebirths_its_check_fixing_its_note_each_time(
     );
     flow.stop().await;
 }
+
+/// Development builds' on-demand compaction of an idle worker goes through its CLI's own
+/// compaction: its session hears none of them, and the third asks for its note (goal 2).
+#[tokio::test]
+async fn three_compactions_asked_for_on_an_idle_worker_hand_it_off_unheard() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-seam-debug-compact", seen.clone()).await;
+    let key = || crate::manager::fault::FaultKey::Task(task.id.clone());
+    for n in 1..=crate::manager::long_sessions::HANDOFF_AFTER {
+        flow.manager.debug_compact(key()).await.unwrap();
+        until(&flow, "the compaction counted", || {
+            read_long(&record(&flow, &task)).compactions == n
+                || matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+        })
+        .await;
+        flow.idle().await;
+    }
+    until(&flow, "the generation closed", || {
+        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+    })
+    .await;
+    assert_eq!(seen.given(NUDGE_MARK).len(), 1);
+    assert_eq!(
+        seen.heard("finished"),
+        1,
+        "{:?}",
+        seen.parent.lock().unwrap()
+    );
+    // The next message starts its successor, as after any hand-off.
+    send(&flow, &task, "Next.").await;
+    until(&flow, "the successor", || {
+        seam_file(&flow, &task).generation == 2
+    })
+    .await;
+    flow.stop().await;
+}

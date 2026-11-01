@@ -2712,6 +2712,19 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::DebugInjectError
         }
         #[cfg(debug_assertions)]
+        Request::DebugCompact { target } => {
+            use brigadier_core::manager::fault::FaultKey;
+            use brigadier_ipc::protocol::FaultTarget;
+            let key = match target {
+                FaultTarget::Task { task_id } => FaultKey::Task(task_id),
+                FaultTarget::Conversation { conversation_id } => {
+                    FaultKey::Conversation(conversation_id)
+                }
+            };
+            heap(|| sessions.debug_compact(key)).await?;
+            Response::DebugCompact
+        }
+        #[cfg(debug_assertions)]
         Request::DebugPlantLearned {
             conversation_id,
             text,
