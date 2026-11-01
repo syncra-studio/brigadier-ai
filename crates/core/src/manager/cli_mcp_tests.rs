@@ -228,6 +228,7 @@ async fn a_stdio_server_pages_its_tools_keeps_its_state_and_says_its_errors() {
 struct Http {
     kept: Mutex<Option<String>>,
     seen: Mutex<Vec<(String, Option<String>)>>,
+    ended_on: Mutex<Option<String>>,
 }
 
 /// A streamable-HTTP server that names a session at `initialize`, wants it and the protocol
@@ -248,6 +249,7 @@ async fn http_server(state: State<Arc<Http>>, request: Request<Body>) -> Respons
         .unwrap()
         .push((method.clone(), session.clone()));
     if method == "DELETE" {
+        *state.ended_on.lock().unwrap() = version.map(|v| v.to_str().unwrap().to_owned());
         return Response::builder().status(204).body(Body::empty()).unwrap();
     }
     let message: Value = serde_json::from_slice(&body).unwrap();
@@ -328,6 +330,10 @@ async fn an_http_server_keeps_its_session_across_calls_and_is_ended_on_close() {
     assert_eq!(
         seen.last().map(|(method, _)| method.as_str()),
         Some("DELETE")
+    );
+    assert_eq!(
+        state.ended_on.lock().unwrap().as_deref(),
+        Some("2025-11-25")
     );
     served.abort();
 }

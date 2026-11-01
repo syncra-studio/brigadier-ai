@@ -398,6 +398,9 @@ impl Conn {
                 for (name, value) in headers.iter() {
                     request = request.header(name.as_str(), value.as_str());
                 }
+                if let Some(version) = &self.version {
+                    request = request.header("mcp-protocol-version", version.as_str());
+                }
                 let _ = request.send().await;
             }
             Link::Http { .. } => {}

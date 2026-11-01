@@ -95,7 +95,12 @@ impl SessionManager {
             if let (Some(checkout), Some(root)) = (&own_checkout, &project) {
                 adopt_checkout(&mut rows, checkout, root);
             }
-            let choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
+            let mut choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
+            if let Some(checkout) = &own_checkout {
+                keep_root_choices(&rows, &mut choices, checkout, || {
+                    Catalog::read_rows_with_library(&roots, &registered, &data_dir)
+                });
+            }
             let warnings = if grants.is_none() {
                 fill_library_values(&mut rows, &data_dir, &choices, project.as_deref(), &secrets)
             } else {
@@ -199,9 +204,94 @@ fn adopt_checkout(rows: &mut Vec<brigadier_registry::catalog::Row>, checkout: &P
     }
 }
 
+/// A branch edit to one CLI's copy of a skill regroups it as different per agent, a row id
+/// with no saved choice; the root's saved choice for that skill still applies there.
+fn keep_root_choices(
+    rows: &[brigadier_registry::catalog::Row],
+    choices: &mut Choices,
+    checkout: &Path,
+    root_rows: impl FnOnce() -> Vec<brigadier_registry::catalog::Row>,
+) {
+    let regrouped: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.different_per_agent
+                && row
+                    .definitions
+                    .iter()
+                    .any(|definition| definition.provenance.file.starts_with(checkout))
+        })
+        .collect();
+    if regrouped.is_empty() {
+        return;
+    }
+    let root_rows = root_rows();
+    for row in regrouped {
+        let saved = root_rows
+            .iter()
+            .filter(|old| {
+                old.kind == row.kind
+                    && old.name == row.name
+                    && old
+                        .definitions
+                        .iter()
+                        .any(|known| row.definitions.contains(known))
+            })
+            .find_map(|old| choices.0.get(&old.id).cloned());
+        if let Some(saved) = saved {
+            choices.0.insert(row.id.clone(), saved);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worktree_edit_to_one_clis_skill_copy_keeps_the_roots_saved_choice() {
+        let dir = std::env::temp_dir().join(format!("plugins-keep-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let home = dir.join("home");
+        let roots = brigadier_registry::Roots::from_vars([
+            ("HOME".into(), home.display().to_string()),
+            ("USERPROFILE".into(), home.display().to_string()),
+        ])
+        .unwrap();
+        let (root, work) = (dir.join("repo"), dir.join("work"));
+        let skill = "---\nname: tidy\ndescription: Tidies.\n---\nTidy up.\n";
+        for checkout in [&root, &work] {
+            for folder in [".claude/skills/tidy", ".agents/skills/tidy"] {
+                std::fs::create_dir_all(checkout.join(folder)).unwrap();
+                std::fs::write(checkout.join(folder).join("SKILL.md"), skill).unwrap();
+            }
+        }
+        std::fs::write(
+            work.join(".claude/skills/tidy/SKILL.md"),
+            format!("{skill}Edited on the branch.\n"),
+        )
+        .unwrap();
+        let root_rows = || Catalog::read_rows(&roots, std::slice::from_ref(&root));
+        let before = root_rows();
+        let saved = before.iter().find(|row| row.name == "tidy").unwrap();
+        assert!(!saved.different_per_agent);
+        let mut choices = Choices::default();
+        let mut off = super::super::choices::Choice::default_for(saved);
+        off.on = false;
+        choices.0.insert(saved.id.clone(), off);
+        let mut rows = Catalog::read_rows(&roots, &[root.clone(), work.clone()]);
+        adopt_checkout(&mut rows, &work, &root);
+        let tidy = rows.iter().find(|row| row.name == "tidy").unwrap();
+        assert!(tidy.different_per_agent, "{rows:?}");
+        assert!(
+            choices.choice(tidy).on,
+            "no saved choice under the regrouped id yet"
+        );
+        keep_root_choices(&rows, &mut choices, &work, root_rows);
+        assert!(!choices.choice(tidy).on);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn a_worktrees_copy_of_a_root_server_keeps_the_roots_row_and_choice() {
