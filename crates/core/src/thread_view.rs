@@ -686,6 +686,16 @@ pub(crate) fn view(
         if !live.awaiting_user || live.user_message.as_deref() != Some(turn.user_message.as_str()) {
             turn.joins |= live.joins;
         }
+        // A turn its file opened that the live turn, the CLI's own, hasn't said yet: a message
+        // steered into that turn, which is the open block's (D25, D74).
+        if (live.continues || live.own)
+            && live
+                .user_message
+                .as_deref()
+                .is_some_and(|own| own != turn.user_message)
+        {
+            turn.joins = true;
+        }
     }
     ThreadView {
         entries,
@@ -1618,5 +1628,43 @@ mod tests {
         later.push(at(20, message("u3", Role::User)));
         let cut = super::view(vec![Arc::new(later)], None, &records);
         assert_eq!(cut.turns[2].end, Some(TurnEnd::Interrupted));
+    }
+
+    /// O38: while the CLI's own turn runs on with the turn before, its file opens a turn at a
+    /// message steered into it before the stream says that message. That turn is the open
+    /// block's from the first frame: it joins, never reads as a block of its own.
+    #[test]
+    fn a_turn_the_file_opens_inside_the_clis_own_running_turn_joins_it() {
+        let file = vec![
+            message("u1", Role::User),
+            message("a1", Role::Assistant),
+            message("a2", Role::Assistant),
+            message("u2", Role::User),
+        ];
+        let records = [TurnRecord {
+            user_message: Some("u1".into()),
+            end: Some(TurnEnd::Done),
+            error: None,
+            error_kind: None,
+            provider: None,
+            ended_at_ms: Some(2),
+            requests: vec!["r1".into()],
+            limit: None,
+            context_window: None,
+            joins: false,
+        }];
+        for (continues, own) in [(true, false), (false, true)] {
+            let live = LiveTurn {
+                open: true,
+                continues,
+                own,
+                awaiting_user: own,
+                user_message: Some("u1".into()),
+                ..LiveTurn::default()
+            };
+            let view = view(vec![Arc::new(file.clone())], Some(&live), &records);
+            assert_eq!(view.turns.len(), 2, "{view:#?}");
+            assert!(view.turns[1].joins, "{view:#?}");
+        }
     }
 }
