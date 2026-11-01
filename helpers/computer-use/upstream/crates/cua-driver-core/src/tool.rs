@@ -1938,7 +1938,7 @@ impl ToolRegistry {
                 None => {
                     return protected_refusal(
                         "unbounded_operation_requires_unrestricted",
-                        "legacy page mutation is unbounded and requires unrestricted mode with trusted launch-time risk acceptance",
+                        "The page tool cannot click, type, or run scripts in this mode because it cannot verify the exact browser page it would change. Use get_window_state to find the control, then click, set_value, or type_text with its element token.",
                     );
                 }
             }
@@ -5121,6 +5121,22 @@ resources:
                 .and_then(serde_json::Value::as_str),
             Some("unbounded_operation_requires_unrestricted")
         );
+        for action in ["click_element", "insert_text", "execute_javascript"] {
+            let refused = registry
+                .invoke_with_context(
+                    "page",
+                    serde_json::json!({"action": action, "pid": 42, "window_id": 7}),
+                    standard_context(),
+                )
+                .await;
+            let message = refused.structured_content.as_ref().unwrap()["refusal"]["message"]
+                .as_str()
+                .unwrap();
+            assert!(message.contains("cannot verify the exact browser page"));
+            assert!(message.contains("set_value, or type_text with its element token"));
+            assert!(!message.contains("unbounded"));
+            assert_eq!(hits.load(Ordering::SeqCst), 0);
+        }
 
         let allowed = registry
             .invoke_with_context(

@@ -277,8 +277,193 @@ fn invoke_inner(
     Ok(())
 }
 
+/// Search only advertised menu containers, never invoke a menu header to probe it.
+/// Runs inside the accelerator worker's existing COM apartment/deadline.
+pub(super) fn search_accelerator(
+    uia: &IUIAutomation,
+    root: &IUIAutomationElement,
+    hwnd: isize,
+    cancelled: &std::sync::atomic::AtomicBool,
+    mut scan: impl FnMut(&IUIAutomationElement) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    super::click::ensure_active(cancelled)?;
+    let hwnd = HWND(hwnd as *mut _);
+    let _no_activate = crate::input::NoActivateGuard::arm(hwnd);
+    let mut visited = Vec::new();
+    search_menu_level(
+        uia,
+        root,
+        hwnd,
+        cancelled,
+        &mut scan,
+        &mut visited,
+        0,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_menu_level(
+    uia: &IUIAutomation,
+    scope: &IUIAutomationElement,
+    hwnd: HWND,
+    cancelled: &std::sync::atomic::AtomicBool,
+    scan: &mut impl FnMut(&IUIAutomationElement) -> anyhow::Result<bool>,
+    visited: &mut Vec<IUIAutomationElement>,
+    depth: usize,
+    menu_scope: bool,
+) -> anyhow::Result<bool> {
+    anyhow::ensure!(
+        depth < 16 && visited.len() < 32,
+        "accelerator menu search limit reached"
+    );
+    super::click::ensure_active(cancelled)?;
+    let condition = unsafe { uia.CreateTrueCondition() }?;
+    let all = unsafe { scope.FindAll(TreeScope_Subtree, &condition) }?;
+    let count = unsafe { all.Length() }?;
+    anyhow::ensure!(
+        count <= 5000,
+        "accelerator menu tree exceeded 5000 elements"
+    );
+    for i in 0..count {
+        super::click::ensure_active(cancelled)?;
+        let element = unsafe { all.GetElement(i) }?;
+        let kind = unsafe { element.CurrentControlType() }.ok();
+        if (kind != Some(UIA_MenuItemControlTypeId) && kind != Some(UIA_ButtonControlTypeId))
+            || unsafe { element.CurrentIsOffscreen() }
+                .map(|v| v.as_bool())
+                .unwrap_or(true)
+            || !unsafe { element.CurrentIsEnabled() }
+                .map(|v| v.as_bool())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let (in_menu, in_document) = menu_ancestry(uia, &element, depth == 0);
+        if in_document || !(in_menu || menu_scope) {
+            continue;
+        }
+        // The window fallback finds attached flyouts, but must not switch to
+        // another menu-bar header while this branch is still expanded.
+        if depth > 0 && !menu_scope && menu_ancestry(uia, &element, true).0 {
+            continue;
+        }
+        if visited.iter().any(|prior| unsafe {
+            uia.CompareElements(prior, &element)
+                .map(|v| v.as_bool())
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
+        let Ok(pattern) = (unsafe { element.GetCurrentPattern(UIA_ExpandCollapsePatternId) })
+            .and_then(|p| p.cast::<IUIAutomationExpandCollapsePattern>())
+        else {
+            continue;
+        };
+        let state = unsafe { pattern.CurrentExpandCollapseState() }?;
+        if state == ExpandCollapseState_LeafNode {
+            continue;
+        }
+        anyhow::ensure!(visited.len() < 32, "accelerator menu search limit reached");
+        visited.push(element.clone());
+        let prior_popups = popups(hwnd);
+        let opened = state != ExpandCollapseState_Expanded;
+        // Remember the pattern before Expand: a failed provider call may still open it.
+        let result = (|| -> anyhow::Result<bool> {
+            if opened {
+                super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
+                    super::click::ensure_active(cancelled)?;
+                    pattern.Expand()
+                })?;
+            }
+            // WinUI attaches MenuFlyout children asynchronously, sometimes to an
+            // owned popup HWND rather than the expanded element's fragment.
+            for attempt in 0..4 {
+                super::click::ensure_active(cancelled)?;
+                let mut scopes = vec![element.clone(), scope.clone()];
+                for popup in popups(hwnd)
+                    .into_iter()
+                    .filter(|p| !prior_popups.contains(p))
+                {
+                    scopes.push(unsafe { uia.ElementFromHandle(popup) }?);
+                }
+                for child in &scopes {
+                    if scan(child)? {
+                        return Ok(true);
+                    }
+                }
+                if attempt == 3 {
+                    for (index, child) in scopes.iter().enumerate() {
+                        if search_menu_level(
+                            uia,
+                            child,
+                            hwnd,
+                            cancelled,
+                            scan,
+                            visited,
+                            depth + 1,
+                            index != 1 || menu_scope,
+                        )? {
+                            return Ok(true);
+                        }
+                    }
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                }
+            }
+            Ok(false)
+        })();
+        // On success too: only collapse menus this call opened. Never send
+        // cleanup after timeout/user cancellation, just like invoke_menu.
+        if opened {
+            let cleanup = super::fg_bypass::run_with_uwp_bypass(hwnd.0 as isize, || unsafe {
+                super::click::ensure_active(cancelled)?;
+                if pattern.CurrentExpandCollapseState()? != ExpandCollapseState_Collapsed {
+                    pattern.Collapse()?;
+                }
+                Ok::<(), windows::core::Error>(())
+            });
+            if let Err(error) = cleanup {
+                anyhow::bail!("accelerator menu search result {result:?}; could not confirm menu cleanup: {error}; read fresh state before retrying");
+            }
+            anyhow::ensure!(
+                unsafe { pattern.CurrentExpandCollapseState() }.ok()
+                    == Some(ExpandCollapseState_Collapsed),
+                "could not confirm accelerator menu collapsed; read fresh state before retrying"
+            );
+        }
+        if result? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancelled_menu_search_never_scans_or_expands() {
+        use std::sync::atomic::AtomicBool;
+        use windows::Win32::System::Com::*;
+        let _com = super::Apartment(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok());
+        let uia: super::IUIAutomation =
+            unsafe { CoCreateInstance(&super::CUIAutomation, None, CLSCTX_INPROC_SERVER) }.unwrap();
+        let root = unsafe { uia.GetRootElement() }.unwrap();
+        // Enter the worker directly: cancellation must be checked before even
+        // querying a provider, much less opening a menu or invoking a match.
+        let result = super::search_menu_level(
+            &uia,
+            &root,
+            super::HWND::default(),
+            &AtomicBool::new(true),
+            &mut |_| panic!("cancelled search attempted accelerator scan"),
+            &mut Vec::new(),
+            0,
+            false,
+        );
+        assert!(result.is_err());
+    }
+
     #[test]
     fn an_invalid_window_cannot_invoke_a_menu() {
         assert!(super::invoke(0, &["File".into(), "Save as".into()]).is_err());

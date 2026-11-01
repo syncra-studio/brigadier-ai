@@ -3,8 +3,9 @@
 //!
 //! Windows asks for no permissions: the helper reaches every app of the
 //! user's session through UI Automation and posts input in the background.
-//! An app running elevated, and packaged (UWP) apps, are out of reach for a
-//! helper that isn't elevated itself; the driver says so when it meets one.
+//! Higher-privilege apps can block background input. The target policy also
+//! refuses ApplicationFrameHost, the shared host for some Store apps, rather
+//! than an individual app. Other Store apps are not refused as a group.
 //!
 //! Linux depends on the session. X11, and X11 apps under XWayland, work
 //! through AT-SPI and XTest. A pure Wayland session (no XWayland `DISPLAY`)
@@ -50,8 +51,9 @@ pub fn facts() -> Facts {
             "Windows asks for no permissions: agents use apps in the background through UI \
              Automation."
                 .to_owned(),
-            "Apps running as administrator and Store (UWP) apps can't be driven in the \
-             background."
+            "Apps running as administrator can block background input. On Windows, Brigadier \
+             can use Store apps such as Calculator and Notepad. Apps Windows shows inside a \
+             shared frame window are refused if Brigadier can't tell which app is inside."
                 .to_owned(),
         ],
     }
@@ -237,8 +239,8 @@ pub fn explain(
 fn platform_note(code: &str, text: &str) -> Option<&'static str> {
     if code == "background_uipi_blocked" || text.contains("blocked by UIPI") {
         return Some(
-            "Windows keeps this app out of reach: it runs as administrator or is a Store \
-             (UWP) app, and Brigadier's computer use can't drive such apps in the background. \
+            "Windows blocked background input because this app has higher privileges than \
+             Brigadier's computer use, for example when running as administrator. \
              Ask the user to do this step.",
         );
     }
@@ -255,6 +257,16 @@ fn platform_note(code: &str, text: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::linux_facts;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_notes_distinguish_shared_hosts_from_other_store_apps() {
+        let notes = super::facts().notes.join(" ");
+        assert!(notes.contains("Store apps such as Calculator and Notepad"));
+        assert!(notes.contains("shared frame window are refused if Brigadier can't tell"));
+        assert!(!notes.contains("ApplicationFrameHost"));
+        assert!(!notes.contains("shared host"));
+    }
 
     #[test]
     fn a_linux_session_says_what_works() {
@@ -290,7 +302,7 @@ mod tests {
             panic!("text first");
         };
         assert!(
-            text.starts_with("Windows keeps this app out of reach"),
+            text.starts_with("Windows blocked background input because"),
             "{text}"
         );
         assert!(text.ends_with("higher-integrity target"), "{text}");

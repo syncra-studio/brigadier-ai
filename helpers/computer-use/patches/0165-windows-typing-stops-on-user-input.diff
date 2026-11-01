@@ -1,0 +1,726 @@
+Why: Background per-character typing on Windows (the WM_CHAR route native and XAML editors such as Notepad use) never watched for the user's own input and ran under a fixed 30 s provider deadline, so a long text kept typing after the user moved the mouse or pressed a key and then ended with a vague provider timeout. Count the user's own (not injected) mouse events including pointer motion and keyboard events, check them before every character and stop at once with a reply saying how much was typed; size the deadline to the text and say plainly how far typing got when it is reached.
+
+diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
+index 90ad73739..dbbaa0442 100644
+--- a/crates/platform-windows/src/input/foreground_policy.rs
++++ b/crates/platform-windows/src/input/foreground_policy.rs
+@@ -62,6 +62,12 @@ pub(crate) fn switch_click(injected: bool, clicked_prior: bool) -> bool {
+     !injected && !clicked_prior
+ }
+ 
++// Any event of the user's own, pointer motion included, interrupts typing.
++// Windows flags every SendInput event as injected, ours and other programs'.
++pub(crate) fn own_input(injected: bool) -> bool {
++    !injected
++}
++
+ pub(crate) fn launch_names(mut expected: Vec<String>) -> Vec<String> {
+     for name in expected.clone() {
+         match name.as_str() {
+@@ -120,6 +126,12 @@ impl ActivationEvidence {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn only_the_users_own_input_interrupts_typing() {
++        assert!(own_input(false));
++        assert!(!own_input(true));
++    }
++
+     #[test]
+     fn a_broker_pid_binds_a_brief_event_recorded_before_activation_returned() {
+         let mut evidence = ActivationEvidence::default();
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+index 5faf9110c..ee9eb3735 100644
+--- a/crates/platform-windows/src/input/foreground_watch.rs
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -202,9 +202,77 @@ unsafe extern "system" fn foreground_event(
+     }
+ }
+ 
++/// The user's own keyboard and mouse events, pointer motion included, seen by
++/// any live watch's hooks. Injected input (ours or any other program's
++/// SendInput) is flagged by Windows and never counted; posted messages never
++/// reach these hooks.
++static USER_INPUT_EVENTS: AtomicU64 = AtomicU64::new(0);
++
++pub(crate) fn user_input_events() -> u64 {
++    USER_INPUT_EVENTS.load(Ordering::Acquire)
++}
++
++fn note_user_input(injected: bool) {
++    if policy::own_input(injected) {
++        USER_INPUT_EVENTS.fetch_add(1, Ordering::AcqRel);
++    }
++}
++
++/// Watches for the user's own input across a long action, re-arming the
++/// hooks when a watch reaches the end of its bounded life.
++pub(crate) struct UserInputMonitor {
++    watch: ForegroundWatch,
++    baseline: u64,
++    pid: u32,
++    hwnd: usize,
++}
++
++impl UserInputMonitor {
++    /// None when the hooks could not be armed, so the user's input would go unseen.
++    pub(crate) fn start(pid: u32, hwnd: usize) -> Option<Self> {
++        let watch = Self::arm(pid, hwnd)?;
++        Some(Self {
++            watch,
++            baseline: user_input_events(),
++            pid,
++            hwnd,
++        })
++    }
++
++    fn arm(pid: u32, hwnd: usize) -> Option<ForegroundWatch> {
++        let prior = unsafe { GetForegroundWindow() }.0 as usize;
++        let watch =
++            ForegroundWatch::start_observing(prior, Target::Processes(vec![pid], vec![hwnd]));
++        watch.monitoring().then_some(watch)
++    }
++
++    /// Some(stop) once the user has used the mouse or keyboard since start,
++    /// or when their input can no longer be watched.
++    pub(crate) fn check(&mut self) -> Option<crate::input::text_policy::InsertStop> {
++        use crate::input::text_policy::InsertStop;
++        if user_input_events() != self.baseline {
++            return Some(InsertStop::UserInput);
++        }
++        if !self.watch.monitoring() {
++            match Self::arm(self.pid, self.hwnd) {
++                Some(watch) => self.watch = watch,
++                None => return Some(InsertStop::Unmonitored),
++            }
++            if user_input_events() != self.baseline {
++                return Some(InsertStop::UserInput);
++            }
++        }
++        None
++    }
++}
++
+ // Read-only hooks distinguish real window selection from motion and from our
+ // injected input. No event is swallowed and no input is synthesized.
+ unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
++    if code >= 0 {
++        let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
++        note_user_input(event.flags & LLMHF_INJECTED != 0);
++    }
+     if code >= 0
+         && matches!(
+             wparam.0 as u32,
+@@ -257,6 +325,7 @@ unsafe extern "system" fn keyboard_event(code: i32, wparam: WPARAM, lparam: LPAR
+         )
+     {
+         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
++        note_user_input(event.flags.contains(LLKHF_INJECTED));
+         if !event.flags.contains(LLKHF_INJECTED) {
+             CURRENT.with(|slot| {
+                 if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+diff --git a/crates/platform-windows/src/input/keyboard.rs b/crates/platform-windows/src/input/keyboard.rs
+index 74636361e..769a37585 100644
+--- a/crates/platform-windows/src/input/keyboard.rs
++++ b/crates/platform-windows/src/input/keyboard.rs
+@@ -352,31 +352,55 @@ pub fn post_insert_text_cancelable(
+     delay_ms: u64,
+     cancelled: &std::sync::atomic::AtomicBool,
+ ) -> Result<()> {
++    post_insert_text_watched(target, text, delay_ms, cancelled, None, || None)
++}
++
++/// Like [`post_insert_text_cancelable`], and `user_input` is asked before
++/// every character: the user's own mouse or keyboard input stops the run at
++/// once. A stop is an [`super::text_policy::InsertStopped`] error that says
++/// how much was typed; `progress` holds the characters accepted so far.
++pub fn post_insert_text_watched(
++    target: u64,
++    text: &str,
++    delay_ms: u64,
++    cancelled: &std::sync::atomic::AtomicBool,
++    progress: Option<&std::sync::atomic::AtomicUsize>,
++    mut user_input: impl FnMut() -> Option<super::text_policy::InsertStop>,
++) -> Result<()> {
++    use super::text_policy::InsertStop;
+     if let Some(message) = crate::input::post_message_blocked_by_uipi(target) {
+         bail!(message);
+     }
+-    for unit in super::text_policy::text_units(text) {
+-        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+-            bail!("Text insertion stopped at its deadline. Some text may have been inserted; read fresh state before retrying.");
+-        }
+-        let sent = unsafe {
+-            windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+-                HWND(target as *mut _),
+-                WM_CHAR,
+-                WPARAM(unit as usize),
+-                LPARAM(1),
+-                windows::Win32::UI::WindowsAndMessaging::SMTO_ABORTIFHUNG,
+-                1000,
+-                None,
+-            )
+-        };
+-        if sent.0 == 0 {
+-            bail!("The target did not acknowledge a text character before the deadline. Some text may have been inserted; read fresh state before retrying. No alternate route was attempted.");
+-        }
+-        if delay_ms > 0 {
+-            sleep(Duration::from_millis(delay_ms));
+-        }
+-    }
++    let units = super::text_policy::text_units(text);
++    super::text_policy::insert_units(
++        &units,
++        || {
++            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
++                return Some(InsertStop::Deadline(None));
++            }
++            user_input()
++        },
++        |unit| {
++            let sent = unsafe {
++                windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
++                    HWND(target as *mut _),
++                    WM_CHAR,
++                    WPARAM(unit as usize),
++                    LPARAM(1),
++                    windows::Win32::UI::WindowsAndMessaging::SMTO_ABORTIFHUNG,
++                    1000,
++                    None,
++                )
++            };
++            sent.0 != 0
++        },
++        || {
++            if delay_ms > 0 {
++                sleep(Duration::from_millis(delay_ms));
++            }
++        },
++        progress,
++    )?;
+     Ok(())
+ }
+ 
+diff --git a/crates/platform-windows/src/input/native_text_tests.rs b/crates/platform-windows/src/input/native_text_tests.rs
+index 2a402f59f..d0bf47b9e 100644
+--- a/crates/platform-windows/src/input/native_text_tests.rs
++++ b/crates/platform-windows/src/input/native_text_tests.rs
+@@ -66,7 +66,7 @@ fn character_insertion_preserves_surrounding_text_and_marks_edit_modified() {
+             &cancelled,
+         )
+         .unwrap_err();
+-        assert!(error.to_string().contains("deadline"));
++        assert!(error.to_string().contains("time limit"));
+         let mut unchanged = [0u16; 64];
+         let n = GetWindowTextW(edit, &mut unchanged);
+         assert_eq!(
+diff --git a/crates/platform-windows/src/input/text_policy.rs b/crates/platform-windows/src/input/text_policy.rs
+index b910d0a32..8125ed410 100644
+--- a/crates/platform-windows/src/input/text_policy.rs
++++ b/crates/platform-windows/src/input/text_policy.rs
+@@ -29,6 +29,144 @@ pub fn contains_field_center(field: (i32, i32, i32, i32), child: (i32, i32, i32,
+ 
+ pub const INSERTION_UNAVAILABLE: &str = "This control exposes no background caret-insertion route. type_text did not replace the document or send text. set_value replaces the whole value; use it only when that is intended.";
+ 
++/// Why per-character insertion stopped before the end of the text.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum InsertStop {
++    /// The user's own (not injected) keyboard or mouse input, pointer motion included.
++    UserInput,
++    /// The user's own input could no longer be watched, so typing on would ignore it.
++    Unmonitored,
++    /// The call's time limit, in whole seconds when known.
++    Deadline(Option<u64>),
++    /// The app did not accept a character within the per-character wait.
++    Unacknowledged,
++}
++
++/// Insertion stopped part way. Display is the plain reply.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct InsertStopped {
++    pub reason: InsertStop,
++    /// Characters the app accepted.
++    pub typed: usize,
++    pub total: usize,
++    /// The start of the text that was not typed.
++    pub rest: String,
++}
++
++fn is_low_surrogate(unit: u16) -> bool {
++    (0xDC00..=0xDFFF).contains(&unit)
++}
++
++/// Characters in a run of whole UTF-16 characters.
++pub fn char_count(units: &[u16]) -> usize {
++    units.iter().filter(|unit| !is_low_surrogate(**unit)).count()
++}
++
++impl InsertStopped {
++    pub fn at(reason: InsertStop, units: &[u16], index: usize) -> Self {
++        let (done, left) = units.split_at(index.min(units.len()));
++        let mut rest: String = char::decode_utf16(left.iter().copied())
++            .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
++            .take(24)
++            .collect::<String>()
++            .replace('\r', "\n");
++        if char_count(left) > 24 {
++            rest.push('…');
++        }
++        Self {
++            reason,
++            typed: char_count(done),
++            total: char_count(units),
++            rest,
++        }
++    }
++
++    pub fn is_user_input(&self) -> bool {
++        self.reason == InsertStop::UserInput
++    }
++
++    pub fn code(&self) -> &'static str {
++        match self.reason {
++            InsertStop::UserInput => "user_input",
++            InsertStop::Unmonitored => "user_input_unmonitored",
++            InsertStop::Deadline(_) => "deadline",
++            InsertStop::Unacknowledged => "not_acknowledged",
++        }
++    }
++}
++
++impl std::fmt::Display for InsertStopped {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        let why = match self.reason {
++            InsertStop::UserInput => "the user used the mouse or keyboard".to_owned(),
++            InsertStop::Unmonitored => {
++                "the user's own mouse and keyboard input could not be watched".to_owned()
++            }
++            InsertStop::Deadline(Some(secs)) => format!("it reached its {secs}-second time limit"),
++            InsertStop::Deadline(None) => "it reached its time limit".to_owned(),
++            InsertStop::Unacknowledged => {
++                "the app did not accept the next character within 1 second".to_owned()
++            }
++        };
++        let left = self.total.saturating_sub(self.typed);
++        if self.typed == 0 {
++            write!(f, "Typing stopped because {why}. Nothing was typed")?;
++        } else {
++            write!(
++                f,
++                "Typing stopped because {why}. Typed {} of {} characters; the remaining {left} (starting {:?}) were not typed",
++                self.typed, self.total, self.rest
++            )?;
++        }
++        if self.reason == InsertStop::Unacknowledged {
++            write!(f, ", though the character the app did not acknowledge may have landed")?;
++        }
++        write!(f, ". Read fresh state before continuing.")
++    }
++}
++
++impl std::error::Error for InsertStopped {}
++
++/// Send `units` one character at a time. `stop` is asked before every
++/// character (never between the halves of a surrogate pair) and ends the run
++/// at once; `pause` runs after each whole character; `progress` holds the
++/// characters accepted so far for a caller that times the run out.
++pub fn insert_units(
++    units: &[u16],
++    mut stop: impl FnMut() -> Option<InsertStop>,
++    mut send: impl FnMut(u16) -> bool,
++    mut pause: impl FnMut(),
++    progress: Option<&std::sync::atomic::AtomicUsize>,
++) -> Result<(), InsertStopped> {
++    let mut typed = 0;
++    for (index, unit) in units.iter().copied().enumerate() {
++        let starts_char = !is_low_surrogate(unit);
++        if starts_char {
++            if let Some(reason) = stop() {
++                return Err(InsertStopped::at(reason, units, index));
++            }
++        }
++        if !send(unit) {
++            // Report from the start of the character the app did not accept.
++            let start = if starts_char { index } else { index - 1 };
++            return Err(InsertStopped::at(InsertStop::Unacknowledged, units, start));
++        }
++        let ends_char = units
++            .get(index + 1)
++            .map_or(true, |next| !is_low_surrogate(*next));
++        if ends_char {
++            typed += 1;
++            if let Some(progress) = progress {
++                progress.store(typed, std::sync::atomic::Ordering::Release);
++            }
++            if index + 1 < units.len() {
++                pause();
++            }
++        }
++    }
++    Ok(())
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -77,4 +215,131 @@ mod tests {
+         assert!(INSERTION_UNAVAILABLE.contains("did not replace"));
+         assert!(INSERTION_UNAVAILABLE.contains("set_value replaces the whole value"));
+     }
++
++    /// Runs `insert_units` with the user acting before character `user_at`
++    /// (never when None); returns what reached the app and the result.
++    fn run(text: &str, user_at: Option<usize>) -> (String, Result<(), InsertStopped>) {
++        let units = text_units(text);
++        let sent = std::cell::RefCell::new(Vec::new());
++        let checks = std::cell::Cell::new(0usize);
++        let result = insert_units(
++            &units,
++            || {
++                let asked = checks.get();
++                checks.set(asked + 1);
++                (Some(asked) == user_at).then_some(InsertStop::UserInput)
++            },
++            |unit| {
++                sent.borrow_mut().push(unit);
++                true
++            },
++            || {},
++            None,
++        );
++        let sent = String::from_utf16(&sent.borrow()).unwrap();
++        (sent, result)
++    }
++
++    #[test]
++    fn the_users_input_stops_typing_before_the_next_character() {
++        let (sent, result) = run("hello world", Some(4));
++        assert_eq!(sent, "hell");
++        let stopped = result.unwrap_err();
++        assert!(stopped.is_user_input());
++        assert_eq!(stopped.code(), "user_input");
++        assert_eq!((stopped.typed, stopped.total), (4, 11));
++        assert_eq!(stopped.rest, "o world");
++        let reply = stopped.to_string();
++        assert!(reply.contains("because the user used the mouse or keyboard"), "{reply}");
++        assert!(reply.contains("Typed 4 of 11 characters"), "{reply}");
++        assert!(reply.contains("remaining 7 (starting \"o world\") were not typed"), "{reply}");
++    }
++
++    #[test]
++    fn without_user_input_every_character_is_sent() {
++        let (sent, result) = run("a😀\nb", None);
++        assert_eq!(sent, "a😀\rb");
++        assert!(result.is_ok());
++    }
++
++    #[test]
++    fn input_before_the_first_character_types_nothing() {
++        let (sent, result) = run("abc", Some(0));
++        assert_eq!(sent, "");
++        let reply = result.unwrap_err().to_string();
++        assert!(reply.contains("Nothing was typed"), "{reply}");
++        assert!(!reply.contains("Typed "), "{reply}");
++    }
++
++    #[test]
++    fn a_stop_never_splits_a_surrogate_pair() {
++        // Checks happen once per character: before 'a', before 😀, before 'b'.
++        let (sent, result) = run("a😀b", Some(2));
++        assert_eq!(sent, "a😀");
++        let stopped = result.unwrap_err();
++        assert_eq!((stopped.typed, stopped.total), (2, 3));
++        assert_eq!(stopped.rest, "b");
++    }
++
++    #[test]
++    fn progress_and_pauses_follow_whole_characters() {
++        let units = text_units("x😀y");
++        let progress = std::sync::atomic::AtomicUsize::new(0);
++        let pauses = std::cell::Cell::new(0);
++        insert_units(&units, || None, |_| true, || pauses.set(pauses.get() + 1), Some(&progress))
++            .unwrap();
++        assert_eq!(progress.load(std::sync::atomic::Ordering::Acquire), 3);
++        // Between characters only, not after the last one.
++        assert_eq!(pauses.get(), 2);
++    }
++
++    #[test]
++    fn an_unacknowledged_character_reports_what_the_app_accepted() {
++        let units = text_units("abcdef");
++        let mut sent = 0;
++        let stopped = insert_units(
++            &units,
++            || None,
++            |_| {
++                sent += 1;
++                sent <= 3
++            },
++            || {},
++            None,
++        )
++        .unwrap_err();
++        assert_eq!(stopped.reason, InsertStop::Unacknowledged);
++        assert_eq!(stopped.typed, 3);
++        assert!(stopped.to_string().contains("may have landed"));
++    }
++
++    #[test]
++    fn deadline_and_unwatched_input_are_said_plainly() {
++        let units = text_units(&"x".repeat(40));
++        let deadline = InsertStopped::at(InsertStop::Deadline(Some(85)), &units, 30);
++        let reply = deadline.to_string();
++        assert!(reply.contains("85-second time limit"), "{reply}");
++        assert!(reply.contains("Typed 30 of 40"), "{reply}");
++        assert!(!reply.contains("accessibility provider"), "{reply}");
++        let long = InsertStopped::at(InsertStop::Deadline(None), &units, 0);
++        assert!(long.rest.ends_with('…'));
++        assert_eq!(long.rest.chars().count(), 25);
++        let unwatched = InsertStopped::at(InsertStop::Unmonitored, &units, 0).to_string();
++        assert!(unwatched.contains("could not be watched"), "{unwatched}");
++        assert!(unwatched.contains("Nothing was typed"), "{unwatched}");
++    }
++
++    #[test]
++    fn replies_avoid_words_the_layer_removes() {
++        // Brigadier's layer drops sentences that mention acting in front.
++        for reason in [
++            InsertStop::UserInput,
++            InsertStop::Unmonitored,
++            InsertStop::Deadline(Some(30)),
++            InsertStop::Unacknowledged,
++        ] {
++            let reply = InsertStopped::at(reason, &text_units("abc"), 1).to_string();
++            assert!(!reply.to_ascii_lowercase().contains("foreground"), "{reply}");
++        }
++    }
+ }
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 7fca14c14..0dc2864cb 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -5261,11 +5261,20 @@ impl Tool for TypeTextTool {
+         let text_for_post = text.clone();
+         let verify_pid = pid;
+         let verify_idx = elem_idx.map(|i| i as usize);
++        // The provider deadline also covers the characters themselves, so it
++        // grows with the text and its requested spacing (each character may
++        // also wait for the app), bounded below the daemon's 120 s exchange.
++        let insert_limit = type_text_insert_limit(text_len, _delay_ms.min(200));
++        let typed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
++        let typing = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(TYPING_NOT_STARTED));
+         let result = tokio::task::spawn_blocking({
+             let admitted = admitted.clone();
++            let (typed, typing) = (typed.clone(), typing.clone());
++            let text_for_report = text.clone();
+             move || {
++                let (worker_typed, worker_typing) = (typed.clone(), typing.clone());
+                 crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+-                    "caret insertion", std::time::Duration::from_secs(30),
++                    "caret insertion", insert_limit,
+                     "unconfirmed insertion; no automatic retry",
+                     move |cancelled| -> anyhow::Result<_> {
+                         let _com = super::launch_browser::Apartment::new();
+@@ -5288,6 +5297,20 @@ impl Tool for TypeTextTool {
+                         let text_target = crate::input::keyboard::background_text_target(
+                             hwnd, native, admitted.as_ref().and_then(|e| e.rect), elem_idx.is_some(),
+                         )?;
++                        // Stop at the user's own mouse or keyboard input between
++                        // characters; never type on when it cannot be watched.
++                        let mut monitor = crate::input::inject::foreground_watch::UserInputMonitor::start(
++                            pid, hwnd as usize,
++                        );
++                        if monitor.is_none() {
++                            let units = crate::input::text_policy::text_units(&text_for_post);
++                            return Ok((
++                                Err(crate::input::text_policy::InsertStopped::at(
++                                    crate::input::text_policy::InsertStop::Unmonitored, &units, 0,
++                                ).into()),
++                                None, None, false,
++                            ));
++                        }
+                         let read = |idx: Option<usize>| match idx {
+                             Some(_) => read_cached_element_value(&admitted),
+                             None => read_focused_value_uia(verify_pid),
+@@ -5297,11 +5320,22 @@ impl Tool for TypeTextTool {
+                         let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                             (|| -> anyhow::Result<()> {
+                                 crate::uia::click::ensure_active(&cancelled)?;
+-                                crate::input::keyboard::post_insert_text_cancelable(
++                                worker_typing.store(TYPING_STARTED, std::sync::atomic::Ordering::Release);
++                                let sent = crate::input::keyboard::post_insert_text_watched(
+                                     text_target, &text_for_post, _delay_ms.min(200), &cancelled,
+-                                )
++                                    Some(&worker_typed),
++                                    || monitor.as_mut().and_then(|monitor| monitor.check()),
++                                );
++                                worker_typing.store(TYPING_ENDED, std::sync::atomic::Ordering::Release);
++                                sent
+                             })()
+                         });
++                        if post_res.as_ref().err().is_some_and(|e| {
++                            e.downcast_ref::<crate::input::text_policy::InsertStopped>().is_some()
++                        }) {
++                            // Stopped part way: the reply reports what was typed.
++                            return Ok((post_res, before, None, false));
++                        }
+                         std::thread::sleep(std::time::Duration::from_millis(40));
+                         crate::uia::click::ensure_active(&cancelled)?;
+                         let after = read(verify_idx);
+@@ -5310,10 +5344,9 @@ impl Tool for TypeTextTool {
+                         );
+                         Ok((post_res, before, after, observed))
+                     },
+-                ).map_err(|error| anyhow::anyhow!(
+-                    "Text insertion is unconfirmed because {}. Some text may already have been inserted; read fresh state before retrying. No alternate route was attempted.",
+-                    crate::uia::click::deadline_reason(error),
+-                ))?
++                ).map_err(|error| anyhow::anyhow!(type_text_deadline_reply(
++                    error, insert_limit, &text_for_report, &typed, &typing,
++                )))?
+             }
+         }).await;
+         match result {
+@@ -5375,13 +5408,100 @@ impl Tool for TypeTextTool {
+                     })),
+                 }
+             }
+-            Ok(Ok((Err(e), _, _, _))) => ToolResult::error(e.to_string()),
++            Ok(Ok((Err(e), _, _, _))) => {
++                match e.downcast_ref::<crate::input::text_policy::InsertStopped>() {
++                    Some(stopped) => ToolResult::error(stopped.to_string())
++                        .with_structured(insert_stopped_structured(stopped)),
++                    None => ToolResult::error(e.to_string()),
++                }
++            }
+             Ok(Err(e)) => ToolResult::error(e.to_string()),
+             Err(e) => ToolResult::error(format!("Task error: {e}")),
+         }
+     }
+ }
+ 
++const TYPING_NOT_STARTED: u8 = 0;
++const TYPING_STARTED: u8 = 1;
++const TYPING_ENDED: u8 = 2;
++
++/// 30 s for the provider reads around the text, plus the requested spacing
++/// and up to 50 ms of app handling per character, at most 100 s.
++fn type_text_insert_limit(characters: usize, delay_ms: u64) -> std::time::Duration {
++    let typing = (characters as u64).saturating_mul(delay_ms.saturating_add(50));
++    std::time::Duration::from_millis(30_000u64.saturating_add(typing).min(100_000))
++}
++
++fn insert_stopped_structured(stopped: &crate::input::text_policy::InsertStopped) -> Value {
++    serde_json::json!({
++        "path": "send_message",
++        "stopped": stopped.code(),
++        "characters_typed": stopped.typed,
++        "characters_total": stopped.total,
++        "effect": "partial",
++    })
++}
++
++/// The reply when the insertion deadline passes: how far typing got, never
++/// a bare provider timeout once characters were being sent.
++fn type_text_deadline_reply(
++    error: crate::uia::windows_enum::UiaDeadlineError,
++    limit: std::time::Duration,
++    text: &str,
++    typed: &std::sync::atomic::AtomicUsize,
++    typing: &std::sync::atomic::AtomicU8,
++) -> String {
++    use std::sync::atomic::Ordering;
++    if !matches!(error, crate::uia::windows_enum::UiaDeadlineError::Timeout) {
++        return format!(
++            "Text insertion is unconfirmed because {}. Some text may already have been inserted; read fresh state before retrying. No alternate route was attempted.",
++            crate::uia::click::deadline_reason(error),
++        );
++    }
++    // The worker stops before its next character once cancelled; let the
++    // character in flight (at most a 1 s wait plus the spacing) settle.
++    let settle = std::time::Instant::now();
++    while typing.load(Ordering::Acquire) == TYPING_STARTED
++        && settle.elapsed() < std::time::Duration::from_millis(1_500)
++    {
++        std::thread::sleep(std::time::Duration::from_millis(20));
++    }
++    deadline_reply_text(
++        typing.load(Ordering::Acquire),
++        typed.load(Ordering::Acquire),
++        text,
++        limit.as_secs(),
++    )
++}
++
++fn deadline_reply_text(typing: u8, typed: usize, text: &str, secs: u64) -> String {
++    let units = crate::input::text_policy::text_units(text);
++    let total = crate::input::text_policy::char_count(&units);
++    if typing == TYPING_NOT_STARTED {
++        return format!(
++            "Text was not typed because the app's accessibility provider did not respond within {secs} seconds. Nothing was typed; read fresh state before retrying."
++        );
++    }
++    if typing == TYPING_ENDED && typed >= total {
++        return format!(
++            "All {total} characters were typed, but reading the field back to confirm them did not finish within {secs} seconds. Read fresh state before continuing."
++        );
++    }
++    // Index of the first untyped character in UTF-16 units.
++    let index = units
++        .iter()
++        .enumerate()
++        .filter(|(_, unit)| !(0xDC00..=0xDFFF).contains(*unit))
++        .nth(typed)
++        .map_or(units.len(), |(index, _)| index);
++    crate::input::text_policy::InsertStopped::at(
++        crate::input::text_policy::InsertStop::Deadline(Some(secs)),
++        &units,
++        index,
++    )
++    .to_string()
++}
++
+ fn post_message_readback_observed(
+     before: Option<&str>,
+     after: Option<&str>,
+diff --git a/crates/platform-windows/src/tools/impl_/post_message_readback_tests.rs b/crates/platform-windows/src/tools/impl_/post_message_readback_tests.rs
+index 979d2e226..2e71fda3e 100644
+--- a/crates/platform-windows/src/tools/impl_/post_message_readback_tests.rs
++++ b/crates/platform-windows/src/tools/impl_/post_message_readback_tests.rs
+@@ -76,3 +76,35 @@ fn native_combo_writes_report_the_synchronous_message_transport() {
+     );
+     assert_eq!(record.debug_json()["transport"], "windows_send_message");
+ }
++
++#[test]
++fn a_deadline_names_the_time_limit_and_how_much_was_typed() {
++    use super::{deadline_reply_text, TYPING_ENDED, TYPING_NOT_STARTED, TYPING_STARTED};
++    let text = "the quick brown fox jumps over the lazy dog";
++    let reply = deadline_reply_text(TYPING_STARTED, 10, text, 70);
++    assert!(reply.contains("70-second time limit"), "{reply}");
++    assert!(reply.contains("Typed 10 of 43 characters"), "{reply}");
++    assert!(reply.contains("remaining 33"), "{reply}");
++    assert!(reply.contains("\"brown fox"), "{reply}");
++    assert!(!reply.contains("accessibility provider"), "{reply}");
++
++    let before = deadline_reply_text(TYPING_NOT_STARTED, 0, text, 30);
++    assert!(before.contains("Nothing was typed"), "{before}");
++
++    let after = deadline_reply_text(TYPING_ENDED, 43, text, 70);
++    assert!(after.starts_with("All 43 characters were typed"), "{after}");
++
++    // Surrogate pairs count as one character each.
++    let emoji = deadline_reply_text(TYPING_STARTED, 1, "😀😀x", 30);
++    assert!(emoji.contains("Typed 1 of 3 characters"), "{emoji}");
++    assert!(emoji.contains("\"😀x\""), "{emoji}");
++}
++
++#[test]
++fn the_insertion_deadline_grows_with_the_text_and_stays_bounded() {
++    use super::type_text_insert_limit;
++    assert_eq!(type_text_insert_limit(0, 30).as_secs(), 30);
++    // The reported case: 309 characters 130 ms apart outlived a fixed 30 s.
++    assert!(type_text_insert_limit(309, 130).as_secs() >= 85);
++    assert_eq!(type_text_insert_limit(100_000, 200).as_secs(), 100);
++}

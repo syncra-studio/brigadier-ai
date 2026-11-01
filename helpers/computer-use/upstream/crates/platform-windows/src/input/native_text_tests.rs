@@ -66,7 +66,7 @@ fn character_insertion_preserves_surrounding_text_and_marks_edit_modified() {
             &cancelled,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("deadline"));
+        assert!(error.to_string().contains("time limit"));
         let mut unchanged = [0u16; 64];
         let n = GetWindowTextW(edit, &mut unchanged);
         assert_eq!(

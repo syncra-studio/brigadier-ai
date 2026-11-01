@@ -5261,11 +5261,21 @@ impl Tool for TypeTextTool {
         let text_for_post = text.clone();
         let verify_pid = pid;
         let verify_idx = elem_idx.map(|i| i as usize);
+        // The provider deadline also covers the characters themselves, so it
+        // grows with the text and its requested spacing (each character may
+        // also wait for the app), bounded below the daemon's 120 s exchange.
+        let insert_limit = type_text_insert_limit(text_len, _delay_ms.min(200));
+        let typed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let typing = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(TYPING_NOT_STARTED));
         let result = tokio::task::spawn_blocking({
             let admitted = admitted.clone();
+            let (typed, typing) = (typed.clone(), typing.clone());
+            let text_for_report = text.clone();
             move || {
+                let (worker_typed, worker_typing) = (typed.clone(), typing.clone());
                 crate::uia::windows_enum::run_uia_with_deadline_cancelable(
-                    "caret insertion", std::time::Duration::from_secs(30),
+                    "caret insertion",
+                    insert_limit,
                     "unconfirmed insertion; no automatic retry",
                     move |cancelled| -> anyhow::Result<_> {
                         let _com = super::launch_browser::Apartment::new();
@@ -5278,44 +5288,98 @@ impl Tool for TypeTextTool {
                             use windows::core::Interface;
                             let element = std::mem::ManuallyDrop::new(unsafe {
                                 windows::Win32::UI::Accessibility::IUIAutomationElement::from_raw(
-                                    e.as_ptr() as *mut _
+                                    e.as_ptr() as *mut _,
                                 )
                             });
                             unsafe { element.CurrentNativeWindowHandle() }
-                                .ok().map(|h| h.0 as usize as u64)
+                                .ok()
+                                .map(|h| h.0 as usize as u64)
                         });
                         crate::uia::click::ensure_active(&cancelled)?;
                         let text_target = crate::input::keyboard::background_text_target(
-                            hwnd, native, admitted.as_ref().and_then(|e| e.rect), elem_idx.is_some(),
+                            hwnd,
+                            native,
+                            admitted.as_ref().and_then(|e| e.rect),
+                            elem_idx.is_some(),
                         )?;
+                        // Stop at the user's own mouse or keyboard input between
+                        // characters; never type on when it cannot be watched.
+                        let mut monitor =
+                            crate::input::inject::foreground_watch::UserInputMonitor::start(
+                                pid,
+                                hwnd as usize,
+                            );
+                        if monitor.is_none() {
+                            let units = crate::input::text_policy::text_units(&text_for_post);
+                            return Ok((
+                                Err(crate::input::text_policy::InsertStopped::at(
+                                    crate::input::text_policy::InsertStop::Unmonitored,
+                                    &units,
+                                    0,
+                                )
+                                .into()),
+                                None,
+                                None,
+                                false,
+                            ));
+                        }
                         let read = |idx: Option<usize>| match idx {
                             Some(_) => read_cached_element_value(&admitted),
                             None => read_focused_value_uia(verify_pid),
                         };
                         let before = read(verify_idx);
                         crate::uia::click::ensure_active(&cancelled)?;
-                        let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
-                            (|| -> anyhow::Result<()> {
-                                crate::uia::click::ensure_active(&cancelled)?;
-                                crate::input::keyboard::post_insert_text_cancelable(
-                                    text_target, &text_for_post, _delay_ms.min(200), &cancelled,
-                                )
-                            })()
-                        });
+                        let post_res =
+                            crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                                (|| -> anyhow::Result<()> {
+                                    crate::uia::click::ensure_active(&cancelled)?;
+                                    worker_typing.store(
+                                        TYPING_STARTED,
+                                        std::sync::atomic::Ordering::Release,
+                                    );
+                                    let sent = crate::input::keyboard::post_insert_text_watched(
+                                        text_target,
+                                        &text_for_post,
+                                        _delay_ms.min(200),
+                                        &cancelled,
+                                        Some(&worker_typed),
+                                        || monitor.as_mut().and_then(|monitor| monitor.check()),
+                                    );
+                                    worker_typing
+                                        .store(TYPING_ENDED, std::sync::atomic::Ordering::Release);
+                                    sent
+                                })()
+                            });
+                        if post_res.as_ref().err().is_some_and(|e| {
+                            e.downcast_ref::<crate::input::text_policy::InsertStopped>()
+                                .is_some()
+                        }) {
+                            // Stopped part way: the reply reports what was typed.
+                            return Ok((post_res, before, None, false));
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(40));
                         crate::uia::click::ensure_active(&cancelled)?;
                         let after = read(verify_idx);
                         let observed = post_message_readback_observed(
-                            before.as_deref(), after.as_deref(), &text_for_post,
+                            before.as_deref(),
+                            after.as_deref(),
+                            &text_for_post,
                         );
                         Ok((post_res, before, after, observed))
                     },
-                ).map_err(|error| anyhow::anyhow!(
-                    "Text insertion is unconfirmed because {}. Some text may already have been inserted; read fresh state before retrying. No alternate route was attempted.",
-                    crate::uia::click::deadline_reason(error),
-                ))?
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!(type_text_deadline_reply(
+                        error,
+                        insert_limit,
+                        &text_for_report,
+                        &typed,
+                        &typing,
+                    ))
+                })?
             }
-        }).await;
+        })
+        .await;
         match result {
             Ok(Ok((Ok(()), before, after, observed))) => {
                 // Three-way verdict. Crucially, "couldn't read the field" is NOT
@@ -5375,11 +5439,98 @@ impl Tool for TypeTextTool {
                     })),
                 }
             }
-            Ok(Ok((Err(e), _, _, _))) => ToolResult::error(e.to_string()),
+            Ok(Ok((Err(e), _, _, _))) => {
+                match e.downcast_ref::<crate::input::text_policy::InsertStopped>() {
+                    Some(stopped) => ToolResult::error(stopped.to_string())
+                        .with_structured(insert_stopped_structured(stopped)),
+                    None => ToolResult::error(e.to_string()),
+                }
+            }
             Ok(Err(e)) => ToolResult::error(e.to_string()),
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
     }
+}
+
+const TYPING_NOT_STARTED: u8 = 0;
+const TYPING_STARTED: u8 = 1;
+const TYPING_ENDED: u8 = 2;
+
+/// 30 s for the provider reads around the text, plus the requested spacing
+/// and up to 50 ms of app handling per character, at most 100 s.
+fn type_text_insert_limit(characters: usize, delay_ms: u64) -> std::time::Duration {
+    let typing = (characters as u64).saturating_mul(delay_ms.saturating_add(50));
+    std::time::Duration::from_millis(30_000u64.saturating_add(typing).min(100_000))
+}
+
+fn insert_stopped_structured(stopped: &crate::input::text_policy::InsertStopped) -> Value {
+    serde_json::json!({
+        "path": "send_message",
+        "stopped": stopped.code(),
+        "characters_typed": stopped.typed,
+        "characters_total": stopped.total,
+        "effect": "partial",
+    })
+}
+
+/// The reply when the insertion deadline passes: how far typing got, never
+/// a bare provider timeout once characters were being sent.
+fn type_text_deadline_reply(
+    error: crate::uia::windows_enum::UiaDeadlineError,
+    limit: std::time::Duration,
+    text: &str,
+    typed: &std::sync::atomic::AtomicUsize,
+    typing: &std::sync::atomic::AtomicU8,
+) -> String {
+    use std::sync::atomic::Ordering;
+    if !matches!(error, crate::uia::windows_enum::UiaDeadlineError::Timeout) {
+        return format!(
+            "Text insertion is unconfirmed because {}. Some text may already have been inserted; read fresh state before retrying. No alternate route was attempted.",
+            crate::uia::click::deadline_reason(error),
+        );
+    }
+    // The worker stops before its next character once cancelled; let the
+    // character in flight (at most a 1 s wait plus the spacing) settle.
+    let settle = std::time::Instant::now();
+    while typing.load(Ordering::Acquire) == TYPING_STARTED
+        && settle.elapsed() < std::time::Duration::from_millis(1_500)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    deadline_reply_text(
+        typing.load(Ordering::Acquire),
+        typed.load(Ordering::Acquire),
+        text,
+        limit.as_secs(),
+    )
+}
+
+fn deadline_reply_text(typing: u8, typed: usize, text: &str, secs: u64) -> String {
+    let units = crate::input::text_policy::text_units(text);
+    let total = crate::input::text_policy::char_count(&units);
+    if typing == TYPING_NOT_STARTED {
+        return format!(
+            "Text was not typed because the app's accessibility provider did not respond within {secs} seconds. Nothing was typed; read fresh state before retrying."
+        );
+    }
+    if typing == TYPING_ENDED && typed >= total {
+        return format!(
+            "All {total} characters were typed, but reading the field back to confirm them did not finish within {secs} seconds. Read fresh state before continuing."
+        );
+    }
+    // Index of the first untyped character in UTF-16 units.
+    let index = units
+        .iter()
+        .enumerate()
+        .filter(|(_, unit)| !(0xDC00..=0xDFFF).contains(*unit))
+        .nth(typed)
+        .map_or(units.len(), |(index, _)| index);
+    crate::input::text_policy::InsertStopped::at(
+        crate::input::text_policy::InsertStop::Deadline(Some(secs)),
+        &units,
+        index,
+    )
+    .to_string()
 }
 
 fn post_message_readback_observed(
@@ -6151,12 +6302,9 @@ impl Tool for HotkeyTool {
                      could not find a UIA AcceleratorKey or `(Ctrl+X)`-style name hint \
                      matching `{key_display_for_result}` (scanned {scanned} element(s)). \
                      PostMessage WM_KEYDOWN/UP is ignored by this target's input pipeline. \
-                     Common cause: the action is nested behind a closed menu (e.g. modern \
-                     Notepad's Save under the File menu) — its element isn't in the visible \
-                     subtree until the menu is opened. Call \
-                     `get_window_state(pid={raw_pid}, window_id={hwnd})` to inspect available \
-                     UIA actions, then use an exposed accelerator or `click` the matching \
-                     element directly."
+                     No matching action was found in the window or its UIA-expandable menus. \
+                     No fallback keyboard input was sent. Inspect fresh window state or use \
+                     `invoke_menu` with an explicit menu path."
                 )),
                 Ok(Err(e)) => ToolResult::error(format!("hotkey (UIA path): {e}")),
                 Err(e) => ToolResult::error(format!("Task error: {e}")),

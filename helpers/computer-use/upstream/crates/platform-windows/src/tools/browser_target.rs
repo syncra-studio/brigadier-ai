@@ -18,6 +18,11 @@ pub(crate) fn is_web_url(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+/// A data document has an exact URL too; never normalize its payload as a host.
+pub(crate) fn is_document_url(url: &str) -> bool {
+    is_web_url(url) || url.starts_with("data:")
+}
+
 /// Quote a single argv item using the Windows CommandLineToArgvW convention.
 pub(crate) fn quote_argument(value: &str) -> String {
     let mut output = String::from("\"");
@@ -43,6 +48,15 @@ pub(crate) fn quote_argument(value: &str) -> String {
 /// The omnibox may omit the scheme and the root slash. Preserve path/query
 /// case and never equate two explicitly different schemes.
 pub(crate) fn url_matches(actual: &str, requested: &str, exact: bool) -> bool {
+    if actual.starts_with("data:") || requested.starts_with("data:") {
+        return actual.starts_with("data:")
+            && !requested.is_empty()
+            && if exact {
+                actual == requested
+            } else {
+                actual.contains(requested)
+            };
+    }
     fn parts(value: &str) -> Option<(Option<String>, String)> {
         let value = value.trim();
         if value.is_empty() || value.chars().any(char::is_whitespace) {
@@ -122,6 +136,26 @@ pub(crate) fn omnibox_binds_document(
 #[cfg(test)]
 mod omnibox_tests {
     use super::*;
+    #[test]
+    fn data_document_identity_preserves_payload_and_ambiguity_checks() {
+        let url = "data:text/html,<title>cu-edge-2</title><input id=g placeholder=second>";
+        assert!(is_document_url(url));
+        assert!(!is_document_url("cu-edge-2"));
+        assert!(url_matches(url, url, true));
+        assert!(url_matches(url, "cu-edge-2", false));
+        assert!(!url_matches(url, &url.to_uppercase(), true));
+        assert!(!url_matches(url, &format!("{url}/"), true));
+        assert!(!url_matches(url, "", false));
+        assert!(omnibox_binds_document(1, None, url, url, true));
+        assert!(!omnibox_binds_document(2, None, url, url, true));
+        assert!(!omnibox_binds_document(
+            1,
+            Some("https://other.test"),
+            url,
+            url,
+            true
+        ));
+    }
     #[test]
     fn edge_address_value_matches_displayed_scheme_and_root_slash_variants() {
         for actual in [

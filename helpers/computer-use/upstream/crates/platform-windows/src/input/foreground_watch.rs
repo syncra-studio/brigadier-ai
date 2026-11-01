@@ -13,13 +13,14 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetAncestor, GetForegroundWindow, GetWindowThreadProcessId,
-    IsWindow, PeekMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint,
-    EVENT_SYSTEM_FOREGROUND, GA_ROOT, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED,
-    LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_REMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL,
-    WINEVENT_OUTOFCONTEXT, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    CallNextHookEx, DispatchMessageW, GetAncestor, GetForegroundWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, PeekMessageW,
+    SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint, EVENT_SYSTEM_FOREGROUND, GA_ROOT,
+    GWL_EXSTYLE, GW_HWNDPREV, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
+    MSLLHOOKSTRUCT, PM_REMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
+    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
+    WM_XBUTTONUP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
 #[path = "foreground_policy.rs"]
@@ -42,6 +43,10 @@ struct State {
     ended: Option<Instant>,
     evidence: policy::ActivationEvidence,
     holders: usize,
+    // Launched windows already minimized once to hand the front back.
+    minimized: Vec<usize>,
+    // Windows above the user's window before the launch; never moved.
+    above_at_start: Vec<usize>,
 }
 
 struct Watch {
@@ -82,6 +87,20 @@ pub(crate) fn window_process(hwnd: HWND) -> u32 {
     let mut pid = 0;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     pid
+}
+
+/// Top-level windows above `window` in z-order, nearest first (bounded).
+fn windows_above(window: HWND) -> Vec<HWND> {
+    let mut above = Vec::new();
+    if window.0.is_null() {
+        return above;
+    }
+    let mut next = unsafe { GetWindow(window, GW_HWNDPREV) }.unwrap_or_default();
+    while !next.0.is_null() && above.len() < 256 {
+        above.push(next);
+        next = unsafe { GetWindow(next, GW_HWNDPREV) }.unwrap_or_default();
+    }
+    above
 }
 
 fn process_name(pid: u32) -> Option<String> {
@@ -169,12 +188,80 @@ impl Watch {
                 unsafe { GetForegroundWindow() } == event_hwnd,
             )
         {
-            unsafe {
-                super::hand_back_foreground(prior, event_hwnd, || {
-                    !self.user_active.load(Ordering::Acquire)
-                        && super::foreground_generation() == self.input_generation
-                })
+            let allowed = || {
+                !self.user_active.load(Ordering::Acquire)
+                    && super::foreground_generation() == self.input_generation
             };
+            let mut handed = unsafe { super::hand_back_foreground(prior, event_hwnd, allowed) };
+            // Windows refuses SetForegroundWindow to a process without a
+            // foreground right even when attached to the front thread. For a
+            // launch, try once per window to let Windows activate yours.
+            if !handed && matches!(self.target, Target::Launch(_)) {
+                let first = {
+                    let mut state = self.state.lock().unwrap();
+                    let key = event_hwnd.0 as usize;
+                    let first = !state.minimized.contains(&key) && state.minimized.len() < 16;
+                    if first {
+                        state.minimized.push(key);
+                    }
+                    first
+                };
+                if first {
+                    handed = unsafe { super::hand_back_by_minimizing(prior, event_hwnd, allowed) };
+                }
+            }
+            let refused = !handed && unsafe { GetForegroundWindow() } == event_hwnd && allowed();
+            self.state.lock().unwrap().observation.refused = refused;
+        }
+    }
+
+    /// While the user's window is in front, keep the launched app's windows
+    /// under it: a window shown without activation still opens on top.
+    fn keep_behind(&self) {
+        if !self.restore_allowed || !matches!(self.target, Target::Launch(_)) {
+            return;
+        }
+        let prior = HWND(self.prior as *mut _);
+        if self.prior == 0
+            || unsafe { GetForegroundWindow() } != prior
+            || window_process(prior) != self.prior_pid
+            || self.user_active.load(Ordering::Acquire)
+            || super::foreground_generation() != self.input_generation
+        {
+            return;
+        }
+        for window in windows_above(prior) {
+            if self
+                .state
+                .lock()
+                .unwrap()
+                .above_at_start
+                .contains(&(window.0 as usize))
+            {
+                continue;
+            }
+            let pid = window_process(window);
+            let target = pid != 0
+                && pid != self.prior_pid
+                && (self.state.lock().unwrap().evidence.is_known(pid)
+                    || match &self.target {
+                        Target::Launch(names) => {
+                            process_name(pid).is_some_and(|name| names.contains(&name))
+                        }
+                        Target::Processes(_, _) => false,
+                    });
+            let ex = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32;
+            let facts = policy::CoverFacts {
+                visible: unsafe { IsWindowVisible(window) }.as_bool(),
+                root: unsafe { GetAncestor(window, GA_ROOT) } == window,
+                iconic: unsafe { IsIconic(window) }.as_bool(),
+                topmost: ex & WS_EX_TOPMOST.0 != 0,
+                tool: ex & WS_EX_TOOLWINDOW.0 != 0,
+                target,
+            };
+            if policy::place_behind_prior(facts) && unsafe { super::place_behind(window, prior) } {
+                self.state.lock().unwrap().observation.placed_behind = true;
+            }
         }
     }
 
@@ -202,9 +289,77 @@ unsafe extern "system" fn foreground_event(
     }
 }
 
+/// The user's own keyboard and mouse events, pointer motion included, seen by
+/// any live watch's hooks. Injected input (ours or any other program's
+/// SendInput) is flagged by Windows and never counted; posted messages never
+/// reach these hooks.
+static USER_INPUT_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn user_input_events() -> u64 {
+    USER_INPUT_EVENTS.load(Ordering::Acquire)
+}
+
+fn note_user_input(injected: bool) {
+    if policy::own_input(injected) {
+        USER_INPUT_EVENTS.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Watches for the user's own input across a long action, re-arming the
+/// hooks when a watch reaches the end of its bounded life.
+pub(crate) struct UserInputMonitor {
+    watch: ForegroundWatch,
+    baseline: u64,
+    pid: u32,
+    hwnd: usize,
+}
+
+impl UserInputMonitor {
+    /// None when the hooks could not be armed, so the user's input would go unseen.
+    pub(crate) fn start(pid: u32, hwnd: usize) -> Option<Self> {
+        let watch = Self::arm(pid, hwnd)?;
+        Some(Self {
+            watch,
+            baseline: user_input_events(),
+            pid,
+            hwnd,
+        })
+    }
+
+    fn arm(pid: u32, hwnd: usize) -> Option<ForegroundWatch> {
+        let prior = unsafe { GetForegroundWindow() }.0 as usize;
+        let watch =
+            ForegroundWatch::start_observing(prior, Target::Processes(vec![pid], vec![hwnd]));
+        watch.monitoring().then_some(watch)
+    }
+
+    /// Some(stop) once the user has used the mouse or keyboard since start,
+    /// or when their input can no longer be watched.
+    pub(crate) fn check(&mut self) -> Option<crate::input::text_policy::InsertStop> {
+        use crate::input::text_policy::InsertStop;
+        if user_input_events() != self.baseline {
+            return Some(InsertStop::UserInput);
+        }
+        if !self.watch.monitoring() {
+            match Self::arm(self.pid, self.hwnd) {
+                Some(watch) => self.watch = watch,
+                None => return Some(InsertStop::Unmonitored),
+            }
+            if user_input_events() != self.baseline {
+                return Some(InsertStop::UserInput);
+            }
+        }
+        None
+    }
+}
+
 // Read-only hooks distinguish real window selection from motion and from our
 // injected input. No event is swallowed and no input is synthesized.
 unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+        note_user_input(event.flags & LLMHF_INJECTED != 0);
+    }
     if code >= 0
         && matches!(
             wparam.0 as u32,
@@ -257,6 +412,7 @@ unsafe extern "system" fn keyboard_event(code: i32, wparam: WPARAM, lparam: LPAR
         )
     {
         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        note_user_input(event.flags.contains(LLKHF_INJECTED));
         if !event.flags.contains(LLKHF_INJECTED) {
             CURRENT.with(|slot| {
                 if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {
@@ -356,6 +512,8 @@ impl ForegroundWatch {
                 ended: None,
                 evidence: policy::ActivationEvidence::default(),
                 holders: 1,
+                minimized: Vec::new(),
+                above_at_start: Vec::new(),
             }),
         });
         let (requests, receive) = mpsc::channel::<mpsc::SyncSender<(policy::Observation, usize)>>();
@@ -387,12 +545,21 @@ impl ForegroundWatch {
                 && keyboard.is_some()
                 && prior != 0
                 && unsafe { GetForegroundWindow() }.0 as usize == prior;
-            worker.state.lock().unwrap().observation.monitoring = monitoring;
+            {
+                let above: Vec<usize> = windows_above(HWND(prior as *mut _))
+                    .into_iter()
+                    .map(|window| window.0 as usize)
+                    .collect();
+                let mut state = worker.state.lock().unwrap();
+                state.observation.monitoring = monitoring;
+                state.above_at_start = above;
+            }
             // Locked before the caller acts; Windows lifts it on the user's own input.
             let mut lock = (monitoring && worker.hold_lock)
                 .then(super::ForegroundLockGuard::acquire)
                 .filter(super::ForegroundLockGuard::acquired);
             let _ = ready.send(());
+            let mut tick: u32 = 0;
             while monitoring && !worker.cancelled.load(Ordering::Acquire) {
                 let mut message = MSG::default();
                 // Pump the hook's owning thread; callbacks are delivered here.
@@ -407,6 +574,10 @@ impl ForegroundWatch {
                     lock = None;
                 }
                 worker.observe(unsafe { GetForegroundWindow() }, None);
+                if tick.is_multiple_of(16) {
+                    worker.keep_behind();
+                }
+                tick = tick.wrapping_add(1);
                 for reply in receive.try_iter().take(128) {
                     let _ = reply.send(worker.snapshot());
                 }
@@ -467,9 +638,15 @@ impl ForegroundWatch {
 
     pub(crate) fn report(&self) -> (&'static str, bool, usize) {
         let (reply, receive) = mpsc::sync_channel(1);
+        // The worker answers within a poll (about 2 ms). A launch watch may be
+        // inside the one-time minimize hand-back (up to about 500 ms), so its
+        // reply waits for that result; other watches keep the short bound.
+        let wait = match self.watch.target {
+            Target::Launch(_) => Duration::from_millis(600),
+            Target::Processes(_, _) => Duration::from_millis(100),
+        };
         if self.requests.send(reply).is_ok() {
-            if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(100))
-            {
+            if let Ok((observation, foreground)) = receive.recv_timeout(wait) {
                 let (note, failed) = self.describe(observation);
                 return (note, failed, foreground);
             }
