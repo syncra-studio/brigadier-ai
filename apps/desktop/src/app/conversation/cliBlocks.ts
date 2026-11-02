@@ -3,6 +3,7 @@ import { backgroundOf, runningSubagents } from "@/state/nativeWorkers";
 import {
   type Block,
   type BlockCompaction,
+  type BlockOrchestratorStep,
   type BoardDigest,
   type BlockState,
   blockShows,
@@ -301,28 +302,51 @@ export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" |
 /** How far a "Messaged …" row, or a card's row, can be from the run of the `brigadier` call that made it. */
 const SEND_SLACK_MS = 2000;
 
+/** The worker actions whose own line says the `brigadier` call that made it (D150). */
+const ACTION_LINE: Record<string, BlockOrchestratorStep["kind"]["type"]> = { pause: "paused", resume: "resumed", close: "stopped", switch: "providerTransition" };
+
 /**
- * A `brigadier send` whose message has its own "Messaged …" row (a worker's, a session's), and a
- * `brigadier ask` whose card has its own "Asking questions" row, is no row of its own: the two
- * said the same (D47, D58).
+ * A `brigadier send` whose message has its own "Messaged …" row (a worker's, a session's), a
+ * `brigadier ask` whose card has its own "Asking questions" row, and a `brigadier pause`,
+ * `resume`, `close` or `switch` whose worker has its own "Paused …", "Resumed …", "Stopped …"
+ * or switch line, is no row of its own: the two said the same (D47, D58, D150).
  */
 function dropShownCalls(blocks: readonly Block[], board: BoardDigest): void {
+  const held = heldMessages(blocks);
   for (const block of blocks) {
     const sent = block.orchestratorSteps.flatMap((step) => ((step.kind.type === "messaged" || step.kind.type === "peerSent") && step.atMs !== undefined ? [step.atMs] : []));
     const asked = block.cards.flatMap((card) => {
       const question = card.type === "question" ? board.questions[card.id] : undefined;
       return question?.kind.type === "orchestrator" ? [question.createdAtMs] : [];
     });
-    if (sent.length === 0 && asked.length === 0) continue;
+    const lines = (type: string) => block.orchestratorSteps.flatMap((step) => (step.kind.type === type && step.atMs !== undefined ? [step.atMs] : []));
     block.orchestratorSteps = block.orchestratorSteps.filter((step) => {
       const { kind, atMs } = step;
+      if (held.has(step)) return false;
       if (kind.type !== "tool" || kind.item !== "command" || kind.detail === null || atMs === undefined) return true;
-      const sub = brigadierCalls(kind.detail)[0];
-      const shown = sub === "send" ? sent : sub === "ask" ? asked : [];
+      const sub = brigadierCalls(kind.detail)[0] ?? "";
+      const line = ACTION_LINE[sub];
+      const shown = sub === "send" ? sent : sub === "ask" ? asked : line ? lines(line) : [];
       const [from, to] = [atMs - SEND_SLACK_MS, (kind.endedAtMs ?? atMs) + SEND_SLACK_MS];
       return !shown.some((at) => at >= from && at <= to);
     });
   }
+}
+
+/**
+ * The thread's messages to a worker it paused: each is held for, and goes with, its resume, which
+ * the "Resumed …" line says; no "Messaged …" row of its own (D7, D150). The user's own keep theirs.
+ */
+function heldMessages(blocks: readonly Block[]): Set<BlockOrchestratorStep> {
+  const paused = new Map<string, boolean>();
+  const held = new Set<BlockOrchestratorStep>();
+  const steps = blocks.flatMap((block) => block.orchestratorSteps).filter((step) => step.atMs !== undefined).sort((a, b) => a.atMs! - b.atMs!);
+  for (const step of steps) {
+    const { kind } = step;
+    if (kind.type === "paused" || kind.type === "resumed" || kind.type === "stopped") paused.set(kind.taskId, kind.type === "paused");
+    else if (kind.type === "messaged" && !kind.byUser && paused.get(kind.taskId)) held.add(step);
+  }
+  return held;
 }
 
 /**

@@ -281,8 +281,8 @@ test("a call its CLI runs in the background reads running until its task ends, t
  * `brigadier` calls: the recording's events, only the command's text changed (D29: no new
  * recording for it).
  */
-function asBrigadier(scenario: "background" | "interrupt", command: string, board?: (atMs: number, requestId: string) => BoardDigest) {
-  const fixture = load("claude-2.1.310", scenario);
+function asBrigadier(scenario: "background" | "interrupt", command: string, board?: (atMs: number, requestId: string) => BoardDigest, folder = "claude-2.1.310") {
+  const fixture = load(folder, scenario);
   const recorded = scenario === "background" ? "sleep 2" : "sleep 30";
   const view = fixture.persisted;
   const call = view.entries.find((entry) => entry.event.type === "command" && entry.event.command === recorded);
@@ -393,6 +393,53 @@ test("a brigadier send whose message has its own Messaged row is no row of its o
   assert.ok(shown.blocks.some((block) => block.orchestratorSteps.some((step) => step.kind.type === "messaged")));
   // A Messaged row from another time is another message: the send keeps its row.
   assert.ok(asBrigadier("interrupt", send, (atMs, requestId) => messaged(atMs + 60_000, requestId)).step);
+});
+
+/** The board with the row a worker action filed, just after its `brigadier` call. */
+function acted(kind: BoardDigest["orchestratorSteps"][number]["kind"], after = 300) {
+  return (atMs: number, requestId: string): BoardDigest => ({ ...NO_BOARD, orchestratorSteps: [{ requestId, atMs: atMs + after, position: 0, kind }] });
+}
+
+const SWITCHED = {
+  type: "providerTransition", taskId: "b36f2e6e", id: "t1", cause: "manual",
+  from: { provider: "claude", model: "opus", effort: null }, to: { provider: "codex", model: null, effort: null },
+  account: { provider: "codex", account: "fake" }, accountLabel: "Fake", startedAtMs: 0,
+} as unknown as BoardDigest["orchestratorSteps"][number]["kind"];
+
+test("pausing, resuming, stopping or switching a worker is one line, its own: no Ran brigadier row beside it, on every CLI (D150)", () => {
+  const actions: [string, BoardDigest["orchestratorSteps"][number]["kind"]][] = [
+    ["brigadier pause b36f2e6e", { type: "paused", taskId: "b36f2e6e" }],
+    ["brigadier resume b36f2e6e 'Go on from line 12.'", { type: "resumed", taskId: "b36f2e6e" }],
+    ["brigadier close b36f2e6e", { type: "stopped", taskId: "b36f2e6e", reason: "Closed by its session." }],
+    ["brigadier switch b36f2e6e --agent codex", SWITCHED],
+  ];
+  for (const folder of ["claude-2.1.310", "codex-0.164.0"]) {
+    for (const [command, kind] of actions) {
+      const shown = asBrigadier("interrupt", command, acted(kind), folder);
+      assert.equal(shown.step, undefined, `${folder}: ${command}`);
+      assert.equal(shown.blocks.flatMap((block) => block.orchestratorSteps).filter((step) => step.kind.type === kind.type).length, 1, `${folder}: ${command}`);
+      // A line from another time is another action: the call keeps its row.
+      assert.ok(asBrigadier("interrupt", command, acted(kind, 60_000), folder).step, `${folder}: ${command}`);
+    }
+  }
+});
+
+test("a message to a paused worker goes with its resume: no Messaged row of its own (D150)", () => {
+  const steps = (kinds: BoardDigest["orchestratorSteps"][number]["kind"][]) => (atMs: number, requestId: string): BoardDigest => ({
+    ...NO_BOARD,
+    orchestratorSteps: kinds.map((kind, index) => ({ requestId, atMs: atMs - 5_000 + index * 2_000, position: 0, kind })),
+  });
+  const send = "brigadier send b36f2e6e 'Go on from line 12.'";
+  const lines = (kinds: BoardDigest["orchestratorSteps"][number]["kind"][]) =>
+    asBrigadier("interrupt", send, steps(kinds)).blocks.flatMap((block) => block.orchestratorSteps).map((step) => step.kind.type);
+  const paused = { type: "paused", taskId: "b36f2e6e" } as const;
+  const message = { type: "messaged", taskId: "b36f2e6e", text: "Go on from line 12." } as const;
+  const resumed = { type: "resumed", taskId: "b36f2e6e" } as const;
+  assert.deepEqual(lines([paused, message, resumed]).filter((type) => type !== "tool"), ["paused", "resumed"]);
+  // One to a worker at work, or another worker, is a message of its own.
+  assert.ok(lines([message, resumed]).includes("messaged"));
+  assert.ok(lines([paused, { ...message, taskId: "other" }, resumed]).includes("messaged"));
+  assert.ok(lines([paused, { ...message, byUser: true }, resumed]).includes("messaged"));
 });
 
 /** The board with the card a `brigadier ask` made, just after the call, still open. */
