@@ -9051,6 +9051,18 @@ impl Tool for HotkeyTool {
             )
             .await;
         }
+        // A chord addressed to a window whose menu item carries it as its shortcut is fired
+        // through that item's accessibility action: background without a virtual keyboard,
+        // which Xvfb and most sessions without /dev/uinput access can't create.
+        if !delivery.is_foreground()
+            && !crate::wayland::is_wayland()
+            && resolved_element_index.is_none()
+            && args.get("x").is_none()
+        {
+            if let Some(result) = menu_shortcut_hotkey(pid, xid, &key, &mods).await {
+                return result;
+            }
+        }
         if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
             return refusal;
         }
@@ -9285,6 +9297,78 @@ impl Tool for HotkeyTool {
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
     }
+}
+
+/// [`HotkeyTool`]'s menu-shortcut route: `None` when no single menu item of
+/// the window carries the chord, so the keyboard routes decide.
+async fn menu_shortcut_hotkey(
+    pid: u32,
+    xid: u64,
+    key: &str,
+    mods: &[String],
+) -> Option<ToolResult> {
+    use cua_driver_core::action_record::{
+        ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, ActualDelivery,
+        EvidenceKind, RequestedDelivery,
+    };
+    let chord = [mods, &[key.to_owned()]].concat().join("+");
+    let (key, mods, chord_for_task) = (key.to_owned(), mods.to_vec(), chord.clone());
+    let outcome = tokio::task::spawn_blocking(move || {
+        let modifiers: Vec<&str> = mods.iter().map(String::as_str).collect();
+        let (path, enabled) =
+            crate::atspi::native::menu_path_for_shortcut_in(pid, xid, &key, &modifiers)
+                .ok()
+                .flatten()?;
+        if !enabled {
+            return Some(Err(anyhow::anyhow!(
+                "{chord_for_task} is the shortcut of {}, which is disabled right now, so \
+                 nothing was sent",
+                path.join(" > ")
+            )));
+        }
+        Some(
+            crate::input::focus_guard::guarded(Some(pid), || {
+                crate::atspi::native::invoke_menu_path_in(pid, xid, &path)
+            })
+            .map(|((), guard)| (path, guard))
+            .map_err(|error| anyhow::anyhow!("its menu item could not be invoked: {error}")),
+        )
+    })
+    .await
+    .ok()??;
+    Some(match outcome {
+        Ok((path, guard)) => attach_focus_guard(
+            ToolResult::text(format!(
+                "Pressed {chord} through its menu item {} (accessibility action, background, \
+                 focus untouched); verify the command's effect from fresh state.",
+                path.join(" > ")
+            ))
+            .with_structured(json!({
+                "path": "ax_menu_shortcut",
+                "menu_path": path,
+                "effect": "unverifiable",
+                "delivery_mode": "background",
+            }))
+            .with_action_record(
+                ActionExecutionRecord::builder(
+                    ActionEffect::Unverifiable,
+                    ActionTransport::LinuxAtSpiAction,
+                    RequestedDelivery::Background,
+                )
+                .actual_delivery(ActualDelivery::Background)
+                .evidence(ActionEvidence {
+                    kind: EvidenceKind::NativeApiResult,
+                    detail:
+                        "The chord's menu item resolved uniquely and AT-SPI accepted its action"
+                            .into(),
+                })
+                .build()
+                .expect("menu shortcut record is valid"),
+            ),
+            guard.as_ref(),
+        ),
+        Err(error) => menu_refusal(format!("hotkey: {error}")),
+    })
 }
 
 // ── set_value ─────────────────────────────────────────────────────────────────

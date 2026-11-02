@@ -3449,6 +3449,136 @@ pub fn invoke_menu_path_in(pid: u32, xid: u64, path: &[String]) -> Result<()> {
     )
 }
 
+/// The menu path (labels from the menubar down) of the one menu item in
+/// window `xid` whose keyboard shortcut is `key` with exactly `modifiers`
+/// (`ctrl`, `shift`, `alt`, `super` and their aliases), and whether it is
+/// enabled. `None` when no item, or more than one, carries that shortcut.
+pub fn menu_path_for_shortcut_in(
+    pid: u32,
+    xid: u64,
+    key: &str,
+    modifiers: &[&str],
+) -> Result<Option<(Vec<String>, bool)>> {
+    let wanted = shortcut_chord(key, modifiers.iter().copied());
+    bounded(
+        async {
+            let conn = shared_connection().await?;
+            let collected = collect_visited_bounded_opts(conn, pid, xid, None, None, true)
+                .await?
+                .ok_or_else(|| anyhow!("no AT-SPI application for pid {pid}"))?;
+            let visited = collected.visited;
+            let mut parents = vec![None; visited.len()];
+            let mut parent_at_depth: Vec<Option<usize>> = Vec::new();
+            for (index, node) in visited.iter().enumerate() {
+                parents[index] = (0..node.depth)
+                    .rev()
+                    .find_map(|depth| parent_at_depth.get(depth).copied().flatten());
+                parent_at_depth.resize(parent_at_depth.len().max(node.depth + 1), None);
+                parent_at_depth[node.depth] = Some(index);
+                parent_at_depth[node.depth + 1..].fill(None);
+            }
+            let mut found: Vec<(Vec<String>, bool)> = Vec::new();
+            for (index, node) in visited.iter().enumerate() {
+                if !node.role.to_ascii_lowercase().contains("menu item")
+                    || node.name.trim().is_empty()
+                    || collected
+                        .scoped_frame
+                        .is_some_and(|frame| node.frame_ordinal != frame)
+                {
+                    continue;
+                }
+                // A disabled item may advertise no actions; its binding still sits on action 0.
+                let action = activation_index(&node.role, &node.actions).unwrap_or(0);
+                let Ok(proxies) = node.acc.proxies().await else {
+                    continue;
+                };
+                let Ok(actions) = proxies.action().await else {
+                    continue;
+                };
+                let Ok(binding) = actions.get_key_binding(action as i32).await else {
+                    continue;
+                };
+                if parse_shortcut(&binding).as_ref() != Some(&wanted) {
+                    continue;
+                }
+                let mut lineage = Vec::new();
+                let mut cursor = Some(index);
+                while let Some(current) = cursor {
+                    let ancestor = &visited[current];
+                    if is_menu_role(&ancestor.role) && !ancestor.name.trim().is_empty() {
+                        lineage.push(ancestor.name.trim().to_owned());
+                    }
+                    cursor = parents[current];
+                }
+                lineage.reverse();
+                lineage.dedup();
+                let item = (lineage, node.enabled != Some(false));
+                if !found.contains(&item) {
+                    found.push(item);
+                }
+            }
+            Ok((found.len() == 1).then(|| found.remove(0)))
+        },
+        || Err(anyhow!("menu shortcut lookup timed out for pid {pid}")),
+    )
+}
+
+/// A chord as (sorted canonical modifiers, lowercase key).
+fn shortcut_chord<'a>(
+    key: &str,
+    modifiers: impl Iterator<Item = &'a str>,
+) -> (Vec<&'static str>, String) {
+    let mut canonical: Vec<&'static str> = modifiers
+        .filter_map(|modifier| match modifier.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" | "primary" => Some("ctrl"),
+            "shift" => Some("shift"),
+            "alt" | "mod1" | "option" => Some("alt"),
+            "super" | "meta" | "cmd" | "command" | "win" | "mod4" => Some("super"),
+            _ => None,
+        })
+        .collect();
+    canonical.sort_unstable();
+    canonical.dedup();
+    (canonical, key.to_ascii_lowercase())
+}
+
+/// The accelerator in an AT-SPI key binding (`mnemonic;sequence;shortcut`,
+/// shortcut like `<Primary><Shift>s`), as a [`shortcut_chord`].
+fn parse_shortcut(binding: &str) -> Option<(Vec<&'static str>, String)> {
+    let shortcut = binding.split(';').nth(2).unwrap_or(binding).trim();
+    let (modifiers, key) = match shortcut.rfind('>') {
+        Some(end) => (&shortcut[..=end], &shortcut[end + 1..]),
+        None => ("", shortcut),
+    };
+    if key.is_empty() || modifiers.is_empty() {
+        return None;
+    }
+    let names = modifiers.split(['<', '>']).filter(|name| !name.is_empty());
+    Some(shortcut_chord(key, names))
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::{parse_shortcut, shortcut_chord};
+
+    #[test]
+    fn menu_accelerators_match_the_chord_in_any_spelling() {
+        let ctrl_s = shortcut_chord("s", ["ctrl"].into_iter());
+        assert_eq!(
+            parse_shortcut("s;<Alt>f:s;<Control>s").as_ref(),
+            Some(&ctrl_s)
+        );
+        assert_eq!(parse_shortcut("<Primary>S").as_ref(), Some(&ctrl_s));
+        assert_eq!(
+            parse_shortcut(";;<Primary><Shift>s"),
+            Some(shortcut_chord("S", ["Shift", "control"].into_iter()))
+        );
+        assert_ne!(parse_shortcut("<Control><Shift>s").as_ref(), Some(&ctrl_s));
+        assert_eq!(parse_shortcut("s;<Alt>f:s;"), None);
+        assert_eq!(parse_shortcut(""), None);
+    }
+}
+
 /// Several nodes matched one menu path segment inside the scoped frame.
 /// LibreOffice publishes its menubar twice per document frame (the VCL
 /// menubar and its accessible mirror), so the same item shows up under two

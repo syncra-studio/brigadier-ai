@@ -220,6 +220,8 @@ Patches applied, in order:
 
 - `patches/0250-linux-launch-keeps-the-front.diff`: Linux launches keep the user's front window: launched apps get a startup id whose user time predates every user action, so window managers with focus-stealing prevention (mutter, KWin) map them behind; a window manager that focuses the new window anyway is undone by the X11 focus guard, and the reply and its active field say what moved and whether it was handed back.
 
+- `patches/0251-linux-hotkey-through-menu-shortcuts.diff`: Linux hotkey fires a chord addressed to a window through the menu item that carries it as its shortcut (AT-SPI key binding, then the item's action under the focus guard), so Ctrl+S saves in the background without the uinput virtual keyboard that Xvfb and most sessions cannot create; a chord whose item is disabled is refused with that reason instead of a keyboard-route error.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
