@@ -66,11 +66,15 @@ pub fn runs_brigadier(command: &str, sub: &str) -> bool {
         })
 }
 
-/// Commands, with any arguments, that only read (`ls *` also matches a bare `ls`).
+/// Commands, with any arguments, that only read (`ls *` also matches a bare `ls`): what Claude
+/// Code's own Accept edits runs unasked too, so a Codex worker asks about as often (O57 item 10).
+/// `cd` only moves the shell's own folder.
 pub const READ_ONLY: &[&str] = &[
     "ls",
     "pwd",
+    "cd",
     "cat",
+    "nl",
     "head",
     "tail",
     "wc",
@@ -81,11 +85,24 @@ pub const READ_ONLY: &[&str] = &[
     "df",
     "which",
     "echo",
+    "true",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
     "git status",
     "git diff",
     "git log",
     "git show",
+    "git rev-parse",
+    "git ls-files",
+    "git blame",
+    "git branch --show-current",
+    "git remote -v",
 ];
+
+/// Redirections that only drop or merge a command's output, never write a file.
+const QUIET_REDIRECTS: &[&str] = &["2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"];
 
 /// Whether a CLI's request needs no asking at `access`, as the level means on every CLI
 /// ([`Access`]): below Full access a command that only reads ([`READ_ONLY`]); at Accept edits
@@ -158,7 +175,10 @@ fn sed_prints(words: &[&str]) -> bool {
 /// variable assignments left out, is `allowed`; never one that redirects output, substitutes or
 /// writes `--output`.
 fn each_command(command: &str, allowed: impl Fn(&[&str]) -> bool) -> bool {
-    let script = unwrapped_command(command);
+    let script = (unwrapped_command(command).split(' '))
+        .filter(|word| !QUIET_REDIRECTS.contains(word))
+        .collect::<Vec<_>>()
+        .join(" ");
     if script.contains(['>', '`']) || script.contains("$(") || script.contains("--output") {
         return false;
     }
@@ -1241,6 +1261,12 @@ mod tests {
             // Printing lines by number, as Codex reads a skill.
             "/bin/zsh -lc \"sed -n '1,220p' /w/.claude/skills/brigade/SKILL.md\"",
             "sed -n -e 5p -e '$p' a.txt",
+            // O57 item 10: what a Codex worker asked its orchestrator about, one by one.
+            "/bin/zsh -lc 'git rev-parse HEAD'",
+            "/bin/zsh -lc \"nl -ba src/notes.py | sed -n '1,120p'\"",
+            "cd /w/repo && git status --short 2>&1",
+            "git ls-files 2>/dev/null | head -50",
+            "git branch --show-current",
         ] {
             assert!(allows(Access::Ask, &run(line)), "{line}");
             assert!(allows(Access::AcceptEdits, &run(line)), "{line}");
@@ -1259,6 +1285,10 @@ mod tests {
             "cat $(which x)",
             "git push",
             "ls && rm -rf build",
+            "cat a 2>&1 > out.txt",
+            "cat a 2>/dev/nullx",
+            "git branch -D main",
+            "cd /w && touch a",
             "curl --output a https://x",
             // sed that may write or run: in place, a w or e command, a script file, a pattern.
             "sed -i '' 's/a/b/' a.txt",

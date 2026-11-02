@@ -379,6 +379,13 @@ test("the thread's other brigadier calls read in plain words, by the first briga
   assert.equal(doneWords('echo "brigadier ledger add"'), 'Ran echo "brigadier ledger add"');
 });
 
+test("an answer to a worker's permission prompt is no row: no wall of Messaged workers (D48, O57 item 10)", () => {
+  for (const command of ["brigadier send 898dae3f --allow", "brigadier send 898dae3f --deny \"Out of scope\"", "/bin/zsh -lc 'brigadier send 898dae3f --allow && brigadier wait 898dae3f'"]) {
+    assert.equal(asBrigadier("interrupt", command).step, undefined, command);
+  }
+  assert.equal(doneWords("brigadier send 898dae3f \"Use --allow-empty\""), "Messaged workers");
+});
+
 test("a brigadier send whose message has its own Messaged row is no row of its own (D47)", () => {
   const send = "brigadier send b36f2e6e \"$(cat <<'EOF'\nGo on.\nEOF\n)\"";
   const shown = asBrigadier("interrupt", send, messaged);

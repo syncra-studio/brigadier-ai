@@ -251,11 +251,13 @@ function brigadierWords(sub: string, command: string): StepWords {
 
 /**
  * A call that is no row of its own: the thread's `brigadier wait` and `brigadier start` (D47),
- * and its `brigadier queue` judging, which the queue rail shows (D68).
+ * its `brigadier queue` judging, which the queue rail shows (D68), and its answer to a worker's
+ * permission prompt (`send <id> --allow|--deny`), which never reaches the user (D48, D54).
  */
 export function brigadierUnshown(command: string): boolean {
   const [sub] = brigadierCalls(command);
-  return sub === "wait" || sub === "start" || sub === "queue";
+  return sub === "wait" || sub === "start" || sub === "queue"
+    || (sub === "send" && /\s--(?:allow|deny)(?:\s|=|$)/.test(unwrapCommand(command)));
 }
 
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */
