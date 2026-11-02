@@ -290,7 +290,7 @@ impl Tool for HotkeyTool {
         }
 
         let panel_pid = if !fg {
-            window_id.and_then(|wid| crate::ax::panel::keyboard_pid(pid, wid))
+            window_id.and_then(|wid| crate::ax::panel::event_pid(pid, wid))
         } else {
             None
         };

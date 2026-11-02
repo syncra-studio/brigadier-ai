@@ -32,7 +32,7 @@ pub use mpx_keyboard::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use evdev::uinput::VirtualDevice;
+use evdev::uinput::VirtualDevice as UinputDevice;
 use evdev::{AttributeSet, EventType, InputEvent, Key, RelativeAxisType};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -560,6 +560,159 @@ fn kde_x11_uinput_hotplug_is_unsafe_from_env() -> bool {
     )
 }
 
+/// The slave that feeds a session's master pair: a uinput device on a real Xorg
+/// with a writable `/dev/uinput`, else the master's own XTEST slave. Every new
+/// master comes with an XTEST pointer and keyboard; XTest requests from a
+/// connection whose client pointer is that master go through them, so they
+/// reach the master's sprite and focus as real (non-`send_event`) input while
+/// the user's core pointer and focus stay put. That needs no uinput, so Xvfb,
+/// containers and desktops without access to `/dev/uinput` get the same route.
+pub(crate) enum VirtualDevice {
+    Uinput(UinputDevice),
+    Xtest(XtestSlave),
+}
+
+pub(crate) struct XtestSlave {
+    conn: RustConnection,
+}
+
+impl XtestSlave {
+    /// A connection whose core requests use `master_pointer` (and its paired
+    /// keyboard), so its XTest input is that master's.
+    fn new(master_pointer: i32) -> Result<Self> {
+        use x11rb::protocol::xinput::ConnectionExt as _;
+        let (conn, _) = connect_x11_for_input()?;
+        conn.xinput_xi_set_client_pointer(x11rb::NONE, master_pointer as u16)?
+            .check()
+            .context("XISetClientPointer for the virtual master")?;
+        Ok(Self { conn })
+    }
+
+    /// evdev events as XTest input. Key codes are X keycodes minus 8; wheel
+    /// detents are buttons 4-7; the high-resolution wheel axes repeat the
+    /// detents and are skipped.
+    fn emit(&mut self, events: &[InputEvent]) -> std::io::Result<()> {
+        use x11rb::protocol::xtest::ConnectionExt as _;
+        let io = |error: &dyn std::fmt::Display| std::io::Error::other(error.to_string());
+        let (mut dx, mut dy) = (0i32, 0i32);
+        for event in events {
+            let code = event.code();
+            let value = event.value();
+            let tap = |button: u8, times: i32| -> std::io::Result<()> {
+                for _ in 0..times.unsigned_abs() {
+                    for kind in [BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT] {
+                        self.conn
+                            .xtest_fake_input(kind, button, 0, x11rb::NONE, 0, 0, 0)
+                            .map_err(|e| io(&e))?;
+                    }
+                }
+                Ok(())
+            };
+            match event.event_type() {
+                EventType::KEY if value == 2 => {}
+                EventType::KEY => {
+                    let press = value != 0;
+                    let (kind, detail) = match xtest_button(code) {
+                        Some(button) => (
+                            if press {
+                                BUTTON_PRESS_EVENT
+                            } else {
+                                BUTTON_RELEASE_EVENT
+                            },
+                            button,
+                        ),
+                        None => (
+                            if press {
+                                KEY_PRESS_EVENT
+                            } else {
+                                KEY_RELEASE_EVENT
+                            },
+                            u8::try_from(code + 8).map_err(|e| io(&e))?,
+                        ),
+                    };
+                    self.conn
+                        .xtest_fake_input(kind, detail, 0, x11rb::NONE, 0, 0, 0)
+                        .map_err(|e| io(&e))?;
+                }
+                EventType::RELATIVE if code == RelativeAxisType::REL_X.0 => dx += value,
+                EventType::RELATIVE if code == RelativeAxisType::REL_Y.0 => dy += value,
+                EventType::RELATIVE if code == RelativeAxisType::REL_WHEEL.0 => {
+                    tap(if value > 0 { 4 } else { 5 }, value)?
+                }
+                EventType::RELATIVE if code == RelativeAxisType::REL_HWHEEL.0 => {
+                    tap(if value > 0 { 7 } else { 6 }, value)?
+                }
+                _ => {}
+            }
+        }
+        if dx != 0 || dy != 0 {
+            // detail 1: relative motion.
+            self.conn
+                .xtest_fake_input(
+                    MOTION_NOTIFY_EVENT,
+                    1,
+                    0,
+                    x11rb::NONE,
+                    dx as i16,
+                    dy as i16,
+                    0,
+                )
+                .map_err(|e| io(&e))?;
+        }
+        // A round trip: the server has run the input before the caller looks
+        // for its raw events or asks another connection about it.
+        self.conn
+            .get_input_focus()
+            .map_err(|e| io(&e))?
+            .reply()
+            .map_err(|e| io(&e))?;
+        Ok(())
+    }
+}
+
+/// The X button for an evdev button code; `None` for a key.
+fn xtest_button(code: u16) -> Option<u8> {
+    match code {
+        c if c == Key::BTN_LEFT.0 => Some(1),
+        c if c == Key::BTN_MIDDLE.0 => Some(2),
+        c if c == Key::BTN_RIGHT.0 => Some(3),
+        c if c == Key::BTN_SIDE.0 => Some(8),
+        c if c == Key::BTN_EXTRA.0 => Some(9),
+        _ => None,
+    }
+}
+
+impl VirtualDevice {
+    pub(crate) fn emit(&mut self, events: &[InputEvent]) -> std::io::Result<()> {
+        match self {
+            Self::Uinput(device) => device.emit(events),
+            Self::Xtest(slave) => slave.emit(events),
+        }
+    }
+}
+
+/// Whether a new master pair is fed by its XTEST slaves instead of uinput
+/// devices: always without a writable `/dev/uinput`, and on Xvfb, which cannot
+/// hot-add a uinput device.
+pub fn uses_xtest_slaves() -> bool {
+    !uinput_accessible() || is_xvfb_process_running()
+}
+
+/// The XTEST slave the server made with the master pair `base`.
+fn xtest_slave_id(display: *mut x11::xlib::Display, base: &str, use_: i32) -> Result<i32> {
+    let kind = if use_ == x11::xinput2::XISlavePointer {
+        "pointer"
+    } else {
+        "keyboard"
+    };
+    let name = format!("{base} XTEST {kind}");
+    xi2_query_devices(display)?
+        .into_iter()
+        .find(|(_, found_use, found_name)| *found_use == use_ && *found_name == name)
+        .map(|(id, _, _)| id)
+        .ok_or_else(|| anyhow!("no XTEST {kind} slave named '{name}'"))
+}
+
 pub(crate) fn uinput_accessible() -> bool {
     fs::OpenOptions::new()
         .read(true)
@@ -576,12 +729,10 @@ pub fn real_pointer_input_available() -> bool {
         return false;
     }
 
-    // `ensure_master_pointer` creates an XI2 master before attaching the
-    // uinput slave. If this process cannot open /dev/uinput, attempting that
-    // path on every click/scroll would create and abandon an XInput master
-    // pair until Xorg terminates the client with BadAlloc. Skip MPX entirely
-    // when the required device is inaccessible.
-    if !uinput_accessible() {
+    // Without a usable /dev/uinput the master pair is fed by its own XTEST
+    // slaves ([`VirtualDevice::Xtest`]); that route is for X11 sessions only.
+    let xtest = uses_xtest_slaves();
+    if xtest && crate::wayland::is_wayland() {
         return false;
     }
     let Ok(display) = open_display() else {
@@ -589,7 +740,7 @@ pub fn real_pointer_input_available() -> bool {
     };
     let supported = real_pointer_capabilities_available(
         supports_parallel_pointer_injection(display).is_ok(),
-        is_xvfb_process_running(),
+        is_xvfb_process_running() && !xtest,
         true,
         false,
     );
@@ -626,15 +777,20 @@ fn ensure_master_pointer_for_session(
 
     let base = master_pointer_name(cursor_id);
     let device_name = slave_pointer_name(&base);
+    let xtest = uses_xtest_slaves();
     // Acquire the non-X resource before mutating the XInput hierarchy. The
     // inexpensive availability probe above handles the normal permission
     // denial; this ordering also prevents a race or late open failure from
     // leaking a newly created master pair.
-    let uinput_device = match create_uinput_pointer(&device_name) {
-        Ok(device) => device,
-        Err(error) => {
-            unsafe { x11::xlib::XCloseDisplay(display) };
-            return Err(error);
+    let uinput_device = if xtest {
+        None
+    } else {
+        match create_uinput_pointer(&device_name) {
+            Ok(device) => Some(device),
+            Err(error) => {
+                unsafe { x11::xlib::XCloseDisplay(display) };
+                return Err(error);
+            }
         }
     };
     let mut change = x11::xinput2::XIAnyHierarchyChangeInfo::default();
@@ -647,6 +803,10 @@ fn ensure_master_pointer_for_session(
         // drags too. Note this is not what makes the WM focus the dragged
         // window — XI2-aware WMs grab buttons for XIAllMasterDevices — see
         // the active-window save/restore in send_parallel_virtual_pointer_drags.
+        // Never 0, not even for an XTEST-fed pair: Xorg's software cursor
+        // keeps showing a no-core master's last cursor without a reference,
+        // so an app that exits under it leaves a use-after-free that aborts
+        // the X server (seen on Xvfb 21.1.12 under valgrind).
         (*add).send_core = 1;
         (*add).enable = 1;
     }
@@ -677,13 +837,19 @@ fn ensure_master_pointer_for_session(
     let keyboard_id = keyboard_id
         .ok_or_else(|| anyhow!("failed to locate created master keyboard for '{cursor_id}'"))?;
 
-    let slave_pointer_id = match wait_for_slave_id(
-        display,
-        &device_name,
-        x11::xinput2::XISlavePointer,
-        Duration::from_secs(5),
-    ) {
-        Ok(id) => id,
+    let slave = match uinput_device {
+        None => xtest_slave_id(display, &base, x11::xinput2::XISlavePointer)
+            .and_then(|id| Ok((id, VirtualDevice::Xtest(XtestSlave::new(pointer_id)?)))),
+        Some(device) => wait_for_slave_id(
+            display,
+            &device_name,
+            x11::xinput2::XISlavePointer,
+            Duration::from_secs(5),
+        )
+        .map(|id| (id, VirtualDevice::Uinput(device))),
+    };
+    let (slave_pointer_id, uinput_device) = match slave {
+        Ok(found) => found,
         Err(error) => {
             // Never leave the fresh master pair behind when the slave never
             // hotplugs (no udev/libinput on this server): a stray master with
@@ -693,8 +859,10 @@ fn ensure_master_pointer_for_session(
             return Err(error);
         }
     };
-    attach_slave_to_master(display, slave_pointer_id, pointer_id)?;
-    set_flat_pointer_accel(display, slave_pointer_id);
+    if !xtest {
+        attach_slave_to_master(display, slave_pointer_id, pointer_id)?;
+        set_flat_pointer_accel(display, slave_pointer_id);
+    }
     unsafe { x11::xlib::XCloseDisplay(display) };
 
     let ids = MasterPointerIds {
@@ -819,7 +987,7 @@ pub(crate) fn reap_orphaned_master_pointers() {
     }
 }
 
-fn create_uinput_pointer(name: &str) -> Result<VirtualDevice> {
+fn create_uinput_pointer(name: &str) -> Result<UinputDevice> {
     guarded_uinput_creation(name, |name| {
         let mut keys = AttributeSet::<Key>::new();
         keys.insert(Key::BTN_LEFT);
@@ -973,7 +1141,53 @@ fn warp_master_pointer(
     if rc != 0 {
         bail!("XIWarpPointer failed with status {rc}");
     }
+    // The server clips a warp to the screen: a point off it (a window partly
+    // off-screen) would put the press or keys on whatever sits at the edge.
+    let at = virtual_master_position(display, ids.pointer_id);
+    if at != Some((x, y)) {
+        bail!(
+            "the point ({x}, {y}) is off the screen (the pointer stopped at {}), so nothing \
+             was sent; move the window fully on screen or aim at a visible point",
+            at.map(|(ax, ay)| format!("({ax}, {ay})"))
+                .unwrap_or_else(|| "an unknown place".to_owned())
+        );
+    }
     Ok(())
+}
+
+/// Where the master pointer `pointer_id` is, in root coordinates.
+fn virtual_master_position(
+    display: *mut x11::xlib::Display,
+    pointer_id: i32,
+) -> Option<(i32, i32)> {
+    let root = unsafe { x11::xlib::XDefaultRootWindow(display) };
+    let (mut root_ret, mut child_ret) = (0, 0);
+    let (mut rx, mut ry, mut wx, mut wy) = (0f64, 0f64, 0f64, 0f64);
+    let mut buttons = x11::xinput2::XIButtonState::default();
+    let mut mods = x11::xinput2::XIModifierState::default();
+    let mut group = x11::xinput2::XIModifierState::default();
+    let prev = unsafe { x11::xlib::XSetErrorHandler(Some(ignore_x_error)) };
+    let rc = unsafe {
+        x11::xinput2::XIQueryPointer(
+            display,
+            pointer_id,
+            root,
+            &mut root_ret,
+            &mut child_ret,
+            &mut rx,
+            &mut ry,
+            &mut wx,
+            &mut wy,
+            &mut buttons,
+            &mut mods,
+            &mut group,
+        )
+    };
+    unsafe { x11::xlib::XSetErrorHandler(prev) };
+    if !buttons.mask.is_null() {
+        unsafe { x11::xlib::XFree(buttons.mask as *mut _) };
+    }
+    (rc != 0).then(|| (rx.round() as i32, ry.round() as i32))
 }
 
 /// True when `window` is override-redirect — a menu, tooltip, or other popup
@@ -2427,7 +2641,7 @@ fn window_children(
 /// target itself (its WM frame) or over an override-redirect popup (a menu or
 /// combo list the click is meant to reach, or the agent-cursor overlay);
 /// `Ok(Some(_))` names the window that covers the point instead.
-fn occluding_window(
+pub(super) fn occluding_window(
     display: *mut x11::xlib::Display,
     window: x11::xlib::Window,
     x: i32,
@@ -2486,7 +2700,7 @@ fn occluding_window(
 
 /// What sits over the screen point a background pointer action aims at.
 #[derive(Debug, Clone)]
-enum PointCover {
+pub(super) enum PointCover {
     /// The target (or a popup meant to receive the press).
     Clear,
     /// A window of the target's own pid; the press is retargeted to it.

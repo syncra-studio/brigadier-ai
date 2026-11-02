@@ -15,6 +15,7 @@ use platform_macos::key_focus_guard;
 struct World {
     apps: HashMap<i32, AppFacts>,
     secs_since_user_input: f64,
+    secs_since_mouse_down: f64,
 }
 
 struct FakeFacts;
@@ -24,6 +25,7 @@ fn world() -> &'static Mutex<World> {
     WORLD.get_or_init(|| {
         Mutex::new(World {
             secs_since_user_input: 60.0,
+            secs_since_mouse_down: 60.0,
             ..Default::default()
         })
     })
@@ -41,6 +43,9 @@ impl Facts for FakeFacts {
     }
     fn secs_since_user_input(&self) -> f64 {
         world().lock().unwrap().secs_since_user_input
+    }
+    fn secs_since_mouse_down(&self) -> f64 {
+        world().lock().unwrap().secs_since_mouse_down
     }
 }
 
@@ -66,8 +71,18 @@ fn set_app(pid: i32, bundle: &str, regular: bool, launched_secs_ago: u64) {
     );
 }
 
+/// The user's last input of any kind, a mouse press included.
 fn set_idle(secs: f64) {
-    world().lock().unwrap().secs_since_user_input = secs;
+    let mut world = world().lock().unwrap();
+    world.secs_since_user_input = secs;
+    world.secs_since_mouse_down = secs;
+}
+
+/// The user typed or moved the pointer `secs` ago, without pressing a button.
+fn set_typing(secs: f64) {
+    let mut world = world().lock().unwrap();
+    world.secs_since_user_input = secs;
+    world.secs_since_mouse_down = 60.0;
 }
 
 // Fake pids, far from real ones.
@@ -94,6 +109,11 @@ fn path_1_an_activation_during_an_action_asks_the_policy() {
     assert!(
         FocusStealPreventer::restores_for_activation(TARGET).is_empty(),
         "R2: right after the user's input"
+    );
+    set_typing(0.2);
+    assert!(
+        FocusStealPreventer::restores_for_activation(TARGET).is_empty(),
+        "R2: typing may be the user's own app switch (Command-Tab)"
     );
     set_idle(60.0);
     drop(lease);
@@ -175,7 +195,15 @@ fn path_3_a_raised_window_asks_the_policy() {
     set_idle(60.0);
     assert!(key_focus_guard::order_restore_allowed(TARGET, USER_APP));
     set_idle(0.2);
-    assert!(!key_focus_guard::order_restore_allowed(TARGET, USER_APP));
+    assert!(
+        !key_focus_guard::order_restore_allowed(TARGET, USER_APP),
+        "R2: a mouse press may be the user's own Command-click"
+    );
+    set_typing(0.2);
+    assert!(
+        key_focus_guard::order_restore_allowed(TARGET, USER_APP),
+        "typing or moving the pointer can't raise a background window"
+    );
     set_idle(60.0);
     set_app(TARGET, "company.menubar", false, 600);
     assert!(!key_focus_guard::order_restore_allowed(TARGET, USER_APP));

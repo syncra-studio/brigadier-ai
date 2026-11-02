@@ -300,6 +300,20 @@ pub fn enter_exact_window_key(pid: pid_t, target_wid: u32) -> Result<WindowKeySc
     let before = key_focus_of_pid(pid);
     let previous = before.window;
     let order_before = app_window_order(pid);
+    // An Open/Save panel's own sheet (Go to Folder) holds its keys while it
+    // is shown: keys addressed to the panel go to that sheet, as they would
+    // for a user, and no sibling window can receive them.
+    if before.window.is_some_and(|key| {
+        key != target_wid && crate::ax::panel::panel_sheet_window(pid, target_wid) == Some(key)
+    }) {
+        return Ok(WindowKeyScope {
+            pid,
+            target: target_wid,
+            previous,
+            order_before,
+            primed: KeyPrime::AlreadyKey,
+        });
+    }
     let primed = prime_exact_window_key(
         target_wid,
         || key_focus_of_pid(pid),

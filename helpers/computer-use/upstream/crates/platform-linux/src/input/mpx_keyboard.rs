@@ -273,7 +273,7 @@ impl KeyboardDeliveryReport {
     }
 }
 
-fn create_uinput_keyboard(name: &str) -> Result<VirtualDevice> {
+fn create_uinput_keyboard(name: &str) -> Result<UinputDevice> {
     guarded_uinput_creation(name, |name| {
         let mut keys = AttributeSet::<Key>::new();
         // Every KEY_* code the X keycode range can address, so any keycode the
@@ -312,14 +312,21 @@ fn ensure_master_keyboard(
             .and_then(|(_, _, name)| name.strip_suffix(" keyboard").map(str::to_owned))
             .ok_or_else(|| anyhow!("master keyboard {} vanished", ids.keyboard_id))?;
         let device_name = slave_keyboard_name(&base);
-        let mut device = create_uinput_keyboard(&device_name)?;
-        let slave_keyboard_id = wait_for_slave_id(
-            display,
-            &device_name,
-            x11::xinput2::XISlaveKeyboard,
-            Duration::from_secs(5),
-        )?;
-        attach_slave_to_master(display, slave_keyboard_id, ids.keyboard_id)?;
+        let (mut device, slave_keyboard_id) = if uses_xtest_slaves() {
+            // The pair's own XTEST keyboard, already attached to its master.
+            let id = xtest_slave_id(display, &base, x11::xinput2::XISlaveKeyboard)?;
+            (VirtualDevice::Xtest(XtestSlave::new(ids.pointer_id)?), id)
+        } else {
+            let device = create_uinput_keyboard(&device_name)?;
+            let id = wait_for_slave_id(
+                display,
+                &device_name,
+                x11::xinput2::XISlaveKeyboard,
+                Duration::from_secs(5),
+            )?;
+            attach_slave_to_master(display, id, ids.keyboard_id)?;
+            (VirtualDevice::Uinput(device), id)
+        };
         warm_up_keyboard(display, &mut device, slave_keyboard_id, ids.keyboard_id);
         let ids = MasterPointerIds {
             slave_keyboard_id: Some(slave_keyboard_id),
@@ -540,6 +547,7 @@ fn deliver(
 
         let window = target_window as x11::xlib::Window;
         let core_before = core_focus(display);
+        let xtest = matches!(*device.lock().unwrap(), VirtualDevice::Xtest(_));
         let released_stuck = release_stuck_virtual_input(cursor_id, display, ids, &device);
         select_raw_key_events(display, slave_keyboard_id)?;
         // A BadWindow/BadMatch from XISetFocus (target unmapped meanwhile) must
@@ -550,7 +558,41 @@ fn deliver(
         // through the error handler, so a stale GetFocus is the real signal.
         // Retry once — a freshly mapped/raised toplevel can miss the first set.
         let mut focus_taken = false;
+        let mut warp_error = None;
+        // An XTEST-fed pair types into the window under its own pointer
+        // (PointerRoot focus, a new master's default), parked on a point of
+        // the target nothing covers. The focus the target gets is
+        // NotifyPointer, which window managers ignore. An explicit XISetFocus
+        // makes openbox and xfwm4 activate the target, and a focus change on
+        // the pair (its core focus events) makes openbox drop the active window.
+        let parked = if xtest {
+            uncovered_point(display, window)
+        } else {
+            None
+        };
+        if xtest {
+            if let Some((x, y)) = parked {
+                let pointer_root = x11::xlib::PointerRoot as x11::xlib::Window;
+                if xi_get_focus(display, ids.keyboard_id) != Some(pointer_root) {
+                    unsafe {
+                        x11::xinput2::XISetFocus(
+                            display,
+                            ids.keyboard_id,
+                            pointer_root,
+                            x11::xlib::CurrentTime,
+                        )
+                    };
+                }
+                match warp_master_pointer(display, ids, x, y) {
+                    Ok(()) => focus_taken = true,
+                    Err(error) => warp_error = Some(error),
+                }
+            }
+        }
         for attempt in 0..2 {
+            if xtest {
+                break;
+            }
             let rc = unsafe {
                 x11::xinput2::XISetFocus(display, ids.keyboard_id, window, x11::xlib::CurrentTime)
             };
@@ -564,6 +606,16 @@ fn deliver(
             }
         }
         unsafe { x11::xlib::XSetErrorHandler(previous_handler) };
+        if let Some(error) = warp_error {
+            return Err(error);
+        }
+        if xtest && parked.is_none() {
+            bail!(
+                "every point of window 0x{target_window:x} is covered by another window, and \
+                 the background keyboard types into the window under its own pointer, so the \
+                 keys can't reach it; nothing was sent"
+            );
+        }
         if !focus_taken {
             bail!(
                 "virtual master keyboard could not take focus on window 0x{target_window:x} \
@@ -614,7 +666,13 @@ fn deliver(
         // guards restore the keymap and the slave disappears.
         sleep(Duration::from_millis(30));
         let _ = keymap_conn.get_input_focus()?.reply();
-        let virtual_focus_held = xi_get_focus(display, ids.keyboard_id) == Some(window);
+        let virtual_focus_held = match parked {
+            Some((x, y)) => matches!(
+                occluding_window(display, window, x, y),
+                Ok(PointCover::Clear)
+            ),
+            None => xi_get_focus(display, ids.keyboard_id) == Some(window),
+        };
         let core_focus_unchanged = core_focus(display) == core_before;
         if !delivery_confirmed {
             tracing::warn!(
@@ -643,6 +701,40 @@ fn deliver(
     let _ = cursor_id;
     unsafe { x11::xlib::XCloseDisplay(display) };
     result
+}
+
+/// A point of `window` (screen coordinates) no other window covers: the
+/// middle first, then a grid inside it.
+fn uncovered_point(
+    display: *mut x11::xlib::Display,
+    window: x11::xlib::Window,
+) -> Option<(i32, i32)> {
+    let (left, top, width, height) = window_screen_bounds(display, window)?;
+    let screen = unsafe { x11::xlib::XDefaultScreen(display) };
+    let (screen_w, screen_h) = unsafe {
+        (
+            x11::xlib::XDisplayWidth(display, screen),
+            x11::xlib::XDisplayHeight(display, screen),
+        )
+    };
+    const PLACES: [f64; 5] = [0.5, 0.25, 0.75, 0.1, 0.9];
+    PLACES
+        .iter()
+        .flat_map(|fy| PLACES.iter().map(move |fx| (*fx, *fy)))
+        .map(|(fx, fy)| {
+            (
+                left + (f64::from(width) * fx) as i32,
+                top + (f64::from(height) * fy) as i32,
+            )
+        })
+        // A point off the screen can't hold the pointer (a warp is clipped).
+        .filter(|&(x, y)| x >= 0 && y >= 0 && x < screen_w && y < screen_h)
+        .find(|&(x, y)| {
+            matches!(
+                occluding_window(display, window, x, y),
+                Ok(PointCover::Clear)
+            )
+        })
 }
 
 /// Type `text` into `target_window` without touching the core focus or the

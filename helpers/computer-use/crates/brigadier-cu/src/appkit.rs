@@ -89,10 +89,12 @@ pub fn run_appkit_main_loop() {
         .expect("run_appkit_main_loop must be called from the main thread");
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        // Accessory policy: no Dock icon, no menu bar. Keeps the
-        // daemon out of the user's application switcher, same as
-        // the cursor overlay's NSApp setup.
-        let _: bool = msg_send![app, setActivationPolicy: 1i64];
+        // Prohibited policy: no Dock icon, no menu bar, and never the
+        // active app (Accessory lets finishLaunching activate a helper
+        // started from a terminal, taking the user's key focus). Same as
+        // the cursor overlay's NSApp setup. The permissions panel switches
+        // to Accessory itself when it has to be shown.
+        let _: bool = msg_send![app, setActivationPolicy: 2i64];
         let _: () = msg_send![app, finishLaunching];
         if !appkit_main_loop_stop_requested() {
             mark_appkit_main_loop_available();

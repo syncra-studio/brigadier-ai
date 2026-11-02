@@ -1,0 +1,136 @@
+Why: On macOS a click on a text field waits for the field to report focus, up to the old fixed 800 ms, instead of always waiting the full 800 ms, so a click on a native field or an already focused web field replies at once (#699).
+
+diff --git a/crates/platform-macos/src/tools/click.rs b/crates/platform-macos/src/tools/click.rs
+index 119a99ae7..f38e41170 100644
+--- a/crates/platform-macos/src/tools/click.rs
++++ b/crates/platform-macos/src/tools/click.rs
+@@ -5,7 +5,7 @@
+ //! * **AX path** (`element_token`): performs AXAction on the cached
+ //!   element. Fires via AX RPC — the target app never needs to be frontmost.
+ //!   Extra behaviors vs. the naive dispatch:
+-//!   - AXTextField / AXTextArea: 800 ms post-click delay for WebKit DOM focus settle.
++//!   - AXTextField / AXTextArea: waits up to 800 ms for the field to report focus.
+ //!   - AXPopUpButton: appends the list of available options and redirects to set_value.
+ //!   - Advertised-action warning if the element didn't list the requested action.
+ //!
+@@ -872,28 +872,13 @@ impl Tool for ClickTool {
+             .await;
+ 
+             // Drop the wildcard lease + detect window/foreground side-effects.
+-            let acted_at = std::time::Instant::now();
+             let changes = super::finish_window_observation(snapshot).await;
+ 
+             match result {
+                 Ok(Ok((
+-                    (
+-                        mut msg,
+-                        needs_webkit_delay,
+-                        suspected_noop,
+-                        selection_verified,
+-                        selection_via_pixel,
+-                    ),
++                    (mut msg, suspected_noop, selection_verified, selection_via_pixel),
+                     fronted,
+                 ))) => {
+-                    // For text inputs, wait 800ms for WebKit DOM focus to settle
+-                    // before returning — matches the Swift reference behaviour.
+-                    // The window watch above already used part of it.
+-                    if needs_webkit_delay {
+-                        let settle = std::time::Duration::from_millis(800)
+-                            .saturating_sub(acted_at.elapsed());
+-                        tokio::time::sleep(settle).await;
+-                    }
+                     msg.push_str(&changes.result_suffix());
+                     // AX dispatch went through, but AXPerformAction returning
+                     // success does not confirm the on-screen effect (many elements
+@@ -1544,8 +1529,8 @@ impl Tool for ClickTool {
+ 
+ // ── AX click implementation (blocking) ───────────────────────────────────────
+ 
+-/// Returns `(summary_text, needs_webkit_delay, suspected_noop,
+-/// selection_verified, selection_via_pixel)`.
++/// Returns `(summary_text, suspected_noop, selection_verified,
++/// selection_via_pixel)`.
+ ///
+ /// `suspected_noop` is true when the element did not advertise the action we
+ /// dispatched — AXUIElementPerformAction returns success regardless, so this is
+@@ -1588,7 +1573,7 @@ fn perform_ax_click(
+     selection_pixel: Option<SelectionPixelTarget>,
+     modifiers: &[String],
+     foreground: bool,
+-) -> anyhow::Result<(String, bool, bool, bool, bool)> {
++) -> anyhow::Result<(String, bool, bool, bool)> {
+     let (element_ptr, idx) = element;
+     let (pid, window_id) = window;
+     let ax_action = crate::input::ax_actions::map_action(action_str)?;
+@@ -1622,7 +1607,6 @@ fn perform_ax_click(
+                          confirmed AXSelected=true."
+                     ),
+                     false,
+-                    false,
+                     true,
+                     false,
+                 ));
+@@ -1640,7 +1624,6 @@ fn perform_ax_click(
+                              reading the caret back. type_text now adds text there."
+                         ),
+                         false,
+-                        false,
+                         true,
+                         false,
+                     ));
+@@ -1715,7 +1698,6 @@ fn perform_ax_click(
+                                          AXSelected read-back."
+                                     ),
+                                     false,
+-                                    false,
+                                     true,
+                                     true,
+                                 ));
+@@ -1771,7 +1753,6 @@ fn perform_ax_click(
+                          {err}."
+                     ),
+                     false,
+-                    false,
+                     true,
+                     false,
+                 ));
+@@ -1790,7 +1771,6 @@ fn perform_ax_click(
+                          after AXPress returned {err}; confirmed AXSelected=true."
+                     ),
+                     false,
+-                    false,
+                     true,
+                     false,
+                 ));
+@@ -1855,9 +1835,18 @@ fn perform_ax_click(
+         ));
+     }
+ 
+-    // WebKit DOM focus settle: 800 ms for text inputs (returned to async caller).
+-    let needs_webkit_delay =
+-        ax_action == "AXPress" && (role == "AXTextField" || role == "AXTextArea");
++    // A pressed text input takes focus asynchronously in web views (WebKit
++    // and Chromium move DOM focus, then mirror it to AXFocused). Wait for the
++    // field to report focus, up to the old fixed 800 ms settle, so typing
++    // right after lands in it; a native field reports focus at once.
++    if ax_action == "AXPress" && (role == "AXTextField" || role == "AXTextArea") {
++        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(800);
++        while unsafe { copy_bool_attr(element, "AXFocused") } != Some(true)
++            && std::time::Instant::now() < deadline
++        {
++            std::thread::sleep(std::time::Duration::from_millis(15));
++        }
++    }
+ 
+     // Show focus-rect highlight around the element (matches Swift showFocusRect).
+     // Also move the cursor to the element center so the glide animation plays.
+@@ -1880,7 +1869,7 @@ fn perform_ax_click(
+     let _ = pid;
+     let _ = window_id; // used by caller context
+ 
+-    Ok((summary, needs_webkit_delay, suspected_noop, false, false))
++    Ok((summary, suspected_noop, false, false))
+ }
+ 
+ #[cfg(test)]

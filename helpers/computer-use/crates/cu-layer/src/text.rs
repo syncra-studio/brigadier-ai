@@ -234,8 +234,9 @@ fn unconfirmed_fields(object: &Map<String, Value>) -> bool {
         || object.get("confirmed") == Some(&Value::Bool(false))
 }
 
-fn honest_message(text: &str, uncertain: bool) -> String {
-    let mut first = true;
+/// `first` spans every text item of one reply: only the reply's first line is
+/// its summary, so a later item (a focus-guard note) keeps its own words.
+fn honest_message(text: &str, uncertain: bool, first: &mut bool) -> String {
     text.lines()
         .map(|line| {
             if is_tree_row(line) {
@@ -251,9 +252,9 @@ fn honest_message(text: &str, uncertain: bool) -> String {
                 || lower.starts_with("performed ")
                 || lower.starts_with("posted ")
                 || lower.starts_with("sent ");
-            let primary = first && !line.trim().is_empty();
+            let primary = *first && !line.trim().is_empty();
             if primary {
-                first = false;
+                *first = false;
             }
             if posted || (uncertain && (summary || primary)) {
                 SENT_NOT_CONFIRMED.to_owned()
@@ -334,12 +335,13 @@ fn result_with_uncertainty(
                 .action_record
                 .as_ref()
                 .is_some_and(|record| record.effect == ActionEffect::Confirmed));
+    let mut first = true;
     for item in &mut result.content {
         if let Content::Text { text, .. } = item {
             let honest = if confirmed || result.is_error == Some(true) {
                 text.clone()
             } else {
-                honest_message(text, uncertain)
+                honest_message(text, uncertain, &mut first)
             };
             *text = prose(&honest);
         }
@@ -374,7 +376,7 @@ fn structured_prose(value: &mut Value, failed: bool) {
                     if uncertain {
                         *message = SENT_NOT_CONFIRMED.into();
                     } else if !failed && !confirmed {
-                        *message = honest_message(message, false);
+                        *message = honest_message(message, false, &mut true);
                     }
                 }
             }
@@ -580,6 +582,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_unconfirmed_reply_says_so_once_and_keeps_the_focus_note() {
+        let note = "The application moved the desktop focus; it was restored.";
+        let mut reply = ToolResult::text("✅ Performed native action on [3].")
+            .with_structured(json!({"effect":"unverifiable"}));
+        reply.content.push(Content::text(note));
+        let out = result_for_tool("click", reply);
+        let texts: Vec<_> = out
+            .content
+            .iter()
+            .filter_map(|item| match item {
+                Content::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, [SENT_NOT_CONFIRMED, note]);
     }
 
     #[test]

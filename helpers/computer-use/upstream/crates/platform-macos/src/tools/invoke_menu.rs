@@ -577,9 +577,10 @@ unsafe fn item_is_save(item: AXUIElementRef) -> bool {
             == 0.0
 }
 
-/// How long a disabled item gets to enable after its window becomes key, and
-/// how often it is re-read.
-const ENABLE_WAIT: Duration = Duration::from_millis(600);
+/// AppKit refreshes a menu's enabled flags on an accessibility read at most
+/// once a second (measured 1.00 s apart in TextEdit and a bare AppKit app,
+/// 2026-11-02), so a read this long after the driver's last action is current.
+const MENU_REFRESH: Duration = Duration::from_millis(1050);
 const ENABLE_POLL: Duration = Duration::from_millis(40);
 
 /// Resolve the whole path from the app's live menu bar without opening any
@@ -588,7 +589,6 @@ const ENABLE_POLL: Duration = Duration::from_millis(40);
 /// front app.
 unsafe fn invoke_path_in_background(
     pid: i32,
-    window_id: u32,
     path: &[String],
 ) -> Result<PressedItem, BackgroundPressError> {
     let app = AXUIElementCreateApplication(pid);
@@ -610,24 +610,24 @@ unsafe fn invoke_path_in_background(
     set_messaging_timeout(target);
     let is_save = item_is_save(target);
     let result = (|| {
-        // AppKit validates menu items against the key window. Make the target
-        // window AppKit-key without raising it or touching the user's window
-        // (the focus record only), so items that need a key window enable.
-        if copy_bool_attr(target, "AXEnabled") == Some(false)
-            && crate::input::skylight::activate_without_raise_with(pid, window_id, false)
+        // A disabled flag may predate the driver's last action by up to one
+        // refresh. Re-read until a refresh must have followed that action;
+        // with no action that recent, the first read is already current.
+        // No focus record: it never makes the window AppKit-key or main for
+        // validation in the background, so it cannot enable an item.
+        if let Some(fresh_at) =
+            cua_driver_core::tool::last_action_end().map(|end| end + MENU_REFRESH)
         {
-            // AppKit revalidates the item once the window is key; wait for it
-            // instead of reading the stale flag after a fixed pause.
-            let mut waited = Duration::ZERO;
-            while waited < ENABLE_WAIT && copy_bool_attr(target, "AXEnabled") == Some(false) {
+            let started = std::time::Instant::now();
+            while copy_bool_attr(target, "AXEnabled") == Some(false)
+                && std::time::Instant::now() < fresh_at
+            {
                 std::thread::sleep(ENABLE_POLL);
-                waited += ENABLE_POLL;
             }
             tracing::info!(
                 target: "invoke_menu",
-                waited_ms = waited.as_millis() as u64,
-                enabled = copy_bool_attr(target, "AXEnabled") != Some(false),
-                "background menu item enable wait"
+                waited_ms = started.elapsed().as_millis() as u64,
+                "background menu item freshness wait"
             );
         }
         if copy_bool_attr(target, "AXEnabled") == Some(false) {
@@ -758,7 +758,7 @@ pub(super) async fn run_in_background(
     let press_path = path.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         let _key_focus = crate::key_focus_guard::protect(pid);
-        unsafe { invoke_path_in_background(pid, window_id, &press_path) }
+        unsafe { invoke_path_in_background(pid, &press_path) }
     })
     .await;
     let preface = request.preface(&path);

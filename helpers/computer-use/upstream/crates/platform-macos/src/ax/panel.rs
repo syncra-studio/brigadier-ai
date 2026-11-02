@@ -158,6 +158,88 @@ pub fn keyboard_pid(pid: i32, wid: u32) -> Option<i32> {
     }
 }
 
+/// The process to post the panel's key events to. A client-served panel
+/// window (TextEdit's Open panel) hosts its content from the AppKit panel
+/// service, and only that service acts on the keys: posted to the client
+/// they are dropped, Go to Folder included. Falls back to [`keyboard_pid`].
+pub fn event_pid(pid: i32, wid: u32) -> Option<i32> {
+    let server = keyboard_pid(pid, wid)?;
+    let content = unsafe { content_service_pid(pid, wid) };
+    Some(content.unwrap_or(server))
+}
+
+/// The panel service pid behind the content of panel `wid`, if any. Most
+/// remote elements report the client's pid; a few (the split view's
+/// splitter) report the service's, so look a few levels down.
+unsafe fn content_service_pid(pid: i32, wid: u32) -> Option<i32> {
+    let app = AXUIElementCreateApplication(pid);
+    if app.is_null() {
+        return None;
+    }
+    AXUIElementSetMessagingTimeout(app, 0.1);
+    let windows = copy_ax_windows_including(app, pid, wid);
+    CFRelease(app as CFTypeRef);
+    let mut roots = Vec::new();
+    for window in windows {
+        if roots.is_empty() && ax_get_window_id(window) == Some(wid) {
+            roots.push(owned(window));
+        } else {
+            CFRelease(window as CFTypeRef);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_millis(150);
+    let found = find_window_in_tree(
+        roots,
+        |element| {
+            let mut element_pid = 0;
+            AXUIElementGetPid(element.as_ptr() as AXUIElementRef, &mut element_pid)
+                == kAXErrorSuccess
+                && element_pid != pid
+                && crate::apps::path_of_pid(element_pid)
+                    .is_some_and(|path| panel_service_path(&path))
+        },
+        |element| {
+            copy_children(element.as_ptr() as AXUIElementRef)
+                .into_iter()
+                .map(|e| owned(e))
+                .collect()
+        },
+        || Instant::now() < deadline,
+    )?;
+    let mut service = 0;
+    (AXUIElementGetPid(found.as_ptr() as AXUIElementRef, &mut service) == kAXErrorSuccess)
+        .then_some(service)
+}
+
+/// The window id of the sheet the exact Open/Save panel `wid` of `pid` shows
+/// (its Go to Folder sheet), if any.
+pub fn panel_sheet_window(pid: i32, wid: u32) -> Option<u32> {
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(app, 0.1);
+        let windows = copy_ax_windows_including(app, pid, wid);
+        CFRelease(app as CFTypeRef);
+        let mut found = None;
+        for window in windows {
+            if found.is_none() && ax_get_window_id(window) == Some(wid) && is_panel(window) {
+                for child in copy_children(window) {
+                    if found.is_none()
+                        && copy_string_attr(child, "AXRole").as_deref() == Some("AXSheet")
+                    {
+                        found = ax_get_window_id(child);
+                    }
+                    CFRelease(child as CFTypeRef);
+                }
+            }
+            CFRelease(window as CFTypeRef);
+        }
+        found
+    }
+}
+
 /// Whether the exact Open/Save panel `wid` of `pid` shows a sheet (its Go to
 /// Folder sheet). `None` when the window isn't such a panel.
 pub fn panel_has_sheet(pid: i32, wid: u32) -> Option<bool> {
