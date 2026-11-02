@@ -404,36 +404,46 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
 /// is open, or its turn ended while background commands of its own still run (a test run and
 /// a wait on it), whose end it takes up again.
 fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
-    cli.is_some_and(|cli| {
-        cli.open
-            || cli.background.iter().any(|job| {
-                job.status == brigadier_providers::BackgroundTaskStatus::Running
-                    && job.kind != brigadier_providers::BackgroundTaskKind::Agent
-                    && !cli
-                        .commands
-                        .iter()
-                        .find(|(id, _)| job.item_id.as_ref() == Some(id))
-                        .map(|(_, command)| command.as_str())
-                        .or_else(|| {
-                            (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
-                                .then_some(job.label.as_str())
-                        })
-                        .is_some_and(|command| {
-                            (matches!(
-                                job.kind,
-                                brigadier_providers::BackgroundTaskKind::Shell
-                                    | brigadier_providers::BackgroundTaskKind::Terminal
-                            ) && thread_view::persistent_app(command))
-                                || (brigadier_providers::policy::runs_only_brigadier(command)
-                                    && (brigadier_providers::policy::runs_brigadier(
-                                        command, "preview",
-                                    ) || brigadier_providers::policy::runs_brigadier(
-                                        command, "wait",
-                                    )))
-                        })
-            })
-    }) && !task.state.is_final()
+    cli.is_some_and(busy)
+        && !task.state.is_final()
         && !task.plain.as_ref().is_some_and(|plain| plain.closed)
+}
+
+/// Its CLI's turn is open, or background commands of its own still run (see [`working`]).
+fn busy(cli: &WorkerCli) -> bool {
+    cli.open
+        || cli.background.iter().any(|job| {
+            job.status == brigadier_providers::BackgroundTaskStatus::Running
+                && job.kind != brigadier_providers::BackgroundTaskKind::Agent
+                && !cli
+                    .commands
+                    .iter()
+                    .find(|(id, _)| job.item_id.as_ref() == Some(id))
+                    .map(|(_, command)| command.as_str())
+                    .or_else(|| {
+                        (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
+                            .then_some(job.label.as_str())
+                    })
+                    .is_some_and(|command| {
+                        (matches!(
+                            job.kind,
+                            brigadier_providers::BackgroundTaskKind::Shell
+                                | brigadier_providers::BackgroundTaskKind::Terminal
+                        ) && thread_view::persistent_app(command))
+                            || (brigadier_providers::policy::runs_only_brigadier(command)
+                                && (brigadier_providers::policy::runs_brigadier(
+                                    command, "preview",
+                                ) || brigadier_providers::policy::runs_brigadier(
+                                    command, "wait",
+                                )))
+                    })
+        })
+}
+
+/// Its turn ended done and nothing of its own runs on: a turn that ended with a background
+/// command still at work (a loop it left running) has not finished, and a close of it is a stop.
+fn finished(cli: &WorkerCli) -> bool {
+    cli.last_end == Some(TurnEnd::Done) && !busy(cli)
 }
 
 /// A worker's row from its task (its link to the session, its title and model, its branch),
@@ -874,7 +884,7 @@ impl SessionManager {
             .lock()
             .unwrap()
             .get(task)
-            .is_some_and(|cli| !cli.open && cli.last_end == Some(TurnEnd::Done))
+            .is_some_and(finished)
     }
 
     /// Drops every worker's CLI and git reads held in memory, as a daemon restart does.
@@ -1306,6 +1316,39 @@ mod tests {
             Some("brigadier wait")
         );
         assert!(cli.commands.len() <= COMMANDS_KEPT + 1);
+    }
+
+    /// A Claude worker that ends its turn done with its loop still running in the background has
+    /// not finished: `brigadier close` stops it and says "Stopped" (D150), as it does any running
+    /// worker; once the loop ended it has (D104).
+    #[test]
+    fn a_turn_that_ended_with_its_loop_still_running_has_not_finished() {
+        use brigadier_providers::{BackgroundTaskKind, BackgroundTaskStatus};
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        let job = |status| ProviderEvent::BackgroundTask {
+            task: BackgroundTask {
+                command: Some(
+                    "for i in $(seq 1 40); do echo $i >> marks.txt; sleep 3; done".into(),
+                ),
+                provider: None,
+                id: "bloop".into(),
+                item_id: None,
+                kind: BackgroundTaskKind::Shell,
+                label: "Write marks".into(),
+                status,
+                started_at_ms: 2,
+                ended_at_ms: None,
+                output_file: None,
+                summary: None,
+                last_line: None,
+            },
+        };
+        follow(&mut cli, &job(BackgroundTaskStatus::Running), 2);
+        follow(&mut cli, &turn_end(TurnStatus::Completed), 3);
+        assert!(!finished(&cli), "its loop still runs");
+        follow(&mut cli, &job(BackgroundTaskStatus::Completed), 4);
+        assert!(finished(&cli));
     }
 
     /// A worker's context size is kept for `brigadier workers` (run2-D42) without sending its
