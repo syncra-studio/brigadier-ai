@@ -398,6 +398,15 @@ mod tab_count_tests {
 /// Explorer parses forward slashes in a drive path as switches, even inside
 /// quotes. Normalize only absolute filesystem arguments, never web URLs.
 pub(crate) fn launch_argument(target: &str, value: &str) -> String {
+    explorer_path_argument(target, value).unwrap_or_else(|| quote_argument(value))
+}
+
+/// Extra arguments retain their caller-supplied syntax except Explorer paths.
+pub(crate) fn additional_launch_argument(target: &str, value: &str) -> String {
+    explorer_path_argument(target, value).unwrap_or_else(|| value.to_owned())
+}
+
+fn explorer_path_argument(target: &str, value: &str) -> Option<String> {
     let name = target.rsplit(['\\', '/']).next().unwrap_or(target);
     let bytes = value.as_bytes();
     let drive_path = bytes.len() >= 3
@@ -405,11 +414,11 @@ pub(crate) fn launch_argument(target: &str, value: &str) -> String {
         && bytes[1] == b':'
         && matches!(bytes[2], b'/' | b'\\');
     if name.eq_ignore_ascii_case("explorer.exe") || name.eq_ignore_ascii_case("explorer") {
-        if drive_path || value.starts_with("//") {
-            return quote_argument(&value.replace('/', "\\"));
+        if drive_path || value.starts_with("//") || value.starts_with(r"\\") {
+            return Some(quote_argument(&value.replace('/', "\\")));
         }
     }
-    quote_argument(value)
+    None
 }
 #[cfg(test)]
 mod path_arguments {
@@ -432,5 +441,41 @@ mod path_arguments {
             launch_argument("explorer.exe", "https://example.com/a/b"),
             quote_argument("https://example.com/a/b")
         );
+    }
+}
+
+#[cfg(test)]
+mod additional_path_arguments {
+    use super::*;
+    #[test]
+    fn only_explorer_filesystem_arguments_change() {
+        for target in ["explorer.exe", r"C:\Windows\EXPLORER.EXE"] {
+            for path in [
+                "C:/test folder/file.txt",
+                "//server/share/folder",
+                r"\\server\share/folder",
+            ] {
+                assert_eq!(
+                    additional_launch_argument(target, path),
+                    quote_argument(&path.replace('/', "\\"))
+                );
+            }
+            for arg in [
+                "https://example.com/a/b",
+                "file:///C:/folder",
+                "/select,",
+                "--flag",
+                "relative/path",
+            ] {
+                assert_eq!(additional_launch_argument(target, arg), arg);
+            }
+        }
+        for arg in [
+            "C:/test folder/file.txt",
+            "//server/share/folder",
+            "--flag=value",
+        ] {
+            assert_eq!(additional_launch_argument("other.exe", arg), arg);
+        }
     }
 }

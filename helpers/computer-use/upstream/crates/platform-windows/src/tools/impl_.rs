@@ -585,7 +585,7 @@ async fn close_settings_window(args: Value) -> ToolResult {
             return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
                 .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
         }
-        readback.finish(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage)
+        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(2))
     }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
 }
 
@@ -2651,6 +2651,11 @@ impl Tool for LaunchAppTool {
                 super::task_browser::disable_feature(&mut extra_args, feature);
             }
         }
+        if let Some(target) = resolved_target.as_deref() {
+            for arg in &mut extra_args {
+                *arg = super::browser_target::additional_launch_argument(target, arg);
+            }
+        }
         // Task browsers open their pages through the proven endpoint instead.
         let urls_in_arguments = task_profile.is_none()
             && super::browser_target::urls_belong_to_app(
@@ -2826,6 +2831,7 @@ impl Tool for LaunchAppTool {
         // ShellExecuteExW. Both branches still need to handle `urls`
         // (additional URLs always go through ShellExecuteExW since the
         // Start Menu doesn't activate by URL).
+        let document_process = fresh_document_cleanup.process_tracker();
         let pid = if let Some(pid) = reused_task_pid {
             pid
         } else if let Some(aumid) = aumid_for_uwp.clone() {
@@ -2834,8 +2840,13 @@ impl Tool for LaunchAppTool {
             // Once submitted, a broker may still open the file after our
             // deadline. Keep it even when activation cannot be confirmed.
             fresh_document_cleanup.launched();
+            let document_process = document_process.clone();
             let activation = tokio::task::spawn_blocking(move || {
-                crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone)
+                let result = crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone);
+                if let (Ok(pid), Some(tracker)) = (&result, &document_process) {
+                    tracker.capture_pid(*pid);
+                }
+                result
             });
             let activation =
                 tokio::time::timeout(std::time::Duration::from_secs(15), activation).await;
@@ -2887,6 +2898,7 @@ impl Tool for LaunchAppTool {
             // backstop for any *other* blocking broker dialog (SmartScreen, an
             // elevation/consent surface) so a bad target can't hang the daemon.
             let task_spawn = task_profile.clone();
+            let document_process = document_process.clone();
             let launch = tokio::task::spawn_blocking(move || -> anyhow::Result<u32> {
                 use windows::core::{PCWSTR, PWSTR};
                 use windows::Win32::Foundation::CloseHandle;
@@ -2955,6 +2967,9 @@ impl Tool for LaunchAppTool {
                                 &startup,
                                 &mut process,
                             )?;
+                            if let Some(tracker) = &document_process {
+                                tracker.capture_handle(process.hProcess);
+                            }
                             let _ = CloseHandle(process.hThread);
                             let _ = CloseHandle(process.hProcess);
                         }
@@ -2991,6 +3006,9 @@ impl Tool for LaunchAppTool {
                         ShellExecuteExW(&mut info)?;
                     }
                     if !info.hProcess.is_invalid() {
+                        if let Some(tracker) = &document_process {
+                            tracker.capture_handle(info.hProcess);
+                        }
                         let p = unsafe { GetProcessId(info.hProcess) };
                         unsafe {
                             let _ = CloseHandle(info.hProcess);
@@ -3000,6 +3018,10 @@ impl Tool for LaunchAppTool {
                         0
                     }
                 };
+
+                if let Some(tracker) = &document_process {
+                    tracker.capture_pid(pid);
+                }
 
                 // Open any additional URLs in the default browser (no focus
                 // steal, no pid capture for these — Swift's NSWorkspace flow

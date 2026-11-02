@@ -1,0 +1,316 @@
+Why: Normalize Explorer filesystem extra arguments, wait for Settings close readback, and report confirmed closed-window batch observations without stale identity reads.
+
+diff --git a/crates/cua-driver-core/src/batch_tools.rs b/crates/cua-driver-core/src/batch_tools.rs
+index ec3e585ae..319ef2539 100644
+--- a/crates/cua-driver-core/src/batch_tools.rs
++++ b/crates/cua-driver-core/src/batch_tools.rs
+@@ -754,7 +754,17 @@ impl Plan {
+         };
+         if let Some(mut args) = observe {
+             let filled = fill_observed_window(&mut args, last_window.as_ref());
+-            let result = if filled {
++            let closed = structured["steps"]
++                .as_array()
++                .and_then(|steps| steps.last())
++                .and_then(|step| step.get("closed_window"))
++                .filter(|window| {
++                    window["pid"] == args["pid"] && window["window_id"] == args["window_id"]
++                });
++            let result = if let Some(window) = closed {
++                ToolResult::text("The observed window closed.")
++                    .with_structured(json!({"status":"closed", "pid":window["pid"], "window_id":window["window_id"], "summary":"The observed window closed."}))
++            } else if filled {
+                 registry.invoke(OBSERVE_TOOL, args).await
+             } else {
+                 ToolResult::error("no window to observe: no step resolved one")
+@@ -1008,6 +1018,22 @@ async fn run_step(
+         if let (true, Some(note)) = (ok, refound_note) {
+             notes.push(note);
+         }
++        // The registry projects legacy structured data into the public action
++        // result. Use the retained producer evidence, which refers to the exact
++        // window this action targeted, rather than parsing the public prose.
++        if ok
++            && result.action_record.as_ref().is_some_and(|record| {
++                record.effect == crate::action_record::ActionEffect::Confirmed
++                    && record.evidence.iter().any(|evidence| {
++                        evidence.kind == crate::action_record::EvidenceKind::WindowChange
++                            && evidence.detail == "Target window/dialog closed"
++                    })
++            })
++        {
++            if let Some(window) = last_window.as_ref() {
++                report["closed_window"] = json!({"pid":window.pid, "window_id":window.window_id});
++            }
++        }
+         report["ok"] = json!(ok);
+         report["message"] = json!(message);
+         if !ok {
+@@ -1166,6 +1192,9 @@ fn fill_observed_window(args: &mut Value, last: Option<&Window>) -> bool {
+ 
+ /// One line saying what the end-of-batch read found.
+ fn observation_summary(state: &Value) -> String {
++    if state["status"] == "closed" {
++        return "The observed window closed.".to_owned();
++    }
+     let status = state.get("since_status").and_then(Value::as_str);
+     let since = state.get("since").and_then(Value::as_str).unwrap_or("");
+     match status {
+diff --git a/crates/cua-driver-core/src/batch_tools/tests.rs b/crates/cua-driver-core/src/batch_tools/tests.rs
+index af5b504db..20f1bd65f 100644
+--- a/crates/cua-driver-core/src/batch_tools/tests.rs
++++ b/crates/cua-driver-core/src/batch_tools/tests.rs
+@@ -32,6 +32,28 @@ impl Tool for Probe {
+         if let Some(message) = args["fail_message"].as_str() {
+             return ToolResult::error(message.to_owned());
+         }
++        if args["text"] == "close-confirmed" || args["text"] == "close-unconfirmed" {
++            use crate::action_record::{
++                ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, EvidenceKind,
++                RequestedDelivery,
++            };
++            let mut record = ActionExecutionRecord::new(
++                if args["text"] == "close-confirmed" {
++                    ActionEffect::Confirmed
++                } else {
++                    ActionEffect::Unverifiable
++                },
++                ActionTransport::WindowsPostMessage,
++                RequestedDelivery::Background,
++            );
++            if args["text"] == "close-confirmed" {
++                record.evidence.push(ActionEvidence {
++                    kind: EvidenceKind::WindowChange,
++                    detail: "Target window/dialog closed".into(),
++                });
++            }
++            return ToolResult::text("close dispatched").with_action_record(record);
++        }
+         if args["fail"] == true {
+             ToolResult::error(format!("{} refused: probe asked to fail", self.def.name))
+         } else {
+@@ -784,3 +806,37 @@ async fn conflicting_token_window_is_rejected_before_actions() {
+     assert!(text(&result).contains("different pid or window_id"));
+     assert_eq!(harness.hits("click"), 0);
+ }
++
++#[tokio::test]
++async fn final_observation_reports_confirmed_close_of_its_exact_window() {
++    for (text, observe, expected_reads) in [
++        ("close-confirmed", json!({}), 0),
++        ("close-unconfirmed", json!({}), 1),
++        ("close-confirmed", json!({"pid":42, "window_id":100}), 1),
++        ("close-confirmed", json!({"pid":43, "window_id":99}), 1),
++    ] {
++        let h = Harness::new();
++        let result = h
++            .run(json!({
++                "pid":42, "window_id":99,
++                "steps":[
++                    {"tool":"set_value","args":{"text":"file name"}},
++                    {"tool":"click","args":{"text":text}}
++                ],
++                "observe":observe
++            }))
++            .await;
++        assert_ne!(result.is_error, Some(true), "{result:?}");
++        assert_eq!(h.hits("get_window_state"), expected_reads, "{result:?}");
++        let data = result.structured_content.unwrap();
++        assert_eq!(data["observation"]["ok"], true);
++        if expected_reads == 0 {
++            assert_eq!(data["observation"]["state"]["status"], "closed");
++            assert_eq!(data["observation"]["state"]["window_id"], 99);
++            assert_eq!(
++                data["observation"]["summary"],
++                "The observed window closed."
++            );
++        }
++    }
++}
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+index ce3740d13..a5e1175e0 100644
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -398,6 +398,15 @@ mod tab_count_tests {
+ /// Explorer parses forward slashes in a drive path as switches, even inside
+ /// quotes. Normalize only absolute filesystem arguments, never web URLs.
+ pub(crate) fn launch_argument(target: &str, value: &str) -> String {
++    explorer_path_argument(target, value).unwrap_or_else(|| quote_argument(value))
++}
++
++/// Extra arguments retain their caller-supplied syntax except Explorer paths.
++pub(crate) fn additional_launch_argument(target: &str, value: &str) -> String {
++    explorer_path_argument(target, value).unwrap_or_else(|| value.to_owned())
++}
++
++fn explorer_path_argument(target: &str, value: &str) -> Option<String> {
+     let name = target.rsplit(['\\', '/']).next().unwrap_or(target);
+     let bytes = value.as_bytes();
+     let drive_path = bytes.len() >= 3
+@@ -405,11 +414,11 @@ pub(crate) fn launch_argument(target: &str, value: &str) -> String {
+         && bytes[1] == b':'
+         && matches!(bytes[2], b'/' | b'\\');
+     if name.eq_ignore_ascii_case("explorer.exe") || name.eq_ignore_ascii_case("explorer") {
+-        if drive_path || value.starts_with("//") {
+-            return quote_argument(&value.replace('/', "\\"));
++        if drive_path || value.starts_with("//") || value.starts_with(r"\\") {
++            return Some(quote_argument(&value.replace('/', "\\")));
+         }
+     }
+-    quote_argument(value)
++    None
+ }
+ #[cfg(test)]
+ mod path_arguments {
+@@ -434,3 +443,39 @@ mod path_arguments {
+         );
+     }
+ }
++
++#[cfg(test)]
++mod additional_path_arguments {
++    use super::*;
++    #[test]
++    fn only_explorer_filesystem_arguments_change() {
++        for target in ["explorer.exe", r"C:\Windows\EXPLORER.EXE"] {
++            for path in [
++                "C:/test folder/file.txt",
++                "//server/share/folder",
++                r"\\server\share/folder",
++            ] {
++                assert_eq!(
++                    additional_launch_argument(target, path),
++                    quote_argument(&path.replace('/', "\\"))
++                );
++            }
++            for arg in [
++                "https://example.com/a/b",
++                "file:///C:/folder",
++                "/select,",
++                "--flag",
++                "relative/path",
++            ] {
++                assert_eq!(additional_launch_argument(target, arg), arg);
++            }
++        }
++        for arg in [
++            "C:/test folder/file.txt",
++            "//server/share/folder",
++            "--flag=value",
++        ] {
++            assert_eq!(additional_launch_argument("other.exe", arg), arg);
++        }
++    }
++}
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index dc01326ba..f6fff85bd 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -585,7 +585,7 @@ async fn close_settings_window(args: Value) -> ToolResult {
+             return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
+                 .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
+         }
+-        readback.finish(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage)
++        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(2))
+     }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
+ }
+ 
+@@ -2651,6 +2651,11 @@ impl Tool for LaunchAppTool {
+                 super::task_browser::disable_feature(&mut extra_args, feature);
+             }
+         }
++        if let Some(target) = resolved_target.as_deref() {
++            for arg in &mut extra_args {
++                *arg = super::browser_target::additional_launch_argument(target, arg);
++            }
++        }
+         // Task browsers open their pages through the proven endpoint instead.
+         let urls_in_arguments = task_profile.is_none()
+             && super::browser_target::urls_belong_to_app(
+diff --git a/crates/platform-windows/src/uia/click.rs b/crates/platform-windows/src/uia/click.rs
+index 152bea52f..83ff1e776 100644
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -100,10 +100,21 @@ impl Readback {
+         route: &str,
+         transport: ActionTransport,
+     ) -> ToolResult {
++        self.finish_with_timeout(ptr, route, transport, Duration::from_millis(400))
++    }
++
++    pub(crate) fn finish_with_timeout(
++        self,
++        ptr: Option<usize>,
++        route: &str,
++        transport: ActionTransport,
++        timeout: Duration,
++    ) -> ToolResult {
++        let deadline = std::time::Instant::now() + timeout;
+         let hwnd = HWND(self.hwnd as *mut _);
+-        let mut closed = false;
++        let mut closed;
+         let mut changed = false;
+-        for attempt in 0..9 {
++        loop {
+             closed = window_closed(self.present_before, unsafe { IsWindow(hwnd) }.as_bool());
+             if !closed {
+                 changed = ptr.is_some_and(|ptr| {
+@@ -112,7 +123,7 @@ impl Readback {
+                     observed_change(&self.before, &state(&element))
+                 });
+             }
+-            if closed || changed || attempt == 8 {
++            if closed || changed || std::time::Instant::now() >= deadline {
+                 break;
+             }
+             std::thread::sleep(std::time::Duration::from_millis(50));
+@@ -515,6 +526,49 @@ fn at_point_inner(
+ mod tests {
+     use super::*;
+     #[test]
++    fn settings_readback_confirms_window_destruction_after_the_short_click_wait() {
++        use windows::core::w;
++        use windows::Win32::UI::WindowsAndMessaging::{
++            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
++        };
++        let (created_tx, created_rx) = std::sync::mpsc::channel();
++        let (close_tx, close_rx) = std::sync::mpsc::channel();
++        let owner = std::thread::spawn(move || unsafe {
++            let hwnd = CreateWindowExW(
++                WINDOW_EX_STYLE(0),
++                w!("STATIC"),
++                w!(""),
++                WS_POPUP,
++                0,
++                0,
++                100,
++                100,
++                None,
++                None,
++                None,
++                None,
++            )
++            .unwrap();
++            created_tx.send(hwnd.0 as usize as u64).unwrap();
++            close_rx.recv().unwrap();
++            std::thread::sleep(Duration::from_millis(600));
++            DestroyWindow(hwnd).unwrap();
++        });
++        let id = created_rx.recv().unwrap();
++        let readback = Readback::new(id, None);
++        close_tx.send(()).unwrap();
++        let result = readback.finish_with_timeout(
++            None,
++            "Settings window WM_CLOSE",
++            ActionTransport::WindowsPostMessage,
++            Duration::from_secs(2),
++        );
++        owner.join().unwrap();
++        let data = result.structured_content.unwrap();
++        assert_eq!(data["effect"], "confirmed");
++        assert!(result.action_record.unwrap().debug_json()["evidence"].is_array());
++    }
++    #[test]
+     fn an_already_missing_window_is_never_a_confirmed_close() {
+         let result =
+             Readback::new(0, None).finish(None, "Close", ActionTransport::WindowsPostMessage);

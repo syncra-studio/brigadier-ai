@@ -53,6 +53,50 @@ impl Observation {
     }
 }
 
+impl Observation {
+    /// The sentence an input action's reply carries when the target app had
+    /// the front during it (a displaced watch starts with it already there);
+    /// None when no activation was seen or the user's own input may explain it.
+    pub(crate) fn action_note(self) -> Option<&'static str> {
+        if !self.activated || !self.foreground_seen || self.user_input || self.interrupted {
+            return None;
+        }
+        Some(if self.restored {
+            "The app's window had the front during this action; your window was put back in front."
+        } else {
+            "The app's window had the front during this action and Windows did not give it back: it is in front of your window now. Click your window to continue."
+        })
+    }
+}
+
+/// Facts for [`may_inherit_prior`] about one live input watch.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct InheritFacts {
+    /// The front window's process is one of the watch's targets.
+    pub target: bool,
+    pub monitoring: bool,
+    pub restore_allowed: bool,
+    /// The watch saw a target window take the front.
+    pub activated: bool,
+    /// No physical input since the watch started.
+    pub input_unchanged: bool,
+    pub prior_valid: bool,
+    pub prior_is_target: bool,
+}
+
+/// A later action may treat a live watch's window as the user's only when the
+/// app took the front from it during that watch and the user has not touched
+/// the mouse or keyboard since: then the app's front window is not the user's.
+pub(crate) fn may_inherit_prior(facts: InheritFacts) -> bool {
+    facts.target
+        && facts.monitoring
+        && facts.restore_allowed
+        && facts.activated
+        && facts.input_unchanged
+        && facts.prior_valid
+        && !facts.prior_is_target
+}
+
 pub(crate) fn may_hand_back(
     prior_valid: bool,
     input_unchanged: bool,
@@ -594,5 +638,108 @@ mod launch_hand_back_tests {
         assert!(evidence.is_known(42));
         assert!(!evidence.is_known(7));
         assert!(!evidence.is_known(0));
+    }
+}
+
+#[cfg(test)]
+mod input_dialog_hand_back_tests {
+    use super::*;
+
+    fn displaced() -> InheritFacts {
+        InheritFacts {
+            target: true,
+            monitoring: true,
+            restore_allowed: true,
+            activated: true,
+            input_unchanged: true,
+            prior_valid: true,
+            prior_is_target: false,
+        }
+    }
+
+    #[test]
+    fn the_users_window_is_inherited_only_when_the_app_took_the_front_without_input() {
+        assert!(may_inherit_prior(displaced()));
+        for blocked in [
+            // Another app's watch says nothing about this app's dialog.
+            InheritFacts {
+                target: false,
+                ..displaced()
+            },
+            InheritFacts {
+                monitoring: false,
+                ..displaced()
+            },
+            InheritFacts {
+                restore_allowed: false,
+                ..displaced()
+            },
+            // The app never took the front: the user may have chosen it.
+            InheritFacts {
+                activated: false,
+                ..displaced()
+            },
+            // The user's own input since: their choice stands.
+            InheritFacts {
+                input_unchanged: false,
+                ..displaced()
+            },
+            InheritFacts {
+                prior_valid: false,
+                ..displaced()
+            },
+            // The app's own window is never the window to give the front to.
+            InheritFacts {
+                prior_is_target: true,
+                ..displaced()
+            },
+        ] {
+            assert!(!may_inherit_prior(blocked), "{blocked:?}");
+        }
+    }
+
+    #[test]
+    fn an_action_reply_says_when_the_app_took_the_front_and_whether_it_came_back() {
+        let took = Observation {
+            activated: true,
+            foreground_seen: true,
+            monitoring: true,
+            ..Default::default()
+        };
+        let kept = took.action_note().expect("kept front is reported");
+        assert!(kept.contains("Click your window"));
+        let back = Observation {
+            restored: true,
+            ..took
+        }
+        .action_note()
+        .expect("restored front is reported");
+        assert!(back.contains("put back in front"));
+        // No activation, an unconfirmed event, or the user's own input: silent.
+        assert_eq!(Observation::default().action_note(), None);
+        assert_eq!(
+            Observation {
+                foreground_seen: false,
+                ..took
+            }
+            .action_note(),
+            None
+        );
+        assert_eq!(
+            Observation {
+                user_input: true,
+                ..took
+            }
+            .action_note(),
+            None
+        );
+        assert_eq!(
+            Observation {
+                interrupted: true,
+                ..took
+            }
+            .action_note(),
+            None
+        );
     }
 }

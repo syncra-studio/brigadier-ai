@@ -322,6 +322,7 @@ pub(super) async fn notepad_document_window(
                     if count == 0
                         && super::launch_policy::document_title_matches(&window.title, &filename)
                     {
+                        record_document_window(&filename, window.pid);
                         return Some(window); // classic Notepad has no tabs
                     }
                     for index in 0..count {
@@ -339,6 +340,7 @@ pub(super) async fn notepad_document_window(
                             .and_then(|p| p.CurrentIsSelected().ok())
                             .is_some_and(|s| s.as_bool());
                         if selected {
+                            record_document_window(&filename, window.pid);
                             return Some(window);
                         }
                     }
@@ -407,27 +409,202 @@ mod fresh_document_tests {
     }
 }
 
-/// Remove only our newly created empty document if launch is refused before
-/// submission to Windows. Once submitted, the path is the user's document
-/// and stays available for saving/reading until the caller cleans it up.
-pub(super) struct UnlaunchedDocument(Option<std::path::PathBuf>);
+/// Retain ownership after submission; saved or replaced documents are preserved.
+pub(super) struct UnlaunchedDocument(Option<FreshDocument>, Option<DocumentProcess>);
 impl UnlaunchedDocument {
     pub(super) fn new(path: Option<std::path::PathBuf>) -> Self {
-        Self(path)
+        let document = path.and_then(|path| FreshDocument::track(path).ok());
+        let process = document.as_ref().map(|document| document.process.clone());
+        Self(document, process)
+    }
+    pub(super) fn process_tracker(&self) -> Option<DocumentProcess> {
+        self.1.clone()
     }
     pub(super) fn launched(&mut self) {
-        self.0 = None;
+        if let Some(document) = self.0.take() {
+            DOCUMENTS.lock().unwrap().push(document);
+        }
     }
 }
 impl Drop for UnlaunchedDocument {
     fn drop(&mut self) {
-        if let Some(path) = self.0.as_ref() {
-            // Do not remove anything if another actor has put content in it.
-            if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == 0) {
-                let _ = std::fs::remove_file(path);
+        if let Some(process) = &self.1 {
+            process.0.lock().unwrap().finished = true;
+        }
+        if let Some(document) = self.0.as_ref() {
+            document.remove_empty();
+        }
+    }
+}
+
+static DOCUMENTS: std::sync::Mutex<Vec<FreshDocument>> = std::sync::Mutex::new(Vec::new());
+
+struct FreshDocument {
+    path: std::path::PathBuf,
+    identity: (u32, u32, u32, u32, u32),
+    scope: Option<String>,
+    process: DocumentProcess,
+    relinquished: std::sync::atomic::AtomicBool,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct DocumentProcess(std::sync::Arc<std::sync::Mutex<DocumentProcessState>>);
+#[derive(Default)]
+struct DocumentProcessState {
+    handle: Option<std::os::windows::io::OwnedHandle>,
+    verified_window: bool,
+    finished: bool,
+}
+impl DocumentProcess {
+    pub(super) fn capture_handle(&self, handle: windows::Win32::Foundation::HANDLE) {
+        use std::os::windows::io::BorrowedHandle;
+        if handle.is_invalid() {
+            return;
+        }
+        // Duplicate while the launch API still owns its handle: even a process
+        // which already exited retains an unambiguous kernel identity.
+        let owned = unsafe { BorrowedHandle::borrow_raw(handle.0) }
+            .try_clone_to_owned()
+            .ok();
+        if let Some(owned) = owned {
+            self.0.lock().unwrap().handle = Some(owned);
+        }
+    }
+    pub(super) fn capture_pid(&self, pid: u32) {
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+        if self.0.lock().unwrap().handle.is_some() {
+            return;
+        }
+        if let Ok(handle) = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+            self.capture_handle(handle);
+            let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
+        }
+    }
+    fn ready(&self, notepad_running: bool) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::{
+            Foundation::{HANDLE, WAIT_OBJECT_0},
+            System::Threading::WaitForSingleObject,
+        };
+        let state = self.0.lock().unwrap();
+        state.finished
+            && match &state.handle {
+                Some(handle) => {
+                    (unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), 0) })
+                        == WAIT_OBJECT_0
+                        && (state.verified_window || !notepad_running)
+                }
+                None => false, // An unproven broker launch can still complete later.
+            }
+    }
+}
+
+fn record_document_window(filename: &str, pid: u32) {
+    for document in DOCUMENTS.lock().unwrap().iter() {
+        if document
+            .path
+            .file_name()
+            .is_some_and(|name| name == filename)
+        {
+            let process = DocumentProcess::default();
+            process.capture_pid(pid);
+            let mut next = process.0.lock().unwrap();
+            if let Some(handle) = next.handle.take() {
+                let mut state = document.process.0.lock().unwrap();
+                state.handle = Some(handle);
+                state.verified_window = true;
             }
         }
     }
+}
+
+impl FreshDocument {
+    fn information(file: &std::fs::File) -> anyhow::Result<(u32, u32, u32, u32, u32)> {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe {
+            GetFileInformationByHandle(
+                windows::Win32::Foundation::HANDLE(file.as_raw_handle()),
+                &mut info,
+            )?;
+        }
+        anyhow::ensure!(
+            info.dwFileAttributes & 0x410 == 0 && info.nFileSizeHigh == 0 && info.nFileSizeLow == 0,
+            "document is not an empty regular file"
+        );
+        Ok((
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+            info.ftLastWriteTime.dwHighDateTime,
+            info.ftLastWriteTime.dwLowDateTime,
+        ))
+    }
+
+    fn track(path: std::path::PathBuf) -> anyhow::Result<Self> {
+        let identity = Self::information(&std::fs::File::open(&path)?)?;
+        Ok(Self {
+            path,
+            identity,
+            scope: cua_driver_core::tool::current_dispatch_runtime_scope(),
+            process: DocumentProcess::default(),
+            relinquished: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    fn remove_empty(&self) -> bool {
+        if self.relinquished.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        use windows::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        // Exclude writers and renames while checking identity/last-write time and
+        // deleting by handle, so a save cannot race the empty-file check.
+        let Ok(file) = std::fs::OpenOptions::new()
+            .access_mode(0x10000 | 0x80)
+            .share_mode(1)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&self.path)
+        else {
+            return false;
+        };
+        if Self::information(&file).ok() != Some(self.identity) {
+            self.relinquished
+                .store(true, std::sync::atomic::Ordering::Release);
+            return false;
+        }
+        let disposition = FILE_DISPOSITION_INFO {
+            DeleteFile: true.into(),
+        };
+        unsafe {
+            SetFileInformationByHandle(
+                windows::Win32::Foundation::HANDLE(file.as_raw_handle()),
+                FileDispositionInfo,
+                &disposition as *const _ as *const _,
+                std::mem::size_of_val(&disposition) as u32,
+            )
+        }
+        .is_ok()
+    }
+}
+
+pub(super) fn cleanup_documents(scope: Option<&str>) {
+    DOCUMENTS.lock().unwrap().retain(|document| {
+        document.scope.as_deref() != scope || (!document.remove_empty() && document.path.exists())
+    });
+}
+
+pub(super) fn poll_documents(notepad_running: bool) {
+    DOCUMENTS.lock().unwrap().retain(|document| {
+        !document.process.ready(notepad_running)
+            || (!document.remove_empty() && document.path.exists())
+    });
 }
 
 #[cfg(test)]
@@ -449,5 +626,86 @@ mod unlaunched_document_tests {
         drop(UnlaunchedDocument::new(Some(edited.clone())));
         assert!(edited.exists());
         std::fs::remove_file(edited).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod document_cleanup_tests {
+    use super::*;
+    #[test]
+    fn process_exit_between_polls_cleans_an_unobserved_document() {
+        use std::os::windows::{io::AsRawHandle, process::CommandExt};
+        let path = create_notepad_document().unwrap();
+        let mut guard = UnlaunchedDocument::new(Some(path.clone()));
+        let tracker = guard.process_tracker().unwrap();
+        guard.launched();
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/C", "exit", "0"])
+            .creation_flags(0x08000000)
+            .spawn()
+            .unwrap();
+        tracker.capture_handle(windows::Win32::Foundation::HANDLE(child.as_raw_handle()));
+        child.wait().unwrap();
+        assert!(
+            !tracker.ready(false),
+            "do not clean up while launch verification is pending"
+        );
+        drop(guard);
+        assert!(
+            tracker.ready(false),
+            "exit is detected without ever observing a running Notepad"
+        );
+        poll_documents(false);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn runtime_cleanup_keeps_another_runtimes_document() {
+        let path = create_notepad_document().unwrap();
+        let mut document = FreshDocument::track(path.clone()).unwrap();
+        let scope = format!(
+            "cleanup-test-{}",
+            path.file_stem().unwrap().to_string_lossy()
+        );
+        document.scope = Some(scope.clone());
+        DOCUMENTS.lock().unwrap().push(document);
+        cleanup_documents(Some("another-runtime"));
+        assert!(path.exists());
+        cleanup_documents(Some(&scope));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn cleanup_keeps_written_truncated_replaced_and_busy_documents() {
+        let blank = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(blank.clone()).unwrap();
+        assert!(owned.remove_empty());
+        assert!(!blank.exists());
+
+        let edited = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(edited.clone()).unwrap();
+        std::fs::write(&edited, "saved content").unwrap();
+        assert!(!owned.remove_empty());
+        std::fs::write(&edited, "").unwrap();
+        assert!(
+            !owned.remove_empty(),
+            "a saved and emptied file is user-owned"
+        );
+        std::fs::remove_file(edited).unwrap();
+
+        let replaced = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(replaced.clone()).unwrap();
+        let replacement = create_notepad_document().unwrap();
+        std::fs::remove_file(&replaced).unwrap();
+        std::fs::rename(&replacement, &replaced).unwrap();
+        assert!(!owned.remove_empty());
+        std::fs::remove_file(replaced).unwrap();
+
+        let busy = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(busy.clone()).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&busy).unwrap();
+        assert!(!owned.remove_empty());
+        drop(writer);
+        assert!(owned.remove_empty());
     }
 }

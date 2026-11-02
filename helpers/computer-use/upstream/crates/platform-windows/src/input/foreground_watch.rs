@@ -47,6 +47,8 @@ struct State {
     minimized: Vec<usize>,
     // Windows above the user's window before the launch; never moved.
     above_at_start: Vec<usize>,
+    // Input-target windows already placed under the user's window once.
+    placed: Vec<usize>,
 }
 
 struct Watch {
@@ -59,6 +61,8 @@ struct Watch {
     input_generation: u64,
     hold_lock: bool,
     restore_allowed: bool,
+    // Started while the target app, not `prior`, was in front.
+    displaced: bool,
     started: Instant,
     cancelled: AtomicBool,
     target: Target,
@@ -89,6 +93,34 @@ pub(crate) fn window_process(hwnd: HWND) -> u32 {
     pid
 }
 
+/// The user's window from a live input watch in which `pid`'s window took the
+/// front without the user's own input since; None when there is none.
+pub(crate) fn inherited_prior(pid: u32) -> Option<usize> {
+    let live = LIVE.lock().unwrap();
+    live.iter()
+        .filter_map(|entry| entry.watch.upgrade())
+        .find_map(|watch| {
+            let Target::Processes(pids, _) = &watch.target else {
+                return None;
+            };
+            let prior = HWND(watch.prior as *mut _);
+            let state = watch.state.lock().unwrap();
+            policy::may_inherit_prior(policy::InheritFacts {
+                target: pids.contains(&pid),
+                monitoring: state.observation.monitoring,
+                restore_allowed: watch.restore_allowed,
+                activated: state.observation.activated,
+                input_unchanged: !watch.user_active.load(Ordering::Acquire)
+                    && super::foreground_generation() == watch.input_generation,
+                prior_valid: watch.prior != 0
+                    && unsafe { IsWindow(prior) }.as_bool()
+                    && window_process(prior) == watch.prior_pid,
+                prior_is_target: watch.prior_pid == pid,
+            })
+            .then_some(watch.prior)
+        })
+}
+
 /// Top-level windows above `window` in z-order, nearest first (bounded).
 fn windows_above(window: HWND) -> Vec<HWND> {
     let mut above = Vec::new();
@@ -103,7 +135,7 @@ fn windows_above(window: HWND) -> Vec<HWND> {
     above
 }
 
-fn process_name(pid: u32) -> Option<String> {
+pub(crate) fn process_name(pid: u32) -> Option<String> {
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut path = vec![0u16; 32768];
@@ -194,12 +226,44 @@ impl Watch {
             };
             let mut handed = unsafe { super::hand_back_foreground(prior, event_hwnd, allowed) };
             // Windows refuses SetForegroundWindow to a process without a
-            // foreground right even when attached to the front thread. For a
-            // launch, try once per window to let Windows activate yours.
-            if !handed && matches!(self.target, Target::Launch(_)) {
-                let first = {
+            // foreground right even when attached to the front thread. Try
+            // once per window to let Windows activate yours: a launched window
+            // is minimized itself; an input target's window through its root
+            // owner, since a modal dialog cannot be minimized.
+            if !handed {
+                use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
+                let minimized = match &self.target {
+                    Target::Launch(_) => event_hwnd,
+                    Target::Processes(targets, windows) => {
+                        let owner = unsafe { GetAncestor(event_hwnd, GA_ROOTOWNER) };
+                        let owner_pid = window_process(owner);
+                        // Only the target app's own owner: a dialog may be owned
+                        // by another process's window, such as the user's.
+                        let own = !owner.0.is_null()
+                            && policy::input_window_matches(
+                                owner_pid != 0 && targets.contains(&owner_pid),
+                                windows.contains(&(owner.0 as usize)),
+                                process_name(owner_pid)
+                                    .is_none_or(|name| name == "applicationframehost"),
+                            );
+                        if own {
+                            owner
+                        } else {
+                            event_hwnd
+                        }
+                    }
+                };
+                // A dialog takes the front when it is created and again when
+                // it is first shown, so its owner waits for the dialog to be
+                // shown. Live (2026-11-02): minimizing Notepad's owner before
+                // its Save as dialog was shown gave the front back for 15 ms.
+                let shown = match self.target {
+                    Target::Launch(_) => true,
+                    Target::Processes(_, _) => unsafe { IsWindowVisible(event_hwnd) }.as_bool(),
+                };
+                let first = shown && {
                     let mut state = self.state.lock().unwrap();
-                    let key = event_hwnd.0 as usize;
+                    let key = minimized.0 as usize;
                     let first = !state.minimized.contains(&key) && state.minimized.len() < 16;
                     if first {
                         state.minimized.push(key);
@@ -207,7 +271,16 @@ impl Watch {
                     first
                 };
                 if first {
-                    handed = unsafe { super::hand_back_by_minimizing(prior, event_hwnd, allowed) };
+                    handed = match self.target {
+                        Target::Launch(_) => unsafe {
+                            super::hand_back_by_minimizing(prior, event_hwnd, allowed)
+                        },
+                        Target::Processes(_, _) => unsafe {
+                            super::hand_back_by_minimizing_owner(
+                                prior, event_hwnd, minimized, allowed,
+                            )
+                        },
+                    };
                 }
             }
             let refused = !handed && unsafe { GetForegroundWindow() } == event_hwnd && allowed();
@@ -216,9 +289,16 @@ impl Watch {
     }
 
     /// While the user's window is in front, keep the launched app's windows
-    /// under it: a window shown without activation still opens on top.
+    /// under it: a window shown without activation still opens on top. An
+    /// input target's windows are kept under it once its action has ended (a
+    /// dialog the action opened is shown on top and pulls its owner up), so a
+    /// menu or popup the action itself is using is left alone.
     fn keep_behind(&self) {
-        if !self.restore_allowed || !matches!(self.target, Target::Launch(_)) {
+        if !self.restore_allowed {
+            return;
+        }
+        let input = matches!(self.target, Target::Processes(_, _));
+        if input && self.state.lock().unwrap().ended.is_none() {
             return;
         }
         let prior = HWND(self.prior as *mut _);
@@ -248,7 +328,12 @@ impl Watch {
                         Target::Launch(names) => {
                             process_name(pid).is_some_and(|name| names.contains(&name))
                         }
-                        Target::Processes(_, _) => false,
+                        // A shared host's other frames belong to other apps.
+                        Target::Processes(pids, windows) => policy::input_window_matches(
+                            pids.contains(&pid),
+                            windows.contains(&(window.0 as usize)),
+                            process_name(pid).is_none_or(|name| name == "applicationframehost"),
+                        ),
                     });
             let ex = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32;
             let facts = policy::CoverFacts {
@@ -259,8 +344,23 @@ impl Watch {
                 tool: ex & WS_EX_TOOLWINDOW.0 != 0,
                 target,
             };
-            if policy::place_behind_prior(facts) && unsafe { super::place_behind(window, prior) } {
-                self.state.lock().unwrap().observation.placed_behind = true;
+            if !policy::place_behind_prior(facts) {
+                continue;
+            }
+            let key = window.0 as usize;
+            let again = input && self.state.lock().unwrap().placed.contains(&key);
+            let placed = if again {
+                // Still above after being placed under the user's window.
+                unsafe { super::place_at_bottom(window) }
+            } else {
+                unsafe { super::place_behind(window, prior) }
+            };
+            if placed {
+                let mut state = self.state.lock().unwrap();
+                state.observation.placed_behind = true;
+                if input && !again && state.placed.len() < 64 {
+                    state.placed.push(key);
+                }
             }
         }
     }
@@ -450,22 +550,36 @@ impl ForegroundWatch {
     /// `hold_lock` keeps other processes from taking the front for the whole
     /// watch, not just the call; it is lifted at the user's first own input.
     pub(crate) fn start(prior: usize, target: Target, hold_lock: bool) -> Self {
-        Self::start_mode(prior, target, hold_lock, true)
+        Self::start_mode(prior, target, hold_lock, true, false)
+    }
+
+    /// Like [`Self::start`] with the lock held, for an action that starts
+    /// while one of the target's own windows has the front that `prior`, the
+    /// user's window, lost to it without input ([`inherited_prior`]). The
+    /// watch monitors from the start and hands the front back to `prior`.
+    pub(crate) fn start_displaced(prior: usize, target: Target) -> Self {
+        Self::start_mode(prior, target, true, true, true)
     }
 
     /// Records input/event evidence without acquiring a lock or restoring a
     /// window. Used by transports which must not manipulate native focus.
     pub(crate) fn start_observing(prior: usize, target: Target) -> Self {
-        Self::start_mode(prior, target, false, false)
+        Self::start_mode(prior, target, false, false, false)
     }
 
     /// Holds the activation-prevention lock like [`Self::start`] (lifted at
     /// the user's first own input) but never restores a window.
     pub(crate) fn start_locked_observing(prior: usize, target: Target) -> Self {
-        Self::start_mode(prior, target, true, false)
+        Self::start_mode(prior, target, true, false, false)
     }
 
-    fn start_mode(prior: usize, target: Target, hold_lock: bool, restore_allowed: bool) -> Self {
+    fn start_mode(
+        prior: usize,
+        target: Target,
+        hold_lock: bool,
+        restore_allowed: bool,
+        displaced: bool,
+    ) -> Self {
         let mut live = LIVE.lock().unwrap();
         live.retain(|entry| {
             entry
@@ -478,6 +592,7 @@ impl ForegroundWatch {
                 if watch.prior == prior
                     && watch.restore_allowed == restore_allowed
                     && watch.hold_lock == hold_lock
+                    && watch.displaced == displaced
                     && watch.target == target
                     && matches!(target, Target::Processes(_, _))
                     && watch.started.elapsed() < Duration::from_secs(20)
@@ -504,6 +619,7 @@ impl ForegroundWatch {
             input_generation: super::foreground_generation(),
             hold_lock,
             restore_allowed,
+            displaced,
             started: Instant::now(),
             cancelled: AtomicBool::new(false),
             target,
@@ -514,6 +630,7 @@ impl ForegroundWatch {
                 holders: 1,
                 minimized: Vec::new(),
                 above_at_start: Vec::new(),
+                placed: Vec::new(),
             }),
         });
         let (requests, receive) = mpsc::channel::<mpsc::SyncSender<(policy::Observation, usize)>>();
@@ -540,14 +657,25 @@ impl ForegroundWatch {
                 unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_event), module, 0) }.ok();
             let keyboard =
                 unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_event), module, 0) }.ok();
+            let front = unsafe { GetForegroundWindow() };
+            let target_window = |window: HWND| match &worker.target {
+                Target::Processes(pids, _) => pids.contains(&window_process(window)),
+                Target::Launch(_) => false,
+            };
             let monitoring = !hook.0.is_null()
                 && mouse.is_some()
                 && keyboard.is_some()
                 && prior != 0
-                && unsafe { GetForegroundWindow() }.0 as usize == prior;
+                && (front.0 as usize == prior
+                    || (worker.displaced
+                        && unsafe { IsWindow(HWND(prior as *mut _)) }.as_bool()
+                        && target_window(front)));
             {
+                // A displaced watch moves the target's windows that are
+                // already over the user's window; keep only the others.
                 let above: Vec<usize> = windows_above(HWND(prior as *mut _))
                     .into_iter()
+                    .filter(|window| !(worker.displaced && target_window(*window)))
                     .map(|window| window.0 as usize)
                     .collect();
                 let mut state = worker.state.lock().unwrap();
@@ -657,6 +785,29 @@ impl ForegroundWatch {
         observation.monitoring = false;
         let (note, failed) = self.describe(observation);
         (note, failed, foreground)
+    }
+
+    /// The input action's sentence about the front, from
+    /// [`policy::Observation::action_note`]. The worker answers within a poll,
+    /// or after a minimize hand-back it is inside (up to about 500 ms).
+    pub(crate) fn action_note(&self) -> Option<&'static str> {
+        if !self.watch.restore_allowed {
+            return None;
+        }
+        let (reply, receive) = mpsc::sync_channel(1);
+        let observation = self
+            .requests
+            .send(reply)
+            .ok()
+            .and_then(|()| receive.recv_timeout(Duration::from_millis(600)).ok())
+            .map(|(observation, _)| observation)
+            .unwrap_or_else(|| {
+                let mut observation = self.watch.state.lock().unwrap().observation;
+                observation.restored =
+                    unsafe { GetForegroundWindow() }.0 as usize == self.watch.prior;
+                observation
+            });
+        observation.action_note()
     }
 
     fn describe(&self, observation: policy::Observation) -> (&'static str, bool) {

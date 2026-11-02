@@ -3,7 +3,7 @@
 //!
 //! The helper's socket only takes peers signed like the helper, so every request goes through
 //! the helper's own binary (`brigadier-cu host …`, one JSON line out). Showing the status never
-//! starts the helper: a running one is asked, otherwise what it last wrote is shown, marked as
+//! starts the helper: a reachable one is asked, otherwise what it last wrote is shown, marked as
 //! not current. Only a button the user presses (Grant…, Check again, the capture check) may
 //! start it.
 //!
@@ -188,6 +188,12 @@ fn setup_of(
     }
 }
 
+/// macOS keeps its recorded-process shortcut; other desktops probe the endpoint even
+/// when a previous daemon's PID record is missing or stale.
+fn query_live_status(platform: ComputerPlatform, recorded: bool) -> bool {
+    platform != ComputerPlatform::Macos || recorded
+}
+
 /// Whether process `pid` exists.
 #[cfg(unix)]
 fn alive(pid: i32) -> bool {
@@ -350,7 +356,10 @@ impl SessionManager {
 
     /// Computer use as Settings shows it. Starts nothing.
     pub async fn computer_use_status(&self) -> ComputerUseStatus {
-        let raw = if self.computer_helper_recorded() {
+        // A stale PID record must not hide a reachable Windows/Linux daemon.
+        // host status only probes the endpoint; it never starts a helper.
+        let raw = if query_live_status(ComputerPlatform::current(), self.computer_helper_recorded())
+        {
             self.computer_host(&["status"]).await.ok()
         } else {
             None
@@ -621,7 +630,7 @@ impl SessionManager {
         }
         if !self.computer_helper_recorded() {
             self.computer_host_state().strikes = 0;
-            let status = self.computer_status_from(None).await;
+            let status = self.computer_use_status().await;
             self.publish_computer_status(&status);
             return;
         }
@@ -701,6 +710,45 @@ mod tests {
             accessibility,
             screen_recording,
         })
+    }
+
+    #[tokio::test]
+    async fn stale_pid_records_do_not_hide_live_desktop_status() {
+        use super::super::flow::{Flow, Options, Reply};
+        let flow = Flow::start(
+            "cu-stale-record",
+            Options::default(),
+            std::sync::Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+        )
+        .await;
+        let home = flow.manager.data_dir.join("computer");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("cu.pid"), "0").unwrap();
+        std::fs::write(
+            home.join("permissions.json"),
+            r#"{"accessibility":false,"screen_recording":false,"pid":0}"#,
+        )
+        .unwrap();
+        assert!(!flow.manager.computer_helper_recorded());
+        for platform in [ComputerPlatform::Windows, ComputerPlatform::Linux] {
+            assert!(query_live_status(
+                platform,
+                flow.manager.computer_helper_recorded()
+            ));
+        }
+        assert!(!query_live_status(ComputerPlatform::Macos, false));
+        let status = flow
+            .manager
+            .computer_status_from(Some(serde_json::json!({
+                "state": "healthy",
+                "permissions": { "accessibility": true, "screen_recording": true,
+                    "platform": { "notes": ["Live desktop details"] } }
+            })))
+            .await;
+        assert!(status.current);
+        assert_eq!(status.accessibility, PermissionState::Granted);
+        assert_eq!(status.screen_recording, PermissionState::Granted);
+        assert_eq!(status.notes, ["Live desktop details"]);
     }
 
     #[test]

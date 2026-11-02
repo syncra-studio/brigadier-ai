@@ -27,7 +27,7 @@ pub type Writer = Box<dyn AsyncWrite + Send + Unpin>;
 #[cfg_attr(unix, allow(dead_code))]
 pub fn pipe_name(socket_path: &str) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(socket_path.to_lowercase().as_bytes());
+    let digest = Sha256::digest(socket_path.replace('/', "\\").to_lowercase().as_bytes());
     let hex: String = digest
         .iter()
         .take(8)
@@ -557,6 +557,10 @@ mod tests {
         assert!(a.starts_with(r"\\.\pipe\brigadier-cu-"));
         assert_eq!(a.len(), r"\\.\pipe\brigadier-cu-".len() + 16);
         assert_ne!(a, b);
+        assert_eq!(
+            a,
+            pipe_name("C:/Users/me/AppData/Roaming/Brigadier/computer/cu.sock")
+        );
         // Windows paths compare without case.
         assert_eq!(
             a,

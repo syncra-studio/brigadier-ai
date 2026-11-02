@@ -40,7 +40,16 @@ pub fn build_registry_with_provider(
     provider: Option<std::sync::Arc<dyn cua_driver_core::consent::ProtectedConsentProvider>>,
 ) -> ToolRegistry {
     #[cfg(target_os = "windows")]
-    return impl_::build_registry_with_provider(compat, provider);
+    {
+        task_browser::start_cleanup();
+        let scope = cua_driver_core::tool::current_dispatch_runtime_scope();
+        let mut registry = impl_::build_registry_with_provider(compat, provider);
+        registry.retain_runtime_cleanup(move || {
+            launch_browser::cleanup_documents(scope.as_deref());
+            task_browser::retire_all(scope.as_deref());
+        });
+        return registry;
+    }
 
     #[cfg(not(target_os = "windows"))]
     {

@@ -200,6 +200,20 @@ Patches applied, in order:
 
 - `patches/0169-windows-typing-and-page-patches-formatted.diff`: Format the Windows typing and Edge page typing code from 0165 and 0168 so cargo fmt --check passes.
 
+- `patches/0170-windows-explorer-arguments-and-closed-window-results.diff`: Normalize Explorer drive and UNC additional arguments while preserving URLs and other apps, allow two seconds for Settings close confirmation, and use exact confirmed window-destruction evidence for final run_steps observations.
+
+- `patches/0175-windows-owned-document-and-browser-profile-cleanup.diff`: Remove untouched fresh Notepad files after Notepad exits or runtime teardown, and retire and delete exited task-browser profiles with a proven stale-owner sweep at startup while preserving live-session reuse.
+
+- `patches/0180-windows-input-guard-dialog-hand-back.diff`: Never hand the front back to the target app's own window: an action that starts while the app's dialog has the front inherits the user's window from the live watch the app took it from, or restores nothing. Hand back from input targets by minimizing the root owner once the window that took the front is shown (a modal dialog cannot be minimized; the next visible window must be the user's), keep input targets' windows under the user's window once the action has ended (at the bottom when placing them under it does not take), and say in click replies when the app took the front. Launch hand-back and its cadence are unchanged.
+
+- `patches/0181-windows-launch-hand-back-next-visible-window.diff`: Check the next visible window, not the next window, when a launched app is minimized to hand the front back: hidden IME and helper windows sit right under it, Windows activates the next visible window, and placing the user's window right under the app is ignored, so a launch refused to hand the front back. The owner route of 0180 now shares the same check.
+
+- `patches/0176-windows-validated-profile-quarantine-and-process-exit.diff`: Rename exited task profiles by validated handle into pinned tombstones before deletion, and retain launched Notepad process handles to detect exit between polls while preserving saved documents.
+
+- `patches/0182-windows-dialog-owner-hand-back-target-only.diff`: Minimize a dialog's root owner to hand the front back only when that owner is one of the target app's own windows, by the same rule that matched the dialog; a dialog owned by another process's window, such as the user's, is never minimized through it.
+
+- `patches/0183-windows-action-note-had-the-front.diff`: Say "had the front", not "took the front", in an input action's reply note: an action that starts while the app's dialog is already in front (a displaced watch) observes it at once, and the app did not take the front during that action.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
