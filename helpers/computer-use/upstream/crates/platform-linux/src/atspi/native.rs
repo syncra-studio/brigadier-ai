@@ -3459,7 +3459,10 @@ pub fn menu_path_for_shortcut_in(
     key: &str,
     modifiers: &[&str],
 ) -> Result<Option<(Vec<String>, bool)>> {
-    let wanted = shortcut_chord(key, modifiers.iter().copied());
+    // A modifier with no menu-accelerator spelling matches no item.
+    let Some(wanted) = shortcut_chord(key, modifiers.iter().copied()) else {
+        return Ok(None);
+    };
     bounded(
         async {
             let conn = shared_connection().await?;
@@ -3523,23 +3526,24 @@ pub fn menu_path_for_shortcut_in(
     )
 }
 
-/// A chord as (sorted canonical modifiers, lowercase key).
+/// A chord as (sorted canonical modifiers, lowercase key). `None` when a
+/// modifier is unknown, so it is never dropped from the chord.
 fn shortcut_chord<'a>(
     key: &str,
     modifiers: impl Iterator<Item = &'a str>,
-) -> (Vec<&'static str>, String) {
+) -> Option<(Vec<&'static str>, String)> {
     let mut canonical: Vec<&'static str> = modifiers
-        .filter_map(|modifier| match modifier.to_ascii_lowercase().as_str() {
+        .map(|modifier| match modifier.to_ascii_lowercase().as_str() {
             "ctrl" | "control" | "primary" => Some("ctrl"),
             "shift" => Some("shift"),
             "alt" | "mod1" | "option" => Some("alt"),
-            "super" | "meta" | "cmd" | "command" | "win" | "mod4" => Some("super"),
+            "super" | "meta" | "cmd" | "command" | "win" | "windows" | "mod4" => Some("super"),
             _ => None,
         })
-        .collect();
+        .collect::<Option<_>>()?;
     canonical.sort_unstable();
     canonical.dedup();
-    (canonical, key.to_ascii_lowercase())
+    Some((canonical, key.to_ascii_lowercase()))
 }
 
 /// The accelerator in an AT-SPI key binding (`mnemonic;sequence;shortcut`,
@@ -3554,7 +3558,7 @@ fn parse_shortcut(binding: &str) -> Option<(Vec<&'static str>, String)> {
         return None;
     }
     let names = modifiers.split(['<', '>']).filter(|name| !name.is_empty());
-    Some(shortcut_chord(key, names))
+    shortcut_chord(key, names)
 }
 
 #[cfg(test)]
@@ -3563,7 +3567,7 @@ mod shortcut_tests {
 
     #[test]
     fn menu_accelerators_match_the_chord_in_any_spelling() {
-        let ctrl_s = shortcut_chord("s", ["ctrl"].into_iter());
+        let ctrl_s = shortcut_chord("s", ["ctrl"].into_iter()).unwrap();
         assert_eq!(
             parse_shortcut("s;<Alt>f:s;<Control>s").as_ref(),
             Some(&ctrl_s)
@@ -3571,11 +3575,18 @@ mod shortcut_tests {
         assert_eq!(parse_shortcut("<Primary>S").as_ref(), Some(&ctrl_s));
         assert_eq!(
             parse_shortcut(";;<Primary><Shift>s"),
-            Some(shortcut_chord("S", ["Shift", "control"].into_iter()))
+            shortcut_chord("S", ["Shift", "control"].into_iter())
         );
         assert_ne!(parse_shortcut("<Control><Shift>s").as_ref(), Some(&ctrl_s));
         assert_eq!(parse_shortcut("s;<Alt>f:s;"), None);
         assert_eq!(parse_shortcut(""), None);
+        assert_eq!(parse_shortcut("<Hyper>s"), None);
+        // Every modifier counts: none is dropped to match a plainer item.
+        assert_eq!(shortcut_chord("s", ["ctrl", "hyper"].into_iter()), None);
+        assert_ne!(
+            shortcut_chord("s", ["ctrl", "windows"].into_iter()).as_ref(),
+            Some(&ctrl_s)
+        );
     }
 }
 

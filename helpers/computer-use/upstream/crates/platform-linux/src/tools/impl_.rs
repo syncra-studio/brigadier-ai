@@ -2189,12 +2189,21 @@ impl Tool for LaunchAppTool {
                     .unwrap_or_else(|_| LaunchedWindows::default());
                     let windows: Vec<Value> =
                         resolved.windows.iter().map(window_record_json).collect();
+                    // Hand the front back only from the launched app: the user may have
+                    // switched windows during the wait for its window.
+                    let launched: Vec<u32> = [Some(launcher_pid), resolved.pid]
+                        .into_iter()
+                        .flatten()
+                        .collect();
                     let focus = match focus_before {
-                        Some(snapshot) => {
-                            tokio::task::spawn_blocking(move || snapshot.restore_if_changed(None))
-                                .await
-                                .ok()
-                        }
+                        Some(snapshot) => tokio::task::spawn_blocking(move || {
+                            snapshot
+                                .front_may_be_taken_by(&launched)
+                                .then(|| snapshot.restore_if_changed(None))
+                        })
+                        .await
+                        .ok()
+                        .flatten(),
                         None => None,
                     };
                     let mut text = message;
@@ -9058,6 +9067,7 @@ impl Tool for HotkeyTool {
             && !crate::wayland::is_wayland()
             && resolved_element_index.is_none()
             && args.get("x").is_none()
+            && args.get("y").is_none()
         {
             if let Some(result) = menu_shortcut_hotkey(pid, xid, &key, &mods).await {
                 return result;

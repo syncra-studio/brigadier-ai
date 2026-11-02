@@ -1631,7 +1631,8 @@ fn perform_ax_click(
             // a click into it is for is a caret to type at: focus it and put the
             // caret at the end of its text, confirmed by reading the caret back.
             if matches!(role.as_str(), "AXTextArea" | "AXTextField") {
-                if let Some(len) = unsafe { crate::document_edit::place_caret_at_end(element) } {
+                if let Some(len) = unsafe { crate::document_edit::place_caret_at_end(pid, element) }
+                {
                     return Ok((
                         format!(
                             "✅ [{idx}] {role} has no press action, so it was focused and its \

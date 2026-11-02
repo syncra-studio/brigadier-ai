@@ -229,14 +229,18 @@ unsafe fn element_window_id(element: AXUIElementRef) -> Option<u32> {
 }
 
 /// Focus a text field or area and put its caret at the end of its text, then
-/// read the caret back. `Some(length)` only when the caret is confirmed at the
-/// end; nothing is typed or replaced.
+/// read the focus and the caret back. `Some(length)` only when `pid`'s focused
+/// element is `element` and its caret is at the end; nothing is typed or
+/// replaced.
 ///
 /// # Safety
 /// `element` must be a live `AXUIElementRef`.
-pub unsafe fn place_caret_at_end(element: AXUIElementRef) -> Option<usize> {
+pub unsafe fn place_caret_at_end(pid: i32, element: AXUIElementRef) -> Option<usize> {
     let _ = crate::input::ax_actions::focus_element(element as usize);
     caret_to_end_of(element);
+    if !crate::input::ax_actions::is_element_focused(pid, element as usize) {
+        return None;
+    }
     let len = copy_string_attr(element, "AXValue")
         .map(|v| v.encode_utf16().count())
         .unwrap_or(0);

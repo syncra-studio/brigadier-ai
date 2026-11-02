@@ -1,0 +1,161 @@
+Why: Linux launches hand the front back only when the launched app (or a window new since the launch) took it, never a window the user switched to during the wait; a hotkey keeps every modifier when it looks for a menu shortcut (an unknown one matches no item), and a hotkey with only one of x or y is refused before the menu-shortcut route.
+
+diff --git a/crates/platform-linux/src/atspi/native.rs b/crates/platform-linux/src/atspi/native.rs
+index b5632280f..f243c88cd 100644
+--- a/crates/platform-linux/src/atspi/native.rs
++++ b/crates/platform-linux/src/atspi/native.rs
+@@ -3459,7 +3459,10 @@ pub fn menu_path_for_shortcut_in(
+     key: &str,
+     modifiers: &[&str],
+ ) -> Result<Option<(Vec<String>, bool)>> {
+-    let wanted = shortcut_chord(key, modifiers.iter().copied());
++    // A modifier with no menu-accelerator spelling matches no item.
++    let Some(wanted) = shortcut_chord(key, modifiers.iter().copied()) else {
++        return Ok(None);
++    };
+     bounded(
+         async {
+             let conn = shared_connection().await?;
+@@ -3523,23 +3526,24 @@ pub fn menu_path_for_shortcut_in(
+     )
+ }
+ 
+-/// A chord as (sorted canonical modifiers, lowercase key).
++/// A chord as (sorted canonical modifiers, lowercase key). `None` when a
++/// modifier is unknown, so it is never dropped from the chord.
+ fn shortcut_chord<'a>(
+     key: &str,
+     modifiers: impl Iterator<Item = &'a str>,
+-) -> (Vec<&'static str>, String) {
++) -> Option<(Vec<&'static str>, String)> {
+     let mut canonical: Vec<&'static str> = modifiers
+-        .filter_map(|modifier| match modifier.to_ascii_lowercase().as_str() {
++        .map(|modifier| match modifier.to_ascii_lowercase().as_str() {
+             "ctrl" | "control" | "primary" => Some("ctrl"),
+             "shift" => Some("shift"),
+             "alt" | "mod1" | "option" => Some("alt"),
+-            "super" | "meta" | "cmd" | "command" | "win" | "mod4" => Some("super"),
++            "super" | "meta" | "cmd" | "command" | "win" | "windows" | "mod4" => Some("super"),
+             _ => None,
+         })
+-        .collect();
++        .collect::<Option<_>>()?;
+     canonical.sort_unstable();
+     canonical.dedup();
+-    (canonical, key.to_ascii_lowercase())
++    Some((canonical, key.to_ascii_lowercase()))
+ }
+ 
+ /// The accelerator in an AT-SPI key binding (`mnemonic;sequence;shortcut`,
+@@ -3554,7 +3558,7 @@ fn parse_shortcut(binding: &str) -> Option<(Vec<&'static str>, String)> {
+         return None;
+     }
+     let names = modifiers.split(['<', '>']).filter(|name| !name.is_empty());
+-    Some(shortcut_chord(key, names))
++    shortcut_chord(key, names)
+ }
+ 
+ #[cfg(test)]
+@@ -3563,7 +3567,7 @@ mod shortcut_tests {
+ 
+     #[test]
+     fn menu_accelerators_match_the_chord_in_any_spelling() {
+-        let ctrl_s = shortcut_chord("s", ["ctrl"].into_iter());
++        let ctrl_s = shortcut_chord("s", ["ctrl"].into_iter()).unwrap();
+         assert_eq!(
+             parse_shortcut("s;<Alt>f:s;<Control>s").as_ref(),
+             Some(&ctrl_s)
+@@ -3571,11 +3575,18 @@ mod shortcut_tests {
+         assert_eq!(parse_shortcut("<Primary>S").as_ref(), Some(&ctrl_s));
+         assert_eq!(
+             parse_shortcut(";;<Primary><Shift>s"),
+-            Some(shortcut_chord("S", ["Shift", "control"].into_iter()))
++            shortcut_chord("S", ["Shift", "control"].into_iter())
+         );
+         assert_ne!(parse_shortcut("<Control><Shift>s").as_ref(), Some(&ctrl_s));
+         assert_eq!(parse_shortcut("s;<Alt>f:s;"), None);
+         assert_eq!(parse_shortcut(""), None);
++        assert_eq!(parse_shortcut("<Hyper>s"), None);
++        // Every modifier counts: none is dropped to match a plainer item.
++        assert_eq!(shortcut_chord("s", ["ctrl", "hyper"].into_iter()), None);
++        assert_ne!(
++            shortcut_chord("s", ["ctrl", "windows"].into_iter()).as_ref(),
++            Some(&ctrl_s)
++        );
+     }
+ }
+ 
+diff --git a/crates/platform-linux/src/input/focus_guard.rs b/crates/platform-linux/src/input/focus_guard.rs
+index 4e0581d9e..184e416b2 100644
+--- a/crates/platform-linux/src/input/focus_guard.rs
++++ b/crates/platform-linux/src/input/focus_guard.rs
+@@ -563,6 +563,30 @@ impl FocusSnapshot {
+             .or_else(|| (self.core_focus > 1).then_some(self.core_focus))
+     }
+ 
++    /// Whether a front change since capture may be the work of `pids`: nothing
++    /// moved yet (the restore's settle watch still looks), or the active or
++    /// topmost window is new since capture or owned by one of `pids`. `false`
++    /// when the front now sits on another app's existing window, which only
++    /// the user can have chosen.
++    /// shortcut: a switch by the user during the restore's settle watch is
++    /// still undone; checking each change's owner there would close that.
++    pub fn front_may_be_taken_by(&self, pids: &[u32]) -> bool {
++        let Ok(x) = X::open() else {
++            return true;
++        };
++        if self.diff(&x).is_empty() {
++            return true;
++        }
++        let fronts: Vec<Window> = [x.active_window(), x.stacking_top()]
++            .into_iter()
++            .flatten()
++            .collect();
++        fronts.is_empty()
++            || fronts.iter().any(|w| {
++                !self.clients.contains(w) || x.owner_pid(*w).is_some_and(|p| pids.contains(&p))
++            })
++    }
++
+     /// Watch briefly for a change, restore if one happened, and report.
+     /// `target_pid` names the action's application for the grab attribution
+     /// and the same-app rule.
+diff --git a/crates/platform-linux/src/tools/impl_.rs b/crates/platform-linux/src/tools/impl_.rs
+index 05d668fba..7159f7e2c 100644
+--- a/crates/platform-linux/src/tools/impl_.rs
++++ b/crates/platform-linux/src/tools/impl_.rs
+@@ -2189,12 +2189,21 @@ impl Tool for LaunchAppTool {
+                     .unwrap_or_else(|_| LaunchedWindows::default());
+                     let windows: Vec<Value> =
+                         resolved.windows.iter().map(window_record_json).collect();
++                    // Hand the front back only from the launched app: the user may have
++                    // switched windows during the wait for its window.
++                    let launched: Vec<u32> = [Some(launcher_pid), resolved.pid]
++                        .into_iter()
++                        .flatten()
++                        .collect();
+                     let focus = match focus_before {
+-                        Some(snapshot) => {
+-                            tokio::task::spawn_blocking(move || snapshot.restore_if_changed(None))
+-                                .await
+-                                .ok()
+-                        }
++                        Some(snapshot) => tokio::task::spawn_blocking(move || {
++                            snapshot
++                                .front_may_be_taken_by(&launched)
++                                .then(|| snapshot.restore_if_changed(None))
++                        })
++                        .await
++                        .ok()
++                        .flatten(),
+                         None => None,
+                     };
+                     let mut text = message;
+@@ -9058,6 +9067,7 @@ impl Tool for HotkeyTool {
+             && !crate::wayland::is_wayland()
+             && resolved_element_index.is_none()
+             && args.get("x").is_none()
++            && args.get("y").is_none()
+         {
+             if let Some(result) = menu_shortcut_hotkey(pid, xid, &key, &mods).await {
+                 return result;
