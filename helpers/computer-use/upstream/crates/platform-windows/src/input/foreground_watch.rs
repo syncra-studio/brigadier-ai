@@ -243,7 +243,15 @@ impl Watch {
                         }
                     }
                 };
-                let first = {
+                // A dialog takes the front when it is created and again when
+                // it is first shown, so its owner waits for the dialog to be
+                // shown. Live (2026-11-02): minimizing Notepad's owner before
+                // its Save as dialog was shown gave the front back for 15 ms.
+                let shown = match self.target {
+                    Target::Launch(_) => true,
+                    Target::Processes(_, _) => unsafe { IsWindowVisible(event_hwnd) }.as_bool(),
+                };
+                let first = shown && {
                     let mut state = self.state.lock().unwrap();
                     let key = minimized.0 as usize;
                     let first = !state.minimized.contains(&key) && state.minimized.len() < 16;

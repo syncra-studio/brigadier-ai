@@ -1,4 +1,4 @@
-Why: Never hand the front back to the target app's own window: an action that starts while the app's dialog has the front inherits the user's window from the live watch the app took it from, or restores nothing. Hand back from input targets by minimizing the root owner once (a modal dialog cannot be minimized), keep input targets' windows under the user's window once the action has ended (at the bottom when placing them under it does not take), and say in click replies when the app took the front. Launch hand-back and its cadence are unchanged.
+Why: Never hand the front back to the target app's own window: an action that starts while the app's dialog has the front inherits the user's window from the live watch the app took it from, or restores nothing. Hand back from input targets by minimizing the root owner once the window that took the front is shown (a modal dialog cannot be minimized; the next visible window must be the user's), keep input targets' windows under the user's window once the action has ended (at the bottom when placing them under it does not take), and say in click replies when the app took the front. Launch hand-back and its cadence are unchanged.
 
 diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
 index 1c3428899..a2227eccb 100644
@@ -163,7 +163,7 @@ index 1c3428899..a2227eccb 100644
 +    }
 +}
 diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
-index 2269dce28..d8a615517 100644
+index 2269dce28..b34fb6d59 100644
 --- a/crates/platform-windows/src/input/foreground_watch.rs
 +++ b/crates/platform-windows/src/input/foreground_watch.rs
 @@ -47,6 +47,8 @@ struct State {
@@ -228,13 +228,14 @@ index 2269dce28..d8a615517 100644
      unsafe {
          let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
          let mut path = vec![0u16; 32768];
-@@ -194,12 +226,26 @@ impl Watch {
+@@ -194,12 +226,34 @@ impl Watch {
              };
              let mut handed = unsafe { super::hand_back_foreground(prior, event_hwnd, allowed) };
              // Windows refuses SetForegroundWindow to a process without a
 -            // foreground right even when attached to the front thread. For a
 -            // launch, try once per window to let Windows activate yours.
 -            if !handed && matches!(self.target, Target::Launch(_)) {
+-                let first = {
 +            // foreground right even when attached to the front thread. Try
 +            // once per window to let Windows activate yours: a launched window
 +            // is minimized itself; an input target's window through its root
@@ -252,14 +253,22 @@ index 2269dce28..d8a615517 100644
 +                        }
 +                    }
 +                };
-                 let first = {
++                // A dialog takes the front when it is created and again when
++                // it is first shown, so its owner waits for the dialog to be
++                // shown. Live (2026-11-02): minimizing Notepad's owner before
++                // its Save as dialog was shown gave the front back for 15 ms.
++                let shown = match self.target {
++                    Target::Launch(_) => true,
++                    Target::Processes(_, _) => unsafe { IsWindowVisible(event_hwnd) }.as_bool(),
++                };
++                let first = shown && {
                      let mut state = self.state.lock().unwrap();
 -                    let key = event_hwnd.0 as usize;
 +                    let key = minimized.0 as usize;
                      let first = !state.minimized.contains(&key) && state.minimized.len() < 16;
                      if first {
                          state.minimized.push(key);
-@@ -207,7 +253,14 @@ impl Watch {
+@@ -207,7 +261,14 @@ impl Watch {
                      first
                  };
                  if first {
@@ -275,7 +284,7 @@ index 2269dce28..d8a615517 100644
                  }
              }
              let refused = !handed && unsafe { GetForegroundWindow() } == event_hwnd && allowed();
-@@ -216,9 +269,16 @@ impl Watch {
+@@ -216,9 +277,16 @@ impl Watch {
      }
  
      /// While the user's window is in front, keep the launched app's windows
@@ -294,7 +303,7 @@ index 2269dce28..d8a615517 100644
              return;
          }
          let prior = HWND(self.prior as *mut _);
-@@ -248,7 +308,12 @@ impl Watch {
+@@ -248,7 +316,12 @@ impl Watch {
                          Target::Launch(names) => {
                              process_name(pid).is_some_and(|name| names.contains(&name))
                          }
@@ -308,7 +317,7 @@ index 2269dce28..d8a615517 100644
                      });
              let ex = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32;
              let facts = policy::CoverFacts {
-@@ -259,8 +324,23 @@ impl Watch {
+@@ -259,8 +332,23 @@ impl Watch {
                  tool: ex & WS_EX_TOOLWINDOW.0 != 0,
                  target,
              };
@@ -334,7 +343,7 @@ index 2269dce28..d8a615517 100644
              }
          }
      }
-@@ -450,22 +530,36 @@ impl ForegroundWatch {
+@@ -450,22 +538,36 @@ impl ForegroundWatch {
      /// `hold_lock` keeps other processes from taking the front for the whole
      /// watch, not just the call; it is lifted at the user's first own input.
      pub(crate) fn start(prior: usize, target: Target, hold_lock: bool) -> Self {
@@ -375,7 +384,7 @@ index 2269dce28..d8a615517 100644
          let mut live = LIVE.lock().unwrap();
          live.retain(|entry| {
              entry
-@@ -478,6 +572,7 @@ impl ForegroundWatch {
+@@ -478,6 +580,7 @@ impl ForegroundWatch {
                  if watch.prior == prior
                      && watch.restore_allowed == restore_allowed
                      && watch.hold_lock == hold_lock
@@ -383,7 +392,7 @@ index 2269dce28..d8a615517 100644
                      && watch.target == target
                      && matches!(target, Target::Processes(_, _))
                      && watch.started.elapsed() < Duration::from_secs(20)
-@@ -504,6 +599,7 @@ impl ForegroundWatch {
+@@ -504,6 +607,7 @@ impl ForegroundWatch {
              input_generation: super::foreground_generation(),
              hold_lock,
              restore_allowed,
@@ -391,7 +400,7 @@ index 2269dce28..d8a615517 100644
              started: Instant::now(),
              cancelled: AtomicBool::new(false),
              target,
-@@ -514,6 +610,7 @@ impl ForegroundWatch {
+@@ -514,6 +618,7 @@ impl ForegroundWatch {
                  holders: 1,
                  minimized: Vec::new(),
                  above_at_start: Vec::new(),
@@ -399,7 +408,7 @@ index 2269dce28..d8a615517 100644
              }),
          });
          let (requests, receive) = mpsc::channel::<mpsc::SyncSender<(policy::Observation, usize)>>();
-@@ -540,14 +637,25 @@ impl ForegroundWatch {
+@@ -540,14 +645,25 @@ impl ForegroundWatch {
                  unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_event), module, 0) }.ok();
              let keyboard =
                  unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_event), module, 0) }.ok();
@@ -426,7 +435,7 @@ index 2269dce28..d8a615517 100644
                      .map(|window| window.0 as usize)
                      .collect();
                  let mut state = worker.state.lock().unwrap();
-@@ -659,6 +767,29 @@ impl ForegroundWatch {
+@@ -659,6 +775,29 @@ impl ForegroundWatch {
          (note, failed, foreground)
      }
  
@@ -457,7 +466,7 @@ index 2269dce28..d8a615517 100644
          if self.watch.restore_allowed {
              return observation.report();
 diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
-index 9ddf13ca5..550cb8274 100644
+index 9ddf13ca5..6a82160af 100644
 --- a/crates/platform-windows/src/input/inject.rs
 +++ b/crates/platform-windows/src/input/inject.rs
 @@ -145,6 +145,18 @@ pub(crate) unsafe fn place_behind(window: HWND, prior: HWND) -> bool {
@@ -479,12 +488,12 @@ index 9ddf13ca5..550cb8274 100644
  /// Facts for [`foreground_watch::policy::may_minimize_for_hand_back`].
  pub(crate) unsafe fn minimize_facts(
      prior: HWND,
-@@ -176,6 +188,31 @@ pub(crate) unsafe fn hand_back_by_minimizing(
+@@ -176,6 +188,47 @@ pub(crate) unsafe fn hand_back_by_minimizing(
      prior: HWND,
      displaced: HWND,
      allowed: impl Fn() -> bool,
 +) -> bool {
-+    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, allowed) }
++    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, false, allowed) }
 +}
 +
 +/// [`hand_back_by_minimizing`] for a window that cannot be minimized itself,
@@ -500,25 +509,47 @@ index 9ddf13ca5..550cb8274 100644
 +    use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
 +    let owner = unsafe { GetAncestor(displaced, GA_ROOTOWNER) };
 +    let owner = if owner.0.is_null() { displaced } else { owner };
-+    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, allowed) }
++    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, true, allowed) }
++}
++
++/// The first visible top-level window below `window` (bounded).
++fn next_visible_below(window: HWND) -> Option<HWND> {
++    let mut next = unsafe { GetWindow(window, GW_HWNDNEXT) }.ok()?;
++    for _ in 0..512 {
++        if next.0.is_null() {
++            return None;
++        }
++        if unsafe { IsWindowVisible(next) }.as_bool() {
++            return Some(next);
++        }
++        next = unsafe { GetWindow(next, GW_HWNDNEXT) }.ok()?;
++    }
++    None
 +}
 +
 +unsafe fn hand_back_by_minimizing_window(
 +    prior: HWND,
 +    displaced: HWND,
 +    minimized: HWND,
++    owner_route: bool,
 +    allowed: impl Fn() -> bool,
  ) -> bool {
      if !allowed() || unsafe { GetForegroundWindow() } != displaced {
          return false;
-@@ -184,14 +221,15 @@ pub(crate) unsafe fn hand_back_by_minimizing(
+@@ -184,14 +237,21 @@ pub(crate) unsafe fn hand_back_by_minimizing(
          return false;
      }
      // Synchronous: the user's window must be next before the minimize.
 -    let _ = unsafe { SetWindowPos(prior, displaced, 0, 0, 0, 0, Z_ONLY) };
 -    let facts = unsafe { minimize_facts(prior, displaced) };
 +    let _ = unsafe { SetWindowPos(prior, minimized, 0, 0, 0, 0, Z_ONLY) };
-+    let facts = unsafe { minimize_facts(prior, minimized) };
++    let mut facts = unsafe { minimize_facts(prior, minimized) };
++    if owner_route {
++        // Windows activates the next visible window. Live (2026-11-02):
++        // under Notepad's owner of an open Save as dialog sat hidden helper
++        // windows, and placing the user's window right under it was ignored.
++        facts.prior_next = next_visible_below(minimized) == Some(prior);
++    }
      if !foreground_watch::policy::may_minimize_for_hand_back(facts)
          || !allowed()
          || unsafe { GetForegroundWindow() } != displaced
@@ -529,7 +560,7 @@ index 9ddf13ca5..550cb8274 100644
      // Both requests are posted to the app's thread and run in order there.
      let _ = unsafe { ShowWindowAsync(displaced, SW_MINIMIZE) };
      let deadline = Instant::now() + Duration::from_millis(250);
-@@ -275,7 +313,7 @@ pub(crate) unsafe fn force_foreground_assisted(target: HWND) -> (bool, bool) {
+@@ -275,7 +335,7 @@ pub(crate) unsafe fn force_foreground_assisted(target: HWND) -> (bool, bool) {
  /// Leases are shared so overlapping run_steps do not clear each other's bit.
  pub struct NoActivateGuard {
      styles: Vec<(isize, u32, u32)>,
@@ -538,7 +569,7 @@ index 9ddf13ca5..550cb8274 100644
  }
  
  struct StyleLease {
-@@ -289,15 +327,44 @@ static STYLE_LEASES: Mutex<std::collections::BTreeMap<(isize, u32, u32), StyleLe
+@@ -289,15 +349,44 @@ static STYLE_LEASES: Mutex<std::collections::BTreeMap<(isize, u32, u32), StyleLe
  impl NoActivateGuard {
      pub fn arm(hwnd: HWND) -> Self {
          use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
@@ -585,7 +616,7 @@ index 9ddf13ca5..550cb8274 100644
                  continue;
              }
              let mut pid = 0;
-@@ -309,7 +376,6 @@ impl NoActivateGuard {
+@@ -309,7 +398,6 @@ impl NoActivateGuard {
              if styles.contains(&key) {
                  continue;
              }
@@ -593,7 +624,7 @@ index 9ddf13ca5..550cb8274 100644
              let lease = leases.entry(key).or_insert_with(|| {
                  let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
                  let want = WS_EX_NOACTIVATE.0 as isize;
-@@ -324,20 +390,22 @@ impl NoActivateGuard {
+@@ -324,20 +412,22 @@ impl NoActivateGuard {
              styles.push(key);
          }
          drop(leases);

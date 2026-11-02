@@ -189,7 +189,7 @@ pub(crate) unsafe fn hand_back_by_minimizing(
     displaced: HWND,
     allowed: impl Fn() -> bool,
 ) -> bool {
-    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, allowed) }
+    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, false, allowed) }
 }
 
 /// [`hand_back_by_minimizing`] for a window that cannot be minimized itself,
@@ -205,13 +205,29 @@ pub(crate) unsafe fn hand_back_by_minimizing_owner(
     use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
     let owner = unsafe { GetAncestor(displaced, GA_ROOTOWNER) };
     let owner = if owner.0.is_null() { displaced } else { owner };
-    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, allowed) }
+    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, true, allowed) }
+}
+
+/// The first visible top-level window below `window` (bounded).
+fn next_visible_below(window: HWND) -> Option<HWND> {
+    let mut next = unsafe { GetWindow(window, GW_HWNDNEXT) }.ok()?;
+    for _ in 0..512 {
+        if next.0.is_null() {
+            return None;
+        }
+        if unsafe { IsWindowVisible(next) }.as_bool() {
+            return Some(next);
+        }
+        next = unsafe { GetWindow(next, GW_HWNDNEXT) }.ok()?;
+    }
+    None
 }
 
 unsafe fn hand_back_by_minimizing_window(
     prior: HWND,
     displaced: HWND,
     minimized: HWND,
+    owner_route: bool,
     allowed: impl Fn() -> bool,
 ) -> bool {
     if !allowed() || unsafe { GetForegroundWindow() } != displaced {
@@ -222,7 +238,13 @@ unsafe fn hand_back_by_minimizing_window(
     }
     // Synchronous: the user's window must be next before the minimize.
     let _ = unsafe { SetWindowPos(prior, minimized, 0, 0, 0, 0, Z_ONLY) };
-    let facts = unsafe { minimize_facts(prior, minimized) };
+    let mut facts = unsafe { minimize_facts(prior, minimized) };
+    if owner_route {
+        // Windows activates the next visible window. Live (2026-11-02):
+        // under Notepad's owner of an open Save as dialog sat hidden helper
+        // windows, and placing the user's window right under it was ignored.
+        facts.prior_next = next_visible_below(minimized) == Some(prior);
+    }
     if !foreground_watch::policy::may_minimize_for_hand_back(facts)
         || !allowed()
         || unsafe { GetForegroundWindow() } != displaced
