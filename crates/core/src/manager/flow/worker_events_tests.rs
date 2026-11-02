@@ -380,6 +380,29 @@ fn event_ids(reply: &CliReply) -> Vec<String> {
     }
 }
 
+/// A worker that ends while its parent's CLI has no turn open owes that CLI the turn the net's
+/// message starts: until it starts, the work holds, as for a background command's end, so its
+/// block never reads over in between (D24, D94; seen live on Codex, the same on every CLI).
+#[tokio::test]
+async fn a_workers_end_holds_the_work_until_the_turn_that_carries_it_starts() {
+    let (flow, seen) = flow("events-owed", PermissionLevel::Full).await;
+    flow.say("Start Hang-on.").await;
+    flow.settled().await;
+    assert!(
+        !flow.manager.cli_holds(&flow.conversation),
+        "its worker works"
+    );
+    seen.release.store(true, Ordering::SeqCst);
+    super::eventually("its end to hold the work", || {
+        flow.manager.cli_holds(&flow.conversation)
+    })
+    .await;
+    until_nets(&seen, 1).await;
+    flow.settled().await;
+    assert!(!flow.manager.cli_holds(&flow.conversation), "its turn came");
+    flow.stop().await;
+}
+
 /// The plan's first: the parent ends its turn with a `wait` running in the background; its
 /// worker finishes; the CLI's next turn starts with the event, once, and the net sends
 /// nothing.

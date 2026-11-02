@@ -678,7 +678,7 @@ export function cliBlocks(
   const holds = (each: Block) => {
     const starts = [...(joined.get(each) ?? []), turnOf.get(each)].flatMap((read) => (read?.startedAtMs != null ? [read.startedAtMs] : []));
     const endedAtMs = turnOf.get(each)?.endedAtMs ?? null;
-    return workingWorkers(view.workers ?? [], view.turns, starts, endedAtMs) + turnCommands(view, view.turns, starts, endedAtMs) + runningSubagents(view, each.startedAtMs, endedAtMs) > 0;
+    return workingWorkers(view.workers ?? [], view.turns, starts, endedAtMs, !!view.jobs?.waking) + turnCommands(view, view.turns, starts, endedAtMs) + runningSubagents(view, each.startedAtMs, endedAtMs) > 0;
   };
   // A turn that carries on the request a usage limit cut (an account or CLI switch) goes on in
   // its block: one block, one switch row, no stopped turn (goal 1). Its requests, else the ones

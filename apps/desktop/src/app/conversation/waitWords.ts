@@ -89,7 +89,7 @@ export function liveWait(view: ThreadView): StatusHead | null {
  * command or subagent (`useBlockHold`'s holders). `null` when several hold it: the counts say it.
  */
 export function heldWait(view: ThreadView, starts: readonly number[], startedAtMs: number, endedAtMs: number | null): StatusHead | null {
-  const workers = workingWorkerRows(view.workers ?? [], view.turns, starts, endedAtMs);
+  const workers = workingWorkerRows(view.workers ?? [], view.turns, starts, endedAtMs, !!view.jobs?.waking);
   const commands = turnCommandTasks(view, view.turns, starts, endedAtMs);
   const subagents = runningSubagentTasks(view, startedAtMs, endedAtMs);
   if (workers.length + commands.length + subagents.length !== 1) return null;

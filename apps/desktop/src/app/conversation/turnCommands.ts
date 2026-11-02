@@ -48,7 +48,9 @@ export function turnCommandTasks(
   const holding = background.filter((task) => jobs.holding?.includes(task.id) && ours(task) && !own(task));
   if (holding.length > 0 || !jobs.waking || next !== null) return holding;
   // Its end owes the turn it starts: the newest block that started it waits for that turn.
-  const owed = background.findLast((task) => task.status !== "running" && task.kind !== "agent" && ours(task) && !own(task) && !excluded(task, entries));
+  // One that ended before the block's turns did had its turn: a worker's word may owe this one.
+  const unheard = (task: BackgroundTask) => endedAtMs === null || (task.endedAtMs ?? 0) > endedAtMs;
+  const owed = background.findLast((task) => task.status !== "running" && task.kind !== "agent" && unheard(task) && ours(task) && !own(task) && !excluded(task, entries));
   return owed ? [owed] : [];
 }
 

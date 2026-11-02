@@ -44,6 +44,17 @@ test("a turn holds for the workers it started until each finished", () => {
   assert.equal(workingWorkers([worker("w6", 6000, { gone: true })], turns, [5000]), 0);
 });
 
+test("a worker that ended after its block's turns holds the block until the CLI's turn for its word starts (D24, D94; seen live on Codex)", () => {
+  // Its block's turns ended at 7000; it ended at 9000 and its word hasn't reached the CLI yet.
+  const ended = worker("w1", 6000, { working: false, lastEnd: "done", lastEventAtMs: 9000 });
+  assert.equal(workingWorkers([ended], turns, [5000], 7000, true), 1);
+  assert.equal(workingWorkers([ended], turns, [5000], 7000, false), 0, "its turn began, or the grace passed");
+  // One whose word a turn of the block already took (the block ends after it) holds nothing.
+  assert.equal(workingWorkers([ended], turns, [5000], 9500, true), 0);
+  // Nor in an older block.
+  assert.equal(workingWorkers([{ ...ended, startedAtMs: 1500 }], turns, [1000], 4000, true), 0);
+});
+
 test("a worker waiting on the user still holds its turn; sent back to work, only the newest turn's", () => {
   const asks = worker("w1", 6000, { working: false, lastEnd: "done", waiting: [{ kind: "question", what: "Which?", card: null }] });
   assert.equal(workingWorkers([asks], turns, [5000]), 1);

@@ -769,11 +769,16 @@ impl SessionManager {
         event: WaitEvent,
     ) {
         let record = self.events_record(conversation);
+        // A card's word holds as its waiting row does, and may be answered before the net goes.
+        let owes = card.is_none();
         if self
             .worker_events
             .push(conversation, &record, task, card, event)
             .is_some()
         {
+            if owes {
+                self.owe_cli_turn(conversation);
+            }
             self.net_soon(conversation);
         }
     }

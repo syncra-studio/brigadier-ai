@@ -27,16 +27,22 @@ export function workingWorkers(
   turns: readonly Pick<ThreadTurn, "startedAtMs">[],
   starts: readonly number[],
   endedAtMs: number | null = null,
+  owed = false,
 ): number {
-  return workingWorkerRows(workers, turns, starts, endedAtMs).length;
+  return workingWorkerRows(workers, turns, starts, endedAtMs, owed).length;
 }
 
-/** The rows of [`workingWorkers`]. */
+/**
+ * The rows of [`workingWorkers`]. `owed`: the CLI's turn that carries a word of its workers
+ * hasn't started yet (`CliJobs::waking`): one that ended after the block's turns did still holds
+ * it until then, so it never reads over in between (D24, D94).
+ */
 export function workingWorkerRows(
   workers: readonly WorkerRow[],
   turns: readonly Pick<ThreadTurn, "startedAtMs">[],
   starts: readonly number[],
   endedAtMs: number | null = null,
+  owed = false,
 ): WorkerRow[] {
   if (starts.length === 0) return [];
   const startedAtMs = Math.min(...starts);
@@ -46,7 +52,8 @@ export function workingWorkerRows(
     // None started after its turns ended is its: the next turn may not be in `turns` yet.
     if (worker.startedAtMs < startedAtMs || (next !== null && worker.startedAtMs >= next) || (endedAtMs !== null && worker.startedAtMs > endedAtMs) || worker.gone) return false;
     if (worker.lastEnd === null) return true;
-    return newest && (worker.working || worker.waiting.length > 0);
+    const unheard = owed && endedAtMs !== null && (worker.lastEventAtMs ?? 0) > endedAtMs;
+    return newest && (worker.working || worker.waiting.length > 0 || unheard);
   });
 }
 

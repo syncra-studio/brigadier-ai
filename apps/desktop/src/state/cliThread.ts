@@ -548,7 +548,7 @@ export function useTurnSubagents(conversationId: string | null, startedAtMs: num
 export function useTurnWorkers(conversationId: string | null, starts: readonly number[], endedAtMs: number | null = null): number {
   return useCliThread((s) => {
     const view = conversationId && starts.length > 0 ? s.views[conversationId] : undefined;
-    return view ? workingWorkers(view.workers ?? NO_ROWS, view.turns, starts, endedAtMs) : 0;
+    return view ? workingWorkers(view.workers ?? NO_ROWS, view.turns, starts, endedAtMs, !!view.jobs?.waking) : 0;
   });
 }
 

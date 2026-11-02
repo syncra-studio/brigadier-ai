@@ -640,20 +640,44 @@ impl SessionManager {
                 said_jobs(live, now_ms()).map(|jobs| (jobs, manager.next_news_seq()))
             };
             if let Some((jobs, seq)) = jobs {
-                let _ = manager.thread_news.send(ThreadNews {
-                    conversation_id: id,
-                    entries: Vec::new(),
-                    opened: false,
-                    ended: None,
-                    turn_ended_at_ms: None,
-                    context: None,
-                    background: None,
-                    mcp: None,
-                    workers: None,
-                    jobs: Some(jobs),
-                    seq,
-                });
+                manager.say_jobs(id, jobs, seq);
             }
+        });
+    }
+
+    /// A worker's word came for conversation `id` while no turn of its CLI is open: the turn
+    /// that carries it there is owed (`CliJobs::waking`), as a background command's end's is,
+    /// so the block it ends holds until that turn starts (D24, D94).
+    pub(super) fn owe_cli_turn(&self, id: &ConversationId) {
+        let until = now_ms() + i64::try_from(BACKGROUND_TURN_GRACE.as_millis()).unwrap_or(i64::MAX);
+        let jobs = {
+            let mut threads = self.cli_threads.lock().unwrap();
+            let Some(live) = threads.get_mut(id).filter(|live| !live.open) else {
+                return;
+            };
+            live.waking_until = Some(until);
+            said_jobs(live, now_ms()).map(|jobs| (jobs, self.next_news_seq()))
+        };
+        if let Some((jobs, seq)) = jobs {
+            self.say_jobs(id.clone(), jobs, seq);
+        }
+        self.wake_grace(id.clone(), until);
+    }
+
+    /// Tells the app what of conversation `id`'s CLI work holds now.
+    fn say_jobs(&self, id: ConversationId, jobs: thread_view::CliJobs, seq: u64) {
+        let _ = self.thread_news.send(ThreadNews {
+            conversation_id: id,
+            entries: Vec::new(),
+            opened: false,
+            ended: None,
+            turn_ended_at_ms: None,
+            context: None,
+            background: None,
+            mcp: None,
+            workers: None,
+            jobs: Some(jobs),
+            seq,
         });
     }
 
