@@ -217,7 +217,7 @@ impl SessionManager {
         let message = as_message(&conv.id, item);
         self.spawn(async move {
             let fits = manager.judged(&conv, &message).await;
-            let routing = conv.queue_routing.lock().await;
+            let mut routing = conv.queue_routing.lock().await;
             // Steered, deleted or sent meanwhile: the user's or the pump's.
             let deciding = manager.core.board(&conv.id).await.is_ok_and(|board| {
                 board
@@ -231,13 +231,15 @@ impl SessionManager {
             }
             if fits == Some(true) {
                 drop(routing);
-                if let Err(err) = manager
+                let Err(err) = manager
                     .steer_queued(conv.id.clone(), message.id.clone())
                     .await
-                {
-                    crate::logging::private_trace!(conv.private_logs, warn, "could not steer in a message that fits its block"; conversation = %conv.id, error = %err);
-                }
-                return;
+                else {
+                    return;
+                };
+                // Refused (the session compacts): it waits in the rail, never Deciding for good.
+                crate::logging::private_trace!(conv.private_logs, warn, "could not steer in a message that fits its block; it waits"; conversation = %conv.id, error = %err);
+                routing = conv.queue_routing.lock().await;
             }
             if let Err(err) = manager
                 .core

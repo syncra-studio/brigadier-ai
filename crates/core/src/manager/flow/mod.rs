@@ -2398,7 +2398,9 @@ impl Flow {
     /// request shows as ended.
     pub async fn settled_in(&self, id: &ConversationId) -> Board {
         self.until_in(id, "the requests to settle", |board| {
+            // A message still Deciding is judged in a moment: not settled yet.
             !board.requests.is_empty()
+                && !board.queue.items.iter().any(|item| item.deciding)
                 && board.requests.values().all(|request| match request.state {
                     RequestState::Working => false,
                     RequestState::Waiting => true,
@@ -2423,9 +2425,7 @@ impl Flow {
         loop {
             let board = self.settled_in(id).await;
             let conv = self.manager.conv(id).unwrap();
-            // A message still Deciding is judged in a moment: not idle yet.
-            let deciding = board.queue.items.iter().any(|item| item.deciding);
-            if !deciding && conv.idle().await {
+            if conv.idle().await {
                 return board;
             }
             assert!(

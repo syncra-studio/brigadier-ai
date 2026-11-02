@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 type Inputs = Arc<Mutex<Vec<String>>>;
 
 /// A session whose CLI keeps a session file, as Claude Code does. "Hold." takes two steers in
-/// its turn; "Work a while." takes two as well, the user's queued message and its withdrawal.
+/// its turn; "Work a while." takes two as well.
 async fn flow(name: &str) -> (Flow, Inputs) {
     let inputs: Inputs = Arc::default();
     let seen = inputs.clone();
@@ -266,28 +266,23 @@ async fn brigadiers_steers_are_brigadiers_and_the_users_steer_is_theirs() {
 }
 
 #[tokio::test]
-async fn a_queued_messages_frame_and_its_withdrawal_are_brigadiers() {
+async fn a_follow_up_the_judge_steers_in_is_the_users_under_its_frame() {
     let (flow, inputs) = flow("said-queued").await;
     flow.say("Work a while.").await;
     until_given(&flow, &inputs, "Work a while.").await;
-    // Sent while the turn works: steered in under its frame to judge.
+    // Sent while the turn works: judged to fit, steered in under its frame (D157).
     flow.say("Also the docs.").await;
     let framed = until_given(&flow, &inputs, "Also the docs.").await;
-    assert!(framed.starts_with("[queued message "), "{framed}");
+    assert!(
+        framed.starts_with(crate::manager::conversation::queue_judging::STEERED),
+        "{framed}"
+    );
     assert_eq!(
         flow.noted_said(&framed),
         Some(Said::Both {
             user: "Also the docs.".into()
         })
     );
-    // Deleted once the thread has it: Brigadier tells the thread to leave it.
-    let item = flow.board().await.queue.items[0].id.clone();
-    flow.manager
-        .delete_queued(&flow.conversation, &item)
-        .await
-        .unwrap();
-    let withdrawn = until_given(&flow, &inputs, "withdrawn").await;
-    assert_eq!(flow.noted_said(&withdrawn), Some(Said::Brigadier));
     flow.stop().await;
 }
 

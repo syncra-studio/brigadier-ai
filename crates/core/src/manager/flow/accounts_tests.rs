@@ -3172,6 +3172,8 @@ async fn a_command_cut_by_an_account_switch_holds_no_work_after_it() {
     type Sender = tokio::sync::mpsc::Sender<ProviderEvent>;
     let log = Log::default();
     let behavior = Arc::new(super::FakeBehavior::default());
+    // The follow-up waits for its own turn (D157).
+    *behavior.judge.lock().unwrap() = Some("WAITS");
     let late: Arc<Mutex<Option<Sender>>> = Arc::default();
     let (closing, close) = (
         Arc::new(tokio::sync::Notify::new()),
@@ -3255,9 +3257,7 @@ async fn a_command_cut_by_an_account_switch_holds_no_work_after_it() {
     flow.until("the late command runs", |board| late_row(board).is_some())
         .await;
     close.notify_one();
-    let own_turn = |turn: &Seen| {
-        turn.input.contains("Follow-up.") && turn.input.contains("now on its own turn")
-    };
+    let own_turn = |turn: &Seen| turn.input.contains("Follow-up.");
     flow.until("the follow-up gets its own turn", |_| {
         seen(&log).iter().any(own_turn)
     })
