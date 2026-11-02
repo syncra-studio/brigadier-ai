@@ -200,6 +200,8 @@ Patches applied, in order:
 
 - `patches/0169-windows-typing-and-page-patches-formatted.diff`: Format the Windows typing and Edge page typing code from 0165 and 0168 so cargo fmt --check passes.
 
+- `patches/0170-windows-explorer-arguments-and-closed-window-results.diff`: Normalize Explorer drive and UNC additional arguments while preserving URLs and other apps, allow two seconds for Settings close confirmation, and use exact confirmed window-destruction evidence for final run_steps observations.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

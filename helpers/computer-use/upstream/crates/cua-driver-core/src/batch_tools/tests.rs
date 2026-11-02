@@ -32,6 +32,28 @@ impl Tool for Probe {
         if let Some(message) = args["fail_message"].as_str() {
             return ToolResult::error(message.to_owned());
         }
+        if args["text"] == "close-confirmed" || args["text"] == "close-unconfirmed" {
+            use crate::action_record::{
+                ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, EvidenceKind,
+                RequestedDelivery,
+            };
+            let mut record = ActionExecutionRecord::new(
+                if args["text"] == "close-confirmed" {
+                    ActionEffect::Confirmed
+                } else {
+                    ActionEffect::Unverifiable
+                },
+                ActionTransport::WindowsPostMessage,
+                RequestedDelivery::Background,
+            );
+            if args["text"] == "close-confirmed" {
+                record.evidence.push(ActionEvidence {
+                    kind: EvidenceKind::WindowChange,
+                    detail: "Target window/dialog closed".into(),
+                });
+            }
+            return ToolResult::text("close dispatched").with_action_record(record);
+        }
         if args["fail"] == true {
             ToolResult::error(format!("{} refused: probe asked to fail", self.def.name))
         } else {
@@ -783,4 +805,38 @@ async fn conflicting_token_window_is_rejected_before_actions() {
     assert_eq!(result.is_error, Some(true));
     assert!(text(&result).contains("different pid or window_id"));
     assert_eq!(harness.hits("click"), 0);
+}
+
+#[tokio::test]
+async fn final_observation_reports_confirmed_close_of_its_exact_window() {
+    for (text, observe, expected_reads) in [
+        ("close-confirmed", json!({}), 0),
+        ("close-unconfirmed", json!({}), 1),
+        ("close-confirmed", json!({"pid":42, "window_id":100}), 1),
+        ("close-confirmed", json!({"pid":43, "window_id":99}), 1),
+    ] {
+        let h = Harness::new();
+        let result = h
+            .run(json!({
+                "pid":42, "window_id":99,
+                "steps":[
+                    {"tool":"set_value","args":{"text":"file name"}},
+                    {"tool":"click","args":{"text":text}}
+                ],
+                "observe":observe
+            }))
+            .await;
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        assert_eq!(h.hits("get_window_state"), expected_reads, "{result:?}");
+        let data = result.structured_content.unwrap();
+        assert_eq!(data["observation"]["ok"], true);
+        if expected_reads == 0 {
+            assert_eq!(data["observation"]["state"]["status"], "closed");
+            assert_eq!(data["observation"]["state"]["window_id"], 99);
+            assert_eq!(
+                data["observation"]["summary"],
+                "The observed window closed."
+            );
+        }
+    }
 }

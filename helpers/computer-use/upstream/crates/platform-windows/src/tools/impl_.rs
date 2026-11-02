@@ -585,7 +585,7 @@ async fn close_settings_window(args: Value) -> ToolResult {
             return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
                 .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
         }
-        readback.finish(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage)
+        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(2))
     }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
 }
 
@@ -2649,6 +2649,11 @@ impl Tool for LaunchAppTool {
             extra_args.extend(profile.arguments());
             for feature in profile.disabled_features() {
                 super::task_browser::disable_feature(&mut extra_args, feature);
+            }
+        }
+        if let Some(target) = resolved_target.as_deref() {
+            for arg in &mut extra_args {
+                *arg = super::browser_target::additional_launch_argument(target, arg);
             }
         }
         // Task browsers open their pages through the proven endpoint instead.

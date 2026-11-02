@@ -100,10 +100,21 @@ impl Readback {
         route: &str,
         transport: ActionTransport,
     ) -> ToolResult {
+        self.finish_with_timeout(ptr, route, transport, Duration::from_millis(400))
+    }
+
+    pub(crate) fn finish_with_timeout(
+        self,
+        ptr: Option<usize>,
+        route: &str,
+        transport: ActionTransport,
+        timeout: Duration,
+    ) -> ToolResult {
+        let deadline = std::time::Instant::now() + timeout;
         let hwnd = HWND(self.hwnd as *mut _);
-        let mut closed = false;
+        let mut closed;
         let mut changed = false;
-        for attempt in 0..9 {
+        loop {
             closed = window_closed(self.present_before, unsafe { IsWindow(hwnd) }.as_bool());
             if !closed {
                 changed = ptr.is_some_and(|ptr| {
@@ -112,7 +123,7 @@ impl Readback {
                     observed_change(&self.before, &state(&element))
                 });
             }
-            if closed || changed || attempt == 8 {
+            if closed || changed || std::time::Instant::now() >= deadline {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -514,6 +525,49 @@ fn at_point_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_readback_confirms_window_destruction_after_the_short_click_wait() {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+        };
+        let (created_tx, created_rx) = std::sync::mpsc::channel();
+        let (close_tx, close_rx) = std::sync::mpsc::channel();
+        let owner = std::thread::spawn(move || unsafe {
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            created_tx.send(hwnd.0 as usize as u64).unwrap();
+            close_rx.recv().unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+            DestroyWindow(hwnd).unwrap();
+        });
+        let id = created_rx.recv().unwrap();
+        let readback = Readback::new(id, None);
+        close_tx.send(()).unwrap();
+        let result = readback.finish_with_timeout(
+            None,
+            "Settings window WM_CLOSE",
+            ActionTransport::WindowsPostMessage,
+            Duration::from_secs(2),
+        );
+        owner.join().unwrap();
+        let data = result.structured_content.unwrap();
+        assert_eq!(data["effect"], "confirmed");
+        assert!(result.action_record.unwrap().debug_json()["evidence"].is_array());
+    }
     #[test]
     fn an_already_missing_window_is_never_a_confirmed_close() {
         let result =
