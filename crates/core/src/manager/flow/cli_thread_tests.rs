@@ -644,6 +644,80 @@ async fn a_sessions_background_command_holds_its_turn_until_the_turn_its_end_sta
     flow.stop().await;
 }
 
+/// A background command that ended while its turn ran (Codex's `brigadier wait`, when a worker
+/// was paused or stopped) may start a turn of its CLI's right after that turn: the turn's end
+/// owes it, said with the end itself, so its block never folds between the two (D153).
+#[tokio::test]
+async fn a_command_that_ended_during_the_turn_owes_the_next_turn_from_the_turns_end() {
+    use brigadier_providers::{
+        BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ProviderEvent, TurnStatus,
+    };
+
+    let flow = Flow::start(
+        "cli-thread-ended-in-turn",
+        Options::default(),
+        script(|_| async { Reply::text("Paused.") }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let conv = flow.manager.conv(&id).unwrap();
+    let mut news = flow.manager.subscribe_thread_news();
+    let wait = |status| ProviderEvent::BackgroundTask {
+        task: BackgroundTask {
+            command: None,
+            provider: None,
+            id: "proc-3".into(),
+            item_id: Some("item_wait".into()),
+            kind: BackgroundTaskKind::Terminal,
+            label: "brigadier wait".into(),
+            status,
+            started_at_ms: 100,
+            ended_at_ms: (status != BackgroundTaskStatus::Running).then(crate::now_ms),
+            output_file: None,
+            summary: None,
+            last_line: None,
+        },
+    };
+    let turn = |ended: bool| {
+        let mut events = vec![ProviderEvent::TurnStarted { turn_id: None }];
+        if ended {
+            events.push(wait(BackgroundTaskStatus::Completed));
+        }
+        events.push(ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: TurnStatus::Completed,
+            duration_ms: None,
+            usage: None,
+        });
+        events
+    };
+    // The wait runs in the background from an earlier turn.
+    flow.manager
+        .follow_cli_thread(&conv, Some(&wait(BackgroundTaskStatus::Running)))
+        .await;
+    for event in turn(true) {
+        flow.manager.follow_cli_thread(&conv, Some(&event)).await;
+    }
+    // The news that ends the turn says the turn owed, in the same message.
+    let mut ended_owing = None;
+    while let Ok(item) = news.try_recv() {
+        if item.conversation_id == id && item.ended.is_some() {
+            ended_owing = Some(item.jobs.is_some_and(|jobs| jobs.waking));
+        }
+    }
+    assert_eq!(ended_owing, Some(true), "the turn's end owes the next turn");
+    assert!(flow.manager.thread_view(&id).unwrap().jobs.waking);
+    // No turn comes (its CLI took that end in the turn): it holds only the settle.
+    tokio::time::sleep(super::super::conversation::WAKE_SETTLE * 2).await;
+    assert!(!flow.manager.thread_view(&id).unwrap().jobs.waking);
+    // A turn in which nothing ended owes nothing.
+    for event in turn(false) {
+        flow.manager.follow_cli_thread(&conv, Some(&event)).await;
+    }
+    assert!(!flow.manager.thread_view(&id).unwrap().jobs.waking);
+    flow.stop().await;
+}
+
 /// A subagent its lead's turn left running holds that turn as a command does (D24): its end
 /// owes the turn it starts, so the turn never reads done between the two. Claude Code 2.1.308
 /// stream lines (an `Agent` call with `run_in_background`).

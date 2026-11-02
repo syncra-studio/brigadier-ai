@@ -295,6 +295,10 @@ pub struct SessionManager {
     checkout_saves: tokio::sync::broadcast::Sender<crate::work::WorkspaceTarget>,
     /// Each conversation's running turn as its CLI streams it ([`cli_thread`]).
     cli_threads: std::sync::Mutex<HashMap<ConversationId, crate::thread_view::LiveTurn>>,
+    /// Each conversation's work block, now or last ([`cli_thread`], D163), and one refresh of
+    /// them at a time, so an older reading never lands after a newer one.
+    work_blocks: std::sync::Mutex<HashMap<ConversationId, crate::thread_view::WorkBlock>>,
+    block_refresh: tokio::sync::Mutex<()>,
     /// Per conversation, the inbox read so far for Brigadier's own messages its CLI was
     /// handed ([`cli_thread`]): the last event's sequence, and the texts of those found.
     inbox_read: std::sync::Mutex<HashMap<ConversationId, (i64, std::collections::HashSet<String>)>>,
@@ -473,6 +477,8 @@ impl SessionManager {
             tab_chats: side_chat::TabChats::default(),
             checkout_saves: tokio::sync::broadcast::channel(16).0,
             cli_threads: std::sync::Mutex::default(),
+            work_blocks: std::sync::Mutex::default(),
+            block_refresh: tokio::sync::Mutex::const_new(()),
             inbox_read: std::sync::Mutex::default(),
             thread_news: tokio::sync::broadcast::channel(1024).0,
             news_seq: std::sync::atomic::AtomicU64::new(

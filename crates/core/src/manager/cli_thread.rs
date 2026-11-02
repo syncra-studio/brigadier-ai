@@ -7,7 +7,7 @@ use brigadier_providers::{
 };
 
 use super::SessionManager;
-use super::conversation::{BACKGROUND_TURN_GRACE, ConvLive};
+use super::conversation::{BACKGROUND_TURN_GRACE, ConvLive, WAKE_SETTLE};
 use super::session_dir::read_lineage;
 use crate::model::{ContextUsage, ConversationId, ConversationView};
 use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
@@ -269,6 +269,8 @@ impl SessionManager {
                         live.waking_until = Some(until);
                         wake_owed = Some(until);
                     }
+                    live.ended_in_turn |=
+                        ended && live.open && task.kind != BackgroundTaskKind::Agent;
                     read_output = !live.reading_output && reads_output(&live.background);
                     live.reading_output |= read_output;
                 }
@@ -493,7 +495,10 @@ impl SessionManager {
             }
             if let Some(end) = ended {
                 live.open = false;
-                live.waking_until = None;
+                // A command that ended during it may start the next turn at once (D153).
+                live.waking_until = std::mem::take(&mut live.ended_in_turn)
+                    .then(|| at + i64::try_from(WAKE_SETTLE.as_millis()).unwrap_or(i64::MAX));
+                wake_owed = wake_owed.or(live.waking_until);
                 if let Some((carried, ..)) = &carried {
                     thread_view::add_requests(&mut live.requests, carried);
                 }
@@ -522,6 +527,7 @@ impl SessionManager {
             jobs = said_jobs(live, at);
             seq = self.next_news_seq();
         }
+        let block_moves = opened || ended.is_some() || jobs.is_some();
         if !news.is_empty()
             || opened
             || ended.is_some()
@@ -542,8 +548,12 @@ impl SessionManager {
                 workers: None,
                 jobs,
                 replies: None,
+                block: None,
                 seq,
             });
+        }
+        if block_moves {
+            self.block_soon(&conv.id);
         }
         if let Some(until) = wake_owed {
             self.wake_grace(conv.id.clone(), until);
@@ -620,6 +630,7 @@ impl SessionManager {
                     workers: None,
                     jobs: None,
                     replies: None,
+                    block: None,
                     seq,
                 });
             }
@@ -670,8 +681,89 @@ impl SessionManager {
         self.wake_grace(id.clone(), until);
     }
 
+    /// Reads conversation `id`'s work block again, soon: after each news of its thread, the
+    /// only times what holds it changes (D163).
+    pub(super) fn block_soon(&self, id: &ConversationId) {
+        let (manager, id) = (self.arc(), id.clone());
+        tokio::spawn(async move {
+            if !manager.refresh_block(&id).await {
+                return;
+            }
+            // Opened, it is read again on a short beat until it closes: a change no news
+            // follows (its CLI's turn going idle) closes it all the same.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                manager.refresh_block(&id).await;
+                let open = manager
+                    .work_blocks
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .is_some_and(|block| block.ended_at_ms.is_none());
+                if !open || manager.conv(&id).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Opens conversation `id`'s work block as its work starts, closes it once nothing holds
+    /// it: its CLI's turn, a message on its way, or what `work_holds` counts (a worker, paused
+    /// too, a background job, a subagent, the turn a job's end owes). Said to the app only
+    /// when it opens or closes, so it never closes and opens again for a gap (D153). Whether
+    /// this opened it.
+    async fn refresh_block(&self, id: &ConversationId) -> bool {
+        let _one = self.block_refresh.lock().await;
+        let Ok(conv) = self.conv(id) else {
+            return false;
+        };
+        let live = conv.is_busy().await || self.work_holds(&conv).await;
+        let said = {
+            let mut blocks = self.work_blocks.lock().unwrap();
+            let now = now_ms();
+            let block = match blocks.get(id) {
+                Some(open) if open.ended_at_ms.is_none() => {
+                    (!live).then(|| thread_view::WorkBlock {
+                        ended_at_ms: Some(now),
+                        ..open.clone()
+                    })
+                }
+                _ => live.then(|| thread_view::WorkBlock {
+                    started_at_ms: now,
+                    ended_at_ms: None,
+                }),
+            };
+            block.map(|block| {
+                blocks.insert(id.clone(), block.clone());
+                (block, self.next_news_seq())
+            })
+        };
+        let opened = said
+            .as_ref()
+            .is_some_and(|(block, _)| block.ended_at_ms.is_none());
+        if let Some((block, seq)) = said {
+            let _ = self.thread_news.send(ThreadNews {
+                conversation_id: id.clone(),
+                entries: Vec::new(),
+                opened: false,
+                ended: None,
+                turn_ended_at_ms: None,
+                context: None,
+                background: None,
+                mcp: None,
+                workers: None,
+                jobs: None,
+                replies: None,
+                block: Some(block),
+                seq,
+            });
+        }
+        opened
+    }
+
     /// Tells the app what of conversation `id`'s CLI work holds now.
     fn say_jobs(&self, id: ConversationId, jobs: thread_view::CliJobs, seq: u64) {
+        self.block_soon(&id);
         let _ = self.thread_news.send(ThreadNews {
             conversation_id: id,
             entries: Vec::new(),
@@ -684,6 +776,7 @@ impl SessionManager {
             workers: None,
             jobs: Some(jobs),
             replies: None,
+            block: None,
             seq,
         });
     }
@@ -945,6 +1038,7 @@ impl SessionManager {
         thread_view::name_providers(&mut view, &owned, current);
         view.seams = super::seam::marks(&record, &mut view.entries);
         view.replies = super::session_messages::replies(&record);
+        view.block = self.work_blocks.lock().unwrap().get(id).cloned();
         if view
             .turns
             .last()

@@ -271,6 +271,7 @@ mod client_tests {
             replies: Vec::new(),
             seq: 0,
             next_model: None,
+            block: None,
         };
         let (send, recv) = tokio::io::duplex(8192);
         let mut writer = FrameWriter::new(send);

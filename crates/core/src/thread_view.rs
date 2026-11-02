@@ -68,6 +68,24 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub next_model: Option<crate::model::ModelChoice>,
+    /// Its work block now, or its last (`WorkBlock`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub block: Option<WorkBlock>,
+}
+
+/// A conversation's job as the core alone says it (D153, D163): its block opens with the work
+/// and stays open while its CLI's turn runs or anything it started holds (a worker, paused ones
+/// too, a background job, a subagent, the turn a job's end owes), and closes once, when none does.
+/// The app only draws it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkBlock {
+    pub started_at_ms: i64,
+    /// None while it is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ended_at_ms: Option<i64>,
 }
 
 /// A reply a session's `brigadier wait` on another session took, as Brigadier kept it: the
@@ -423,6 +441,10 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub replies: Option<Vec<WaitReply>>,
+    /// Its work block, when it opened or closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub block: Option<WorkBlock>,
     /// Its number, rising, given as it changed what a read of the thread holds
     /// ([`ThreadView::seq`]); none (0) for news no read holds the same way (workers' rows).
     #[serde(default, skip_serializing_if = "unnumbered")]
@@ -490,6 +512,9 @@ pub(crate) struct LiveTurn {
     /// A background command ended while no turn was open: until when the turn its end starts
     /// is owed (`CliJobs::waking`), a turn begun meanwhile included until it says whose it is.
     pub waking_until: Option<i64>,
+    /// A background command ended while this turn ran: its CLI may start a turn for that end
+    /// right after this one (Codex does), so its end owes that turn a short while (D153).
+    pub ended_in_turn: bool,
     /// What of its background work was last said to hold its turn.
     pub jobs_said: CliJobs,
     /// The model's context window its CLI last said: it outlasts the turn.
@@ -772,6 +797,7 @@ pub(crate) fn view(
         replies: Vec::new(),
         seq: 0,
         next_model: None,
+        block: None,
     }
 }
 
@@ -1279,6 +1305,7 @@ mod tests {
             replies: Vec::new(),
             seq: 7,
             next_model: None,
+            block: None,
         };
         let ids = |view: &ThreadView| -> Vec<String> {
             view.entries

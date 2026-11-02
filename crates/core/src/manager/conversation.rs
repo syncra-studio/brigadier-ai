@@ -47,7 +47,7 @@ use crate::sessions::{
 use crate::tools::Role;
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, HeldBy, InjectionKind, OrchestratorStepKind,
-    QueuedMessage, QuotaWait, RequestState, RunState, TaskId,
+    QueuedMessage, QuotaWait, RequestState, RunState, TaskId, TaskState,
 };
 use crate::{Error, Result, now_ms};
 
@@ -618,6 +618,14 @@ impl Background {
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
+
+/// How long a turn's end waits for the turn a background command that ended during it may
+/// start: the block it ends never reads over between the two (D153). A CLI that took that end
+/// in the turn starts none, and the block closes this much later.
+#[cfg(not(test))]
+pub(super) const WAKE_SETTLE: Duration = Duration::from_secs(3);
+#[cfg(test)]
+pub(super) const WAKE_SETTLE: Duration = Duration::from_millis(300);
 
 /// How long a Codex command whose terminal left `/ps` waits for its item's end, which brings
 /// its exit code and output (Codex drains the output first), before it ends without them.
@@ -1634,7 +1642,7 @@ impl SessionManager {
     /// Sends `message` into the running turn, which the thread shows it inside; else (the
     /// turn just ended, or is still starting) the next turn carries it.
     /// Whether a session's or a Chat's work still holds while no turn of its CLI runs: one of
-    /// its workers still works (its own background commands count), or a background command of
+    /// its workers still works (its own background commands count) or is paused, or a background command of
     /// its CLI still runs or one's end waits for the turn it starts (`CliJobs::waking`). Its block stays open meanwhile, and
     /// what the user sends goes on in it. A side chat's or a tab chat's never holds: it keeps
     /// the plain queue.
@@ -1655,10 +1663,10 @@ impl SessionManager {
         {
             return true;
         }
-        self.core
-            .tasks(&conv.id)
-            .await
-            .is_ok_and(|tasks| self.workers_working(&tasks))
+        // A paused worker keeps its work open too, until it resumes or stops (D159).
+        self.core.tasks(&conv.id).await.is_ok_and(|tasks| {
+            self.workers_working(&tasks) || tasks.iter().any(|task| task.state == TaskState::Paused)
+        })
     }
 
     pub(super) async fn join_working(

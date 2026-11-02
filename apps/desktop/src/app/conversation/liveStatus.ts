@@ -155,6 +155,8 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
  * D106), else the workers and commands holding it, else `head`.
  */
 export function liveHead(head: StatusHead | null, workers: number, commands: number, subagents = 0, named: StatusHead | null = null): StatusHead | null {
+  // A question card's own row says it waits for the answer (D161): no line of its own.
+  if (head?.waitsOn === "answer") return null;
   if (head?.tone === "needsYou") return head;
   if (named && workers + commands + subagents > 0) return named;
   if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" };

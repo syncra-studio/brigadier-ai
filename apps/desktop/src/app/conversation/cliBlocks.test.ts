@@ -1045,6 +1045,8 @@ test("goal 8: a turn woken to judge a follow-up while the block's worker works g
     ],
     turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }],
     workers: [{ ...row("aa11bb22", 1050), ...(working && { working: true, lastEnd: null }) }],
+    // The core's work block: open while the worker works, closed once it is done (D163).
+    block: { startedAtMs: 1010, ...(!working && { endedAtMs: 1600 }) },
   });
   const queued = { id, text: "Reply with U1.", attachments: [], mentions: [], queuedAtMs: 1900, editedAtMs: null, deciding: true, delivered: true };
   const board = { ...NO_BOARD, queueItems: [queued], requests: { r1: {} } };
@@ -1702,7 +1704,8 @@ test("a message woken for while only a background subagent holds the block goes 
   ];
   const background = [{ id: "bg1", itemId: "ag1", kind: "agent" as const, label: "Sleep then print", status: "running" as const, startedAtMs: 1100, endedAtMs: null, outputFile: null, summary: null, lastLine: null }];
   for (const turns of [[turn("u1", 1000, 1300, "done")], [turn("u1", 1000, 1300, "done"), turn("q1", 5000, null, null)]]) {
-    const blocks = cliBlocks({ entries, turns, background }, "conv");
+    // The core's work block, opened with the first turn, still open while the subagent runs (D163).
+    const blocks = cliBlocks({ entries, turns, background, block: { startedAtMs: 1010 } }, "conv");
     assert.deepEqual(blocks.map((block) => block.key), ["u1"], `${turns.length} turns read`);
   }
 });

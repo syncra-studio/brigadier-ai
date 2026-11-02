@@ -3094,6 +3094,7 @@ mod tests {
             replies: Vec::new(),
             seq: 0,
             next_model: None,
+            block: None,
         };
         let frame = ServerFrame::Response {
             id: 7,

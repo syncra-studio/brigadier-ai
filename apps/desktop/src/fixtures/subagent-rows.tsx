@@ -48,6 +48,8 @@ const turns = [{ userMessage: "u1", startedAtMs: at(0), endedAtMs: at(20_000), e
 let view: ThreadView = {
   entries, turns,
   background: [task("b1", "bg", "agent", "Explore the parser", 17_000, null), task("s1", "cmd", "shell", "sleep 30", 17_200, null)],
+  // The core's work block: open while what the turn started runs (D163).
+  block: { startedAtMs: at(100) },
 };
 
 const conversation = {
@@ -144,7 +146,7 @@ async function drive() {
   await click("[data-activities] [data-activity]", /^Subagent:/);
   const background = seen().panel;
   // Both end.
-  show({ ...view, background: [task("b1", "bg", "agent", "Explore the parser", 17_000, 40_000), task("s1", "cmd", "shell", "sleep 30", 17_200, 47_200)] });
+  show({ ...view, background: [task("b1", "bg", "agent", "Explore the parser", 17_000, 40_000), task("s1", "cmd", "shell", "sleep 30", 17_200, 47_200)], block: { startedAtMs: at(100), endedAtMs: at(47_300) } });
   await pause();
   await openWork();
   const ended = seen();

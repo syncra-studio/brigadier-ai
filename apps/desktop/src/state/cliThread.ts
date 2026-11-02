@@ -143,7 +143,7 @@ function isDelta(event: ProviderEvent): boolean {
 }
 
 /** What news carries whole, all of it, when any of it changed: the view's, as it stands. */
-type Lists = Partial<Pick<ThreadView, "background" | "mcp" | "workers" | "jobs" | "replies">>;
+type Lists = Partial<Pick<ThreadView, "background" | "mcp" | "workers" | "jobs" | "replies" | "block">>;
 
 /** The lists a piece of news carries. */
 function listsOf(news: ThreadNews): Lists {
@@ -153,6 +153,7 @@ function listsOf(news: ThreadNews): Lists {
     ...(news.workers && { workers: news.workers }),
     ...(news.jobs && { jobs: news.jobs }),
     ...(news.replies && { replies: news.replies }),
+    ...(news.block && { block: news.block }),
   };
 }
 

@@ -515,6 +515,7 @@ impl SessionManager {
                 workers: None,
                 jobs: None,
                 replies: Some(replies(&self.session_dir(waiter).record())),
+                block: None,
                 seq: 0,
             });
         }

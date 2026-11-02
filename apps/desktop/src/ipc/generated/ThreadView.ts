@@ -7,6 +7,7 @@ import type { ModelChoice } from "./ModelChoice";
 import type { SeamMark } from "./SeamMark";
 import type { ThreadTurn } from "./ThreadTurn";
 import type { WaitReply } from "./WaitReply";
+import type { WorkBlock } from "./WorkBlock";
 import type { WorkerRow } from "./WorkerRow";
 
 /**
@@ -55,4 +56,8 @@ seq?: number,
  * Its newest turn's model declined it (a refusal): the model "Continue on" moves the
  * session to, the next in the routing (D143); none when no row can take it.
  */
-nextModel?: ModelChoice, };
+nextModel?: ModelChoice, 
+/**
+ * Its work block now, or its last (`WorkBlock`).
+ */
+block?: WorkBlock, };

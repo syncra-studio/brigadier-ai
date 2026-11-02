@@ -487,6 +487,7 @@ export type { WakeJob } from "./WakeJob";
 export type { WindowHistory } from "./WindowHistory";
 export type { WindowState } from "./WindowState";
 export type { WindowView } from "./WindowView";
+export type { WorkBlock } from "./WorkBlock";
 export type { WorkSpan } from "./WorkSpan";
 export type { WorkerAccess } from "./WorkerAccess";
 export type { WorkerDiff } from "./WorkerDiff";

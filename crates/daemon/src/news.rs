@@ -143,6 +143,7 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         workers: None,
         jobs: None,
         replies: None,
+        block: None,
         seq: news.seq,
     };
     let second = ThreadNews {
@@ -157,6 +158,7 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         workers: news.workers.take(),
         jobs: news.jobs.take(),
         replies: None,
+        block: news.block.take(),
         seq: news.seq,
     };
     (first, second)
@@ -172,6 +174,7 @@ fn items_only(news: &ThreadNews) -> bool {
         && news.mcp.is_none()
         && news.workers.is_none()
         && news.jobs.is_none()
+        && news.block.is_none()
 }
 
 /// Waits until `due`; forever when none.
@@ -219,6 +222,7 @@ mod tests {
             workers: None,
             jobs: None,
             replies: None,
+            block: None,
             seq: 0,
         }
     }

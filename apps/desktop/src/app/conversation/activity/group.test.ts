@@ -220,7 +220,7 @@ test("an interview is one block: two answered rounds and a steer, each round a r
 
 test("a question card's row says what it asks, what it asked, and the recommended answer", () => {
   const open = roundCard("q1", "r", 1, 2, null);
-  assert.equal(questionRowWords(open), "Asking questions");
+  assert.equal(questionRowWords(open), "Asking questions · waiting");
   const withdrawn = { ...open, answeredAtMs: 2 };
   assert.equal(questionRowWords(withdrawn), "Asked 2 questions · withdrawn");
   const single = { ...roundCard("q2", "r", 1, 1, ["No"]), items: [], text: "Ship it?", options: ["Yes", "No"], recommended: 0, answers: [], answer: "No" };
@@ -237,7 +237,7 @@ test("a question card's row says what it asks, what it asked, and the recommende
   assert.equal(answerWords(item, "1\\. Cover: USM.  2\\. Format: A4 \\*bold\\*"), "1. Cover: USM.  2. Format: A4 *bold*");
   assert.equal(answerWords(item, "C:\\Users\\me"), "C:\\Users\\me");
   const merge = { ...single, kind: { type: "merge" as const, branch: "b", base: "main", conflicted: false, conflicts: [] }, answer: null, answeredAtMs: null };
-  assert.equal(questionRowWords(merge), "Asking whether to merge into main");
+  assert.equal(questionRowWords(merge), "Asking whether to merge into main · waiting");
 });
 
 const stepAt = (position: number, kind: BlockOrchestratorStep["kind"]): SequenceEntry => ({ kind: "orchestrator", steps: [{ kind, position }], position });

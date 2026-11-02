@@ -55,6 +55,8 @@ let view: ThreadView = {
   entries,
   turns,
   workers: [worker("aa11bb22", "First bug", 1_000, false), worker("cc33dd44", "Second bug", 61_000, false)],
+  // The core's work block: open from the first turn while the workers work (D163).
+  block: { startedAtMs: at(100) },
 };
 
 const conversation = {
@@ -143,6 +145,7 @@ async function drive() {
     entries: [...view.entries, news("n2", "cc33dd44", 300_000), said("a5", "assistant", "Both bugs are fixed.", 301_000)],
     turns: [...view.turns, turn("n2", 300_000, 302_000, [])],
     workers: [worker("aa11bb22", "First bug", 1_000, true), worker("cc33dd44", "Second bug", 61_000, true)],
+    block: { startedAtMs: at(100), endedAtMs: at(302_000) },
   });
   await pause();
   const done = seen();

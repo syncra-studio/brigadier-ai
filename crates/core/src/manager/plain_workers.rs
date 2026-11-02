@@ -954,6 +954,11 @@ impl SessionManager {
         // The turn finished, one way or another: a later cut-off may go on by itself again. An
         // interrupted one (a quit closing its CLI) is still the turn that was cut off (D9 a).
         let finished = status != TurnStatus::Interrupted;
+        // Its word owes its session's CLI a turn from before the task reads reported, so its
+        // block never reads over in between (D24, D153).
+        if !super::workers::explicitly_paused(task) {
+            self.owe_cli_turn(&task.conversation_id);
+        }
         live.reporting
             .store(true, std::sync::atomic::Ordering::SeqCst);
         // Its session paused it meanwhile (D7): the pause took this turn's end, and its

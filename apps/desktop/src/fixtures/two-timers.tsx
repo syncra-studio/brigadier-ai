@@ -99,7 +99,7 @@ async function drive() {
   const agent = { id: "a1", itemId: null, kind: "agent", label: "Sleep then print", status: "running", startedAtMs: turnAt + 1_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null };
   const endedAt = turnAt + 5_000;
   const reply = { event: { type: "message", itemId: "a-1", role: "assistant", text: "Started a subagent in the background." } as ProviderEvent, atMs: endedAt - 500 };
-  const ended = { ...view, entries: [...view.entries, reply], turns: [{ ...view.turns[0]!, end: "done", endedAtMs: endedAt }], background: [agent] } as unknown as ThreadView;
+  const ended = { ...view, entries: [...view.entries, reply], turns: [{ ...view.turns[0]!, end: "done", endedAtMs: endedAt }], background: [agent], block: { startedAtMs: turnAt } } as unknown as ThreadView;
   useBoard.setState({ board: { ...emptyBoard(id), loaded: true, run: "idle" } });
   useCliThread.setState((state) => ({ views: { ...state.views, [id]: ended } }));
   applyActivityNews({ conversationId: id, entries: [], opened: false, ended: "done", turnEndedAtMs: endedAt } as never);
@@ -110,7 +110,7 @@ async function drive() {
     await pause(350);
   }
   // The subagent ends: no turn follows it (as on Codex).
-  const done = { ...ended, background: [{ ...agent, status: "completed", endedAtMs: Date.now() }] } as unknown as ThreadView;
+  const done = { ...ended, background: [{ ...agent, status: "completed", endedAtMs: Date.now() }], block: { startedAtMs: turnAt, endedAtMs: Date.now() } } as unknown as ThreadView;
   useCliThread.setState((state) => ({ views: { ...state.views, [id]: done } }));
   await pause(600);
   const after = [header(), placeholder()];

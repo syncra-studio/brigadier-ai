@@ -1,6 +1,5 @@
-import { runsBrigadier, taskCommand } from "@/app/conversation/backgroundRows";
 import { nextTurnStart } from "@/app/conversation/turnWorkers";
-import type { BackgroundTask, FileEntry, ThreadTurn, ThreadView } from "@/ipc/generated";
+import type { BackgroundTask, ThreadTurn, ThreadView } from "@/ipc/generated";
 import { subagentOf } from "@/state/nativeWorkers";
 
 /**
@@ -9,7 +8,7 @@ import { subagentOf } from "@/state/nativeWorkers";
  * end and the turn their end starts is over; then it folds as usual.
  *
  * Which commands hold is the engine's word (`CliJobs::holding`: not a subagent, a
- * `brigadier wait` or a `brigadier preview` call). A command belongs to the block whose turns
+ * `brigadier wait` or a `brigadier preview` call while it runs). A command belongs to the block whose turns
  * its call came in: found by the task's item id among the thread's items, else by when it
  * started (a Codex terminal is seen only when Codex lists it, maybe after a later turn began).
  * One that ended while no turn was open holds the newest block it started in until the turn its
@@ -47,15 +46,11 @@ export function turnCommandTasks(
   const own = (task: BackgroundTask) => subagentOf(task, background, entries) !== undefined;
   const holding = background.filter((task) => jobs.holding?.includes(task.id) && ours(task) && !own(task));
   if (holding.length > 0 || !jobs.waking || next !== null) return holding;
-  // Its end owes the turn it starts: the newest block that started it waits for that turn.
-  // One that ended before the block's turns did had its turn: a worker's word may owe this one.
-  const unheard = (task: BackgroundTask) => endedAtMs === null || (task.endedAtMs ?? 0) > endedAtMs;
-  const owed = background.findLast((task) => task.status !== "running" && task.kind !== "agent" && unheard(task) && ours(task) && !own(task) && !excluded(task, entries));
+  // Its end owes the turn it starts: the newest block that started it waits for that turn, a
+  // `brigadier wait`'s too. One that ended during the block's last turn or after may owe it (a
+  // CLI begins the turn for it once that one ended, D153); one that ended before had its turn.
+  const lastStart = Math.max(...starts);
+  const unheard = (task: BackgroundTask) => endedAtMs === null || (task.endedAtMs ?? 0) >= lastStart;
+  const owed = background.findLast((task) => task.status !== "running" && task.kind !== "agent" && unheard(task) && ours(task) && !own(task));
   return owed ? [owed] : [];
-}
-
-/** A wait or a preview call: covered by the workers' own hold, or a row of its own. */
-function excluded(task: BackgroundTask, entries: readonly FileEntry[]): boolean {
-  const command = taskCommand(task, entries) ?? "";
-  return runsBrigadier(command, "wait") || runsBrigadier(command, "preview");
 }

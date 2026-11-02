@@ -1,29 +1,23 @@
 import { useMemo } from "react";
 
-import { type BlockState, isFinal } from "@/app/conversation/blocks";
+import type { BlockState } from "@/app/conversation/blocks";
 import type { StatusHead } from "@/app/conversation/liveStatus";
+import { coreHolds } from "@/app/conversation/turnWorkers";
 import { heldWait, liveWait } from "@/app/conversation/waitWords";
 import type { WorkSpan } from "@/ipc/generated";
-import { useBoard } from "@/state/board";
 import { useCliThread, useTurnCommands, useTurnSubagents, useTurnWorkers } from "@/state/cliThread";
 import { backgroundOf } from "@/state/nativeWorkers";
 
-type HeldBlock = { state: BlockState; startedAtMs: number; endedAtMs: number | null; worked: readonly WorkSpan[]; requestIds: readonly string[] };
+type HeldBlock = { state: BlockState; startedAtMs: number; endedAtMs: number | null; worked: readonly WorkSpan[] };
 
 const NO_STARTS: readonly number[] = [];
 
 /**
- * What a block's turns started that still works past them, and so holds it open (D24): its
- * workers, its background commands, its CLI's own subagents. One reading for its header and for
- * the composer, so the two say the same (D94).
+ * Whether a block whose turns ended is still open, as the core's work block says (D163), and
+ * what of it still works past them, to name its wait: its workers, its background commands, its
+ * CLI's own subagents. One reading for its header and for the composer, so the two say the same (D94).
  */
 export function useBlockHold(conversationId: string | null, meta: HeldBlock | null | undefined) {
-  const requestIds = meta?.requestIds;
-  const workersActive = useBoard((s) =>
-    Object.values(s.board?.tasks ?? {}).some(
-      (task) => task.requestId !== null && !!requestIds?.includes(task.requestId) && !isFinal(task),
-    ),
-  );
   // The workers its turn started that still work: over, it stays live until they finish (its own
   // wake-ups when they do are in the same turn).
   const starts = meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS;
@@ -47,7 +41,8 @@ export function useBlockHold(conversationId: string | null, meta: HeldBlock | nu
     const view = conversationId && meta ? s.views[conversationId] : undefined;
     return view ? JSON.stringify(heldWait(view, starts, meta!.startedAtMs, meta!.endedAtMs)) : "null";
   });
-  const held = workers > 0 || commands > 0 || workersActive || subagents > 0;
+  // Open or over is the core's word alone (D163): what holds it above only names the wait.
+  const held = useCliThread((s) => coreHolds(conversationId ? s.views[conversationId]?.block : null, meta?.state === "done" ? meta.endedAtMs : null)) && meta?.state === "done";
   return { workers, commands, subagents, held, heldUntil, named: useMemo(() => JSON.parse(named) as StatusHead | null, [named]) };
 }
 

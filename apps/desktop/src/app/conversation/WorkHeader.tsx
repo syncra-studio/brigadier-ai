@@ -1,13 +1,15 @@
 import type { FC } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useBlockError } from "@/app/conversation/BlockError";
 import { isLive, turnTime, waitsOnCard } from "@/app/conversation/blocks";
-import { headerLabel, useTicking } from "@/app/conversation/requestTime";
+import { cardWait, headerLabel, useTicking } from "@/app/conversation/requestTime";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
 import { interruptedByQuit } from "@/app/conversation/turnError";
 import { useAuiState } from "@/components/conversation";
 import { ChevronRightAlt } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { useBoard } from "@/state/board";
 
 /**
  * The row over a request's work, with a rule under it: "Working for 12s" while live, also while
@@ -34,14 +36,18 @@ export const WorkHeader: FC<{
   // it ended, it worked until then, so the time never drops back (D53).
   const from = meta.worked[0]?.fromMs ?? meta.startedAtMs;
   const elapsed = held ? Math.max(0, now - from) : Math.max(turnTime(meta, now), meta.state === "done" && heldUntil !== null ? heldUntil - from : 0);
-  // Waiting on its own question card, or held open by what it started, the turn still reads as working.
-  const state = waitsOnCard(meta) || held ? "working" : meta.state;
+  // Waiting on its own question card it reads "Waiting for …" (D161); held open by what it started, it still works.
+  const state = waitsOnCard(meta) ? "waiting" : held ? "working" : meta.state;
+  const questions = useBoard(
+    useShallow((s) => meta.cards.flatMap((card) => (card.type === "question" && s.board?.questions[card.id] ? [s.board.questions[card.id]!] : []))),
+  );
+  const waited = cardWait(questions, now);
   const failed = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error" ? String(status.error ?? "") : null;
   });
   const interrupted = interruptedByQuit(useBlockError(meta, failed)?.error);
-  const label = headerLabel(state, elapsed, quota, interrupted);
+  const label = headerLabel(state, elapsed, quota, interrupted, waited);
   const text = (
     <span
       data-slot="request-work-label"

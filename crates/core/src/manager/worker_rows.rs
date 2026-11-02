@@ -670,6 +670,7 @@ impl SessionManager {
             }
             sent.insert(id.clone(), rows.clone());
         }
+        self.block_soon(id);
         let _ = self.thread_news.send(ThreadNews {
             conversation_id: id.clone(),
             entries: Vec::new(),
@@ -682,6 +683,7 @@ impl SessionManager {
             workers: Some(rows),
             jobs: None,
             replies: None,
+            block: None,
             seq: 0,
         });
     }

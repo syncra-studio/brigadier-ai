@@ -1,5 +1,5 @@
 import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
-import { backgroundOf, runningSubagents } from "@/state/nativeWorkers";
+import { backgroundOf } from "@/state/nativeWorkers";
 import {
   type Block,
   type BlockCompaction,
@@ -15,8 +15,7 @@ import {
 } from "@/app/conversation/blocks";
 import { attachReplies, sessionSent, sessionWait } from "@/app/conversation/sessionSend";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import { turnCommands } from "@/app/conversation/turnCommands";
-import { workingWorkers } from "@/app/conversation/turnWorkers";
+import { coreHolds } from "@/app/conversation/turnWorkers";
 import type {
   BackgroundTask,
   FileChange,
@@ -695,16 +694,9 @@ export function cliBlocks(
     if (!now) return previous.end == null;
     return now.startedAtMs != null && now.startedAtMs < (previous.endedAtMs ?? (previous.end == null ? Number.POSITIVE_INFINITY : 0));
   };
-  // A turn the stream gave but no read has yet (its turn comes with the next one): it goes on in
-  // the block before while that block's workers or background commands still work, as the
-  // daemon will say (D24); for a second or two it showed as a block of its own (seen live).
-  // The block's own work only, as its header reads it (`useBlockHold`): what started after its
-  // turns ended (the next turn's worker) never holds it (seen live: a finished block reopened).
-  const holds = (each: Block) => {
-    const starts = [...(joined.get(each) ?? []), turnOf.get(each)].flatMap((read) => (read?.startedAtMs != null ? [read.startedAtMs] : []));
-    const endedAtMs = turnOf.get(each)?.endedAtMs ?? null;
-    return workingWorkers(view.workers ?? [], view.turns, starts, endedAtMs, !!view.jobs?.waking) + turnCommands(view, view.turns, starts, endedAtMs) + runningSubagents(view, each.startedAtMs, endedAtMs) > 0;
-  };
+  // A turn begun while the core's work block of the block before is open goes on in it (D163):
+  // one job, one block, as the core alone says.
+  const holds = (each: Block) => coreHolds(view.block, turnOf.get(each)?.endedAtMs ?? null);
   // A turn that carries on the request a usage limit cut (an account or CLI switch) goes on in
   // its block: one block, one switch row, no stopped turn (goal 1), with what the user steered
   // into it meanwhile (D25; seen live). Its requests, else the ones the engine noted it sent: one
