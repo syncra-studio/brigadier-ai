@@ -981,6 +981,11 @@ async fn ensure_daemon_started(
     Ok(())
 }
 
+/// How long a call waits when both grants are present and only Brigadier's
+/// setup confirmation is missing: long enough for a confirmation the user is
+/// giving right now to land, short enough to answer the agent at once.
+const HOST_ONLY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Poll the daemon's private permission state until the complete authority is
 /// ready. The bounded deadline fails closed instead of dispatching protected
 /// work while onboarding is incomplete.
@@ -993,16 +998,11 @@ async fn wait_for_daemon_permission_readiness(
     let started = Instant::now();
     // While a TCC grant is missing the user may be granting it right now, so
     // waiting is useful. When both grants are present and only the host's
-    // readiness milestone is missing, waiting does not help: the host must
-    // republish it, which needs a user action. Fail fast in that case.
+    // readiness milestone (Brigadier's capture confirmation) is missing, the
+    // user has to finish setup in Brigadier's window first; the agent gets
+    // that reason within a few seconds instead of a silent wait.
     let grants_deadline = Duration::from_secs(55);
-    // With Brigadier's setup window the user finishes setup there, which the
-    // agent's call can wait for like a grant.
-    let host_only_deadline = if external_permission_flow {
-        grants_deadline
-    } else {
-        Duration::from_secs(6)
-    };
+    let host_only_deadline = HOST_ONLY_DEADLINE;
     // Brigadier opens its setup window when asked; only once the helper says setup is
     // unfinished, so an agent arriving after setup never opens it.
     let mut setup_asked = !external_permission_flow;
@@ -1978,6 +1978,43 @@ mod tests {
             state.needs_grant_wait(true, true),
             "host-owned onboarding must gate driving calls until the host publishes readiness"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn missing_capture_confirmation_answers_within_seconds_with_the_reason() {
+        use std::io::{BufRead, Write};
+        let dir = std::env::temp_dir().join(format!("cu-proxy-confirm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("d.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        // A daemon stand-in: both grants present, capture not confirmed.
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut line = String::new();
+                let _ = std::io::BufReader::new(&stream).read_line(&mut line);
+                let answer = crate::serve::DaemonResponse::ok(serde_json::json!({
+                    "accessibility": true,
+                    "screen_recording": true,
+                    "external_permission_ready": false,
+                }));
+                let _ =
+                    stream.write_all((serde_json::to_string(&answer).unwrap() + "\n").as_bytes());
+            }
+        });
+        let started = std::time::Instant::now();
+        let error = wait_for_daemon_permission_readiness(socket.to_str().unwrap(), "s", true)
+            .await
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+        let message = unavailable_message(&error);
+        assert!(
+            message.contains("screen capture hasn't been confirmed"),
+            "{message}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(target_os = "macos")]
