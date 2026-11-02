@@ -158,6 +158,19 @@ function Fixture() {
           setup: text(document.querySelector('[data-slot="setup-line"]')),
           setupButtons: buttons(row("Setup")),
         };
+      },
+      ...(["windows", "linux"] as const).flatMap((platform) => [
+        () => {
+          useApp.setState((state) => ({ info: { ...state.info, platform } as typeof state.info }));
+          onComputerUse({ ...status({ state: "ready" }, "granted", "granted", true), platform });
+        },
+        () => { seen[platform + "NoNotes"] = text(document.querySelector('[data-slot="desktop-notes"]')); },
+        () => { onComputerUse({ ...status({ state: "ready" }, "granted", "granted", false), platform }); },
+        () => { seen[platform + "CachedNoNotes"] = text(document.querySelector('[data-slot="desktop-notes"]')); },
+        () => { onComputerUse({ ...status({ state: "off" }, "granted", "granted", true), platform }); },
+        () => { seen[platform + "OffNoNotes"] = text(document.querySelector('[data-slot="desktop-notes"]')); },
+      ]),
+      () => {
         setResult(JSON.stringify(seen));
       },
     ];
