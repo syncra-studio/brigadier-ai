@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl build-essential pkg-config \
       libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev libdbus-1-dev \
-      xvfb mutter dbus dbus-x11 at-spi2-core libatk-adaptor libgtk-3-0 \
+      xvfb mutter openbox xfwm4 dbus dbus-x11 at-spi2-core libatk-adaptor libgtk-3-0 \
       mousepad thunar zenity xterm xdotool x11-utils python3 \
     && rm -rf /var/lib/apt/lists/* \
     # run.sh names the caller's uid here: dbus refuses a user without a passwd entry.

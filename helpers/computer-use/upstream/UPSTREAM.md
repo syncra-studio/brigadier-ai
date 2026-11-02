@@ -231,6 +231,8 @@ Patches applied, in order:
 
 - `patches/0252-linux-launch-restore-and-shortcut-checks.diff`: Linux launches hand the front back only when the launched app (or a window new since the launch) took it, never a window the user switched to during the wait; a hotkey keeps every modifier when it looks for a menu shortcut (an unknown one matches no item), and a hotkey with only one of x or y is refused before the menu-shortcut route.
 
+- `patches/0253-linux-real-input-without-uinput.diff`: Linux background keys and pixel clicks work without /dev/uinput: the virtual pointer and keyboard pair is fed through its own XTEST devices (core events stay on: Xorg's software cursor keeps a no-core master's cursor without a reference, a use-after-free that aborts the server); keys reach the window under the pair's pointer (PointerRoot focus) so no window manager activates it; the focus guard stamps the user's window with a fresh user time so a dialog the app opens later can't take the front, restores an active window the window manager dropped, ignores a stacking list that was empty at capture, and the focus notes of real input stay on a line of their own.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

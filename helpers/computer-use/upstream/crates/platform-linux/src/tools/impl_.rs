@@ -3488,7 +3488,13 @@ fn key_route_result(action: &str, route: KeyRoute, mode_label: &str) -> ToolResu
                      did not confirm the last key; the keys may not have landed.",
                 );
             }
-            text.push_str(&report.delivery_notes());
+            // On a line of its own: an unconfirmed reply's first line is
+            // replaced by the honest summary, and the focus note must stay.
+            let notes = report.delivery_notes();
+            if !notes.trim().is_empty() {
+                text.push('\n');
+                text.push_str(notes.trim());
+            }
             ToolResult::text(text).with_structured(structured)
         }
         KeyRoute::Synthetic | KeyRoute::Terminal => {
@@ -3838,7 +3844,7 @@ impl PointerRoute {
             ),
             Self::Mpx(effect) if effect.landed() => format!(
                 "(delivery_mode={mode_label}, path={}, focus {}); {}the screen around the \
-                 point changed ({:.1}% of the region) — the action landed.",
+                 point changed ({:.1}% of the region) — the action landed.{}",
                 crate::input::MPX_POINTER_PATH,
                 if effect.focus_unchanged {
                     "untouched"
@@ -3850,12 +3856,13 @@ impl PointerRoute {
                 } else {
                     String::new()
                 },
-                effect.region_diff_pct.unwrap_or(0.0)
+                effect.region_diff_pct.unwrap_or(0.0),
+                mpx_focus_note(effect)
             ),
             Self::Mpx(effect) => format!(
                 "(delivery_mode={mode_label}, path={}, focus {}); real button events were \
                  delivered but the screen around the point did not visibly change \
-                 ({}) — confirm with a screenshot.",
+                 ({}) — confirm with a screenshot.{}",
                 crate::input::MPX_POINTER_PATH,
                 if effect.focus_unchanged {
                     "untouched"
@@ -3865,7 +3872,8 @@ impl PointerRoute {
                 effect
                     .region_diff_pct
                     .map(|pct| format!("{pct:.2}% of the region"))
-                    .unwrap_or_else(|| "region capture unavailable".to_owned())
+                    .unwrap_or_else(|| "region capture unavailable".to_owned()),
+                mpx_focus_note(effect)
             ),
             _ => format!(
                 "(delivery_mode={mode_label}{}); not verified — confirm with a screenshot.",
@@ -3874,6 +3882,18 @@ impl PointerRoute {
                     .unwrap_or_default()
             ),
         }
+    }
+}
+
+/// The focus move a real press caused, on a line of its own: the
+/// parenthesised route details are not shown to every caller, and an
+/// unconfirmed reply's first line is replaced by the honest summary.
+fn mpx_focus_note(effect: &crate::input::PointerEffect) -> &'static str {
+    if effect.focus_unchanged {
+        ""
+    } else {
+        "\nThe window manager moved the desktop focus to this window for the press; it was \
+         restored to the previous window (focus_outcome=restored)."
     }
 }
 
@@ -8369,7 +8389,12 @@ fn type_text_mpx_result(
              not confirm the last key; the text may not have landed.",
         );
     }
-    text.push_str(&report.delivery_notes());
+    // Own line: see `key_route_result`.
+    let notes = report.delivery_notes();
+    if !notes.trim().is_empty() {
+        text.push('\n');
+        text.push_str(notes.trim());
+    }
     let result = if report.skipped_characters.is_empty() {
         ToolResult::text(text)
     } else {

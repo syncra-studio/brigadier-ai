@@ -33,6 +33,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
 /// How long the guard watches for a late focus change after delivery (a
@@ -61,6 +62,8 @@ struct Atoms {
     net_client_list_stacking: u32,
     net_wm_pid: u32,
     net_wm_name: u32,
+    net_wm_user_time: u32,
+    net_wm_user_time_window: u32,
     utf8_string: u32,
 }
 
@@ -82,6 +85,8 @@ impl X {
             net_client_list_stacking: intern(b"_NET_CLIENT_LIST_STACKING")?,
             net_wm_pid: intern(b"_NET_WM_PID")?,
             net_wm_name: intern(b"_NET_WM_NAME")?,
+            net_wm_user_time: intern(b"_NET_WM_USER_TIME")?,
+            net_wm_user_time_window: intern(b"_NET_WM_USER_TIME_WINDOW")?,
             utf8_string: intern(b"UTF8_STRING")?,
         };
         Ok(Self { conn, root, atoms })
@@ -272,6 +277,32 @@ impl X {
             self.root,
             EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
             event,
+        );
+        let _ = self.conn.flush();
+    }
+
+    /// Stamp `window` with the server's current time as its last user
+    /// interaction. Real input gives the target app fresh event times; a
+    /// window it maps or a focus request it makes later would carry them and
+    /// win the window manager's focus-stealing check against the user's
+    /// window. With this stamp the user's window is newer, so it keeps the front.
+    fn touch_user_time(&self, window: Window) {
+        let time = self.server_time();
+        if time == 0 {
+            return;
+        }
+        let holder = self
+            .window_property(window, self.atoms.net_wm_user_time_window, 1)
+            .first()
+            .copied()
+            .filter(|w| *w != 0)
+            .unwrap_or(window);
+        let _ = self.conn.change_property32(
+            PropMode::REPLACE,
+            holder,
+            self.atoms.net_wm_user_time,
+            AtomEnum::CARDINAL,
+            &[time],
         );
         let _ = self.conn.flush();
     }
@@ -517,16 +548,20 @@ impl FocusSnapshot {
         if focus > 1 && focus != self.core_focus {
             changes.push(format!("focus 0x{:x}->0x{:x}", self.core_focus, focus));
         }
+        // The user's active window gone to none (openbox after a focus event
+        // of the virtual keyboard) is a change too: nothing has the front.
         let active = x.active_window();
-        if active != self.active && active.is_some() {
+        if active != self.active && (active.is_some() || self.active.is_some()) {
             changes.push(format!(
                 "active 0x{:x}->0x{:x}",
                 self.active.unwrap_or(0),
                 active.unwrap_or(0)
             ));
         }
+        // An empty stacking list at capture (xfwm4 before it lists the user's
+        // window) leaves nothing to compare with or restore to.
         let top = x.stacking_top();
-        if top != self.stacking_top && top.is_some() {
+        if top != self.stacking_top && top.is_some() && self.stacking_top.is_some() {
             changes.push(format!(
                 "stacking_top 0x{:x}->0x{:x}",
                 self.stacking_top.unwrap_or(0),
@@ -611,6 +646,9 @@ impl FocusSnapshot {
         let mut report = FocusGuardReport::default();
         // The target app owns the focus: whatever it maps next is its own.
         let target_owns_focus = target_pid.is_some() && self.previous_owner == target_pid;
+        if let Some(active) = self.active.filter(|_| !target_owns_focus) {
+            x.touch_user_time(active);
+        }
 
         // Settle watch: stop at the first observed change. A new top-level
         // (dialog being mapped) extends the watch when the focus belongs to
@@ -792,6 +830,16 @@ impl FocusSnapshot {
 
     fn reassert(&self, x: &X) {
         if let Some(prev) = self.active {
+            // The WM dropped the active window while the core focus never left
+            // it (openbox after a focus event of the virtual keyboard). It only
+            // re-marks a window active on a FocusIn, which setting the same
+            // focus again does not send.
+            if x.active_window().is_none()
+                && self.core_focus > 1
+                && x.core_focus().0 == self.core_focus
+            {
+                x.set_focus(1, InputFocus::POINTER_ROOT);
+            }
             x.activate(prev, x.active_window().unwrap_or(0));
         }
         if self.core_focus > 1 {

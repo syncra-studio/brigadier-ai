@@ -451,7 +451,7 @@ jobs:
           key: ${{ steps.cu-live-cache.outputs.cache-primary-key }}
       - name: Step table
         if: always()
-        run: cat target/linux-live/out/linux-live-report.md >>"$GITHUB_STEP_SUMMARY" || true
+        run: cat target/linux-live/out/linux-live-report-*.md >>"$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

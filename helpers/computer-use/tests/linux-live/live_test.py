@@ -19,6 +19,9 @@ from mcp_client import Mcp
 BIN = os.environ["BRIGADIER_CU_BIN"]
 OUT = os.environ.get("LINUX_LIVE_OUT", "/tmp")
 WORK = "/tmp/linux-live"
+# mutter runs every step. openbox and xfwm4 run the launch, the reads and the real-input steps:
+# with their default settings they focus every new window, whatever the launcher asks (#694).
+WM = os.environ.get("LINUX_LIVE_WM", "mutter")
 MACOS_WORDS = re.compile(r"Safari|Finder|Apple|macOS|\bAX\b|AppKit|Cmd\b|⌘|\bDock\b|Spotlight|TCC")
 
 rows = []
@@ -57,8 +60,10 @@ desk = None
 mcp = None
 
 
-def step(name, tool, args, check, settle=0.4):
-    """One tool call. `check(err, text, sc, images)` returns a failure reason or None."""
+def step(name, tool, args, check, settle=0.4, front_may_flash=False):
+    """One tool call. `check(err, text, sc, images)` returns a failure reason or None.
+    `front_may_flash`: the active window may move while the call runs (a window manager that
+    focuses new windows) but must be back when it returns; the pointer never moves."""
     baseline, start = Desk.now(), len(desk.samples)
     try:
         err, text, sc, images = mcp.call(tool, args)
@@ -70,10 +75,20 @@ def step(name, tool, args, check, settle=0.4):
     except Exception as error:
         problem = f"check raised {error!r}"
     moved = desk.changes(start, baseline)
+    if front_may_flash:
+        flashed = any(sample[0] != baseline[0] for sample in moved)
+        moved = [sample for sample in moved if sample[1] != baseline[1]]
+        if Desk.now() != baseline:
+            moved.append(Desk.now())
+        if flashed and "restored" not in text:
+            problem = (problem + "; " if problem else "") + "the front moved and the reply does not say so"
     if moved:
         problem = (problem + "; " if problem else "") + f"front/pointer changed {baseline} -> {moved[:3]}"
+    name = name if WM == "mutter" else f"{name} [{WM}]"
     rows.append((name, problem is None, text, problem, len(desk.samples) - start))
-    print(f"[{'PASS' if problem is None else 'FAIL'}] {name}: {short(text)}" + (f"\n       {problem}" if problem else ""), flush=True)
+    # A failure prints the whole reply: CI's log is all there is to debug it from.
+    print(f"[{'PASS' if problem is None else 'FAIL'}] {name}: {short(text) if problem is None else text}"
+          + (f"\n       {problem}" if problem else ""), flush=True)
     return err, text, sc or {}
 
 
@@ -141,7 +156,8 @@ def main():
         time.sleep(0.2)
     time.sleep(1)  # mutter claims the screen before it manages windows
     # The user's own front window: a terminal, with the pointer resting on the desktop.
-    terminal = subprocess.Popen(["xterm", "-title", "user-terminal"])
+    # In the bottom-right corner, so the apps behind it keep points it doesn't cover.
+    terminal = subprocess.Popen(["xterm", "-geometry", "60x12-0-0", "-title", "user-terminal"])
     until = time.time() + 10
     while not x("xdotool", "search", "--all", "--pid", str(terminal.pid), "--name", "^user-terminal$") and time.time() < until:
         time.sleep(0.2)
@@ -174,8 +190,10 @@ def main():
     print(f"[{'PASS' if problem is None else 'FAIL'}] tools/list: {rows[-1][2]}", flush=True)
 
     # 2. launch_app in the background.
+    # openbox and xfwm4 focus every new window: the front may flash, and the reply must say so.
     _, _, sc = step("launch_app mousepad", "launch_app", {"name": "mousepad", "additional_arguments": [notes]},
-                    lambda e, t, sc, i: expect(not e and sc.get("pid") and sc.get("active") is False, "not launched in the background"))
+                    lambda e, t, sc, i: expect(not e and sc.get("pid") and sc.get("active") is False, "not launched in the background"),
+                    settle=1.0, front_may_flash=WM != "mutter")
     pid = sc.get("pid")
     editor = windows_of(pid, "notes.txt") if pid else []
     if not editor:
@@ -210,6 +228,48 @@ def main():
             time.sleep(0.2)
         return f"file on disk is {open(notes).read()!r}"
     step("hotkey ctrl+s (save)", "hotkey", {"pid": pid, "window_id": wid, "keys": ["ctrl", "s"]}, saved)
+
+    # 5b. Real input in the background, no menu item or button involved: a click at a point of
+    # the text puts the caret there, then Return, a chord no menu carries (ctrl+End) and Return
+    # again. The saved file shows each landed where it should.
+    _, _, sc = step("get_window_state (text frame)", "get_window_state",
+                    {"pid": pid, "window_id": wid, "tree_format": "elements", "include_screenshot": True},
+                    lambda e, t, sc, i: expect(not e and i == 1, f"error={e} images={i}"))
+    text_frame = next((el.get("screenshot_frame") for el in sc.get("elements", [])
+                       if "Hello world" in (el.get("value") or el.get("label") or "") and el.get("screenshot_frame")), None)
+    if text_frame is None:
+        return finish("no screenshot frame for mousepad's text")
+    if WM == "mutter":
+        # shortcut: GTK3 under mutter reports its screen extents with the window's origin added
+        # twice (#704); undo it here until that is fixed.
+        geometry = x("xwininfo", "-id", str(wid))
+        text_frame = dict(text_frame,
+                          x=text_frame["x"] - int(re.search(r"Absolute upper-left X:\s+(-?\d+)", geometry).group(1)),
+                          y=text_frame["y"] - int(re.search(r"Absolute upper-left Y:\s+(-?\d+)", geometry).group(1)))
+    landed = lambda e, t, sc, i: expect(not e, f"refused (effect {sc.get('effect')})")
+    # Real input: openbox and xfwm4 activate the window it lands in (core click-to-focus), and
+    # the helper puts the user's window back; the reply must say so.
+    flash = WM != "mutter"
+    step("click at x/y inside the text (no control there)", "click",
+         {"pid": pid, "window_id": wid, "x": text_frame["x"] + 2, "y": text_frame["y"] + 4}, landed, front_may_flash=flash)
+    step("press_key return (no menu item)", "press_key", {"pid": pid, "window_id": wid, "key": "return"}, landed, front_may_flash=flash)
+    step("hotkey ctrl+end (no menu item)", "hotkey", {"pid": pid, "window_id": wid, "keys": ["ctrl", "end"]}, landed, front_may_flash=flash)
+    step("press_key return at the end", "press_key", {"pid": pid, "window_id": wid, "key": "return"}, landed, front_may_flash=flash)
+    before_keys = open(notes).read()
+    def saved_keys(e, t, sc, i):
+        until = time.time() + 3
+        while time.time() < until:
+            # The click put the caret before the first character; ctrl+end moved it to the end.
+            if open(notes).read() == "\n" + before_keys + "\n":
+                return expect(not e, "saved but the reply is an error")
+            time.sleep(0.2)
+        return f"file on disk is {open(notes).read()!r}, was {before_keys!r}"
+    step("hotkey ctrl+s (save the keys)", "hotkey", {"pid": pid, "window_id": wid, "keys": ["ctrl", "s"]}, saved_keys)
+    if WM != "mutter":
+        step("close (invoke_menu File > Close Window, editor)", "invoke_menu", {"pid": pid, "window_id": wid, "path": ["File", "Close Window"]},
+             lambda e, t, sc, i: expect(not e and gone(pid, wid), "the window is still open"))
+        terminal.kill()
+        return finish(None)
 
     # 6. invoke_menu opens a dialog behind the user's window; read it and close it by token.
     step("invoke_menu Help > About", "invoke_menu", {"pid": pid, "window_id": wid, "path": ["Help", "About"]},
@@ -317,7 +377,7 @@ def finish(fatal):
         report.append(f"| {name} | {result} | {cell} | {samples} |")
     total = len(desk.samples) if desk else 0
     report.append(f"\n{len(rows) - len(failed)}/{len(rows)} steps passed; {total} active-window/pointer samples.")
-    with open(os.path.join(OUT, "linux-live-report.md"), "w") as file:
+    with open(os.path.join(OUT, f"linux-live-report-{WM}.md"), "w") as file:
         file.write("\n".join(report) + "\n")
     print("\n".join(report), flush=True)
     return 1 if failed else 0
