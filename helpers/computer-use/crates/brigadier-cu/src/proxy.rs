@@ -683,7 +683,22 @@ fn proxy_target_guard(
 ) -> Result<(), cua_driver_core::protocol::ToolResult> {
     let mut args = args.clone();
     crate::scope_args::take_allowed(&mut args);
-    cu_layer::guard::check_target(name, &args, allowed)
+    cu_layer::guard::check_target(name, &args, allowed).or_else(|refusal| {
+        if daemon_decides(&refusal) {
+            Ok(())
+        } else {
+            Err(refusal)
+        }
+    })
+}
+
+/// Whether only the daemon can settle this refusal: it alone knows which
+/// System Settings its launch_app started, and its own guard checks the call.
+fn daemon_decides(refusal: &cua_driver_core::protocol::ToolResult) -> bool {
+    refusal
+        .structured_content
+        .as_ref()
+        .is_some_and(|sc| sc["reason"] == "user_owned_settings")
 }
 
 /// A guard refusal in the daemon's response shape, so the MCP client sees the
@@ -1504,6 +1519,22 @@ mod tests {
         assert_eq!(result["isError"], true);
         assert_eq!(result["structuredContent"]["code"], "target_not_allowed");
         assert!(proxy_target_guard("get_screen_size", &serde_json::json!({}), &[]).is_ok());
+    }
+
+    /// kill_app on System Settings goes on to the daemon, whose guard knows
+    /// whether its launch_app started that process; other refusals stay here.
+    #[test]
+    fn only_the_daemon_decides_a_settings_quit() {
+        let refusal = |reason: &str| {
+            cua_driver_core::protocol::ToolResult::error("refused").with_structured(
+                serde_json::json!({"code": "target_not_allowed", "reason": reason}),
+            )
+        };
+        assert!(daemon_decides(&refusal("user_owned_settings")));
+        assert!(!daemon_decides(&refusal("security_surface")));
+        assert!(!daemon_decides(
+            &cua_driver_core::protocol::ToolResult::error("refused")
+        ));
     }
 
     #[test]
