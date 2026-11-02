@@ -1608,6 +1608,29 @@ test("a turn carried on after a usage limit's switch goes on in its block: no st
   assert.deepEqual(cliBlocks({ entries: fresh, turns: limitTurns(false) }, "conv").map((block) => block.key), ["u1", "u2", "n1"]);
 });
 
+test("a follow-up the user steers during a usage limit's switch goes on in the cut turn's block: one block, the switch's carry-on with it, never stopped (screen pass, every CLI)", () => {
+  const FOLLOW = "Also, at the very end reply FOLLOW too.";
+  const cut = { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit" as const, requests: ["r1"] };
+  // The daemon hands the steered follow-up's request to the carry-on: the cut request is done, the follow-up works.
+  const requests = { r1: { state: { type: "done" } }, r9: { state: { type: "working" }, steeredInto: "r1" } };
+  const board = { ...NO_BOARD, requests };
+  const entries = limitEntries.slice(0, 4);
+  // Steered, before the CLI says it: in the open block, never a block of its own.
+  for (const carry of [{ ...turn("k1", 1500, null, null), requests: ["r1"] }, { ...turn("k1", 1500, null, null), requests: ["r1", "r9"] }]) {
+    const tree = cliThreadTree({ entries, turns: [cut, carry] }, "conv", [message("r1", "Run six commands", 1000), message("r9", FOLLOW, 1700)], {}, [], board, { state: "running", error: null });
+    const blocks = tree.nodes.flatMap((node) => (node.kind === "block" ? [node.block] : []));
+    assert.deepEqual(blocks.map((block) => [block.key, block.state, block.error]), [["u1", "working", null]], JSON.stringify(carry.requests));
+    assert.deepEqual(blocks[0]!.steers.map((steer) => steer.text), [FOLLOW]);
+    assert.equal(tree.nodes.filter((node) => node.kind === "user").length, 1);
+  }
+  // Read, with the carry-on naming both requests: still one block, done, the follow-up once.
+  const read = [...entries, user("s9", FOLLOW, 1700, { steer: true, said: { by: "user" }, requests: ["r9"] }), at({ type: "message", itemId: "a1", role: "assistant", text: "DONE FOLLOW" }, 1900)];
+  const blocks = cliBlocks({ entries: read, turns: [cut, { ...turn("k1", 1500, 2000, "done"), requests: ["r1", "r9"] }] }, "conv", board);
+  assert.deepEqual(blocks.map((block) => [block.key, block.state, block.error]), [["u1", "done", null]]);
+  assert.deepEqual(blocks[0]!.steers.map((steer) => steer.text), [FOLLOW]);
+  assert.deepEqual(blocks[0]!.worked, [{ fromMs: 1000, toMs: 1400 }, { fromMs: 1500, toMs: 2000 }]);
+});
+
 test("a thread whose turns repeat a message never repeats a node id", () => {
   const entries = [user("u1", "Same", 1000, { requests: ["r1"] }), user("u2", "Same", 2000, { requests: ["r1"] })];
   const { nodes } = cliThreadTree({ entries, turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1"] }] }, "conv", [], {}, [], NO_BOARD, { state: "idle", error: null });

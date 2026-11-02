@@ -681,12 +681,14 @@ export function cliBlocks(
     return workingWorkers(view.workers ?? [], view.turns, starts, endedAtMs, !!view.jobs?.waking) + turnCommands(view, view.turns, starts, endedAtMs) + runningSubagents(view, each.startedAtMs, endedAtMs) > 0;
   };
   // A turn that carries on the request a usage limit cut (an account or CLI switch) goes on in
-  // its block: one block, one switch row, no stopped turn (goal 1). Its requests, else the ones
-  // the engine noted it sent, are all that turn's; one the user sent anew opens its own.
+  // its block: one block, one switch row, no stopped turn (goal 1), with what the user steered
+  // into it meanwhile (D25; seen live). Its requests, else the ones the engine noted it sent: one
+  // naming none of the cut turn's, a message the user sent anew, opens its own.
   const carriesOn = (requests: readonly string[] = []) => {
     const before = view.turns[turn - 1];
     if (before?.errorKind !== "usageLimit" && !before?.limit) return false;
-    return (view.turns[turn]?.requests ?? requests).every((request) => before.requests.includes(request));
+    const named = view.turns[turn]?.requests.length ? view.turns[turn]!.requests : requests;
+    return named.length === 0 || named.some((request) => before.requests.includes(request));
   };
   // While its turn runs, a turn begun while the block before held goes on in it (D24, D113):
   // the daemon's `joins` may come only once the turn is judged or over.
@@ -1159,6 +1161,14 @@ export function cliThreadTree(
     const peer = message.role === "peer";
     if ((message.role !== "user" && !peer) || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id) || queued.has(message.id)) continue;
     const text = fullText[message.id] ?? message.text;
+    // One the user steered into a request a block shows is that block's (D25), after its items,
+    // until the CLI says where it read it: never a block of its own (seen live at a switch).
+    const into = (board.requests?.[message.requestId ?? message.id] as { steeredInto?: string | null } | undefined)?.steeredInto;
+    const open = into ? blocks.findLast((block) => block.requestIds.includes(into)) : undefined;
+    if (open && !peer) {
+      open.steers.push({ message, text, position: view.entries.length });
+      continue;
+    }
     // Another session's, taken from the queue, is on its way as that session's (goal 4).
     blocks.push(onItsWay(message.id, peer ? { kind: "peer", message, text: peerWords(text), earlier: false } : { kind: "message", message, text }, message.createdAtMs, run));
   }
