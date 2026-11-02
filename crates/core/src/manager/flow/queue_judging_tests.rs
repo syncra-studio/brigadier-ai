@@ -1241,6 +1241,15 @@ async fn a_message_sent_while_only_its_workers_work_wakes_the_session_to_judge_i
         !flow.manager.work_holds(&conv).await
     })
     .await;
+    // Its end wakes the session to hear it, which holds the work until that turn ran.
+    super::eventually("the session to hear the worker's end", || {
+        answers.lock().unwrap()["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|input| input.as_str().unwrap().contains("[worker events"))
+    })
+    .await;
     flow.idle().await;
     flow.say("Thanks, that's all.").await;
     flow.idle().await;
