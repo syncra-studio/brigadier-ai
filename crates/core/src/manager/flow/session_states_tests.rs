@@ -749,6 +749,10 @@ async fn a_worker_whose_own_background_commands_still_run_still_works() {
         !working().await
     })
     .await;
-    assert!(!flow.manager.work_holds(&conv).await);
+    // Its word owes the session a turn, which holds the work until it starts (D24, D94).
+    super::eventually_async("the turn its word owes to start", || async {
+        !flow.manager.work_holds(&conv).await
+    })
+    .await;
     flow.stop().await;
 }
