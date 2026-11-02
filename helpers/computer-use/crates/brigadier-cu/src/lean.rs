@@ -109,6 +109,7 @@ pub fn tools_list(mut list: Value, brigadier: bool) -> Value {
 
 fn description(name: &str) -> &'static str {
     match name {
+        "get_window_state" if !cfg!(target_os = "macos") => "Read a window's accessibility tree; screenshots only on request or a thin tree. Row [N] with snapshot_id S is element_token S:N. A new read stales the previous tokens. Re-read with since:\"latest\" for a diff and fresh ids; obey reindexed mappings. Use a screenshot before zoom or pixel actions. Partial trees say truncated; narrow query or increase limits.",
         "get_window_state" => "Read a window's accessibility tree; screenshots only on request or a thin tree. Row [N] with snapshot_id S is element_token S:N. A new read stales the previous tokens (macOS keeps those of unchanged elements). Re-read with since:\"latest\" for a diff and fresh ids; obey reindexed mappings. Use a screenshot before zoom or pixel actions. Partial trees say truncated; narrow query or increase limits.",
         "list_windows" => "List windows, titles and ids. Prefer an app or pid filter. Use the returned pid/window_id for reads and actions.",
         "list_apps" => "List running and installed apps, one short entry each. To open a known app, call launch_app directly.",
@@ -215,6 +216,7 @@ fn property_description(name: &str) -> Option<&'static str> {
         "display_only" => "Screenshot preview only: does not refresh snapshots or captures and cannot ground input.",
         "coordinate_frame" => "Window-local screenshot pixels.",
         "app" => "Filter by case-insensitive app name or exact bundle id; prefer app or pid to an unfiltered listing.",
+        "element_token" if !cfg!(target_os = "macos") => "S:N from snapshot_id S and row [N]; new reads stale old tokens.",
         "element_token" => "S:N from snapshot_id S and row [N]; new reads stale old tokens (macOS keeps unchanged ones).",
         "target" => "Exact window: {kind:\"window\",pid,window_id}.",
         "scope" => "Window scope (default).",
