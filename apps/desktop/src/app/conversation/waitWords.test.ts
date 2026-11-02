@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { liveHead, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { heldWait, liveWait } from "@/app/conversation/waitWords";
 import type { BackgroundTask, FileEntry, ThreadTurn, ThreadView, WorkerRow } from "@/ipc/generated";
-import { emptyBoard } from "@/state/board";
+import { type Board, emptyBoard } from "@/state/board";
 
 const turn = (startedAtMs: number, end: ThreadTurn["end"] = null): ThreadTurn =>
   ({ userMessage: "u", startedAtMs, endedAtMs: end ? startedAtMs + 500 : null, end, error: null, requests: [] });
@@ -63,6 +63,12 @@ test("the live line says the named wait where it said Thinking, and a held block
   const status: StatusInput = { board: { ...emptyBoard("c"), run: "running", runRequest: "r1" }, requestIds: ["r1"], state: "working", thinkingLive: false, compacting: false, quotaWait: null, wait };
   assert.deepEqual(threadStatus(status).head, wait);
   assert.deepEqual(threadStatus({ ...status, wait: null }).head, { text: "Thinking", tone: "busy" });
+  // A running `brigadier start … && brigadier wait` has no row: the wait is named (seen live on Claude),
+  // while a command with a row of its own still says it there.
+  const running = (detail: string): StatusInput => ({ ...status, board: { ...status.board, orchestratorSteps: [{ requestId: "r1", atMs: 1000, position: 1,
+    kind: { type: "tool", itemId: "i1", name: "shell", detail, status: "inProgress", item: "command", turn: 1000 } }] as Board["orchestratorSteps"] } });
+  assert.deepEqual(threadStatus(running("brigadier start 'Fetch it' --json && brigadier wait")).head, wait);
+  assert.equal(threadStatus(running("sleep 5")).head, null);
   // Held over: one holder by name, several by count.
   const ended: ThreadView = {
     entries: [command("toolu_bg", "sleep 40 && echo done", 1010, "completed")],

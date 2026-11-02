@@ -1,4 +1,4 @@
-import { isPlumbing } from "@/app/conversation/activity/words";
+import { brigadierUnshown, isPlumbing } from "@/app/conversation/activity/words";
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
 import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
 import { activelyWorking } from "@/app/conversation/taskActivity";
@@ -83,9 +83,11 @@ function leadHead({ board, requestIds, thinkingLive, compacting, wait }: StatusI
   // A retry stalls whatever streamed so far: say so over it.
   if (board.doing && RETRYING.has(board.doing)) return { text: board.doing, tone: "busy" };
   const runRequest = board.runRequest;
-  // A plumbing call (a tool search) has no row of its own: what the lead does shows here.
+  // A plumbing call (a tool search) or the thread's own `brigadier start`/`wait` has no row of
+  // its own: what the lead does shows here.
   const toolRunning = board.orchestratorSteps.some((step) => step.requestId === runRequest
-    && step.kind.type === "tool" && step.kind.status === "inProgress" && !isPlumbing(step.kind.name));
+    && step.kind.type === "tool" && step.kind.status === "inProgress" && !isPlumbing(step.kind.name)
+    && !(step.kind.item === "command" && step.kind.detail !== null && brigadierUnshown(step.kind.detail)));
   const streaming = !!board.streaming?.text && (board.streaming.requestId === null || requestIds.includes(board.streaming.requestId));
   // A message on its way has its own row: "Sending message to API work".
   const sending = Object.values(board.peerMessages).some((message) => message.outgoing
