@@ -184,6 +184,32 @@ pub(crate) fn is_notepad_target(target: &str) -> bool {
             .starts_with("microsoft.windowsnotepad_")
 }
 
+/// Windows Notepad keeps every window in one process and opens a file as a
+/// tab in a window it already shows; it has no switch for a window of its own.
+/// The windows this helper did not open belong to the user, so a launch while
+/// one is open is refused rather than sent into it.
+pub(crate) fn foreign_notepad_windows(open: &[u64], own: &[u64]) -> Vec<u64> {
+    open.iter()
+        .copied()
+        .filter(|window| !own.contains(window))
+        .collect()
+}
+
+pub(crate) fn notepad_open_refusal(titles: &[String]) -> String {
+    let named = titles
+        .iter()
+        .filter(|title| !title.is_empty())
+        .map(|title| format!("{title:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let which = if named.is_empty() {
+        String::new()
+    } else {
+        format!(" ({named})")
+    };
+    format!("No app was launched: Notepad is already open in a window this helper did not open{which}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it would appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
+}
+
 pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
     match executable_name(target).as_str() {
         "chrome" | "msedge" | "brave" | "chromium" | "vivaldi" | "opera" => Some("--new-window"),
@@ -221,6 +247,17 @@ mod fresh_document_tests {
         ));
         assert!(is_notepad_target(r"C:\Windows\notepad.exe"));
         assert!(!is_notepad_target("Notepad++"));
+    }
+    #[test]
+    fn notepad_windows_the_helper_did_not_open_block_a_launch() {
+        assert!(foreign_notepad_windows(&[], &[]).is_empty());
+        assert!(foreign_notepad_windows(&[7, 9], &[7, 9, 11]).is_empty());
+        assert_eq!(foreign_notepad_windows(&[7, 8], &[7]), vec![8]);
+        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()]);
+        assert!(refusal.starts_with("No app was launched"));
+        assert!(refusal.contains("\"notes.txt - Notepad\""));
+        assert!(refusal.contains("close Notepad"));
+        assert!(!notepad_open_refusal(&[String::new()]).contains("()"));
     }
     #[test]
     fn restored_document_titles_cannot_match_the_new_file() {

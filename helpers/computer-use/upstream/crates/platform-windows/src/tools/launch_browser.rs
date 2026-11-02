@@ -277,6 +277,58 @@ pub(super) fn create_notepad_document() -> anyhow::Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// Notepad windows that this helper's own launches opened. Only these may
+/// receive another launch (see `launch_policy::foreign_notepad_windows`).
+static OWN_NOTEPAD_WINDOWS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+/// Visible top-level Notepad windows (minimized included) with their titles.
+pub(super) fn open_notepad_windows() -> Vec<(u64, String)> {
+    let pids: std::collections::HashSet<_> = crate::win32::list_processes()
+        .into_iter()
+        .filter(|process| super::launch_policy::is_notepad_target(&process.name))
+        .map(|process| process.pid)
+        .collect();
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    crate::win32::list_windows_via_win32(None)
+        .into_iter()
+        .filter(|window| pids.contains(&window.pid))
+        .map(|window| (window.hwnd, window.title))
+        .collect()
+}
+
+/// Open Notepad windows this helper did not open, with their titles.
+pub(super) fn foreign_notepad_windows() -> Vec<(u64, String)> {
+    let open = open_notepad_windows();
+    let ids: Vec<u64> = open.iter().map(|(window, _)| *window).collect();
+    let mut own = OWN_NOTEPAD_WINDOWS.lock().unwrap();
+    own.retain(|window| ids.contains(window));
+    let foreign = super::launch_policy::foreign_notepad_windows(&ids, &own);
+    open.into_iter()
+        .filter(|(window, _)| foreign.contains(window))
+        .collect()
+}
+
+/// Held by a Notepad launch that found no foreign window: when its reply is
+/// built, every Notepad window then open came from this helper's launches.
+pub(super) struct OwnNotepadWindows;
+impl Drop for OwnNotepadWindows {
+    fn drop(&mut self) {
+        record_own_notepad_windows();
+    }
+}
+
+fn record_own_notepad_windows() {
+    let open = open_notepad_windows();
+    let mut own = OWN_NOTEPAD_WINDOWS.lock().unwrap();
+    for (window, _) in open {
+        if !own.contains(&window) && own.len() < 64 {
+            own.push(window);
+        }
+    }
+}
+
 pub(super) async fn notepad_document_window(
     filename: String,
 ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {

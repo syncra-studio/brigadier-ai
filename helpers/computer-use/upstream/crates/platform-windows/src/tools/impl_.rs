@@ -2671,6 +2671,24 @@ impl Tool for LaunchAppTool {
             }));
         }
 
+        let notepad_launch = aumid_for_uwp
+            .as_deref()
+            .or(resolved_target.as_deref())
+            .is_some_and(super::launch_policy::is_notepad_target);
+        if notepad_launch {
+            let foreign =
+                tokio::task::spawn_blocking(super::launch_browser::foreign_notepad_windows)
+                    .await
+                    .unwrap_or_default();
+            if !foreign.is_empty() {
+                let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
+                return ToolResult::error(super::launch_policy::notepad_open_refusal(&titles))
+                    .with_structured(json!({"code": "notepad_open_in_user_window", "launch_confirmed": false, "windows": []}));
+            }
+        }
+        // Every reply from here on, failure or not, records the Notepad
+        // windows this launch opened as the helper's own.
+        let _own_notepad_windows = notepad_launch.then(|| super::launch_browser::OwnNotepadWindows);
         let fresh_document_path = if urls.is_empty()
             && extra_args.is_empty()
             && aumid_for_uwp

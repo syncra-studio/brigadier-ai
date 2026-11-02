@@ -214,6 +214,8 @@ Patches applied, in order:
 
 - `patches/0183-windows-action-note-had-the-front.diff`: Say "had the front", not "took the front", in an input action's reply note: an action that starts while the app's dialog is already in front (a displaced watch) observes it at once, and the app did not take the front during that action.
 
+- `patches/0184-windows-notepad-refuses-user-windows.diff`: Refuse a Notepad launch while Notepad shows a window this helper did not open. Windows Notepad keeps all its windows in one process and opens a file as a tab inside a window it already shows; it has no command-line switch or activation argument for a window of its own. The file would land in the user's window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Windows that the helper's own Notepad launches opened stay reusable.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
