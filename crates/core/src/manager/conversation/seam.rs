@@ -47,7 +47,7 @@ pub(super) struct SeamLive {
     /// `seam.json` says `nudged` (or is about to): nothing but the note turn reaches the CLI.
     pub(super) held: bool,
     /// The CLI took the nudge in (its stream said it): the turn it is in ends the generation.
-    seen: bool,
+    pub(super) seen: bool,
     /// The note turn is being stopped: when it ends, the seam closes whatever it wrote.
     force: bool,
     /// Counts the hold timers armed; only the newest acts.
@@ -297,8 +297,21 @@ impl SessionManager {
 
     /// The CLI's stream showed a user message: the nudge, once taken in.
     pub(super) async fn seam_heard(&self, conv: &ConvLive, text: &str) {
-        if text.starts_with(crate::thread_view::NUDGE_MARK) {
-            conv.state.lock().await.seam.seen = true;
+        if !text.starts_with(crate::thread_view::NUDGE_MARK) {
+            return;
+        }
+        // A hold armed while the nudge was on its way ends with its arrival: the note turn runs
+        // to its own end, which checks the note. One for a waiting message stays.
+        let waiting = self
+            .core
+            .conversation_view(conv.id.clone(), 1)
+            .await
+            .is_ok_and(|view| !view.queue.items.is_empty());
+        let mut state = conv.state.lock().await;
+        state.seam.seen = true;
+        if !waiting && state.seam.hold_armed {
+            state.seam.hold_armed = false;
+            state.seam.hold_timer += 1;
         }
     }
 

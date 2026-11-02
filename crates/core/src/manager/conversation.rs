@@ -6725,7 +6725,7 @@ mod tests {
         tokio::time::timeout(crate::test_patience(), async {
             loop {
                 let state = conv.state.lock().await;
-                if state.unowned_turn {
+                if state.unowned_turn && state.seam.seen {
                     assert!(!state.busy);
                     break;
                 }
@@ -6735,6 +6735,7 @@ mod tests {
         })
         .await
         .expect("the nudge started its own CLI turn");
+        // A message came while the note turn runs.
         flow.manager.arm_seam_hold(&conv).await;
         tokio::time::timeout(Duration::from_secs(2), stopped.notified())
             .await
@@ -6751,6 +6752,91 @@ mod tests {
             read_seam(&record).seams[0].end.death.as_deref(),
             Some("it was still working a minute after a message came")
         );
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_seam_hold_ends_when_the_cli_takes_the_nudge_in() {
+        use super::super::flow::{FakeBehavior, Flow, Options, Reply};
+        use super::super::seam::{Phase, SeamConfig, SeamFile, read_seam, write_seam};
+
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let stopped = Arc::new(tokio::sync::Notify::new());
+        let (at_note, after_stop) = (reached.clone(), stopped.clone());
+        let flow = Flow::start(
+            "seam-nudge-heard",
+            Options {
+                behavior: Arc::new(FakeBehavior {
+                    session_file: true,
+                    ..FakeBehavior::default()
+                }),
+                ..Options::default()
+            },
+            Arc::new(move |turn| {
+                let (at_note, after_stop) = (at_note.clone(), after_stop.clone());
+                Box::pin(async move {
+                    if turn.input.starts_with(crate::thread_view::NUDGE_MARK) {
+                        at_note.notify_one();
+                        turn.stopped().await;
+                        after_stop.notify_one();
+                        Reply::text("")
+                    } else {
+                        Reply::text("Answered.")
+                    }
+                })
+            }),
+        )
+        .await;
+        flow.say("Start.").await;
+        flow.settled().await;
+        *flow.manager.seam.lock().unwrap() = SeamConfig {
+            tokens: 60_000,
+            hold: Duration::from_millis(50),
+            long: None,
+            tokens_set: false,
+        };
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.live_cli().await.unwrap();
+        let record = flow.manager.session_dir(&conv.id).record();
+        write_seam(
+            &record,
+            &SeamFile {
+                phase: Phase::Nudged {
+                    at_ms: now_ms(),
+                    tokens: 70_000,
+                    predecessor: Some(cli.session.native_id()),
+                },
+                ..SeamFile::default()
+            },
+        )
+        .unwrap();
+        conv.state.lock().await.seam.held = true;
+        let nudge = format!("{} write the note", crate::thread_view::NUDGE_MARK);
+        cli.session
+            .steer(TurnInput::text(nudge.clone()))
+            .await
+            .unwrap();
+        reached.notified().await;
+        // The previous turn's end armed the hold while the nudge was on its way (OpenCode, live).
+        flow.manager.arm_seam_hold(&conv).await;
+        flow.manager
+            .on_conversation_event(
+                &conv,
+                &cli,
+                ProviderEvent::Message {
+                    item_id: "nudge".into(),
+                    role: ProviderRole::User,
+                    text: nudge,
+                },
+            )
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), stopped.notified())
+                .await
+                .is_err(),
+            "the note turn the CLI took in runs to its own end"
+        );
+        assert!(matches!(read_seam(&record).phase, Phase::Nudged { .. }));
         flow.stop().await;
     }
 
