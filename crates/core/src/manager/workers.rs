@@ -2702,9 +2702,10 @@ impl SessionManager {
         self.stop_task_previews(&task.conversation_id, &task.id)
             .await;
         let (kept, drop_branch) = match kept_as {
-            TaskState::Stopped | TaskState::Failed => self.keep_unfinished(task).await,
-            // A write task that ends done changed nothing that could land.
-            TaskState::Done => (None, true),
+            // A finished turn can still leave files it never committed.
+            TaskState::Stopped | TaskState::Failed | TaskState::Done => {
+                self.keep_unfinished(task).await
+            }
             // A landed branch is deleted once the landing checked it is merged.
             _ => (None, false),
         };
@@ -2783,10 +2784,7 @@ impl SessionManager {
         if !path.join(".git").exists() {
             return (None, false);
         }
-        let message = self.commit_message(format!(
-            "WIP: task-{} {} (unfinished, kept by Brigadier)",
-            task.number, task.title
-        ));
+        let message = self.commit_message("Unfinished changes kept when the worker closed".into());
         let base = workspace.base.clone().map(Oid);
         let on_snapshot = workspace.on_snapshot;
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
@@ -2901,12 +2899,22 @@ impl SessionManager {
         let Ok(repo) = self.task_repo(task) else {
             return;
         };
+        let Some(target) = task.workspace.as_ref().and_then(|w| w.target.clone()) else {
+            return;
+        };
         self.forget_branch(&repo, &branch);
         let git = self.git.clone();
         let result = blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
             match repo.branch_tip(&branch).map_err(git_error)? {
-                Some(tip) => repo.delete_branch_at(&branch, &tip).map_err(git_error),
+                Some(tip)
+                    if repo
+                        .ancestor(&tip, &repo.branch_commit(&target).map_err(git_error)?)
+                        .map_err(git_error)? =>
+                {
+                    repo.delete_branch_at(&branch, &tip).map_err(git_error)
+                }
+                Some(_) => Ok(()),
                 None => Ok(()),
             }
         })

@@ -550,6 +550,118 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
     flow.stop().await;
 }
 
+#[tokio::test]
+async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
+    for mode in ["finished", "close", "cleanup"] {
+        let script: Script = Arc::new(|turn| {
+            Box::pin(async move {
+                join_queued(&turn).await;
+                if !turn.is_orchestrator() {
+                    std::fs::write(turn.cwd.join("marks.txt"), "unfinished marks\n").unwrap();
+                } else if turn.input.contains("Start one.") {
+                    let started =
+                        brigadier(&turn, CliRequest::Start(Box::new(start("Write marks.")))).await;
+                    assert!(started.get("error").is_none(), "{started}");
+                } else if turn.input.contains("Close it.") {
+                    let workers = brigadier(&turn, CliRequest::Workers).await;
+                    let id = workers["workers"][0]["id"].as_str().unwrap().to_owned();
+                    let closed = brigadier(&turn, CliRequest::Close { id }).await;
+                    assert_eq!(closed["closed"], true, "{closed}");
+                }
+                Reply::text("Done.")
+            })
+        });
+        let flow = Flow::start(
+            &format!("20261030-1141-core-goals-w130-keep-{mode}"),
+            Options::default(),
+            script,
+        )
+        .await;
+        flow.say("Start one.").await;
+        flow.until("worker finished", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == crate::work::TaskState::Reported)
+        })
+        .await;
+        flow.settled().await;
+        let task = flow.core.tasks(&flow.conversation).await.unwrap().remove(0);
+        let workspace = task.workspace.as_ref().unwrap();
+        let path = std::path::Path::new(workspace.worktree.as_ref().unwrap());
+        let branch = workspace.branch.as_ref().unwrap();
+        assert!(path.join("marks.txt").exists());
+        match mode {
+            "finished" => {
+                flow.manager
+                    .dispose_task(&task, crate::work::TaskState::Done)
+                    .await
+            }
+            "close" => {
+                flow.say("Close it.").await;
+                flow.until("worker closed", |board| {
+                    board
+                        .tasks
+                        .get(&task.id)
+                        .is_some_and(|task| task.state.is_final())
+                })
+                .await;
+                flow.idle().await;
+            }
+            _ => {
+                let leftovers = flow
+                    .manager
+                    .runtime
+                    .ledger()
+                    .dispose(&format!("task:{}", task.id))
+                    .await;
+                assert!(leftovers.is_clean(), "{leftovers:?}");
+            }
+        }
+        assert!(!path.exists(), "{mode}: the worker's worktree was removed");
+        assert_eq!(
+            super::git(&flow.repo, &["show", &format!("{branch}:marks.txt")]),
+            "unfinished marks",
+            "{mode}"
+        );
+        assert_eq!(
+            super::git(&flow.repo, &["log", "-1", "--format=%s", branch]),
+            "Unfinished changes kept when the worker closed",
+            "{mode}"
+        );
+        assert_eq!(
+            super::git(
+                &flow.repo,
+                &[
+                    "rev-list",
+                    "--count",
+                    branch,
+                    &format!("^{}", workspace.base.as_ref().unwrap())
+                ]
+            ),
+            "1"
+        );
+        // A later cleanup must not delete the branch that now holds the kept commit.
+        let ledger = flow.manager.runtime.ledger();
+        ledger
+            .record(
+                "kept-worker-branch",
+                brigadier_providers::Artifact::GitBranches {
+                    repo: flow.repo.display().to_string(),
+                    namespace: branch.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(ledger.dispose("kept-worker-branch").await.is_clean());
+        assert_eq!(
+            super::git(&flow.repo, &["show", &format!("{branch}:marks.txt")]),
+            "unfinished marks"
+        );
+        flow.stop().await;
+    }
+}
+
 /// `brigadier start`'s request for `prompt`, with nothing else given.
 pub(super) fn start(prompt: &str) -> StartRequest {
     StartRequest {

@@ -932,9 +932,7 @@ pub struct ScanUsage {
 /// with the worktree.
 pub(super) fn keep_changes(git: &brigadier_git::Git, path: &Path) -> Result<()> {
     let worktree = git.open_worktree(path).map_err(git_error)?;
-    match worktree
-        .commit_wip("WIP: uncommitted changes kept by Brigadier before removing its worktree")
-    {
+    match worktree.commit_wip("Unfinished changes kept when the worker closed") {
         Ok(Some(commit)) => {
             tracing::info!(worktree = %path.display(), commit = %commit.0, "kept a worktree's changes as a WIP commit");
             Ok(())
