@@ -351,7 +351,7 @@ of its own.
   session is open; without a `gh` sign-in it says "gh auth login for PR status" (S34) (user, 2026-10-23: "fix
   this").
 - **Waiting on you:** only real pending ask-user questions and MCP sign-ins of this session's workers (since
-  core-goals D48 a worker's CLI permission prompt goes to its parent alone, never the user; since D69 a CLI's own subagent's prompt is answered by a short-lived read-only fork of the session that started it, which Brigadier deletes once it answers). The user answers them here, and the parent relays (G19.Q6). This session's own question
+  core-goals D48 a worker's CLI permission prompt, its own subagents' included, goes to its parent alone, never the user; since D166 the session CLI's own subagents' prompts are the user's cards, as in the plain CLI). The user answers them here, and the parent relays (G19.Q6). This session's own question
   shows only above the composer.
 - **Workers:** this session's own workers (G19). Title, state from the worker's own CLI events, +/− of its
   worktree against the parent's branch (G21), and "N done · M stopped". The rail above the composer and the

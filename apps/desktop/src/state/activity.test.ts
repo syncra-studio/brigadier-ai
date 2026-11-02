@@ -64,10 +64,10 @@ test("a worker CLI's permission prompt never needs the user: its orchestrator an
   assert.deepEqual(Object.keys(applyToBoard(board, card("own", null)).approvals), ["own"]);
 });
 
-test("a CLI's own subagent's permission request never needs the user: a fork of its orchestrator answers it (D69)", () => {
+test("the session CLI's own subagent's permission request is the user's card, as its own is (D166)", () => {
   applyActivityEvents([card("sub", null, "toolu_agent", "c6")]);
-  assert.equal(row("c6").awaiting, null);
-  assert.deepEqual(Object.keys(applyToBoard(emptyBoard("c6"), card("sub", null, "toolu_agent", "c6")).approvals), [], "no card for the user");
+  assert.equal(row("c6").awaiting, "approval");
+  assert.deepEqual(Object.keys(applyToBoard(emptyBoard("c6"), card("sub", null, "toolu_agent", "c6")).approvals), ["sub"]);
 });
 
 const stopped = () => stoppedOf(useActivity.getState().byConversation.stopped);

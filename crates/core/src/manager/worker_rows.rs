@@ -920,8 +920,7 @@ impl SessionManager {
         let current = owned.last().map(|(kind, _)| *kind);
         thread_view::name_providers(&mut view, &owned, current);
         let board = self.core.board(id).await?;
-        let failures = self.fork_failures.lock().unwrap().clone();
-        add_prompts(&mut view.entries, &board, Some(&task.id), &failures);
+        add_prompts(&mut view.entries, &board, &task.id);
         // Its hand-offs to fresh CLI sessions (D14): a divider each, the nudge and the
         // hand-off hidden, as a session's.
         view.seams = super::seam::marks(&record, &mut view.entries);
@@ -956,23 +955,19 @@ impl SessionManager {
     }
 }
 
-/// The permission prompts its orchestrator answers in the thread of worker `task` (D48), or of
-/// the session (`None`), and their answers, each where it came by time among `entries` (its
-/// CLI's files keep neither): read-only rows. A CLI's own subagent's (D69) are rows of its
-/// subagent's call, with a note when no fork could answer one (`failures`). One whose CLI ended
-/// unanswered leaves none.
-pub(super) fn add_prompts(
+/// The permission prompts its orchestrator answers in the thread of worker `task` (D48), and
+/// their answers, each where it came by time among `entries` (its CLI's files keep neither):
+/// read-only rows. Its CLI's own subagent's are rows of that subagent's call. One whose CLI
+/// ended unanswered leaves none.
+fn add_prompts(
     entries: &mut Vec<brigadier_providers::session_file::FileEntry>,
     board: &crate::board::Board,
-    task: Option<&TaskId>,
-    failures: &HashMap<crate::work::CardId, (i64, String)>,
+    task: &TaskId,
 ) {
     for card in board.approvals.values() {
-        let (true, true, ApprovalSubject::Cli { request }) = (
-            card.task_id.as_ref() == task,
-            card.for_orchestrator(),
-            &card.subject,
-        ) else {
+        let (true, ApprovalSubject::Cli { request }) =
+            (card.task_id.as_ref() == Some(task), &card.subject)
+        else {
             continue;
         };
         let answer = match (&card.state, card.resolved_at_ms) {
@@ -1011,19 +1006,6 @@ pub(super) fn add_prompts(
                 },
             )
         }));
-        if card.state == CardState::Pending
-            && let Some((at, why)) = failures.get(&card.id)
-        {
-            events.push((
-                *at,
-                ProviderEvent::Notice {
-                    level: brigadier_providers::NoticeLevel::Warning,
-                    message: format!(
-                        "The orchestrator couldn't answer this request ({why}). It waits."
-                    ),
-                },
-            ));
-        }
         for (at, event) in events {
             let index = entries
                 .iter()

@@ -99,7 +99,6 @@ mod shared_workspace;
 mod side_chat;
 mod sidecars;
 mod source_actions;
-mod subagent_approvals;
 mod terminal_host;
 mod thread;
 mod thread_images;
@@ -210,8 +209,6 @@ pub struct SessionManager {
     cli_asks: cli_tools::CliAsks,
     /// The questions a thread's CLI asked with its own tool, whose answers go back to it.
     cli_questions: cli_cards::CliQuestions,
-    /// Subagents' requests no fork of their orchestrator could answer (D69), by card.
-    fork_failures: subagent_approvals::ForkFailures,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
@@ -432,7 +429,6 @@ impl SessionManager {
             worker_rows: Default::default(),
             cli_asks: Default::default(),
             cli_questions: Default::default(),
-            fork_failures: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
             shared_workspaces: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),

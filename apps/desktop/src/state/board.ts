@@ -49,9 +49,9 @@ export function shownApproval(approval: Approval): approval is ShownApproval {
   return approval.subject.type !== "finishSession" && !forOrchestrator(approval);
 }
 
-/** A worker CLI's own permission prompt (D48), or a CLI's own subagent's (D69): only its orchestrator answers it, the user never sees it. */
+/** A worker CLI's own permission prompt, its subagents' included (D48, D166): only its orchestrator answers it, the user never sees it. */
 export function forOrchestrator(approval: Approval): boolean {
-  return approval.subject.type === "cli" && (approval.taskId !== null || !!approval.subject.request.agent);
+  return approval.subject.type === "cli" && approval.taskId !== null;
 }
 
 /** Newest entries kept per open worker transcript; older ones load on demand. */

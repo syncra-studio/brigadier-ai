@@ -289,7 +289,6 @@ impl SessionManager {
         let manager = self.arc();
         self.spawn(async move {
             crate::heap(|| manager.sweep_orphans()).await;
-            manager.sweep_forks().await;
         });
         self.sweep_test_data().await;
     }

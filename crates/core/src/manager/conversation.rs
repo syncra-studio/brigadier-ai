@@ -230,8 +230,6 @@ pub(crate) struct Cli {
     pub meter: TokenMeter,
     /// A session thread's: the workspace, level and access it was started for.
     pub launch: Option<super::thread::ThreadLaunch>,
-    /// What it was started with: a fork of it answers its subagents' requests (D69).
-    pub spec: SessionSpec,
 }
 
 /// A turn a restart cut off, going on by itself (D9 a) until its CLI begins it.
@@ -3381,7 +3379,6 @@ impl SessionManager {
             self.session_dir(&conv.id).root(),
             choice.provider,
         )?;
-        let started_spec = spec.clone();
         let started = match self
             .runtime
             .start_hosted(&owner, &account, spec.clone())
@@ -3475,7 +3472,6 @@ impl SessionManager {
             grants: grant_values,
             ended: CancellationToken::new(),
             launch,
-            spec: started_spec,
         });
         conv.state.lock().await.cli = Some(cli.clone());
         let manager = self.arc();

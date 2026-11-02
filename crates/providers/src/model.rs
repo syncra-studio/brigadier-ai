@@ -388,8 +388,7 @@ pub struct ApprovalRequest {
     #[ts(as = "Option<bool>", optional)]
     pub network: bool,
     /// The CLI's own subagent that asks: the id its thread gives the subagent's call (the
-    /// `parent` of its entries). None for the session's own request. A fork of the session that
-    /// started it answers it, never the user (D69).
+    /// `parent` of its entries). None for the session's own request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub agent: Option<String>,

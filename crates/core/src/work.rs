@@ -1243,11 +1243,10 @@ pub struct Approval {
 }
 
 impl Approval {
-    /// A worker CLI's own permission prompt (D48), or a CLI's own subagent's (D69): its
+    /// A worker CLI's own permission prompt, its subagents' included (D48, D166): its
     /// orchestrator answers it, never the user.
     pub fn for_orchestrator(&self) -> bool {
-        matches!(&self.subject, ApprovalSubject::Cli { request }
-            if self.task_id.is_some() || request.agent.is_some())
+        matches!(&self.subject, ApprovalSubject::Cli { .. } if self.task_id.is_some())
     }
 }
 
