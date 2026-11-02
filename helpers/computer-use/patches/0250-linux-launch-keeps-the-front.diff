@@ -1,0 +1,80 @@
+Why: Linux launches keep the user's front window: launched apps get a startup id whose user time predates every user action, so window managers with focus-stealing prevention (mutter, KWin) map them behind; a window manager that focuses the new window anyway is undone by the X11 focus guard, and the reply and its active field say what moved and whether it was handed back.
+
+diff --git a/crates/platform-linux/src/tools/impl_.rs b/crates/platform-linux/src/tools/impl_.rs
+index 3be700798..f02934584 100644
+--- a/crates/platform-linux/src/tools/impl_.rs
++++ b/crates/platform-linux/src/tools/impl_.rs
+@@ -1907,7 +1907,11 @@ fn spawn_launch_command(cmd: &str, additional_arguments: &[String]) -> std::io::
+         // ScreenReaderEnabled setting (which can launch Orca). Native
+         // toolkits ignore these when they do not need them.
+         .env("ACCESSIBILITY_ENABLED", "1")
+-        .env("NO_AT_BRIDGE", "0");
++        .env("NO_AT_BRIDGE", "0")
++        // A startup id whose user time (_TIME1) predates every user action: window managers
++        // with focus-stealing prevention (mutter, KWin) map the app's window behind the
++        // user's instead of focusing it. Toolkits forward it to an already running instance.
++        .env("DESKTOP_STARTUP_ID", launch_startup_id());
+     if chromium_family_program(prog)
+         && !rest
+             .iter()
+@@ -1921,6 +1925,12 @@ fn spawn_launch_command(cmd: &str, additional_arguments: &[String]) -> std::io::
+     Ok(pid)
+ }
+ 
++fn launch_startup_id() -> String {
++    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++    format!("cua-driver-{}-{sequence}_TIME1", std::process::id())
++}
++
+ /// Collect a launched child's exit status in the background.
+ ///
+ /// `std::process::Child` does not reap on drop and the driver never waits on
+@@ -2066,6 +2076,13 @@ impl Tool for LaunchAppTool {
+                 .into_iter()
+                 .map(|w| w.xid)
+                 .collect();
++        // The user's front window, so a window manager that focuses the new window anyway
++        // can be undone and reported (X11 only; None elsewhere).
++        let focus_before =
++            tokio::task::spawn_blocking(crate::input::focus_guard::FocusSnapshot::capture)
++                .await
++                .ok()
++                .flatten();
+         let result = tokio::task::spawn_blocking(
+             move || -> anyhow::Result<(String, Option<u32>, String)> {
+                 // Open URLs via xdg-open.
+@@ -2172,16 +2189,32 @@ impl Tool for LaunchAppTool {
+                     .unwrap_or_else(|_| LaunchedWindows::default());
+                     let windows: Vec<Value> =
+                         resolved.windows.iter().map(window_record_json).collect();
++                    let focus = match focus_before {
++                        Some(snapshot) => {
++                            tokio::task::spawn_blocking(move || snapshot.restore_if_changed(None))
++                                .await
++                                .ok()
++                        }
++                        None => None,
++                    };
+                     let mut text = message;
+                     let mut structured = json!({
+                         "pid": resolved.pid,
+                         "bundle_id": Value::Null,
+                         "name": name,
+                         "running": resolved.pid.is_some(),
+-                        "active": false,
++                        "active": focus.as_ref().is_some_and(|f| f.changed && !f.restored),
+                         "windows": windows,
+                         "launcher_pid": launcher_pid,
+                     });
++                    if let Some(focus) = focus.filter(|f| f.changed) {
++                        text.push_str(&focus.summary());
++                        if let (Some(target), Value::Object(fields)) =
++                            (structured.as_object_mut(), focus.to_json())
++                        {
++                            target.extend(fields);
++                        }
++                    }
+                     if resolved.handed_off {
+                         match resolved.pid {
+                             Some(pid) => {

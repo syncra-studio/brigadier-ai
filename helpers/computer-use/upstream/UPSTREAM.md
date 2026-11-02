@@ -213,6 +213,19 @@ Patches applied, in order:
 - `patches/0182-windows-dialog-owner-hand-back-target-only.diff`: Minimize a dialog's root owner to hand the front back only when that owner is one of the target app's own windows, by the same rule that matched the dialog; a dialog owned by another process's window, such as the user's, is never minimized through it.
 
 - `patches/0183-windows-action-note-had-the-front.diff`: Say "had the front", not "took the front", in an input action's reply note: an action that starts while the app's dialog is already in front (a displaced watch) observes it at once, and the app did not take the front during that action.
+- `patches/0200-macos-health-accepts-brigadier-bundle.diff`: health_report's bundle check passes for Brigadier's helper app (ai.brigadier.computer-use and the development id), so a correctly set up helper no longer always reads as degraded.
+- `patches/0201-macos-finder-reads-leave-out-desktop.diff`: A window-scoped read of a Finder window leaves out Finder's desktop scroll area, so the user's desktop icons are no longer listed as part of the window.
+- `patches/0202-macos-text-area-click-places-caret.diff`: A token click on a text area or text field that has no press action focuses it and puts its caret at the end of its text, confirmed by reading the caret back, instead of failing with AX error -25206.
+- `patches/0203-macos-unchanged-tokens-survive-reads.diff`: On macOS a token from one of a window's last 4 reads keeps working while a later read proves its element unchanged (same AX element, role, title, value, place and parents); other platforms keep staling every older token.
+- `patches/0204-macos-waits-end-on-effect.diff`: On macOS press_key ends its value readback and pre-focus pauses as soon as the change or focus is seen (same caps), batch lookups poll every 80 ms, and invoke_menu logs how long a background item took to enable.
+- `patches/0205-macos-open-panel-rows-and-sheet.diff`: On macOS a background pixel click on a list or sidebar row with no press action selects that row through accessibility, confirmed by read-back (#676); panels report whether they show a sheet, so a Go to Folder shortcut that opened nothing says so (#675).
+- `patches/0206-macos-caret-click-confirms-focus.diff`: On macOS a token click on a text area or text field reports the caret placed only when the app also reads back that element as focused, so the reply never claims a focus the app did not take.
+
+- `patches/0250-linux-launch-keeps-the-front.diff`: Linux launches keep the user's front window: launched apps get a startup id whose user time predates every user action, so window managers with focus-stealing prevention (mutter, KWin) map them behind; a window manager that focuses the new window anyway is undone by the X11 focus guard, and the reply and its active field say what moved and whether it was handed back.
+
+- `patches/0251-linux-hotkey-through-menu-shortcuts.diff`: Linux hotkey fires a chord addressed to a window through the menu item that carries it as its shortcut (AT-SPI key binding, then the item's action under the focus guard), so Ctrl+S saves in the background without the uinput virtual keyboard that Xvfb and most sessions cannot create; a chord whose item is disabled is refused with that reason instead of a keyboard-route error.
+
+- `patches/0252-linux-launch-restore-and-shortcut-checks.diff`: Linux launches hand the front back only when the launched app (or a window new since the launch) took it, never a window the user switched to during the wait; a hotkey keeps every modifier when it looks for a menu shortcut (an unknown one matches no item), and a hotkey with only one of x or y is refused before the menu-shortcut route.
 
 <!-- sync:end -->
 

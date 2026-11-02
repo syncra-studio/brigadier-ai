@@ -623,6 +623,12 @@ unsafe fn invoke_path_in_background(
                 std::thread::sleep(ENABLE_POLL);
                 waited += ENABLE_POLL;
             }
+            tracing::info!(
+                target: "invoke_menu",
+                waited_ms = waited.as_millis() as u64,
+                enabled = copy_bool_attr(target, "AXEnabled") != Some(false),
+                "background menu item enable wait"
+            );
         }
         if copy_bool_attr(target, "AXEnabled") == Some(false) {
             return Err(BackgroundPressError::Disabled {

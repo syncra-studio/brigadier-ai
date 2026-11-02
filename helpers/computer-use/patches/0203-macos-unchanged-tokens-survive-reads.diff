@@ -1,0 +1,566 @@
+Why: On macOS a token from one of a window's last 4 reads keeps working while a later read proves its element unchanged (same AX element, role, title, value, place and parents); other platforms keep staling every older token.
+
+diff --git a/crates/cua-driver-core/src/snapshot_store.rs b/crates/cua-driver-core/src/snapshot_store.rs
+index 944f54e8d..1430cfe3d 100644
+--- a/crates/cua-driver-core/src/snapshot_store.rs
++++ b/crates/cua-driver-core/src/snapshot_store.rs
+@@ -20,8 +20,22 @@ pub trait SnapshotPayload: Send + Sync + 'static {
+         self.len() == 0
+     }
+     fn retain(&self, index: usize) -> Option<Self::Element>;
++    /// Whether a window's replaced reads are kept so their tokens can still
++    /// resolve through [`Self::carried_row`]. Off by default: a new read
++    /// stales every older token of that window.
++    const CARRIES_ROWS: bool = false;
++    /// The row of `self`, a newer read of the same window, that holds the
++    /// element at `row` of `older`, only when the platform can prove that
++    /// element unchanged. `None` keeps the older token stale.
++    fn carried_row(&self, _older: &Self, _row: usize) -> Option<usize> {
++        None
++    }
+ }
+ 
++/// Replaced reads kept per window when the payload carries rows: with the
++/// current read, a token stays usable across the window's last 4 reads.
++const CARRIED_READS_PER_WINDOW: usize = 3;
++
+ struct Snapshot<S> {
+     id: u32,
+     window_id: u64,
+@@ -260,6 +274,9 @@ fn out_of_range_refusal<S: SnapshotPayload>(snapshot: &Snapshot<S>, row: usize)
+ pub struct SnapshotStore<S: SnapshotPayload> {
+     runtime_scope: String,
+     inner: Mutex<HashMap<i32, Vec<Snapshot<S>>>>,
++    /// Replaced reads whose unchanged elements' tokens still resolve, oldest
++    /// first. Only filled when `S::CARRIES_ROWS`. Lock after `inner`.
++    replaced: Mutex<HashMap<i32, Vec<Snapshot<S>>>>,
+ }
+ 
+ impl<S: SnapshotPayload> SnapshotStore<S> {
+@@ -267,6 +284,7 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+         Self {
+             runtime_scope: current_runtime_scope(),
+             inner: Mutex::new(HashMap::new()),
++            replaced: Mutex::new(HashMap::new()),
+         }
+     }
+ 
+@@ -392,7 +410,7 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+         (screenshot_scale, window_size): (Option<f64>, Option<(f64, f64)>),
+         semantic: bool,
+     ) -> Option<(u32, Vec<u32>)> {
+-        let (id, retired) = {
++        let (id, invalidated, retired) = {
+             let mut inner = self.inner.lock().unwrap();
+             if session.is_some_and(crate::session::is_session_ended) {
+                 return None;
+@@ -420,6 +438,12 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+             if lane.len() == LRU_CAP_PER_PID {
+                 retired.push(lane.remove(0));
+             }
++            // Every replaced or evicted read is reported: a kept read's tokens
++            // resolve only for elements proven unchanged.
++            let invalidated: Vec<u32> = retired.iter().map(|snapshot| snapshot.id).collect();
++            if S::CARRIES_ROWS {
++                self.keep_replaced(pid, window_id, &mut retired);
++            }
+             let id = crate::element_token::mint_snapshot_id();
+             lane.push(Snapshot {
+                 id,
+@@ -431,13 +455,44 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+                 semantic,
+                 payload,
+             });
+-            (id, retired)
++            (id, invalidated, retired)
+         };
+-        let invalidated = retired.iter().map(|snapshot| snapshot.id).collect();
+         drop(retired);
+         Some((id, invalidated))
+     }
+ 
++    /// Move the window's replaced read (in `retired`) into the kept reads,
++    /// and move into `retired` the kept reads that fall out: beyond the last
++    /// [`CARRIED_READS_PER_WINDOW`], or of a window evicted from the lane.
++    fn keep_replaced(&self, pid: i32, window_id: u64, retired: &mut Vec<Snapshot<S>>) {
++        let mut replaced = self.replaced.lock().unwrap();
++        let kept = replaced.entry(pid).or_default();
++        let evicted: Vec<u64> = retired
++            .iter()
++            .map(|old| old.window_id)
++            .filter(|&id| id != window_id)
++            .collect();
++        if let Some(position) = retired
++            .iter()
++            .position(|old| old.window_id == window_id && old.semantic)
++        {
++            kept.push(retired.remove(position));
++        }
++        let mut same_window = kept.iter().filter(|old| old.window_id == window_id).count();
++        let mut index = 0;
++        while index < kept.len() {
++            let old = &kept[index];
++            let too_old = old.window_id == window_id && same_window > CARRIED_READS_PER_WINDOW;
++            if too_old || evicted.contains(&old.window_id) {
++                same_window -= usize::from(too_old);
++                retired.push(kept.remove(index));
++            } else {
++                index += 1;
++            }
++        }
++        replaced.retain(|_, kept| !kept.is_empty());
++    }
++
+     /// Resolve the screenshot transform from the same authoritative latest
+     /// snapshot used for element tokens. Without a window, every snapshot of
+     /// the process must agree on one transform owned by this session.
+@@ -593,9 +648,19 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+                 retired.extend::<Vec<_>>(owned);
+             }
+             inner.retain(|_, lane| !lane.is_empty());
+-            retired
++            let count = retired.len();
++            let mut replaced = self.replaced.lock().unwrap();
++            for kept_reads in replaced.values_mut() {
++                let (owned, kept) = std::mem::take(kept_reads)
++                    .into_iter()
++                    .partition(|snapshot| snapshot.screenshot_owner.as_deref() == Some(session));
++                *kept_reads = kept;
++                retired.extend::<Vec<_>>(owned);
++            }
++            replaced.retain(|_, kept| !kept.is_empty());
++            (count, retired)
+         };
+-        let count = retired.len();
++        let (count, retired) = retired;
+         drop(retired);
+         count
+     }
+@@ -636,12 +701,35 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+     pub fn pid_for_token(&self, args: &serde_json::Value) -> Option<i32> {
+         let token = args.get("element_token")?.as_str()?;
+         let (snapshot_id, _) = parse_token(token)?;
+-        self.inner
+-            .lock()
+-            .unwrap()
++        let owner = |lanes: &HashMap<i32, Vec<Snapshot<S>>>| {
++            lanes
++                .iter()
++                .find(|(_, lane)| lane.iter().any(|snapshot| snapshot.id == snapshot_id))
++                .map(|(pid, _)| *pid)
++        };
++        let inner = self.inner.lock().unwrap();
++        owner(&inner).or_else(|| owner(&self.replaced.lock().unwrap()))
++    }
++
++    /// A replaced read's row, resolved in its window's current read when the
++    /// platform proves the element unchanged there.
++    fn carried<'a>(
++        &self,
++        pid: i32,
++        lane: &'a [Snapshot<S>],
++        snapshot_id: u32,
++        row: usize,
++    ) -> Option<(&'a Snapshot<S>, usize)> {
++        let replaced = self.replaced.lock().unwrap();
++        let old = replaced
++            .get(&pid)?
+             .iter()
+-            .find(|(_, lane)| lane.iter().any(|snapshot| snapshot.id == snapshot_id))
+-            .map(|(pid, _)| *pid)
++            .find(|old| old.id == snapshot_id)?;
++        let current = lane
++            .iter()
++            .find(|snapshot| snapshot.window_id == old.window_id && snapshot.semantic)?;
++        let row = current.payload.carried_row(&old.payload, row)?;
++        Some((current, row))
+     }
+ 
+     pub fn resolve(
+@@ -660,10 +748,12 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+         let lane = inner.get(&pid).map(Vec::as_slice).unwrap_or_default();
+         let (snapshot, element_index) = match parse_token(token) {
+             Some((snapshot_id, element_index)) => {
+-                let Some(snapshot) = lane.iter().find(|snapshot| snapshot.id == snapshot_id) else {
+-                    return Err(stale_token_refusal(pid, lane));
+-                };
+-                (snapshot, element_index)
++                match lane.iter().find(|snapshot| snapshot.id == snapshot_id) {
++                    Some(snapshot) => (snapshot, element_index),
++                    None => self
++                        .carried(pid, lane, snapshot_id, element_index)
++                        .ok_or_else(|| stale_token_refusal(pid, lane))?,
++                }
+             }
+             // A bare row number ("11") is the `[11]` of a markdown read. It
+             // names a row of the window's current snapshot, the one a fresh
+@@ -691,20 +781,36 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+     }
+ 
+     pub fn remove(&self, pid: i32, window_id: u64) -> Option<u32> {
+-        let retired = {
++        let (retired, _kept) = {
+             let mut inner = self.inner.lock().unwrap();
+-            inner.get_mut(&pid).and_then(|lane| {
++            let retired = inner.get_mut(&pid).and_then(|lane| {
+                 let position = lane.iter().position(|entry| entry.window_id == window_id)?;
+                 Some(lane.remove(position))
+-            })
++            });
++            let kept: Vec<_> = self
++                .replaced
++                .lock()
++                .unwrap()
++                .get_mut(&pid)
++                .map(|kept| {
++                    let (gone, stay) = std::mem::take(kept)
++                        .into_iter()
++                        .partition(|old| old.window_id == window_id);
++                    *kept = stay;
++                    gone
++                })
++                .unwrap_or_default();
++            (retired, kept)
+         };
+         retired.map(|snapshot| snapshot.id)
+     }
+ 
+     pub fn clear(&self) -> usize {
+         let retired = std::mem::take(&mut *self.inner.lock().unwrap());
++        let kept = std::mem::take(&mut *self.replaced.lock().unwrap());
+         let count = retired.len();
+         drop(retired);
++        drop(kept);
+         count
+     }
+ }
+diff --git a/crates/platform-macos/src/ax/snapshot.rs b/crates/platform-macos/src/ax/snapshot.rs
+index fc9145aba..ca01fb712 100644
+--- a/crates/platform-macos/src/ax/snapshot.rs
++++ b/crates/platform-macos/src/ax/snapshot.rs
+@@ -1,6 +1,6 @@
+ use super::bindings::AXUIElementRef;
+ use super::tree::AXNode;
+-use core_foundation::base::{CFRelease, CFRetain, CFTypeRef};
++use core_foundation::base::{CFEqual, CFRelease, CFRetain, CFTypeRef};
+ use cua_driver_core::snapshot_store::{SnapshotPayload, SnapshotStore};
+ 
+ pub struct RetainedElement(usize);
+@@ -39,16 +39,52 @@ impl Drop for RetainedElement {
+ 
+ pub struct AxSnapshot {
+     pub elements: Vec<usize>,
++    /// Per row, a hash of what the read saw: role, title, value, description,
++    /// identifier, depth, place among its siblings and its parent's hash.
++    /// `None` when the role was unreadable, so the row is never carried.
++    pub identities: Vec<Option<u64>>,
+ }
+ 
+ impl AxSnapshot {
+     pub fn from_nodes(nodes: &[AXNode]) -> Self {
++        use std::collections::HashMap;
++        use std::hash::{Hash, Hasher};
++        let mut by_index: HashMap<usize, Option<u64>> = HashMap::new();
++        let mut siblings: HashMap<Option<usize>, usize> = HashMap::new();
++        let mut elements = Vec::new();
++        let mut identities = Vec::new();
++        for node in nodes {
++            let Some(index) = node.element_index else {
++                continue;
++            };
++            let place = siblings.entry(node.parent_element_index).or_default();
++            let parent = match node.parent_element_index {
++                Some(parent) => by_index.get(&parent).copied().flatten(),
++                None => Some(0),
++            };
++            let identity = parent.filter(|_| !node.role.is_empty()).map(|parent| {
++                let mut hasher = std::collections::hash_map::DefaultHasher::new();
++                (
++                    &node.role,
++                    &node.title,
++                    &node.value,
++                    &node.description,
++                    &node.identifier,
++                    node.depth,
++                    *place,
++                    parent,
++                )
++                    .hash(&mut hasher);
++                hasher.finish()
++            });
++            *place += 1;
++            by_index.insert(index, identity);
++            elements.push(node.element_ptr);
++            identities.push(identity);
++        }
+         Self {
+-            elements: nodes
+-                .iter()
+-                .filter(|node| node.element_index.is_some())
+-                .map(|node| node.element_ptr)
+-                .collect(),
++            elements,
++            identities,
+         }
+     }
+ }
+@@ -63,6 +99,27 @@ impl SnapshotPayload for AxSnapshot {
+             .get(index)
+             .map(|ptr| unsafe { RetainedElement::retain(*ptr) })
+     }
++
++    const CARRIES_ROWS: bool = true;
++
++    /// The one row of this read that is the same AX element (CFEqual) with
++    /// the same identity hash as `older`'s row: unchanged content, same place
++    /// under the same unchanged parents. Anything else stays stale.
++    fn carried_row(&self, older: &Self, row: usize) -> Option<usize> {
++        let identity = (*older.identities.get(row)?)?;
++        let element = *older.elements.get(row)?;
++        if element == 0 {
++            return None;
++        }
++        let mut matches = self.identities.iter().enumerate().filter(|&(index, id)| {
++            *id == Some(identity) && {
++                let now = self.elements[index];
++                now != 0 && unsafe { CFEqual(now as CFTypeRef, element as CFTypeRef) != 0 }
++            }
++        });
++        let (found, _) = matches.next()?;
++        matches.next().is_none().then_some(found)
++    }
+ }
+ 
+ impl Drop for AxSnapshot {
+@@ -101,6 +158,7 @@ mod tests {
+         unsafe { CFRetain(ptr as CFTypeRef) };
+         AxSnapshot {
+             elements: vec![ptr],
++            identities: vec![None],
+         }
+     }
+ 
+@@ -115,8 +173,11 @@ mod tests {
+         let guard = resolve(&cache, snapshot, 0).unwrap();
+         assert_eq!(unsafe { CFGetRetainCount(ptr as CFTypeRef) }, base + 2);
+         cache.publish(1, 2, AxSnapshot::from_nodes(&[]));
+-        assert_eq!(unsafe { CFGetRetainCount(ptr as CFTypeRef) }, base + 1);
+         assert!(resolve(&cache, snapshot, 0).is_none());
++        // The replaced read is kept (for unchanged rows) until it ages out.
++        assert_eq!(unsafe { CFGetRetainCount(ptr as CFTypeRef) }, base + 2);
++        cache.clear();
++        assert_eq!(unsafe { CFGetRetainCount(ptr as CFTypeRef) }, base + 1);
+         drop(guard);
+         assert_eq!(unsafe { CFGetRetainCount(ptr as CFTypeRef) }, base);
+     }
+@@ -170,4 +231,188 @@ mod tests {
+         );
+         assert_eq!(resolve(&cache, snapshot, 0).unwrap().as_ptr(), original_ptr);
+     }
++
++    /// One indexed row: (element, role, title, value, parent row).
++    type Row<'a> = (&'a CFString, &'a str, &'a str, &'a str, Option<usize>);
++
++    fn read(rows: &[Row]) -> AxSnapshot {
++        let nodes: Vec<AXNode> = rows
++            .iter()
++            .enumerate()
++            .map(|(index, (element, role, title, value, parent))| {
++                let ptr = element.as_concrete_TypeRef() as usize;
++                unsafe { CFRetain(ptr as CFTypeRef) };
++                AXNode {
++                    element_index: Some(index),
++                    role: (*role).into(),
++                    title: Some((*title).into()),
++                    value: Some((*value).into()),
++                    description: None,
++                    identifier: None,
++                    help: None,
++                    actions: Vec::new(),
++                    element_ptr: ptr,
++                    depth: usize::from(parent.is_some()),
++                    parent_element_index: *parent,
++                    frame: None,
++                    value_state: None,
++                    value_description: None,
++                    min_value: None,
++                    max_value: None,
++                    enabled: None,
++                    selected: None,
++                    in_web_content: false,
++                }
++            })
++            .collect();
++        AxSnapshot::from_nodes(&nodes)
++    }
++
++    fn resolved_row(cache: &Snapshots, snapshot: u32, index: usize) -> Option<(usize, usize)> {
++        match cache
++            .resolve(
++                1,
++                &serde_json::json!({ "element_token": token_for(snapshot, index) }),
++            )
++            .ok()?
++        {
++            ResolvedElement::Element {
++                element_index,
++                element,
++                ..
++            } => Some((element_index, element.as_ptr())),
++            _ => None,
++        }
++    }
++
++    fn elements() -> [CFString; 4] {
++        ["w05-window", "w05-row-a", "w05-row-b", "w05-field"].map(CFString::new)
++    }
++
++    #[test]
++    fn an_unchanged_element_keeps_its_token_across_reads() {
++        let [window, a, b, field] = elements();
++        let cache = Snapshots::new();
++        let first = cache.publish(
++            1,
++            2,
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&a, "AXRow", "a", "", Some(0)),
++            ]),
++        );
++        // A new element after it changes nothing about row [1].
++        cache.publish(
++            1,
++            2,
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&a, "AXRow", "a", "", Some(0)),
++                (&b, "AXRow", "b", "", Some(0)),
++                (&field, "AXTextField", "", "x", Some(0)),
++            ]),
++        );
++        let a_ptr = a.as_concrete_TypeRef() as usize;
++        assert_eq!(resolved_row(&cache, first, 1), Some((1, a_ptr)));
++    }
++
++    #[test]
++    fn a_changed_value_stales_the_token() {
++        let [window, _, _, field] = elements();
++        let cache = Snapshots::new();
++        let rows = |value| {
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&field, "AXTextField", "", value, Some(0)),
++            ])
++        };
++        let first = cache.publish(1, 2, rows("before"));
++        cache.publish(1, 2, rows("after"));
++        assert_eq!(resolved_row(&cache, first, 1), None);
++        // The window row itself did not change and still resolves.
++        assert!(resolved_row(&cache, first, 0).is_some());
++    }
++
++    #[test]
++    fn the_same_object_with_new_content_is_stale() {
++        let [window, a, _, _] = elements();
++        let cache = Snapshots::new();
++        let first = cache.publish(
++            1,
++            2,
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&a, "AXRow", "a", "", Some(0)),
++            ]),
++        );
++        cache.publish(
++            1,
++            2,
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&a, "AXRow", "renamed", "", Some(0)),
++            ]),
++        );
++        assert_eq!(resolved_row(&cache, first, 1), None);
++    }
++
++    #[test]
++    fn a_moved_row_is_stale() {
++        let [window, a, b, _] = elements();
++        let cache = Snapshots::new();
++        let first = cache.publish(
++            1,
++            2,
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&a, "AXRow", "a", "", Some(0)),
++                (&b, "AXRow", "b", "", Some(0)),
++            ]),
++        );
++        cache.publish(
++            1,
++            2,
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&b, "AXRow", "b", "", Some(0)),
++                (&a, "AXRow", "a", "", Some(0)),
++            ]),
++        );
++        assert_eq!(resolved_row(&cache, first, 1), None);
++        assert_eq!(resolved_row(&cache, first, 2), None);
++    }
++
++    #[test]
++    fn a_removed_element_is_stale() {
++        let [window, a, _, _] = elements();
++        let cache = Snapshots::new();
++        let first = cache.publish(
++            1,
++            2,
++            read(&[
++                (&window, "AXWindow", "Doc", "", None),
++                (&a, "AXRow", "a", "", Some(0)),
++            ]),
++        );
++        cache.publish(1, 2, read(&[(&window, "AXWindow", "Doc", "", None)]));
++        assert_eq!(resolved_row(&cache, first, 1), None);
++    }
++
++    #[test]
++    fn tokens_reach_back_only_four_reads() {
++        let [window, _, _, _] = elements();
++        let cache = Snapshots::new();
++        let publish = || cache.publish(1, 2, read(&[(&window, "AXWindow", "Doc", "", None)]));
++        let first = publish();
++        let second = publish();
++        publish();
++        publish();
++        assert!(resolved_row(&cache, first, 0).is_some());
++        publish();
++        assert_eq!(resolved_row(&cache, first, 0), None);
++        assert!(resolved_row(&cache, second, 0).is_some());
++        // Removing the window drops its kept reads too.
++        cache.remove(1, 2);
++        assert_eq!(resolved_row(&cache, second, 0), None);
++    }
+ }
+diff --git a/crates/platform-macos/src/tools/get_window_state.rs b/crates/platform-macos/src/tools/get_window_state.rs
+index c1ec2bfff..828b88faa 100644
+--- a/crates/platform-macos/src/tools/get_window_state.rs
++++ b/crates/platform-macos/src/tools/get_window_state.rs
+@@ -33,7 +33,7 @@ fn def() -> &'static ToolDef {
+             \n\
+             DIFF READS (use them for every re-read after acting): `since:\"latest\"`, or `since:<snapshot_id>` from an earlier read of the same window, returns only what changed: `+` added, `~` changed, `-` removed rows (removed ids are the old snapshot's), a `reindexed:` line if indices shifted, or `no change since …; focused element is …`. The response carries a NEW snapshot_id: use it in tokens. An unknown, expired, other-window or differently-scoped (query/max_elements/max_depth) `since` falls back to a full read; `since_status` says why.\n\
+             \n\
+-            A new snapshot of the same (pid, window_id) replaces the previous one and stales its tokens (`invalidated_snapshot_ids`). `include_screenshot:false` returns the tree only and keeps the last screenshot's pixel frame while the window keeps its size; `include_accessibility_tree:false` returns only the screenshot and keeps the current snapshot's rows and tokens valid (use it, not `max_elements:1`, when you just need to look); adding `display_only:true` (live previews) also leaves the pixel frame alone. The tree can lie on some surfaces (Electron, Catalyst, virtualized rows with `h:1` frames): cross-check the screenshot, and use pixel x,y at action time only for elements missing from the tree.\n\
++            A new snapshot of the same (pid, window_id) replaces the previous one (`invalidated_snapshot_ids`); its tokens, for the window's last 4 reads, still resolve only for elements this read shows unchanged (same element, role, title, value and place), others are stale. `include_screenshot:false` returns the tree only and keeps the last screenshot's pixel frame while the window keeps its size; `include_accessibility_tree:false` returns only the screenshot and keeps the current snapshot's rows and tokens valid (use it, not `max_elements:1`, when you just need to look); adding `display_only:true` (live previews) also leaves the pixel frame alone. The tree can lie on some surfaces (Electron, Catalyst, virtualized rows with `h:1` frames): cross-check the screenshot, and use pixel x,y at action time only for elements missing from the tree.\n\
+             \n\
+             Refusals: `window_id_not_found`; `window_owner_pid_mismatch` names the real `owner_pid` (sandboxed Open/Save panels belong to a panel service). `degraded_reason` `ax_window_unresolved` or `ax_app_launching` (the latter with `truncation_reason: app_lookup_timeout`) means an empty tree: re-snapshot, or act with `delivery_mode:\"foreground\"`. `px_frame_mismatch` / `px_capture_unavailable` omit the unprovable screenshot; the AX payload stays valid.".into(),
+         input_schema: cua_driver_core::window_state_view::extend_input_schema(serde_json::json!({
+@@ -639,7 +639,7 @@ impl Tool for GetWindowStateTool {
+             .collect();
+         if !invalidated.is_empty() {
+             content.push(Content::text(format!(
+-                "Invalidated snapshots {}: their element_tokens are stale.",
++                "Replaced snapshots {}: their element_tokens still work only for elements this read shows unchanged; any other is refused as stale.",
+                 invalidated.join(", ")
+             )));
+             structured["invalidated_snapshot_ids"] = serde_json::json!(invalidated);

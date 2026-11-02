@@ -41,6 +41,10 @@ impl WindowScope {
     }
 }
 
+/// Marks Finder's desktop scroll area (AXDescription "desktop"), which
+/// exposes no AX identifier of its own.
+pub const DESKTOP_IDENTIFIER: &str = "desktop";
+
 /// A top-level child of the application AX element, reduced to the two facts
 /// the scoping decision needs.
 #[derive(Debug, Clone)]
@@ -88,6 +92,10 @@ impl TopLevelCandidate {
                 .identifier
                 .as_deref()
                 .is_some_and(|id| matches!(id, "open-panel" | "save-panel"))
+    }
+
+    fn is_desktop(&self) -> bool {
+        self.role == "AXScrollArea" && self.identifier.as_deref() == Some(DESKTOP_IDENTIFIER)
     }
 }
 
@@ -167,6 +175,7 @@ where
         .filter(|(i, c)| {
             (c.role != "AXWindow" || matched.contains(i))
                 && !(dialog_scope && c.role == "AXMenuBar")
+                && !c.is_desktop()
         })
         .map(|(i, _)| i)
         .collect();
@@ -204,6 +213,19 @@ mod tests {
         let d = decide_window_scope(&candidates, 22, never_called);
         assert_eq!(d.scope, WindowScope::Matched);
         assert_eq!(d.walk, vec![0, 2], "menu bar + requested window only");
+    }
+
+    /// Finder's desktop (the user's icons) is a top-level scroll area, not
+    /// part of any Finder window.
+    #[test]
+    fn matched_window_leaves_out_the_desktop() {
+        let candidates = [
+            TopLevelCandidate::new("AXWindow", Some(22)),
+            TopLevelCandidate::new("AXMenuBar", None),
+            TopLevelCandidate::new("AXScrollArea", None).with_identifier(DESKTOP_IDENTIFIER),
+        ];
+        let d = decide_window_scope(&candidates, 22, never_called);
+        assert_eq!(d.walk, vec![0, 1]);
     }
 
     #[test]

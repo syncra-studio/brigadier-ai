@@ -563,6 +563,30 @@ impl FocusSnapshot {
             .or_else(|| (self.core_focus > 1).then_some(self.core_focus))
     }
 
+    /// Whether a front change since capture may be the work of `pids`: nothing
+    /// moved yet (the restore's settle watch still looks), or the active or
+    /// topmost window is new since capture or owned by one of `pids`. `false`
+    /// when the front now sits on another app's existing window, which only
+    /// the user can have chosen.
+    /// shortcut: a switch by the user during the restore's settle watch is
+    /// still undone; checking each change's owner there would close that.
+    pub fn front_may_be_taken_by(&self, pids: &[u32]) -> bool {
+        let Ok(x) = X::open() else {
+            return true;
+        };
+        if self.diff(&x).is_empty() {
+            return true;
+        }
+        let fronts: Vec<Window> = [x.active_window(), x.stacking_top()]
+            .into_iter()
+            .flatten()
+            .collect();
+        fronts.is_empty()
+            || fronts.iter().any(|w| {
+                !self.clients.contains(w) || x.owner_pid(*w).is_some_and(|p| pids.contains(&p))
+            })
+    }
+
     /// Watch briefly for a change, restore if one happened, and report.
     /// `target_pid` names the action's application for the grab attribution
     /// and the same-app rule.

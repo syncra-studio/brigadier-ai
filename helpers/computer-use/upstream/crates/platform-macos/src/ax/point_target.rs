@@ -58,7 +58,33 @@ pub unsafe fn press_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIEle
     geometry_target(pid, wid, x, y)
 }
 
+/// The one selectable row (`AXRow` exposing `AXSelected`) under the point in
+/// window `wid`, found by geometry like [`press_target`]'s fallback. Rows have
+/// no press action, so a click on one is answered by selecting it.
+///
+/// # Safety
+/// Calls into the accessibility API; the caller releases the result.
+pub unsafe fn row_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElementRef> {
+    geometry_target_where(pid, wid, x, y, |element| {
+        copy_string_attr(element, "AXRole").as_deref() == Some("AXRow")
+            && copy_bool_attr(element, "AXSelected").is_some()
+    })
+}
+
 unsafe fn geometry_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElementRef> {
+    geometry_target_where(pid, wid, x, y, |element| {
+        copy_bool_attr(element, "AXEnabled") != Some(false)
+            && copy_action_names(element).iter().any(|a| a == "AXPress")
+    })
+}
+
+unsafe fn geometry_target_where(
+    pid: i32,
+    wid: u32,
+    x: f64,
+    y: f64,
+    wanted: impl Fn(AXUIElementRef) -> bool,
+) -> Option<AXUIElementRef> {
     let app = AXUIElementCreateApplication(pid);
     if app.is_null() {
         return None;
@@ -104,10 +130,7 @@ unsafe fn geometry_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElem
                     pending.push((child, child_path));
                 }
             }
-            if inside == Some(true)
-                && copy_bool_attr(element, "AXEnabled") != Some(false)
-                && copy_action_names(element).iter().any(|a| a == "AXPress")
-            {
+            if inside == Some(true) && wanted(element) {
                 core_foundation::base::CFRetain(element as CFTypeRef);
                 candidates.push((element, path));
             }

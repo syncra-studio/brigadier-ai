@@ -224,14 +224,59 @@ fn unresolved_identity(tool: &str) -> ToolResult {
         .with_structured(json!({"code":"target_identity_unavailable"}))
 }
 
+/// System Settings processes that `launch_app` started (it was not running
+/// before), so an agent may quit the window it opened. The user's own
+/// System Settings stays out of reach.
+static TASK_LAUNCHED_SETTINGS: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+
+/// Record that `launch_app` started this System Settings process.
+pub fn note_task_launched_settings(bundle_id: &str, pid: i64) {
+    if bundle_id.eq_ignore_ascii_case(MACOS_SETTINGS) {
+        let mut pids = TASK_LAUNCHED_SETTINGS.lock().unwrap();
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+}
+
+const MACOS_SETTINGS: &str = "com.apple.systempreferences";
+
+fn is_macos_settings(identity: &TargetIdentity) -> bool {
+    identity
+        .bundle_id
+        .as_deref()
+        .is_some_and(|id| id.eq_ignore_ascii_case(MACOS_SETTINGS))
+}
+
+fn task_launched_settings(identity: &TargetIdentity) -> bool {
+    is_macos_settings(identity)
+        && identity
+            .pid
+            .is_some_and(|pid| TASK_LAUNCHED_SETTINGS.lock().unwrap().contains(&pid))
+}
+
 /// Check one resolved identity.
 pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Result<(), ToolResult> {
     match classify(identity, allowed) {
         Some(RefusalReason::SecuritySurface)
             if reads_settings(tool, identity)
-                || tool == "kill_app" && is_windows_settings(identity) =>
+                || tool == "kill_app"
+                    && (is_windows_settings(identity) || task_launched_settings(identity)) =>
         {
             Ok(())
+        }
+        Some(RefusalReason::SecuritySurface)
+            if tool == "kill_app" && is_macos_settings(identity) =>
+        {
+            let message = "target_not_allowed: kill_app refused to quit System Settings: it was \
+                           already open before this task's launch_app, so it is the user's own \
+                           window. Leave it open; kill_app quits only a System Settings that \
+                           launch_app started.";
+            Err(ToolResult::error(message).with_structured(json!({
+                "code": "target_not_allowed",
+                "reason": "user_owned_settings",
+                "tool": tool,
+            })))
         }
         Some(reason) => Err(refusal(tool, identity, reason)),
         None => Ok(()),
@@ -456,6 +501,8 @@ fn is_windows_or_linux_security_surface(bundle: &str) -> bool {
             | "mmc"
             | "rundll32"
             | "gnome-shell"
+            // GNOME's X11 window frames: their buttons close and move other apps' windows.
+            | "mutter-x11-frames"
             | "lxpolkit"
             | "gcr-prompter"
             | "gcr-viewer"
@@ -815,7 +862,11 @@ fn console_host_refusal(
     identity: &TargetIdentity,
     evidence: &ConsoleEvidence,
 ) -> ToolResult {
-    let bundle = identity.bundle_id.as_deref().unwrap_or("unknown bundle");
+    let bundle = identity
+        .bundle_id
+        .as_deref()
+        .map(|bundle| format!(" ({bundle})"))
+        .unwrap_or_default();
     let mut found = format!("{} (pid {})", evidence.executable, evidence.pid);
     for (pid, executable) in &evidence.via {
         found.push_str(&format!(", started by {executable} (pid {pid})"));
@@ -825,7 +876,7 @@ fn console_host_refusal(
         .map(|pid| format!(" (pid {pid})"))
         .unwrap_or_default();
     let message = format!(
-        "target_not_allowed: {tool} refused to target '{name}' ({bundle}). '{name}' is not a \
+        "target_not_allowed: {tool} refused to target '{name}'{bundle}. '{name}' is not a \
          known terminal app, but a console or shell process runs under it: {found}, started \
          by '{name}'{target_pid}. Brigadier Computer Use treats an app that hosts a console as \
          a terminal app and does not act on it by default. If this app is a terminal, run the \
@@ -966,7 +1017,8 @@ const SETTINGS_REFUSAL: &str =
      com.apple.Software-Update-Settings.extension, com.apple.Displays-Settings.extension, \
      com.apple.Network-Settings.extension, com.apple.BluetoothSettings or \
      com.apple.settings.PrivacySecurity.extension, then get_window_state. To change a \
-     setting, ask the user to do this step.";
+     setting, ask the user to do this step. kill_app quits a System Settings that \
+     launch_app started.";
 #[cfg(target_os = "windows")]
 const SETTINGS_REFUSAL: &str =
     "Settings can be opened, read and closed; all other input is refused. Close a task-owned window with click using pid, window_id and action:\"close\" without an element or pixels; use kill_app if normal close fails. To read a page, open it \
@@ -980,6 +1032,11 @@ const SETTINGS_REFUSAL: &str =
      with launch_app, then get_window_state. To change a setting, ask the user to do this \
      step.";
 
+const WINDOW_FRAMES_REFUSAL: &str =
+    "This is the window manager's frame (title bar and its buttons), drawn around other apps' \
+     windows; its buttons close and move them. Brigadier Computer Use doesn't use it: act on the \
+     app's own window instead.";
+
 #[cfg(target_os = "macos")]
 const SECURITY_REFUSAL: &str =
     "Brigadier Computer Use does not act on macOS authentication or security surfaces \
@@ -992,7 +1049,11 @@ const SECURITY_REFUSAL: &str =
 
 /// The typed refusal returned to the model.
 pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> ToolResult {
-    let bundle = identity.bundle_id.as_deref().unwrap_or("unknown bundle");
+    let bundle = identity
+        .bundle_id
+        .as_deref()
+        .map(|bundle| format!(" ({bundle})"))
+        .unwrap_or_default();
     let why = match reason {
         RefusalReason::UserBrigadier => {
             "Brigadier Computer Use never acts on the user's Brigadier app or its windows. Use the \
@@ -1007,6 +1068,14 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
             "Brigadier Computer Use does not act on itself or on the app that hosts it."
         }
         RefusalReason::SecuritySurface if is_settings(identity) => SETTINGS_REFUSAL,
+        RefusalReason::SecuritySurface
+            if identity
+                .bundle_id
+                .as_deref()
+                .is_some_and(|bundle| bundle.eq_ignore_ascii_case("mutter-x11-frames")) =>
+        {
+            WINDOW_FRAMES_REFUSAL
+        }
         RefusalReason::SecuritySurface => SECURITY_REFUSAL,
         RefusalReason::StoreApp => {
             "Windows shows this app inside a shared frame window, so Brigadier can't tell \
@@ -1014,7 +1083,7 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
         }
     };
     let message = format!(
-        "target_not_allowed: {tool} refused to target '{}' ({bundle}). {why}",
+        "target_not_allowed: {tool} refused to target '{}'{bundle}. {why}",
         identity.name
     );
     ToolResult::error(message.clone()).with_structured(json!({
@@ -1695,6 +1764,33 @@ mod tests {
     }
 
     #[test]
+    fn only_a_task_launched_macos_settings_can_be_quit() {
+        let settings = |pid| TargetIdentity {
+            name: "System Settings".into(),
+            bundle_id: Some(MACOS_SETTINGS.into()),
+            pid: Some(pid),
+        };
+        let refused = check("kill_app", &settings(9101), &[]).unwrap_err();
+        let structured = refused.structured_content.unwrap();
+        assert_eq!(structured["reason"], "user_owned_settings");
+        note_task_launched_settings("com.apple.TextEdit", 9101);
+        assert!(check("kill_app", &settings(9101), &[]).is_err());
+        note_task_launched_settings(MACOS_SETTINGS, 9102);
+        assert!(check("kill_app", &settings(9102), &[]).is_ok());
+        assert!(check("kill_app", &settings(9101), &[]).is_err());
+        for tool in [
+            "click",
+            "press_key",
+            "hotkey",
+            "type_text",
+            "set_value",
+            "invoke_menu",
+        ] {
+            assert!(check(tool, &settings(9102), &[]).is_err(), "{tool}");
+        }
+    }
+
+    #[test]
     fn system_settings_can_be_opened_and_read_but_not_changed() {
         with_fake_apps(|resolver| {
             for (tool, args) in [
@@ -1837,9 +1933,20 @@ mod tests {
             "polkit-kde-authentication-agent-1",
             "gcr-prompter",
             "pinentry-gnome3",
+            "mutter-x11-frames",
         ] {
             assert_eq!(reason(prompt), Some("security_surface"), "{prompt}");
         }
+        let frames = refusal(
+            "click",
+            &exe("mutter-x11-frames"),
+            RefusalReason::SecuritySurface,
+        );
+        assert!(
+            format!("{:?}", frames.content).contains("window manager's frame"),
+            "{:?}",
+            frames.content
+        );
         for app in ["notepad", "gedit", "firefox", "chrome"] {
             assert_eq!(reason(app), None, "{app}");
         }
