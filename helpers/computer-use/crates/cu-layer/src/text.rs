@@ -20,6 +20,8 @@ const FRONT_WORDS: &[&str] = &[
     "bring it to the front",
     "bring the app to the front",
     "bring the window to the front",
+    // What foreground delivery would do, left behind once the retry sentence is dropped.
+    "activate the target window",
 ];
 
 /// Words that mark a sentence as describing desktop input (the user's

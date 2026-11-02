@@ -62,14 +62,20 @@ pub fn tools_list(mut list: Value, brigadier: bool) -> Value {
                 object.remove("capabilities");
                 object.remove("risk");
             }
-            if cfg!(target_os = "windows") {
+            if !cfg!(target_os = "macos") {
                 if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
                     for field in ["webkit_inspector_port", "enable_javascript_apple_events"] {
                         properties.remove(field);
                     }
                 }
             }
-            if cfg!(target_os = "windows") && name == "page" {
+            // Linux ignores launch_app's bundle_id; its description names other platforms.
+            if cfg!(target_os = "linux") && name == "launch_app" {
+                if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
+                    properties.remove("bundle_id");
+                }
+            }
+            if !cfg!(target_os = "macos") && name == "page" {
                 if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
                     properties.remove("bundle_id");
                     properties.remove("user_has_confirmed_enabling");
@@ -89,7 +95,7 @@ pub fn tools_list(mut list: Value, brigadier: bool) -> Value {
             if name == "get_window_state" {
                 for (field, description) in [
                     ("include_screenshot", "Default false; thin trees automatically include an image. Explicit false disables fallback; true requests an image."),
-                    ("timeout_ms", "AX walk budget in ms; returns a partial tree on timeout. Increase or narrow query/limits."),
+                    ("timeout_ms", if cfg!(target_os = "macos") { "AX walk budget in ms; returns a partial tree on timeout. Increase or narrow query/limits." } else { "Accessibility walk budget in ms; returns a partial tree on timeout. Increase or narrow query/limits." }),
                 ] {
                     if let Some(property) = tool["inputSchema"]["properties"].get_mut(field) {
                         property["description"] = description.into();
@@ -106,22 +112,23 @@ fn description(name: &str) -> &'static str {
         "get_window_state" => "Read a window's accessibility tree; screenshots only on request or a thin tree. Row [N] with snapshot_id S is element_token S:N. A new read stales the previous tokens (macOS keeps those of unchanged elements). Re-read with since:\"latest\" for a diff and fresh ids; obey reindexed mappings. Use a screenshot before zoom or pixel actions. Partial trees say truncated; narrow query or increase limits.",
         "list_windows" => "List windows, titles and ids. Prefer an app or pid filter. Use the returned pid/window_id for reads and actions.",
         "list_apps" => "List running and installed apps, one short entry each. To open a known app, call launch_app directly.",
-        "page" if cfg!(target_os = "windows") => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. JavaScript needs an available CDP server; cdp_port selects an existing one. Select a unique tab with target_url_contains. Focus the DOM field before inserting text. Accessibility fallback has fewer DOM capabilities.",
+        "page" if !cfg!(target_os = "macos") => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. JavaScript needs an available CDP server; cdp_port selects an existing one. Select a unique tab with target_url_contains. Focus the DOM field before inserting text. Accessibility fallback has fewer DOM capabilities.",
         "page" => "Browser text, DOM and JavaScript. Prefer get_text/query_dom to large trees. JavaScript needs an available CDP server; cdp_port selects an existing one. Select a unique tab with target_url_contains. Safari uses Apple Events (enabling requires user confirmation and restarts the browser). Focus the DOM field before inserting text. AX fallback has fewer DOM capabilities.",
         "zoom" => "Crop the last screenshot; take get_window_state with include_screenshot:true first. Region uses that image's pixels. Omit pid to resolve the unique session/window snapshot. Click in the zoom image with from_zoom:true.",
         "click" if cfg!(target_os = "windows") => "Click a fresh element_token or screenshot x/y in the target window. For Settings, only closing is allowed: action:\"close\" with pid/window_id and no element, pixels or modifiers. Read again to verify the outcome.",
+        "click" if cfg!(target_os = "linux") => "Click a fresh element_token (preferred) or x/y in the target window's last screenshot. Default accessibility action press. Unsupported actions are refused; listed actions are hints, not proof of delivery. Read again to verify the outcome.",
         "click" => "Click a fresh element_token (preferred) or x/y in the target window's last screenshot. Default AX action press. Unsupported actions are refused; listed AX actions are hints, not proof of delivery. Read again to verify the outcome.",
         "double_click" => "Double-click a fresh element_token or screenshot x/y in a specific window. Verify with a read.",
         "right_click" => "Open a context menu with a fresh element_token or window-local screenshot x/y. Verify with a read.",
         "type_text" => "Insert text, preferably into a fresh element_token. Without a token, target the window's focused field; with x/y, click that screenshot point first. Verify the value afterwards.",
-        "set_value" if cfg!(target_os = "windows") => "Set a writable accessibility element's value using a fresh element_token; reads back the result.",
+        "set_value" if !cfg!(target_os = "macos") => "Set a writable accessibility element's value using a fresh element_token; reads back the result.",
         "set_value" => "Set a writable accessibility element's value using a fresh element_token; reads back the result. File names in Finder require the Rename menu workflow instead.",
         "press_key" => "Send a key with optional modifiers to an element or window. With x/y, focus that screenshot point first. Verify the outcome.",
         "hotkey" => "Send a key combination to an element or window; menu equivalents may be used. With x/y, focus that screenshot point first. Verify the outcome.",
         "scroll" => "Scroll a window or element. With x/y, wheel-scroll at that window-local screenshot point. Defaults: amount 3, by line. Read again for fresh ids and outcome.",
         "invoke_menu" => "Invoke a menu by its label path on a specific window, e.g. [\"File\",\"Save\"]. Read to verify the outcome.",
         "run_steps" => "Run ordered actions; stop on the first failure. Steps use {tool,args} or {<tool>:args}. Named targeting: role/name/nth/app/window instead of ids. A step may have wait_for (before), expect (after), timeout_ms, or only checks. Named matches must be unique; nth is zero-based. Prefer short batches. observe:{} performs one final text diff with fresh ids; omit to skip. Delivery alone does not prove the requested outcome.",
-        "launch_app" if cfg!(target_os = "linux") => "Open a Linux GUI app in the background. Prefer launch_path from list_apps; bundle_id is ignored on Linux. name may be an executable or installed app name. Returns pid and windows; read the target window next. URLs open through the desktop's URL handler.",
+        "launch_app" if cfg!(target_os = "linux") => "Open a Linux GUI app in the background. Prefer launch_path from list_apps. name may be an executable or installed app name. Returns pid and windows; read the target window next. URLs open through the desktop's URL handler.",
         "launch_app" if cfg!(target_os = "windows") => "Request a Windows GUI app launch. Windows may activate it despite background hints; bounded monitoring cannot guarantee a flash-free launch. Use launch_path from list_apps, path for an executable, or aumid/bundle_id for a packaged app. name searches installed apps. Opening and foreground preservation are separate results; inspect the returned evidence before acting.",
         "launch_app" => "Open or reuse an app in the background, optionally opening files/URLs. Prefer bundle_id; name may be a full app path. Returns pid and windows; read the target window next. creates_new_application_instance requests isolation where supported.",
         "kill_app" => "Terminate the specified app process. Use only for apps this task owns.",
@@ -227,6 +234,7 @@ fn property_description(name: &str) -> Option<&'static str> {
         "cdp_port" => "Explicit CDP port for JavaScript/text actions; otherwise discover from pid.",
         "target_url_contains" => "Require one tab matching this URL substring; window_id alone does not select a CDP tab.",
         "creates_new_application_instance" => "Request a separate app instance/window; single-instance apps may reuse one.",
+        "record_video" if !cfg!(target_os = "macos") => "Also record recording.mp4. Default false; needs ffmpeg.",
         "record_video" => "Also record recording.mp4. Default false; Windows/Linux need ffmpeg; macOS needs screen-capture permission.",
         "screenshot_out_file" => "Write the PNG here (~ expanded) instead of embedding it; forces a capture.",
         "css_selector" => "CSS selector for query_dom.",
