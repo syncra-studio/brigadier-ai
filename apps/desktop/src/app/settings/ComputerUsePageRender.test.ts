@@ -13,7 +13,7 @@ type Look = {
 };
 type States = "unknown" | "cached" | "missingBoth" | "missingAccessibility" | "confirmCapture" | "ready" | "readyCached" | "restarting" | "failed" | "off";
 type Linux = { sections: string[]; rows: string[]; notes: string; setup: string; setupButtons: string[] };
-type Seen = Record<States, Look> & { first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[]; linux: Linux };
+type Seen = Record<States, Look> & { first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[]; linux: Linux; windowsNoNotes: string; linuxNoNotes: string; windowsCachedNoNotes: string; linuxCachedNoNotes: string; windowsOffNoNotes: string; linuxOffNoNotes: string };
 
 // The real page in Chromium over a faked daemon.
 test("computer use settings: enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
@@ -83,4 +83,9 @@ test("computer use settings: enable, menu bar, permissions and setup, in every s
   assert.equal(seen.linux.notes, "Wayland session: apps running under XWayland work in the background.");
   assert.equal(seen.linux.setup, "Ready. Agents can use apps on this computer.");
   assert.deepEqual(seen.linux.setupButtons, []);
+  for (const platform of ["windows", "linux"] as const) {
+    assert.equal(seen[`${platform}NoNotes`], "Agents can use apps on this computer.");
+    assert.equal(seen[`${platform}CachedNoNotes`], "Desktop details are available while the helper is running.");
+    assert.equal(seen[`${platform}OffNoNotes`], "Desktop details are available while the helper is running.");
+  }
 });
