@@ -22,6 +22,7 @@ struct Seen {
     selected: usize,
     closed: Vec<u32>,
     sheet: Option<bool>,
+    order: Vec<&'static str>,
 }
 
 type Shared = Arc<Mutex<Seen>>;
@@ -59,15 +60,24 @@ impl MenuBar for FakeMenuBar {
         self.0.lock().unwrap().panel == Some((pid, window_id))
     }
     fn make_main(&self, _pid: i32, window_id: u32) {
-        self.0.lock().unwrap().made_main.push(window_id);
+        let mut seen = self.0.lock().unwrap();
+        seen.made_main.push(window_id);
+        seen.order.push("main");
     }
     fn press(&self, _pid: i32, key: &str, modifiers: i64) -> Option<String> {
-        self.0.lock().unwrap().menu_pressed += 1;
+        let mut seen = self.0.lock().unwrap();
+        seen.menu_pressed += 1;
+        seen.order.push("press");
+        drop(seen);
         match (key, modifiers) {
             ("z", 0) => Some("Undo".to_owned()),
             ("g", 1) => Some("Find Previous".to_owned()),
             _ => None,
         }
+    }
+    fn guard_front(&self, _pid: i32) -> Option<Box<dyn Send>> {
+        self.0.lock().unwrap().order.push("guard");
+        Some(Box::new(Release(self.0.clone())))
     }
     fn select_all_text(&self, _pid: i32, _window_id: Option<u32>) -> Option<String> {
         self.0.lock().unwrap().selected += 1;
@@ -85,6 +95,31 @@ impl MenuBar for FakeMenuBar {
             _ => None,
         }
     }
+}
+
+struct Release(Shared);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().order.push("release");
+    }
+}
+
+/// ⌘O's Open panel must not stay above the user's window: the front guard
+/// spans making the window main and the press.
+#[tokio::test]
+async fn the_menu_press_runs_under_the_front_guard() {
+    let (registry, seen) = build();
+    registry
+        .invoke(
+            "hotkey",
+            json!({"pid": 1, "window_id": 5, "keys": ["cmd", "z"]}),
+        )
+        .await;
+    assert_eq!(
+        seen.lock().unwrap().order,
+        ["guard", "main", "press", "release"]
+    );
 }
 
 #[tokio::test]

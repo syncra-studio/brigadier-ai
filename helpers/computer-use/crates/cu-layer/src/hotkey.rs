@@ -66,6 +66,11 @@ pub trait MenuBar: Send + Sync {
     /// Presses the enabled menu item whose shortcut is `key` with
     /// `modifiers` (a [`menu_modifiers`] value), and returns its title.
     fn press(&self, pid: i32, key: &str, modifiers: i64) -> Option<String>;
+    /// Held while the menu item is pressed: hands the user's front window
+    /// back if the press raises one of the app's windows (an Open panel).
+    fn guard_front(&self, _pid: i32) -> Option<Box<dyn Send>> {
+        None
+    }
     /// Selects all the text of the focused text field (in `window_id`, when
     /// given), or else of the first one in that window. Returns what was
     /// selected, for the answer.
@@ -251,10 +256,14 @@ impl Tool for MenuShortcut {
             }
             return result;
         }
-        if let Some(window_id) = window_id {
-            self.menu_bar.make_main(pid, window_id);
-        }
-        if let Some(title) = self.menu_bar.press(pid, &key, modifiers) {
+        let pressed = {
+            let _front = self.menu_bar.guard_front(pid);
+            if let Some(window_id) = window_id {
+                self.menu_bar.make_main(pid, window_id);
+            }
+            self.menu_bar.press(pid, &key, modifiers)
+        };
+        if let Some(title) = pressed {
             return ToolResult::text(format!(
                 "Pressed {title} ({display}) in the menu bar of pid {pid}."
             ))
@@ -298,6 +307,10 @@ impl MenuBar for System {
 
     fn press(&self, pid: i32, key: &str, modifiers: i64) -> Option<String> {
         unsafe { system::press(pid, key, modifiers) }
+    }
+
+    fn guard_front(&self, pid: i32) -> Option<Box<dyn Send>> {
+        platform_macos::key_focus_guard::protect(pid).map(|lease| Box::new(lease) as Box<dyn Send>)
     }
 
     fn select_all_text(&self, pid: i32, window_id: Option<u32>) -> Option<String> {
