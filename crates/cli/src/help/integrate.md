@@ -7,4 +7,3 @@ Things that end later: started something that ends after your turn (CI, a PR's c
 
 Gotchas:
 - Tests needing gitignored files (fixtures, credentials) skip silently in a fresh worktree; the worker links them and says which.
-- A hand-off gives each worker's id, branch, state, and what you wait on.

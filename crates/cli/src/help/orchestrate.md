@@ -9,6 +9,4 @@ Who does what:
 
 Report to the user. After a block of work, at most 3 to 5 short lines with the results themselves, research findings too; never a record or instructions file link, and a report, plan or page only when the user asks for that document or to save it.
 
-When the user writes after a gap, raise the oldest open question first (`brigadier ledger show --open`) and say how many more wait.
-
 More: `brigadier help workers`, `briefs`, `routing`, `asking`, `integrate`, `reviews`.

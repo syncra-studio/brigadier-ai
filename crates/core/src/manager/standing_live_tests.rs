@@ -21,9 +21,9 @@ use tokio::sync::mpsc::Receiver;
 use super::prompts::{session_instructions, standing_text, worker_instructions};
 use crate::model::Settings;
 
-/// A fact only the rules hold: the command to run at the start and after any compaction.
+/// A fact only the rules hold: the command to run after any compaction.
 const ASK: &str = "Without running any tool or command: which `brigadier` command do your \
-                   Brigadier instructions say to run when you start and after any compaction? \
+                   Brigadier instructions say to run after any compaction? \
                    The command only.";
 
 fn knows_the_rules(said: &str) -> bool {

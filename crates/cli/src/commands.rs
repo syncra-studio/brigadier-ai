@@ -162,7 +162,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "state",
         summary: "Everything you need now, in one call: workers, brief, rules, open items, \
-                  routing (run it when you start and after any compaction).",
+                  routing (run it after any compaction).",
         details: "The same as `brigadier context` with no part: your workers with their state \
                   and progress, and each small part whole; the big parts (whole ledger, \
                   transcript, skills, MCP servers, project files) listed with the command that \
@@ -176,7 +176,7 @@ pub const COMMANDS: &[Command] = &[
         summary: "Everything about your job, on pull: brief, decisions, open items, ledger, \
                   transcript, skills, MCP servers, project, routing.",
         details: "Nothing of it is put into your conversation (D13): run `brigadier context` \
-                  when you start and after any compaction, then open what you need. Alone it \
+                  after any compaction, then open what you need. Alone it \
                   lists each part with its size and the command that opens it. `brief`: your \
                   task as `brigadier start` gave it, or a session's first request. \
                   `decisions`: the rules and decisions still standing, quoted with their ids. \

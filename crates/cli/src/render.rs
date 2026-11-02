@@ -6,7 +6,7 @@ use crate::protocol::{
     Answer, AskOutput, Changes, CloseOutput, CommandFact, CommandStatus, GitFacts, Item, ItemKind,
     LibraryOutput, ManageOutput, MergeWord, ReadOutput, SendOutput, SessionsOutput, ShowOutput,
     StartOutput, StartRow, ToolOutput, TurnCommands, WaitOutput, WhyBy, WhyOutput, WorkerRow,
-    WorkerState, WorkersOutput,
+    WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
