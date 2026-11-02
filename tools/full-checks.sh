@@ -82,6 +82,13 @@ run pnpm build
 run pnpm --filter @brigadier/desktop stage-sidecar --debug
 run cargo clippy --locked --workspace --all-targets -- -D warnings
 run cargo test --locked --workspace --lib --bins --tests
+# The file-watch tests are ignored above: under the suite's write storm macOS drops file events
+# (#686). They run here on their own, one at a time.
+run cargo test --locked -p brigadier-core --lib -- --ignored --test-threads=1 --exact \
+  manager::flow::workspace_tests::the_watch_hears_files_and_staging_but_not_ignored_folders \
+  manager::flow::workspace_tests::the_watch_says_a_burst_a_few_times \
+  manager::workspace::tests::new_watches_after_a_switch_say_one_more_change \
+  pages::tests::the_watcher_tells_outside_edits_new_files_and_deletions
 if [ "$(uname)" = Darwin ]; then
   # The computer-use helper is its own workspace (macOS only); its output sits beside the main
   # build's, where stage-sidecar puts it.
