@@ -8,8 +8,9 @@ import type { ThreadTurn, WorkerRow } from "@/ipc/generated";
  * block's turns started (Brigadier's word of its workers joins the block as a turn more).
  *
  * A worker still works while its CLI is on the run it was started for, or waits on the user. In
- * the newest turn, a worker the turn sent back to work counts again; an older turn's worker
- * that a later turn sent more work never opens the older turn again.
+ * the newest turn, a worker the turn sent back to work counts again, wherever it started (a
+ * resumed or switched one, D151); an older turn's worker that a later turn sent more work never
+ * opens the older turn again. A paused one holds nothing (D7, D118).
  */
 /**
  * When the turn after a block's, its turns started at `starts`, began; `null` for the newest
@@ -49,9 +50,12 @@ export function workingWorkerRows(
   const next = nextTurnStart(turns, starts);
   const newest = next === null;
   return workers.filter((worker) => {
-    // None started after its turns ended is its: the next turn may not be in `turns` yet.
-    if (worker.startedAtMs < startedAtMs || (next !== null && worker.startedAtMs >= next) || (endedAtMs !== null && worker.startedAtMs > endedAtMs) || worker.gone) return false;
-    if (worker.lastEnd === null) return true;
+    // None started after its turns ended is its: the next turn may not be in `turns` yet. A paused
+    // one runs nothing (D7, D118), as the daemon's queue reads it.
+    if ((next !== null && worker.startedAtMs >= next) || (endedAtMs !== null && worker.startedAtMs > endedAtMs) || worker.gone || worker.paused) return false;
+    // One an earlier block started (resumed or switched since) holds the newest block while it
+    // works, as any working worker holds the daemon's queue (D24, D151).
+    if (worker.lastEnd === null && worker.startedAtMs >= startedAtMs) return true;
     const unheard = owed && endedAtMs !== null && (worker.lastEventAtMs ?? 0) > endedAtMs;
     return newest && (worker.working || worker.waiting.length > 0 || unheard);
   });

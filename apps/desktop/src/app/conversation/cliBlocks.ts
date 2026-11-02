@@ -723,7 +723,10 @@ export function cliBlocks(
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
     const named = [...text.matchAll(/Worker ".*?" \(([^)\s]+)\): /g)].map((match) => match[1]!);
-    return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && row.startedAtMs >= from));
+    // Or one an earlier block started that its requests resumed or messaged back to work (D151).
+    const sentBack = (task: string) =>
+      (board?.orchestratorSteps ?? []).some((step) => step.requestId !== null && each.requestIds.includes(step.requestId) && (step.kind.type === "resumed" || step.kind.type === "messaged") && step.kind.taskId === task);
+    return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && (row.startedAtMs >= from || sentBack(row.id))));
   };
   const internal = new Set<Block>();
   const waited = waitOutputs(view);
