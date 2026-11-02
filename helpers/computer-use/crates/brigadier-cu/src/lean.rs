@@ -207,6 +207,8 @@ fn property_description(name: &str) -> Option<&'static str> {
         "launch_path" => "Exact launch_path returned by list_apps; takes precedence over aliases (Windows: command line or AUMID; Linux: desktop Exec command).",
         "display_only" => "Screenshot preview only: does not refresh snapshots or captures and cannot ground input.",
         "coordinate_frame" => "Window-local screenshot pixels.",
+        // Windows has no bundle ids: its list_windows filter matches the app name only.
+        "app" if cfg!(target_os = "windows") => "Filter by case-insensitive app name; prefer app or pid to an unfiltered listing.",
         "app" => "Filter by case-insensitive app name or exact bundle id; prefer app or pid to an unfiltered listing.",
         "element_token" => "S:N from snapshot_id S and row [N]; new reads stale old tokens.",
         "target" => "Exact window: {kind:\"window\",pid,window_id}.",
@@ -227,6 +229,7 @@ fn property_description(name: &str) -> Option<&'static str> {
         "cdp_port" => "Explicit CDP port for JavaScript/text actions; otherwise discover from pid.",
         "target_url_contains" => "Require one tab matching this URL substring; window_id alone does not select a CDP tab.",
         "creates_new_application_instance" => "Request a separate app instance/window; single-instance apps may reuse one.",
+        "record_video" if cfg!(target_os = "windows") => "Also record recording.mp4. Default false; needs ffmpeg.",
         "record_video" => "Also record recording.mp4. Default false; Windows/Linux need ffmpeg; macOS needs screen-capture permission.",
         "screenshot_out_file" => "Write the PNG here (~ expanded) instead of embedding it; forces a capture.",
         "css_selector" => "CSS selector for query_dom.",
@@ -722,6 +725,16 @@ mod tests {
         brigadier: bool,
     ) -> Option<Value> {
         View::default().fallback_arguments(name, original, &mut read.clone(), brigadier)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_argument_text_names_no_macos_concepts() {
+        for name in ["app", "record_video"] {
+            let text = property_description(name).unwrap();
+            assert!(!text.contains("macOS"), "{name}: {text}");
+            assert!(!text.contains("bundle id"), "{name}: {text}");
+        }
     }
 
     fn read(markdown: &str) -> Value {
