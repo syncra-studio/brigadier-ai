@@ -197,12 +197,15 @@ fn shows_a_name(window: &crate::window_list::Window, names: &[String]) -> bool {
     })
 }
 
-/// Whether every name is shown by one of `windows`.
+/// Whether every name is shown by one of `windows` that has its real size
+/// (Finder titles a new window while it is still 0x0).
 fn every_name_shown(windows: &[crate::window_list::Window], names: &[String]) -> bool {
     names.iter().all(|name| {
-        windows
-            .iter()
-            .any(|w| shows_a_name(w, std::slice::from_ref(name)))
+        windows.iter().any(|w| {
+            w.width >= MIN_PAGE_SIDE
+                && w.height >= MIN_PAGE_SIDE
+                && shows_a_name(w, std::slice::from_ref(name))
+        })
     })
 }
 
@@ -393,6 +396,13 @@ mod tests {
         let names = vec![shown_name("/tmp/doc.txt").unwrap()];
         assert!(every_name_shown(&[window(9, "doc")], &names));
         assert!(!every_name_shown(&[window(9, "doc.txt.bak")], &names));
+        // A new window titled before it is sized doesn't end the wait yet.
+        let sizing = crate::window_list::Window {
+            width: 0.0,
+            height: 0.0,
+            ..window(10, "doc")
+        };
+        assert!(!every_name_shown(&[sizing], &names));
     }
 
     use super::*;
