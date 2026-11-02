@@ -1,0 +1,54 @@
+Why: health_report's bundle check passes for Brigadier's helper app (ai.brigadier.computer-use and the development id), so a correctly set up helper no longer always reads as degraded.
+
+diff --git a/crates/platform-macos/src/tools/health_report.rs b/crates/platform-macos/src/tools/health_report.rs
+index 369e7e80f..11f943d55 100644
+--- a/crates/platform-macos/src/tools/health_report.rs
++++ b/crates/platform-macos/src/tools/health_report.rs
+@@ -38,6 +38,11 @@ pub const MACOS_CHECK_NAMES: &[&str] = &[
+ /// reports this id.
+ pub const CANONICAL_BUNDLE_ID: &str = "com.trycua.driver";
+ 
++/// Brigadier's helper app (release and development builds). Its TCC grants
++/// matter the same way the canonical bundle's do.
++const BRIGADIER_BUNDLE_IDS: [&str; 2] =
++    ["ai.brigadier.computer-use", "ai.brigadier.dev.computer-use"];
++
+ pub struct MacosHealthProvider;
+ 
+ #[async_trait]
+@@ -175,12 +180,11 @@ fn standalone_bundle_identity(bid: Option<String>, exe: String) -> CheckEntry {
+         identity_source: Some("current_process".to_owned()),
+         ..Default::default()
+     };
+-    if bid.as_deref() == Some(CANONICAL_BUNDLE_ID) {
+-        return CheckEntry::pass(
+-            NAME_BUNDLE_IDENTITY,
+-            format!("Bundle is {CANONICAL_BUNDLE_ID}."),
+-        )
+-        .with_data(data);
++    if let Some(id) = bid
++        .as_deref()
++        .filter(|id| *id == CANONICAL_BUNDLE_ID || BRIGADIER_BUNDLE_IDS.contains(id))
++    {
++        return CheckEntry::pass(NAME_BUNDLE_IDENTITY, format!("Bundle is {id}.")).with_data(data);
+     }
+     let message = match bid.as_deref() {
+         None | Some("") => "Process has no CFBundleIdentifier.".to_owned(),
+@@ -588,9 +592,14 @@ mod tests {
+             assert_eq!(data.executable_path.as_deref(), Some("/tmp/host"));
+             assert_eq!(data.identity_source.as_deref(), Some("current_process"));
+         }
+-        let entry = standalone_bundle_identity(Some(CANONICAL_BUNDLE_ID.to_owned()), String::new());
+-        assert_eq!(entry.status, CheckStatus::Pass);
+-        assert!(entry.hint.is_none());
++        for id in [CANONICAL_BUNDLE_ID]
++            .into_iter()
++            .chain(BRIGADIER_BUNDLE_IDS)
++        {
++            let entry = standalone_bundle_identity(Some(id.to_owned()), String::new());
++            assert_eq!(entry.status, CheckStatus::Pass, "{id}");
++            assert!(entry.hint.is_none());
++        }
+         assert!(wrong_hints.is_empty(), "{}", wrong_hints.join("\n"));
+     }
+ 
