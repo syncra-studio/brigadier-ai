@@ -135,7 +135,7 @@ pub enum CliRequest {
         /// `transcript`: the last N items.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last: Option<u32>,
-        /// `transcript`: one exact item, as a search hit names it.
+        /// `transcript`: one exact item, as a search hit names it, or positions (`7`, `0-8`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<String>,
         /// `transcript`: a worker's session's thread rather than its own records.

@@ -532,3 +532,24 @@ fn a_codex_stop_hooks_send_back_is_not_user_words() {
         "{texts:?}"
     );
 }
+
+/// A reborn session pulls its predecessors' turns by the positions its transcript prints
+/// (`[#N · …]`), not only by ids a search names (demo9 O57 item 11).
+#[test]
+fn an_earlier_generations_items_open_by_their_position() {
+    let fixture = Fixture::new();
+    let first = read_items(&fixture.session, &args("0")).unwrap();
+    assert!(first.starts_with("[#0 · user"), "{first}");
+    assert!(first.contains("Keep the café setting verbatim."), "{first}");
+    assert!(
+        read_items(&fixture.session, &args("#1"))
+            .unwrap()
+            .contains("Checking now.")
+    );
+    let span = read_items(&fixture.session, &args("0-1")).unwrap();
+    assert!(
+        span.contains("café") && span.contains("Checking now."),
+        "{span}"
+    );
+    assert!(read_items(&fixture.session, &args("900")).is_err());
+}

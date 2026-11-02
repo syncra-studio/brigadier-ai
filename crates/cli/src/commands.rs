@@ -213,7 +213,8 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "item",
                 "ID",
-                "transcript: one exact item, as a search hit names it.",
+                "transcript: one exact item, as a search hit names it, or positions as \
+                 `--last` prints them (`7`, `0-8`), earlier fresh contexts' too.",
             ),
             switch(
                 "session",
@@ -816,7 +817,11 @@ pub const COMMANDS: &[Command] = &[
                 "N",
                 "search: max hits (default 8); read: max UTF-8 bytes per item.",
             ),
-            flag("item", "ID", "read: exact item id printed by search."),
+            flag(
+                "item",
+                "ID",
+                "read: exact item id printed by search, or positions (`7`, `0-8`).",
+            ),
             choice(
                 "role",
                 "ROLE",
@@ -879,7 +884,11 @@ pub const COMMANDS: &[Command] = &[
                 "N",
                 "search: max hits (default 8); read: max UTF-8 bytes per item.",
             ),
-            flag("item", "ID", "read: exact item id printed by search."),
+            flag(
+                "item",
+                "ID",
+                "read: exact item id printed by search, or positions (`7`, `0-8`).",
+            ),
             choice(
                 "role",
                 "ROLE",

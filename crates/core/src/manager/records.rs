@@ -284,7 +284,16 @@ impl SessionManager {
                 return Ok("No transcript yet.\n".to_owned());
             }
             let from = (count - i64::from(last).min(READ_MAX)).max(0);
-            read_span(&session, from, count - 1)
+            let text = read_span(&session, from, count - 1)?;
+            Ok(if from > 0 {
+                format!(
+                    "[#0–#{} come before, earlier generations' too: `--item <#>` or \
+                     `--item <from>-<to>` opens them]\n{text}",
+                    from - 1
+                )
+            } else {
+                text
+            })
         })
         .await
     }
@@ -921,6 +930,15 @@ pub(crate) fn read_span(session: &RecordSession, from: i64, to: i64) -> Result<S
     Ok(text.trim_end().to_owned())
 }
 
+/// A position (`7`, `#7`) or span (`0-8`, `#0–#8`) as `--item` may name one.
+fn position_span(item: &str) -> Option<(i64, i64)> {
+    let at = |n: &str| n.trim().trim_start_matches('#').parse::<i64>().ok();
+    match item.split_once(['-', '–']) {
+        Some((from, to)) => Some((at(from)?, at(to)?)),
+        None => at(item).map(|n| (n, n)),
+    }
+}
+
 fn validate_role(role: Option<&str>) -> Result<()> {
     if role.is_some_and(|role| !matches!(role, "user" | "assistant" | "tool")) {
         return Err(Error::Invalid(
@@ -934,6 +952,13 @@ fn validate_role(role: Option<&str>) -> Result<()> {
 /// inside a codepoint advance to the next boundary so successive pages do not repeat bytes.
 fn read_items(session: &RecordSession, args: &RecordRead) -> Result<String> {
     validate_role(args.role.as_deref())?;
+    // `--item 7`, `#7` or `0-8`: positions as a span read prints them, every generation's.
+    if let Some((from, to)) = args.item.as_deref().and_then(position_span)
+        && args.from.is_none()
+        && args.to.is_none()
+    {
+        return read_span(session, from, to);
+    }
     if args.item.is_none()
         && args.role.is_none()
         && args.tool.is_none()
