@@ -547,8 +547,13 @@ impl SessionManager {
         let conversation = self.core.conversation(id).ok()?;
         let from = super::setup_choice(&conversation)
             .filter(|_| conversation.kind == crate::model::ConversationKind::Session)?;
+        // `opus`, `claude-opus-5-5` and the CLI's default may be one model.
+        let runs_as = |choice: &ModelChoice| {
+            let (model, _) = self.runs_as(choice.provider, choice.model.as_deref(), None);
+            (choice.provider, model)
+        };
         self.fallback_rows().into_iter().find(|choice| {
-            (choice.provider, &choice.model) != (from.provider, &from.model)
+            runs_as(choice) != runs_as(&from)
                 && (choice.provider == from.provider
                     || self.agent_unready(choice.provider).is_none())
                 && self.fallback_refusal(choice).is_none()
