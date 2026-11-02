@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { TurnBoundary } from "@/components/conversation/turn-boundary";
+import { TurnBoundary } from "@/components/conversation";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { request } from "@/ipc/client";
 import { loadConversation } from "@/state/actions";

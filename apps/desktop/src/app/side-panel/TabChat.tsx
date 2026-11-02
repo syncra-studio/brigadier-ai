@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react";
-import { TurnBoundary } from "@/components/conversation/turn-boundary";
+import { TurnBoundary } from "@/components/conversation";
 import { createPortal } from "react-dom";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
