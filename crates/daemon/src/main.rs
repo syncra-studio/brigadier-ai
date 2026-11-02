@@ -326,7 +326,9 @@ async fn run(
             platform.paths().data_dir.join("models"),
         )),
         awake.clone(),
-        Arc::new(Pages::open(platform.paths().data_dir.join(PAGES_DIR))),
+        Arc::new(Pages::open_in_background(
+            platform.paths().data_dir.join(PAGES_DIR),
+        )),
         Arc::new(site_icons::SiteIcons::new(
             platform.paths().data_dir.join("site-icons"),
         )),

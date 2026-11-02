@@ -403,9 +403,7 @@ impl SessionManager {
                 .await
                 .map_err(|err| Error::Invalid(format!("reading the integrations: {err}")))?;
             #[cfg(not(test))]
-            if let Err(err) = registry.watch() {
-                tracing::warn!(error = %err, "the integrations' configs aren't watched");
-            }
+            registry.watch_in_background();
             registry
         };
         let manager = Arc::new_cyclic(|me| Self {

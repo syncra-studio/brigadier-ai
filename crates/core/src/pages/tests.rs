@@ -575,3 +575,16 @@ impl Pages {
         self.inner.path(id).is_file()
     }
 }
+
+#[test]
+fn opening_in_the_background_returns_before_its_watcher_and_then_watches() {
+    let folder = Folder::new();
+    let pages = Pages::open_in_background(folder.0.join(PAGES_DIR));
+    // Usable at once, watched or not.
+    assert!(pages.list().unwrap().is_empty());
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while lock(&pages.watch).is_none() {
+        assert!(Instant::now() < deadline, "the pages watcher never started");
+        thread::sleep(std::time::Duration::from_millis(20));
+    }
+}

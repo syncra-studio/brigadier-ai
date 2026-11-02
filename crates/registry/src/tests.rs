@@ -1189,6 +1189,44 @@ fn watcher_refreshes_on_config_and_skill_edits_through_symlinks() {
     );
 }
 
+/// The daemon is ready before the watcher is: starting it never waits for the file-event
+/// service, and once it watches, the configs are read again and listeners told.
+#[cfg(unix)]
+#[test]
+fn watching_in_the_background_waits_for_nothing() {
+    let home = fixture("watch-later");
+    write(&home.join(".claude.json"), r#"{"mcpServers": {}}"#);
+    let registry = Registry::new(roots(&home, &[]));
+    let told = Arc::new(AtomicUsize::new(0));
+    let counter = told.clone();
+    registry.on_change(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    // A watcher that can't be put in place yet, as one fseventsd is slow to register.
+    let held = registry.watcher.lock().unwrap();
+    let (returned, started) = std::sync::mpsc::channel();
+    let starting = registry.clone();
+    std::thread::spawn(move || {
+        starting.watch_in_background();
+        let _ = returned.send(());
+    });
+    assert!(
+        started
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_ok(),
+        "starting the watcher waited for it"
+    );
+    // A server added before it watches is read once it does.
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers": {"early": {"command": "e"}}}"#,
+    );
+    drop(held);
+    assert!(eventually(|| registry.watcher.lock().unwrap().is_some()));
+    assert!(eventually(|| told.load(Ordering::SeqCst) > 0));
+    assert!(registry.catalog(None).server("claude:user:early").is_some());
+}
+
 /// A Claude Code plugin installed at `root` with `manifest`, and one skill in its `skills/`.
 fn claude_plugin(root: &Path, manifest: &str, skill_name: &str) {
     write(&root.join(".claude-plugin/plugin.json"), manifest);

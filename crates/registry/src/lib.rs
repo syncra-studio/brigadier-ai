@@ -911,6 +911,24 @@ impl Registry {
         Ok(())
     }
 
+    /// [`Self::watch`] on a thread of its own, so nothing waits for it: under load macOS's
+    /// file-event service takes seconds for each folder watched. Once it watches, the configs
+    /// are read again for what changed meanwhile.
+    pub fn watch_in_background(self: &Arc<Self>) {
+        let registry = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("registry-watch".into())
+            .spawn(move || match registry.watch() {
+                Ok(()) => registry.changed(),
+                Err(error) => {
+                    tracing::warn!(%error, "the integrations' configs aren't watched");
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "the integrations' configs aren't watched");
+        }
+    }
+
     /// What the watcher looks at.
     fn watched(&self) -> watch::Watched {
         let roots = &self.roots;
