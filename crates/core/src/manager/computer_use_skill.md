@@ -6,7 +6,7 @@ description: Read and operate apps through computer MCP tools in the background.
 Brigadier manages the session and agent cursor; omit `session`.
 
 1. Open only apps the task needs with `launch_app`. Choose your pid/window_id from its reply and call `get_window_state`.
-2. Prefer fresh element_token targets: snapshot_id S and row [N] give `S:N`. A new tree read replaces that window's snapshot: use the newest ids, obey reindexed mappings, never borrow another window's tokens. On stale-token errors, read that window again. Truncated trees need query or higher max_elements (default 250).
+2. Prefer fresh element_token targets: snapshot_id S and row [N] give `S:N`. A new tree read replaces that window's snapshot: use the newest ids, obey reindexed mappings, never borrow another window's tokens. On macOS an older token of that window still works while its element is unchanged; a changed one is refused as stale. On stale-token errors, read that window again. Truncated trees need query or higher max_elements (default 250).
 3. Prefer short `run_steps` batches with `observe:{}`: actions run in order, stop on failure and return one final since:"latest" diff with fresh ids. Malformed batches are rejected before execution. Navigation or menus can stale later tokens; use fresh reads or role/name/nth targeting instead. Direct actions need a separate check-read unless their reply shows the outcome.
 4. Never call it done without evidence that the requested outcome happened. Delivery, a changed tree/closed menu or effect:"confirmed" proves only what was checked. No change or "unverifiable" alone is not success. Check effects outside the window separately: saved files, sent messages, submissions and purchases need evidence from their destination/state.
 

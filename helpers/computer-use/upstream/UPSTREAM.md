@@ -216,6 +216,7 @@ Patches applied, in order:
 - `patches/0200-macos-health-accepts-brigadier-bundle.diff`: health_report's bundle check passes for Brigadier's helper app (ai.brigadier.computer-use and the development id), so a correctly set up helper no longer always reads as degraded.
 - `patches/0201-macos-finder-reads-leave-out-desktop.diff`: A window-scoped read of a Finder window leaves out Finder's desktop scroll area, so the user's desktop icons are no longer listed as part of the window.
 - `patches/0202-macos-text-area-click-places-caret.diff`: A token click on a text area or text field that has no press action focuses it and puts its caret at the end of its text, confirmed by reading the caret back, instead of failing with AX error -25206.
+- `patches/0203-macos-unchanged-tokens-survive-reads.diff`: On macOS a token from one of a window's last 4 reads keeps working while a later read proves its element unchanged (same AX element, role, title, value, place and parents); other platforms keep staling every older token.
 
 <!-- sync:end -->
 
