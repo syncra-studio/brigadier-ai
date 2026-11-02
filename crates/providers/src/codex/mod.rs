@@ -2709,6 +2709,9 @@ impl Replayer for CodexReplayer {
             if let Some(task) = parse::ended_terminal(&event, &mut self.terminals, 0) {
                 said.push(ProviderEvent::BackgroundTask { task });
             }
+            for task in parse::outliving_turn(&event, &self.commands, &mut self.terminals) {
+                said.push(ProviderEvent::BackgroundTask { task });
+            }
             said.push(event);
         }
         said
@@ -3410,7 +3413,12 @@ async fn read_loop(
                     // A background terminal ends with its command, in the turn that ran it.
                     let ended =
                         parse::ended_terminal(&event, &mut lock(&shared.terminals), now_ms());
-                    if let Some(task) = ended {
+                    // And one still running as its turn completes goes on, said before that end.
+                    let outliving = {
+                        let mut terminals = lock(&shared.terminals);
+                        parse::outliving_turn(&event, &lock(&shared.commands), &mut terminals)
+                    };
+                    for task in ended.into_iter().chain(outliving) {
                         shared
                             .events
                             .send(ProviderEvent::BackgroundTask { task })

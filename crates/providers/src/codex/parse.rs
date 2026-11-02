@@ -1541,6 +1541,11 @@ impl CommandItems {
             ProviderEvent::TurnCompleted { status, .. } if *status != TurnStatus::Interrupted => {
                 self.running.clear();
             }
+            // The Stop ended those its turn waited on: none goes on (`outliving_turn`).
+            ProviderEvent::TurnCompleted { .. } => {
+                let running = &self.running;
+                self.started.retain(|item, _| !running.contains(item));
+            }
             _ => {}
         }
     }
@@ -1587,6 +1592,47 @@ pub(crate) fn ended_terminal(
     Some(task)
 }
 
+/// The commands still running as their turn completes that no listing named yet: they go on
+/// in the background, which `/ps` says only at its next listing, seconds on (seen live: the
+/// work read over meanwhile). Each is a terminal from now on, by its item, until that listing
+/// names it ([`background_terminals`]) or its item ends ([`ended_terminal`]).
+pub(crate) fn outliving_turn(
+    event: &ProviderEvent,
+    commands: &CommandItems,
+    known: &mut HashMap<String, BackgroundTask>,
+) -> Vec<BackgroundTask> {
+    if !matches!(event, ProviderEvent::TurnCompleted { status, .. } if *status == TurnStatus::Completed)
+    {
+        return Vec::new();
+    }
+    let mut said = Vec::new();
+    for (item, at) in &commands.started {
+        if known
+            .values()
+            .any(|task| task.item_id.as_deref() == Some(item))
+        {
+            continue;
+        }
+        let task = BackgroundTask {
+            id: item.clone(),
+            item_id: Some(item.clone()),
+            kind: BackgroundTaskKind::Terminal,
+            label: String::new(),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: *at,
+            ended_at_ms: None,
+            output_file: None,
+            summary: None,
+            last_line: None,
+            command: None,
+            provider: Some(ProviderKind::Codex),
+        };
+        known.insert(item.clone(), task.clone());
+        said.push(task);
+    }
+    said
+}
+
 /// The thread's background terminals as `thread/backgroundTerminals/list` gives them, against
 /// those `known` from the last listing: each new one as running, each one gone as ended at
 /// `now`. `known` becomes this listing's. A command's process `commands` says isn't in the
@@ -1614,6 +1660,16 @@ pub(crate) fn background_terminals(
                 .and_then(Value::as_str)
                 .is_some_and(|item| commands.foreground(item))
         {
+            continue;
+        }
+        let item = terminal.get("itemId").and_then(Value::as_str);
+        // One said as its turn completed (`outliving_turn`): the same task, named now.
+        if let Some(mut task) = item.and_then(|item| known.remove(item)) {
+            let command = terminal.get("command").and_then(Value::as_str);
+            task.label = command.unwrap_or_default().to_owned();
+            task.command = command.map(str::to_owned);
+            changed.push(task.clone());
+            listing.insert(id.to_owned(), task);
             continue;
         }
         let task = known.remove(id).unwrap_or_else(|| {
@@ -1952,6 +2008,85 @@ mod tests {
             [("9".to_owned(), BackgroundTaskStatus::Completed, Some(4_000))]
         );
         assert!(known.is_empty());
+    }
+
+    /// A command still running as its turn completes is a background terminal from that end
+    /// on, not from `/ps`'s next listing seconds later (seen live: its block read over in
+    /// between); that listing names the same task, and its item's end or its leaving the list
+    /// ends it. A stopped turn's commands go on with none.
+    #[test]
+    fn a_command_outliving_its_turn_is_a_terminal_from_its_turns_end() {
+        let command = |item: &str, status| ProviderEvent::Command {
+            item_id: item.into(),
+            command: "sleep 20 && echo done".into(),
+            cwd: None,
+            status,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        };
+        let turn = |status| ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status,
+            duration_ms: None,
+            usage: None,
+        };
+        let started = ProviderEvent::TurnStarted { turn_id: None };
+        let listed = json!({ "data": [{ "processId": "9", "itemId": "exec-a",
+            "command": "sleep 20 && echo done", "cwd": "/w" }] });
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-a", ItemStatus::InProgress)] {
+            commands.note(event, 5);
+        }
+        let end = turn(TurnStatus::Completed);
+        commands.note(&end, 0);
+        let said = outliving_turn(&end, &commands, &mut known);
+        assert_eq!(
+            said.iter()
+                .map(|task| (task.id.as_str(), task.status, task.started_at_ms))
+                .collect::<Vec<_>>(),
+            [("exec-a", BackgroundTaskStatus::Running, 5)]
+        );
+        // `/ps` names it: the same task, now with its command.
+        let named = background_terminals(&listed, &mut known, &commands, 7);
+        assert_eq!(
+            named
+                .iter()
+                .map(|task| (task.id.as_str(), task.label.as_str(), task.status))
+                .collect::<Vec<_>>(),
+            [(
+                "exec-a",
+                "sleep 20 && echo done",
+                BackgroundTaskStatus::Running
+            )]
+        );
+        assert!(background_terminals(&listed, &mut known, &commands, 8).is_empty());
+        let gone = background_terminals(&json!({ "data": [] }), &mut known, &commands, 9);
+        assert_eq!(
+            (gone[0].id.as_str(), gone[0].status),
+            ("exec-a", BackgroundTaskStatus::Completed)
+        );
+        // Its item ending before any listing ends it too.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-b", ItemStatus::InProgress), &end] {
+            commands.note(event, 5);
+        }
+        assert_eq!(outliving_turn(&end, &commands, &mut known).len(), 1);
+        let done = command("exec-b", ItemStatus::Completed);
+        let ended = ended_terminal(&done, &mut known, 6).expect("it ends with its item");
+        assert_eq!(ended.id, "exec-b");
+        assert!(known.is_empty());
+        // A stopped turn's command: none, then or at the next turn's end.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        let stop = turn(TurnStatus::Interrupted);
+        for event in [&started, &command("exec-c", ItemStatus::InProgress), &stop] {
+            commands.note(event, 5);
+        }
+        assert!(outliving_turn(&stop, &commands, &mut known).is_empty());
+        commands.note(&started, 6);
+        commands.note(&end, 7);
+        assert!(outliving_turn(&end, &commands, &mut known).is_empty());
     }
 
     /// Codex's `/ps` lists the command its turn waits on (checked on 0.166.0): it is no
