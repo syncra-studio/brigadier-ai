@@ -205,6 +205,11 @@ jobs:
           cargo test --locked -p cu-layer --lib
           cargo clippy --locked -p brigadier-cu --lib -- -D warnings
           cargo test --locked -p brigadier-cu --lib
+          # The agents' tool list on Windows: 20 tools, its size budget and no macOS wording (Linux's
+          # is checked by the live test).
+          if [ "$RUNNER_OS" = Windows ]; then
+            cargo test --locked -p brigadier-cu --bin brigadier-cu -- windows_real_registry_tool_list_budget --nocapture
+          fi
       - name: Windows Connect and project setup tests
         if: runner.os == 'Windows'
         # Connect's fakes use the real PowerShell runner and the daemon staged above as the
