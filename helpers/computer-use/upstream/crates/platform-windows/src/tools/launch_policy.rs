@@ -210,6 +210,29 @@ pub(crate) fn notepad_open_refusal(titles: &[String]) -> String {
     format!("No app was launched: Notepad is already open in a window this helper did not open{which}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it would appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
 }
 
+/// A window counts as the user's open window unless DWM reports it cloaked
+/// and it is on no virtual desktop. Unknown facts count as open.
+pub(crate) fn user_reachable(read: bool, cloaked: bool, on_a_desktop: Option<bool>) -> bool {
+    !read || !cloaked || on_a_desktop != Some(false)
+}
+
+/// Windows Settings has a single window: `ms-settings:` changes the page in
+/// the one already open. One the helper did not open belongs to the user.
+pub(crate) fn settings_open_refusal(titles: &[String]) -> String {
+    let named = titles
+        .iter()
+        .filter(|title| !title.is_empty())
+        .map(|title| format!("{title:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let which = if named.is_empty() {
+        String::new()
+    } else {
+        format!(" ({named})")
+    };
+    format!("No app was launched: Windows Settings is already open in a window this helper did not open{which}. Settings has only one window, so opening a Settings page would change the page in the user's own Settings window. Ask the user to close Settings first.")
+}
+
 pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
     match executable_name(target).as_str() {
         "chrome" | "msedge" | "brave" | "chromium" | "vivaldi" | "opera" => Some("--new-window"),
@@ -247,6 +270,23 @@ mod fresh_document_tests {
         ));
         assert!(is_notepad_target(r"C:\Windows\notepad.exe"));
         assert!(!is_notepad_target("Notepad++"));
+    }
+    #[test]
+    fn only_a_cloaked_window_on_no_desktop_is_not_the_users() {
+        assert!(user_reachable(true, false, None));
+        assert!(user_reachable(false, true, Some(false)));
+        // Another virtual desktop: the user can switch to it.
+        assert!(user_reachable(true, true, Some(true)));
+        assert!(user_reachable(true, true, None));
+        assert!(!user_reachable(true, true, Some(false)));
+    }
+    #[test]
+    fn settings_windows_the_helper_did_not_open_block_a_launch() {
+        let refusal = settings_open_refusal(&["Settings".into()]);
+        assert!(refusal.starts_with("No app was launched"));
+        assert!(refusal.contains("(\"Settings\")"));
+        assert!(refusal.contains("close Settings"));
+        assert!(!settings_open_refusal(&[String::new()]).contains("()"));
     }
     #[test]
     fn notepad_windows_the_helper_did_not_open_block_a_launch() {

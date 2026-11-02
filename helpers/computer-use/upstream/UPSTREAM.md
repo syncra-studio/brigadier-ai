@@ -224,6 +224,10 @@ Patches applied, in order:
 
 - `patches/0188-windows-shortcut-menu-closed-by-its-command.diff`: A Windows shortcut found in a closed menu counts the menu as closed once its flyout window is gone: a command that opens a dialog (Notepad Ctrl+W, "Save changes?") can make the menu header unreadable, and the reply no longer reports the shortcut search as failed after its command ran.
 
+- `patches/0189-windows-settings-refuses-user-window.diff`: Refuse an ms-settings: launch while a Settings window this helper did not open is one the user can see or switch to: Settings has a single window and the launch would change its page. A Settings frame Windows keeps cloaked on no virtual desktop after the user closed it is not the user's. Settings Close waits up to 8 s for the window to go, as Settings hid its frame 2.9 s after WM_CLOSE.
+
+- `patches/0190-windows-launch-broker-event-front-at-reply.diff`: A launch whose only activation evidence is an unattributed ApplicationFrameHost event says whether the user's window was in front at reply time.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

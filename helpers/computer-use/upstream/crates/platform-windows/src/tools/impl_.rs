@@ -585,7 +585,8 @@ async fn close_settings_window(args: Value) -> ToolResult {
             return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
                 .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
         }
-        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(2))
+        // Live (2026-11-02, Windows 11 26300): Settings hid its frame 2.9 s after WM_CLOSE.
+        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(8))
     }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
 }
 
@@ -2774,6 +2775,24 @@ impl Tool for LaunchAppTool {
                 (resolved_target.clone(), base_extra)
             }
         };
+
+        let settings_launch =
+            super::launch_policy::is_settings_protocol_launch(target_file_opt.is_some(), &urls);
+        if settings_launch {
+            let foreign =
+                tokio::task::spawn_blocking(super::launch_browser::foreign_settings_windows)
+                    .await
+                    .unwrap_or_default();
+            if !foreign.is_empty() {
+                let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
+                return ToolResult::error(super::launch_policy::settings_open_refusal(&titles))
+                    .with_structured(json!({"code": "settings_open_in_user_window", "launch_confirmed": false, "windows": []}));
+            }
+        }
+        // Every reply from here on records the Settings window this launch
+        // opened as the helper's own, like Notepad's above.
+        let _own_settings_windows =
+            settings_launch.then(|| super::launch_browser::OwnSettingsWindows);
 
         let direct_task_manager = if let Some(target) = target_file_opt.as_deref() {
             match super::launch_focus::task_manager_direct_path(target) {
