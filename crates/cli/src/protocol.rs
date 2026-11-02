@@ -879,7 +879,6 @@ pub struct Item {
 #[serde(rename_all = "kebab-case")]
 pub enum ItemKind {
     Message,
-    Reasoning,
     Tool,
     Command,
     TurnEnd,

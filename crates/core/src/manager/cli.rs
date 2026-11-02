@@ -209,7 +209,6 @@ fn event_item(event: &ProviderEvent, at_ms: i64) -> Option<Item> {
             }),
             ..item(ItemKind::Message, text.clone())
         },
-        ProviderEvent::Reasoning { text, .. } => item(ItemKind::Reasoning, text.clone()),
         ProviderEvent::ToolCall {
             name,
             input,
@@ -249,6 +248,8 @@ fn event_item(event: &ProviderEvent, at_ms: i64) -> Option<Item> {
             item(ItemKind::TurnEnd, word.into())
         }
         ProviderEvent::Error { error } => item(ItemKind::Error, error.message.clone()),
+        // A model's thinking is never handed to another session: it reads as hidden
+        // reasoning, which providers' safety checks refuse (D143).
         _ => return None,
     })
 }
@@ -1044,6 +1045,30 @@ mod tests {
         assert_eq!(read[0].output.as_deref(), Some("done"));
         assert_eq!(read[0].at_ms, 3);
         assert_eq!(read[1].text, "All read.");
+    }
+
+    /// What one session reads of another never carries its thinking (D143).
+    #[test]
+    fn a_sessions_thinking_is_never_read_out() {
+        let read = items(&[
+            entry(
+                1,
+                ProviderEvent::Reasoning {
+                    item_id: "r".into(),
+                    text: "secret plan".into(),
+                },
+            ),
+            entry(
+                2,
+                ProviderEvent::Message {
+                    item_id: "m".into(),
+                    role: brigadier_providers::model::Role::Assistant,
+                    text: "Done.".into(),
+                },
+            ),
+        ]);
+        assert_eq!(read.len(), 1, "{read:?}");
+        assert_eq!(read[0].text, "Done.");
     }
 
     #[test]

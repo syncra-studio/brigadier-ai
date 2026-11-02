@@ -461,7 +461,6 @@ fn item(item: &Item) -> String {
             };
             format!("[{who}]\n{}\n", item.text.trim_end())
         }
-        ItemKind::Reasoning => format!("[thinking] {}\n", item.text.trim_end()),
         ItemKind::Command => format!("$ {}\n", item.text.trim_end()),
         ItemKind::Tool => format!("[tool] {}\n", item.text.trim_end()),
         ItemKind::TurnEnd => format!("[turn ended] {}\n", item.text.trim_end()),
