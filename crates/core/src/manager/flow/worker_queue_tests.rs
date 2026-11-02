@@ -539,8 +539,8 @@ async fn a_message_sent_during_a_wait_on_a_running_worker_ends_the_wait() {
                 let id = id_of(
                     &brigadier(&turn, CliRequest::Start(Box::new(start("Write marks.")))).await,
                 );
-                let command = |status| ProviderEvent::Command {
-                    item_id: "wait-1".into(),
+                let command = |item: &str, status| ProviderEvent::Command {
+                    item_id: item.into(),
                     command: format!("brigadier wait {id}"),
                     cwd: None,
                     status,
@@ -549,17 +549,25 @@ async fn a_message_sent_during_a_wait_on_a_running_worker_ends_the_wait() {
                     duration_ms: None,
                     kept: None,
                 };
-                turn.emit(command(ItemStatus::InProgress)).await;
+                // A background command still running keeps the message held after the wait.
+                turn.emit(command("bg-1", ItemStatus::InProgress)).await;
+                turn.emit(command("wait-1", ItemStatus::InProgress)).await;
                 let waited = tokio::time::timeout(
                     std::time::Duration::from_secs(20),
                     brigadier(&turn, wait(&[&id], None)),
                 )
                 .await;
-                turn.emit(command(ItemStatus::Completed)).await;
+                turn.emit(command("wait-1", ItemStatus::Completed)).await;
                 answers
                     .lock()
                     .unwrap()
                     .insert("wait".into(), waited.unwrap_or(json!("never ended")));
+                // Waited again with that message still held: it blocks, never returns at once.
+                turn.emit(command("wait-2", ItemStatus::InProgress)).await;
+                let again = brigadier(&turn, wait(&[&id], Some(1))).await;
+                turn.emit(command("wait-2", ItemStatus::Completed)).await;
+                turn.emit(command("bg-1", ItemStatus::Completed)).await;
+                answers.lock().unwrap().insert("again".into(), again);
                 Reply::text("Read it.")
             })
         }),
@@ -583,6 +591,14 @@ async fn a_message_sent_during_a_wait_on_a_running_worker_ends_the_wait() {
     let got = answers.lock().unwrap()["wait"].clone();
     assert_eq!(got["message"], json!(true), "{got:#}");
     assert_eq!(got["events"], json!([]), "{got:#}");
+    // Once per held message: the next wait blocks until its time is up.
+    super::eventually("the second wait to end", || {
+        answers.lock().unwrap().contains_key("again")
+    })
+    .await;
+    let again = answers.lock().unwrap()["again"].clone();
+    assert_eq!(again["message"], Value::Null, "{again:#}");
+    assert_eq!(again["timedOut"], json!(true), "{again:#}");
     worker_done.notify_waiters();
     flow.stop().await;
 }

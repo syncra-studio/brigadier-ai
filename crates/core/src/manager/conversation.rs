@@ -363,6 +363,8 @@ struct ConvState {
     /// unmarked when the last ends.
     held_requests: Vec<String>,
     held_items: Vec<String>,
+    /// Those of them a `brigadier wait` already ended for: the next wait blocks (goal 3).
+    held_told: Vec<String>,
     /// Queued messages the session has to judge (run2-D40), given to it while a turn ran and
     /// still Deciding until it judges them; at its turn's end they go back to waiting (D72).
     deciding: Vec<String>,
@@ -1717,14 +1719,22 @@ impl SessionManager {
         }
     }
 
-    /// Whether a message sent to the session waits behind one of its thread's commands: a
-    /// `brigadier wait` it runs ends for it (goal 3).
+    /// Whether a message sent to the session waits behind one of its thread's commands, and
+    /// no `brigadier wait` ended for it yet: the one it runs ends for it, once (goal 3).
     pub(super) async fn message_held(&self, id: &ConversationId) -> bool {
         let Some(conv) = self.convs_lock().get(id).cloned() else {
             return false;
         };
-        let state = conv.state.lock().await;
-        !state.held_requests.is_empty() || !state.held_items.is_empty()
+        let mut state = conv.state.lock().await;
+        let held: Vec<String> = state
+            .held_requests
+            .iter()
+            .chain(&state.held_items)
+            .cloned()
+            .collect();
+        let new = held.iter().any(|id| !state.held_told.contains(id));
+        state.held_told = held;
+        new
     }
 
     /// Marks steered requests as waiting behind the thread's command `held`, or as read now.
