@@ -351,7 +351,12 @@ fn try_click(
     // Keep target/owner protection alive through native commands and their
     // bounded readback, even if this helper was reached without a window_id.
     let noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
+    // A background dialog that closes activates its owner, which Windows
+    // raises over the user's window: keep the owner hidden until it is gone.
+    let hidden_owner =
+        (!expand_only).then(|| super::dialog_owner::HiddenOwner::arm(HWND(hwnd as *mut _)));
     let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
+    drop(hidden_owner);
     // Say so when the app took the front during the click (a Save closing
     // its dialog activates the owner), and whether your window got it back.
     if let (Ok(Some(reply)), Some(note)) = (&mut result, noactivate.action_note()) {

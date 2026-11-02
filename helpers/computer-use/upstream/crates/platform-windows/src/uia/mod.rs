@@ -29,6 +29,7 @@ use windows::Win32::UI::Accessibility::{
 };
 
 pub(crate) mod click;
+mod dialog_owner;
 pub mod fg_bypass;
 mod menu;
 pub mod scroll;
