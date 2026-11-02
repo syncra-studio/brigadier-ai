@@ -479,6 +479,7 @@ export type { UpdatesView } from "./UpdatesView";
 export type { UsageActivity } from "./UsageActivity";
 export type { UsageView } from "./UsageView";
 export type { UserRequest } from "./UserRequest";
+export type { WaitReply } from "./WaitReply";
 export type { WaitingOn } from "./WaitingOn";
 export type { Wake } from "./Wake";
 export type { WakeEnd } from "./WakeEnd";

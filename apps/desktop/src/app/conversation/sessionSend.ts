@@ -1,6 +1,6 @@
-import type { BoardDigest, SessionSentStep } from "@/app/conversation/blocks";
+import type { BoardDigest, SessionSentStep, SessionWaitStep } from "@/app/conversation/blocks";
 import { type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
-import type { ProviderEvent } from "@/ipc/generated";
+import type { ProviderEvent, ThreadView, WaitReply } from "@/ipc/generated";
 
 /**
  * The thread's own `brigadier send <session> <text>` (S30) as the row of the message it sent:
@@ -91,15 +91,11 @@ function shellTokens(command: string): string[] | null {
   return tokens;
 }
 
-/**
- * What `command` gives `brigadier send`, when it runs it once to message someone: whom (`to`, as
- * the command names it) and the text; null for any other command, or a send that answers a
- * worker's prompt (`--allow`, `--deny`).
- */
-export function sendArgs(command: string): { to: string; text: string } | null {
+/** The arguments of each `brigadier <sub>` `command` runs; null when its quotes never close. */
+function brigadierArgs(command: string, sub: string): string[][] | null {
   const tokens = shellTokens(unwrapCommand(command));
   if (!tokens) return null;
-  const found: { to: string; text: string }[] = [];
+  const found: string[][] = [];
   let start = true;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
@@ -110,16 +106,59 @@ export function sendArgs(command: string): { to: string; text: string } | null {
     if (!start) continue;
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
     start = false;
-    if (!/^(?:\S*\/)?brigadier$/.test(token) || tokens[index + 1] !== "send") continue;
+    if (!/^(?:\S*\/)?brigadier$/.test(token) || tokens[index + 1] !== sub) continue;
     const args: string[] = [];
     for (index += 2; index < tokens.length && !/^[;&|()\n]$/.test(tokens[index]!); index += 1) args.push(tokens[index]!);
     index -= 1;
-    if (args.some((arg) => arg === "--allow" || arg === "--deny")) return null;
-    const [to, ...words] = args;
-    if (to === undefined) return null;
-    found.push({ to, text: words.join(" ") });
+    found.push(args);
   }
-  return found.length === 1 ? found[0]! : null;
+  return found;
+}
+
+/**
+ * What `command` gives `brigadier send`, when it runs it once to message someone: whom (`to`, as
+ * the command names it) and the text; null for any other command, or a send that answers a
+ * worker's prompt (`--allow`, `--deny`).
+ */
+export function sendArgs(command: string): { to: string; text: string } | null {
+  const found = brigadierArgs(command, "send");
+  if (found?.length !== 1) return null;
+  const args = found[0]!;
+  if (args.some((arg) => arg === "--allow" || arg === "--deny")) return null;
+  const [to, ...words] = args;
+  return to === undefined ? null : { to, text: words.join(" ") };
+}
+
+/** The ids `command`'s one `brigadier wait` names (none: it waits on the workers), its options left out. */
+export function waitArgs(command: string): string[] | null {
+  const found = brigadierArgs(command, "wait");
+  if (found?.length !== 1) return null;
+  // An id is a word (a redirect such as `2>` is none); `--timeout`'s value is no id.
+  return found[0]!.filter((arg, index, args) => /^\w[\w-]*$/.test(arg) && !/^\d+$/.test(arg) && args[index - 1] !== "--timeout");
+}
+
+/**
+ * The row of the thread's own `brigadier wait` on other sessions (D138): one naming ids none of
+ * its workers has. Its replies come after, from what Brigadier kept (`attachReplies`).
+ */
+export function sessionWait(step: ToolStep | null, event: ProviderEvent, view: Pick<ThreadView, "workers">): SessionWaitStep | null {
+  if (!step || step.item !== "command") return null;
+  const command = commandOf(event);
+  const to = command === null ? null : waitArgs(command);
+  if (!to?.length || to.some((id) => (view.workers ?? []).some((row) => namesId(row.id, id)))) return null;
+  return { type: "sessionWait", itemId: step.itemId, to, status: step.status, replies: [] };
+}
+
+/**
+ * Each reply a wait took, under the newest of the thread's waits on its session that began
+ * before it came: Brigadier's own record of it, the same on every CLI (D138).
+ */
+export function attachReplies(steps: readonly { kind: { type: string }; atMs?: number }[], replies: readonly WaitReply[]): void {
+  const waits = steps.flatMap((step) => (step.kind.type === "sessionWait" ? [{ kind: step.kind as SessionWaitStep, atMs: step.atMs ?? 0 }] : []));
+  for (const reply of replies) {
+    const wait = waits.findLast(({ kind, atMs }) => atMs <= reply.atMs && kind.to.some((id) => namesId(reply.from, id)));
+    wait?.kind.replies.push(reply);
+  }
 }
 
 /** A call's command line, as the CLI gave it: a Codex command's, or a shell tool's input. */

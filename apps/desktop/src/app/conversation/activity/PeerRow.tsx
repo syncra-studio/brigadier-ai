@@ -15,10 +15,11 @@ import {
   sessionSendWords,
   sessionSentDescribed,
   UNKNOWN_SESSION,
+  type WordPart,
 } from "@/app/conversation/activity/peerWords";
 import { PeerLink } from "@/app/conversation/activity/PeerLink";
-import { type BlockOrchestratorStep, heldForWait, type PeerSentStep, type SessionSentStep } from "@/app/conversation/blocks";
-import { usePeerName } from "@/app/conversation/peerParts";
+import { type BlockOrchestratorStep, heldForWait, type PeerSentStep, type SessionSentStep, type SessionWaitStep } from "@/app/conversation/blocks";
+import { FoldedMarkdown, usePeerName } from "@/app/conversation/peerParts";
 import { namesId } from "@/app/conversation/sessionSend";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ThreadActivity } from "@/components/conversation";
@@ -67,6 +68,7 @@ function namedIn(steps: readonly BlockOrchestratorStep[], records: Readonly<Reco
       return [...kind.messageIds.flatMap((id) => records[id]?.peer ?? []), ...taken.map((record) => record.peer), ...asked.map((record) => record.peer)];
     }
     if (kind.type === "messageRefused") return kind.to ?? [];
+    if (kind.type === "sessionWait") return kind.replies.map((reply) => reply.from);
     return [];
   });
 }
@@ -79,7 +81,7 @@ export function usePeerLookup(steps: readonly BlockOrchestratorStep[]): PeerLook
   const records = useBoard((s) => s.board?.peerMessages) ?? NO_RECORDS;
   const here = useViewConversation()?.projectId ?? null;
   const ids = namedIn(steps, records);
-  const targets = steps.flatMap(({ kind }) => (kind.type === "sessionSent" ? [kind.to] : []));
+  const targets = steps.flatMap(({ kind }) => (kind.type === "sessionSent" ? [kind.to] : kind.type === "sessionWait" ? kind.to : []));
   // Each `brigadier send`'s session, as `brigadier` read its id; then each session named, with its project.
   const named = useApp(
     useShallow((s) => {
@@ -140,10 +142,29 @@ export function exchangeOf(kind: PeerSentStep, peers: PeerLookup, going = false)
   };
 }
 
+/**
+ * Where a `brigadier wait` on other sessions stands (D138), as a row of waits reads it: whom it
+ * waits for while it runs, then whose replies it took, each opening its session at the reply.
+ */
+export function waitExchange(kind: SessionWaitStep, peers: PeerLookup): Exchange {
+  const ref = (session: string, message?: string): PeerRef => {
+    const name = peers.name(session);
+    return { session, title: (name ?? UNKNOWN_SESSION).title, ...(message !== undefined && { message }), ...(!name && { gone: true }) };
+  };
+  return {
+    sends: [],
+    // A reply taken ends it, whatever its call still says.
+    waits: [kind.replies.length > 0 ? "completed" : kind.status],
+    received: kind.replies.map((reply) => ref(reply.from, reply.messageId)),
+    waitingOn: kind.to.map((to) => ref(peers.session(to) ?? to)),
+  };
+}
+
 /** A message row's words and how it stands (`going`: see `Exchange`); null for a step that isn't one. */
 export function describePeerStep(step: BlockOrchestratorStep, peers: PeerLookup, going = false): Described | null {
   const { kind } = step;
   if (kind.type === "peerSent") return exchangeDescribed(exchangeOf(kind, peers, going));
+  if (kind.type === "sessionWait") return exchangeDescribed(waitExchange(kind, peers));
   if (kind.type === "messageRefused") {
     return refusedDescribed(peers.name(kind.to) ?? (kind.title ? { title: kind.title, project: null } : UNKNOWN_SESSION));
   }
@@ -167,13 +188,27 @@ function rowState(exchange: Exchange, status: string, waiting: boolean): string 
   return exchange.waits.length > 0 ? "waited" : (exchange.sends[0]?.state.type ?? "waited");
 }
 
+/** A row's words, each session it names a link to it. */
+const PeerWords: FC<{ parts: readonly WordPart[]; running: boolean }> = ({ parts, running }) => (
+  <span data-slot="peer-words" className="min-w-0 truncate">
+    {parts.map((part, index) =>
+      typeof part === "string" ? (
+        <span key={index} className={cn(running && "shimmer")}>{part}</span>
+      ) : part.gone ? (
+        <span key={index} className="text-row-object">{part.title}</span>
+      ) : (
+        <PeerLink key={index} peer={part} />
+      ),
+    )}
+  </span>
+);
+
 /** One row of messages and waits, from their records. */
 export const PeerSentRow: FC<{ step: BlockOrchestratorStep; kind: PeerSentStep; going: boolean }> = ({ step, kind, going }) => {
   const peers = usePeerLookup([step]);
   const exchange = exchangeOf(kind, peers, going);
   const { parts, status, waiting } = exchangeWords(exchange);
   if (kind.messageIds.length > 0 && exchange.sends.length === 0) return null;
-  const running = status === "inProgress";
   const Icon = waiting ? Clock : Chat;
   const tip = failures(kind.messageIds.flatMap((id) => peers.records[id] ?? []));
   return (
@@ -186,17 +221,33 @@ export const PeerSentRow: FC<{ step: BlockOrchestratorStep; kind: PeerSentStep; 
       {...(tip && { title: tip })}
     >
       <Icon aria-hidden className="size-4 shrink-0" />
-      <span data-slot="peer-words" className="min-w-0 truncate">
-        {parts.map((part, index) =>
-          typeof part === "string" ? (
-            <span key={index} className={cn(running && "shimmer")}>{part}</span>
-          ) : part.gone ? (
-            <span key={index} className="text-row-object">{part.title}</span>
-          ) : (
-            <PeerLink key={index} peer={part} />
-          ),
-        )}
-      </span>
+      <PeerWords parts={parts} running={status === "inProgress"} />
+    </ThreadActivity>
+  );
+};
+
+/**
+ * The thread's own `brigadier wait` on other sessions (D138): "Waiting for Docs to reply", then
+ * "Received a reply from Docs", collapsed, opening to the reply as Brigadier kept it.
+ */
+export const SessionWaitRow: FC<{ step: BlockOrchestratorStep; kind: SessionWaitStep }> = ({ step, kind }) => {
+  const peers = usePeerLookup([step]);
+  const { parts, status, waiting } = exchangeWords(waitExchange(kind, peers));
+  const detail = kind.replies.length === 0 ? undefined : (
+    <div data-slot="wait-replies" className="flex flex-col gap-2">
+      {kind.replies.map((reply) => <FoldedMarkdown key={`${reply.atMs}:${reply.messageId ?? ""}`} text={reply.text} />)}
+    </div>
+  );
+  return (
+    <ThreadActivity
+      data-slot="orchestrator-step"
+      data-kind="message"
+      data-wait={waiting ? "waiting" : kind.replies.length > 0 ? "received" : "waited"}
+      data-at={step.position}
+      detail={detail}
+    >
+      {waiting ? <Clock aria-hidden className="size-4 shrink-0" /> : <Chat aria-hidden className="size-4 shrink-0" />}
+      <PeerWords parts={parts} running={status === "inProgress"} />
     </ThreadActivity>
   );
 };
@@ -285,5 +336,6 @@ export function peerStepRow(step: BlockOrchestratorStep, going = false): ReactNo
   if (kind.type === "peerSent") return <PeerSentRow step={step} kind={kind} going={going} />;
   if (kind.type === "messageRefused") return <PeerRefusedRow kind={kind} />;
   if (kind.type === "sessionSent") return <SessionSentRow step={step} kind={kind} />;
+  if (kind.type === "sessionWait") return <SessionWaitRow step={step} kind={kind} />;
   return null;
 }

@@ -283,7 +283,7 @@ async fn two_sessions(flow: &Flow, seen: &Seen) -> ConversationId {
 /// answer, and A is never also given it as a message (proposed).
 #[tokio::test]
 async fn a_session_messages_another_mid_turn_and_hears_its_answer() {
-    let (flow, seen) = flow("sessions-message", false).await;
+    let (mut flow, seen) = flow("sessions-message", false).await;
     let a = flow.conversation.clone();
     let b = two_sessions(&flow, &seen).await;
     flow.say_to(&b, "Hold-steer.").await;
@@ -344,7 +344,18 @@ async fn a_session_messages_another_mid_turn_and_hears_its_answer() {
         seen.inputs_of(&a)
     );
     assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
-    assert_eq!(kept_seen(&flow, &a).await, [(answer, true)]);
+    assert_eq!(kept_seen(&flow, &a).await, [(answer.clone(), true)]);
+    // A's thread keeps it for its wait's row (goal 4, D138), across a restart, never sent again.
+    let kept = |flow: &Flow| flow.manager.thread_view(&a).unwrap().replies;
+    let before = kept(&flow);
+    assert_eq!(before.len(), 1, "{before:#?}");
+    assert_eq!(before[0].from, b);
+    assert_eq!(before[0].message_id.as_deref(), Some(answer.as_str()));
+    assert_eq!(before[0].text, "Thanks from the other side.");
+    flow.restart().await;
+    assert_eq!(kept(&flow), before);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(seen.took(&a, "Thanks from the other side."), 0);
     flow.stop().await;
 }
 
@@ -601,6 +612,8 @@ async fn a_session_wait_returns_the_turns_own_end() {
     let message = events[0]["message"].as_str().unwrap_or_default();
     assert!(!message.contains("Got it."), "{waited:#}");
     assert!(message.contains("The API said no."), "{waited:#}");
+    // An error is no reply: the wait's row keeps none.
+    assert!(flow.manager.thread_view(&a).unwrap().replies.is_empty());
     flow.stop().await;
 }
 

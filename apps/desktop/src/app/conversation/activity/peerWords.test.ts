@@ -86,8 +86,8 @@ test("a row of several messages names each session once, and only the replies th
 test("a wait with no message next to it is a row of its own", () => {
   assert.deepEqual(line(exchange([], ["inProgress"], [], [docs])), ["Waiting for Docs to reply", "inProgress", true]);
   assert.deepEqual(line(exchange([], ["inProgress"])), ["Waiting for replies", "inProgress", true]);
-  assert.deepEqual(line(exchange([], ["completed"], [docs])), ["Waited for a reply from Docs", "completed", false]);
-  assert.deepEqual(line(exchange([], ["completed"], [docs, notes])), ["Waited for replies from Docs and Release notes", "completed", false]);
+  assert.deepEqual(line(exchange([], ["completed"], [docs])), ["Received a reply from Docs", "completed", false]);
+  assert.deepEqual(line(exchange([], ["completed"], [docs, notes])), ["Received replies from Docs and Release notes", "completed", false]);
   assert.deepEqual(line(exchange([], ["completed"])), ["Waited; no reply yet", "completed", false]);
 });
 

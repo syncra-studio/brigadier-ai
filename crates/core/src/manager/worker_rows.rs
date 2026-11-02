@@ -671,6 +671,7 @@ impl SessionManager {
             mcp: None,
             workers: Some(rows),
             jobs: None,
+            replies: None,
             seq: 0,
         });
     }

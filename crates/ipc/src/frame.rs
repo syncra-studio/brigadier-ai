@@ -268,6 +268,7 @@ mod client_tests {
             workers: vec![],
             seams: vec![],
             jobs: Default::default(),
+            replies: Vec::new(),
             seq: 0,
         };
         let (send, recv) = tokio::io::duplex(8192);

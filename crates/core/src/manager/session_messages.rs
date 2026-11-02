@@ -32,7 +32,7 @@ use super::session_dir::read_lineage;
 use super::{SessionManager, blocking};
 use crate::model::{Conversation, ConversationId, Lifecycle};
 use crate::now_ms;
-use crate::thread_view::TurnEnd;
+use crate::thread_view::{ThreadNews, TurnEnd, WaitReply};
 use crate::work::InjectionKind;
 
 /// The recipient's messages' file, in its `record/`.
@@ -58,6 +58,15 @@ enum Line {
     Seen { id: String, at_ms: i64 },
     /// The recipient's user deleted it from the queue before it was read: never sent.
     Removed { id: String, at_ms: i64 },
+    /// A reply a `brigadier wait` of this session's took: its thread shows it under that
+    /// wait's row, and it is never given to its CLI as a message (goal 4, D138).
+    Reply {
+        from: ConversationId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        text: String,
+        at_ms: i64,
+    },
 }
 
 /// A message as its recipient's file says it stands.
@@ -99,11 +108,35 @@ fn read(record: &Path) -> Vec<Kept> {
                     message.removed = true;
                 }
             }
+            Ok(Line::Reply { .. }) => {}
             // A line a crash cut short: what it said never happened.
             Err(err) => tracing::warn!(error = %err, "skipped a session message line"),
         }
     }
     kept
+}
+
+/// The replies the waits of the session whose `record` this is took, oldest first.
+pub(super) fn replies(record: &Path) -> Vec<WaitReply> {
+    let Ok(text) = std::fs::read_to_string(record.join(FILE)) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| match serde_json::from_str(line) {
+            Ok(Line::Reply {
+                from,
+                message_id,
+                text,
+                at_ms,
+            }) => Some(WaitReply {
+                from,
+                message_id,
+                text,
+                at_ms,
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The text a message from `from` (titled `title`) is given to its recipient's CLI with.
@@ -416,7 +449,7 @@ impl SessionManager {
             .remove(&token)
             .is_none();
         // An answer given as it ended is its own: never lost, never given twice.
-        if gone
+        let out = if gone
             && out
                 .events
                 .iter()
@@ -425,13 +458,66 @@ impl SessionManager {
         {
             let mut events = out.events;
             events.insert(0, event);
-            return WaitOutput {
+            WaitOutput {
                 events,
                 timed_out: false,
                 message: false,
-            };
+            }
+        } else {
+            out
+        };
+        if caller.task_id.is_none() {
+            self.keep_replies(&caller.conversation_id, sessions, &out.events);
         }
         out
+    }
+
+    /// The replies a wait of session `waiter`'s on `sessions` took: kept in its record, and
+    /// its thread told at once, before its CLI reads them (goal 4, D138).
+    fn keep_replies(
+        &self,
+        waiter: &ConversationId,
+        sessions: &[Conversation],
+        events: &[WaitEvent],
+    ) {
+        let mut kept = false;
+        for event in events {
+            if !matches!(event.event, EventKind::Answered | EventKind::TurnEnded) {
+                continue;
+            }
+            let from = sessions
+                .iter()
+                .find(|session| short(&session.id.0) == event.id);
+            let (Some(from), Some(text)) = (from, &event.message) else {
+                continue;
+            };
+            self.append_mail(
+                waiter,
+                &Line::Reply {
+                    from: from.id.clone(),
+                    message_id: (!event.event_id.is_empty()).then(|| event.event_id.clone()),
+                    text: text.clone(),
+                    at_ms: now_ms(),
+                },
+            );
+            kept = true;
+        }
+        if kept {
+            let _ = self.thread_news.send(ThreadNews {
+                conversation_id: waiter.clone(),
+                entries: Vec::new(),
+                opened: false,
+                ended: None,
+                turn_ended_at_ms: None,
+                context: None,
+                background: None,
+                mcp: None,
+                workers: None,
+                jobs: None,
+                replies: Some(replies(&self.session_dir(waiter).record())),
+                seq: 0,
+            });
+        }
     }
 
     async fn wait_on_sessions(

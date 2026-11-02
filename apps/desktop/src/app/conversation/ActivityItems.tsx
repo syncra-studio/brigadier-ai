@@ -31,7 +31,7 @@ export function useLiveLine(unjoined: readonly Activity<LeadStep, Entry>[], live
   const newest = unjoined.at(-1);
   const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
   // The reply being written after the work is its newest unit: no group's row says the line then.
-  const inGroup = !answered && lastStep?.type === "step" && !["peerSent", "sessionSent", "messageRefused"].includes(lastStep.step.kind.type);
+  const inGroup = !answered && lastStep?.type === "step" && !["peerSent", "sessionSent", "sessionWait", "messageRefused"].includes(lastStep.step.kind.type);
   // A message the running lead just sent, with nothing after it yet: its row still reads as
   // sending and no line goes under it, so the wait that usually follows takes the row over and
   // the turn never shrinks under the user's message.
@@ -48,8 +48,11 @@ export function useLiveLine(unjoined: readonly Activity<LeadStep, Entry>[], live
     && sentStep.kind.waits.length === 0 && sentStep.kind.messageIds.length > 0
     && sentStep.kind.messageIds.every((id) => { const record = peers.records[id]; return !!record && went(record.state); })
     ? sentStep : null;
+  // A wait on another session's reply says it in its own row: no line under it either (D138).
+  const last = newest?.type === "group" && newest.items.at(-1) === lastStep && lastStep?.type === "step" ? lastStep.step.kind : null;
+  const waitRow = last?.type === "sessionWait" && last.status === "inProgress" && last.replies.length === 0;
   // What waits on the user, or a retry stalling the turn, still shows.
-  const shownLine = going && line?.tone !== "needsYou" && !RETRYING.has(line?.text ?? null) ? null : line;
+  const shownLine = (going || waitRow) && line?.tone !== "needsYou" && !RETRYING.has(line?.text ?? null) ? null : line;
   return { line: shownLine, rawLine: line, inGroup, going, peers };
 }
 
@@ -117,7 +120,7 @@ export const ActivityItems: FC<{
             <ActivityGroup
               items={item.items}
               live={!!live && !answered && (!live.quotaWait || !!line) && index === activity.length - 1}
-              working={working && !item.items.every(({ step }) => ["peerSent", "sessionSent", "messageRefused"].includes(step.kind.type))}
+              working={working && !item.items.every(({ step }) => ["peerSent", "sessionSent", "sessionWait", "messageRefused"].includes(step.kind.type))}
               liveLabel={inGroup && index === activity.length - 1 ? line : null}
               summary={summary}
               describe={(step) => describePeerStep(step, peers, step === going) ?? describeLeadStep(shown(step), tasks)}

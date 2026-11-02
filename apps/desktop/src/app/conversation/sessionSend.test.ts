@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ToolStep } from "@/app/conversation/activity/words";
-import { namesId, sendArgs, sessionSent } from "@/app/conversation/sessionSend";
-import type { ProviderEvent, Task } from "@/ipc/generated";
+import { attachReplies, namesId, sendArgs, sessionSent, sessionWait, waitArgs } from "@/app/conversation/sessionSend";
+import type { ProviderEvent, Task, WorkerRow } from "@/ipc/generated";
 
 test("a `brigadier send` command gives whom it messages and the text, however the shell quotes it", () => {
   assert.deepEqual(sendArgs(`brigadier send 4f2a9c1e "Can you check the schema?"`), { to: "4f2a9c1e", text: "Can you check the schema?" });
@@ -76,4 +76,23 @@ test("a send to one of the session's workers keeps its own row", () => {
   assert.equal(sessionSent(other.step, other.event), null);
   const allow = call(`brigadier send 0011aa22 --allow`, "completed", "Allowed what 0011aa22 asked.\n");
   assert.equal(sessionSent(allow.step, allow.event), null);
+});
+
+test("a `brigadier wait` on another session is its reply's row, under the newest wait on it that began before it (D138)", () => {
+  assert.deepEqual(waitArgs(`brigadier wait 4f2a9c1e --timeout 600 2>&1`), ["4f2a9c1e"]);
+  assert.deepEqual(waitArgs(`brigadier wait`), [], "no ids: it waits on the workers");
+  const waiting = call(`brigadier wait 4f2a9c1e`, "inProgress", null);
+  const kind = sessionWait(waiting.step, waiting.event, {});
+  assert.deepEqual(kind, { type: "sessionWait", itemId: waiting.step.itemId, to: ["4f2a9c1e"], status: "inProgress", replies: [] });
+  // A wait on one of its workers, or on all of them, keeps no row (D47).
+  assert.equal(sessionWait(waiting.step, waiting.event, { workers: [{ id: "task-9f-4f2a9c1e" } as WorkerRow] }), null);
+  const workers = call(`brigadier wait`, "inProgress", null);
+  assert.equal(sessionWait(workers.step, workers.event, {}), null);
+  // Each reply goes to the newest wait on its session begun before it came.
+  const first = { kind: sessionWait(waiting.step, waiting.event, {})!, atMs: 1000 };
+  const second = { kind: sessionWait(waiting.step, waiting.event, {})!, atMs: 3000 };
+  const from = "0192aaaa-bbbb-7ccc-8ddd-00004f2a9c1e";
+  attachReplies([first, second], [{ from, text: "One.", atMs: 2000 }, { from, messageId: "sm-1", text: "Two.", atMs: 4000 }, { from: "other", text: "No.", atMs: 4000 }]);
+  assert.deepEqual(first.kind.replies.map((reply) => reply.text), ["One."]);
+  assert.deepEqual(second.kind.replies.map((reply) => reply.text), ["Two."]);
 });

@@ -12,7 +12,7 @@ import {
   type ThreadNode,
   type ThreadTree,
 } from "@/app/conversation/blocks";
-import { sessionSent } from "@/app/conversation/sessionSend";
+import { attachReplies, sessionSent, sessionWait } from "@/app/conversation/sessionSend";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { turnCommands } from "@/app/conversation/turnCommands";
 import { workingWorkers } from "@/app/conversation/turnWorkers";
@@ -282,9 +282,6 @@ const PLAN_FILE = /(?:^|\/)\.claude\/plans\/[^/]+\.md$/;
 
 export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" | "endedAtMs"> | null, task: BackgroundTask | undefined): ToolStep | null {
   if (!step) return null;
-  // The thread's own `brigadier wait` and `start` are no rows (D47): the block's "Waiting for a
-  // worker" line and the worker's own row say them.
-  if (step.item === "command" && step.detail !== null && brigadierUnshown(step.detail)) return null;
   // Claude's plan, written to its own plan file in plan mode, is the plan card's, as Codex's
   // plan is: no "Edited …" row (harness D7, D57).
   if (step.item === "files" && (step.files?.length ?? 0) > 0 && step.files?.every((file) => PLAN_FILE.test(file.path))) return null;
@@ -1000,13 +997,17 @@ export function cliBlocks(
       default: {
         if (readsOnly(event, waited)) return;
         const tool = keptToolStep(entry, turnOf.get(current) ?? null, backgroundOf(view));
-        // Its `brigadier send` to another session is the row of the message it sent (S30).
-        const kind = sessionSent(tool, event, board) ?? tool;
+        // Its `brigadier send` to another session is the row of the message it sent (S30), its
+        // `brigadier wait` on one the row of the reply (D138). Its other `wait`s and `start`s are
+        // no rows (D47): the block's "Waiting for a worker" line and the worker's own row say them.
+        const kind = sessionSent(tool, event, board) ?? sessionWait(tool, event, view)
+          ?? (tool?.item === "command" && tool.detail !== null && brigadierUnshown(tool.detail) ? null : tool);
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }
     }
   });
   if (block) close(block);
+  attachReplies(blocks.flatMap((each) => each.orchestratorSteps), view.replies ?? []);
   // A compaction its turn ended with (Brigadier's at a turn's end, or the CLI's after its last
   // reply) is between that turn and the next: after the block, not in its work.
   for (const each of blocks) {

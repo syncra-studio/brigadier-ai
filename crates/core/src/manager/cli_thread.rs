@@ -541,6 +541,7 @@ impl SessionManager {
                 mcp,
                 workers: None,
                 jobs,
+                replies: None,
                 seq,
             });
         }
@@ -618,6 +619,7 @@ impl SessionManager {
                     mcp: None,
                     workers: None,
                     jobs: None,
+                    replies: None,
                     seq,
                 });
             }
@@ -681,6 +683,7 @@ impl SessionManager {
             mcp: None,
             workers: None,
             jobs: Some(jobs),
+            replies: None,
             seq,
         });
     }
@@ -945,6 +948,7 @@ impl SessionManager {
         view.seq = self.news_seq.load(std::sync::atomic::Ordering::SeqCst);
         thread_view::name_providers(&mut view, &owned, current);
         view.seams = super::seam::marks(&record, &mut view.entries);
+        view.replies = super::session_messages::replies(&record);
         Ok(view)
     }
 

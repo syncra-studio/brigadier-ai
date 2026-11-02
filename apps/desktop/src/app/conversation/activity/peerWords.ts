@@ -94,6 +94,8 @@ function waited(sent: readonly PeerRef[], received: readonly PeerRef[], failed: 
   if (!alone && [...sessions(sent)].every((session) => all.has(session))) {
     return [all.size === 1 ? "Waited for its reply" : "Waited for their replies"];
   }
+  // A wait on its own (`brigadier wait` on another session) took the reply (D138).
+  if (alone) return all.size === 1 ? ["Received a reply from ", ...named(received)] : ["Received replies from ", ...named(received)];
   return all.size === 1 ? ["Waited for a reply from ", ...named(received)] : ["Waited for replies from ", ...named(received)];
 }
 

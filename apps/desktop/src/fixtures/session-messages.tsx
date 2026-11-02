@@ -25,6 +25,7 @@ const FIRST = "sm-0123456789ab";
 const SECOND = "sm-ba9876543210";
 const ASK = "Can you check the orders schema before I cut the release? The migration in 0042 renames customer_id, and the export job still reads the old column on every nightly run.";
 const MORE = "Also the docs.";
+const ANSWER = "Checked it: the export job still reads customer_id.\n\nI pointed it at the new column and ran the nightly export once; it passes.";
 
 const conversationOf = (id: string, title: string) =>
   ({
@@ -51,6 +52,9 @@ const turn = (userMessage: string, startedAtMs: number, endedAtMs: number | null
 const header = (id: string, text: string) => `[message from session "Release prep" (${SENDER}) · ${id}]\n${text}`;
 const send = (itemId: string, text: string, status: "inProgress" | "completed", output: string | null): ProviderEvent => ({
   type: "toolCall", itemId, name: "Bash", input: JSON.stringify({ command: `brigadier send 4f2a9c1e "${text}"` }), status, output,
+});
+const waitOn = (itemId: string, status: "inProgress" | "completed", output: string | null): ProviderEvent => ({
+  type: "toolCall", itemId, name: "Bash", input: JSON.stringify({ command: "brigadier wait 4f2a9c1e --timeout 600" }), status, output,
 });
 
 const T = Date.now() - 600_000;
@@ -143,6 +147,9 @@ const sentRows = () =>
     };
   });
 
+/** The thread's row of its `brigadier wait` on another session (D138). */
+const waitRow = () => document.querySelector<HTMLElement>("[data-slot=orchestrator-step][data-wait]");
+
 /** Every bubble's text: Brigadier's header never shows. */
 const headers = () => all("main *").some((element) => element.childElementCount === 0 && (element.textContent ?? "").includes("[message from session"));
 
@@ -194,6 +201,47 @@ try {
   await until(() => received().some((each) => each.id === SECOND));
   await wait(200);
   seen.receivedLive = { received: received(), headers: headers() };
+
+  // The sender waits on the receiver's reply (D138): "Waiting for API work to reply", then the
+  // same row settles to "Received a reply from API work", collapsed, opening to the reply.
+  await openConversation(SENDER);
+  await until(() => sentRows().length > 0);
+  const W = Date.now();
+  live(SENDER, [user("u3", "Wait for its answer", W), at(waitOn("w1", "inProgress", null), W + 100)], turn("u3", W, null, ["r4"]));
+  const rowSeen = () => {
+    const row = waitRow();
+    const toggle = row?.querySelector<HTMLElement>("[role=button]") ?? null;
+    return {
+      text: text(row?.querySelector("[data-slot=peer-words]")),
+      state: row?.dataset.wait ?? null,
+      link: text(row?.querySelector("[data-slot=peer-link]")),
+      shimmer: !!row?.querySelector(".shimmer"),
+      open: toggle?.getAttribute("aria-expanded") === "true",
+      reply: text(row?.querySelector("[data-slot=wait-replies]")),
+      lines: (document.querySelector("main")!.textContent ?? "").includes("Waiting for a worker"),
+    };
+  };
+  await until(() => waitRow()?.dataset.wait === "waiting");
+  seen.waiting = rowSeen();
+  const kept = { from: RECEIVER, messageId: "sm-c0ffee000001", text: ANSWER, atMs: W + 5000 };
+  views[SENDER] = { ...views[SENDER]!, replies: [kept] };
+  applyThreadNews({ conversationId: SENDER, entries: [], replies: [kept] });
+  live(SENDER, [at(waitOn("w1", "completed", `answered (sm-c0ffee000001) ${ANSWER}`), W + 100)]);
+  await until(() => waitRow()?.dataset.wait === "received");
+  await wait(200);
+  seen.received = rowSeen();
+  // Opened, the reply shows; never as a bubble of its own.
+  waitRow()?.querySelector<HTMLElement>("[role=button]")?.click();
+  await until(() => rowSeen().open && rowSeen().reply);
+  await wait(300);
+  seen.opened = { ...rowSeen(), bubbles: received().length, inBubble: all("[data-slot=peer-message]").some((each) => (each.textContent ?? "").includes("Checked it")) };
+  // Reopened, read back from Brigadier's record: the same row.
+  await openConversation(RECEIVER);
+  await until(() => received().length > 0);
+  await openConversation(SENDER);
+  await until(() => waitRow()?.dataset.wait === "received");
+  await wait(200);
+  seen.reopened = rowSeen();
 } catch (error) {
   seen.failed = String(error);
 }

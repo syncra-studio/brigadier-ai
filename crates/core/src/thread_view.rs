@@ -54,11 +54,31 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "CliJobs::is_empty")]
     #[ts(as = "Option<CliJobs>", optional)]
     pub jobs: CliJobs,
+    /// The replies its `brigadier wait`s on other sessions took, oldest first (goal 4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<WaitReply>>", optional)]
+    pub replies: Vec<WaitReply>,
     /// The last [`ThreadNews::seq`] it holds: news up to it is in it, news after it isn't,
     /// whichever reaches the app first.
     #[serde(default, skip_serializing_if = "unnumbered")]
     #[ts(as = "Option<u64>", optional)]
     pub seq: u64,
+}
+
+/// A reply a session's `brigadier wait` on another session took, as Brigadier kept it: the
+/// thread shows it under that wait's row, never as a message of its own (goal 4, D138).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitReply {
+    /// The session that replied.
+    pub from: ConversationId,
+    /// Its message (`brigadier send`), when it sent one; none for its turn's last words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message_id: Option<String>,
+    pub text: String,
+    /// When the wait took it.
+    pub at_ms: i64,
 }
 
 fn unnumbered(seq: &u64) -> bool {
@@ -390,6 +410,10 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub jobs: Option<CliJobs>,
+    /// Its waits' replies, all of them, when one came.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replies: Option<Vec<WaitReply>>,
     /// Its number, rising, given as it changed what a read of the thread holds
     /// ([`ThreadView::seq`]); none (0) for news no read holds the same way (workers' rows).
     #[serde(default, skip_serializing_if = "unnumbered")]
@@ -736,6 +760,7 @@ pub(crate) fn view(
         jobs: live
             .map(|live| live.jobs(crate::now_ms()))
             .unwrap_or_default(),
+        replies: Vec::new(),
         seq: 0,
     }
 }
@@ -1241,6 +1266,7 @@ mod tests {
             workers: vec![],
             seams: vec![seam("u2"), seam("u3")],
             jobs: CliJobs::default(),
+            replies: Vec::new(),
             seq: 7,
         };
         let ids = |view: &ThreadView| -> Vec<String> {

@@ -21,6 +21,7 @@ import type {
   Task,
   ThinkingSegment,
   WorkerStep,
+  WaitReply,
   WorkerStepKind,
   WorkSpan,
 } from "@/ipc/generated";
@@ -122,6 +123,19 @@ export type SessionSentStep = {
   refused: string | null;
 };
 
+/**
+ * The thread's own `brigadier wait` on other sessions (D138), one row: "Waiting for Docs to
+ * reply" while it runs, then "Received a reply from Docs", opening to the reply. `to` holds the
+ * ids as the call named them; `replies` what Brigadier kept of the replies it took.
+ */
+export type SessionWaitStep = {
+  type: "sessionWait";
+  itemId: string;
+  to: readonly string[];
+  status: ItemStatus;
+  replies: WaitReply[];
+};
+
 /** The messages to other sessions a step's row sent: a jump to one opens the work holding it. */
 export function sentMessageIds(kind: BlockOrchestratorStep["kind"]): readonly string[] {
   if (kind.type === "peerSent") return kind.messageIds;
@@ -143,7 +157,7 @@ export type MachineWords = {
  * the order it happened.
  */
 export type BlockOrchestratorStep = {
-  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep | SessionSentStep;
+  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep | SessionSentStep | SessionWaitStep;
   position: number;
   /** When the step began (a tool call: when it was first seen). */
   atMs?: number;

@@ -6,6 +6,7 @@ import type { ConversationId } from "./ConversationId";
 import type { FileEntry } from "./FileEntry";
 import type { McpServerState } from "./McpServerState";
 import type { TurnEnd } from "./TurnEnd";
+import type { WaitReply } from "./WaitReply";
 import type { WorkerRow } from "./WorkerRow";
 
 /**
@@ -44,6 +45,10 @@ workers?: Array<WorkerRow>,
  * What of its CLI's background work holds its turn, when that changed (D21).
  */
 jobs?: CliJobs, 
+/**
+ * Its waits' replies, all of them, when one came.
+ */
+replies?: Array<WaitReply>, 
 /**
  * Its number, rising, given as it changed what a read of the thread holds
  * ([`ThreadView::seq`]); none (0) for news no read holds the same way (workers' rows).

@@ -142,6 +142,7 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         mcp: None,
         workers: None,
         jobs: None,
+        replies: None,
         seq: news.seq,
     };
     let second = ThreadNews {
@@ -155,6 +156,7 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         mcp: news.mcp.take(),
         workers: news.workers.take(),
         jobs: news.jobs.take(),
+        replies: None,
         seq: news.seq,
     };
     (first, second)
@@ -216,6 +218,7 @@ mod tests {
             mcp: None,
             workers: None,
             jobs: None,
+            replies: None,
             seq: 0,
         }
     }
