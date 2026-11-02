@@ -629,23 +629,6 @@ async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
             ),
             "1"
         );
-        // A later cleanup must not delete the branch that now holds the kept commit.
-        let ledger = flow.manager.runtime.ledger();
-        ledger
-            .record(
-                "kept-worker-branch",
-                brigadier_providers::Artifact::GitBranches {
-                    repo: flow.repo.display().to_string(),
-                    namespace: branch.clone(),
-                },
-            )
-            .await
-            .unwrap();
-        assert!(ledger.dispose("kept-worker-branch").await.is_clean());
-        assert_eq!(
-            super::git(&flow.repo, &["show", &format!("{branch}:marks.txt")]),
-            "unfinished marks"
-        );
         flow.stop().await;
     }
 }

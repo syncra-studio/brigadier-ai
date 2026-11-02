@@ -90,8 +90,9 @@ impl SessionManager {
                                         super::disk::keep_changes(&git, &path)
                                             .map_err(|err| err.to_string())?;
                                     }
-                                    // Refuse any new changes written after the kept commit.
-                                    repo.remove_worktree(&path, false)
+                                    // Forced: its changes are in the kept commit, and git
+                                    // refuses a plain removal of a worktree holding a nested repo.
+                                    repo.remove_worktree(&path, true)
                                         .map_err(|err| err.to_string())
                                 } else {
                                     Err("the worktree is no longer registered; its files stay"
@@ -1951,11 +1952,8 @@ impl SessionManager {
             let _lane = self.closing.lane.lock().await;
             blocking(move || {
                 let repo = git.open(&repo).map_err(git_error)?;
-                if let Some(tip) = repo.branch_tip(&branch).map_err(git_error)? {
-                    if !tip_kept_elsewhere(&repo, &branch, &tip).map_err(Error::Invalid)? {
-                        return Ok(());
-                    }
-                    repo.delete_branch_at(&branch, &tip).map_err(git_error)?;
+                if repo.branch_tip(&branch).map_err(git_error)?.is_some() {
+                    repo.delete_branch(&branch, true).map_err(git_error)?;
                 } else {
                     repo.remove_branch_config(&branch).map_err(git_error)?;
                 }
@@ -2075,39 +2073,33 @@ fn remove_git_leftover(
     };
     match what {
         Artifact::GitBranches { namespace, .. } => {
-            // Removing a worktree may just have made a kept commit. A delete recorded
-            // before that commit must not take its only branch with it.
-            repo.prune_worktrees().map_err(|err| err.to_string())?;
-            let checked_out: Vec<_> = repo
-                .worktrees()
-                .map_err(|err| err.to_string())?
-                .into_iter()
-                .filter_map(|worktree| worktree.branch)
-                .collect();
-            let mut kept = Vec::new();
-            for (name, tip) in repo.branches_in(namespace).map_err(|err| err.to_string())? {
-                if checked_out.contains(&name) || !tip_kept_elsewhere(&repo, namespace, &tip)? {
-                    kept.push(name);
-                } else {
-                    repo.delete_branch_at(&name, &tip)
+            let mut removal = repo
+                .remove_namespace(namespace)
+                .map_err(|err| err.to_string())?;
+            if !removal.checked_out.is_empty() {
+                // A worktree whose folder went with the session's (one its CLI made there)
+                // still holds its branch in git's records: those records go, then the branch.
+                let worktrees = repo.worktrees().map_err(|err| err.to_string())?;
+                let gone = worktrees.iter().any(|worktree| {
+                    worktree
+                        .branch
+                        .as_ref()
+                        .is_some_and(|branch| removal.checked_out.contains(branch))
+                        && !worktree.path.exists()
+                });
+                if gone {
+                    repo.prune_worktrees().map_err(|err| err.to_string())?;
+                    removal = repo
+                        .remove_namespace(namespace)
                         .map_err(|err| err.to_string())?;
                 }
             }
-            for name in repo
-                .branch_config_in(namespace)
-                .map_err(|err| err.to_string())?
-            {
-                if !kept.contains(&name) {
-                    repo.remove_branch_config(&name)
-                        .map_err(|err| err.to_string())?;
-                }
-            }
-            if kept.is_empty() {
+            if removal.checked_out.is_empty() {
                 Ok(None)
             } else {
                 Ok(Some(format!(
-                    "{} stays: it has unmerged commits or a worktree has it out",
-                    kept.join(", ")
+                    "{} stays: a worktree has it out",
+                    removal.checked_out.join(", ")
                 )))
             }
         }
@@ -2125,27 +2117,6 @@ fn remove_git_leftover(
         }
         _ => Err("not a git leftover".into()),
     }
-}
-
-/// A namespace's tip goes only when a branch, remote or tag outside it holds the commit.
-fn tip_kept_elsewhere(
-    repo: &brigadier_git::Repo,
-    namespace: &str,
-    tip: &brigadier_git::Oid,
-) -> std::result::Result<bool, String> {
-    let prefix = format!("refs/heads/{namespace}");
-    let holders = repo
-        .read_only(&[
-            "for-each-ref",
-            "--contains",
-            &tip.0,
-            "--format=%(refname)",
-            "refs/heads/",
-            "refs/remotes/",
-            "refs/tags/",
-        ])
-        .map_err(|err| err.to_string())?;
-    Ok(holders.lines().any(|holder| !holder.starts_with(&prefix)))
 }
 
 /// The cleanup-ledger owner of what a delete takes from the conversation's repositories.
