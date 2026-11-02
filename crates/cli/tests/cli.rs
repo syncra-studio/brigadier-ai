@@ -496,20 +496,6 @@ fn sample(request: &CliRequest) -> CliReply {
             off_routing: Some("Off your routing: its Fallback row names Claude opus.".into()),
             worker: None,
         }),
-        CliRequest::Queue { id, judgment } => CliReply::ok(&QueueOutput {
-            id: id.clone(),
-            state: match judgment {
-                Judgment::Join => QueueState::Joined,
-                Judgment::Wait => QueueState::Waiting,
-                Judgment::Worker { .. } => QueueState::SentToWorker,
-                Judgment::NewSession => QueueState::Offered,
-            },
-            already: false,
-            worker: match judgment {
-                Judgment::Worker { id } => Some(id.clone()),
-                _ => None,
-            },
-        }),
         CliRequest::ContinueOn { agent, after_turn } => {
             CliReply::ok(&brigadier_cli::protocol::ContinueOnOutput {
                 agent: *agent,
@@ -878,10 +864,6 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["pause", "a1b2", "--json"],
         &["resume", "a1b2", "--json"],
         &["switch", "a1b2", "--agent", "codex", "--json"],
-        &["queue", "9f8e7d6c", "join", "--json"],
-        &["queue", "9f8e7d6c", "wait", "--json"],
-        &["queue", "9f8e7d6c", "worker", "a1b2", "--json"],
-        &["queue", "9f8e7d6c", "new-session", "--json"],
         &["continue-on", "codex", "--after-turn", "--json"],
         &["preview", "start", "--name", "web", "--json", "pnpm", "dev"],
         &["preview", "log", "preview-1", "--tail", "5", "--json"],
@@ -1085,7 +1067,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 18, sample);
+    let daemon = stand_in_daemon(&dir.0, 17, sample);
     let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
     assert!(
         models.contains("Your rules") && models.contains("forbid: fable"),
@@ -1220,15 +1202,6 @@ fn text_output_reads_well() {
     assert!(close.starts_with("Closed a1b2.\n"), "{close}");
     assert!(close.contains("stopped"), "{close}");
     assert!(close.contains("Add JSON output"), "{close}");
-    let queued = stdout(&brigadier(
-        Some(&dir.0),
-        Some(GRANT),
-        &["queue", "9f8e7d6c", "worker", "a1b2"],
-    ));
-    assert_eq!(
-        queued,
-        "9f8e7d6c went to worker a1b2; the user sees where it went.\n"
-    );
     // A screenshot is saved where `--out` says, and the text says where.
     let shot = dir.0.join("shot.png");
     let shown = stdout(&brigadier(

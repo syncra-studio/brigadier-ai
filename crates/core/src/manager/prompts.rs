@@ -596,7 +596,7 @@ mod tests {
             // Which worker.
             "Give each part to the worker that owns its files or knows its area; track who owns what (`brigadier workers --json`).",
             "A follow-up from the user on a worker's area goes to that worker with `brigadier send`, not to a new one.",
-            "A message the user sends mid-work comes as `[queued message <id> …]`; judge it soon with `brigadier queue <id>`: `join` when it belongs to this work, `worker <id>` when it belongs to a worker's, `wait` when it doesn't belong, even a quick question (it comes again when this work is done, and is judged again then), or `new-session` if it could run apart; one that comes while only background work is in progress you answer now (`join`; unjudged, it joins). Nothing else is judged for you: unjudged, it stays queued and you are asked once more. One `steered in by the user` is this work's: do it, and if it doesn't belong to this work, start a worker for it.",
+            "A message `steered in by the user` mid-work is this work's: do it, and if it doesn't belong to this work, start a worker for it.",
             "A finished, unclosed worker takes related next work by `brigadier send`, cheaper while its context is useful, not near full; else start fresh. Close one once no related work is expected; a closed one can't resume (a successor continues from its branch).",
             // Asking.
             "Every new job (build, change, fix, design, research) opens with a grilling round.",

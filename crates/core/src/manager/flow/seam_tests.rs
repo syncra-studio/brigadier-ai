@@ -377,6 +377,8 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
     )
     .await;
     seam_on(&mut flow, Duration::from_millis(300));
+    // Its judge says it waits: it stays queued into the seam.
+    *flow.behavior.judge.lock().unwrap() = Some("WAITS");
     flow.say("Grow.").await;
     reached.notified().await;
     // Queued while the turn runs, before the seam.
@@ -392,10 +394,10 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
         )
         .await
         .unwrap();
-    let super::super::conversation::SendOutcome::Queued(item) = outcome else {
-        panic!("not queued")
-    };
-    assert!(item.delivered, "not steered: {item:?}");
+    assert!(
+        matches!(outcome, super::super::conversation::SendOutcome::Queued(_)),
+        "not queued"
+    );
     release.notify_one();
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
     flow.idle().await;
@@ -403,20 +405,10 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
         file.seams[0].end.death.as_deref(),
         Some("it was still working a minute after a message came")
     );
-    // It reached the working thread at once, Deciding (run2-D40); left unjudged, it is never
-    // counted as joined (D72): it goes back to the queue and on its own turn, in the successor.
+    // It waited in the queue and starts the successor's work on its own turn (D157).
     let meanwhile = given(&inputs, "Meanwhile.");
-    assert_eq!(meanwhile.len(), 2, "{meanwhile:#?}");
-    assert_ne!(meanwhile[0].0, file.seams[0].successor, "{meanwhile:#?}",);
-    assert!(
-        meanwhile[0].1.starts_with("[queued message "),
-        "{meanwhile:?}"
-    );
-    assert_eq!(meanwhile[1].0, file.seams[0].successor, "{meanwhile:#?}");
-    assert!(
-        meanwhile[1].1.contains(", now on its own turn]"),
-        "{meanwhile:?}"
-    );
+    assert_eq!(meanwhile.len(), 1, "{meanwhile:#?}");
+    assert_eq!(meanwhile[0].0, file.seams[0].successor, "{meanwhile:#?}");
     // The message starts the successor's work: no bare carry-on.
     assert!(given(&inputs, CARRY_ON).is_empty());
     flow.stop().await;

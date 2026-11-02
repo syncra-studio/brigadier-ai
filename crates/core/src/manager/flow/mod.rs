@@ -628,6 +628,9 @@ pub(crate) struct FakeBehavior {
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
     /// Off, it is dropped.
     pub take_in_steers: bool,
+    /// What the one-shot judging a follow-up answers (D157), instead of the script; `FITS`
+    /// when unset.
+    pub judge: Mutex<Option<&'static str>>,
     /// Closed mid-turn, it says that turn was interrupted before it ends, as the Codex and
     /// OpenCode CLIs do; off, its process just ends, as Claude Code's does.
     pub interrupt_on_close: bool,
@@ -1284,6 +1287,10 @@ impl ProviderSession for FakeSession {
             *running.lock().unwrap() = true;
             let steers = self.steers.clone();
             let take_in_steers = self.behavior.take_in_steers;
+            let judged = turn
+                .prompt
+                .contains("fits the work in progress")
+                .then(|| self.behavior.judge.lock().unwrap().unwrap_or("FITS"));
             let stops = self.stops.clone();
             stops.0.store(false, std::sync::atomic::Ordering::SeqCst);
             let session_file = self.session_file.clone();
@@ -1309,7 +1316,10 @@ impl ProviderSession for FakeSession {
                 let mut turn = turn;
                 let reply = loop {
                     let again = turn.clone();
-                    let mut reply = script(turn).await;
+                    let mut reply = match judged {
+                        Some(word) => Reply::text(word),
+                        None => script(turn).await,
+                    };
                     if let Some(used) = reply.context_tokens {
                         let _ = tx
                             .send(ProviderEvent::ContextSize {
@@ -2413,7 +2423,9 @@ impl Flow {
         loop {
             let board = self.settled_in(id).await;
             let conv = self.manager.conv(id).unwrap();
-            if conv.idle().await {
+            // A message still Deciding is judged in a moment: not idle yet.
+            let deciding = board.queue.items.iter().any(|item| item.deciding);
+            if !deciding && conv.idle().await {
                 return board;
             }
             assert!(

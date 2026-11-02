@@ -115,9 +115,6 @@ pub enum CliRequest {
         /// From 1.
         line: u32,
     },
-    /// The calling session's judgment of a message the user queued while it works
-    /// (run2-D40).
-    Queue { id: String, judgment: Judgment },
     /// Questions on one card for the user, answered together when they answer it.
     Ask {
         /// One or more, in the order asked.
@@ -389,8 +386,8 @@ pub enum Answer {
 pub enum CliReply {
     /// The request's output: [`SessionsOutput`], [`WorkersOutput`], [`ShowOutput`],
     /// [`ReadOutput`], [`StartOutput`], [`SendOutput`], [`WaitOutput`], [`CloseOutput`],
-    /// [`ContinueOnOutput`], [`ToolOutput`], [`AskOutput`], [`WhyOutput`] or [`QueueOutput`],
-    /// by request.
+    /// [`ContinueOnOutput`], [`ToolOutput`], [`AskOutput`], or [`WhyOutput`], by
+    /// request.
     Ok {
         output: serde_json::Value,
     },
@@ -1077,48 +1074,6 @@ pub enum ContinueWhen {
     Now,
     /// Once the running turn ends.
     AfterTurn,
-}
-
-/// `brigadier queue`'s judgment of a queued message (run2-D40).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase"
-)]
-pub enum Judgment {
-    /// It belongs to the work running now: it is taken into it.
-    Join,
-    /// A request of its own: it waits, and comes again on its own turn.
-    Wait,
-    /// It belongs to one of the caller's workers' work (run2-D38): its words go to that worker.
-    Worker { id: String },
-    /// A request of its own that could run apart: the user is offered a new session for it.
-    NewSession,
-}
-
-/// What became of a queued message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum QueueState {
-    Joined,
-    Waiting,
-    SentToWorker,
-    Offered,
-}
-
-/// `brigadier queue`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QueueOutput {
-    pub id: String,
-    pub state: QueueState,
-    /// Always false: nothing joins a message by itself any more (D72); kept so the output's
-    /// names stay stable.
-    pub already: bool,
-    /// For `sent-to-worker`: the worker's id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker: Option<String>,
 }
 
 /// `brigadier close`.

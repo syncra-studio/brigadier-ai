@@ -740,7 +740,12 @@ impl Core {
     /// it, and one the session already has (given to it to judge, run2-D40) is named once. A
     /// merge card answered in the words it carries points at the message from now on.
     /// Another session's message stays that session's: a peer message, never the user's (goal 4).
-    pub async fn append_queued(&self, id: ConversationId, item: QueuedMessage) -> Result<Message> {
+    pub async fn append_queued(
+        &self,
+        id: ConversationId,
+        item: QueuedMessage,
+        into: Option<String>,
+    ) -> Result<Message> {
         let message = self
             .append_user_message_as(
                 id.clone(),
@@ -749,7 +754,7 @@ impl Core {
                 item.mentions,
                 None,
                 Some((item.id.clone(), item.peer)),
-                None,
+                into,
             )
             .await?;
         let board = self.board(&id).await?;
@@ -2106,41 +2111,6 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
-    /// The session took queued message `item_id` to judge (run2-D40): its words can't change
-    /// any more, and it says which command of the thread's it waits behind, if one. False if
-    /// it is no longer queued.
-    pub(crate) async fn mark_delivered(
-        &self,
-        id: &ConversationId,
-        item_id: &str,
-        held: Option<HeldBy>,
-    ) -> Result<bool> {
-        let mut found = false;
-        self.change_queue(id, |queue| {
-            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
-                item.delivered = true;
-                item.held_by = held;
-                found = true;
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(found)
-    }
-
-    /// Reserves an existing queued message for a worker hand-off. Unlike settling, a missing
-    /// item is an error: a stale snapshot must never authorize sending it (#630).
-    pub(crate) async fn claim_queued(&self, id: &ConversationId, item_id: &str) -> Result<()> {
-        self.change_queue(id, |queue| {
-            let item = find_queued(queue, item_id)?;
-            item.deciding = true;
-            item.held_by = None;
-            Ok(())
-        })
-        .await?;
-        Ok(())
-    }
-
     /// Ends the judging of queued messages `item_ids` (`deciding`: claims them again, for a
     /// hand-off under way): those still queued wait there for their turn. Returns those whose
     /// mark changed.
@@ -2175,27 +2145,6 @@ impl Core {
         Ok(changed)
     }
 
-    /// Ends the judging of queued message `item_id` with the session's offer to open it as a
-    /// new session: it waits, showing the offer. False if it is no longer queued.
-    pub(crate) async fn offer_queued_as_session(
-        &self,
-        id: &ConversationId,
-        item_id: &str,
-    ) -> Result<bool> {
-        let mut found = false;
-        self.change_queue(id, |queue| {
-            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
-                item.deciding = false;
-                item.held_by = None;
-                item.offer_session = true;
-                found = true;
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(found)
-    }
-
     /// The user's "Run here" on a message the session offered as a new session: the offer goes
     /// and it waits like any other. Fails if it is no longer queued.
     pub async fn run_queued_here(
@@ -2208,38 +2157,6 @@ impl Core {
             Ok(())
         })
         .await
-    }
-
-    /// Says which of the thread's commands the Deciding messages `item_ids` wait behind
-    /// (`None`: none any more). Those already saying so, or gone, are left as they are.
-    pub(crate) async fn mark_queued_held(
-        &self,
-        id: &ConversationId,
-        item_ids: &[String],
-        held: Option<HeldBy>,
-    ) -> Result<()> {
-        if item_ids.is_empty() {
-            return Ok(());
-        }
-        let board = self.board(id).await?;
-        let changes = board
-            .queue
-            .items
-            .iter()
-            .any(|item| item_ids.contains(&item.id) && item.held_by != held);
-        if !changes {
-            return Ok(());
-        }
-        self.change_queue(id, |queue| {
-            for item in &mut queue.items {
-                if item_ids.contains(&item.id) {
-                    item.held_by = held.clone();
-                }
-            }
-            Ok(())
-        })
-        .await
-        .map(|_| ())
     }
 
     /// The user dismissed the notice made at `at_ms` (D51): no read or redraw shows it again.
@@ -3485,7 +3402,10 @@ mod tests {
             .await
             .unwrap();
         let mut feed = core.store.subscribe();
-        let message = core.append_queued(id.clone(), item.clone()).await.unwrap();
+        let message = core
+            .append_queued(id.clone(), item.clone(), None)
+            .await
+            .unwrap();
         assert_eq!(message.id, item.id);
         assert!(core.board(&id).await.unwrap().queue.items.is_empty());
         let mut written = Vec::new();
@@ -3501,7 +3421,7 @@ mod tests {
         );
         // A stale caller sending it again finds it gone: no second message.
         assert!(matches!(
-            core.append_queued(id.clone(), item).await,
+            core.append_queued(id.clone(), item, None).await,
             Err(Error::NotFound(_))
         ));
     }

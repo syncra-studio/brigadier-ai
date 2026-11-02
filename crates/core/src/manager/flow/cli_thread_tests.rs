@@ -306,6 +306,8 @@ async fn a_crash_mid_turn_keeps_the_cut_turn_interrupted(queued: bool) {
         Options {
             behavior: Arc::new(FakeBehavior {
                 session_file: true,
+                // The follow-up waits for its own turn.
+                judge: std::sync::Mutex::new(Some("WAITS")),
                 ..FakeBehavior::default()
             }),
             ..Options::default()

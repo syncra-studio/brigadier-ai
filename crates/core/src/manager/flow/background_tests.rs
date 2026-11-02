@@ -557,7 +557,6 @@ async fn each_cli_job_keeps_the_request_that_started_it() {
         script(move |turn| {
             let kept = kept.clone();
             async move {
-                super::cli_tests::join_queued(&turn).await;
                 let running: Vec<String> = if turn.input.contains("Start A.") {
                     vec!["a".into()]
                 } else if turn.input.contains("Start B.") {
@@ -889,7 +888,6 @@ async fn a_long_turn_for_a_stopped_jobs_end_keeps_the_next_turn_owed() {
         script(move |turn| {
             let kept = kept.clone();
             async move {
-                super::cli_tests::join_queued(&turn).await;
                 let running: Vec<String> = if turn.input.contains("Start A.") {
                     vec!["a".into()]
                 } else if turn.input.contains("Start B.") {
@@ -996,7 +994,6 @@ async fn a_job_ending_during_an_unowned_jobs_turn_keeps_its_turn_owed() {
         script(move |turn| {
             let kept = kept.clone();
             async move {
-                super::cli_tests::join_queued(&turn).await;
                 let running: Vec<String> = if turn.input.contains("Start A.") {
                     vec!["a".into()]
                 } else if turn.input.contains("Start B.") {

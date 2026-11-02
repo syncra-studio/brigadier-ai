@@ -343,11 +343,12 @@ impl SessionManager {
         &self,
         to: ConversationId,
         item: crate::work::QueuedMessage,
+        into: Option<String>,
     ) -> crate::Result<crate::model::Message> {
         if item.peer.is_some() {
             self.session_message_seen(&to, &item.id);
         }
-        self.core.append_queued(to, item).await
+        self.core.append_queued(to, item, into).await
     }
 
     /// `to`'s user deleted queued `item`: another session's message is removed for good.

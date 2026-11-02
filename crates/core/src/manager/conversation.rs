@@ -357,42 +357,17 @@ struct ConvState {
     /// Brigadier's own notes for the running turn held the same way: steered in once no
     /// command runs, else carried by the next turn.
     held_notes: Vec<String>,
-    /// The steered requests and Deciding queued messages marked as waiting behind them,
-    /// unmarked when the last ends.
+    /// The steered requests marked as waiting behind them, unmarked when the last ends.
     held_requests: Vec<String>,
-    held_items: Vec<String>,
     /// Those of them a `brigadier wait` already ended for: the next wait blocks (goal 3).
     held_told: Vec<String>,
-    /// Queued messages the session has to judge (run2-D40), given to it while a turn ran and
-    /// still Deciding until it judges them; at its turn's end they go back to waiting (D72).
-    deciding: Vec<String>,
-    /// Those of them given to the session on a turn of their own, woken to judge them while
-    /// its work held with no turn running: the pending message that starts that turn is the
-    /// queued one, not yet the user's message of a request, and never goes again. Also those
-    /// steered into the CLI's own turn for its background jobs' end ([`Self::own_turn`]).
-    woken: HashSet<String>,
     /// The running turn started with a message the user sent while the session's work still
     /// held (its workers or its CLI's background commands): it goes on with that work, in its
     /// block ([`crate::thread_view::ThreadTurn::joins`]).
     turn_joins: bool,
-    /// The running turn is one the CLI began on its own for its background jobs' end: only that
-    /// work holds its block, so a message sent meanwhile is answered in it (D113).
-    own_turn: bool,
-    /// The turn's judging is settled, even while the rest of its end is being recorded.
-    judging_ended: bool,
-    /// Queued messages given to the session to judge in the open block (D25): each is judged
-    /// once per block; a new block judges those still waiting again.
-    judged_in_block: HashSet<String>,
-    /// The turn being started opens a new block (no work held): once its CLI begins it, what
-    /// still waits in the queue is judged again in it (D25).
-    opens_block: bool,
     /// The open block's `brigadier` look-ups, and whether its drift note went (D167).
     look_ups: u32,
     drift_noted: bool,
-    /// Queued messages left unjudged at a turn's end and asked once more (D72): never again.
-    asked_again: HashSet<String>,
-    /// Those left unjudged whose next judging in the open block is that second ask.
-    ask_again: HashSet<String>,
     /// Those being handed to a worker right now: no timer, turn end or pump settles them.
     claimed: HashSet<String>,
     /// Replies that were streaming when a message was steered in, and the request they
@@ -447,11 +422,11 @@ struct ConvState {
 impl ConvState {
     /// The drift note (D167) for the turn starting now: when the block took more look-ups than
     /// one `brigadier state` call would, once a block. A new block counts afresh.
-    fn drift_note(&mut self) -> Option<String> {
+    fn drift_note(&mut self, opens_block: bool) -> Option<String> {
         let note = (self.look_ups > prompts::MAX_LOOK_UPS && !self.drift_noted)
             .then(|| prompts::drift_note(self.look_ups));
         self.drift_noted |= note.is_some();
-        if self.opens_block {
+        if opens_block {
             self.look_ups = 0;
             self.drift_noted = false;
         }
@@ -496,11 +471,10 @@ impl ConvState {
         carried
     }
 
-    /// The requests and queued messages marked as waiting behind a command, unless none are.
-    fn take_held(&mut self) -> Option<(Vec<String>, Vec<String>)> {
+    /// The requests marked as waiting behind a command, unless none are.
+    fn take_held(&mut self) -> Option<Vec<String>> {
         let requests = std::mem::take(&mut self.held_requests);
-        let items = std::mem::take(&mut self.held_items);
-        (!requests.is_empty() || !items.is_empty()).then_some((requests, items))
+        (!requests.is_empty()).then_some(requests)
     }
 
     /// The thread's oldest command running now, which a message sent in waits behind.
@@ -705,10 +679,6 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) hand_over_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
-    /// Tests: pauses a queue judgment after reading its queue item, before reserving it.
-    #[cfg(test)]
-    pub(super) queue_judgment_pause:
-        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// Tests: pauses a worker row's drain after its worker took it, before it leaves the queue.
     #[cfg(test)]
     pub(super) worker_delivery_pause:
@@ -779,7 +749,6 @@ impl ConvLive {
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
-            queue_judgment_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             worker_delivery_pause: std::sync::Mutex::new(None),
         }
@@ -859,7 +828,7 @@ impl ConvLive {
         item: &str,
         words: &str,
         status: ItemStatus,
-    ) -> Option<(Vec<String>, Vec<String>)> {
+    ) -> Option<Vec<String>> {
         let mut state = self.state.lock().await;
         if status == ItemStatus::InProgress {
             if !state.holding.iter().any(|(of, _)| of == item) {
@@ -1404,7 +1373,7 @@ impl SessionManager {
                 // A Chat judges it too, as a session does (run2-D46); a side chat doesn't.
                 drop(state);
                 return self
-                    .queue_to_judge(&conv, text, attachments, mentions, queue_index, false)
+                    .queue_to_judge(&conv, text, attachments, mentions, queue_index)
                     .await;
             }
             let item = self
@@ -1423,7 +1392,7 @@ impl SessionManager {
             holds = self.work_holds(&conv).await;
             if !steer && holds {
                 return self
-                    .queue_to_judge(&conv, text, attachments, mentions, queue_index, true)
+                    .queue_to_judge(&conv, text, attachments, mentions, queue_index)
                     .await;
             }
             if steer && holds {
@@ -1528,31 +1497,23 @@ impl SessionManager {
         if compacting {
             return Err(Error::Invalid(COMPACTING_STEER.into()));
         }
-        // One the running turn has to judge joins without going again (run2-D46).
-        if self.steered_delivered(&conv, &item_id).await? {
-            return Ok(());
-        }
-        let mut delivered = false;
+        // The work in progress takes it (D25); with no turn running, in its open block from
+        // the first frame.
+        let busy = conv.state.lock().await.busy;
+        let holds = !busy && self.work_holds(&conv).await;
+        let into = if holds {
+            self.request_for(&id).await
+        } else {
+            None
+        };
         let message = conv
             .user_write(async {
                 let item = self.core.queued(&id, &item_id).await?;
-                delivered = item.delivered;
-                self.append_queued(id.clone(), item).await
+                self.append_queued(id.clone(), item, into).await
             })
             .await?;
         drop(routing);
-        // The work in progress takes it (D25): one the session read before is named again.
-        let working = conv.state.lock().await.busy || self.work_holds(&conv).await;
-        let frame = match (working, delivered) {
-            (true, true) => Some(queue_judging::steered_frame(&crate::manager::cli::short(
-                &item_id,
-            ))),
-            (true, false) => Some(queue_judging::STEERED.to_owned()),
-            (false, true) => Some(queue_judging::own_turn_frame(&crate::manager::cli::short(
-                &item_id,
-            ))),
-            (false, false) => None,
-        };
+        let frame = (busy || holds).then(|| queue_judging::STEERED.to_owned());
         self.join_working(&conv, message, frame).await;
         Ok(())
     }
@@ -1614,7 +1575,7 @@ impl SessionManager {
         if busy && !paused {
             // The session judges it, as it waits Deciding (run2-D40).
             return self
-                .queue_to_judge(conv, text, attachments, mentions, queue_index, false)
+                .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
         // No turn runs, but the session's work still holds (its workers, its CLI's background
@@ -1623,7 +1584,7 @@ impl SessionManager {
         let holds = !paused && self.work_holds(conv).await;
         if !steer && holds {
             return self
-                .queue_to_judge(conv, text, attachments, mentions, queue_index, true)
+                .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
         if busy || paused {
@@ -1789,12 +1750,7 @@ impl SessionManager {
             return false;
         };
         let mut state = conv.state.lock().await;
-        let held: Vec<String> = state
-            .held_requests
-            .iter()
-            .chain(&state.held_items)
-            .cloned()
-            .collect();
+        let held: Vec<String> = state.held_requests.to_vec();
         let new = held.iter().any(|id| !state.held_told.contains(id));
         state.held_told = held;
         new
@@ -1816,9 +1772,8 @@ impl SessionManager {
         words: &str,
         status: ItemStatus,
     ) {
-        if let Some((requests, items)) = conv.holding_command(item, words, status).await {
+        if let Some(requests) = conv.holding_command(item, words, status).await {
             self.mark_held(conv, &requests, None).await;
-            self.mark_items_held(conv, &items, None).await;
         }
         if status != ItemStatus::InProgress {
             self.steer_held(conv).await;
@@ -1850,9 +1805,8 @@ impl SessionManager {
             state.notes.extend(notes);
             state.take_held()
         };
-        if let Some((requests, items)) = held {
+        if let Some(requests) = held {
             self.mark_held(conv, &requests, None).await;
-            self.mark_items_held(conv, &items, None).await;
         }
     }
 
@@ -1877,7 +1831,7 @@ impl SessionManager {
                     return Ok(None);
                 };
                 conv.goes_on_own_turn(&item);
-                Ok(Some(self.append_queued(conv.id.clone(), item).await))
+                Ok(Some(self.append_queued(conv.id.clone(), item, None).await))
             })
             .await;
         match popped {
@@ -2392,7 +2346,6 @@ impl SessionManager {
             }
             // A turn of its own, for no request.
             state.busy = true;
-            state.judging_ended = false;
             state.interrupted = false;
             state.compacting = true;
             state.request = None;
@@ -2696,7 +2649,7 @@ impl SessionManager {
                 match self.core.next_queued(&conv.id).await {
                     Ok(Some(item)) => {
                         conv.goes_on_own_turn(&item);
-                        match self.append_queued(conv.id.clone(), item).await {
+                        match self.append_queued(conv.id.clone(), item, None).await {
                             Ok(message) => users.push(message),
                             Err(err) => {
                                 crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
@@ -2723,11 +2676,9 @@ impl SessionManager {
                 // Nothing left to say: the thread is idle and the requests settle.
                 self.idle_without_turn(&conv).await;
                 self.settle_requests(&conv.id).await;
-                // While the block stays open (D24) a waiting message stays queued for the next
-                // one (D25); one this block hasn't judged yet wakes it to judge it.
-                if holds {
-                    self.judge_waiting(&conv, true).await;
-                } else if session && !sent_queued && self.send_queued(&conv).await {
+                // While the block stays open (D24) a waiting message stays queued until it
+                // ends (D157).
+                if !holds && session && !sent_queued && self.send_queued(&conv).await {
                     sent_queued = true;
                     continue;
                 }
@@ -2751,7 +2702,6 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
-            state.judging_ended = false;
             state.interrupted = false;
             state.landed = false;
             state.watchdog.begin(now_ms());
@@ -2765,23 +2715,9 @@ impl SessionManager {
                 state.stopped_open.remove(request);
             }
             state.turn_joins = holds && !users.is_empty();
-            state.own_turn = false;
-            // A user's message with no work held opens a new block: each waiting message is
-            // judged again in it (D25).
-            state.opens_block = !holds && !users.is_empty();
-            drift = state.drift_note();
-            if state.opens_block {
-                state.judged_in_block.clear();
-                // Its second ask was for the block that closed: here it is judged like any other.
-                state.ask_again.clear();
-            }
-            // A queued message woken to be judged is no user message of a request yet: nothing
-            // sends it again (it is in the queue, Deciding).
-            state.in_turn = users
-                .iter()
-                .filter(|message| !state.woken.contains(&message.id))
-                .cloned()
-                .collect();
+            // A user's message with no work held opens a new block.
+            drift = state.drift_note(!holds && !users.is_empty());
+            state.in_turn = users.clone();
             state.in_turn_envelopes.clone_from(&envelopes);
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
@@ -3019,12 +2955,7 @@ impl SessionManager {
                     },
                 );
             }
-            // A queued message woken to be judged waits in the queue instead (`end_judging`).
-            let woken = std::mem::take(&mut state.woken);
-            let mut pending: Vec<Message> = users
-                .into_iter()
-                .filter(|message| !woken.contains(&message.id))
-                .collect();
+            let mut pending: Vec<Message> = users;
             pending.append(&mut state.pending);
             state.pending = pending;
             // Back in front, kept so under the inbox's lock.
@@ -3034,7 +2965,6 @@ impl SessionManager {
             state.inbox = inbox;
             failed
         };
-        self.end_judging(conv, false).await;
         if asked_note {
             self.arm_seam_hold(conv).await;
         }
@@ -4260,13 +4190,6 @@ impl SessionManager {
                         continue;
                     }
                     self.note_thread_progress(&conv, &cli, event.as_ref()).await;
-                    // Auto-joined messages belong to this turn's final request list (#629).
-                    // Settle them while it is still busy, before persisting its end.
-                    if let Some(ProviderEvent::TurnCompleted { status, .. }) = &event {
-                        let completed = *status == TurnStatus::Completed
-                            && conv.state.lock().await.limit_hit.is_none();
-                        self.end_judging(&conv, completed).await;
-                    }
                     self.follow_cli_thread(&conv, event.as_ref()).await;
                     match event {
                     // Never stored.
@@ -5088,19 +5011,7 @@ impl SessionManager {
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
-                let opens_block = {
-                    let mut state = conv.state.lock().await;
-                    state.transition_turn_started = true;
-                    std::mem::take(&mut state.opens_block)
-                };
-                // Only when something waits: most turns open a block with an empty queue.
-                let waiting = opens_block
-                    && (self.core.board(&conv.id).await)
-                        .is_ok_and(|board| !board.queue.items.is_empty());
-                if waiting {
-                    let (manager, conv) = (self.arc(), conv.clone());
-                    self.spawn(async move { manager.judge_waiting(&conv, false).await });
-                }
+                conv.state.lock().await.transition_turn_started = true;
                 self.confirm_provider_transition(conv, cli).await;
                 // The user's Stop came while the turn was starting (its CLI, a new worktree's
                 // setup script, #326), with no CLI turn to stop yet: it stops this one now.
@@ -5143,8 +5054,6 @@ impl SessionManager {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
                         state.busy = true;
-                        state.own_turn = true;
-                        state.judging_ended = false;
                         state.interrupted = false;
                         state.limit_hit = None;
                         state.turn_error = None;

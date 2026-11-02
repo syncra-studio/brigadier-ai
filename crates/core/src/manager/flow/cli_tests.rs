@@ -36,16 +36,6 @@ pub(super) fn short(id: &str) -> String {
     id[id.len() - 8..].to_owned()
 }
 
-/// Judges `join` every queued message the turn was given to judge, as a real CLI working on it
-/// would (D72: nothing joins one by itself).
-pub(super) async fn join_queued(turn: &Turn) {
-    let judge = regex::Regex::new(r"\[queued message (\S{8}) · [^\]]*judge it").unwrap();
-    for found in judge.captures_iter(&turn.input) {
-        let (id, judgment) = (found[1].to_owned(), brigadier_cli::protocol::Judgment::Join);
-        brigadier(turn, CliRequest::Queue { id, judgment }).await;
-    }
-}
-
 /// Runs `brigadier <request>` as a command of the turn would: as the session and with the grant
 /// its CLI's environment names. Checks the answer against the command's schema; an error answer
 /// comes back as `{"error": …}`.
@@ -67,7 +57,6 @@ pub(super) async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         CliRequest::Pause { .. } => "pause",
         CliRequest::Resume { .. } => "resume",
         CliRequest::Switch { .. } => "switch",
-        CliRequest::Queue { .. } => "queue",
         CliRequest::ContinueOn { .. } => "continue-on",
         CliRequest::Tool { tool, .. } => tool.command(),
         CliRequest::Ask { .. } => "ask",
@@ -555,7 +544,6 @@ async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
     for mode in ["finished", "close", "cleanup"] {
         let script: Script = Arc::new(|turn| {
             Box::pin(async move {
-                join_queued(&turn).await;
                 if !turn.is_orchestrator() {
                     std::fs::write(turn.cwd.join("marks.txt"), "unfinished marks\n").unwrap();
                 } else if turn.input.contains("Start one.") {
@@ -2601,7 +2589,6 @@ async fn a_start_off_the_routing_runs_and_says_so() {
                 return Reply::text("Done.");
             }
             // A round said while workers still run comes queued: it joins this work.
-            join_queued(&turn).await;
             let by = |work: Option<&str>| StartRequest {
                 work: work.map(str::to_owned),
                 local: true,
@@ -2900,7 +2887,6 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
             ) {
                 return Reply::text("Done.");
             }
-            join_queued(&turn).await;
             let review = |reviewing: &[&str]| StartRequest {
                 reviewing: reviewing.iter().map(|id| (*id).to_owned()).collect(),
                 local: true,

@@ -128,7 +128,7 @@ fn the_successor_gets_the_notes_skills_section_and_the_users_words_whole() {
 /// the user's words alone, never an old "judge it" to act on (run2-D40).
 #[test]
 fn the_successor_gets_queued_messages_without_their_frames() {
-    let deciding = crate::manager::conversation::queue_judging::deciding_frame("feedbeef");
+    let deciding = crate::manager::conversation::queue_judging::STEERED;
     let own_turn = crate::manager::conversation::queue_judging::own_turn_frame("cafebabe");
     let withdrawn = crate::manager::conversation::queue_judging::withdrawn_frame("deadbeef");
     let mut steer = message("s1", Role::User, &format!("{deciding}Also the docs."));

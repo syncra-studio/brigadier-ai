@@ -9,9 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_cli::protocol::{
-    CliCall, CliReply, CliRequest, GRANT_ENV, Judgment, PROTOCOL, SESSION_ENV,
-};
+use brigadier_cli::protocol::{CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, SESSION_ENV};
 use brigadier_providers::ProviderKind;
 use serde_json::Value;
 
@@ -82,27 +80,15 @@ fn script(seen: Arc<Seen>) -> Script {
     })
 }
 
-/// The queue id a message given to judge names (goal 8's frames), never one on its own turn.
-fn to_judge(said: &str) -> Option<String> {
-    let rest = said.strip_prefix("[queued message ")?;
-    let (id, rest) = rest.split_at_checked(8)?;
-    rest.starts_with(" · ").then(|| id.to_owned())
-}
-
 /// `said` without the queue's frame it came under.
-fn unframed(said: &str) -> &str {
-    match said.strip_prefix("[queued message ") {
-        Some(rest) => rest.split_once("]\n").map_or(said, |(_, body)| body),
-        None => said,
-    }
+fn unframed(said: &str) -> std::borrow::Cow<'_, str> {
+    crate::manager::conversation::queue_judging::without_frames(said)
 }
 
 /// A session: `Hold.` keeps its turn running until released (or its CLI closes);
 /// `Hold-steer.` until a message is steered in; `Spawn.` starts a worker, `Spawn-hold.` one that
 /// runs until released; `Message <id> then wait` sends session `id` a message asking it to
 /// answer, then waits for its turn end; a session's message asking for an answer is answered.
-/// A message given to judge is joined, unless it says `Wait me.` (wait), `Worker me.` (to the
-/// session's worker) or `Leave me.` (unjudged).
 async fn session(turn: Turn, id: ConversationId, seen: Arc<Seen>) -> Reply {
     seen.inputs
         .lock()
@@ -116,31 +102,7 @@ async fn session(turn: Turn, id: ConversationId, seen: Arc<Seen>) -> Reply {
         ),
     );
     let said = turn.input.clone();
-    if let Some(queued) = to_judge(&said) {
-        let judgment = if said.contains("Wait me.") {
-            Some(Judgment::Wait)
-        } else if said.contains("Leave me.") {
-            None
-        } else if said.contains("Worker me.") {
-            let workers = brigadier(&turn, CliRequest::Workers).await;
-            let worker = workers["workers"][0]["id"].as_str().unwrap().to_owned();
-            Some(Judgment::Worker { id: worker })
-        } else {
-            Some(Judgment::Join)
-        };
-        if let Some(judgment) = judgment {
-            let judged = brigadier(
-                &turn,
-                CliRequest::Queue {
-                    id: queued,
-                    judgment,
-                },
-            )
-            .await;
-            seen.printed.lock().unwrap().insert("judged".into(), judged);
-        }
-    }
-    let said = unframed(&said).to_owned();
+    let said = unframed(&said).into_owned();
     if said.contains("Spawn-hold.") {
         turn.start_worker("Helper", "Hold.").await;
         return Reply::text("Spawned.");
@@ -308,10 +270,9 @@ async fn a_session_messages_another_mid_turn_and_hears_its_answer() {
         .filter(|input| input.contains(&message))
         .collect();
     assert_eq!(given.len(), 1, "{:#?}", seen.inputs_of(&b));
-    let shown = &message[message.len() - 8..];
     assert!(
-        given[0].starts_with(&format!("[queued message {shown} · ")),
-        "judged from B's queue: {}",
+        given[0].starts_with(crate::manager::conversation::queue_judging::STEERED),
+        "judged from B's queue, it fits B's running work: {}",
         given[0]
     );
     assert!(
@@ -322,7 +283,6 @@ async fn a_session_messages_another_mid_turn_and_hears_its_answer() {
         "{}",
         given[0]
     );
-    assert_eq!(seen.printed("judged")["state"], "joined");
     assert!(flow.core.board(&b).await.unwrap().queue.items.is_empty());
     assert_peer_message(&flow, &b, &message, &a).await;
 
@@ -392,8 +352,9 @@ async fn an_answer_with_no_wait_on_it_reaches_the_session_once_idle_or_busy() {
     flow.idle().await;
     flow.idle_in(&b).await;
     assert_eq!(kept_seen(&flow, &b).await, [(first, true)]);
-    // A works: B's answer waits in A's queue (given to A's turn to judge, or on its own turn
-    // once that one ends), and reaches A once.
+    // A works: B's answer waits in A's queue (its judge says it waits) and goes on its own
+    // turn once that one ends, reaching A once.
+    *flow.behavior.judge.lock().unwrap() = Some("WAITS");
     flow.say("Hold.").await;
     super::eventually("A's turn to run", || seen.took(&a, "Hold.") == 1).await;
     ok(call(&flow, &seen, &a, send(&b.0, "Two. Answer back.")).await);
@@ -416,8 +377,8 @@ async fn an_answer_with_no_wait_on_it_reaches_the_session_once_idle_or_busy() {
         .collect();
     assert_eq!(answers.len(), 2, "{:#?}", seen.inputs_of(&a));
     assert!(
-        answers[1].starts_with("[queued message "),
-        "from A's queue: {}",
+        answers[1].starts_with("[message from session "),
+        "from A's queue, on its own turn: {}",
         answers[1]
     );
     assert!(flow.core.board(&a).await.unwrap().queue.items.is_empty());
@@ -444,11 +405,12 @@ async fn a_message_while_the_block_holds_on_a_worker_goes_on_in_that_block() {
     );
     let sent = ok(call(&flow, &seen, &a, send(&b.0, "Join me.")).await);
     let message = sent["message"].as_str().unwrap().to_owned();
-    super::eventually("B to judge it", || {
-        seen.printed.lock().unwrap().contains_key("judged")
+    super::eventually("B to take it", || {
+        seen.inputs_of(&b)
+            .iter()
+            .any(|input| input.contains(&message))
     })
     .await;
-    assert_eq!(seen.printed("judged")["state"], "joined");
     let given: Vec<String> = seen
         .inputs_of(&b)
         .into_iter()
@@ -456,7 +418,7 @@ async fn a_message_while_the_block_holds_on_a_worker_goes_on_in_that_block() {
         .collect();
     assert_eq!(given.len(), 1, "{given:#?}");
     assert!(
-        given[0].contains("only background work is in progress"),
+        given[0].starts_with(crate::manager::conversation::queue_judging::STEERED),
         "{}",
         given[0]
     );
@@ -471,84 +433,6 @@ async fn a_message_while_the_block_holds_on_a_worker_goes_on_in_that_block() {
     assert_peer_message(&flow, &b, &message, &a).await;
     seen.release.store(true, Ordering::SeqCst);
     flow.settled_in(&b).await;
-    assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
-    flow.stop().await;
-}
-
-/// Judged `wait`, it waits in B's rail for its own turn, once the block is done; left
-/// unjudged (D72), it is never lost and goes on its own turn. Each reaches B as A's and is
-/// seen only then.
-#[tokio::test]
-async fn a_message_judged_wait_or_left_unjudged_goes_on_its_own_turn_once() {
-    for (name, text) in [
-        ("sessions-wait-judged", "Wait me."),
-        ("sessions-unjudged", "Leave me."),
-    ] {
-        let (flow, seen) = flow(name, false).await;
-        let a = flow.conversation.clone();
-        let b = two_sessions(&flow, &seen).await;
-        flow.say_to(&b, "Hold-steer.").await;
-        super::eventually("B's turn to run", || seen.took(&b, "Hold-steer.") == 1).await;
-        let sent = ok(call(&flow, &seen, &a, send(&b.0, text)).await);
-        let message = sent["message"].as_str().unwrap().to_owned();
-        super::eventually("B's own turn for it", || {
-            seen.inputs_of(&b)
-                .iter()
-                .any(|input| input.contains(&message) && input.contains(", now on its own turn]"))
-        })
-        .await;
-        flow.settled_in(&b).await;
-        let on_own: Vec<String> = seen
-            .inputs_of(&b)
-            .into_iter()
-            .filter(|input| input.contains(&message) && to_judge(input).is_none())
-            .collect();
-        assert_eq!(on_own.len(), 1, "{name}: {:#?}", seen.inputs_of(&b));
-        assert!(unframed(&on_own[0]).starts_with(HEADER), "{}", on_own[0]);
-        assert!(flow.core.board(&b).await.unwrap().queue.items.is_empty());
-        assert_peer_message(&flow, &b, &message, &a).await;
-        assert_eq!(kept_seen(&flow, &b).await, [(message, true)], "{name}");
-        flow.stop().await;
-    }
-}
-
-/// Judged `worker`: the worker gets A's words with who sent them, and B's thread keeps the
-/// message once, as A's (goal 4); a hand-off that fails leaves it waiting, never lost.
-#[tokio::test]
-async fn a_message_judged_for_a_worker_reaches_it_and_stays_in_the_thread_once() {
-    let (flow, seen) = flow("sessions-to-worker", false).await;
-    let a = flow.conversation.clone();
-    let b = two_sessions(&flow, &seen).await;
-    flow.say_to(&b, "Spawn-hold.").await;
-    flow.settled_in(&b).await;
-    let worker = ConversationId("worker".into());
-    super::eventually("B's worker to run", || seen.took(&worker, "Hold.") == 1).await;
-    let sent = ok(call(&flow, &seen, &a, send(&b.0, "Worker me.")).await);
-    let message = sent["message"].as_str().unwrap().to_owned();
-    super::eventually("B to judge it", || {
-        seen.printed.lock().unwrap().contains_key("judged")
-    })
-    .await;
-    let judged = seen.printed("judged");
-    assert_eq!(judged["state"], "sent-to-worker", "{judged:#}");
-    seen.release.store(true, Ordering::SeqCst);
-    super::eventually("the worker to take it", || {
-        seen.took(&worker, "Worker me.") == 1
-    })
-    .await;
-    let took: Vec<String> = seen
-        .inputs_of(&worker)
-        .into_iter()
-        .filter(|input| input.contains("Worker me."))
-        .collect();
-    assert!(
-        took[0].contains(&format!("({}) · {message}]", a.0)),
-        "{}",
-        took[0]
-    );
-    flow.settled_in(&b).await;
-    assert!(flow.core.board(&b).await.unwrap().queue.items.is_empty());
-    assert_peer_message(&flow, &b, &message, &a).await;
     assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
     flow.stop().await;
 }
@@ -759,95 +643,6 @@ async fn a_message_its_cli_never_took_reaches_it_once_after_a_crash() {
     flow.stop().await;
 }
 
-/// B's user stops B while it judges A's message (D67): it waits in B's queue, not lost; the
-/// user's Steer then sends it, once, as A's.
-#[tokio::test]
-async fn a_message_being_judged_when_its_user_stops_it_waits_and_a_steer_sends_it() {
-    let (flow, seen) = flow("sessions-stopped", false).await;
-    let a = flow.conversation.clone();
-    let b = two_sessions(&flow, &seen).await;
-    flow.say_to(&b, "Hold.").await;
-    super::eventually("B's turn to run", || seen.took(&b, "Hold.") == 1).await;
-    let sent = ok(call(&flow, &seen, &a, send(&b.0, "Leave me. Stopped one.")).await);
-    let message = sent["message"].as_str().unwrap().to_owned();
-    flow.until_in(&b, "it to reach B's turn, Deciding", |board| {
-        board
-            .queue
-            .items
-            .iter()
-            .any(|item| item.id == message && item.delivered)
-    })
-    .await;
-    flow.manager.interrupt(b.clone()).await.unwrap();
-    flow.until_in(&b, "it to wait after the stop", |board| {
-        board
-            .queue
-            .items
-            .iter()
-            .any(|item| item.id == message && !item.deciding)
-    })
-    .await;
-    flow.settled_in(&b).await;
-    assert_eq!(kept(&flow, &b), [(message.clone(), false)]);
-    flow.manager
-        .steer_queued(b.clone(), message.clone())
-        .await
-        .unwrap();
-    flow.until_in(&b, "it to go", |board| board.queue.items.is_empty())
-        .await;
-    flow.settled_in(&b).await;
-    assert_peer_message(&flow, &b, &message, &a).await;
-    assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
-    flow.stop().await;
-}
-
-/// Given to B's running turn to judge, then the daemon died (goal 4): it waits in B's queue,
-/// once, and goes on B's own turn after the restart; never a second copy. (The fake CLI's turn
-/// outlives the halted daemon and still reads what was steered into it: a real CLI ends with
-/// it, so only the turns after the restart are counted, and that one never judges.)
-#[tokio::test]
-async fn a_message_being_judged_when_the_daemon_died_goes_once_after_the_restart() {
-    let (mut flow, seen) = flow("sessions-crash-deciding", false).await;
-    let a = flow.conversation.clone();
-    let b = two_sessions(&flow, &seen).await;
-    flow.say_to(&b, "Hold.").await;
-    super::eventually("B's turn to run", || seen.took(&b, "Hold.") == 1).await;
-    let sent = ok(call(&flow, &seen, &a, send(&b.0, "Leave me. Judge me later.")).await);
-    let message = sent["message"].as_str().unwrap().to_owned();
-    flow.until_in(&b, "it to reach B's turn, Deciding", |board| {
-        board
-            .queue
-            .items
-            .iter()
-            .any(|item| item.id == message && item.delivered)
-    })
-    .await;
-    assert_eq!(kept(&flow, &b), [(message.clone(), false)]);
-
-    flow.crash().await;
-    seen.release.store(true, Ordering::SeqCst);
-    let own_turn = |seen: &Seen| {
-        seen.inputs_of(&b)
-            .iter()
-            .filter(|input| input.contains(&message) && input.contains(", now on its own turn]"))
-            .count()
-    };
-    super::eventually("B to take it on its own turn", || own_turn(&seen) == 1).await;
-    flow.settled_in(&b).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(own_turn(&seen), 1, "{:#?}", seen.inputs_of(&b));
-    assert!(
-        seen.took(&b, "Judge me later.") <= 2,
-        "{:#?}",
-        seen.inputs_of(&b)
-    );
-    assert!(flow.core.board(&b).await.unwrap().queue.items.is_empty());
-    // Kept across the restart as A's, never the user's.
-    assert_peer_message(&flow, &b, &message, &a).await;
-    assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
-    flow.stop().await;
-}
-
 /// Its CLI took it mid-turn, then the daemon died: it is not sent again, even with the line
 /// that said so lost, since the recipient's own session file holds it.
 #[tokio::test]
@@ -900,13 +695,23 @@ async fn a_queued_message_cut_off_before_its_turn_began_goes_again_after_a_crash
     let (mut flow, seen) = flow("sessions-crash-before-start", false).await;
     let a = flow.conversation.clone();
     let b = two_sessions(&flow, &seen).await;
-    flow.say_to(&b, "Hold-steer.").await;
-    super::eventually("B's turn to run", || seen.took(&b, "Hold-steer.") == 1).await;
+    *flow.behavior.judge.lock().unwrap() = Some("WAITS");
+    flow.say_to(&b, "Hold.").await;
+    super::eventually("B's turn to run", || seen.took(&b, "Hold.") == 1).await;
+    let sent = ok(call(&flow, &seen, &a, send(&b.0, "Wait me.")).await);
+    let message = sent["message"].as_str().unwrap().to_owned();
+    flow.until_in(&b, "A's message to wait, judged", |board| {
+        board
+            .queue
+            .items
+            .iter()
+            .any(|item| item.id == message && !item.deciding)
+    })
+    .await;
     let reached = Arc::new(tokio::sync::Notify::new());
     *flow.behavior.hold_send.lock().unwrap() =
         Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
-    let sent = ok(call(&flow, &seen, &a, send(&b.0, "Wait me.")).await);
-    let message = sent["message"].as_str().unwrap().to_owned();
+    seen.release.store(true, Ordering::SeqCst);
     reached.notified().await;
     flow.crash().await;
     super::eventually("A's message sent again", || {
@@ -919,7 +724,7 @@ async fn a_queued_message_cut_off_before_its_turn_began_goes_again_after_a_crash
     let on_own = seen
         .inputs_of(&b)
         .into_iter()
-        .filter(|input| input.contains(&message) && to_judge(input).is_none())
+        .filter(|input| input.contains(&message))
         .count();
     assert_eq!(on_own, 1, "{:#?}", seen.inputs_of(&b));
     assert!(flow.core.board(&b).await.unwrap().queue.items.is_empty());

@@ -164,7 +164,6 @@ fn print(
         "pause" => present(output, json, render::pause),
         "resume" => present(output, json, render::resume),
         "switch" => present(output, json, render::switch),
-        "queue" => present(output, json, render::queue),
         "continue-on" => present(output, json, render::continue_on),
         "ask" => present(output, json, render::ask),
         "why" => present(output, json, render::why),
