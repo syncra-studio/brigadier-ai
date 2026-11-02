@@ -409,7 +409,8 @@ impl SessionManager {
                             error_kind: None,
                             provider: None,
                             ended_at_ms: None,
-                            requests: Vec::new(),
+                            // Its own request: the turn the file opens with it took it.
+                            requests: requests.clone(),
                             limit: None,
                             context_window: None,
                             joins: true,

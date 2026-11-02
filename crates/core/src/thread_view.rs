@@ -963,7 +963,12 @@ fn turns(
             continue;
         }
         let started = turns[n].0.started_at_ms;
-        let previous = &mut turns[n - 1].0;
+        let (head, tail) = turns.split_at_mut(n);
+        let previous = &mut head[n - 1].0;
+        // What it names (a steered message's request) it took, not the turn before.
+        previous
+            .requests
+            .retain(|request| !tail[0].0.requests.contains(request));
         let own = ends.get(previous.user_message.as_str()).and_then(|ends| {
             ends.iter().rev().find(|record| {
                 record
@@ -1783,5 +1788,46 @@ mod tests {
             assert_eq!(view.turns.len(), 2, "{view:#?}");
             assert!(view.turns[1].joins, "{view:#?}");
         }
+    }
+
+    /// A message steered into the CLI's own turn that the file opens a turn with (D113): its
+    /// request is that turn's, not the one before's, so the thread shows it where the CLI read
+    /// it, once (seen live on Claude: a second, never-ending block).
+    #[test]
+    fn a_turn_the_file_opens_inside_the_one_before_takes_its_own_request() {
+        let at = |mut entry: FileEntry, at| {
+            entry.at_ms = Some(at);
+            entry
+        };
+        let file = vec![
+            at(message("u1", Role::User), 1),
+            at(message("a1", Role::Assistant), 2),
+            at(message("wake", Role::Assistant), 4),
+            at(message("u2", Role::User), 5),
+            at(message("a2", Role::Assistant), 6),
+        ];
+        let record = |user: &str, end, ended_at_ms, requests: &[&str], joins| TurnRecord {
+            user_message: Some(user.into()),
+            end,
+            error: None,
+            error_kind: None,
+            provider: None,
+            ended_at_ms,
+            requests: requests.iter().map(|&request| request.into()).collect(),
+            limit: None,
+            context_window: None,
+            joins,
+        };
+        let records = [
+            record("u1", Some(TurnEnd::Done), Some(2), &["r1"], false),
+            record("u2", None, None, &["r2"], true),
+            record("u1", Some(TurnEnd::Done), Some(7), &["r1", "r2"], false),
+        ];
+        let view = view(vec![Arc::new(file)], None, &records);
+        assert_eq!(view.turns.len(), 2, "{view:#?}");
+        assert_eq!(view.turns[0].requests, ["r1"], "{view:#?}");
+        assert_eq!(view.turns[0].ended_at_ms, Some(2), "{view:#?}");
+        assert_eq!(view.turns[1].requests, ["r2"], "{view:#?}");
+        assert!(view.turns[1].joins, "{view:#?}");
     }
 }
