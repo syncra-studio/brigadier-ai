@@ -2102,7 +2102,7 @@ pub enum SendOutcome {
     /// It is in the transcript (a new turn, or steered into the running one).
     Sent { message: Box<Message> },
     /// It waits in the queue.
-    Queued { item: QueuedMessage },
+    Queued { item: Box<QueuedMessage> },
 }
 
 /// A slice of an artifact's text.

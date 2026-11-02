@@ -1316,7 +1316,9 @@ fn send_outcome(outcome: brigadier_core::manager::SendOutcome) -> SendOutcome {
         brigadier_core::manager::SendOutcome::Sent(message) => SendOutcome::Sent {
             message: Box::new(message),
         },
-        brigadier_core::manager::SendOutcome::Queued(item) => SendOutcome::Queued { item },
+        brigadier_core::manager::SendOutcome::Queued(item) => SendOutcome::Queued {
+            item: Box::new(item),
+        },
     }
 }
 
