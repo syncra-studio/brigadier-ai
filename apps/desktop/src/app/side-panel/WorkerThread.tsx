@@ -15,6 +15,7 @@ import { ActionRow, exitOf } from "@/app/side-panel/ActionRow";
 import { EntryView } from "@/app/side-panel/EntryView";
 import { withSeams } from "@/app/side-panel/workerSeams";
 import { WorkerBrief } from "@/app/side-panel/WorkerBrief";
+import { pickedRow } from "@/app/conversation/activity/Briefs";
 import { rowFinished, workerStateOf } from "@/app/conversation/activity/workerState";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
@@ -218,6 +219,7 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
   const entries = useMemo(() => all.filter((_, index) => index !== briefAt), [all, briefAt]);
   const activity = workerActivity(entries);
   const switches = useWorkerSwitches(row.id, entries);
+  const picked = useBoard((s) => pickedRow(s, row.id));
   // As the lead's work does: all of it in view while it works (or was stopped), its history
   // folded once it is over, so no row moves into the fold while it is watched.
   const previous = working || state.kind === "stopped" ? [] : activity.slice(0, Math.max(0, activity.length - 3));
@@ -276,6 +278,8 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
       <StoppedBy.Provider value={state.kind === "stopped" ? { atMs: row.lastEventAtMs ?? row.startedAtMs } : null}>
       <div className="max-w-thread mx-auto min-w-0 gap-activity flex flex-col pt-5">
         {brief?.kind === "item" && brief.item.kind === "message" && <WorkerBrief text={brief.item.text} />}
+        {/* Clicking its start row opens this panel, so the row's pick is said here too (goal 12). */}
+        {picked && <p data-slot="worker-picked" className="text-muted-foreground text-sm">{picked}</p>}
         <WorkHeader row={row} turns={view?.turns ?? []} />
         {previousCount > 0 && <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger className="text-foreground/50 border-border hover:text-foreground flex min-h-7 w-full items-center gap-1 border-b text-start text-sm">

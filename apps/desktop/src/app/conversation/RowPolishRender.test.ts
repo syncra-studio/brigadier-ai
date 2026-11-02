@@ -139,3 +139,34 @@ test("a start's detail says what its routing row picked, the words its reply say
     await server.close();
   }
 });
+
+test("clicking a start row opens its worker's panel, which says under the brief what its routing row picked (goal 12, seen missing on screen)", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  Object.assign(globalThis, { document: { documentElement: {} }, getComputedStyle: () => ({ getPropertyValue: () => "" }) });
+  try {
+    const { WorkerThread } = await server.ssrLoadModule("/src/app/side-panel/WorkerThread.tsx");
+    const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
+    const { useWorkerThreads } = await server.ssrLoadModule("/src/state/cliThread.ts");
+    const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
+    const picked = "Your row \"Mechanical changes and search\" picked its agent, model and effort.";
+    const brief = "Count the lines of README.md.";
+    Object.assign(useWorkerThreads.getInitialState().views, {
+      t1: { entries: [{ event: { type: "message", itemId: "u1", role: "user", text: brief }, atMs: 1000 }], turns: [] },
+    });
+    const row = { id: "t1", number: 1, title: "Count README lines", agent: "codex", model: null, startedAtMs: 1000, working: false, lastEnd: "done", gone: false,
+      lastEventAtMs: 2000, limit: null, freshContext: false, waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false };
+    const html = (created: object) => {
+      const store = createStore(() => ({ board: { ...emptyBoard("c"), orchestratorSteps: [step(1, created)] }, orchestrator: null }));
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
+        React.createElement(TooltipProvider, null, React.createElement(WorkerThread, { conversationId: "c", row })))).replaceAll("&quot;", "\"");
+    };
+    const shown = html({ type: "created", taskId: "t1", row: picked });
+    assert.ok(shown.indexOf(picked) > shown.indexOf(brief), "the pick follows the brief");
+    assert.equal(shown.split(picked).length, 2, "said once");
+    assert.doesNotMatch(html({ type: "created", taskId: "t1" }), /worker-picked/);
+  } finally {
+    Reflect.deleteProperty(globalThis, "document");
+    Reflect.deleteProperty(globalThis, "getComputedStyle");
+    await server.close();
+  }
+});
