@@ -521,6 +521,16 @@ impl ConvState {
             || !self.lingering.is_empty()
             || self.lingering_request.is_some()
     }
+
+    /// [`Self::has_cli_jobs`] but for ended jobs whose turn is still owed: their end was told
+    /// already, or comes in a turn of its own, so nothing of them is cut by what comes next.
+    fn runs_cli_jobs(&self) -> bool {
+        self.background
+            .as_ref()
+            .is_some_and(|jobs| !jobs.running.is_empty())
+            || !self.lingering.is_empty()
+            || self.lingering_request.is_some()
+    }
 }
 
 /// The background jobs of a conversation's CLI (see `ConvState::background`).

@@ -180,8 +180,10 @@ impl SessionManager {
         steer: bool,
     ) -> Option<bool> {
         let mut file = self.read_seam_of(&conv.id).await;
+        // A job that ended inside the turn asking for a move owes a turn for a while: it never
+        // holds the move (demo9, every CLI).
         if file.phase != Phase::Live
-            || conv.has_cli_jobs().await
+            || conv.state.lock().await.runs_cli_jobs()
             || self.open_permission(&conv.id).await
         {
             return None;
@@ -464,6 +466,14 @@ impl SessionManager {
         state.seam.hold_armed = false;
         state.seam.hold_timer += 1;
         state.seam.carry_on = !stopped;
+        // Jobs that ended before the note turn were told by then: their owed turns never hold
+        // the predecessor's retirement (demo9, every CLI).
+        if let Some(jobs) = &mut state.background {
+            jobs.owed.clear();
+            if !jobs.waits() {
+                state.background = None;
+            }
+        }
         true
     }
 
