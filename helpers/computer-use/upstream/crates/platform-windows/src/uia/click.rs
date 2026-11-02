@@ -213,7 +213,7 @@ fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<(H
                 && GetParent(button).ok()? == hwnd
                 && IsWindowEnabled(button).as_bool();
             let named = native == Some(button)
-                || element.CurrentAutomationId().ok()?.to_string() == id.to_string();
+                || element.CurrentAutomationId().ok()? == if id == 1 { "1" } else { "2" };
             (usable && named).then_some((button, id))
         })?;
         if native == Some(button) {

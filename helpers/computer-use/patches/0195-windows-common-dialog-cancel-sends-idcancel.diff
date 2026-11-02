@@ -40,7 +40,7 @@ index 1fa5f3623..8f6568ec8 100644
      #[test]
      fn native_caption_or_winui_close_identity_is_required() {
 diff --git a/crates/platform-windows/src/uia/click.rs b/crates/platform-windows/src/uia/click.rs
-index df886bbd8..37873228c 100644
+index df886bbd8..731debc91 100644
 --- a/crates/platform-windows/src/uia/click.rs
 +++ b/crates/platform-windows/src/uia/click.rs
 @@ -192,36 +192,39 @@ fn send_command(
@@ -81,7 +81,7 @@ index df886bbd8..37873228c 100644
 +                && GetParent(button).ok()? == hwnd
 +                && IsWindowEnabled(button).as_bool();
 +            let named = native == Some(button)
-+                || element.CurrentAutomationId().ok()?.to_string() == id.to_string();
++                || element.CurrentAutomationId().ok()? == if id == 1 { "1" } else { "2" };
 +            (usable && named).then_some((button, id))
 +        })?;
          if native == Some(button) {
