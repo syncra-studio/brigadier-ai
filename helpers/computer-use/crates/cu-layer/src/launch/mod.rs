@@ -192,10 +192,11 @@ impl Tool for LaunchAppTool {
                 );
             }
         }
-        let windows_before: HashSet<u32> = crate::window_list::windows(None)
+        let titles_before: HashMap<u32, String> = crate::window_list::windows(None)
             .into_iter()
-            .map(|w| w.id)
+            .map(|w| (w.id, w.title))
             .collect();
+        let windows_before: HashSet<u32> = titles_before.keys().copied().collect();
         let running_before = apps::running_apps();
         let pids_before: HashSet<i32> = running_before.iter().map(|a| a.pid).collect();
         let is_named = |app: &apps::RunningApp| {
@@ -351,7 +352,7 @@ impl Tool for LaunchAppTool {
                 // Wait a little for the documents' windows and list them
                 // first, so the caller needn't list the windows again.
                 let (mut windows, new) =
-                    open_link::wait_for_new_windows(pid, &windows_seen, urls.len());
+                    open_link::wait_for_new_windows(pid, &titles_before, &urls);
                 if new == 0 {
                     put_window_first(&mut windows, apps::main_window_id(pid));
                 }

@@ -217,6 +217,7 @@ Patches applied, in order:
 - `patches/0201-macos-finder-reads-leave-out-desktop.diff`: A window-scoped read of a Finder window leaves out Finder's desktop scroll area, so the user's desktop icons are no longer listed as part of the window.
 - `patches/0202-macos-text-area-click-places-caret.diff`: A token click on a text area or text field that has no press action focuses it and puts its caret at the end of its text, confirmed by reading the caret back, instead of failing with AX error -25206.
 - `patches/0203-macos-unchanged-tokens-survive-reads.diff`: On macOS a token from one of a window's last 4 reads keeps working while a later read proves its element unchanged (same AX element, role, title, value, place and parents); other platforms keep staling every older token.
+- `patches/0204-macos-waits-end-on-effect.diff`: On macOS press_key ends its value readback and pre-focus pauses as soon as the change or focus is seen (same caps), batch lookups poll every 80 ms, and invoke_menu logs how long a background item took to enable.
 
 - `patches/0250-linux-launch-keeps-the-front.diff`: Linux launches keep the user's front window: launched apps get a startup id whose user time predates every user action, so window managers with focus-stealing prevention (mutter, KWin) map them behind; a window manager that focuses the new window anyway is undone by the X11 focus guard, and the reply and its active field say what moved and whether it was handed back.
 
