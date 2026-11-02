@@ -28,17 +28,18 @@ use crate::work::{Approval, ApprovalSubject, CardState, Question, Task};
 use crate::{Error, Result};
 
 /// The parts the overview gives whole when small (D156): what a thread acts on at once.
-const INLINE: [ContextPart; 6] = [
+const INLINE: [ContextPart; 7] = [
     ContextPart::Brief,
     ContextPart::Waiting,
     ContextPart::Decisions,
     ContextPart::Open,
     ContextPart::Checkpoint,
+    ContextPart::Project,
     ContextPart::Routing,
 ];
 
 /// Past this a part is listed with its size instead (a long-lived ledger, a big routing).
-const INLINE_TOKENS: u32 = 2_000;
+const INLINE_TOKENS: u32 = 4_000;
 
 /// The transcript items `context transcript` gives when not told how many.
 const LAST: u32 = 20;

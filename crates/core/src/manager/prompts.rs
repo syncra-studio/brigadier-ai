@@ -615,7 +615,7 @@ mod tests {
             "| `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |",
             "A worker is naked: its CLI loads none of your setup but the project's instruction file, MCP servers only by `--mcp` (for heavy use), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`, and calls any MCP server of the setup with `brigadier mcp`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.",
             // Pick the model.
-            "The user's routing decides each worker's agent, model and effort. Before each `brigadier start`, read `brigadier models`; pass `--work \"<Work>\"` of the row that fits; that row (the user's, else the shipped) picks all three. If its account is out of quota, pass the agent, model and effort of the same Work's next row the rules allow; never a model or effort the rows don't name.",
+            "The user's routing decides each worker's agent, model and effort. The rows are in `brigadier state` (routing), read once: no `brigadier models` before each start. Pass `--work \"<Work>\"` of the row that fits (none: its default row); that row (the user's, else the shipped) picks all three. If its account is out of quota, pass the agent, model and effort of the same Work's next row the rules allow; never a model or effort the rows don't name.",
             // Brief.
             "Target:** the repo area and the outcome.",
             "Change:** what to build or fix, and decisions made (quote the user's words when they matter).",
