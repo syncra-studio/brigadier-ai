@@ -214,6 +214,7 @@ Patches applied, in order:
 
 - `patches/0183-windows-action-note-had-the-front.diff`: Say "had the front", not "took the front", in an input action's reply note: an action that starts while the app's dialog is already in front (a displaced watch) observes it at once, and the app did not take the front during that action.
 - `patches/0200-macos-health-accepts-brigadier-bundle.diff`: health_report's bundle check passes for Brigadier's helper app (ai.brigadier.computer-use and the development id), so a correctly set up helper no longer always reads as degraded.
+- `patches/0201-macos-finder-reads-leave-out-desktop.diff`: A window-scoped read of a Finder window leaves out Finder's desktop scroll area, so the user's desktop icons are no longer listed as part of the window.
 
 <!-- sync:end -->
 

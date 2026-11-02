@@ -6,8 +6,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use cu_layer::launch::{
-    self, apps, local_file_target, names_app, preflight_file_urls, put_window_first, retry_launch,
-    settings_hint, split_open_targets, watchdog_ticks, LaunchAppTool,
+    self, apps, drop_noise_windows, local_file_target, names_app, preflight_file_urls,
+    put_window_first, retry_launch, settings_hint, split_open_targets, watchdog_ticks,
+    LaunchAppTool,
 };
 use cu_layer::target_policy::{self, TargetResolver};
 use cua_driver_core::tool::Tool;
@@ -106,6 +107,24 @@ fn window(window_id: u32) -> WindowInfo {
 
 fn ids(windows: &[WindowInfo]) -> Vec<u32> {
     windows.iter().map(|w| w.window_id).collect()
+}
+
+#[test]
+fn launch_results_leave_out_untitled_windows_that_are_not_on_screen() {
+    let titled = |id: u32, title: &str, on_screen: bool| {
+        let mut w = window(id);
+        w.title = title.to_owned();
+        w.is_on_screen = on_screen;
+        w
+    };
+    let mut windows = vec![
+        titled(1, "doc.txt", true),
+        titled(2, "", false),
+        titled(3, "", true),
+        titled(4, "Other Space", false),
+    ];
+    drop_noise_windows(&mut windows);
+    assert_eq!(ids(&windows), [1, 3, 4]);
 }
 
 #[test]

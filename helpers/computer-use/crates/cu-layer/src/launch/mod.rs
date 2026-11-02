@@ -415,7 +415,12 @@ impl Tool for LaunchAppTool {
         }
 
         match launch_result {
-            Ok(Ok(Launched { pid, app, windows })) => {
+            Ok(Ok(Launched {
+                pid,
+                app,
+                mut windows,
+            })) => {
+                drop_noise_windows(&mut windows);
                 let app_name = app.as_ref().map(|a| a.name.as_str()).unwrap_or("?");
                 let bid = app
                     .as_ref()
@@ -629,6 +634,13 @@ pub fn names_app(
 /// Lists the window `first` first (the app's main window: the one the
 /// launch opened or brought up), ahead of any panels or helper windows,
 /// keeping the others in order.
+/// Leave out windows that carry nothing for an agent: untitled and not on
+/// screen, such as TextEdit's hidden helper window and Finder's desktop
+/// strips. list_windows still lists every window.
+pub fn drop_noise_windows(windows: &mut Vec<WindowInfo>) {
+    windows.retain(|w| !w.title.trim().is_empty() || w.is_on_screen);
+}
+
 pub fn put_window_first(windows: &mut [WindowInfo], first: Option<u32>) {
     if let Some(at) = windows.iter().position(|w| Some(w.window_id) == first) {
         windows[..=at].rotate_right(1);
