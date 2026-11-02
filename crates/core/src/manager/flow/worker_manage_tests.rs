@@ -258,7 +258,10 @@ fn pause(id: &str) -> CliRequest {
 }
 
 fn resume(id: &str) -> CliRequest {
-    CliRequest::Resume { id: id.into() }
+    CliRequest::Resume {
+        id: id.into(),
+        note: None,
+    }
 }
 
 fn switch(id: &str, agent: Option<ProviderKind>) -> CliRequest {

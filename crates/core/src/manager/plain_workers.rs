@@ -1762,11 +1762,22 @@ impl SessionManager {
     }
 
     /// `brigadier resume` (D7).
-    pub(super) async fn cli_resume(&self, caller: &CliCaller, id: &str) -> Result<CliReply> {
+    pub(super) async fn cli_resume(
+        &self,
+        caller: &CliCaller,
+        id: &str,
+        note: Option<String>,
+    ) -> Result<CliReply> {
         let task = match self.own_worker(caller, id).await {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
+        // Held as a message to the paused worker is, and goes with the resume: no row of its own.
+        if let Some(note) = note
+            && super::workers::explicitly_paused(&task)
+        {
+            self.send_plain(&task, note).await?;
+        }
         self.resume_task(task.id.clone()).await?;
         Ok(CliReply::ok(&ManageOutput {
             id: short(&task.id.0),

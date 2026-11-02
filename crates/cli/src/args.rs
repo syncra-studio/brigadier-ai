@@ -425,7 +425,10 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
         },
         "close" => CliRequest::Close { id: id() },
         "pause" => CliRequest::Pause { id: id() },
-        "resume" => CliRequest::Resume { id: id() },
+        "resume" => CliRequest::Resume {
+            id: id(),
+            note: Some(args.text("note")).filter(|note| !note.trim().is_empty()),
+        },
         "switch" => {
             let given = |name: &str| {
                 args.flag(name)
@@ -1299,7 +1302,17 @@ mod tests {
         );
         assert_eq!(
             run(&["resume", "ab12"]).0,
-            CliRequest::Resume { id: "ab12".into() }
+            CliRequest::Resume {
+                id: "ab12".into(),
+                note: None
+            }
+        );
+        assert_eq!(
+            run(&["resume", "ab12", "go", "on", "from", "12"]).0,
+            CliRequest::Resume {
+                id: "ab12".into(),
+                note: Some("go on from 12".into())
+            }
         );
         assert_eq!(
             run(&["switch", "ab12"]).0,

@@ -445,10 +445,13 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "resume",
-        summary: "Resume a paused worker.",
-        details: "It gets what you sent it while paused, then \"Continue where you stopped.\", \
-                  in one turn of the same session.",
-        args: &[positional("id", "The worker.")],
+        summary: "Resume a paused worker (the user's \"carry on\"), with an optional note.",
+        details: "It gets what you sent it while paused and the note, then \"Continue where \
+                  you stopped.\", in one turn of the same session: one call, no `send` first.",
+        args: &[
+            positional("id", "The worker."),
+            rest("note", "What it should know as it goes on.", false),
+        ],
         available: true,
         schema: include_str!("../schemas/resume.schema.json"),
     },

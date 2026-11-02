@@ -677,14 +677,20 @@ pub fn close(output: &CloseOutput) -> String {
 pub fn pause(output: &ManageOutput) -> String {
     let id = &output.id;
     if output.done {
-        format!("Paused {id}. What you send it waits for `brigadier resume {id}`.\n")
+        format!(
+            "Paused {id}; the thread shows it. A note for it goes with `brigadier resume {id} \
+             \"<note>\"`.\n"
+        )
     } else {
         format!("{id} was paused already.\n")
     }
 }
 
 pub fn resume(output: &ManageOutput) -> String {
-    format!("Resumed {}: it continues where it stopped.\n", output.id)
+    format!(
+        "Resumed {}: it continues where it stopped; the thread shows it.\n",
+        output.id
+    )
 }
 
 pub fn switch(output: &ManageOutput) -> String {

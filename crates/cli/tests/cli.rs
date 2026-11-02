@@ -478,7 +478,7 @@ fn sample(request: &CliRequest) -> CliReply {
             id: id.clone(),
             closed: true,
         }),
-        CliRequest::Pause { id } | CliRequest::Resume { id } => CliReply::ok(&ManageOutput {
+        CliRequest::Pause { id } | CliRequest::Resume { id, .. } => CliReply::ok(&ManageOutput {
             id: id.clone(),
             done: true,
             to: None,
