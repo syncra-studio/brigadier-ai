@@ -46,6 +46,11 @@ test("how its last turn ended: failed (or cut off, or gone without a done end), 
   assert.equal(word({ working: false, lastEnd: "stopped", gone: true, merged: true }), "Stopped");
 });
 
+test("a worker its session paused reads Paused, never Failed, its cut turn whatever it was (O57 item 3)", () => {
+  assert.equal(word({ working: false, lastEnd: "interrupted", paused: true }), "Paused");
+  assert.equal(word({ working: false, lastEnd: null, paused: true }), "Paused");
+});
+
 test("git says the rest: Merged, Done · not merged (commits ahead or changes), Done", () => {
   assert.equal(word({ working: false, lastEnd: "done", merged: true, ahead: 0 }), "Merged");
   assert.equal(word({ working: false, lastEnd: "done", ahead: 2 }), "Done · not merged");
@@ -63,8 +68,9 @@ test("the finished ones count as N done · M stopped, failed among the stopped",
     row({ working: false, lastEnd: "failed" }),
     row(),
   ];
-  assert.deepEqual(finishedCounts(rows, NOW), { done: 3, stopped: 2 });
+  assert.deepEqual(finishedCounts(rows, NOW), { done: 3, paused: 0, stopped: 2 });
   assert.equal(finishedWords(rows, NOW), "3 done · 2 stopped");
+  assert.equal(finishedWords([...rows, row({ working: false, lastEnd: "interrupted", paused: true })], NOW), "3 done · 1 paused · 2 stopped");
   assert.equal(finishedWords([row()], NOW), "");
 });
 

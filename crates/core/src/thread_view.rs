@@ -207,6 +207,10 @@ pub struct WorkerRow {
     pub last_end: Option<TurnEnd>,
     /// Its CLI ended, or its session closed it.
     pub gone: bool,
+    /// Its session paused it (D7), until it resumes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub paused: bool,
     /// When its CLI last said anything.
     pub last_event_at_ms: Option<i64>,
     /// The usage limit its model hit, while it holds.

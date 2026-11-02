@@ -456,6 +456,15 @@ pub(crate) fn row(
         TaskState::Reported => Some(TurnEnd::Done),
         _ => None,
     });
+    let paused = super::workers::explicitly_paused(task);
+    let closed = task.plain.as_ref().is_some_and(|plain| plain.closed);
+    // A turn its session cut (a pause, a switch or a close, D124) never failed: a closed one
+    // stopped, a switched one goes on.
+    let last_end = match last_end {
+        Some(TurnEnd::Interrupted) if closed => Some(TurnEnd::Stopped),
+        Some(TurnEnd::Interrupted) if cli.cut && !paused => None,
+        end => end,
+    };
     let git = git.cloned().unwrap_or_default();
     let background = if gone {
         Vec::new()
@@ -478,6 +487,7 @@ pub(crate) fn row(
         working: working(task, Some(&cli)),
         last_end,
         gone,
+        paused,
         last_event_at_ms: cli.last_event_ms,
         limit: cli.limit.filter(|_| !gone),
         fresh_context: cli.fresh_context && cli.open,

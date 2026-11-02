@@ -183,6 +183,15 @@ impl Bench {
         Flow::task(&self.flow.board().await, 1).clone()
     }
 
+    /// Its row on the side panel's Workers card.
+    async fn row(&self) -> crate::thread_view::WorkerRow {
+        let rows = (self.flow.manager)
+            .worker_rows_of(&self.flow.conversation, false)
+            .await
+            .unwrap();
+        rows.into_iter().next().unwrap()
+    }
+
     /// Runs `request` as `brigadier` in the session's next turn; its answer.
     async fn run(&self, request: CliRequest) -> Value {
         // Its turn before has ended: nothing waits in the queue to be judged.
@@ -313,6 +322,9 @@ async fn a_pause_ends_the_turn_holds_messages_and_a_resume_goes_on_once() {
         Some(TurnEnd::Interrupted),
         "D124: not 'You stopped'"
     );
+    // The Workers card reads Paused, never Failed (O57 item 3).
+    let row = bench.row().await;
+    assert!(row.paused, "{row:?}");
     // A real CLI may still report the cut turn's end after its close: it changes nothing.
     let steps = bench.flow.board().await.worker_steps.len();
     let live = bench.flow.manager.task_live(&task);
@@ -530,6 +542,12 @@ async fn a_switch_moves_a_working_worker_once_and_its_pins_follow() {
         Some(TurnEnd::Interrupted),
         "D124: not 'You stopped'"
     );
+    // Moved, it goes on: its Workers card row never reads Failed (O57 item 3).
+    let row = bench.row().await;
+    assert!(
+        row.working || row.last_end != Some(TurnEnd::Interrupted),
+        "{row:?}"
+    );
     super::eventually("its turn on Codex", || {
         bench
             .with(WORDS)
@@ -707,6 +725,13 @@ async fn a_paused_worker_closed_stops_once_and_still_reads() {
     bench.run(pause(&id)).await;
     let closed = bench.run(CliRequest::Close { id: id.clone() }).await;
     assert_eq!(closed["closed"], true, "{closed:#}");
+    // The Workers card reads Stopped, never Failed (O57 item 3).
+    let row = bench.row().await;
+    assert_eq!(
+        (row.paused, row.last_end),
+        (false, Some(TurnEnd::Stopped)),
+        "{row:?}"
+    );
     let read = bench
         .run(CliRequest::Read {
             id: id.clone(),
