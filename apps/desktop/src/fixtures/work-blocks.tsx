@@ -557,9 +557,17 @@ async function driveOpened(): Promise<object> {
   return { opened, answering, done, expanded, answer: seen().answer, chosen, reloaded };
 }
 
-/** What the CLI runs beside the turn: its background tasks, and which of them hold the turn. */
+/**
+ * What the CLI runs beside the turn: its background tasks, which of them hold the turn, and the
+ * core's work block they keep open, closed once none runs (D163).
+ */
 function background(tasks: BackgroundTask[], holding: string[] = []): void {
-  useCliThread.setState((state) => ({ views: { ...state.views, [ID]: { ...state.views[ID]!, background: tasks, jobs: { holding } } } }));
+  useCliThread.setState((state) => {
+    const held = state.views[ID]!;
+    const startedAtMs = held.block?.startedAtMs ?? Date.now();
+    const block = tasks.some((each) => each.status === "running") ? { startedAtMs } : { startedAtMs, endedAtMs: Date.now() };
+    return { views: { ...state.views, [ID]: { ...held, background: tasks, jobs: { holding }, block } } };
+  });
 }
 const task = (id: string, kind: "agent" | "shell", label: string, running: boolean): BackgroundTask => ({
   id, itemId: null, kind, label, status: running ? "running" : "completed", startedAtMs: Date.now() - 500,
