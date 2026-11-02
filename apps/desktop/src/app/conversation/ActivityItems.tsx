@@ -45,7 +45,7 @@ export function useLiveLine(unjoined: readonly Activity<LeadStep, Entry>[], live
   const sentStep = newest?.type === "group" && lastStep !== undefined && newest.items.at(-1) === lastStep
     && lastStep.type === "step" && lastStep.step.kind.type === "peerSent" ? lastStep.step : null;
   const going = leadRunning && thought === null && !live?.thinkingLive && sentStep?.kind.type === "peerSent"
-    && sentStep.kind.waits.length === 0 && sentStep.kind.messageIds.length > 0
+    && sentStep.kind.messageIds.length > 0
     && sentStep.kind.messageIds.every((id) => { const record = peers.records[id]; return !!record && went(record.state); })
     ? sentStep : null;
   // A wait on another session's reply says it in its own row: no line under it either (D138).

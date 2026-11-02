@@ -97,15 +97,12 @@ export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?
  */
 export type DecidedStep = { type: "decided"; what: string; why: string };
 
-/** A wait of the thread for the replies to its messages, as its call stands. */
-export type PeerWaitCall = { itemId: string; status: ItemStatus; requestId: string | null };
-
 /**
  * Messages this session sent others, and its waits for their replies, as one row of the work
  * (SESSION-MESSAGING-PLAN.md §6.1): "Sent message to Docs, waited for its reply". The records
  * say where each went and how it stands; adjacent sends and waits share the row.
  */
-export type PeerSentStep = { type: "peerSent"; messageIds: readonly string[]; waits: readonly PeerWaitCall[] };
+export type PeerSentStep = { type: "peerSent"; messageIds: readonly string[] };
 
 /**
  * A message the thread's own `brigadier send` gave another session (S30), as one row of the work:
@@ -502,7 +499,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       kind: "orchestrator",
       position: peer.position,
       requestId: peer.requestId,
-      step: { kind: { type: "peerSent", messageIds: [peer.messageId], waits: [] }, position: peer.position, atMs: peer.sentAtMs },
+      step: { kind: { type: "peerSent", messageIds: [peer.messageId] }, position: peer.position, atMs: peer.sentAtMs },
       atMs: peer.sentAtMs,
     });
   }

@@ -241,22 +241,20 @@ test("a question card's row says what it asks, what it asked, and the recommende
 });
 
 const stepAt = (position: number, kind: BlockOrchestratorStep["kind"]): SequenceEntry => ({ kind: "orchestrator", steps: [{ kind, position }], position });
-const waitCall = (itemId: string) => ({ itemId, status: "completed" as const, requestId: "a1" });
 
-test("messages to other sessions and the waits for their replies, next to each other, are one row of the work", () => {
+test("messages to other sessions, next to each other, are one row of the work", () => {
   const sequence: SequenceEntry[] = [
-    stepAt(1, { type: "peerSent", messageIds: ["m1"], waits: [] }),
-    stepAt(2, { type: "peerSent", messageIds: ["m2"], waits: [] }),
-    stepAt(3, { type: "peerSent", messageIds: [], waits: [waitCall("w1")] }),
+    stepAt(1, { type: "peerSent", messageIds: ["m1"] }),
+    stepAt(2, { type: "peerSent", messageIds: ["m2"] }),
     stepAt(4, { type: "tool", itemId: "t1", name: "Read", detail: null, status: "completed", throughPosition: 4 }),
-    stepAt(5, { type: "peerSent", messageIds: [], waits: [waitCall("w2")] }),
+    stepAt(5, { type: "peerSent", messageIds: ["m3"] }),
   ];
   const [group] = turnActivity(sequence);
   assert.ok(group?.type === "group");
   assert.deepEqual(group.items.map((item) => item.type === "step" ? item.step.kind : item.type), [
-    { type: "peerSent", messageIds: ["m1", "m2"], waits: [waitCall("w1")] },
+    { type: "peerSent", messageIds: ["m1", "m2"] },
     { type: "tool", itemId: "t1", name: "Read", detail: null, status: "completed", throughPosition: 4 },
-    { type: "peerSent", messageIds: [], waits: [waitCall("w2")] },
+    { type: "peerSent", messageIds: ["m3"] },
   ]);
 });
 

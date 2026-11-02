@@ -117,7 +117,7 @@ export function joinExchanges(items: GroupItem<LeadStep>[], sending: LeadStep | 
       const next = item.step.kind;
       out[out.length - 1] = {
         ...last,
-        step: { ...last.step, kind: { ...kind, messageIds: [...kind.messageIds, ...next.messageIds], waits: [...kind.waits, ...next.waits] } },
+        step: { ...last.step, kind: { ...kind, messageIds: [...kind.messageIds, ...next.messageIds] } },
       };
       continue;
     }

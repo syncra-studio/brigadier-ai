@@ -50,24 +50,10 @@ export type PeerLookup = {
 
 const NO_RECORDS: Readonly<Record<string, PeerMessage>> = {};
 
-/** The records a row's waits took replies with, or wait for: by the call, or by its request. */
-function waitRecords(kind: PeerSentStep, records: Readonly<Record<string, PeerMessage>>): { taken: PeerMessage[]; asked: PeerMessage[] } {
-  const calls = new Set(kind.waits.map((wait) => wait.itemId));
-  const requests = new Set(kind.waits.flatMap((wait) => (wait.requestId ? [wait.requestId] : [])));
-  const all = Object.values(records);
-  return {
-    taken: all.filter((record) => !record.outgoing && record.hold?.type === "taken" && calls.has(record.hold.itemId)),
-    asked: all.filter((record) => record.outgoing && !record.replyTo && !record.automatic && requests.has(record.requestId ?? "")),
-  };
-}
-
 /** The sessions the message rows among `steps` name. */
 function namedIn(steps: readonly BlockOrchestratorStep[], records: Readonly<Record<string, PeerMessage>>): string[] {
   return steps.flatMap(({ kind }) => {
-    if (kind.type === "peerSent") {
-      const { taken, asked } = waitRecords(kind, records);
-      return [...kind.messageIds.flatMap((id) => records[id]?.peer ?? []), ...taken.map((record) => record.peer), ...asked.map((record) => record.peer)];
-    }
+    if (kind.type === "peerSent") return kind.messageIds.flatMap((id) => records[id]?.peer ?? []);
     if (kind.type === "messageRefused") return kind.to ?? [];
     if (kind.type === "sessionWait") return kind.replies.map((reply) => reply.from);
     return [];
@@ -127,16 +113,13 @@ export function exchangeOf(kind: PeerSentStep, peers: PeerLookup, going = false)
   const sent = kind.messageIds.flatMap((id) => records[id] ?? []);
   const replies = Object.values(records).filter((record) => !record.outgoing && heldForWait(record));
   const answered = (record: PeerMessage) => replies.some((reply) => reply.replyTo === record.messageId);
-  const { taken, asked } = waitRecords(kind, records);
-  const received = sent.length > 0
-    ? sent.filter(answered).map((record) => ref(record, record.messageId))
-    : taken.map((reply) => ref(reply, reply.replyTo));
-  const due = (sent.length > 0 ? sent : asked).filter((record) =>
+  const received = sent.filter(answered).map((record) => ref(record, record.messageId));
+  const due = sent.filter((record) =>
     !answered(record) && (record.state.type === "pending" || record.state.type === "delivered" || record.state.type === "seen") && !record.settled,
   );
   return {
     sends: sent.map((record) => ({ ...ref(record, receiverHasIt(record.state) ? record.messageId : undefined), state: record.state })),
-    waits: kind.waits.map((wait) => wait.status),
+    waits: [],
     received,
     waitingOn: due.map((record) => ref(record, record.messageId)),
     going,
