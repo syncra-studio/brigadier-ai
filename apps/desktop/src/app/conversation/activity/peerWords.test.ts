@@ -20,6 +20,7 @@ import {
   waitExchange,
 } from "@/app/conversation/activity/peerWords";
 import type { Conversation, ItemStatus, PeerMessage, PeerState, Project } from "@/ipc/generated";
+import { summarize } from "@/app/conversation/activity/words";
 
 const docs: PeerRef = { session: "docs", title: "Docs" };
 const notes: PeerRef = { session: "notes", title: "Release notes" };
@@ -104,6 +105,15 @@ test("the row's words as a group reads them: kind, summary phrase and the waitin
   // A message waiting for the user's OK counts as sent for the group.
   assert.equal(exchangeDescribed(exchange([send(docs, "waitingForOk")])).words.kind, "message");
   assert.deepEqual(refusedDescribed(UNKNOWN_SESSION).words.done, "Couldn’t send message to a session");
+});
+
+test("a wait on its own sums up as its row reads, never as a message sent (demo9 shot 04)", () => {
+  const received = exchangeDescribed(exchange([], ["completed"], [docs]));
+  assert.equal(received.words.done, "Received a reply from Docs");
+  assert.equal(summarize([received.words]), "Received a reply");
+  assert.equal(summarize([received.words, received.words]), "Received replies");
+  assert.equal(summarize([exchangeDescribed(exchange([], ["inProgress"], [], [docs])).words]), "Waiting for a reply");
+  assert.equal(summarize([exchangeDescribed(exchange([], ["completed"])).words]), "Waited; no reply yet");
 });
 
 test("only a message the receiver has opens it there", () => {

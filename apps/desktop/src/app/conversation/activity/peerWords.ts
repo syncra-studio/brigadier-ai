@@ -137,6 +137,11 @@ export function exchangeDescribed(exchange: Exchange): Described {
   const sent = exchange.sends.some((send) => went(send.state) || send.state.type === "waitingForOk");
   const failed = exchange.sends.length > 0 && !sent;
   const object = parts.find((part): part is PeerRef => typeof part !== "string")?.title;
+  // A wait on its own sums up as its row reads, never as a message sent (D138).
+  if (exchange.sends.length === 0) {
+    const phrase = exchange.received.length > 0 ? "Received a reply" : waiting ? "Waiting for a reply" : label;
+    return { words: { kind: "other", doing: label, done: label, ...(object !== undefined && { object }), phrase, many: phrase === "Received a reply" ? "Received replies" : phrase, ...(waiting && { waiting }) }, status };
+  }
   return {
     words: {
       kind: failed ? "other" : "message",
