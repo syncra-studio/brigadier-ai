@@ -1229,6 +1229,8 @@ struct Server {
     url: String,
     password: String,
     recorder: Option<Arc<Recorder>>,
+    /// How long one request may take ([`REQUEST_TIMEOUT`]).
+    timeout: Duration,
 }
 
 impl Server {
@@ -1280,6 +1282,7 @@ impl Server {
             url,
             password,
             recorder,
+            timeout: REQUEST_TIMEOUT,
         })
     }
 
@@ -1304,11 +1307,22 @@ impl Server {
         // again until they are, as long as a start may take.
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let (status, text) = loop {
-            let mut request = self.request(method.clone(), path).timeout(REQUEST_TIMEOUT);
+            let mut request = self.request(method.clone(), path).timeout(self.timeout);
             if let Some(body) = body {
                 request = request.json(body);
             }
-            let response = request.send().await.map_err(failed)?;
+            let response = match request.send().await {
+                // A fresh server busy loading (several start at once) can take longer than one
+                // request's timeout to answer: a read is asked again, as long as a start may take.
+                Err(err)
+                    if err.is_timeout()
+                        && method == Method::GET
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    continue;
+                }
+                sent => sent.map_err(failed)?,
+            };
             let status = response.status();
             let text = response.text().await.map_err(failed)?;
             if status != reqwest::StatusCode::SERVICE_UNAVAILABLE
@@ -1836,7 +1850,7 @@ mod tests {
     /// requests as OpenCode 2.0.19 does (`ACTIVE` set: a turn runs) and logs each one.
     #[cfg(unix)]
     const FAKE_SERVER: &str = r#"#!/usr/bin/env python3
-import http.server, json, os, sys, threading
+import http.server, json, os, sys, threading, time
 log = open(os.environ["LOG"], "a")
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -1853,6 +1867,10 @@ class H(http.server.BaseHTTPRequestHandler):
             self.answer(200, {"data": {"id": "msg_1", "type": "user", "delivery": "steer"}})
         elif self.path.startswith("/api/session/ses_1/message"):
             self.answer(200, {"data": [{"id": "msg_1", "type": "user", "text": "Hold."}]})
+        elif self.path == "/api/model":
+            if os.environ.get("SLOW") and not os.path.exists(os.environ["SLOW"]):
+                open(os.environ["SLOW"], "w").close(); time.sleep(2)
+            self.answer(200, {"data": [{"id": "big-pickle", "providerID": "opencode"}]})
         elif self.path == "/api/model/default":
             self.answer(200, {"data": {"id": "big-pickle", "providerID": "opencode"}})
         elif self.path.startswith("/api/command"):
@@ -1867,6 +1885,39 @@ print(json.dumps({"url": f"http://127.0.0.1:{server.server_address[1]}"}), flush
 threading.Thread(target=server.serve_forever, daemon=True).start()
 sys.stdin.read()
 "#;
+
+    /// A fresh server slower to answer its first read than one request's timeout (several
+    /// starting at once, seen live) is asked again, not taken as gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_slow_first_read_is_asked_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("brigadier-opencode-slow-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("opencode");
+        std::fs::write(&script, FAKE_SERVER).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let log = root.join("log");
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let mut spec = brigadier_sandbox::SpawnSpec::new(script.display().to_string());
+        spec.env.push(("LOG".into(), log.clone().into()));
+        spec.env.push(("ACTIVE".into(), root.join("active").into()));
+        spec.env.push(("SLOW".into(), root.join("slow").into()));
+        let mut server = Server::start(platform, spec, process::Options::default(), None)
+            .await
+            .unwrap();
+        server.timeout = Duration::from_millis(300);
+        let models = list_models(&server).await.unwrap();
+        assert_eq!(models[0]["id"], "big-pickle");
+        let asked = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(asked.matches("GET /api/model ").count(), 2, "{asked}");
+        server.process.shutdown(EXIT_GRACE).await;
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A turn that isn't running never takes a steer: OpenCode admits it without starting one,
     /// and it is taken back out. A running turn keeps it. The `/` commands are OpenCode's own.
