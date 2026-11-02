@@ -113,7 +113,11 @@ fn title_of(given: Option<&str>, prompt: &str) -> String {
     if let Some(given) = given.map(str::trim).filter(|title| !title.is_empty()) {
         return given.to_owned();
     }
-    let title = short_title(brief_lead(prompt));
+    // The task itself: a brief's Change part, never its Target ("none, no repo files").
+    let change = (prompt.lines().map(brief_part)).find(|(label, _)| {
+        (label.split_whitespace().next()).is_some_and(|word| word.eq_ignore_ascii_case("change"))
+    });
+    let title = short_title(change.unwrap_or_else(|| brief_part(prompt)).1);
     if title.is_empty() {
         "Worker".to_owned()
     } else {
@@ -121,9 +125,10 @@ fn title_of(given: Option<&str>, prompt: &str) -> String {
     }
 }
 
-/// A brief's first words past its list number and short label: "1. Target: Fix the login" is
-/// "Fix the login" (`brigadier help briefs` numbers its parts).
-fn brief_lead(prompt: &str) -> &str {
+/// A brief part's short label and its first words past its list number and that label:
+/// "1. Target: Fix the login" is ("Target", "Fix the login") (`brigadier help briefs` numbers
+/// its parts); the label is empty when it has none.
+fn brief_part(prompt: &str) -> (&str, &str) {
     let line = prompt.trim_start();
     let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
     let line = match line[digits..].strip_prefix(['.', ')']) {
@@ -132,9 +137,9 @@ fn brief_lead(prompt: &str) -> &str {
     };
     match line.find(": ") {
         Some(at) if line[..at].split_whitespace().count() <= 2 && !line[..at].contains('\n') => {
-            line[at + 2..].trim_start()
+            (&line[..at], line[at + 2..].trim_start())
         }
-        _ => line,
+        _ => ("", line),
     }
 }
 
@@ -1872,6 +1877,14 @@ mod tests {
         assert_eq!(
             title_of(None, "Target (proposed): Read TASK.md and report"),
             "Read TASK.md and report"
+        );
+        // The task is the brief's Change part, not its Target (seen live: "none (no repo files)").
+        assert_eq!(
+            title_of(
+                None,
+                "1. Target: none (no repo files).\n2. Change: Run the curl in TASK.md step 1.\n3. Do not touch: x"
+            ),
+            "Run the curl in TASK.md"
         );
         assert_eq!(title_of(None, "3 bugs to fix in login"), "3 bugs to fix");
         assert_eq!(
