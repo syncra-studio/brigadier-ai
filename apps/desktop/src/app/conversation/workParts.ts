@@ -5,7 +5,7 @@ import { foldsAway, type SequenceEntry as Entry } from "@/app/conversation/block
  * A turn's work cut where a new turn of its CLI's joined it: runs of work, and what came between
  * them, the user's follow-up bubble or a line of what a worker did.
  */
-export type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answer?: Entry } | { type: "between"; entry: Entry };
+export type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answer?: Entry; kept?: Entry[] } | { type: "between"; entry: Entry };
 
 /**
  * Whether an entry cuts the work: a follow-up steered in, a compaction's divider, or a line of
@@ -30,7 +30,7 @@ function keepJoinedAnswers(parts: WorkPart[], done: boolean, answers: (index: nu
     if (part.type !== "work" || next?.type !== "between" || next.entry.kind === "compaction") return part;
     const last = part.items.at(-1);
     if (last?.type !== "entry" || last.entry.kind !== "text" || !answers(last.entry.index)) return part;
-    return { type: "work", items: part.items.slice(0, -1), answer: last.entry };
+    return { ...part, items: part.items.slice(0, -1), answer: last.entry };
   });
 }
 
@@ -38,16 +38,19 @@ function keepJoinedAnswers(parts: WorkPart[], done: boolean, answers: (index: nu
  * The work in runs between its cuts. A live turn always ends on a run, where its live line goes,
  * even right after a cut.
  */
-function workParts(items: readonly Activity<LeadStep, Entry>[], live: boolean): WorkPart[] {
+function workParts(items: readonly Activity<LeadStep, Entry>[], live: boolean, stays: (entry: Entry) => boolean = () => false): WorkPart[] {
   const parts: WorkPart[] = [];
   for (const item of items) {
     if (item.type === "entry" && cuts(item.entry)) {
       parts.push({ type: "between", entry: item.entry });
       continue;
     }
-    const last = parts.at(-1);
-    if (last?.type === "work") last.items.push(item);
-    else parts.push({ type: "work", items: [item] });
+    let last = parts.at(-1);
+    if (last?.type !== "work") parts.push((last = { type: "work", items: [] }));
+    // What stays in view of a folded run (a switch's divider, a kept card) stays with its run,
+    // never below a follow-up that came after it (D65: no row moves when the turn ends).
+    if (item.type === "entry" && stays(item.entry)) (last.kept ??= []).push(item.entry);
+    else last.items.push(item);
   }
   if (live && parts.at(-1)?.type !== "work") parts.push({ type: "work", items: [] });
   return parts;
@@ -64,6 +67,7 @@ export function turnParts(
   live: boolean,
   answers: (index: number) => boolean,
 ): WorkPart[] {
-  const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
-  return keepJoinedAnswers(workParts(done ? folded : activity, live && !done), done, answers);
+  // The answer and its update lines are drawn under the parts; the rest that stays in view, in its run.
+  const folded = activity.filter((item) => item.type === "group" || item.entry.kind !== "text" || foldsAway(item.entry, answer));
+  return keepJoinedAnswers(done ? workParts(folded, false, (entry) => !foldsAway(entry, answer)) : workParts(activity, live), done, answers);
 }

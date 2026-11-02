@@ -1631,6 +1631,25 @@ test("a follow-up the user steers during a usage limit's switch goes on in the c
   assert.deepEqual(blocks[0]!.worked, [{ fromMs: 1000, toMs: 1400 }, { fromMs: 1500, toMs: 2000 }]);
 });
 
+test("a switch's divider stays where it was drawn live when the turn ends: in its run, above a follow-up steered in after it (D65, screen pass)", () => {
+  const FOLLOW = "Also, at the very end reply FOLLOW too.";
+  const cut = { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit" as const, requests: ["r1"] };
+  const switched = { requestId: "r1", atMs: 1450, position: 0, kind: { type: "providerTransition", id: "t1", cause: "automaticFallback", from: { provider: "claude", model: "opus", effort: null }, to: { provider: "claude", model: "opus", effort: null }, account: { provider: "claude", account: "fake" }, accountLabel: "Fake second", startedAtMs: 1450 } } as unknown as BoardDigest["orchestratorSteps"][number];
+  const board = { ...NO_BOARD, orchestratorSteps: [switched], requests: { r1: { state: { type: "done" } }, r9: { state: { type: "done" }, steeredInto: "r1" } } };
+  const entries = [
+    ...limitEntries.slice(0, 5),
+    user("s9", FOLLOW, 1950, { steer: true, said: { by: "user" }, requests: ["r9"] }),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "DONE FOLLOW" }, 2000),
+  ];
+  const [block] = cliBlocks({ entries, turns: [cut, { ...turn("k1", 1500, 2100, "done"), requests: ["r1", "r9"] }] }, "conv", board);
+  const sequence = blockSequence(block!);
+  const answer = answerIndex(block!.texts, true);
+  const drawn = turnParts(turnActivity(sequence, false), answer, true, false, () => true).flatMap((part) =>
+    part.type === "between" ? [part.entry.kind] : [...(part.items.length ? ["fold"] : []), ...(part.kept ?? []).map((entry) => entry.kind === "orchestrator" ? entry.steps[0]!.kind.type : entry.kind), ...(part.answer ? ["answer"] : [])]);
+  // Live: commands, the switch, DONE, the follow-up. Done: the switch stays above the follow-up.
+  assert.deepEqual(drawn, ["fold", "providerTransition", "answer", "steer"]);
+});
+
 test("a thread whose turns repeat a message never repeats a node id", () => {
   const entries = [user("u1", "Same", 1000, { requests: ["r1"] }), user("u2", "Same", 2000, { requests: ["r1"] })];
   const { nodes } = cliThreadTree({ entries, turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1"] }] }, "conv", [], {}, [], NO_BOARD, { state: "idle", error: null });

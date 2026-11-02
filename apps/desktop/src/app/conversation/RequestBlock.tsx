@@ -39,7 +39,6 @@ import {
   answerIndex,
   blockFinished,
   blockSequence,
-  foldsAway,
   foldsWork,
   isLive,
   liveAnswer,
@@ -195,8 +194,6 @@ export const RequestBlock: FC = () => {
   const answer = done ? answerIndex(meta.texts, true) : liveAnswer(meta.texts, sequence);
   const updates = done ? updateIndices(meta.texts, answer) : [];
   const activity = turnActivity(done ? sequence : sequence.filter((entry) => entry.kind !== "text" || entry.index !== answer), false);
-  // The answer, kept cards and access notices stay outside the fold.
-  const kept = done ? sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer)) : [];
   const allParts = turnParts(activity, answer, done, live, (index) => {
     const text = meta.texts[index];
     return !!text && !text.commentary && !text.update;
@@ -279,6 +276,7 @@ export const RequestBlock: FC = () => {
             </div>
           ) : (
             <Fragment key={partKey(parts, index)}>
+            {(part.items.length > 0 || !part.kept) && (
             <WorkFold open={!foldable || open} clicked={fold.clicked} searched={searched}>
               <div
                 data-slot="request-work"
@@ -301,6 +299,13 @@ export const RequestBlock: FC = () => {
                 />
               </div>
             </WorkFold>
+            )}
+            {/* Kept cards, access notices and a switch's divider stay outside the fold, under their own run. */}
+            {part.kept?.map((entry) => (
+              <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
+                <SequenceEntry entry={entry} streaming={false} />
+              </div>
+            ))}
             {/* The answer its request came to before a follow-up joined it: in view, as the last one's is. */}
             {part.answer && (
               <JoinedAnswer>
@@ -313,11 +318,6 @@ export const RequestBlock: FC = () => {
             </Fragment>
           ),
         )}
-        {kept.map((entry) => (
-          <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
-            <SequenceEntry entry={entry} streaming={false} />
-          </div>
-        ))}
         {answer !== null && (
           <div
             ref={answerSlot}
