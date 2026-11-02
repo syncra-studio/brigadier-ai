@@ -127,6 +127,8 @@ pub fn level_allows(
                         let read: Vec<&str> = read.split(' ').collect();
                         words.len() >= read.len() && words[..read.len()] == read[..]
                     }) || sed_prints(words)
+                        // ripgrep only reads, unless `--pre` runs a program on each file.
+                        || (words.first() == Some(&"rg") && !words.iter().any(|w| w.starts_with("--pre")))
                         || (edits && words.first() == Some(&"brigadier"))
                 })
         }
@@ -1267,6 +1269,8 @@ mod tests {
             "cd /w/repo && git status --short 2>&1",
             "git ls-files 2>/dev/null | head -50",
             "git branch --show-current",
+            "/bin/zsh -c \"git status --short && git branch --show-current && rg --files -g '!.*'\"",
+            "rg -n 'def main' src",
         ] {
             assert!(allows(Access::Ask, &run(line)), "{line}");
             assert!(allows(Access::AcceptEdits, &run(line)), "{line}");
@@ -1290,6 +1294,8 @@ mod tests {
             "git branch -D main",
             "cd /w && touch a",
             "curl --output a https://x",
+            "rg --pre ./run.sh x",
+            "rg --pre=./run.sh x",
             // sed that may write or run: in place, a w or e command, a script file, a pattern.
             "sed -i '' 's/a/b/' a.txt",
             "sed -ni 1p a.txt",
