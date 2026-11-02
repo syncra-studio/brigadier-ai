@@ -202,6 +202,8 @@ Patches applied, in order:
 
 - `patches/0170-windows-explorer-arguments-and-closed-window-results.diff`: Normalize Explorer drive and UNC additional arguments while preserving URLs and other apps, allow two seconds for Settings close confirmation, and use exact confirmed window-destruction evidence for final run_steps observations.
 
+- `patches/0175-windows-owned-document-and-browser-profile-cleanup.diff`: Remove untouched fresh Notepad files after Notepad exits or runtime teardown, and retire and delete exited task-browser profiles with a proven stale-owner sweep at startup while preserving live-session reuse.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -1,5 +1,5 @@
 //! Windows task-browser ownership. No inbound attach, user-profile setup or
-//! recursive deletion. Only internally created, lifecycle-bound profiles get
+//! user-profile deletion. Only internally created, lifecycle-bound profiles get
 //! automatically generated DevTools arguments.
 use crate::browser_platform::WindowsBrowserPlatform;
 use anyhow::{anyhow, bail, Context, Result};
@@ -67,7 +67,13 @@ pub(super) fn lifecycle(args: &Value) -> Result<String> {
     if RUNTIME.get().is_none() {
         let _ = RUNTIME.set(nonce()?);
     }
-    Ok(format!("runtime-{}", RUNTIME.get().unwrap()))
+    let key = format!("runtime-{}", RUNTIME.get().unwrap());
+    Ok(
+        match cua_driver_core::tool::current_dispatch_runtime_scope() {
+            Some(scope) => format!("__cua_runtime_{scope}:{key}"),
+            None => key,
+        },
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -366,7 +372,7 @@ pub(super) fn prepare(
     });
     profile.persist(marker)?;
     PROFILES.lock().unwrap().push(profile.clone());
-    // Retain an exact audit manifest; no failure/drop/session path deletes it.
+    // Retain an audit trail, including retirement when the directory is removed.
     if let Some(home) = std::env::var_os("CUA_DRIVER_STATE_DIR") {
         let mut audit = OpenOptions::new()
             .create(true)
@@ -388,10 +394,8 @@ pub(super) fn retire(key: &str) {
             let mut next = record;
             next.retired = true;
             let _ = profile.persist(next);
-            // Close what the lifecycle opened; the profile itself is kept.
+            // Closing the job is asynchronous; maintenance waits for process exit.
             let _ = profile.terminate();
-            profile.marker_file.lock().unwrap().take();
-            profile.directory.lock().unwrap().take();
         }
     }
 }
@@ -761,7 +765,7 @@ mod tests {
 impl Profile {
     /// `--no-startup-window` keeps Chromium alive without windows. Once the
     /// task browser has shown a window and then has none for two checks, close
-    /// it through its own proven endpoint. Never deletes the profile.
+    /// it through its own proven endpoint. Maintenance removes it after exit.
     pub(super) fn watch_lifetime(self: &Arc<Self>, pid: u32) {
         if self
             .watching
@@ -941,7 +945,10 @@ impl Profile {
 
     /// End every process this profile started. Never touches other browsers.
     pub(super) fn terminate(&self) -> Closed {
-        Closed(self.job.lock().unwrap().take().is_some_and(|job| {
+        let mut record = self.record.lock().unwrap().clone();
+        record.retired = true;
+        let _ = self.persist(record);
+        Closed(self.job.lock().unwrap().as_ref().is_some_and(|job| {
             unsafe { windows::Win32::System::JobObjects::TerminateJobObject(job.0, 1) }.is_ok()
         }))
     }
@@ -1026,5 +1033,318 @@ mod containment_tests {
         let ended = unsafe { WaitForSingleObject(process, 5000) } == WAIT_OBJECT_0;
         let _ = unsafe { CloseHandle(process) };
         assert!(ended, "the contained process outlived its job");
+    }
+}
+
+/// Query the kernel rather than treating access denied as process exit.
+fn process_gone(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+    match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+        Ok(handle) => {
+            let exited = unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0;
+            let _ = unsafe { CloseHandle(handle) };
+            exited
+        }
+        Err(error) => error.code() == windows::core::HRESULT::from_win32(ERROR_INVALID_PARAMETER.0),
+    }
+}
+
+fn browser_gone(record: &Marker) -> bool {
+    record.process.as_ref().is_none_or(|process| {
+        u32::try_from(process.pid).is_ok_and(|pid| {
+            process_gone(pid)
+                || crate::browser_platform::process_identity(pid)
+                    .is_ok_and(|(started, _)| process.start_time != Some(started))
+        })
+    })
+}
+
+fn audit_retirement(path: &Path, owner: &Marker) {
+    if let Some(home) = std::env::var_os("CUA_DRIVER_STATE_DIR") {
+        if let Ok(mut audit) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(home).join("task-browser-profiles.jsonl"))
+        {
+            let _ = writeln!(audit, "{}", json!({"profile": path, "owner": owner}));
+        }
+    }
+}
+
+impl Profile {
+    fn cleanup_exited(&self) -> Result<()> {
+        let mut record = self.record.lock().unwrap().clone();
+        if !browser_gone(&record) {
+            bail!("task browser is still running");
+        }
+        if record.process.is_none() && !record.retired {
+            bail!("launch still pending");
+        }
+        if let Some(job) = self.job.lock().unwrap().as_ref() {
+            use windows::Win32::System::JobObjects::{
+                JobObjectBasicAccountingInformation, QueryInformationJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            unsafe {
+                QueryInformationJobObject(
+                    job.0,
+                    JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut _,
+                    std::mem::size_of_val(&info) as u32,
+                    None,
+                )?;
+            }
+            if info.ActiveProcesses != 0 {
+                // The browser may have exited before one of its children.
+                unsafe {
+                    windows::Win32::System::JobObjects::TerminateJobObject(job.0, 1)?;
+                }
+                bail!("task browser job is still running");
+            }
+        }
+        if !self.path.exists() {
+            return Ok(());
+        }
+        reject_reparse_ancestors(&self.path)?;
+        let current = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&self.path)?;
+        if directory_id(&current)? != record.directory {
+            bail!("task profile was replaced");
+        }
+        // Pin the direct child while validating; recursive removal never follows
+        // reparse points. Refuse any such entry rather than removing its contents.
+        reject_reparse_tree(&self.path)?;
+        record.retired = true;
+        if self.marker_file.lock().unwrap().is_some() {
+            self.persist(record.clone())?;
+            audit_retirement(&self.path, &record);
+        }
+        self.job.lock().unwrap().take();
+        self.marker_file.lock().unwrap().take();
+        self.directory.lock().unwrap().take();
+        drop(current);
+        // Keep the ownership proof until the contents are gone, so a sharing
+        // violation or helper crash leaves enough evidence for the next sweep.
+        for entry in std::fs::read_dir(&self.path)? {
+            let entry = entry?;
+            if entry.file_name() == "brigadier-task-owner.json" {
+                continue;
+            }
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(entry.path())?;
+            } else {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        let marker = self.path.join("brigadier-task-owner.json");
+        std::fs::remove_file(&marker)?;
+        if let Err(error) = std::fs::remove_dir(&self.path) {
+            if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(marker) {
+                let _ = file.write_all(&serde_json::to_vec(&record)?);
+            }
+            return Err(error.into());
+        }
+        Ok(())
+    }
+}
+
+fn reject_reparse_tree(path: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata.file_attributes() & 0x400 != 0 {
+            bail!("task profile contains a reparse point");
+        }
+        if metadata.is_dir() {
+            reject_reparse_tree(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn sweep_stale(root: &Path) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    reject_reparse_ancestors(root)?;
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        let attempt = || -> Result<()> {
+            reject_reparse_ancestors(&path)?;
+            let directory = OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES.0)
+                .share_mode(3)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(&path)?;
+            let marker_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(1)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(path.join("brigadier-task-owner.json"))?;
+            let mut bytes = Vec::new();
+            (&marker_file).take(65537).read_to_end(&mut bytes)?;
+            if bytes.len() > 65536 {
+                bail!("oversize task marker");
+            }
+            let mut record: Marker = serde_json::from_slice(&bytes)?;
+            if record.schema != "brigadier-task-browser-v1"
+                || record.nonce.len() != 32
+                || !record.nonce.bytes().all(|b| b.is_ascii_hexdigit())
+                || path.file_name().and_then(|name| name.to_str())
+                    != Some(&format!("task-{}", record.nonce))
+                || directory_id(&directory)? != record.directory
+                || !process_gone(record.creator_pid)
+                || !browser_gone(&record)
+            {
+                bail!("task profile is unproven or still owned");
+            }
+            record.retired = true;
+            let profile = Profile {
+                path: path.clone(),
+                executable: record.executable.clone(),
+                directory: Mutex::new(Some(directory)),
+                marker_file: Mutex::new(Some(marker_file)),
+                record: Mutex::new(record),
+                watching: std::sync::atomic::AtomicBool::new(false),
+                job: Mutex::new(None),
+            };
+            profile.cleanup_exited()
+        };
+        let _ = attempt();
+    }
+    Ok(())
+}
+
+pub(super) fn retire_all(scope: Option<&str>) {
+    let prefix = scope.map(|scope| format!("__cua_runtime_{scope}:"));
+    let profiles: Vec<_> = PROFILES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|profile| {
+            let record = profile.record.lock().unwrap();
+            prefix.as_ref().map_or_else(
+                || !record.lifecycle.starts_with("__cua_runtime_"),
+                |prefix| record.lifecycle.starts_with(prefix),
+            )
+        })
+        .cloned()
+        .collect();
+    for profile in &profiles {
+        let mut record = profile.record.lock().unwrap().clone();
+        record.retired = true;
+        let _ = profile.persist(record);
+        profile.terminate();
+        let _ = profile.cleanup_exited();
+    }
+    // TerminateJobObject returns before all child processes have exited.
+    // Give normal daemon teardown a chance to finish deletion itself.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let pending = profiles
+            .iter()
+            .any(|profile| profile.cleanup_exited().is_err());
+        if !pending {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+pub(super) fn start_cleanup() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        if let Ok(root) = task_root() {
+            let _ = sweep_stale(&root);
+        }
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            for profile in PROFILES.lock().unwrap().iter() {
+                let _ = profile.cleanup_exited();
+            }
+            // A Notepad tab can retain unsaved content without writing this file.
+            // Wait for all Notepad processes to exit; runtime teardown is also a
+            // cleanup boundary, and never removes files written or replaced.
+            let notepad_running = crate::win32::list_processes()
+                .iter()
+                .any(|process| super::launch_policy::is_notepad_target(&process.name));
+            super::launch_browser::poll_documents(notepad_running);
+        });
+    });
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    fn fixture(root: &Path, creator_pid: u32) -> PathBuf {
+        let id = nonce().unwrap();
+        let path = root.join(format!("task-{id}"));
+        std::fs::create_dir(&path).unwrap();
+        let dir = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&path)
+            .unwrap();
+        let record = Marker {
+            schema: "brigadier-task-browser-v1".into(),
+            nonce: id,
+            lifecycle: "test-session".into(),
+            creator_pid,
+            executable: "chrome.exe".into(),
+            directory: directory_id(&dir).unwrap(),
+            process: None,
+            endpoint: None,
+            retired: false,
+        };
+        std::fs::write(
+            path.join("brigadier-task-owner.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir(path.join("Default")).unwrap();
+        std::fs::write(path.join("Default").join("Preferences"), "test data").unwrap();
+        path
+    }
+    #[test]
+    fn stale_sweep_removes_only_proven_profiles_of_dead_creators() {
+        let root = tempfile::tempdir().unwrap();
+        let stale = fixture(root.path(), 0);
+        let live = fixture(root.path(), std::process::id());
+        let live_browser = fixture(root.path(), 0);
+        let marker = live_browser.join("brigadier-task-owner.json");
+        let mut record: Marker = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+        let (started, executable) =
+            crate::browser_platform::process_identity(std::process::id()).unwrap();
+        record.process = Some(ProcessFingerprint {
+            pid: std::process::id().into(),
+            start_time: Some(started),
+            executable,
+        });
+        std::fs::write(marker, serde_json::to_vec(&record).unwrap()).unwrap();
+        let replaced = fixture(root.path(), 0);
+        let marker = replaced.join("brigadier-task-owner.json");
+        let mut record: Marker = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+        record.directory.index ^= 1;
+        std::fs::write(marker, serde_json::to_vec(&record).unwrap()).unwrap();
+        let ordinary = root.path().join("task-unowned");
+        std::fs::create_dir(&ordinary).unwrap();
+        sweep_stale(root.path()).unwrap();
+        assert!(!stale.exists());
+        assert!(live.exists(), "a live creator can still reuse its profile");
+        assert!(
+            live_browser.exists(),
+            "a surviving browser must not lose its profile"
+        );
+        assert!(replaced.exists());
+        assert!(ordinary.exists());
     }
 }

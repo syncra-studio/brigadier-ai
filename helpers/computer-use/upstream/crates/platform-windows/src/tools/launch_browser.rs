@@ -407,27 +407,115 @@ mod fresh_document_tests {
     }
 }
 
-/// Remove only our newly created empty document if launch is refused before
-/// submission to Windows. Once submitted, the path is the user's document
-/// and stays available for saving/reading until the caller cleans it up.
-pub(super) struct UnlaunchedDocument(Option<std::path::PathBuf>);
+/// Retain ownership after submission; saved or replaced documents are preserved.
+pub(super) struct UnlaunchedDocument(Option<FreshDocument>);
 impl UnlaunchedDocument {
     pub(super) fn new(path: Option<std::path::PathBuf>) -> Self {
-        Self(path)
+        Self(path.and_then(|path| FreshDocument::track(path).ok()))
     }
     pub(super) fn launched(&mut self) {
-        self.0 = None;
+        if let Some(document) = self.0.take() {
+            DOCUMENTS.lock().unwrap().push((document, false));
+        }
     }
 }
 impl Drop for UnlaunchedDocument {
     fn drop(&mut self) {
-        if let Some(path) = self.0.as_ref() {
-            // Do not remove anything if another actor has put content in it.
-            if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == 0) {
-                let _ = std::fs::remove_file(path);
-            }
+        if let Some(document) = self.0.as_ref() {
+            document.remove_empty();
         }
     }
+}
+
+static DOCUMENTS: std::sync::Mutex<Vec<(FreshDocument, bool)>> = std::sync::Mutex::new(Vec::new());
+
+struct FreshDocument {
+    path: std::path::PathBuf,
+    identity: (u32, u32, u32, u32, u32),
+    scope: Option<String>,
+}
+
+impl FreshDocument {
+    fn information(file: &std::fs::File) -> anyhow::Result<(u32, u32, u32, u32, u32)> {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe {
+            GetFileInformationByHandle(
+                windows::Win32::Foundation::HANDLE(file.as_raw_handle()),
+                &mut info,
+            )?;
+        }
+        anyhow::ensure!(
+            info.dwFileAttributes & 0x410 == 0 && info.nFileSizeHigh == 0 && info.nFileSizeLow == 0,
+            "document is not an empty regular file"
+        );
+        Ok((
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+            info.ftLastWriteTime.dwHighDateTime,
+            info.ftLastWriteTime.dwLowDateTime,
+        ))
+    }
+
+    fn track(path: std::path::PathBuf) -> anyhow::Result<Self> {
+        let identity = Self::information(&std::fs::File::open(&path)?)?;
+        Ok(Self {
+            path,
+            identity,
+            scope: cua_driver_core::tool::current_dispatch_runtime_scope(),
+        })
+    }
+
+    fn remove_empty(&self) -> bool {
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        use windows::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        // Exclude writers and renames while checking identity/last-write time and
+        // deleting by handle, so a save cannot race the empty-file check.
+        let Ok(file) = std::fs::OpenOptions::new()
+            .access_mode(0x10000 | 0x80)
+            .share_mode(1)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&self.path)
+        else {
+            return false;
+        };
+        if Self::information(&file).ok() != Some(self.identity) {
+            return false;
+        }
+        let disposition = FILE_DISPOSITION_INFO {
+            DeleteFile: true.into(),
+        };
+        unsafe {
+            SetFileInformationByHandle(
+                windows::Win32::Foundation::HANDLE(file.as_raw_handle()),
+                FileDispositionInfo,
+                &disposition as *const _ as *const _,
+                std::mem::size_of_val(&disposition) as u32,
+            )
+        }
+        .is_ok()
+    }
+}
+
+pub(super) fn cleanup_documents(scope: Option<&str>) {
+    DOCUMENTS.lock().unwrap().retain(|(document, _)| {
+        document.scope.as_deref() != scope || (!document.remove_empty() && document.path.exists())
+    });
+}
+
+pub(super) fn poll_documents(notepad_running: bool) {
+    DOCUMENTS.lock().unwrap().retain_mut(|(document, seen)| {
+        // Do not mistake an asynchronous shell launch for an already closed app.
+        *seen |= notepad_running;
+        notepad_running || !*seen || (!document.remove_empty() && document.path.exists())
+    });
 }
 
 #[cfg(test)]
@@ -449,5 +537,59 @@ mod unlaunched_document_tests {
         drop(UnlaunchedDocument::new(Some(edited.clone())));
         assert!(edited.exists());
         std::fs::remove_file(edited).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod document_cleanup_tests {
+    use super::*;
+    #[test]
+    fn runtime_cleanup_keeps_another_runtimes_document() {
+        let path = create_notepad_document().unwrap();
+        let mut document = FreshDocument::track(path.clone()).unwrap();
+        let scope = format!(
+            "cleanup-test-{}",
+            path.file_stem().unwrap().to_string_lossy()
+        );
+        document.scope = Some(scope.clone());
+        DOCUMENTS.lock().unwrap().push((document, false));
+        cleanup_documents(Some("another-runtime"));
+        assert!(path.exists());
+        cleanup_documents(Some(&scope));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn cleanup_keeps_written_truncated_replaced_and_busy_documents() {
+        let blank = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(blank.clone()).unwrap();
+        assert!(owned.remove_empty());
+        assert!(!blank.exists());
+
+        let edited = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(edited.clone()).unwrap();
+        std::fs::write(&edited, "saved content").unwrap();
+        assert!(!owned.remove_empty());
+        std::fs::write(&edited, "").unwrap();
+        assert!(
+            !owned.remove_empty(),
+            "a saved and emptied file is user-owned"
+        );
+        std::fs::remove_file(edited).unwrap();
+
+        let replaced = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(replaced.clone()).unwrap();
+        let replacement = create_notepad_document().unwrap();
+        std::fs::remove_file(&replaced).unwrap();
+        std::fs::rename(&replacement, &replaced).unwrap();
+        assert!(!owned.remove_empty());
+        std::fs::remove_file(replaced).unwrap();
+
+        let busy = create_notepad_document().unwrap();
+        let owned = FreshDocument::track(busy.clone()).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&busy).unwrap();
+        assert!(!owned.remove_empty());
+        drop(writer);
+        assert!(owned.remove_empty());
     }
 }
