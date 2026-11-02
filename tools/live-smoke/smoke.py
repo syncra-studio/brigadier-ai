@@ -373,18 +373,26 @@ class Smoke:
         time.sleep(3)
         follow_code, steer_code = code("F"), code("S")
         follow_out, _ = self.send("C1", f"Also, put the code {follow_code} in your answer.", codes=[follow_code])
-        time.sleep(5)
+        follow_deciding = False
+
+        def look_deciding():
+            nonlocal follow_deciding
+            for item in self.view("C1")["queue"]["items"]:
+                if item.get("deciding") and follow_code in item["text"]:
+                    follow_deciding = True
+
+        # The judge settles it in seconds (D157): look while it decides.
+        sent_at = time.time()
+        while time.time() < sent_at + 5:
+            look_deciding()
+            time.sleep(0.1)
         _, steer_id = self.send("C1", f"And put the code {steer_code} in your answer too.", steer=True, codes=[steer_code])
         steer_at = now_ms()
         deferred, deferred_after, cmd_end = {}, None, None
-        follow_deciding = False
         deadline = time.time() + long + 150
         t1 = None
         while time.time() < deadline:
             v = self.view("C1")
-            for item in v["queue"]["items"]:
-                if item.get("deciding") and follow_code in item["text"]:
-                    follow_deciding = True
             running = any(s["status"] == "inProgress" and self.runs("C1", s, f"hold.sh {long}") for s in tool_steps(v))
             if not running and cmd_end is None:
                 cmd_end = now_ms()
