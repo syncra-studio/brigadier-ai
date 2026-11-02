@@ -158,6 +158,35 @@ pub fn keyboard_pid(pid: i32, wid: u32) -> Option<i32> {
     }
 }
 
+/// Whether the exact Open/Save panel `wid` of `pid` shows a sheet (its Go to
+/// Folder sheet). `None` when the window isn't such a panel.
+pub fn panel_has_sheet(pid: i32, wid: u32) -> Option<bool> {
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(app, 0.1);
+        let windows = copy_ax_windows_including(app, pid, wid);
+        CFRelease(app as CFTypeRef);
+        let mut found = None;
+        for window in windows {
+            if found.is_none() && ax_get_window_id(window) == Some(wid) && is_panel(window) {
+                let children = copy_children(window);
+                let sheet = children
+                    .iter()
+                    .any(|child| copy_string_attr(*child, "AXRole").as_deref() == Some("AXSheet"));
+                for child in children {
+                    CFRelease(child as CFTypeRef);
+                }
+                found = Some(sheet);
+            }
+            CFRelease(window as CFTypeRef);
+        }
+        found
+    }
+}
+
 /// Open/Save panels own their key equivalents (notably Cmd-Shift-G). The
 /// client app's identically bound Find Previous menu must never intercept them.
 pub fn blocks_app_menu(pid: i32, wid: u32) -> bool {

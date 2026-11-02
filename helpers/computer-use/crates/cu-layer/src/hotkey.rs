@@ -76,7 +76,20 @@ pub trait MenuBar: Send + Sync {
     fn close_window(&self, _pid: i32, _window_id: u32) -> Option<bool> {
         None
     }
+    /// Whether the Open/Save panel `window_id` shows a sheet within a short
+    /// wait. `None` when it isn't such a panel.
+    fn panel_sheet_opened(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        None
+    }
 }
+
+/// The answer when ⌘⇧G reached a background Open/Save panel but no Go to
+/// Folder sheet opened.
+pub const GO_TO_FOLDER_NOT_OPENED: &str = "Go to Folder did not open: the shortcut was sent to \
+    the Open/Save panel, but no Go to Folder sheet appeared. A panel behind the user's window \
+    gets no key shortcuts from macOS, so this can't work from the background. Pick the folder \
+    with the panel's sidebar and file rows instead (click them), or open the folder with \
+    launch_app urls.";
 
 /// The answer for ⌘W done with the window's close button.
 fn closed_window_result(display: &str, pid: i32, window_id: u32, gone: bool) -> ToolResult {
@@ -218,10 +231,25 @@ impl Tool for MenuShortcut {
         let Some((pid, window_id, key, modifiers, display)) = menu_combo(&args) else {
             return self.inner.invoke(args).await;
         };
-        if self.menu_bar.chromium(pid)
-            || window_id.is_some_and(|window_id| self.menu_bar.panel_owns_keys(pid, window_id))
-        {
+        if self.menu_bar.chromium(pid) {
             return self.inner.invoke(args).await;
+        }
+        if let Some(window_id) =
+            window_id.filter(|window_id| self.menu_bar.panel_owns_keys(pid, *window_id))
+        {
+            let result = self.inner.invoke(args).await;
+            let go_to_folder = key.eq_ignore_ascii_case("g") && modifiers == SHIFT;
+            if go_to_folder
+                && result.is_error != Some(true)
+                && self.menu_bar.panel_sheet_opened(pid, window_id) == Some(false)
+            {
+                return ToolResult::error(GO_TO_FOLDER_NOT_OPENED).with_structured(json!({
+                    "status": "failed",
+                    "effect": "failed",
+                    "reason": "go_to_folder_sheet_not_shown",
+                }));
+            }
+            return result;
         }
         if let Some(window_id) = window_id {
             self.menu_bar.make_main(pid, window_id);
@@ -274,6 +302,18 @@ impl MenuBar for System {
 
     fn select_all_text(&self, pid: i32, window_id: Option<u32>) -> Option<String> {
         unsafe { system::select_all_text(pid, window_id) }
+    }
+
+    fn panel_sheet_opened(&self, pid: i32, window_id: u32) -> Option<bool> {
+        // A sheet the panel opens shows within a few run-loop turns.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(600);
+        loop {
+            let shown = platform_macos::ax::panel::panel_has_sheet(pid, window_id)?;
+            if shown || std::time::Instant::now() >= deadline {
+                return Some(shown);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
     }
 
     fn close_window(&self, pid: i32, window_id: u32) -> Option<bool> {

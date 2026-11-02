@@ -1156,8 +1156,24 @@ impl Tool for ClickTool {
                                     screen_y,
                                 )
                             };
+                            // Ok(None): fall through to the routed pixel path;
+                            // Ok(Some(None)): pressed or focused (unconfirmed);
+                            // Ok(Some(Some(role))): a row selected, read back.
+                            // No pressable element: a list or sidebar row has
+                            // no press action, so select the row under the
+                            // point instead.
+                            let element = match element {
+                                Some(element) => Some(element),
+                                None if !focus_only => crate::ax::point_target::row_target(
+                                    pid,
+                                    hit_test_wid,
+                                    screen_x,
+                                    screen_y,
+                                ),
+                                None => None,
+                            };
                             let Some(element) = element else {
-                                return Ok::<bool, anyhow::Error>(false);
+                                return Ok::<Option<Option<String>>, anyhow::Error>(None);
                             };
                             // The pid-scoped hit-test can resolve an element from a
                             // same-process sibling overlapping the requested point.
@@ -1168,7 +1184,7 @@ impl Tool for ClickTool {
                                 != Some(hit_test_wid)
                             {
                                 CFRelease(element as _);
-                                return Ok(false);
+                                return Ok(None);
                             }
                             // An element that does not advertise AXPress can still
                             // accept it as a no-op. On a toolkit that drops routed
@@ -1180,8 +1196,15 @@ impl Tool for ClickTool {
                                     .iter()
                                     .any(|action| action == "AXPress")
                             {
+                                // A click on a list or sidebar row selects it (an
+                                // Open panel's sidebar drops routed clicks): select
+                                // that row the way a token click does, read back.
+                                let _key_focus = crate::key_focus_guard::protect(pid);
+                                let selected = crate::input::ax_actions::select_nearest_container(
+                                    element as usize,
+                                );
                                 CFRelease(element as _);
-                                return Ok(false);
+                                return Ok(selected.map(Some));
                             }
                             let _key_focus = crate::key_focus_guard::protect(pid);
                             let delivered = if focus_only {
@@ -1200,7 +1223,7 @@ impl Tool for ClickTool {
                                 true
                             };
                             CFRelease(element as _);
-                            Ok(delivered)
+                            Ok(delivered.then_some(None))
                         })
                         .await
                     },
@@ -1208,7 +1231,28 @@ impl Tool for ClickTool {
                 .await;
                 let changes = super::finish_window_observation(snapshot).await;
                 match ax_result {
-                    Ok(Ok(true)) => {
+                    Ok(Ok(Some(Some(role)))) => {
+                        crate::cursor::overlay::send_command(
+                            cursor_key.clone(),
+                            cursor_overlay::OverlayCommand::ClickPulse {
+                                x: screen_x,
+                                y: screen_y,
+                            },
+                        );
+                        return ToolResult::text(format!(
+                            "✅ Selected the {role} at this point through accessibility; \
+                             confirmed by reading its selection back.{}",
+                            changes.result_suffix()
+                        ))
+                        .with_structured(serde_json::json!({
+                            "path": "ax",
+                            "delivery_attempted": true,
+                            "verified": true,
+                            "effect": "confirmed",
+                            "evidence": [{ "kind": "accessibility_readback" }]
+                        }));
+                    }
+                    Ok(Ok(Some(None))) => {
                         crate::cursor::overlay::send_command(
                             cursor_key.clone(),
                             cursor_overlay::OverlayCommand::ClickPulse {
@@ -1228,7 +1272,7 @@ impl Tool for ClickTool {
                             "effect": "unverifiable"
                         }));
                     }
-                    Ok(Ok(false)) if focus_only => {
+                    Ok(Ok(None)) if focus_only => {
                         return ToolResult::error(
                             "Background PX focus is unavailable at the requested point.".to_owned(),
                         )

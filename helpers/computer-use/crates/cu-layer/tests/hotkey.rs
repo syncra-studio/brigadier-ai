@@ -21,6 +21,7 @@ struct Seen {
     menu_pressed: usize,
     selected: usize,
     closed: Vec<u32>,
+    sheet: Option<bool>,
 }
 
 type Shared = Arc<Mutex<Seen>>;
@@ -71,6 +72,9 @@ impl MenuBar for FakeMenuBar {
     fn select_all_text(&self, _pid: i32, _window_id: Option<u32>) -> Option<String> {
         self.0.lock().unwrap().selected += 1;
         Some("all 5 characters of the AXTextArea".to_owned())
+    }
+    fn panel_sheet_opened(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        self.0.lock().unwrap().sheet
     }
     /// Window 7 closes; window 8 stays open (a save sheet); 9 has no button.
     fn close_window(&self, _pid: i32, window_id: u32) -> Option<bool> {
@@ -213,6 +217,27 @@ async fn panel_shortcuts_bypass_the_client_menu_and_preserve_the_exact_target() 
         assert!(seen.made_main.is_empty());
         assert_eq!(seen.menu_pressed, 0);
         assert_eq!(seen.selected, 0);
+    }
+}
+
+#[tokio::test]
+async fn go_to_folder_that_shows_no_sheet_says_it_did_not_open() {
+    for (sheet, opened) in [(Some(false), false), (Some(true), true)] {
+        let (registry, seen) = build();
+        {
+            let mut seen = seen.lock().unwrap();
+            seen.panel = Some((1, 90));
+            seen.sheet = sheet;
+        }
+        let args = json!({"pid": 1, "window_id": 90, "keys": ["cmd", "shift", "g"]});
+        let result = registry.invoke("hotkey", args).await;
+        if opened {
+            assert_eq!(text_of(&result), "posted");
+        } else {
+            assert_eq!(result.is_error, Some(true));
+            assert_eq!(text_of(&result), cu_layer::hotkey::GO_TO_FOLDER_NOT_OPENED);
+            assert_eq!(result.structured_content.unwrap()["effect"], "failed");
+        }
     }
 }
 
