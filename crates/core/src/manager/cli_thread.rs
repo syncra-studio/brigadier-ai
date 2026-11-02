@@ -728,7 +728,7 @@ impl SessionManager {
                         ..open.clone()
                     })
                 }
-                _ => live.then(|| thread_view::WorkBlock {
+                _ => live.then_some(thread_view::WorkBlock {
                     started_at_ms: now,
                     ended_at_ms: None,
                 }),
