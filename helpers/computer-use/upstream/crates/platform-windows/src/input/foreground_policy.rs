@@ -54,17 +54,17 @@ impl Observation {
 }
 
 impl Observation {
-    /// The sentence an input action's reply carries when the target app took
-    /// the front during it; None when no activation was seen or the user's
-    /// own input may explain it.
+    /// The sentence an input action's reply carries when the target app had
+    /// the front during it (a displaced watch starts with it already there);
+    /// None when no activation was seen or the user's own input may explain it.
     pub(crate) fn action_note(self) -> Option<&'static str> {
         if !self.activated || !self.foreground_seen || self.user_input || self.interrupted {
             return None;
         }
         Some(if self.restored {
-            "The app's window took the front during this action; your window was put back in front."
+            "The app's window had the front during this action; your window was put back in front."
         } else {
-            "The app's window took the front during this action and Windows did not give it back: it is in front of your window now. Click your window to continue."
+            "The app's window had the front during this action and Windows did not give it back: it is in front of your window now. Click your window to continue."
         })
     }
 }

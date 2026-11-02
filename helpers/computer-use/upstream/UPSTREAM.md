@@ -212,6 +212,8 @@ Patches applied, in order:
 
 - `patches/0182-windows-dialog-owner-hand-back-target-only.diff`: Minimize a dialog's root owner to hand the front back only when that owner is one of the target app's own windows, by the same rule that matched the dialog; a dialog owned by another process's window, such as the user's, is never minimized through it.
 
+- `patches/0183-windows-action-note-had-the-front.diff`: Say "had the front", not "took the front", in an input action's reply note: an action that starts while the app's dialog is already in front (a displaced watch) observes it at once, and the app did not take the front during that action.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
