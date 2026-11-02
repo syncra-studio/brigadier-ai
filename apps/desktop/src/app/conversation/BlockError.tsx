@@ -12,10 +12,11 @@ import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ErrorState, useAui, useAuiState } from "@/components/conversation";
 import type { ThreadTurn, UserRequest } from "@/ipc/generated";
-import { resume, send } from "@/state/actions";
+import { continueOn, resume, send, updateSetup } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
 import { cliFacts } from "@/lib/providerKinds";
+import { modelName, useModelGroups } from "@/lib/setup";
 
 /** The block's turn, as its CLI's thread has it. */
 function useBlockTurn<T>(meta: BlockMeta | undefined, pick: (turn: ThreadTurn | undefined) => T): T {
@@ -80,6 +81,8 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
   const turnProvider = useBlockTurn(meta, (turn) => turn?.provider ?? null);
   const latest = useAuiState((s) => s.message.isLast);
   const conversation = useViewConversation();
+  const next = useCliThread((s) => (conversation ? s.views[conversation.id]?.nextModel ?? null : null));
+  const groups = useModelGroups();
   const aui = useAui();
   const action = useAction();
   if (read === null || quotaCovered) return null;
@@ -87,7 +90,7 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
   if (read.wentOn) return <TaskNoticeRow text="Brigadier reopened · picked up where it stopped" />;
   const { error, resumable } = read;
   const provider = turnProvider ?? (meta.texts.at(-1)?.model ?? meta.picked)?.provider;
-  const { summary, limit } = describeTurnError(error, provider ? cliFacts(provider).vendor : undefined, kind);
+  const { summary, limit, declined } = describeTurnError(error, provider ? cliFacts(provider).vendor : undefined, kind);
   // Brigadier quit while it ran: Continue picks the request up (UI audit H1).
   const interrupted = interruptedByQuit(error);
   const again = (() => {
@@ -102,8 +105,25 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
     const to = conversation.id;
     return () => action.run(() => send({ text: TRY_AGAIN, attachments: [], mentions: [] }, undefined, { to }));
   })();
+  // Its model declined it: one quiet line, and one click goes on with the next model the
+  // routing names, never the same one again (D143). On another CLI the session moves there and
+  // its successor picks the work up; on the same CLI the model changes and the turn is asked again.
+  const setup = conversation?.setup;
+  if (declined && next && again && conversation && setup?.type === "session") {
+    const id = conversation.id;
+    const onContinue = () =>
+      action.run(async () => {
+        if (next.provider !== setup.orchestrator.provider) {
+          await continueOn(id, next.provider, next);
+          return;
+        }
+        await updateSetup(id, { ...setup, orchestrator: next });
+        await send({ text: TRY_AGAIN, attachments: [], mentions: [] }, undefined, { to: id });
+      });
+    return <UsageLimitDivider summary={summary} onTryAgain={onContinue} action={`Continue on ${modelName(groups, next)}`} />;
+  }
   // A usage limit is no error of the turn: a divider says it, with Try again for later.
-  if (limit) {
+  if (limit || declined) {
     return <UsageLimitDivider summary={summary} onTryAgain={again} />;
   }
   return (

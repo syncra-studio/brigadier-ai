@@ -540,6 +540,21 @@ impl SessionManager {
         })
     }
 
+    /// The model a session goes on with after its own declined a turn (D143): the first
+    /// `Fallback` row of the user's routing that is another model than the session's, on an
+    /// agent that can take it, that the user's rules allow. `None`: no such row (or no session).
+    pub(crate) fn declined_next(&self, id: &crate::model::ConversationId) -> Option<ModelChoice> {
+        let conversation = self.core.conversation(id).ok()?;
+        let from = super::setup_choice(&conversation)
+            .filter(|_| conversation.kind == crate::model::ConversationKind::Session)?;
+        self.fallback_rows().into_iter().find(|choice| {
+            (choice.provider, &choice.model) != (from.provider, &from.model)
+                && (choice.provider == from.provider
+                    || self.agent_unready(choice.provider).is_none())
+                && self.fallback_refusal(choice).is_none()
+        })
+    }
+
     /// Why the user's rules refuse a `Fallback` row's `choice` (`None`: they allow it).
     fn fallback_refusal(&self, choice: &ModelChoice) -> Option<String> {
         self.model_refusal(

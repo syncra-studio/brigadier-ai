@@ -67,6 +67,8 @@ pub enum InjectedError {
     Auth,
     /// Credits run out.
     Billing,
+    /// The model declines the turn (D143).
+    Refusal,
 }
 
 /// What an archive, restore or delete did to one of its conversations.

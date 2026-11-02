@@ -74,6 +74,12 @@ test("a usage limit is said as such, for the thread's divider", () => {
   assert.equal(describeTurnError("ECONNRESET", "Claude").limit, undefined);
 });
 
+test("a turn its model declined is said in one quiet line, never in the provider's own words (D143)", () => {
+  const declined = describeTurnError("API Error: Opus 5.5's safeguards flagged this message", "Claude", "policy");
+  assert.deepEqual(declined, { summary: "Claude declined this turn", declined: true });
+  assert.equal(describeTurnError("refused", "Codex", "policy").summary, "Codex declined this turn");
+});
+
 test("a turn Brigadier quit during reads interrupted, also one still starting, which Continue sends again", () => {
   assert.equal(summary("Brigadier quit while this was running."), "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands.");
   assert.equal(summary("Brigadier quit before this started."), "Interrupted: Brigadier quit before this started. Continue sends it again.");

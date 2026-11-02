@@ -3,6 +3,7 @@ import type { BackgroundTask } from "./BackgroundTask";
 import type { CliJobs } from "./CliJobs";
 import type { FileEntry } from "./FileEntry";
 import type { McpServerState } from "./McpServerState";
+import type { ModelChoice } from "./ModelChoice";
 import type { SeamMark } from "./SeamMark";
 import type { ThreadTurn } from "./ThreadTurn";
 import type { WaitReply } from "./WaitReply";
@@ -49,4 +50,9 @@ replies?: Array<WaitReply>,
  * The last [`ThreadNews::seq`] it holds: news up to it is in it, news after it isn't,
  * whichever reaches the app first.
  */
-seq?: number, };
+seq?: number, 
+/**
+ * Its newest turn's model declined it (a refusal): the model "Continue on" moves the
+ * session to, the next in the routing (D143); none when no row can take it.
+ */
+nextModel?: ModelChoice, };

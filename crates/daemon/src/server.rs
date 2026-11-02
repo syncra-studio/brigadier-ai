@@ -2709,6 +2709,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 InjectedError::ContextWindow => Error::ContextWindow,
                 InjectedError::Auth => Error::Auth,
                 InjectedError::Billing => Error::Billing,
+                InjectedError::Refusal => Error::Refusal,
             };
             heap(|| sessions.debug_inject_error(key, provider, error, after_tool_calls)).await?;
             Response::DebugInjectError
@@ -3092,6 +3093,7 @@ mod tests {
             jobs: Default::default(),
             replies: Vec::new(),
             seq: 0,
+            next_model: None,
         };
         let frame = ServerFrame::Response {
             id: 7,

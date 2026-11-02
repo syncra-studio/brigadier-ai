@@ -51,10 +51,12 @@ pub(crate) fn verdict(error: &ProviderError) -> ErrorVerdict {
                 kind: LimitKind::Credits,
             },
         }),
-        ErrorKind::Auth | ErrorKind::ContextWindow => ErrorVerdict::HandOff(AttemptEnd::Error {
-            kind: error.kind,
-            message: error.message.clone(),
-        }),
+        ErrorKind::Auth | ErrorKind::ContextWindow | ErrorKind::Policy => {
+            ErrorVerdict::HandOff(AttemptEnd::Error {
+                kind: error.kind,
+                message: error.message.clone(),
+            })
+        }
         ErrorKind::Overloaded | ErrorKind::Server | ErrorKind::Network => ErrorVerdict::Transient,
         _ => ErrorVerdict::Keep,
     }
@@ -175,6 +177,7 @@ pub(crate) fn end_reason(end: &AttemptEnd) -> String {
             ErrorKind::Auth => "logged out".into(),
             ErrorKind::Process => "its CLI exited".into(),
             ErrorKind::Stalled => "went silent".into(),
+            ErrorKind::Policy => "its model declined the turn".into(),
             _ => "kept failing".into(),
         },
     }

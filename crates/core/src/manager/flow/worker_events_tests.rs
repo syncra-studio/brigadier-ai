@@ -129,6 +129,19 @@ async fn worker(turn: &Turn, seen: &Seen) -> Reply {
     if said.contains("Crash-now.") {
         return Reply::crashed(9);
     }
+    if said.contains("Decline-now.") {
+        turn.emit(ProviderEvent::Error {
+            error: brigadier_providers::ProviderError {
+                kind: brigadier_providers::ErrorKind::Policy,
+                message: "API Error: flagged".into(),
+                will_retry: false,
+                limit: None,
+                code: None,
+            },
+        })
+        .await;
+        return Reply::text("");
+    }
     if said.contains("Limit-now.") {
         return Reply::limited();
     }
@@ -705,6 +718,27 @@ async fn an_event_after_the_parents_seam_reaches_its_successor_once() {
         "the net went to the CLI session before the seam"
     );
     assert_eq!(seen.told(), [("Hang-on".into(), "finished".into())]);
+    flow.stop().await;
+}
+
+/// A worker its model declined (D143): its parent hears it, told to switch it to the next
+/// model itself, never in the provider's own words.
+#[tokio::test]
+async fn a_worker_its_model_declined_is_its_parents_to_switch() {
+    let (flow, seen) = flow("events-declined", PermissionLevel::AcceptEdits).await;
+    flow.say("Start Decline-now.").await;
+    super::eventually("the decline told", || {
+        seen.told()
+            .contains(&("Decline-now".to_owned(), "failed".to_owned()))
+    })
+    .await;
+    let nets = seen.nets();
+    assert!(
+        nets.iter().any(|(_, input)| input
+            .contains("Its model declined this turn: switch it to the next model in your routing (`brigadier switch ")
+            && !input.contains("flagged")),
+        "{nets:#?}"
+    );
     flow.stop().await;
 }
 

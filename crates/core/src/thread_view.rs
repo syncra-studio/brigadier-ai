@@ -63,6 +63,11 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "unnumbered")]
     #[ts(as = "Option<u64>", optional)]
     pub seq: u64,
+    /// Its newest turn's model declined it (a refusal): the model "Continue on" moves the
+    /// session to, the next in the routing (D143); none when no row can take it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub next_model: Option<crate::model::ModelChoice>,
 }
 
 /// A reply a session's `brigadier wait` on another session took, as Brigadier kept it: the
@@ -766,6 +771,7 @@ pub(crate) fn view(
             .unwrap_or_default(),
         replies: Vec::new(),
         seq: 0,
+        next_model: None,
     }
 }
 
@@ -1272,6 +1278,7 @@ mod tests {
             jobs: CliJobs::default(),
             replies: Vec::new(),
             seq: 7,
+            next_model: None,
         };
         let ids = |view: &ThreadView| -> Vec<String> {
             view.entries

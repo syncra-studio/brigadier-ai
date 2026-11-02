@@ -52,6 +52,8 @@ pub enum InjectedError {
     Auth,
     /// The account's credits ran out.
     Billing,
+    /// The model declined the turn (a safety refusal, D143).
+    Refusal,
 }
 
 impl InjectedError {
@@ -63,6 +65,7 @@ impl InjectedError {
                 "Invalid authentication credentials. Please sign in again.",
             ),
             Self::Billing => (ErrorKind::Billing, "Credit balance is too low"),
+            Self::Refusal => (ErrorKind::Policy, "The model declined to answer this turn"),
         };
         ProviderError {
             kind,

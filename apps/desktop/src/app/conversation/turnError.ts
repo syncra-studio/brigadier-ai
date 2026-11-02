@@ -71,8 +71,9 @@ function kindOf(raw: string): ErrorKind | null {
 /**
  * `cli`: the turn's own CLI by name, else "the agent"; `kind`: as its adapter classed it.
  * `limit`: the provider's usage limit stopped it, which the thread shows as a divider, not an error.
+ * `declined`: its model refused the turn, which the thread says in one quiet line (D143).
  */
-export function describeTurnError(raw: string, cli = "the agent", kind?: ErrorKind | null): { summary: string; limit?: true } {
+export function describeTurnError(raw: string, cli = "the agent", kind?: ErrorKind | null): { summary: string; limit?: true; declined?: true } {
   if (raw.trim() === INTERRUPTED_BEFORE_START) return { summary: "Interrupted: Brigadier quit before this started. Continue sends it again." };
   if (interruptedByQuit(raw)) return { summary: "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands." };
   const Cli = cli.charAt(0).toUpperCase() + cli.slice(1);
@@ -84,7 +85,8 @@ export function describeTurnError(raw: string, cli = "the agent", kind?: ErrorKi
     case "process": return { summary: `${Cli} stopped unexpectedly.` };
     case "network": return { summary: `Lost the connection to ${cli}.` };
     case "overloaded": return { summary: `${Cli} is overloaded right now.` };
-    case "server": case "invalidRequest": case "policy": return { summary: `This turn stopped because of an error on ${cli}'s side.` };
+    case "policy": return { summary: `${Cli} declined this turn`, declined: true };
+    case "server": case "invalidRequest": return { summary: `This turn stopped because of an error on ${cli}'s side.` };
     default: return { summary: "This turn stopped because of an error." };
   }
 }

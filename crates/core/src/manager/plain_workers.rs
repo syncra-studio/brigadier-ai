@@ -934,6 +934,15 @@ impl SessionManager {
             _ => None,
         };
         let error = match &cutoff {
+            // Its orchestrator picks the next model itself (D143, D48); never the same again.
+            Some(AttemptEnd::Error {
+                kind: brigadier_providers::ErrorKind::Policy,
+                ..
+            }) => Some(format!(
+                "Its model declined this turn: switch it to the next model in your routing \
+                 (`brigadier switch {} --agent … --model …`), then tell it to go on.",
+                short(&task.id.0)
+            )),
             Some(AttemptEnd::Error { message, .. }) => Some(message.clone()),
             _ => None,
         };

@@ -270,6 +270,7 @@ mod client_tests {
             jobs: Default::default(),
             replies: Vec::new(),
             seq: 0,
+            next_model: None,
         };
         let (send, recv) = tokio::io::duplex(8192);
         let mut writer = FrameWriter::new(send);

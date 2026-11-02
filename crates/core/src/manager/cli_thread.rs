@@ -949,6 +949,13 @@ impl SessionManager {
         thread_view::name_providers(&mut view, &owned, current);
         view.seams = super::seam::marks(&record, &mut view.entries);
         view.replies = super::session_messages::replies(&record);
+        if view
+            .turns
+            .last()
+            .is_some_and(|turn| turn.error_kind == Some(brigadier_providers::ErrorKind::Policy))
+        {
+            view.next_model = self.declined_next(id);
+        }
         Ok(view)
     }
 

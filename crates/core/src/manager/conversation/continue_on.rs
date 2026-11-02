@@ -115,7 +115,7 @@ impl SessionManager {
     }
 
     /// Why `provider` can't take a session now, in plain words; `None` when it can.
-    fn agent_unready(&self, provider: ProviderKind) -> Option<String> {
+    pub(super) fn agent_unready(&self, provider: ProviderKind) -> Option<String> {
         let settings = self.core.settings();
         let label = provider.label();
         if !crate::routing::availability::provider_on(&settings, provider) {

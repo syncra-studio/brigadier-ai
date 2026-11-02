@@ -121,6 +121,8 @@ pub struct Parser {
     unechoed: u32,
     /// An error was already reported for the running turn.
     turn_error: Option<ErrorKind>,
+    /// The model declined the running turn (`model_refusal_no_fallback`): its error is a refusal.
+    refused: bool,
     turn_started_ms: Option<i64>,
     /// `/compact` was written and Claude has not started compacting yet.
     compact_asked: bool,
@@ -392,13 +394,20 @@ impl Parser {
 
     fn assistant(&mut self, value: &Value, out: &mut Vec<Output>) {
         let message = value.get("message").cloned().unwrap_or(Value::Null);
-        if let Some(code) = str_of(value, "error").or_else(|| {
-            (value
-                .pointer("/api_error_params/rate_limit_info/status")
-                .and_then(Value::as_str)
-                == Some("rejected"))
-            .then_some("rate_limit")
-        }) {
+        if let Some(code) = str_of(value, "error")
+            .or_else(|| {
+                (value
+                    .pointer("/api_error_params/rate_limit_info/status")
+                    .and_then(Value::as_str)
+                    == Some("rejected"))
+                .then_some("rate_limit")
+            })
+            .or_else(|| {
+                (value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+                    && str_of(&message, "stop_reason") == Some("refusal"))
+                .then_some("refusal")
+            })
+        {
             let text = content_text(&message);
             let error = self.api_error(value, code, text, out);
             self.turn_error = Some(error.kind);
@@ -939,11 +948,11 @@ impl Parser {
                     }));
                 }
             }
+            // The model declined the turn and Claude retries nowhere: the turn's error says it
+            // (a refusal, ErrorKind::Policy), in the thread's own words, not Claude's.
+            Some("model_refusal_no_fallback") => self.refused = true,
             Some(
-                subtype @ ("model_fallback"
-                | "model_refusal_fallback"
-                | "model_consent_fallback"
-                | "model_refusal_no_fallback"),
+                subtype @ ("model_fallback" | "model_refusal_fallback" | "model_consent_fallback"),
             ) => {
                 let detail = ["message", "reason", "fallback_model"]
                     .iter()
@@ -1161,6 +1170,7 @@ impl Parser {
         }
         self.turn_active = true;
         self.turn_error = None;
+        self.refused = false;
         self.interrupting = false;
         self.turn_started_ms = Some(now_ms());
         out.push(Output::Event(ProviderEvent::TurnStarted { turn_id: None }));
@@ -1286,6 +1296,7 @@ impl Parser {
                     .map(|started| now_ms() - started)
             });
         self.turn_error = None;
+        self.refused = false;
         out.push(Output::Event(ProviderEvent::TurnCompleted {
             turn_id: None,
             status,
@@ -1520,6 +1531,7 @@ impl Parser {
         let lower = message.to_lowercase();
         let gateway_reset = gateway_reset_at_ms(&message, now_ms());
         let (kind, limit) = match code {
+            _ if self.refused || code == "refusal" => (ErrorKind::Policy, None),
             _ if gateway_reset.is_some() => (
                 ErrorKind::UsageLimit,
                 Some(LimitHit {
@@ -2351,6 +2363,35 @@ mod tests {
         assert_eq!(
             errors(Parser::live().feed(&value.to_string()))[0].kind,
             ErrorKind::UsageLimit
+        );
+    }
+
+    /// A model's refusal (D143) is the turn's error, classed a refusal, with no notice in
+    /// Claude's own words: from its system line or from the refusing API error message.
+    #[test]
+    fn a_refusal_is_the_turns_policy_error() {
+        let refusal = json!({"type": "system", "subtype": "model_refusal_no_fallback",
+            "original_model": "claude-opus-5-5", "api_refusal_category": "reasoning_extraction",
+            "content": "declined", "uuid": "u", "session_id": "s"});
+        let result = json!({"type": "result", "subtype": "error_during_execution",
+            "is_error": true, "result": "API Error: flagged", "session_id": "s"});
+        let mut parser = Parser::live();
+        let mut outputs = parser.feed(&refusal.to_string());
+        outputs.extend(parser.feed(&result.to_string()));
+        assert!(
+            !outputs
+                .iter()
+                .any(|output| matches!(output, Output::Event(ProviderEvent::Notice { .. }))),
+            "{outputs:?}"
+        );
+        assert_eq!(errors(outputs).pop().unwrap().kind, ErrorKind::Policy);
+
+        let message = json!({"type": "assistant", "isApiErrorMessage": true,
+            "message": {"id": "m", "role": "assistant", "model": "<synthetic>",
+                "stop_reason": "refusal", "content": [{"type": "text", "text": "API Error: flagged"}]}});
+        assert_eq!(
+            errors(Parser::live().feed(&message.to_string()))[0].kind,
+            ErrorKind::Policy
         );
     }
 
