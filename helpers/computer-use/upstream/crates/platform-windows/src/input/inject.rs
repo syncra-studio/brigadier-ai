@@ -158,6 +158,10 @@ pub(crate) unsafe fn place_at_bottom(window: HWND) -> bool {
 }
 
 /// Facts for [`foreground_watch::policy::may_minimize_for_hand_back`].
+/// Windows activates the next visible window, so hidden windows between the
+/// displaced window and the user's are skipped. Live (2026-11-02, Windows 11
+/// 26300): hidden IME windows sat right under Notepad and placing the user's
+/// window there was ignored, so a launch refused to hand the front back.
 pub(crate) unsafe fn minimize_facts(
     prior: HWND,
     displaced: HWND,
@@ -171,7 +175,7 @@ pub(crate) unsafe fn minimize_facts(
         minimizable: style & WS_MINIMIZEBOX.0 != 0,
         topmost: ex & WS_EX_TOPMOST.0 != 0,
         tool: ex & WS_EX_TOOLWINDOW.0 != 0,
-        prior_next: unsafe { GetWindow(displaced, GW_HWNDNEXT) }.ok() == Some(prior),
+        prior_next: next_visible_below(displaced) == Some(prior),
         prior_hung: unsafe { IsHungAppWindow(prior) }.as_bool(),
     }
 }
@@ -189,7 +193,7 @@ pub(crate) unsafe fn hand_back_by_minimizing(
     displaced: HWND,
     allowed: impl Fn() -> bool,
 ) -> bool {
-    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, false, allowed) }
+    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, allowed) }
 }
 
 /// [`hand_back_by_minimizing`] for a window that cannot be minimized itself,
@@ -205,7 +209,7 @@ pub(crate) unsafe fn hand_back_by_minimizing_owner(
     use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
     let owner = unsafe { GetAncestor(displaced, GA_ROOTOWNER) };
     let owner = if owner.0.is_null() { displaced } else { owner };
-    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, true, allowed) }
+    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, allowed) }
 }
 
 /// The first visible top-level window below `window` (bounded).
@@ -227,7 +231,6 @@ unsafe fn hand_back_by_minimizing_window(
     prior: HWND,
     displaced: HWND,
     minimized: HWND,
-    owner_route: bool,
     allowed: impl Fn() -> bool,
 ) -> bool {
     if !allowed() || unsafe { GetForegroundWindow() } != displaced {
@@ -238,13 +241,7 @@ unsafe fn hand_back_by_minimizing_window(
     }
     // Synchronous: the user's window must be next before the minimize.
     let _ = unsafe { SetWindowPos(prior, minimized, 0, 0, 0, 0, Z_ONLY) };
-    let mut facts = unsafe { minimize_facts(prior, minimized) };
-    if owner_route {
-        // Windows activates the next visible window. Live (2026-11-02):
-        // under Notepad's owner of an open Save as dialog sat hidden helper
-        // windows, and placing the user's window right under it was ignored.
-        facts.prior_next = next_visible_below(minimized) == Some(prior);
-    }
+    let facts = unsafe { minimize_facts(prior, minimized) };
     if !foreground_watch::policy::may_minimize_for_hand_back(facts)
         || !allowed()
         || unsafe { GetForegroundWindow() } != displaced

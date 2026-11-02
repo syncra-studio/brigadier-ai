@@ -206,6 +206,8 @@ Patches applied, in order:
 
 - `patches/0180-windows-input-guard-dialog-hand-back.diff`: Never hand the front back to the target app's own window: an action that starts while the app's dialog has the front inherits the user's window from the live watch the app took it from, or restores nothing. Hand back from input targets by minimizing the root owner once the window that took the front is shown (a modal dialog cannot be minimized; the next visible window must be the user's), keep input targets' windows under the user's window once the action has ended (at the bottom when placing them under it does not take), and say in click replies when the app took the front. Launch hand-back and its cadence are unchanged.
 
+- `patches/0181-windows-launch-hand-back-next-visible-window.diff`: Check the next visible window, not the next window, when a launched app is minimized to hand the front back: hidden IME and helper windows sit right under it, Windows activates the next visible window, and placing the user's window right under the app is ignored, so a launch refused to hand the front back. The owner route of 0180 now shares the same check.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
