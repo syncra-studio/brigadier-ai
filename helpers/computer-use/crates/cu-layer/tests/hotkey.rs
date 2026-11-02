@@ -22,6 +22,7 @@ struct Seen {
     selected: usize,
     closed: Vec<u32>,
     sheet: Option<bool>,
+    sheet_before: Option<bool>,
     order: Vec<&'static str>,
 }
 
@@ -85,6 +86,9 @@ impl MenuBar for FakeMenuBar {
     }
     fn panel_sheet_opened(&self, _pid: i32, _window_id: u32) -> Option<bool> {
         self.0.lock().unwrap().sheet
+    }
+    fn panel_sheet_shown(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        self.0.lock().unwrap().sheet_before
     }
     /// Window 7 closes; window 8 stays open (a save sheet); 9 has no button.
     fn close_window(&self, _pid: i32, window_id: u32) -> Option<bool> {
@@ -275,6 +279,27 @@ async fn go_to_folder_that_shows_no_sheet_says_it_did_not_open() {
             assert_eq!(result.structured_content.unwrap()["effect"], "failed");
         }
     }
+}
+
+/// A sheet already on the panel (New Folder) would read as Go to Folder
+/// having opened, so nothing is sent.
+#[tokio::test]
+async fn go_to_folder_on_a_panel_already_showing_a_sheet_sends_nothing() {
+    let (registry, seen) = build();
+    {
+        let mut seen = seen.lock().unwrap();
+        seen.panel = Some((1, 90));
+        seen.sheet_before = Some(true);
+        seen.sheet = Some(true);
+    }
+    let args = json!({"pid": 1, "window_id": 90, "keys": ["cmd", "shift", "g"]});
+    let result = registry.invoke("hotkey", args).await;
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(
+        text_of(&result),
+        cu_layer::hotkey::GO_TO_FOLDER_SHEET_ALREADY_SHOWN
+    );
+    assert_eq!(seen.lock().unwrap().posted, 0);
 }
 
 #[tokio::test]

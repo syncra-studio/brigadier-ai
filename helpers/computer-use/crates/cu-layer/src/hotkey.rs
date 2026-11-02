@@ -86,7 +86,18 @@ pub trait MenuBar: Send + Sync {
     fn panel_sheet_opened(&self, _pid: i32, _window_id: u32) -> Option<bool> {
         None
     }
+    /// Whether the Open/Save panel `window_id` shows a sheet right now.
+    fn panel_sheet_shown(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        None
+    }
 }
+
+/// The answer when ⌘⇧G is asked of a panel that already shows a sheet: the
+/// keys would go to that sheet, and a sheet read back afterwards proves nothing.
+pub const GO_TO_FOLDER_SHEET_ALREADY_SHOWN: &str = "Nothing was sent: the Open/Save panel \
+    already shows a sheet (Go to Folder, New Folder or another dialog), so Go to Folder can't \
+    open on it. Read the panel: if that sheet is Go to Folder, type the path into it; otherwise \
+    close it first (press_key escape), then send the shortcut again.";
 
 /// The answer when ⌘⇧G reached a background Open/Save panel but no Go to
 /// Folder sheet opened.
@@ -270,8 +281,17 @@ impl Tool for MenuShortcut {
         if let Some(window_id) =
             window_id.filter(|window_id| self.menu_bar.panel_owns_keys(pid, *window_id))
         {
-            let result = self.inner.invoke(args).await;
             let go_to_folder = key.eq_ignore_ascii_case("g") && modifiers == SHIFT;
+            if go_to_folder && self.menu_bar.panel_sheet_shown(pid, window_id) == Some(true) {
+                return ToolResult::error(GO_TO_FOLDER_SHEET_ALREADY_SHOWN).with_structured(
+                    json!({
+                        "status": "failed",
+                        "effect": "failed",
+                        "reason": "panel_sheet_already_shown",
+                    }),
+                );
+            }
+            let result = self.inner.invoke(args).await;
             if go_to_folder && result.is_error != Some(true) {
                 match self.menu_bar.panel_sheet_opened(pid, window_id) {
                     Some(true) => return go_to_folder_opened(),
@@ -346,6 +366,10 @@ impl MenuBar for System {
 
     fn select_all_text(&self, pid: i32, window_id: Option<u32>) -> Option<String> {
         unsafe { system::select_all_text(pid, window_id) }
+    }
+
+    fn panel_sheet_shown(&self, pid: i32, window_id: u32) -> Option<bool> {
+        platform_macos::ax::panel::panel_has_sheet(pid, window_id)
     }
 
     fn panel_sheet_opened(&self, pid: i32, window_id: u32) -> Option<bool> {
