@@ -3819,8 +3819,13 @@ impl PointerRoute {
                 text.push(' ');
                 text.push_str(&foreign.describe());
             }
+            // Own line: see `mpx_focus_note`.
             if let Some(guard) = &effect.focus_guard {
-                text.push_str(&guard.summary());
+                let summary = guard.summary();
+                if !summary.trim().is_empty() {
+                    text.push('\n');
+                    text.push_str(summary.trim());
+                }
             }
         }
         text
@@ -3890,10 +3895,20 @@ impl PointerRoute {
 /// unconfirmed reply's first line is replaced by the honest summary.
 fn mpx_focus_note(effect: &crate::input::PointerEffect) -> &'static str {
     if effect.focus_unchanged {
-        ""
-    } else {
-        "\nThe window manager moved the desktop focus to this window for the press; it was \
-         restored to the previous window (focus_outcome=restored)."
+        return "";
+    }
+    // "Restored" only when the guard found nothing still moved; when it did,
+    // its own summary says what moved and whether restoring held.
+    match &effect.focus_guard {
+        Some(guard) if guard.changed => "",
+        Some(_) => {
+            "\nThe window manager moved the desktop focus to this window for the press; it \
+             was restored to the previous window (focus_outcome=restored)."
+        }
+        None => {
+            "\nThe window manager moved the desktop focus to this window for the press; \
+             whether it was restored could not be checked."
+        }
     }
 }
 

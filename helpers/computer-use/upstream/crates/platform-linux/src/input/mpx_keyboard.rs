@@ -558,6 +558,7 @@ fn deliver(
         // through the error handler, so a stale GetFocus is the real signal.
         // Retry once — a freshly mapped/raised toplevel can miss the first set.
         let mut focus_taken = false;
+        let mut warp_error = None;
         // An XTEST-fed pair types into the window under its own pointer
         // (PointerRoot focus, a new master's default), parked on a point of
         // the target nothing covers. The focus the target gets is
@@ -582,7 +583,10 @@ fn deliver(
                         )
                     };
                 }
-                focus_taken = warp_master_pointer(display, ids, x, y).is_ok();
+                match warp_master_pointer(display, ids, x, y) {
+                    Ok(()) => focus_taken = true,
+                    Err(error) => warp_error = Some(error),
+                }
             }
         }
         for attempt in 0..2 {
@@ -602,6 +606,9 @@ fn deliver(
             }
         }
         unsafe { x11::xlib::XSetErrorHandler(previous_handler) };
+        if let Some(error) = warp_error {
+            return Err(error);
+        }
         if xtest && parked.is_none() {
             bail!(
                 "every point of window 0x{target_window:x} is covered by another window, and \
@@ -703,6 +710,13 @@ fn uncovered_point(
     window: x11::xlib::Window,
 ) -> Option<(i32, i32)> {
     let (left, top, width, height) = window_screen_bounds(display, window)?;
+    let screen = unsafe { x11::xlib::XDefaultScreen(display) };
+    let (screen_w, screen_h) = unsafe {
+        (
+            x11::xlib::XDisplayWidth(display, screen),
+            x11::xlib::XDisplayHeight(display, screen),
+        )
+    };
     const PLACES: [f64; 5] = [0.5, 0.25, 0.75, 0.1, 0.9];
     PLACES
         .iter()
@@ -713,6 +727,8 @@ fn uncovered_point(
                 top + (f64::from(height) * fy) as i32,
             )
         })
+        // A point off the screen can't hold the pointer (a warp is clipped).
+        .filter(|&(x, y)| x >= 0 && y >= 0 && x < screen_w && y < screen_h)
         .find(|&(x, y)| {
             matches!(
                 occluding_window(display, window, x, y),

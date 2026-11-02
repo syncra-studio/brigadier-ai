@@ -1141,7 +1141,53 @@ fn warp_master_pointer(
     if rc != 0 {
         bail!("XIWarpPointer failed with status {rc}");
     }
+    // The server clips a warp to the screen: a point off it (a window partly
+    // off-screen) would put the press or keys on whatever sits at the edge.
+    let at = virtual_master_position(display, ids.pointer_id);
+    if at != Some((x, y)) {
+        bail!(
+            "the point ({x}, {y}) is off the screen (the pointer stopped at {}), so nothing \
+             was sent; move the window fully on screen or aim at a visible point",
+            at.map(|(ax, ay)| format!("({ax}, {ay})"))
+                .unwrap_or_else(|| "an unknown place".to_owned())
+        );
+    }
     Ok(())
+}
+
+/// Where the master pointer `pointer_id` is, in root coordinates.
+fn virtual_master_position(
+    display: *mut x11::xlib::Display,
+    pointer_id: i32,
+) -> Option<(i32, i32)> {
+    let root = unsafe { x11::xlib::XDefaultRootWindow(display) };
+    let (mut root_ret, mut child_ret) = (0, 0);
+    let (mut rx, mut ry, mut wx, mut wy) = (0f64, 0f64, 0f64, 0f64);
+    let mut buttons = x11::xinput2::XIButtonState::default();
+    let mut mods = x11::xinput2::XIModifierState::default();
+    let mut group = x11::xinput2::XIModifierState::default();
+    let prev = unsafe { x11::xlib::XSetErrorHandler(Some(ignore_x_error)) };
+    let rc = unsafe {
+        x11::xinput2::XIQueryPointer(
+            display,
+            pointer_id,
+            root,
+            &mut root_ret,
+            &mut child_ret,
+            &mut rx,
+            &mut ry,
+            &mut wx,
+            &mut wy,
+            &mut buttons,
+            &mut mods,
+            &mut group,
+        )
+    };
+    unsafe { x11::xlib::XSetErrorHandler(prev) };
+    if !buttons.mask.is_null() {
+        unsafe { x11::xlib::XFree(buttons.mask as *mut _) };
+    }
+    (rc != 0).then(|| (rx.round() as i32, ry.round() as i32))
 }
 
 /// True when `window` is override-redirect — a menu, tooltip, or other popup
