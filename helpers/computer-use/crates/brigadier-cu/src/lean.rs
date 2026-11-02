@@ -316,6 +316,7 @@ pub fn result(name: &str, mut result: Value, brigadier: bool) -> Value {
     }
     let mut trees = Vec::new();
     collect_trees(&result["structuredContent"], &mut trees);
+    let partial_note = partial_tree_note(&trees, &result["structuredContent"]);
     if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
         for block in content.iter_mut() {
             if block["type"] == "text" {
@@ -331,6 +332,17 @@ pub fn result(name: &str, mut result: Value, brigadier: bool) -> Value {
             }
         }
         content.retain(|block| block["type"] != "text" || block["text"] != "");
+        if let Some(note) = partial_note {
+            match content.iter_mut().find(|block| block["type"] == "text") {
+                Some(block) => {
+                    let text = block["text"].as_str().unwrap_or_default();
+                    if !text.contains("PARTIAL TREE") {
+                        block["text"] = format!("{text}\n{note}").into();
+                    }
+                }
+                None => content.insert(0, serde_json::json!({"type":"text","text":note})),
+            }
+        }
     }
     rewrite_tool_hints(&mut result, name != "page");
     result
@@ -478,6 +490,24 @@ fn offered_tool_prose(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A cut-short walk must say so in the text the agent reads, not only inside
+/// the structured tree: an empty filtered read would otherwise look like "no
+/// such element".
+fn partial_tree_note(trees: &[String], structured: &Value) -> Option<String> {
+    let line = trees
+        .iter()
+        .flat_map(|tree| tree.lines())
+        .find(|line| line.contains("PARTIAL TREE"))?
+        .trim();
+    let mut note = line.to_owned();
+    if structured["filtered_element_count"] == 0 {
+        note.push_str(
+            " No row matched in the part that was read; that does not mean the element is missing.",
+        );
+    }
+    Some(note)
 }
 
 fn collect_trees(value: &Value, trees: &mut Vec<String>) {
@@ -864,6 +894,30 @@ mod tests {
                 true
             );
         }
+    }
+
+    #[test]
+    fn a_timed_out_filtered_read_says_the_tree_is_partial_in_its_text() {
+        let note = "⚠️ PARTIAL TREE: the 1000 ms timeout_ms budget ran out after 311 node(s) (725 discovered but not visited).";
+        let partial = json!({
+            "content":[{"type":"text","text":format!("window_id=1 pid=2 elements=46\n\n{note}")}],
+            "structuredContent":{"tree_markdown":format!("\n{note}"),"elements":[],"filtered_element_count":0,"truncated":true},
+            "isError":false
+        });
+        let out = result("get_window_state", partial, true);
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("window_id=1 pid=2 elements=46"), "{text}");
+        assert!(text.contains("PARTIAL TREE"), "{text}");
+        assert!(
+            text.contains("does not mean the element is missing"),
+            "{text}"
+        );
+        let whole = read("- [1] AXButton \"Save\"");
+        let out = result("get_window_state", whole, true);
+        assert!(!out["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("PARTIAL"));
     }
 
     #[test]
