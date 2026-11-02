@@ -1000,7 +1000,8 @@ export function cliBlocks(
         // Its `brigadier send` to another session is the row of the message it sent (S30), its
         // `brigadier wait` on one the row of the reply (D138). Its other `wait`s and `start`s are
         // no rows (D47): the block's "Waiting for a worker" line and the worker's own row say them.
-        const kind = sessionSent(tool, event, board) ?? sessionWait(tool, event, view)
+        // One call that sends and then waits (as the CLIs do) is the wait's row.
+        const kind = sessionWait(tool, event, view) ?? sessionSent(tool, event, board)
           ?? (tool?.item === "command" && tool.detail !== null && brigadierUnshown(tool.detail) ? null : tool);
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }

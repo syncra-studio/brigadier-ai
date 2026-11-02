@@ -83,7 +83,10 @@ test("a `brigadier wait` on another session is its reply's row, under the newest
   assert.deepEqual(waitArgs(`brigadier wait`), [], "no ids: it waits on the workers");
   const waiting = call(`brigadier wait 4f2a9c1e`, "inProgress", null);
   const kind = sessionWait(waiting.step, waiting.event, {});
-  assert.deepEqual(kind, { type: "sessionWait", itemId: waiting.step.itemId, to: ["4f2a9c1e"], status: "inProgress", replies: [] });
+  assert.deepEqual(kind, { type: "sessionWait", itemId: waiting.step.itemId, to: ["4f2a9c1e"], sent: null, status: "inProgress", replies: [] });
+  // As the CLIs run it: the message, then the wait, in one call, its row the wait's, holding the message's id.
+  const both = call(`brigadier send 4f2a9c1e "Is it done?" 2>&1; brigadier wait 4f2a9c1e --timeout 600 2>&1 | tail -40`, "completed", "Sent sm-0123456789ab to session 4f2a9c1e: queued into its turn.\n");
+  assert.equal(sessionWait(both.step, both.event, {})?.sent, "sm-0123456789ab");
   // A wait on one of its workers, or on all of them, keeps no row (D47).
   assert.equal(sessionWait(waiting.step, waiting.event, { workers: [{ id: "task-9f-4f2a9c1e" } as WorkerRow] }), null);
   const workers = call(`brigadier wait`, "inProgress", null);

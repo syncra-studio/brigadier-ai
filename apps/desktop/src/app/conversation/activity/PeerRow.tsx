@@ -15,6 +15,7 @@ import {
   sessionSendWords,
   sessionSentDescribed,
   UNKNOWN_SESSION,
+  waitExchange,
   type WordPart,
 } from "@/app/conversation/activity/peerWords";
 import { PeerLink } from "@/app/conversation/activity/PeerLink";
@@ -142,24 +143,6 @@ export function exchangeOf(kind: PeerSentStep, peers: PeerLookup, going = false)
   };
 }
 
-/**
- * Where a `brigadier wait` on other sessions stands (D138), as a row of waits reads it: whom it
- * waits for while it runs, then whose replies it took, each opening its session at the reply.
- */
-export function waitExchange(kind: SessionWaitStep, peers: PeerLookup): Exchange {
-  const ref = (session: string, message?: string): PeerRef => {
-    const name = peers.name(session);
-    return { session, title: (name ?? UNKNOWN_SESSION).title, ...(message !== undefined && { message }), ...(!name && { gone: true }) };
-  };
-  return {
-    sends: [],
-    // A reply taken ends it, whatever its call still says.
-    waits: [kind.replies.length > 0 ? "completed" : kind.status],
-    received: kind.replies.map((reply) => ref(reply.from, reply.messageId)),
-    waitingOn: kind.to.map((to) => ref(peers.session(to) ?? to)),
-  };
-}
-
 /** A message row's words and how it stands (`going`: see `Exchange`); null for a step that isn't one. */
 export function describePeerStep(step: BlockOrchestratorStep, peers: PeerLookup, going = false): Described | null {
   const { kind } = step;
@@ -242,6 +225,7 @@ export const SessionWaitRow: FC<{ step: BlockOrchestratorStep; kind: SessionWait
     <ThreadActivity
       data-slot="orchestrator-step"
       data-kind="message"
+      data-peer-message={kind.sent ?? undefined}
       data-wait={waiting ? "waiting" : kind.replies.length > 0 ? "received" : "waited"}
       data-at={step.position}
       detail={detail}

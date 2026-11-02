@@ -54,7 +54,8 @@ const send = (itemId: string, text: string, status: "inProgress" | "completed", 
   type: "toolCall", itemId, name: "Bash", input: JSON.stringify({ command: `brigadier send 4f2a9c1e "${text}"` }), status, output,
 });
 const waitOn = (itemId: string, status: "inProgress" | "completed", output: string | null): ProviderEvent => ({
-  type: "toolCall", itemId, name: "Bash", input: JSON.stringify({ command: "brigadier wait 4f2a9c1e --timeout 600" }), status, output,
+  // As the CLIs run it: the message and the wait for its reply in one call.
+  type: "toolCall", itemId, name: "Bash", input: JSON.stringify({ command: `brigadier send 4f2a9c1e "Is it done?" 2>&1; brigadier wait 4f2a9c1e --timeout 600 2>&1 | tail -40` }), status, output,
 });
 
 const T = Date.now() - 600_000;
@@ -218,6 +219,7 @@ try {
       shimmer: !!row?.querySelector(".shimmer"),
       open: toggle?.getAttribute("aria-expanded") === "true",
       reply: text(row?.querySelector("[data-slot=wait-replies]")),
+      id: row?.dataset.peerMessage ?? null,
       lines: (document.querySelector("main")!.textContent ?? "").includes("Waiting for a worker"),
     };
   };
@@ -226,7 +228,7 @@ try {
   const kept = { from: RECEIVER, messageId: "sm-c0ffee000001", text: ANSWER, atMs: W + 5000 };
   views[SENDER] = { ...views[SENDER]!, replies: [kept] };
   applyThreadNews({ conversationId: SENDER, entries: [], replies: [kept] });
-  live(SENDER, [at(waitOn("w1", "completed", `answered (sm-c0ffee000001) ${ANSWER}`), W + 100)]);
+  live(SENDER, [at(waitOn("w1", "completed", `Sent sm-0000000000aa to session 4f2a9c1e: queued into its turn.\n4f2a9c1e answered (sm-c0ffee000001) ${ANSWER}`), W + 100)]);
   await until(() => waitRow()?.dataset.wait === "received");
   await wait(200);
   seen.received = rowSeen();

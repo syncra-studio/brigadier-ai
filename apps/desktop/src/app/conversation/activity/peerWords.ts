@@ -1,4 +1,6 @@
 import type { Described } from "@/app/conversation/activity/ActivityGroup";
+import type { PeerLookup } from "@/app/conversation/activity/PeerRow";
+import type { SessionWaitStep } from "@/app/conversation/blocks";
 import type { Conversation, ItemStatus, PeerMessage, PeerState, Project } from "@/ipc/generated";
 
 /**
@@ -103,6 +105,24 @@ function waited(sent: readonly PeerRef[], received: readonly PeerRef[], failed: 
 function lower(clause: WordPart[]): WordPart[] {
   const [first, ...rest] = clause;
   return typeof first === "string" ? [first.charAt(0).toLowerCase() + first.slice(1), ...rest] : clause;
+}
+
+/**
+ * Where a `brigadier wait` on other sessions stands (D138), as a row of waits reads it: whom it
+ * waits for while it runs, then whose replies it took, each opening its session at the reply.
+ */
+export function waitExchange(kind: SessionWaitStep, peers: Pick<PeerLookup, "name" | "session">): Exchange {
+  const ref = (session: string, message?: string): PeerRef => {
+    const name = peers.name(session);
+    return { session, title: (name ?? UNKNOWN_SESSION).title, ...(message !== undefined && { message }), ...(!name && { gone: true }) };
+  };
+  return {
+    sends: [],
+    // A reply taken ends it, whatever its call still says.
+    waits: [kind.replies.length > 0 ? "completed" : kind.status],
+    received: kind.replies.map((reply) => ref(reply.from, reply.messageId)),
+    waitingOn: kind.to.map((to) => ref(peers.session(to) ?? to)),
+  };
 }
 
 /** A row's words as one line of text. */

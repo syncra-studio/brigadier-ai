@@ -139,14 +139,16 @@ export function waitArgs(command: string): string[] | null {
 
 /**
  * The row of the thread's own `brigadier wait` on other sessions (D138): one naming ids none of
- * its workers has. Its replies come after, from what Brigadier kept (`attachReplies`).
+ * its workers has, the message its call sent first too. Its replies come after, from what
+ * Brigadier kept (`attachReplies`).
  */
 export function sessionWait(step: ToolStep | null, event: ProviderEvent, view: Pick<ThreadView, "workers">): SessionWaitStep | null {
   if (!step || step.item !== "command") return null;
   const command = commandOf(event);
   const to = command === null ? null : waitArgs(command);
   if (!to?.length || to.some((id) => (view.workers ?? []).some((row) => namesId(row.id, id)))) return null;
-  return { type: "sessionWait", itemId: step.itemId, to, status: step.status, replies: [] };
+  const output = "output" in event ? (event.output ?? "") : "";
+  return { type: "sessionWait", itemId: step.itemId, to, sent: SENT_TO_SESSION.exec(output)?.[1] ?? null, status: step.status, replies: [] };
 }
 
 /**

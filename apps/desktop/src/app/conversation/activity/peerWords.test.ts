@@ -17,6 +17,7 @@ import {
   replyOf,
   sentByCaption,
   UNKNOWN_SESSION,
+  waitExchange,
 } from "@/app/conversation/activity/peerWords";
 import type { Conversation, ItemStatus, PeerMessage, PeerState, Project } from "@/ipc/generated";
 
@@ -149,4 +150,20 @@ test("the thread's own `brigadier send` row: Messaging, then Messaged, the user'
   assert.equal(sessionSentDescribed(named, "sent").status, "completed");
   assert.equal(sessionSentDescribed(named, "refused").words.done, "Couldn’t send message to Docs");
   assert.equal(sessionSentDescribed(named, "refused").words.phrase, "Couldn’t message a session");
+});
+
+test("a `brigadier wait` on another session: waiting for its reply, then received, the name opening it at the reply (D138)", () => {
+  const B = "0192aaaa-bbbb-7ccc-8ddd-00004f2a9c1e";
+  const peers = { name: (id: string | undefined) => (id === B ? { title: "Docs", project: null } : null), session: (to: string) => (B.endsWith(to) ? B : null) };
+  const kind = { type: "sessionWait" as const, itemId: "w1", to: ["4f2a9c1e"], sent: null, status: "inProgress" as const, replies: [] as { from: string; messageId?: string; text: string; atMs: number }[] };
+  const words = () => {
+    const { parts, status, waiting } = exchangeWords(waitExchange(kind, peers));
+    return [plainWords(parts), status, waiting];
+  };
+  assert.deepEqual(words(), ["Waiting for Docs to reply", "inProgress", true]);
+  kind.replies.push({ from: B, messageId: "sm-1", text: "Done.", atMs: 2 });
+  // The reply taken settles it, even before its call says it ended.
+  assert.deepEqual(words(), ["Received a reply from Docs", "completed", false]);
+  assert.deepEqual(waitExchange(kind, peers).received, [{ session: B, title: "Docs", message: "sm-1" }]);
+  assert.deepEqual(exchangeWords(waitExchange({ ...kind, status: "completed", replies: [] }, peers)).parts, ["Waited; no reply yet"]);
 });

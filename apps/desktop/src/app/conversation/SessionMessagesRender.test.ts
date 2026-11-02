@@ -19,7 +19,7 @@ type Seen = {
   opened: WaitRow & { bubbles: number; inBubble: boolean };
   reopened: WaitRow;
 };
-type WaitRow = { text: string | null; state: string | null; link: string | null; shimmer: boolean; open: boolean; reply: string | null; lines: boolean };
+type WaitRow = { text: string | null; state: string | null; link: string | null; shimmer: boolean; open: boolean; reply: string | null; id: string | null; lines: boolean };
 
 const SENDER = "0192aaaa-bbbb-7ccc-8ddd-0000a11ce5e5";
 const ASK = "Can you check the orders schema before I cut the release? The migration in 0042 renames customer_id, and the export job still reads the old column on every nightly run.";
@@ -59,12 +59,13 @@ test("sessions messaging each other: the receiver's captioned message and the se
   assert.deepEqual(seen.receivedLive.received.at(-1), { id: "sm-ba9876543210", caption: CAPTION, text: "Also the docs.", right: true });
   assert.equal(seen.receivedLive.headers, false);
 
-  // D138: the sender's `brigadier wait` row, "Waiting for API work to reply" while it runs, with no
-  // "Waiting for a worker" line under it; the same row then settles, collapsed, to "Received a
-  // reply from API work", which opens to the reply as Brigadier kept it, never a bubble.
+  // D138: the sender's `brigadier send …; brigadier wait …` call is one row: "Waiting for API work
+  // to reply" while it runs, with no "Waiting for a worker" line under it; then, collapsed,
+  // "Received a reply from API work", holding the message it sent for a jump to it, which opens
+  // to the reply as Brigadier kept it, never a bubble.
   const reply = "Checked it: the export job still reads customer_id. I pointed it at the new column and ran the nightly export once; it passes.";
-  assert.deepEqual(seen.waiting, { text: "Waiting for API work to reply", state: "waiting", link: "API work", shimmer: true, open: false, reply: null, lines: false });
-  assert.deepEqual(seen.received, { text: "Received a reply from API work", state: "received", link: "API work", shimmer: false, open: false, reply: null, lines: false });
+  assert.deepEqual(seen.waiting, { text: "Waiting for API work to reply", state: "waiting", link: "API work", shimmer: true, open: false, reply: null, id: null, lines: false });
+  assert.deepEqual(seen.received, { text: "Received a reply from API work", state: "received", link: "API work", shimmer: false, open: false, reply: null, id: "sm-0000000000aa", lines: false });
   assert.deepEqual(seen.opened, { ...seen.received, open: true, reply, bubbles: 0, inBubble: false });
   assert.deepEqual(seen.reopened, seen.received, "read back after reopening: the same row, collapsed");
 });

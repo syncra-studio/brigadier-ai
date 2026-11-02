@@ -126,12 +126,14 @@ export type SessionSentStep = {
 /**
  * The thread's own `brigadier wait` on other sessions (D138), one row: "Waiting for Docs to
  * reply" while it runs, then "Received a reply from Docs", opening to the reply. `to` holds the
- * ids as the call named them; `replies` what Brigadier kept of the replies it took.
+ * ids as the call named them; `sent` the message the same call sent first, once it said so;
+ * `replies` what Brigadier kept of the replies it took.
  */
 export type SessionWaitStep = {
   type: "sessionWait";
   itemId: string;
   to: readonly string[];
+  sent: string | null;
   status: ItemStatus;
   replies: WaitReply[];
 };
@@ -140,6 +142,7 @@ export type SessionWaitStep = {
 export function sentMessageIds(kind: BlockOrchestratorStep["kind"]): readonly string[] {
   if (kind.type === "peerSent") return kind.messageIds;
   if (kind.type === "sessionSent" && kind.messageId !== null) return [kind.messageId];
+  if (kind.type === "sessionWait" && kind.sent !== null) return [kind.sent];
   return [];
 }
 
