@@ -1054,6 +1054,27 @@ test("goal 8: a turn woken to judge a follow-up while the block's worker works g
   assert.equal(blocks(false), 2);
 });
 
+test("goal 3: a follow-up the CLI read inside its still running turn goes on in that block before any read has its turn, its worker already done (screen pass on Claude)", () => {
+  // Seen live: "pause it" read as the wait on the worker ended; for 2 s two "Working for" headers.
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const thread = (end: ThreadTurn["end"]): ThreadView => ({
+    entries: [
+      user("u1", "Start a worker", 1000, { requests: ["r1"] }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
+      user("q1", toJudge("pause it"), 2000, { requests: [id] }),
+    ],
+    turns: [{ ...turn("u1", 1000, end ? 1500 : null, end), requests: ["r1"] }],
+    workers: [row("aa11bb22", 1050)],
+  });
+  const queued = { id, text: "pause it", attachments: [], mentions: [], queuedAtMs: 1900, editedAtMs: null, deciding: true, delivered: true };
+  const board = { ...NO_BOARD, queueItems: [queued], requests: { r1: {} } };
+  const blocks = (end: ThreadTurn["end"]) =>
+    cliThreadTree(thread(end), "conv", [stored("r1", 900)], {}, [], board, { state: "running", error: null }).nodes.filter((node) => node.kind === "block").length;
+  assert.equal(blocks(null), 1);
+  // Its turn ended before: a turn of its own.
+  assert.equal(blocks("done"), 2);
+});
+
 /** A queued message's words under the line giving them to the session to judge. */
 const toJudge = (words: string) => `[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`;
 

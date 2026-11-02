@@ -666,9 +666,13 @@ export function cliBlocks(
   // A turn the user's message started while the block before still held (its workers or its
   // CLI's background commands still ran) goes on in that block, as the daemon says.
   // So does a turn begun while the turn before still ran (a CLI's input queued mid-turn, D74).
+  // Not read yet while the turn before still runs, it is one the CLI began inside that turn: a
+  // turn of the user's starts only once the one before ended (seen live: two headers for 2 s).
   const overlaps = () => {
     const [previous, now] = [view.turns[turn - 1], view.turns[turn]];
-    return !!previous && now?.startedAtMs != null && now.startedAtMs < (previous.endedAtMs ?? (previous.end == null ? Number.POSITIVE_INFINITY : 0));
+    if (!previous) return false;
+    if (!now) return previous.end == null;
+    return now.startedAtMs != null && now.startedAtMs < (previous.endedAtMs ?? (previous.end == null ? Number.POSITIVE_INFINITY : 0));
   };
   // A turn the stream gave but no read has yet (its turn comes with the next one): it goes on in
   // the block before while that block's workers or background commands still work, as the
