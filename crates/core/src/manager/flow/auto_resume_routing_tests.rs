@@ -159,12 +159,13 @@ async fn what_goes_on_by_itself_keeps_its_routing_pick() {
     let log: Log = Arc::default();
     let mut flow = flow("auto-resume-routing", &log).await;
     flow.say("Start them.").await;
+    // Their CLI sessions recorded too: a crash before that starts a worker afresh, with no
+    // "restarted" note to wait for.
     flow.until("both workers work", |board| {
         board.tasks.len() == 2
-            && board
-                .tasks
-                .values()
-                .all(|task| task.state == crate::work::TaskState::Running)
+            && board.tasks.values().all(|task| {
+                task.state == crate::work::TaskState::Running && task.native_session.is_some()
+            })
     })
     .await;
     super::eventually("both workers' turns", || {
