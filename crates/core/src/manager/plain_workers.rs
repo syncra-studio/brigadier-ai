@@ -970,7 +970,8 @@ impl SessionManager {
                     if finished && let Some(plain) = &mut task.plain {
                         plain.auto_resumed = false;
                     }
-                    if error.is_some() {
+                    // A successful later turn recovers the previous turn's error.
+                    if error.is_some() || kind == EventKind::TurnEnded {
                         task.error = error.clone();
                     }
                     if let Some(outputs) = outputs {

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_cli::protocol::{CliCall, CliReply, GRANT_ENV, PROTOCOL, SESSION_ENV};
+use brigadier_cli::protocol::{CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, SESSION_ENV};
 use brigadier_providers::{
     ItemStatus, McpServerState, McpStatus, ProviderEvent, ProviderKind, Role, TurnStatus,
 };
@@ -738,6 +738,83 @@ async fn a_worker_its_model_declined_is_its_parents_to_switch() {
             .contains("Its model declined this turn: switch it to the next model in your routing (`brigadier switch ")
             && !input.contains("flagged")),
         "{nets:#?}"
+    );
+    flow.stop().await;
+}
+
+/// A declined turn's error belongs to that turn: after its parent switches the worker and
+/// it finishes, neither its idle task nor its closed, done task carries that old error.
+#[tokio::test]
+async fn a_worker_that_finishes_after_a_decline_has_no_stale_error() {
+    let (flow, seen) = flow("events-declined-recovered", PermissionLevel::Full).await;
+    flow.say("Start Decline-now.").await;
+    super::eventually("the decline told", || {
+        seen.told()
+            .contains(&("Decline-now".to_owned(), "failed".to_owned()))
+    })
+    .await;
+    let task = Flow::task(&flow.idle().await, 1).clone();
+    assert!(
+        task.error
+            .as_deref()
+            .unwrap()
+            .contains("declined this turn")
+    );
+    let (session, grant) = seen.caller.lock().unwrap().clone().unwrap();
+    let caller = flow.manager.cli_caller(&session, &grant).unwrap();
+    for request in [
+        CliRequest::Switch {
+            id: task.id.0.clone(),
+            agent: Some(ProviderKind::Codex),
+            model: None,
+            effort: None,
+        },
+        CliRequest::Send {
+            id: task.id.0.clone(),
+            text: Some("Go on.".into()),
+            answer: None,
+        },
+    ] {
+        let reply = flow
+            .manager
+            .cli_call(
+                &caller,
+                CliCall {
+                    protocol: PROTOCOL,
+                    request,
+                },
+            )
+            .await;
+        assert!(matches!(reply, CliReply::Ok { .. }), "{reply:?}");
+    }
+    super::eventually("the recovered worker finished", || {
+        seen.told()
+            .contains(&("Decline-now".to_owned(), "finished".to_owned()))
+    })
+    .await;
+    let recovered = Flow::task(&flow.idle().await, 1).clone();
+    assert_eq!(recovered.route.choice.provider, ProviderKind::Codex);
+    let reply = flow
+        .manager
+        .cli_call(
+            &caller,
+            CliCall {
+                protocol: PROTOCOL,
+                request: CliRequest::Close { id: task.id.0 },
+            },
+        )
+        .await;
+    assert!(matches!(reply, CliReply::Ok { .. }), "{reply:?}");
+    let done = Flow::task(&flow.board().await, 1).clone();
+    assert_eq!(done.state, crate::work::TaskState::Done);
+    assert_eq!(done.error, None);
+    assert_eq!(recovered.error, None);
+    assert_eq!(
+        seen.told()
+            .iter()
+            .filter(|(_, word)| word == "failed")
+            .count(),
+        1
     );
     flow.stop().await;
 }
