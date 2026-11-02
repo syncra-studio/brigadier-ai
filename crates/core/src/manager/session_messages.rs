@@ -428,6 +428,7 @@ impl SessionManager {
             return WaitOutput {
                 events,
                 timed_out: false,
+                message: false,
             };
         }
         out
@@ -458,6 +459,7 @@ impl SessionManager {
                 return WaitOutput {
                     events,
                     timed_out: false,
+                    message: false,
                 };
             }
             // Looked at again on each turn end and message seen, and each second besides.
@@ -469,10 +471,10 @@ impl SessionManager {
                 () = turned => {}
                 () = again => {}
                 Ok(event) = &mut *answered => {
-                    return WaitOutput { events: vec![event], timed_out: false };
+                    return WaitOutput { events: vec![event], timed_out: false, message: false };
                 }
                 () = tokio::time::sleep_until(far), if deadline.is_some() => {
-                    return WaitOutput { events: Vec::new(), timed_out: true };
+                    return WaitOutput { events: Vec::new(), timed_out: true, message: false };
                 }
             }
         }

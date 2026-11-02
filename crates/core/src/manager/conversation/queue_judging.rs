@@ -371,6 +371,10 @@ impl SessionManager {
                 crate::logging::private_trace!(conv.private_logs, warn, "could not mark a queued message given"; conversation = %conv.id, error = %err);
             }
         }
+        // A `brigadier wait` holding it ends, so it is read now.
+        if held.is_some() {
+            self.worker_events.added.notify_waiters();
+        }
         // A command that ended while this was written released it first: say so again.
         if held.is_some() && !conv.state.lock().await.held_items.contains(&item.id) {
             self.mark_items_held(conv, std::slice::from_ref(&item.id), None)

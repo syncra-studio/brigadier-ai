@@ -1702,6 +1702,8 @@ impl SessionManager {
     /// first, and its release is written again after it, so none keeps waiting on an ended command.
     async fn hold(&self, conv: &ConvLive, requests: &[String], held: HeldBy) {
         self.mark_held(conv, requests, Some(held)).await;
+        // A `brigadier wait` holding it ends, so it is read now.
+        self.worker_events.added.notify_waiters();
         let released: Vec<String> = {
             let state = conv.state.lock().await;
             requests
@@ -1713,6 +1715,16 @@ impl SessionManager {
         if !released.is_empty() {
             self.mark_held(conv, &released, None).await;
         }
+    }
+
+    /// Whether a message sent to the session waits behind one of its thread's commands: a
+    /// `brigadier wait` it runs ends for it (goal 3).
+    pub(super) async fn message_held(&self, id: &ConversationId) -> bool {
+        let Some(conv) = self.convs_lock().get(id).cloned() else {
+            return false;
+        };
+        let state = conv.state.lock().await;
+        !state.held_requests.is_empty() || !state.held_items.is_empty()
     }
 
     /// Marks steered requests as waiting behind the thread's command `held`, or as read now.

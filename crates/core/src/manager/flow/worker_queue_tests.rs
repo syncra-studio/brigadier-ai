@@ -513,3 +513,76 @@ async fn editing_a_worker_row_on_its_way_is_refused() {
     );
     flow.stop().await;
 }
+
+/// A message sent while the session waits on a worker with `brigadier wait` ends that wait, so
+/// a CLI that reads input only between commands reads it now: "pause it" sat in the queue until
+/// the worker had finished (goal 3, screen pass on Claude). Every CLI, in the core.
+#[tokio::test]
+async fn a_message_sent_during_a_wait_on_a_running_worker_ends_the_wait() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let answers = Answers::default();
+    let worker_done = Arc::new(tokio::sync::Notify::new());
+    let (kept, release) = (answers.clone(), worker_done.clone());
+    let flow = Flow::start(
+        "wait-ends-for-message",
+        Options::default(),
+        Arc::new(move |turn| {
+            let (answers, release) = (kept.clone(), release.clone());
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    release.notified().await;
+                    return Reply::text("Done.");
+                }
+                if !turn.input.contains("Write the marks.") {
+                    return Reply::text("Noted.");
+                }
+                let id = id_of(
+                    &brigadier(&turn, CliRequest::Start(Box::new(start("Write marks.")))).await,
+                );
+                let command = |status| ProviderEvent::Command {
+                    item_id: "wait-1".into(),
+                    command: format!("brigadier wait {id}"),
+                    cwd: None,
+                    status,
+                    exit_code: None,
+                    output: None,
+                    duration_ms: None,
+                    kept: None,
+                };
+                turn.emit(command(ItemStatus::InProgress)).await;
+                let waited = tokio::time::timeout(
+                    std::time::Duration::from_secs(20),
+                    brigadier(&turn, wait(&[&id], None)),
+                )
+                .await;
+                turn.emit(command(ItemStatus::Completed)).await;
+                answers
+                    .lock()
+                    .unwrap()
+                    .insert("wait".into(), waited.unwrap_or(json!("never ended")));
+                Reply::text("Read it.")
+            })
+        }),
+    )
+    .await;
+    flow.say("Write the marks.").await;
+    flow.until("the wait's command to run", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == TaskState::Running)
+    })
+    .await;
+    // The wait's command is the thread's: give it a moment to be seen running.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    flow.say("pause it").await;
+    super::eventually("the wait to end", || {
+        answers.lock().unwrap().contains_key("wait")
+    })
+    .await;
+    let got = answers.lock().unwrap()["wait"].clone();
+    assert_eq!(got["message"], json!(true), "{got:#}");
+    assert_eq!(got["events"], json!([]), "{got:#}");
+    worker_done.notify_waiters();
+    flow.stop().await;
+}

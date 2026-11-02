@@ -409,7 +409,8 @@ pub const COMMANDS: &[Command] = &[
                   its CLI showed: its commits, merged or not, uncommitted files, the commands \
                   it ran and how each exited), needs input, \
                   failed, interrupted, gone, usage limit, fresh context, quiet (20 minutes \
-                  without a word while it works). Without ids, any of them. Each event is \
+                  without a word while it works), or a message sent to you meanwhile, so you read \
+                  it now (`message`). Without ids, any of them. Each event is \
                   heard once, kept across a restart. Keep one running in the background while \
                   workers run: it wakes you when it returns. Given sessions instead, it returns \
                   at the end of their turn (once it took what you sent it), with its last \

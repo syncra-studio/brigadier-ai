@@ -580,7 +580,9 @@ pub fn send(output: &SendOutput) -> String {
 
 pub fn wait(output: &WaitOutput) -> String {
     if output.events.is_empty() {
-        return if output.timed_out {
+        return if output.message {
+            "A message came in for you: read it, then wait again if you still need to.\n".into()
+        } else if output.timed_out {
             "Nothing yet (timed out).\n".into()
         } else {
             "Nothing to wait for.\n".into()

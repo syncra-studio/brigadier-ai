@@ -11,6 +11,10 @@
     "timedOut": {
       "type": "boolean"
     },
+    "message": {
+      "description": "It ended for a message sent to the caller meanwhile: read it, then wait again.",
+      "type": "boolean"
+    },
     "events": {
       "type": "array",
       "items": {

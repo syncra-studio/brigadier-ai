@@ -971,6 +971,10 @@ pub struct WaitOutput {
     /// Oldest first.
     pub events: Vec<WaitEvent>,
     pub timed_out: bool,
+    /// It ended for a message sent to the caller meanwhile, which its CLI reads only once the
+    /// wait's command ends (goal 3: "pause it" is acted on while the worker still runs).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub message: bool,
 }
 
 /// One event of a worker.

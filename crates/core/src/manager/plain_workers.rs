@@ -1641,8 +1641,21 @@ impl SessionManager {
                     CliReply::ok(&WaitOutput {
                         events,
                         timed_out: false,
+                        message: false,
                     }),
                     Some(self.held_events(parent, holder)),
+                ));
+            }
+            // A message sent to the session meanwhile waits behind this wait's command on a CLI
+            // that reads it only once the command ends: end it, so it is read now (goal 3).
+            if self.message_held(parent).await {
+                return Ok((
+                    CliReply::ok(&WaitOutput {
+                        events: Vec::new(),
+                        timed_out: false,
+                        message: true,
+                    }),
+                    None,
                 ));
             }
             if !can_send {
@@ -1663,6 +1676,7 @@ impl SessionManager {
             CliReply::ok(&WaitOutput {
                 events: Vec::new(),
                 timed_out: ended,
+                message: false,
             }),
             None,
         ))

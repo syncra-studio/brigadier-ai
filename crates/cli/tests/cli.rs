@@ -432,6 +432,7 @@ fn sample(request: &CliRequest) -> CliReply {
             CliReply::ok(&WaitOutput {
                 events: Vec::new(),
                 timed_out: true,
+                message: false,
             })
         }
         CliRequest::Wait { .. } => CliReply::ok(&WaitOutput {
@@ -471,6 +472,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 },
             ],
             timed_out: false,
+            message: false,
         }),
         CliRequest::Close { id } => CliReply::ok(&CloseOutput {
             id: id.clone(),
