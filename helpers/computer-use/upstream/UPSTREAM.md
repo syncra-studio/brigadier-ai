@@ -204,6 +204,8 @@ Patches applied, in order:
 
 - `patches/0175-windows-owned-document-and-browser-profile-cleanup.diff`: Remove untouched fresh Notepad files after Notepad exits or runtime teardown, and retire and delete exited task-browser profiles with a proven stale-owner sweep at startup while preserving live-session reuse.
 
+- `patches/0180-windows-input-guard-dialog-hand-back.diff`: Never hand the front back to the target app's own window: an action that starts while the app's dialog has the front inherits the user's window from the live watch the app took it from, or restores nothing. Hand back from input targets by minimizing the root owner once (a modal dialog cannot be minimized), keep input targets' windows under the user's window once the action has ended (at the bottom when placing them under it does not take), and say in click replies when the app took the front. Launch hand-back and its cadence are unchanged.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -350,7 +350,33 @@ fn try_click(
     }
     // Keep target/owner protection alive through native commands and their
     // bounded readback, even if this helper was reached without a window_id.
-    let _noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
+    let noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
+    let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
+    // Say so when the app took the front during the click (a Save closing
+    // its dialog activates the owner), and whether your window got it back.
+    if let (Ok(Some(reply)), Some(note)) = (&mut result, noactivate.action_note()) {
+        match reply.content.iter_mut().find_map(|content| match content {
+            cua_driver_core::protocol::Content::Text { text, .. } => Some(text),
+            _ => None,
+        }) {
+            Some(text) => {
+                text.push(' ');
+                text.push_str(note);
+            }
+            None => reply
+                .content
+                .push(cua_driver_core::protocol::Content::text(note)),
+        }
+    }
+    result
+}
+
+fn try_click_guarded(
+    hwnd: u64,
+    ptr: usize,
+    expand_only: bool,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<Option<ToolResult>> {
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
     if !expand_only {

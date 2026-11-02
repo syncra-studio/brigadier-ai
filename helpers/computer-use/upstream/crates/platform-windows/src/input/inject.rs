@@ -145,6 +145,18 @@ pub(crate) unsafe fn place_behind(window: HWND, prior: HWND) -> bool {
     unsafe { SetWindowPos(window, prior, 0, 0, 0, 0, Z_ONLY | SWP_ASYNCWINDOWPOS) }.is_ok()
 }
 
+/// Put `window` and its owner at the bottom of the z-order without activating
+/// either; posted like [`place_behind`]. Live (2026-11-02, Windows 11 26300):
+/// for Notepad's Save as dialog and its disabled owner, placing either under
+/// the user's window was accepted but changed nothing, while the bottom took
+/// both. The owner moves with its dialog, so SWP_NOOWNERZORDER is left out.
+pub(crate) unsafe fn place_at_bottom(window: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
+    let flags =
+        SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_ASYNCWINDOWPOS.0);
+    unsafe { SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, flags) }.is_ok()
+}
+
 /// Facts for [`foreground_watch::policy::may_minimize_for_hand_back`].
 pub(crate) unsafe fn minimize_facts(
     prior: HWND,
@@ -177,6 +189,31 @@ pub(crate) unsafe fn hand_back_by_minimizing(
     displaced: HWND,
     allowed: impl Fn() -> bool,
 ) -> bool {
+    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, allowed) }
+}
+
+/// [`hand_back_by_minimizing`] for a window that cannot be minimized itself,
+/// such as a modal dialog: minimize its root owner instead, which hides the
+/// owner's dialogs with it. Live (2026-11-02, Windows 11 26300): Notepad's
+/// Save as dialog kept the front after the attached hand-back; minimizing its
+/// owner gave the front back to the user's window within 4 ms.
+pub(crate) unsafe fn hand_back_by_minimizing_owner(
+    prior: HWND,
+    displaced: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
+    let owner = unsafe { GetAncestor(displaced, GA_ROOTOWNER) };
+    let owner = if owner.0.is_null() { displaced } else { owner };
+    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, allowed) }
+}
+
+unsafe fn hand_back_by_minimizing_window(
+    prior: HWND,
+    displaced: HWND,
+    minimized: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
     if !allowed() || unsafe { GetForegroundWindow() } != displaced {
         return false;
     }
@@ -184,14 +221,15 @@ pub(crate) unsafe fn hand_back_by_minimizing(
         return false;
     }
     // Synchronous: the user's window must be next before the minimize.
-    let _ = unsafe { SetWindowPos(prior, displaced, 0, 0, 0, 0, Z_ONLY) };
-    let facts = unsafe { minimize_facts(prior, displaced) };
+    let _ = unsafe { SetWindowPos(prior, minimized, 0, 0, 0, 0, Z_ONLY) };
+    let facts = unsafe { minimize_facts(prior, minimized) };
     if !foreground_watch::policy::may_minimize_for_hand_back(facts)
         || !allowed()
         || unsafe { GetForegroundWindow() } != displaced
     {
         return false;
     }
+    let displaced = minimized;
     // Both requests are posted to the app's thread and run in order there.
     let _ = unsafe { ShowWindowAsync(displaced, SW_MINIMIZE) };
     let deadline = Instant::now() + Duration::from_millis(250);
@@ -275,7 +313,7 @@ pub(crate) unsafe fn force_foreground_assisted(target: HWND) -> (bool, bool) {
 /// Leases are shared so overlapping run_steps do not clear each other's bit.
 pub struct NoActivateGuard {
     styles: Vec<(isize, u32, u32)>,
-    _watch: foreground_watch::ForegroundWatch,
+    watch: foreground_watch::ForegroundWatch,
 }
 
 struct StyleLease {
@@ -289,15 +327,44 @@ static STYLE_LEASES: Mutex<std::collections::BTreeMap<(isize, u32, u32), StyleLe
 impl NoActivateGuard {
     pub fn arm(hwnd: HWND) -> Self {
         use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
-        let prior = unsafe { GetForegroundWindow() }.0 as usize;
+        let front = unsafe { GetForegroundWindow() }.0 as usize;
         let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
         let root = if root.0.is_null() { hwnd } else { root };
         let owner = unsafe { GetAncestor(root, GA_ROOTOWNER) };
         let mut styles = Vec::new();
         let mut pids = Vec::new();
+        for window in [root, owner] {
+            let pid = foreground_watch::window_process(window);
+            if !window.0.is_null() && pid != 0 {
+                pids.push(pid);
+            }
+        }
+        pids.sort_unstable();
+        pids.dedup();
+        // The front window may be the target app's own, such as a dialog that
+        // took the front during an earlier action. It is never the user's
+        // window: handing the front "back" to it fought the app's owner while
+        // the dialog closed and left no window in front. Use the user's window
+        // from a live watch in which this app took the front without input,
+        // or restore nothing.
+        let front_pid = foreground_watch::window_process(HWND(front as *mut _));
+        // In a shared host, such as ApplicationFrameHost, only the target's
+        // own frames are its windows; the user's other apps share the pid.
+        let front_is_target = front_pid != 0
+            && foreground_watch::policy::input_window_matches(
+                pids.contains(&front_pid),
+                front == root.0 as usize || front == owner.0 as usize,
+                foreground_watch::process_name(front_pid)
+                    .is_none_or(|name| name == "applicationframehost"),
+            );
+        let inherited = front_is_target.then(|| foreground_watch::inherited_prior(front_pid));
+        let prior = match inherited {
+            Some(inherited) => inherited.unwrap_or(0),
+            None => front,
+        };
         let mut leases = STYLE_LEASES.lock().unwrap();
         for window in [root, owner] {
-            if window.0.is_null() || window.0 as usize == prior {
+            if window.0.is_null() || window.0 as usize == front {
                 continue;
             }
             let mut pid = 0;
@@ -309,7 +376,6 @@ impl NoActivateGuard {
             if styles.contains(&key) {
                 continue;
             }
-            pids.push(pid);
             let lease = leases.entry(key).or_insert_with(|| {
                 let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
                 let want = WS_EX_NOACTIVATE.0 as isize;
@@ -324,20 +390,22 @@ impl NoActivateGuard {
             styles.push(key);
         }
         drop(leases);
-        pids.sort_unstable();
-        pids.dedup();
-        let watch = foreground_watch::ForegroundWatch::start(
-            prior,
-            foreground_watch::Target::Processes(
-                pids,
-                styles.iter().map(|key| key.0 as usize).collect(),
-            ),
-            true,
+        let target = foreground_watch::Target::Processes(
+            pids,
+            styles.iter().map(|key| key.0 as usize).collect(),
         );
-        Self {
-            styles,
-            _watch: watch,
-        }
+        let watch = if prior != front {
+            foreground_watch::ForegroundWatch::start_displaced(prior, target)
+        } else {
+            foreground_watch::ForegroundWatch::start(prior, target, true)
+        };
+        Self { styles, watch }
+    }
+
+    /// A sentence for the action's reply when the app took the front during
+    /// it; None when nothing was recorded.
+    pub fn action_note(&self) -> Option<&'static str> {
+        self.watch.action_note()
     }
 }
 
