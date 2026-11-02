@@ -131,13 +131,13 @@ impl Parser {
             },
             "session.execution.failed" => vec![
                 ProviderEvent::Error {
-                    error: classify(&data["error"], false),
+                    error: classify(&data["error"], false, created),
                 },
                 self.turn_end(TurnStatus::Failed, created),
             ],
             // OpenCode retries on its own: a limit it meets now is said, nothing ends.
             "session.retry.scheduled" => vec![ProviderEvent::Error {
-                error: classify(&data["error"], true),
+                error: classify(&data["error"], true, created),
             }],
             "session.text.delta" => vec![ProviderEvent::MessageDelta {
                 item_id: item("t"),
@@ -520,12 +520,13 @@ fn approval(data: &Value, called: Option<&Value>) -> ApprovalRequest {
 
 /// OpenCode's error (`{type, message, status?}`, its types `provider.quota`,
 /// `provider.rate-limit`, `provider.auth`, …) in Brigadier's words. A used-up quota is a usage
-/// limit, as the other CLIs report one; OpenCode tells no window or reset (D17).
-pub(crate) fn classify(error: &Value, will_retry: bool) -> ProviderError {
+/// limit, as the other CLIs report one; its reset is when OpenCode says to try again
+/// (`retryAfterMs`, from the event's time `at`), when it says (D17).
+pub(crate) fn classify(error: &Value, will_retry: bool, at: Option<i64>) -> ProviderError {
     let code = error["type"].as_str().unwrap_or("unknown").to_owned();
     let message = error["message"].as_str().unwrap_or(&code).to_owned();
     let kind = match code.as_str() {
-        "provider.quota" => ErrorKind::UsageLimit,
+        "provider.quota" | "provider.go-limit" => ErrorKind::UsageLimit,
         _ if message.to_lowercase().contains("usage limit") => ErrorKind::UsageLimit,
         "provider.rate-limit" => ErrorKind::RateLimit,
         "provider.auth" => ErrorKind::Auth,
@@ -539,9 +540,11 @@ pub(crate) fn classify(error: &Value, will_retry: bool) -> ProviderError {
         kind,
         message: clip(&message, 2_000),
         will_retry,
-        limit: (kind == ErrorKind::UsageLimit).then_some(LimitHit {
+        limit: (kind == ErrorKind::UsageLimit).then(|| LimitHit {
             window: None,
-            resets_at_ms: None,
+            resets_at_ms: error["retryAfterMs"]
+                .as_i64()
+                .map(|after| at.unwrap_or_else(crate::now_ms) + after),
             kind: LimitKind::UsageWindow,
         }),
         code: Some(code),
@@ -1396,8 +1399,45 @@ mod tests {
         let no_route = classify(
             &json!({"type": "provider.no-route", "message": "Model unavailable: opencode/x"}),
             false,
+            None,
         );
         assert_eq!(no_route.kind, ErrorKind::Other);
+    }
+
+    /// OpenCode Go's limit as `opencode serve` 2.2.3 sends it (checked live): a usage limit
+    /// that resets when OpenCode says to try again, so the wait can say when it resumes.
+    #[test]
+    fn a_go_limit_resets_when_opencode_says_to_try_again() {
+        let mut parser = Parser::new(Some(S.into()), None);
+        let failed = line(
+            "session.execution.failed",
+            json!({"sessionID": S, "error": {"type": "provider.go-limit", "message": "OpenCode Go weekly usage limit reached.", "status": 429, "response": {"body": "{\"type\":\"error\",\"error\":{\"type\":\"GoUsageLimitError\",\"message\":\"Go usage limit exceeded\"},\"metadata\":{\"limitName\":\"weekly\"}}"}, "retryAfterMs": 538_140_000}}),
+        );
+        let events = feed(
+            &mut parser,
+            &[
+                line("session.execution.started", json!({"sessionID": S})),
+                failed,
+            ],
+        );
+        let ProviderEvent::Error { error } = &events[1] else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            (error.kind, error.will_retry),
+            (ErrorKind::UsageLimit, false)
+        );
+        assert_eq!(
+            error.limit.as_ref().and_then(|limit| limit.resets_at_ms),
+            Some(538_141_000)
+        );
+        assert!(matches!(
+            events[2],
+            ProviderEvent::TurnCompleted {
+                status: TurnStatus::Failed,
+                ..
+            }
+        ));
     }
 
     #[test]
