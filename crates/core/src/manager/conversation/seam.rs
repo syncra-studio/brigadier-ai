@@ -29,7 +29,7 @@ use super::{Cli, ConvLive, Envelope};
 use crate::manager::SessionManager;
 use crate::manager::seam::{
     Boot, NOTE_FIXES, Phase, SeamEnd, SeamFile, TailBudget, bootstrap, check_note, complete,
-    handoff_line, note_path, nudge, read_seam, start_path, write_seam,
+    handoff_line, note_path, nudge, read_seam, start_path, with_workers, write_seam,
 };
 use crate::manager::session_dir::read_lineage;
 use crate::model::{ConversationId, ConversationKind, Message, ModelChoice, Setup};
@@ -884,6 +884,17 @@ impl SessionManager {
             target_window: cli.session.context_window(),
         };
         let own = cli.session.native_id();
+        let caller = crate::manager::cli::CliCaller {
+            conversation_id: id.clone(),
+            task_id: None,
+            grant: String::new(),
+        };
+        let workers = match self.cli_workers(&caller).await {
+            Ok(output) if !output.workers.is_empty() => {
+                Some(brigadier_cli::render::workers(&output))
+            }
+            _ => None,
+        };
         crate::manager::blocking(move || {
             let record = dir.record();
             let lineage: Vec<_> = read_lineage(&record)
@@ -926,6 +937,10 @@ impl SessionManager {
                 entries: &entries,
                 blobs: &blobs,
             });
+            let text = match &workers {
+                Some(workers) => with_workers(text, workers),
+                None => text,
+            };
             if let Some(parent) = start.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|err| crate::Error::Invalid(err.to_string()))?;

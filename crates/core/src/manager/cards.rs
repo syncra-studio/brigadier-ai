@@ -529,6 +529,33 @@ impl SessionManager {
         }
         match &question.kind {
             QuestionKind::Orchestrator => {
+                // D170: the thread's answered question is its ledger's Decision, written here
+                // with the option's own words, so the thread needn't write it.
+                let record = self.session_dir(&conversation_id).record();
+                if question.task_id.is_none() && record.is_dir() {
+                    let entries: Vec<String> = round
+                        .iter()
+                        .zip(&answers)
+                        .map(|(item, answer)| {
+                            format!(
+                                "Decision (the user's answer, card {}): asked \"{}\"; the user \
+                                 answered: {answer}",
+                                question.id, item.text
+                            )
+                        })
+                        .collect();
+                    let written = super::blocking(move || {
+                        for entry in entries {
+                            let stamp = super::cli_ledger::Stamp::now(&record);
+                            super::cli_ledger::add_entry(&record, &entry, stamp)?;
+                        }
+                        Ok(())
+                    })
+                    .await;
+                    if let Err(err) = written {
+                        tracing::warn!(conversation = %conversation_id, error = %err, "could not write the answer to the ledger");
+                    }
+                }
                 for (item, answer) in round.iter().zip(&answers) {
                     self.learn_user_decision(
                         &conversation_id,

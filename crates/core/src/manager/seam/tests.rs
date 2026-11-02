@@ -750,3 +750,28 @@ fn a_note_with_gaps_or_none_fails_the_check_and_its_line_carries_what_is_left_ou
     );
     std::fs::remove_dir_all(&record).unwrap();
 }
+
+/// D170: the nudge carries the ledger's open items and rules, and the hand-off the workers, so
+/// the note needs no look-up first.
+#[test]
+fn the_nudge_carries_the_open_items_and_rules_and_the_hand_off_its_workers() {
+    let record = std::env::temp_dir().join(format!("brigadier-nudge-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(record.join("handoff")).unwrap();
+    std::fs::write(
+        record.join(super::super::session_dir::LEDGER_FILE),
+        "- L1 · 11-01 20:00 · gen 1 · Decision: SQLite\n\
+         - L2 · 11-01 20:01 · gen 1 · Open: promise to rerun the test\n",
+    )
+    .unwrap();
+    let text = nudge(&note_path(&record, 1));
+    assert!(text.contains("Open items (1):\n- L2"), "{text}");
+    assert!(text.contains("Rules and decisions (1):\n- L1"), "{text}");
+    std::fs::remove_dir_all(&record).unwrap();
+
+    let end = crate::thread_view::HANDOFF_END;
+    let handoff = with_workers(format!("hand-off\n{end}"), "ID    STATE\nab12  working\n");
+    assert_eq!(
+        handoff,
+        format!("hand-off\n## Workers\nID    STATE\nab12  working\n\n{end}")
+    );
+}

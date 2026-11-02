@@ -324,17 +324,37 @@ pub(crate) fn nudge(note: &Path) -> String {
          status to the user. Keep the note concise; reference transcript entries instead of \
          copying transcripts or command outputs. Finish the step you are on, at a boundary you \
          choose; don't start new \
-         work.\nUpdate the ledger. Run `brigadier ledger show --open --rules`: close each open \
-         item that is done and name every other one by its id (L<n>) in the note, and check your last steps kept each rule; write any slip as a \
-         Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
+         work.\nUpdate the ledger. Close each open item below that is done (`brigadier ledger \
+         close <id>`) and name every other one by its id (L<n>) in the note, and check your \
+         last steps kept each rule below; write any slip as a Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
          \"read A,B,C; next D,E\", stale ledger entries. Don't restate rules or decisions; the \
          next session reads them with `brigadier context`. Absolute paths only.\nAdd a \"Skills to use next\" section when any \
          apply, naming the skills by the names available to you.\nKeep API keys, passwords, \
          tokens and personal data out of the note; say where they live instead. Then stop.\n\
          If this is your second hand-off in a \
-         row that is still reading, say so in the note and propose splitting the work.",
-        note.display()
+         row that is still reading, say so in the note and propose splitting the work.\n\n{}",
+        note.display(),
+        note_ledger(note)
     )
+}
+
+/// The open items and rules of the ledger beside `note`, as `brigadier ledger show --open
+/// --rules` gives them: in the nudge itself, so the note needs no look-up first (D170).
+fn note_ledger(note: &Path) -> String {
+    let record = note.parent().and_then(Path::parent);
+    record
+        .and_then(|record| super::cli_ledger::show_entries(record, true, true).ok())
+        .unwrap_or_else(|| "Open items and rules: `brigadier ledger show --open --rules`.".into())
+}
+
+/// D170: the session's workers (id, branch, state) go in its hand-off itself, before its end
+/// mark, so the note needn't list them.
+pub(crate) fn with_workers(text: String, workers: &str) -> String {
+    let Some(end) = text.rfind(&format!("\n{HANDOFF_END}")) else {
+        return text;
+    };
+    let workers = workers.trim_end().replace(HANDOFF_END, QUOTED_END);
+    format!("{}\n## Workers\n{workers}\n{}", &text[..end], &text[end..])
 }
 
 /// How many times a session or worker is asked to fix a note that fails goal 13's check before

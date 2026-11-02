@@ -1098,13 +1098,9 @@ fn text_output_reads_well() {
     // How full each worker's context is, to weigh reusing it (run2-D42).
     assert!(workers.contains("CONTEXT"), "{workers}");
     assert!(workers.contains("120k of 1M"), "{workers}");
-    // What git and the CLI showed, in a few words, and no wait running while one works.
+    // What git and the CLI showed, in a few words.
     assert!(
         workers.contains("conflicts · 2 commits · 1 uncommitted  3, 1 failed"),
-        "{workers}"
-    );
-    assert!(
-        workers.contains("No `brigadier wait` is running while worker 2 is at work"),
         "{workers}"
     );
     let read = stdout(&brigadier(

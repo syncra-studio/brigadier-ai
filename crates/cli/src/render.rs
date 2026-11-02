@@ -339,33 +339,7 @@ pub fn workers(output: &WorkersOutput) -> String {
     if output.workers.is_empty() {
         return "This session has no workers.\n".into();
     }
-    let mut out = worker_rows(&output.workers);
-    let working: Vec<String> = output
-        .workers
-        .iter()
-        .filter(|worker| {
-            matches!(
-                worker.state,
-                WorkerState::Starting | WorkerState::Working | WorkerState::Asking
-            )
-        })
-        .map(|worker| worker.number.to_string())
-        .collect();
-    if !output.wait_running && !working.is_empty() {
-        out.push_str(&format!(
-            "\nNo `brigadier wait` is running while {} {} {} at work: start one in the \
-             background to hear {}.\n",
-            if working.len() == 1 {
-                "worker"
-            } else {
-                "workers"
-            },
-            working.join(", "),
-            if working.len() == 1 { "is" } else { "are" },
-            if working.len() == 1 { "it" } else { "them" },
-        ));
-    }
-    out
+    worker_rows(&output.workers)
 }
 
 pub fn show(output: &ShowOutput) -> String {
@@ -545,8 +519,8 @@ pub fn start(output: &StartOutput) -> String {
         format!("{line} It runs all the same.\n")
     });
     format!(
-        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}{review}{off}Keep `brigadier wait` \
-         running in the background: it returns with its events and wakes you.\n",
+        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}{review}{off}Its events reach you \
+         by themselves once your turn ends; `brigadier wait` only to wait for them now.\n",
         worker.id,
         worker.number,
         worker.agent.id(),

@@ -349,16 +349,16 @@ impl SessionManager {
                     {
                         continue;
                     }
-                    let free = review.is_none()
-                        || self
-                            .choice_available(&ModelChoice {
-                                provider,
-                                model,
-                                effort: row.effort.clone(),
-                                fast: None,
-                                account: None,
-                            })
-                            .await;
+                    // D170: every start skips a row whose account is out of quota itself.
+                    let free = self
+                        .choice_available(&ModelChoice {
+                            provider,
+                            model,
+                            effort: row.effort.clone(),
+                            fast: None,
+                            account: None,
+                        })
+                        .await;
                     if free {
                         fit = Some(row.clone());
                         break;
@@ -370,8 +370,8 @@ impl SessionManager {
                         return Ok(CliReply::error(
                             ErrorCode::NotFound,
                             format!(
-                                "no row for the work \"{work}\"; `brigadier models` lists each \
-                                 kind of work"
+                                "no row for the work \"{work}\"; the kinds of work: {}",
+                                self.work_kinds()?.join(", ")
                             ),
                         ));
                     }

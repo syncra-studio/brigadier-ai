@@ -117,7 +117,7 @@ pub(crate) struct Stamp {
 }
 
 impl Stamp {
-    fn now(record: &Path) -> Self {
+    pub(crate) fn now(record: &Path) -> Self {
         Self {
             at: jiff::Zoned::now().strftime("%m-%d %H:%M").to_string(),
             generation: super::seam::read_seam(record).generation,

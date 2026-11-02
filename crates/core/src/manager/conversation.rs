@@ -108,6 +108,8 @@ fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
 }
 /// Messages carried verbatim when a conversation's CLI session is started over.
 const RESEED_MESSAGES: usize = 40;
+/// A user message this long after the thread's last one comes "after a gap" (D170).
+const GAP_MS: i64 = 30 * 60 * 1000;
 /// Bytes of transcript carried when a conversation's CLI session is started over.
 const RESEED_BYTES: usize = 48_000;
 /// Messages of an @-mentioned conversation that go along as context.
@@ -2804,10 +2806,14 @@ impl SessionManager {
             .filter(|(envelope, _)| !landed_envelopes.contains(envelope))
             .cloned()
             .collect();
-        let notes: Vec<String> = unread
+        let mut notes: Vec<String> = unread
             .iter()
             .map(|(envelope, _)| envelope.text.clone())
             .collect();
+        // D170: a successor's turn has its hand-off instead.
+        if successor.is_none() && !reseed {
+            notes.extend(self.gap_note(&conv.id, &users).await);
+        }
         let unsent: Vec<Message> = users
             .iter()
             .filter(|message| !landed.contains(&message.id))
@@ -6113,6 +6119,45 @@ impl SessionManager {
         if let Some(conv) = self.convs_lock().get(id).cloned() {
             conv.native_ids().reset();
         }
+    }
+
+    /// D170: a user message after a gap of [`GAP_MS`] carries the ledger's open items, oldest
+    /// first, so the thread needn't look them up. A side or tab chat has no ledger of its own.
+    async fn gap_note(&self, id: &ConversationId, users: &[Message]) -> Option<String> {
+        let first = users.first()?;
+        let own = self
+            .core
+            .conversation(id)
+            .is_ok_and(|record| record.side_of.is_none() && record.tab_chat.is_none());
+        if !own {
+            return None;
+        }
+        let page = self
+            .core
+            .list_messages(
+                id.clone(),
+                None,
+                u32::try_from(users.len() + 1).unwrap_or(u32::MAX),
+            )
+            .await
+            .ok()?;
+        let before = page.messages.first()?;
+        if first.created_at_ms - before.created_at_ms < GAP_MS || before.id == first.id {
+            return None;
+        }
+        let record = self.session_dir(id).record();
+        let ledger = super::blocking(move || super::cli_ledger::Ledger::read(&record))
+            .await
+            .ok()?;
+        let open = ledger.open();
+        (!open.is_empty()).then(|| {
+            let items: Vec<&str> = open.iter().map(|entry| entry.text.as_str()).collect();
+            format!(
+                "[Brigadier: the user writes after a gap; raise the oldest open question first and \
+                 say how many more wait. Open items:]\n{}",
+                items.join("\n")
+            )
+        })
     }
 
     async fn has_history(&self, id: &ConversationId) -> bool {

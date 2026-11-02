@@ -379,6 +379,18 @@ impl SessionManager {
     }
     /// `brigadier start --work`'s rows: the user's order of that work, else the shipped rows,
     /// first to last (S32).
+    /// Every kind of work the routing names, in its order, once each.
+    pub(super) fn work_kinds(&self) -> Result<Vec<String>> {
+        let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
+        let mut kinds: Vec<String> = Vec::new();
+        for row in guidance(GUIDANCE, &user) {
+            if !kinds.iter().any(|kind| same_work(kind, &row.work)) {
+                kinds.push(row.work);
+            }
+        }
+        Ok(kinds)
+    }
+
     pub(super) fn work_rows(&self, work: &str) -> Result<Vec<Guidance>> {
         let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
         Ok(guidance(GUIDANCE, &user)
