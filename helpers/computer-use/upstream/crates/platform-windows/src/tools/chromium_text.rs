@@ -313,14 +313,14 @@ fn select_bound_target(
     candidates: &[CdpWindowCandidate],
     url: &str,
 ) -> Result<String> {
-    let BindingOutcome::Bound {
-        candidate,
-        quality: BindingQuality::Exact,
-    } = correlate(native, candidates, 2.0)
-    else {
-        bail!(
-            "the DevTools browser window cannot be bound uniquely to the addressed Windows window"
-        );
+    let candidate = match correlate(native, candidates, 2.0) {
+        BindingOutcome::Bound {
+            candidate,
+            quality: BindingQuality::Exact,
+        } => candidate,
+        _ => exact_title_window(native, candidates, url).context(
+            "the DevTools browser window cannot be bound uniquely to the addressed Windows window",
+        )?,
     };
     let mut visible = candidates
         .iter()
@@ -332,6 +332,40 @@ fn select_bound_target(
         bail!("more than one tab has the visible page URL; no tab was guessed");
     }
     Ok(tab.cdp_target_id.clone())
+}
+
+/// A second launch of the same browser opens its window at the same place,
+/// and one page title can contain another ("cu" in "cu2 - Google Chrome"),
+/// so geometry and substring titles tie. A window is still proven when it is
+/// the only one with the native bounds that holds a page with the visible URL
+/// whose title is exactly the native title's page part ("<title> - <browser>").
+fn exact_title_window(
+    native: &NativeWindowInfo,
+    candidates: &[CdpWindowCandidate],
+    url: &str,
+) -> Option<CdpWindowCandidate> {
+    if !native.geometry_exact {
+        return None;
+    }
+    let exact_title = |title: &str| {
+        !title.is_empty()
+            && (native.title == title
+                || native
+                    .title
+                    .strip_prefix(title)
+                    .is_some_and(|rest| rest.starts_with(" - ")))
+    };
+    let mut hits = candidates.iter().filter(|tab| {
+        tab.cdp_window_id.is_some()
+            && tab
+                .bounds
+                .is_some_and(|bounds| bounds.approx_eq(&native.bounds, 2.0))
+            && exact_title(&tab.title)
+            && same_url(&tab.url, url)
+    });
+    let hit = hits.next()?;
+    hits.all(|other| other.cdp_window_id == hit.cdp_window_id)
+        .then(|| hit.clone())
 }
 
 #[cfg(test)]
@@ -421,6 +455,56 @@ mod tests {
             "https://fixture.test/#a",
             "https://fixture.test/#b"
         ));
+    }
+
+    #[test]
+    fn windows_at_one_place_with_colliding_titles_bind_by_exact_title_and_url() {
+        let bounds = Rect::new(16.0, 16.0, 1280.0, 900.0);
+        let native = |title: &str| NativeWindowInfo {
+            pid: 42,
+            window_id: 1,
+            title: title.into(),
+            bounds,
+            geometry_exact: true,
+            ownership: NativeOwnershipProof {
+                method: NativeOwnershipMethod::WindowServerOwner,
+                owner_pid: 42,
+                detail: None,
+            },
+        };
+        let tab = |id: &str, window: i64, title: &str, url: &str| CdpWindowCandidate {
+            cdp_target_id: id.into(),
+            cdp_window_id: Some(window),
+            title: title.into(),
+            url: url.into(),
+            bounds: Some(bounds),
+        };
+        let tabs = [
+            tab("one", 7, "cu-final", "data:text/html,a"),
+            tab("two", 8, "cu-final2", "data:text/html,b"),
+        ];
+        let second = native("cu-final2 - Google Chrome");
+        assert_eq!(
+            select_bound_target(&second, &tabs, "data:text/html,b").unwrap(),
+            "two"
+        );
+        let first = native("cu-final - Google Chrome");
+        assert_eq!(
+            select_bound_target(&first, &tabs, "data:text/html,a").unwrap(),
+            "one"
+        );
+        // The visible URL must belong to the exact-title page.
+        assert!(select_bound_target(&first, &tabs, "data:text/html,b").is_err());
+        // Two windows with the same page stay ambiguous.
+        let same = [
+            tab("one", 7, "cu-final", "data:text/html,a"),
+            tab("two", 8, "cu-final", "data:text/html,a"),
+        ];
+        assert!(select_bound_target(&first, &same, "data:text/html,a").is_err());
+        // Without exact geometry nothing is proven.
+        let mut loose = native("cu-final2 - Google Chrome");
+        loose.geometry_exact = false;
+        assert!(select_bound_target(&loose, &tabs, "data:text/html,b").is_err());
     }
 
     #[test]

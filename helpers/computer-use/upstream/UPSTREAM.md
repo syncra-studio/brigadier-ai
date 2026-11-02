@@ -228,6 +228,12 @@ Patches applied, in order:
 
 - `patches/0190-windows-launch-broker-event-front-at-reply.diff`: A launch whose only activation evidence is an unattributed ApplicationFrameHost event says whether the user's window was in front at reply time.
 
+- `patches/0191-windows-browser-window-binds-by-exact-title.diff`: Typing into a browser page binds the addressed window when a second launch opened its window at the same place and one page title contains another: the window is the only one with the native bounds holding a page with the visible URL whose title is exactly the native title before " - <browser>".
+
+- `patches/0192-windows-retired-browser-profile-name-ends.diff`: Retiring a task-browser profile passes the new folder name with a terminating NUL: Windows read past the name, the retired folder got stray characters after its nonce, and it was never deleted.
+
+- `patches/0193-windows-chromium-first-read-waits-for-page.diff`: Reading a Chromium window waits briefly, within the read's budget, for its page document: Chromium builds the page accessibility tree only after the first UI Automation client asks, and the first read of a new Chrome page listed only the address bar.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
