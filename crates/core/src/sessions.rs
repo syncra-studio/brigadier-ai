@@ -749,6 +749,7 @@ impl Core {
                 item.mentions,
                 None,
                 Some((item.id.clone(), item.peer)),
+                None,
             )
             .await?;
         let board = self.board(&id).await?;
@@ -780,12 +781,27 @@ impl Core {
         mentions: Vec<Mention>,
         parent: Option<String>,
     ) -> Result<Message> {
-        self.append_user_message_as(id, text, attachments, mentions, parent, None)
+        self.append_user_message_as(id, text, attachments, mentions, parent, None, None)
+            .await
+    }
+
+    /// [`Self::append_user_message`], its request steered into request `into` in the same
+    /// write, so no frame ever shows it as a block of its own.
+    pub(crate) async fn append_steered_message(
+        &self,
+        id: ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+        into: Option<String>,
+    ) -> Result<Message> {
+        self.append_user_message_as(id, text, attachments, mentions, None, None, into)
             .await
     }
 
     /// [`Self::append_user_message_under`], for queued message `queued`: the message takes its
     /// id, and it leaves the queue in the same write; another session's is that session's.
+    #[allow(clippy::too_many_arguments)]
     async fn append_user_message_as(
         &self,
         id: ConversationId,
@@ -794,6 +810,7 @@ impl Core {
         mentions: Vec<Mention>,
         parent: Option<String>,
         queued: Option<(String, Option<PeerRef>)>,
+        steered_into: Option<String>,
     ) -> Result<Message> {
         let (queued, peer) = match queued {
             Some((item, peer)) => (Some(item), peer),
@@ -857,7 +874,7 @@ impl Core {
                         state: RequestState::Working,
                         started_at_ms: message.created_at_ms,
                         ended_at_ms: None,
-                        steered_into: None,
+                        steered_into,
                         steered_after: None,
                         undo: None,
                         waited: Vec::new(),

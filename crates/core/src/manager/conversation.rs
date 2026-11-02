@@ -1319,9 +1319,16 @@ impl SessionManager {
         state.last_activity_ms = now_ms();
         if state.busy && !state.compacting {
             if steer {
+                // In the running turn's block from the first frame: marked in the write that stores it.
                 let message = self
                     .core
-                    .append_user_message(id.clone(), text, attachments, mentions)
+                    .append_steered_message(
+                        id.clone(),
+                        text,
+                        attachments,
+                        mentions,
+                        state.request.clone(),
+                    )
                     .await?;
                 let brigade = queue_judging::judges_queue(&conversation);
                 if brigade {
@@ -1383,6 +1390,7 @@ impl SessionManager {
         // commands): as a session's, the message joins that work, Deciding, on a turn that wakes
         // the Chat to judge it now. A Steer still goes straight in.
         let mut holds = false;
+        let mut into = None;
         if !paused && queue_judging::judges_queue(&conversation) {
             drop(state);
             holds = self.work_holds(&conv).await;
@@ -1390,6 +1398,9 @@ impl SessionManager {
                 return self
                     .queue_to_judge(&conv, text, attachments, mentions, queue_index, true)
                     .await;
+            }
+            if steer && holds {
+                into = self.request_for(&id).await;
             }
             state = conv.state.lock().await;
         }
@@ -1401,11 +1412,12 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
+        // Steered into the work that holds with no turn running: it takes it (D25), in its
+        // open block from the first frame.
         let message = self
             .core
-            .append_user_message(id.clone(), text, attachments, mentions)
+            .append_steered_message(id.clone(), text, attachments, mentions, into)
             .await?;
-        // Steered into the work that holds with no turn running: it takes it (D25).
         if steer && holds {
             conv.frame(&message.id, queue_judging::STEERED.to_owned());
         }
@@ -1553,11 +1565,16 @@ impl SessionManager {
             return Ok(SendOutcome::Queued(item));
         }
         if steer && busy {
+            // In the running turn's block from the first frame: marked in the write that stores it.
+            let into = conv.running_request().await;
             let message = conv
-                .user_write(
-                    self.core
-                        .append_user_message(id.clone(), text, attachments, mentions),
-                )
+                .user_write(self.core.append_steered_message(
+                    id.clone(),
+                    text,
+                    attachments,
+                    mentions,
+                    into,
+                ))
                 .await?;
             self.join_working(
                 conv,
@@ -1592,13 +1609,22 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
+        // Steered into the work that holds with no turn running: it takes it (D25), in its
+        // open block from the first frame.
+        let into = if steer && holds {
+            self.request_for(id).await
+        } else {
+            None
+        };
         let message = conv
-            .user_write(
-                self.core
-                    .append_user_message(id.clone(), text, attachments, mentions),
-            )
+            .user_write(self.core.append_steered_message(
+                id.clone(),
+                text,
+                attachments,
+                mentions,
+                into,
+            ))
             .await?;
-        // Steered into the work that holds with no turn running: it takes it (D25).
         if steer && holds {
             conv.frame(&message.id, queue_judging::STEERED.to_owned());
         }

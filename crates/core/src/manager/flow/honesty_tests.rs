@@ -189,7 +189,8 @@ async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
 }
 
 /// A message the user steers in while the thread's command runs says so until the command
-/// ends, then the thread reads it.
+/// ends, then the thread reads it. Every write of its request names the running turn's, so no
+/// frame ever draws it as a block of its own (D65).
 #[tokio::test]
 async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     let gate = Arc::new(tokio::sync::Notify::new());
@@ -218,7 +219,9 @@ async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
         })
     })
     .await;
-    flow.manager
+    let running = flow.board().await.latest_request().unwrap().id.clone();
+    let sent = flow
+        .manager
         .send_message(
             flow.conversation.clone(),
             "Use banker's rounding instead.".into(),
@@ -249,6 +252,17 @@ async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     })
     .await;
     flow.settled().await;
+    let crate::manager::SendOutcome::Sent(message) = sent else {
+        panic!("a steer is sent, never queued: {sent:?}");
+    };
+    let marks = super::tab_chat_tests::steer_marks(&flow, &message.id).await;
+    assert!(
+        !marks.is_empty()
+            && marks
+                .iter()
+                .all(|into| into.as_deref() == Some(running.as_str())),
+        "every write of its request names the running turn's: {marks:?}"
+    );
     let inputs = inputs.lock().unwrap().clone();
     assert!(
         inputs

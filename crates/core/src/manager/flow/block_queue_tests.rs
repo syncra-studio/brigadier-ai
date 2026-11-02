@@ -294,11 +294,15 @@ async fn a_waiting_message_steered_in_is_taken_by_the_open_block() {
 }
 
 /// A message the user steers in fresh while only the block's workers work: the block takes it
-/// at once, framed, on a turn that goes on with that work; nothing is queued.
+/// at once, framed, on a turn that goes on with that work; nothing is queued. Its request is
+/// steered into the open block's in the very write that stores it, so no frame ever draws it
+/// as a block of its own (D65, D113).
 #[tokio::test]
 async fn a_fresh_steer_while_the_block_is_open_is_taken_framed() {
     let (flow, answers, release) = block("block-steer-fresh").await;
-    flow.manager
+    let open = flow.board().await.latest_request().unwrap().id.clone();
+    let sent = flow
+        .manager
         .send_message(
             flow.conversation.clone(),
             FIRST.into(),
@@ -309,7 +313,18 @@ async fn a_fresh_steer_while_the_block_is_open_is_taken_framed() {
         )
         .await
         .unwrap();
+    let crate::manager::SendOutcome::Sent(message) = sent else {
+        panic!("a steer is sent, never queued: {sent:?}");
+    };
     flow.idle().await;
+    let marks = super::tab_chat_tests::steer_marks(&flow, &message.id).await;
+    assert!(!marks.is_empty());
+    assert!(
+        marks
+            .iter()
+            .all(|into| into.as_deref() == Some(open.as_str())),
+        "every write of its request names the open block's: {marks:?}"
+    );
     assert!(flow.board().await.queue.items.is_empty());
     let all = inputs(&answers);
     let steered = all.last().unwrap();
