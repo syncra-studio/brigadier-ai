@@ -421,6 +421,9 @@ impl Tool for LaunchAppTool {
                     .as_ref()
                     .and_then(|a| a.bundle_id.as_deref())
                     .unwrap_or("?");
+                if !pids_before.contains(&pid) {
+                    crate::target_policy::note_task_launched_settings(bid, pid.into());
+                }
                 let mut summary = match opened_in_background {
                     Some(opened) => {
                         let links = if link_count == 1 {

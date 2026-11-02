@@ -224,14 +224,59 @@ fn unresolved_identity(tool: &str) -> ToolResult {
         .with_structured(json!({"code":"target_identity_unavailable"}))
 }
 
+/// System Settings processes that `launch_app` started (it was not running
+/// before), so an agent may quit the window it opened. The user's own
+/// System Settings stays out of reach.
+static TASK_LAUNCHED_SETTINGS: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+
+/// Record that `launch_app` started this System Settings process.
+pub fn note_task_launched_settings(bundle_id: &str, pid: i64) {
+    if bundle_id.eq_ignore_ascii_case(MACOS_SETTINGS) {
+        let mut pids = TASK_LAUNCHED_SETTINGS.lock().unwrap();
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+}
+
+const MACOS_SETTINGS: &str = "com.apple.systempreferences";
+
+fn is_macos_settings(identity: &TargetIdentity) -> bool {
+    identity
+        .bundle_id
+        .as_deref()
+        .is_some_and(|id| id.eq_ignore_ascii_case(MACOS_SETTINGS))
+}
+
+fn task_launched_settings(identity: &TargetIdentity) -> bool {
+    is_macos_settings(identity)
+        && identity
+            .pid
+            .is_some_and(|pid| TASK_LAUNCHED_SETTINGS.lock().unwrap().contains(&pid))
+}
+
 /// Check one resolved identity.
 pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Result<(), ToolResult> {
     match classify(identity, allowed) {
         Some(RefusalReason::SecuritySurface)
             if reads_settings(tool, identity)
-                || tool == "kill_app" && is_windows_settings(identity) =>
+                || tool == "kill_app"
+                    && (is_windows_settings(identity) || task_launched_settings(identity)) =>
         {
             Ok(())
+        }
+        Some(RefusalReason::SecuritySurface)
+            if tool == "kill_app" && is_macos_settings(identity) =>
+        {
+            let message = "target_not_allowed: kill_app refused to quit System Settings: it was \
+                           already open before this task's launch_app, so it is the user's own \
+                           window. Leave it open; kill_app quits only a System Settings that \
+                           launch_app started.";
+            Err(ToolResult::error(message).with_structured(json!({
+                "code": "target_not_allowed",
+                "reason": "user_owned_settings",
+                "tool": tool,
+            })))
         }
         Some(reason) => Err(refusal(tool, identity, reason)),
         None => Ok(()),
@@ -966,7 +1011,8 @@ const SETTINGS_REFUSAL: &str =
      com.apple.Software-Update-Settings.extension, com.apple.Displays-Settings.extension, \
      com.apple.Network-Settings.extension, com.apple.BluetoothSettings or \
      com.apple.settings.PrivacySecurity.extension, then get_window_state. To change a \
-     setting, ask the user to do this step.";
+     setting, ask the user to do this step. kill_app quits a System Settings that \
+     launch_app started.";
 #[cfg(target_os = "windows")]
 const SETTINGS_REFUSAL: &str =
     "Settings can be opened, read and closed; all other input is refused. Close a task-owned window with click using pid, window_id and action:\"close\" without an element or pixels; use kill_app if normal close fails. To read a page, open it \
@@ -1691,6 +1737,33 @@ mod tests {
                 pid: Some(43),
             };
             assert!(check("kill_app", &identity, &[]).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn only_a_task_launched_macos_settings_can_be_quit() {
+        let settings = |pid| TargetIdentity {
+            name: "System Settings".into(),
+            bundle_id: Some(MACOS_SETTINGS.into()),
+            pid: Some(pid),
+        };
+        let refused = check("kill_app", &settings(9101), &[]).unwrap_err();
+        let structured = refused.structured_content.unwrap();
+        assert_eq!(structured["reason"], "user_owned_settings");
+        note_task_launched_settings("com.apple.TextEdit", 9101);
+        assert!(check("kill_app", &settings(9101), &[]).is_err());
+        note_task_launched_settings(MACOS_SETTINGS, 9102);
+        assert!(check("kill_app", &settings(9102), &[]).is_ok());
+        assert!(check("kill_app", &settings(9101), &[]).is_err());
+        for tool in [
+            "click",
+            "press_key",
+            "hotkey",
+            "type_text",
+            "set_value",
+            "invoke_menu",
+        ] {
+            assert!(check(tool, &settings(9102), &[]).is_err(), "{tool}");
         }
     }
 
