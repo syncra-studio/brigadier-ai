@@ -27,6 +27,19 @@ use crate::tools::Role;
 use crate::work::{Approval, ApprovalSubject, CardState, Question, Task};
 use crate::{Error, Result};
 
+/// The parts the overview gives whole when small (D156): what a thread acts on at once.
+const INLINE: [ContextPart; 6] = [
+    ContextPart::Brief,
+    ContextPart::Waiting,
+    ContextPart::Decisions,
+    ContextPart::Open,
+    ContextPart::Checkpoint,
+    ContextPart::Routing,
+];
+
+/// Past this a part is listed with its size instead (a long-lived ledger, a big routing).
+const INLINE_TOKENS: u32 = 2_000;
+
 /// The transcript items `context transcript` gives when not told how many.
 const LAST: u32 = 20;
 
@@ -163,9 +176,11 @@ impl SessionManager {
         Ok(format!("{}/{name}", conversation.short()))
     }
 
-    /// The parts, one line each, with their sizes and the commands that open them.
+    /// Everything in one call (D156, D160): the workers, and each small part whole; the big
+    /// parts one line each, with their sizes and the commands that open them.
     async fn context_overview(&self, whose: &Whose) -> Result<ContextOutput> {
         let mut parts = Vec::new();
+        let mut inline: Vec<(ContextPart, String)> = Vec::new();
         for part in ContextPart::ALL {
             let (entries, lines, tokens) = match part {
                 // Read whole only when asked: its size is its item count.
@@ -191,6 +206,9 @@ impl SessionManager {
                         ContextPart::Project => Some(count(output.files.len())),
                         _ => None,
                     };
+                    if INLINE.contains(&part) && tokens(&output.text) <= INLINE_TOKENS {
+                        inline.push((part, output.text.clone()));
+                    }
                     (entries, lines(&output.text), tokens(&output.text))
                 }
             };
@@ -204,11 +222,40 @@ impl SessionManager {
             });
         }
         let mut text = String::from(
-            "Everything about your job is here, on pull: open what you need. Run \
-             `brigadier context` again after any compaction.\n\n",
+            "Everything about your job, in this one call; run it again after any compaction. \
+             Each worker action's reply carries that worker's state too, so nothing else needs \
+             checking.\n",
         );
+        if !whose.worker() {
+            let caller = CliCaller {
+                conversation_id: whose.conversation.clone(),
+                task_id: None,
+                grant: String::new(),
+            };
+            let workers = self.cli_workers(&caller).await?;
+            text.push_str(&format!(
+                "\n## workers\n{}",
+                brigadier_cli::render::workers(&workers)
+            ));
+        }
+        for (part, body) in &inline {
+            text.push_str(&format!(
+                "\n## {}: {}\n{}",
+                part.word(),
+                summary(*part, whose.worker()),
+                body
+            ));
+            if !body.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        text.push_str("\nThe rest, on pull:\n");
+        let shown: Vec<&str> = inline.iter().map(|(part, _)| part.word()).collect();
         let width = parts.iter().map(|part| part.part.len()).max().unwrap_or(0);
-        for part in &parts {
+        for part in parts
+            .iter()
+            .filter(|part| !shown.contains(&part.part.as_str()))
+        {
             let size = match (part.part.as_str(), part.entries) {
                 ("transcript", Some(items)) => plural(items, "item"),
                 (name, Some(entries)) => {

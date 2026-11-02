@@ -22,6 +22,10 @@
     "offRouting": {
       "type": "string",
       "description": "switch: its new place is off its routing, the line that says so."
+    },
+    "worker": {
+      "type": "object",
+      "description": "The worker as it is now: a `brigadier workers --json` row."
     }
   }
 }

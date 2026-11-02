@@ -160,6 +160,18 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/waiting.schema.json"),
     },
     Command {
+        name: "state",
+        summary: "Everything you need now, in one call: workers, brief, rules, open items, \
+                  routing (run it when you start and after any compaction).",
+        details: "The same as `brigadier context` with no part: your workers with their state \
+                  and progress, and each small part whole; the big parts (whole ledger, \
+                  transcript, skills, MCP servers, project files) listed with the command that \
+                  opens them.",
+        args: &[],
+        available: true,
+        schema: include_str!("../schemas/state.schema.json"),
+    },
+    Command {
         name: "context",
         summary: "Everything about your job, on pull: brief, decisions, open items, ledger, \
                   transcript, skills, MCP servers, project, routing.",
@@ -1190,7 +1202,13 @@ pub const TOPICS: &[Topic] = &[
     Topic {
         name: "workers",
         summary: "Which worker, one short job, waves and every `wait` event.",
-        text: include_str!("help/workers.md"),
+        text: concat!(
+            include_str!("help/workers.md"),
+            "\n",
+            include_str!("help/briefs.md"),
+            "\n",
+            include_str!("help/routing.md")
+        ),
     },
     Topic {
         name: "approvals",

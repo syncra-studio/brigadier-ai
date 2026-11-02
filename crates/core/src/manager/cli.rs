@@ -633,7 +633,7 @@ impl SessionManager {
         Ok(SessionsOutput { project, sessions })
     }
 
-    async fn cli_workers(&self, caller: &CliCaller) -> crate::Result<WorkersOutput> {
+    pub(super) async fn cli_workers(&self, caller: &CliCaller) -> crate::Result<WorkersOutput> {
         let session = match &caller.task_id {
             Some(task_id) => short(&task_id.0),
             None => short(&caller.conversation_id.0),
@@ -663,6 +663,19 @@ impl SessionManager {
             session,
             workers,
             wait_running: self.worker_events.waiting(&caller.conversation_id, &record),
+        })
+    }
+
+    /// Worker `task` as `brigadier workers` shows it now, for the reply of an action on it (D156).
+    pub(super) async fn worker_now(&self, task: &Task) -> Option<WorkerRow> {
+        let task = self
+            .task_by_id(&task.conversation_id, &task.id)
+            .await
+            .ok()?;
+        let diffs = self.cli_worker_changes(&task.conversation_id).await;
+        Some(WorkerRow {
+            context: self.worker_context(&task),
+            ..self.cli_worker_row(&task, &diffs).await
         })
     }
 

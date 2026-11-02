@@ -126,7 +126,9 @@ async fn a_thread_and_its_worker_pull_their_context() {
                     let overview = brigadier(&turn, context(None)).await;
                     assert_eq!(overview["part"], "overview");
                     let text = overview["text"].as_str().unwrap();
-                    assert!(text.lines().count() < 40, "{text}");
+                    // One call carries what a thread acts on (D156): the small parts whole.
+                    assert!(text.contains(CHECKPOINT.trim()), "{text}");
+                    assert!(text.contains("## workers"), "{text}");
                     let parts: Vec<&str> = overview["parts"]
                         .as_array()
                         .unwrap()
@@ -136,7 +138,8 @@ async fn a_thread_and_its_worker_pull_their_context() {
                     assert_eq!(parts, ContextPart::ALL.map(ContextPart::word));
                     for part in ContextPart::ALL {
                         assert!(
-                            text.contains(&format!("  {}", part.word())),
+                            text.contains(&format!("  {}", part.word()))
+                                || text.contains(&format!("## {}:", part.word())),
                             "{part:?}: {text}"
                         );
                     }

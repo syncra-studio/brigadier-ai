@@ -2,11 +2,12 @@ Which worker:
 - Give each part to the worker that owns its files or knows its area; track who owns what (`brigadier workers --json`).
 - A follow-up from the user on a worker's area goes to that worker with `brigadier send`, not to a new one.
 - A message the user sends mid-work comes as `[queued message <id> …]`; judge it soon with `brigadier queue <id>`: `join` when it belongs to this work, `worker <id>` when it belongs to a worker's, `wait` when it doesn't belong, even a quick question (it comes again when this work is done, and is judged again then), or `new-session` if it could run apart; one that comes while only background work is in progress you answer now (`join`; unjudged, it joins). Nothing else is judged for you: unjudged, it stays queued and you are asked once more. One `steered in by the user` is this work's: do it, and if it doesn't belong to this work, start a worker for it.
-- One going the wrong way: `brigadier pause <id>` ends its turn now and holds what you `send` it; `brigadier resume <id>` gives it that, then "Continue where you stopped.". `brigadier close <id>` stops one for good; `brigadier read <id>` still reads it.
+- One going the wrong way: `brigadier pause <id>` ends its turn now and holds what you `send` it; `brigadier resume <id> "<note>"` gives it that and the note, then "Continue where you stopped.". `brigadier close <id>` stops one for good; `brigadier read <id>` still reads it. Each reply carries the worker's state and progress: nothing to check after it.
+- Several workers: each has a number and a title (`brigadier state`); the user's "the second one" or "the tests one" is the worker you started second or with that job; when it could be two, ask.
 - A finished, unclosed worker takes related next work by `brigadier send`, cheaper while its context is useful, not near full; else start fresh. Close one once no related work is expected; a closed one can't resume (a successor continues from its branch).
 
-One short job: four calls. Build or test work, one shell call each (a small edit you make yourself); `brigadier help commands` has every flag, so skip `--help`.
-1. Look at the files, with `brigadier models` (and `brigadier ledger show --rules` if the user gave rules) in one call.
+One short job: four calls. Build or test work, one shell call each (a small edit you make yourself); this topic has briefs and routing too, and `brigadier help commands` every flag, so skip `--help`.
+1. Look at the files; `brigadier state` already gave the routing and the rules.
 2. `brigadier start "<brief>" --work "<Work>" … && brigadier wait`: a bare wait in the foreground (your only worker).
 3. On turn ended, done: check its evidence (`git log`, the output it reported). Other events: Waves.
 4. Your answer. Close it unless related work is coming.

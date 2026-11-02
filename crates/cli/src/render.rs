@@ -666,39 +666,53 @@ pub fn queue(output: &QueueOutput) -> String {
     }
 }
 
+/// The worker as the action left it: the reply says all a follow-up check would (D156).
+fn now(worker: Option<&WorkerRow>) -> String {
+    worker.map_or(String::new(), |worker| {
+        format!(
+            "Now (no `brigadier workers` needed):\n{}",
+            worker_rows(std::slice::from_ref(worker))
+        )
+    })
+}
+
 pub fn close(output: &CloseOutput) -> String {
-    if output.closed {
+    let said = if output.closed {
         format!("Closed {}.\n", output.id)
     } else {
         format!("{} had already ended.\n", output.id)
-    }
+    };
+    said + &now(output.worker.as_ref())
 }
 
 pub fn pause(output: &ManageOutput) -> String {
     let id = &output.id;
-    if output.done {
+    let said = if output.done {
         format!(
             "Paused {id}; the thread shows it. A note for it goes with `brigadier resume {id} \
              \"<note>\"`.\n"
         )
     } else {
         format!("{id} was paused already.\n")
-    }
+    };
+    said + &now(output.worker.as_ref())
 }
 
 pub fn resume(output: &ManageOutput) -> String {
     format!(
-        "Resumed {}: it continues where it stopped; the thread shows it.\n",
-        output.id
+        "Resumed {}: it continues where it stopped; the thread shows it.\n{}",
+        output.id,
+        now(output.worker.as_ref())
     )
 }
 
 pub fn switch(output: &ManageOutput) -> String {
     let to = output.to.as_deref().unwrap_or("its next choice");
-    match &output.off_routing {
+    let said = match &output.off_routing {
         Some(line) => format!("Moved {} to {to}.\n{line}\n", output.id),
         None => format!("Moved {} to {to}.\n", output.id),
-    }
+    };
+    said + &now(output.worker.as_ref())
 }
 
 /// `preview`, `browser`, `app` and `page`: the tool's answer, and where its screenshots went.

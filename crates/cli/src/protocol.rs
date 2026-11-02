@@ -1128,6 +1128,9 @@ pub struct CloseOutput {
     pub id: String,
     /// False when it had already ended.
     pub closed: bool,
+    /// The worker as it is now, so no `brigadier workers` call is needed after it (D156).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerRow>,
 }
 
 /// `brigadier pause`, `resume` and `switch`.
@@ -1143,6 +1146,9 @@ pub struct ManageOutput {
     /// `switch`: its new place is off its routing (D8, D77), the line that says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub off_routing: Option<String>,
+    /// The worker as it is now, so no `brigadier workers` call is needed after it (D156).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerRow>,
 }
 
 /// `brigadier preview`, `browser`, `app`, `page` and the other tools' subcommands: what the

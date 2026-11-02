@@ -222,6 +222,7 @@ const BRIGADIER: Record<string, [doing: string, done: string]> = {
   send: ["Messaging workers", "Messaged workers"],
   close: ["Closing a worker", "Closed a worker"],
   context: ["Reading the brigadier context", "Read the brigadier context"],
+  state: ["Reading the brigadier state", "Read the brigadier state"],
   ask: ["Asking questions", "Asked questions"],
   preview: ["Working on the preview", "Worked on the preview"],
   checkpoint: ["Writing the checkpoint", "Wrote the checkpoint"],

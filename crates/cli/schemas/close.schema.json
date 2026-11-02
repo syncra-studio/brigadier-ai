@@ -14,6 +14,10 @@
     "closed": {
       "type": "boolean",
       "description": "False when it had already ended."
+    },
+    "worker": {
+      "type": "object",
+      "description": "The worker as it is now: a `brigadier workers --json` row."
     }
   }
 }

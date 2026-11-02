@@ -266,6 +266,14 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
         },
         "models" => CliRequest::Models,
         "workers" => CliRequest::Workers,
+        "state" => CliRequest::Context {
+            part: None,
+            name: None,
+            grep: None,
+            last: None,
+            item: None,
+            session: false,
+        },
         "show" => CliRequest::Show { id: id() },
         "read" => {
             let last = number("last")?;

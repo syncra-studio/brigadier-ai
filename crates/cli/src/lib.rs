@@ -172,7 +172,7 @@ fn print(
             output.text.clone()
         }),
         "library" => present(output, json, render::library),
-        "context" => present(output, json, |output: &protocol::ContextOutput| {
+        "context" | "state" => present(output, json, |output: &protocol::ContextOutput| {
             output.text.clone()
         }),
         name if json && protocol::Tool::of_command(name).is_some() => {

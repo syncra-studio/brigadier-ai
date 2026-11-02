@@ -477,18 +477,24 @@ fn sample(request: &CliRequest) -> CliReply {
         CliRequest::Close { id } => CliReply::ok(&CloseOutput {
             id: id.clone(),
             closed: true,
+            worker: Some(WorkerRow {
+                state: WorkerState::Stopped,
+                ..worker_row()
+            }),
         }),
         CliRequest::Pause { id } | CliRequest::Resume { id, .. } => CliReply::ok(&ManageOutput {
             id: id.clone(),
             done: true,
             to: None,
             off_routing: None,
+            worker: Some(worker_row()),
         }),
         CliRequest::Switch { id, .. } => CliReply::ok(&ManageOutput {
             id: id.clone(),
             done: true,
             to: Some("Codex gpt-6.1-sol · high on Work".into()),
             off_routing: Some("Off your routing: its Fallback row names Claude opus.".into()),
+            worker: None,
         }),
         CliRequest::Queue { id, judgment } => CliReply::ok(&QueueOutput {
             id: id.clone(),
@@ -935,6 +941,7 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["checkpoint", "set", "Goal:", "ship.", "--json"],
         &["checkpoint", "show", "--json"],
         &["context", "--json"],
+        &["state", "--json"],
         &["context", "brief", "--json"],
         &["context", "decisions", "--json"],
         &["context", "open", "--json"],
@@ -1209,7 +1216,10 @@ fn text_output_reads_well() {
     ));
     assert_eq!(send, "Denied what e5f6 asked.\n");
     let close = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["close", "a1b2"]));
-    assert_eq!(close, "Closed a1b2.\n");
+    // The reply carries the worker as it is now: no `workers` call after it (D156).
+    assert!(close.starts_with("Closed a1b2.\n"), "{close}");
+    assert!(close.contains("stopped"), "{close}");
+    assert!(close.contains("Add JSON output"), "{close}");
     let queued = stdout(&brigadier(
         Some(&dir.0),
         Some(GRANT),
