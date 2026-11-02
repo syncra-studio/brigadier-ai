@@ -216,6 +216,12 @@ Patches applied, in order:
 
 - `patches/0184-windows-notepad-refuses-user-windows.diff`: Refuse a Notepad launch while Notepad shows a window this helper did not open. Windows Notepad keeps all its windows in one process and opens a file as a tab inside a window it already shows; it has no command-line switch or activation argument for a window of its own. The file would land in the user's window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Windows that the helper's own Notepad launches opened stay reusable.
 
+- `patches/0185-windows-hotkey-confirms-closed-window.diff`: A Windows shortcut that closes its own window (Ctrl+Shift+W in Notepad) says the window closed, instead of an error about a menu that closed with it; a shortcut sent to a window that is gone, or disabled behind its own dialog, says so in plain words.
+
+- `patches/0186-windows-launch-front-never-left.diff`: When Windows reports a launched app's activation but the user's window was in front at every check and at reply time, a launch reply says so instead of calling it unconfirmed.
+
+- `patches/0187-windows-dialog-owner-hidden-while-closing.diff`: A click that closes a target app's background dialog (Save as Cancel or Save) hides the dialog's owner window for the action and shows it again directly under the front window: Windows activates the owner when a modal dialog ends and raises it over the user's window, even with WS_EX_NOACTIVATE set.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

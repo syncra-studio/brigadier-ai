@@ -6332,11 +6332,36 @@ impl Tool for HotkeyTool {
                 }
             })
             .await;
+            let window = windows::Win32::Foundation::HWND(hwnd as isize as *mut _);
+            let gone =
+                || !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(window) }.as_bool();
             return match result {
+                Ok(Ok((true, _))) if gone() => ToolResult::text(format!(
+                    "{key_display_for_result} to pid {raw_pid} (UIA accelerator): confirmed the target window closed."
+                ))
+                .with_structured(json!({"path": "uia", "verified": true, "effect": "confirmed"})),
                 Ok(Ok((true, _))) => unconfirmed_key_result(
                     &format!("{key_display_for_result} to pid {raw_pid}"),
                     "uia",
                 ),
+                Ok(Err(_)) if gone() => ToolResult::error(format!(
+                    "{key_display_for_result} was not confirmed: window {hwnd} no longer exists. \
+                     Call list_windows or get_window_state for the app's current windows."
+                )),
+                Ok(Err(e))
+                    if !unsafe { windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(window) }
+                        .as_bool() =>
+                {
+                    ToolResult::error(format!(
+                        "{key_display_for_result} was not confirmed: window {hwnd} is disabled, usually because \
+                         it is waiting for one of its own dialogs (such as Save as) to close. Finish or \
+                         cancel that dialog first, then retry. ({e})"
+                    ))
+                }
+                Ok(Err(e)) => ToolResult::error(format!(
+                    "{key_display_for_result} was not confirmed: the app's accessibility interface (UI \
+                     Automation) failed while looking for the shortcut ({e}). Read fresh state before retrying."
+                )),
                 Ok(Ok((false, scanned))) => ToolResult::error(format!(
                     "hotkey on a modern XAML / UWP target (pid {raw_pid}, hwnd {hwnd}) \
                      could not find a UIA AcceleratorKey or `(Ctrl+X)`-style name hint \
@@ -6346,7 +6371,6 @@ impl Tool for HotkeyTool {
                      No fallback keyboard input was sent. Inspect fresh window state or use \
                      `invoke_menu` with an explicit menu path."
                 )),
-                Ok(Err(e)) => ToolResult::error(format!("hotkey (UIA path): {e}")),
                 Err(e) => ToolResult::error(format!("Task error: {e}")),
             };
         }

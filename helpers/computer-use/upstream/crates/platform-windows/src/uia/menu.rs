@@ -423,6 +423,13 @@ fn search_menu_level(
                 }
                 Ok::<(), windows::core::Error>(())
             });
+            // A matched shortcut that closed its own window (Ctrl+Shift+W)
+            // takes the menu with it: there is nothing left to collapse.
+            if matches!(result, Ok(true))
+                && !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(hwnd) }.as_bool()
+            {
+                return Ok(true);
+            }
             if let Err(error) = cleanup {
                 anyhow::bail!("accelerator menu search result {result:?}; could not confirm menu cleanup: {error}; read fresh state before retrying");
             }
