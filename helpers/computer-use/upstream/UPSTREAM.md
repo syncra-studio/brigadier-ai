@@ -222,6 +222,8 @@ Patches applied, in order:
 
 - `patches/0187-windows-dialog-owner-hidden-while-closing.diff`: A click that closes a target app's background dialog (Save as Cancel or Save) hides the dialog's owner window for the action and shows it again directly under the front window: Windows activates the owner when a modal dialog ends and raises it over the user's window, even with WS_EX_NOACTIVATE set.
 
+- `patches/0188-windows-shortcut-menu-closed-by-its-command.diff`: A Windows shortcut found in a closed menu counts the menu as closed once its flyout window is gone: a command that opens a dialog (Notepad Ctrl+W, "Save changes?") can make the menu header unreadable, and the reply no longer reports the shortcut search as failed after its command ran.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

@@ -6360,7 +6360,7 @@ impl Tool for HotkeyTool {
                 }
                 Ok(Err(e)) => ToolResult::error(format!(
                     "{key_display_for_result} was not confirmed: the app's accessibility interface (UI \
-                     Automation) failed while looking for the shortcut ({e}). Read fresh state before retrying."
+                     Automation) reported a problem while finding or running the shortcut: {e}"
                 )),
                 Ok(Ok((false, scanned))) => ToolResult::error(format!(
                     "hotkey on a modern XAML / UWP target (pid {raw_pid}, hwnd {hwnd}) \
