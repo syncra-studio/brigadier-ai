@@ -583,6 +583,7 @@ mod tests {
             "Map the decisions the job needs, each after those it depends on.",
             "Ask all you can in one call of your CLI's own question tool, in plain words: recommended option first, labelled \"… (Recommended)\", why in its description; a next round only for what hangs on those answers, never one call per question. More questions or options than one call takes: one `brigadier ask` card instead.",
             "Stop when nothing is assumed silently. Say the shared understanding back in a few lines, then start.",
+            "A choice that turns up mid-job (the code and a test disagree) is asked the same way, before you change anything, even when a skill says to make the smallest fix: it decides how, never what.",
             "Questions go in the question tool or on a card, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown.",
             "Skip it only when nothing is left to decide: a pure question, or an exact one-line instruction.",
             "The user unsure which way: a top-level Chat may offer Fusion with `brigadier fusion offer \"<question>\"`; a session never starts or offers Fusion.",
