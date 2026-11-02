@@ -289,10 +289,11 @@ jobs:
         # Ignored in the step above: under its write storm macOS drops file events (#686), so
         # they run here on their own, as in tools/full-checks.sh.
         run: |
-          cargo nextest run --locked --profile ci -p brigadier-core --lib --run-ignored only --test-threads 1 \
+          cargo nextest run --locked --profile ci -p brigadier-core -p brigadier-registry --lib --run-ignored only --test-threads 1 \
             -E 'test(=manager::flow::workspace_tests::the_watch_hears_files_and_staging_but_not_ignored_folders)' \
             -E 'test(=manager::workspace::tests::new_watches_after_a_switch_say_one_more_change)' \
-            -E 'test(=pages::tests::the_watcher_tells_outside_edits_new_files_and_deletions)'
+            -E 'test(=pages::tests::the_watcher_tells_outside_edits_new_files_and_deletions)' \
+            -E 'test(=tests::watcher_refreshes_on_config_and_skill_edits_through_symlinks)'
       - name: Copy-on-write tests on a file system that shares blocks
         # The runner's ext4 can't make copy-on-write copies, so the tests of copying a checkout's
         # caches into a worktree skip in the step above (issue #110). Here they run with their

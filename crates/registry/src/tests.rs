@@ -1137,6 +1137,7 @@ fn eventually(mut done: impl FnMut() -> bool) -> bool {
 }
 
 #[cfg(unix)]
+#[ignore = "macOS drops FSEvents under the suite's write storm; run serially, see full-checks"]
 #[test]
 fn watcher_refreshes_on_config_and_skill_edits_through_symlinks() {
     let home = fixture("watch");

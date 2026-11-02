@@ -88,8 +88,9 @@ watch_tests=(
   manager::flow::workspace_tests::the_watch_hears_files_and_staging_but_not_ignored_folders
   manager::workspace::tests::new_watches_after_a_switch_say_one_more_change
   pages::tests::the_watcher_tells_outside_edits_new_files_and_deletions
+  tests::watcher_refreshes_on_config_and_skill_edits_through_symlinks
 )
-watch_run=(cargo test --locked -p brigadier-core --lib -- --ignored --test-threads=1 --exact "${watch_tests[@]}")
+watch_run=(cargo test --locked --no-fail-fast -p brigadier-core -p brigadier-registry --lib -- --ignored --test-threads=1 --exact "${watch_tests[@]}")
 if [ "$(uname)" = Darwin ]; then
   # A busy Mac drops file events even with these tests alone, so here a failure is reported
   # but doesn't stop the checks; CI (Linux) gates them.
