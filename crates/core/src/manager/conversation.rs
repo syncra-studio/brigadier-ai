@@ -386,6 +386,9 @@ struct ConvState {
     /// The turn being started opens a new block (no work held): once its CLI begins it, what
     /// still waits in the queue is judged again in it (D25).
     opens_block: bool,
+    /// The open block's `brigadier` look-ups, and whether its drift note went (D167).
+    look_ups: u32,
+    drift_noted: bool,
     /// Queued messages left unjudged at a turn's end and asked once more (D72): never again.
     asked_again: HashSet<String>,
     /// Those left unjudged whose next judging in the open block is that second ask.
@@ -442,6 +445,19 @@ struct ConvState {
 }
 
 impl ConvState {
+    /// The drift note (D167) for the turn starting now: when the block took more look-ups than
+    /// one `brigadier state` call would, once a block. A new block counts afresh.
+    fn drift_note(&mut self) -> Option<String> {
+        let note = (self.look_ups > prompts::MAX_LOOK_UPS && !self.drift_noted)
+            .then(|| prompts::drift_note(self.look_ups));
+        self.drift_noted |= note.is_some();
+        if self.opens_block {
+            self.look_ups = 0;
+            self.drift_noted = false;
+        }
+        note
+    }
+
     /// Whether its wait for a limit ends by itself at the reset: a usage window's does, at most
     /// A spend control or credits never does. Usage windows retain automatic intent.
     fn goes_on_its_own(&self) -> bool {
@@ -726,6 +742,11 @@ impl ConvLive {
     #[cfg(test)]
     pub(super) async fn answer_request(&self, request: &str) {
         self.state.lock().await.request = Some(request.to_owned());
+    }
+
+    /// A `brigadier` look-up of this conversation's own session, counted for the drift note.
+    pub(super) async fn looked_up(&self) {
+        self.state.lock().await.look_ups += 1;
     }
 
     pub fn new(id: ConversationId, kind: ConversationKind, private_logs: bool) -> Self {
@@ -2620,6 +2641,7 @@ impl SessionManager {
         let mut sent_queued = false;
         let mut carry = false;
         // `origin`: the request the envelopes belong to, which their notes speak of.
+        let drift: Option<String>;
         let (users, envelopes, request, mut user_notes) = loop {
             let mut state = conv.state.lock().await;
             if state.busy
@@ -2747,6 +2769,7 @@ impl SessionManager {
             // A user's message with no work held opens a new block: each waiting message is
             // judged again in it (D25).
             state.opens_block = !holds && !users.is_empty();
+            drift = state.drift_note();
             if state.opens_block {
                 state.judged_in_block.clear();
                 // Its second ask was for the block that closed: here it is judged like any other.
@@ -2884,6 +2907,10 @@ impl SessionManager {
                     prompts::CONTINUE_ON_ACCOUNT
                 },
             );
+        }
+        // Seen, never shown: one plain note, nothing blocked (D167).
+        if let Some(note) = &drift {
+            prepend_said(&mut input, &mut user, note);
         }
         let handoff = match &successor {
             Some(successor) => Some(self.seam_handoff(&conv, &cli, successor).await),

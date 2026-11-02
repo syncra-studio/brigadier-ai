@@ -2520,6 +2520,7 @@ mod computer_use_tests;
 mod context_tests;
 #[cfg(unix)]
 mod continue_on_tests;
+mod drift_note_tests;
 #[cfg(unix)]
 mod engine_tests;
 #[cfg(unix)]

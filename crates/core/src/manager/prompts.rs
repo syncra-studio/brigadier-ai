@@ -222,6 +222,16 @@ pub(crate) const CONTINUE_ON_ACCOUNT: &str = "[Your last turn stopped early: its
 /// the turn the limit stopped: it already holds the user's message and what the turn did.
 pub(crate) const CONTINUE_AFTER_LIMIT: &str = "[Your last turn stopped early at a usage limit, which has reset. Carry on from where you stopped. Don't redo anything you already did.]";
 
+/// More `brigadier` look-ups than this in one block get the drift note (D167).
+pub(crate) const MAX_LOOK_UPS: u32 = 3;
+
+/// The drift note (D167): what to do next time, never a rule or a refusal.
+pub(crate) fn drift_note(look_ups: u32) -> String {
+    format!(
+        "[Brigadier note: your last request took {look_ups} separate `brigadier` look-ups. Next time one `brigadier state` call gives them all, and a pause, resume, close or switch reply already carries the worker's state.]"
+    )
+}
+
 /// Today's date (UTC). Development builds take `BRIGADIER_FAKE_TODAY` instead when it is set,
 /// so a check can start a session on another day.
 pub(crate) fn today() -> String {

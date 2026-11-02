@@ -408,6 +408,21 @@ impl SessionManager {
                 },
             );
         }
+        // The orchestrator's look-ups, counted for its drift note (D167); nothing is refused.
+        if caller.task_id.is_none()
+            && matches!(
+                call.request,
+                CliRequest::Models
+                    | CliRequest::Sessions { .. }
+                    | CliRequest::Workers
+                    | CliRequest::Show { .. }
+                    | CliRequest::Read { .. }
+                    | CliRequest::Context { .. }
+            )
+            && let Ok(conv) = self.conv(&caller.conversation_id)
+        {
+            conv.looked_up().await;
+        }
         let reply = match call.request {
             CliRequest::Models => self.cli_models(caller).await.map(|o| CliReply::ok(&o)),
             CliRequest::Sessions { all } => self

@@ -99,6 +99,8 @@ mod shared_workspace;
 mod side_chat;
 mod sidecars;
 mod source_actions;
+#[cfg(all(test, unix))]
+mod standing_live_tests;
 mod terminal_host;
 mod thread;
 mod thread_images;
