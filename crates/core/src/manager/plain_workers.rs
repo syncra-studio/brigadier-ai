@@ -113,11 +113,16 @@ fn title_of(given: Option<&str>, prompt: &str) -> String {
     if let Some(given) = given.map(str::trim).filter(|title| !title.is_empty()) {
         return given.to_owned();
     }
-    // The task itself: a brief's Change part, never its Target ("none, no repo files").
-    let change = (prompt.lines().map(brief_part)).find(|(label, _)| {
-        (label.split_whitespace().next()).is_some_and(|word| word.eq_ignore_ascii_case("change"))
+    // The task itself: a brief's first part that names one. Target says the outcome; Change
+    // quotes the user ("user requested one Brigadier worker…", seen live); a part saying "none"
+    // ("Target: none (no repo files)") names nothing, so the next one does.
+    let part = (prompt.lines().map(brief_part)).find(|(label, text)| {
+        !text.trim().is_empty()
+            && !(!label.is_empty()
+                && (text.split(|c: char| !c.is_alphanumeric()).next())
+                    .is_some_and(|word| word.eq_ignore_ascii_case("none")))
     });
-    let title = short_title(change.unwrap_or_else(|| brief_part(prompt)).1);
+    let title = short_title(part.unwrap_or_else(|| brief_part(prompt)).1);
     if title.is_empty() {
         "Worker".to_owned()
     } else {
@@ -1878,13 +1883,46 @@ mod tests {
             title_of(None, "Target (proposed): Read TASK.md and report"),
             "Read TASK.md and report"
         );
-        // The task is the brief's Change part, not its Target (seen live: "none (no repo files)").
+        // A part saying "none" names no task: the next part does (seen live: "none (no repo files)").
         assert_eq!(
             title_of(
                 None,
                 "1. Target: none (no repo files).\n2. Change: Run the curl in TASK.md step 1.\n3. Do not touch: x"
             ),
             "Run the curl in TASK.md"
+        );
+        // Real briefs from both CLIs: the title reads as the task, never the user's quoted words.
+        let briefs = [
+            // Codex (screen pass 11-02): its Change quotes the request.
+            (
+                "Target: run a shell command and report its output.\nChange: user requested one Brigadier worker to run echo ALPHA and report it.\nDo not touch: all files; no git operations or modifications.\nFiles: none.",
+                "run a shell command",
+            ),
+            (
+                "Target: count lines in the repository root README.md.\nChange: L1 user rule: \"Start one worker on the claude model opus to count README lines.\"\nFiles: README.md, read only.",
+                "count lines in the repository",
+            ),
+            // Claude.
+            (
+                "Target: search this repository for README.md and report its line count.\nChange: L1 user says \"first, search this repo and tell me how many lines README.md has\"; read only.",
+                "search this repository for README.md",
+            ),
+            (
+                "Target (L1): carry out TASK.md step 1 and report its output first line.\nChange (L1, L2): run curl -s https://example.com; then run date at the end, as the user requested.",
+                "carry out TASK.md step 1",
+            ),
+            (
+                "Target: add a one-line README.md in the current checkout.\nChange: the user requested a worker add a one-line README.md; write one suitable short line.",
+                "add a one-line README.md",
+            ),
+        ];
+        for (brief, title) in briefs {
+            assert_eq!(title_of(None, brief), title, "{brief}");
+        }
+        // A plain prompt that starts with "None" is still its own title.
+        assert_eq!(
+            title_of(None, "None of the tests pass\nFix them"),
+            "None of the tests pass"
         );
         assert_eq!(title_of(None, "3 bugs to fix in login"), "3 bugs to fix");
         assert_eq!(
