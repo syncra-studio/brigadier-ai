@@ -424,11 +424,13 @@ test("pausing, resuming, stopping or switching a worker is one line, its own: no
   }
 });
 
+/** A board whose steps are `kinds`, two seconds apart around `atMs`. */
+const steps = (kinds: BoardDigest["orchestratorSteps"][number]["kind"][]) => (atMs: number, requestId: string): BoardDigest => ({
+  ...NO_BOARD,
+  orchestratorSteps: kinds.map((kind, index) => ({ requestId, atMs: atMs - 5_000 + index * 2_000, position: 0, kind })),
+});
+
 test("a message to a paused worker goes with its resume: no Messaged row of its own (D150)", () => {
-  const steps = (kinds: BoardDigest["orchestratorSteps"][number]["kind"][]) => (atMs: number, requestId: string): BoardDigest => ({
-    ...NO_BOARD,
-    orchestratorSteps: kinds.map((kind, index) => ({ requestId, atMs: atMs - 5_000 + index * 2_000, position: 0, kind })),
-  });
   const send = "brigadier send b36f2e6e 'Go on from line 12.'";
   const lines = (kinds: BoardDigest["orchestratorSteps"][number]["kind"][]) =>
     asBrigadier("interrupt", send, steps(kinds)).blocks.flatMap((block) => block.orchestratorSteps).map((step) => step.kind.type);

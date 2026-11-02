@@ -339,7 +339,7 @@ function dropShownCalls(blocks: readonly Block[], board: BoardDigest): void {
 function heldMessages(blocks: readonly Block[]): Set<BlockOrchestratorStep> {
   const paused = new Map<string, boolean>();
   const held = new Set<BlockOrchestratorStep>();
-  const steps = blocks.flatMap((block) => block.orchestratorSteps).filter((step) => step.atMs !== undefined).sort((a, b) => a.atMs! - b.atMs!);
+  const steps = blocks.flatMap((block) => block.orchestratorSteps).filter((step) => step.atMs !== undefined).toSorted((a, b) => a.atMs! - b.atMs!);
   for (const step of steps) {
     const { kind } = step;
     if (kind.type === "paused" || kind.type === "resumed" || kind.type === "stopped") paused.set(kind.taskId, kind.type === "paused");
