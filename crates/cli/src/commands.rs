@@ -425,7 +425,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "close",
-        summary: "Close one of this session's workers.",
+        summary: "Stop one of this session's workers for good (the user's \"stop it\").",
         details: "Stops its CLI and removes it from `brigadier workers`. Unfinished changes \
                   are kept as a commit on its branch.",
         args: &[positional("id", "The worker.")],
