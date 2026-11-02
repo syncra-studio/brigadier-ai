@@ -152,11 +152,51 @@ pub fn walk_tree_budgeted(
     max_depth: usize,
     budget: &mut WalkBudget,
 ) -> UiaTreeResult {
+    wait_for_chromium_page(hwnd, budget);
     let tree = unsafe { walk_tree_unsafe(hwnd, query, max_depth, budget) };
     if budget.expired() {
         budget.stop_for_timeout();
     }
     tree
+}
+
+/// Chromium builds a window's page accessibility tree only after the first
+/// UI Automation client asks for it. Live (2026-11-02, Windows 11 26300): the
+/// first read of a freshly launched Chrome page listed the address bar and no
+/// page at all. Wait briefly, within the read's budget, for the page document.
+fn wait_for_chromium_page(hwnd: u64, budget: &WalkBudget) {
+    use windows::Win32::UI::Accessibility::{TreeScope_Descendants, UIA_DocumentControlTypeId};
+    if !crate::input::is_chromium_target_window(hwnd) {
+        return;
+    }
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    let Ok(automation) = (unsafe {
+        CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+    }) else {
+        return;
+    };
+    let Ok(root) =
+        (unsafe { automation.ElementFromHandle(windows::Win32::Foundation::HWND(hwnd as *mut _)) })
+    else {
+        return;
+    };
+    let Ok(document) = (unsafe {
+        automation.CreatePropertyCondition(
+            UIA_ControlTypePropertyId,
+            &windows::core::VARIANT::from(UIA_DocumentControlTypeId.0),
+        )
+    }) else {
+        return;
+    };
+    for attempt in 0..5 {
+        if unsafe { root.FindFirst(TreeScope_Descendants, &document) }.is_ok() {
+            return;
+        }
+        if attempt == 4 || budget.expired() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
 }
 
 unsafe fn walk_tree_unsafe(
