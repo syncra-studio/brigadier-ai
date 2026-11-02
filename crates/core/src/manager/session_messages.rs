@@ -238,7 +238,7 @@ impl SessionManager {
             return false;
         };
         let wait = waits.remove(&token).expect("found");
-        drop(waits);
+        // Sent under the lock: a wait ending now finds its token gone only with the answer in.
         let event = WaitEvent {
             id: short(&from.0),
             event_id: id.to_owned(),
@@ -250,7 +250,9 @@ impl SessionManager {
             git: None,
             commands: None,
         };
-        wait.answer.send(event).is_ok()
+        let given = wait.answer.send(event).is_ok();
+        drop(waits);
+        given
     }
 
     /// Puts message `id` of `from`'s before `to`'s CLI: into its queue while it works or its
@@ -345,7 +347,14 @@ impl SessionManager {
             Ok(board) => board.queue.items.into_iter().map(|item| item.id).collect(),
             Err(_) => Vec::new(),
         };
-        let pending: Vec<Kept> = read(&record)
+        let kept = read(&record);
+        // Removed, then the crash came before it left the queue: it leaves now, never sent.
+        for message in kept.iter().filter(|m| m.removed && queued.contains(&m.id)) {
+            if let Err(err) = self.delete_queued(id, &message.id).await {
+                tracing::warn!(conversation = %id, message = %message.id, error = %err, "a removed session message stays queued");
+            }
+        }
+        let pending: Vec<Kept> = kept
             .into_iter()
             .filter(|message| {
                 message.seen_at_ms.is_none() && !message.removed && !queued.contains(&message.id)

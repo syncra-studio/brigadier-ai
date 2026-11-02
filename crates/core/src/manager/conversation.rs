@@ -2227,7 +2227,10 @@ impl SessionManager {
                 .all_messages(&id)
                 .await?
                 .into_iter()
-                .find(|message| message.id == request && message.role == MessageRole::User)
+                .find(|message| {
+                    message.id == request
+                        && matches!(message.role, MessageRole::User | MessageRole::Peer)
+                })
         {
             let mut state = conv.state.lock().await;
             let note = if by_itself {

@@ -1558,6 +1558,10 @@ test("goal 4: another session's message judged from the queue is in the rail or 
   const steer = block!.steers.find((each) => each.text === words);
   assert.equal(steer?.message.role, "peer");
   assert.deepEqual(steer?.message.peer, { messageId: id, from });
+  // Steered in by the user from a paused queue: still that session's, never hidden.
+  const steeredIn = user("s1", `[steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]\n${header}`, 1100, { steer: true, said: { by: "brigadier" } });
+  const [withSteer] = cliBlocks({ entries: [judged[0]!, steeredIn, judged[2]!], turns: open(["r1", id]) }, "conv", NO_BOARD, true, [], ["r1", id]);
+  assert.equal(withSteer!.steers.find((each) => each.text === words)?.message.role, "peer", JSON.stringify(withSteer!.steers));
   // The rail row shows its words alone.
   assert.equal(peerWords(header), words);
 });

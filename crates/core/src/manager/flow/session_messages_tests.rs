@@ -879,3 +879,59 @@ async fn a_message_its_cli_took_is_not_sent_again_after_a_crash() {
     );
     flow.stop().await;
 }
+
+/// B's own turn for A's queued message: the CLI took it, then the daemon died before the turn
+/// was seen starting. It goes again by itself, as A's, with a word to check; never dropped.
+#[tokio::test]
+async fn a_queued_message_cut_off_before_its_turn_began_goes_again_after_a_crash() {
+    let (mut flow, seen) = flow("sessions-crash-before-start", false).await;
+    let a = flow.conversation.clone();
+    let b = two_sessions(&flow, &seen).await;
+    flow.say_to(&b, "Hold-steer.").await;
+    super::eventually("B's turn to run", || seen.took(&b, "Hold-steer.") == 1).await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_send.lock().unwrap() =
+        Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
+    let sent = ok(call(&flow, &seen, &a, send(&b.0, "Wait me.")).await);
+    let message = sent["message"].as_str().unwrap().to_owned();
+    reached.notified().await;
+    flow.crash().await;
+    super::eventually("A's message sent again", || {
+        seen.inputs_of(&b).iter().any(|input| {
+            input.contains(&message) && input.contains("[Brigadier restarted as this message")
+        })
+    })
+    .await;
+    flow.settled_in(&b).await;
+    let on_own = seen
+        .inputs_of(&b)
+        .into_iter()
+        .filter(|input| input.contains(&message) && to_judge(input).is_none())
+        .count();
+    assert_eq!(on_own, 1, "{:#?}", seen.inputs_of(&b));
+    assert!(flow.core.board(&b).await.unwrap().queue.items.is_empty());
+    flow.stop().await;
+}
+
+/// B's user deleted A's message and the daemon died before it left B's queue: after the
+/// restart it leaves the queue, never reaching B.
+#[tokio::test]
+async fn a_message_removed_just_before_a_crash_never_reaches_its_session() {
+    let (mut flow, seen) = flow("sessions-crash-removed", true).await;
+    let a = flow.conversation.clone();
+    let b = two_sessions(&flow, &seen).await;
+    flow.say_to(&b, "Hold.").await;
+    super::eventually("B's turn to run", || seen.took(&b, "Hold.") == 1).await;
+    let sent = ok(call(&flow, &seen, &a, send(&b.0, "Delete me.")).await);
+    let message = sent["message"].as_str().unwrap().to_owned();
+    // The delete's first half only: the tombstone, with the item still queued.
+    let item = flow.core.queued(&b, &message).await.unwrap();
+    flow.manager.peer_removed(&b, &item);
+    flow.crash().await;
+    seen.release.store(true, Ordering::SeqCst);
+    flow.settled_in(&b).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(seen.took(&b, "Delete me."), 0, "{:#?}", seen.inputs_of(&b));
+    assert!(flow.core.board(&b).await.unwrap().queue.items.is_empty());
+    flow.stop().await;
+}

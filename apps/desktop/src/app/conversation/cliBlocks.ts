@@ -822,8 +822,8 @@ export function cliBlocks(
     const carries = view.turns[turn]?.requests ?? [];
     const shownBefore = carries.length > 0 && carries.every((request) => blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === request));
     // Peer messages retain their authored content and sender; only automatic engine notices hide.
-    // Also judged from the queue, under its frame (goal 4).
-    const peer = !!asked && FROM_SESSION.test(asked.text.replace(QUEUED, ""));
+    // Also judged from the queue, or steered in, under its frame (goal 4).
+    const peer = !!asked && FROM_SESSION.test(asked.text.replace(QUEUED, "").replace(STEERED, ""));
     const says =
       !!asked && (said && !peer ? ours : !theirs && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore));
     // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
