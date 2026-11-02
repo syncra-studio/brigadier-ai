@@ -89,7 +89,11 @@ pub fn tools_list(mut list: Value, brigadier: bool) -> Value {
             if name == "get_window_state" {
                 for (field, description) in [
                     ("include_screenshot", "Default false; thin trees automatically include an image. Explicit false disables fallback; true requests an image."),
-                    ("timeout_ms", "AX walk budget in ms; returns a partial tree on timeout. Increase or narrow query/limits."),
+                    ("timeout_ms", if cfg!(target_os = "windows") {
+                        "Accessibility walk budget in ms; returns a partial tree on timeout. Increase or narrow query/limits."
+                    } else {
+                        "AX walk budget in ms; returns a partial tree on timeout. Increase or narrow query/limits."
+                    }),
                 ] {
                     if let Some(property) = tool["inputSchema"]["properties"].get_mut(field) {
                         property["description"] = description.into();
