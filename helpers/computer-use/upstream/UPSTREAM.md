@@ -234,6 +234,8 @@ Patches applied, in order:
 
 - `patches/0193-windows-chromium-first-read-waits-for-page.diff`: Reading a Chromium window waits briefly, within the read's budget, for its page document: Chromium builds the page accessibility tree only after the first UI Automation client asks, and the first read of a new Chrome page listed only the address bar.
 
+- `patches/0194-windows-dialog-owner-hidden-for-owner-read-token.diff`: Clicking a background dialog's button through a token read from its owner window also hides the owner while the dialog closes: the owner's read lists the dialog's controls, and the click now looks up the window the element really lives in, so the closing dialog no longer raises itself and its owner over the user's window (4 ms, Notepad Save as Cancel).
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
