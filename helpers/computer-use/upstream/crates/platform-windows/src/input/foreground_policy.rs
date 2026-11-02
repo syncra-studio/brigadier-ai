@@ -31,6 +31,9 @@ impl Observation {
         if self.interrupted {
             return ("The captured window is no longer valid; automatic restoration stopped. Keeping it in front is unconfirmed.", true);
         }
+        if !self.activated && self.uncertain_broker && self.restored {
+            return ("A Windows broker activation event could not be attributed to this launch. Your window was in front at reply time; whether it stayed in front throughout is unconfirmed.", true);
+        }
         if !self.activated && self.uncertain_broker {
             return ("A Windows broker activation event could not be attributed to this launch. Keeping your window in front is unconfirmed.", true);
         }
@@ -447,6 +450,23 @@ mod lease_tests {
         .report()
         .0
         .contains("not confirmed in front"));
+    }
+    #[test]
+    fn an_unattributed_broker_event_says_where_your_window_is() {
+        let broker = Observation {
+            uncertain_broker: true,
+            ..Default::default()
+        };
+        let (front, failed) = Observation {
+            restored: true,
+            ..broker
+        }
+        .report();
+        assert!(
+            front.contains("Your window was in front at reply time") && failed,
+            "{front}"
+        );
+        assert!(!broker.report().0.contains("in front at reply time"));
     }
     #[test]
     fn an_activation_event_with_the_user_window_always_in_front_says_so() {
