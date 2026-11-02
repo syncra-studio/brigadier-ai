@@ -906,7 +906,7 @@ pub enum LinkTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    /// Permission level for new sessions without an explicit choice.
+    /// Permission level for new sessions without an explicit choice: Full access (D144).
     pub default_permission: PermissionLevel,
     /// Orchestrator model for projects that have not remembered one. Absent: the first
     /// logged-in provider's default model.
@@ -1194,7 +1194,7 @@ impl Settings {
 
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
-pub const SETTINGS_VERSION: u32 = 7;
+pub const SETTINGS_VERSION: u32 = 8;
 
 /// A model named by its CLI's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -1207,7 +1207,7 @@ pub struct ModelRef {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            default_permission: PermissionLevel::AcceptEdits,
+            default_permission: PermissionLevel::Full,
             default_orchestrator: None,
             default_chat_model: None,
             hibernate_after_minutes: 30,
@@ -2954,9 +2954,9 @@ mod tests {
     }
 
     #[test]
-    fn levels_start_at_accept_edits_and_old_saved_levels_are_dropped() {
+    fn new_sessions_start_at_full_access_and_old_saved_levels_are_dropped() {
         let fresh = Settings::default();
-        assert_eq!(fresh.default_permission, PermissionLevel::AcceptEdits);
+        assert_eq!(fresh.default_permission, PermissionLevel::Full);
         for permission in [
             PermissionLevel::Ask,
             PermissionLevel::AcceptEdits,
@@ -2997,7 +2997,7 @@ mod tests {
             assert_eq!(permission, PermissionLevel::AcceptEdits, "{old}");
         }
         let legacy: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(legacy.default_permission, PermissionLevel::AcceptEdits);
+        assert_eq!(legacy.default_permission, PermissionLevel::Full);
     }
 
     #[test]

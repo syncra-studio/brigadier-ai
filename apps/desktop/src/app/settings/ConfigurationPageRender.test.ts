@@ -60,12 +60,13 @@ test("Configuration shows its defaults in one card and explains the choices in i
   assert.equal(seen.planFirstSaved, true);
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
-  assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Accept edits"]);
+  // New sessions start at Full access (D144).
+  assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Full access"]);
   // A picker's name is its label, then its choice (#564).
   assert.deepEqual(seen.names, [
     "Model for sessions Automatic (Opus 5.5)",
     "Model for chats Automatic (Opus 5.5)",
-    "Default permission level Accept edits",
+    "Default permission level Full access",
   ]);
   assert.deepEqual(seen.sessionsMenu, [["Automatic (Opus 5.5)", "The first signed-in agent’s default model."]]);
   assert.deepEqual(seen.chatsMenu, [["Automatic (Opus 5.5)", "The same model as new sessions."]]);

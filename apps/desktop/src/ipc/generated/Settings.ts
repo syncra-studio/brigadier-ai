@@ -17,7 +17,7 @@ import type { ProviderKind } from "./ProviderKind";
  */
 export type Settings = { 
 /**
- * Permission level for new sessions without an explicit choice.
+ * Permission level for new sessions without an explicit choice: Full access (D144).
  */
 defaultPermission: PermissionLevel, 
 /**

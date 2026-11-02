@@ -243,7 +243,7 @@ async fn later_starts_keep_what_was_made_after_the_first() {
     let mut flow = Flow::start("engine-later", Options::default(), listening(&heard)).await;
     assert_eq!(
         flow.core.settings().default_permission,
-        PermissionLevel::AcceptEdits
+        PermissionLevel::Full
     );
     assert_eq!(
         flow.core.engine().as_deref(),

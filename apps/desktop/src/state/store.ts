@@ -213,7 +213,7 @@ export const useApp = create<AppState>()(() => ({
   projects: {},
   conversations: {},
   settings: {
-    defaultPermission: "acceptEdits",
+    defaultPermission: "full",
     defaultOrchestrator: null,
     defaultChatModel: null,
     hibernateAfterMinutes: 30,
