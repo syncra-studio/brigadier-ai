@@ -2536,10 +2536,18 @@ impl SessionManager {
             })
             .await?;
         let input = task.plain.as_ref().unwrap().resume_input.clone().unwrap();
-        if let Err(err) = self
+        // Its CLI comes back first; a slow start (a timed-out answer) gets one more try, so the
+        // user's "carry on" is one call, not a failure and a retry (D150).
+        let mut sent = self
             .message_worker(&conversation_id, &task, input.clone())
-            .await
-        {
+            .await;
+        if let Err(err) = &sent {
+            tracing::warn!(task = %task_id, error = %err, "a worker's resume failed; trying once more");
+            sent = self
+                .message_worker(&conversation_id, &task, input.clone())
+                .await;
+        }
+        if let Err(err) = sent {
             // Still paused, holding what it held. A later resume makes a new intent.
             self.update_task_if(
                 &conversation_id,
