@@ -34,10 +34,10 @@ test("a turn has one live line, streams its answer in its own place, folds when 
   );
   // The live thought's heading, in the same row.
   assert.deepEqual([seen.thought.groupLine, seen.thought.status, seen.thought.thinkingLive], ["Checking the failing test", null, 0]);
-  // What waits on the user wins over the thought.
-  assert.deepEqual([seen.question.groupLine, seen.question.groupTone, seen.question.status, seen.question.thinkingLive], ["Waiting for your answer", "needsYou", null, 0]);
-  // A question's wait has a checklist before its words; "Thinking" has no glyph.
-  assert.deepEqual([seen.question.groupGlyph, seen.question.groupQuiet, seen.thinking.groupGlyph], ["tasks", false, null]);
+  // A question's wait is said by the header and its own row (D161): the group keeps its thought.
+  assert.deepEqual([seen.question.groupLine, seen.question.groupTone, seen.question.status, seen.question.thinkingLive], ["Checking the failing test", "busy", null, 0]);
+  // A thought or "Thinking" has no glyph.
+  assert.deepEqual([seen.question.groupGlyph, seen.question.groupQuiet, seen.thinking.groupGlyph], [null, false, null]);
   // A call waiting for the user's OK: "Awaiting approval", its sweep over fainter words, no glyph.
   assert.deepEqual(
     [seen.approval.groupLine, seen.approval.groupTone, seen.approval.groupQuiet, seen.approval.groupGlyph, seen.approval.status],
@@ -78,7 +78,8 @@ test("a turn has one live line, streams its answer in its own place, folds when 
     assert.deepEqual([state.fold, state.answerInWork, state.header], ["gone", false, header]);
     assert.notEqual(state.answer, null);
   }
-  assert.equal(seen.answeringAsked.status, "Waiting for your answer");
+  // The asked wait is the header's and its row's to say (D161), not a line under the answer.
+  assert.equal(seen.answeringAsked.status, null);
   assert.equal(seen.stored.answer, "Fixed the rounding: round now rounds half-up, and the tests pass.");
   assert.equal(seen.done.status, null);
   assert.deepEqual(seen.actions, ["Copy response", "Read aloud", "Feedback", "Try again", "Fork chat from here"]);

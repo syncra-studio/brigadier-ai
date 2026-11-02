@@ -69,6 +69,12 @@ async fn a_restart_keeps_the_thread_and_how_each_turn_ended() {
     flow.say("Crash now.").await;
     eventually("the killed turn ends", || ended(&flow, 4)).await;
     flow.settled().await;
+    // Nothing holds the work after the crash: its block closes.
+    eventually("the block closes", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.block.is_some_and(|block| block.ended_at_ms.is_some())
+    })
+    .await;
 
     let before = flow.manager.thread_view(&id).unwrap();
     let ends: Vec<_> = before.turns.iter().map(|turn| turn.end).collect();
@@ -114,8 +120,10 @@ async fn a_restart_keeps_the_thread_and_how_each_turn_ended() {
     // The news it holds is numbered on from the restart.
     assert!(after.seq > before.seq);
     assert_eq!(
+        // The block record lives in memory: a restart starts with none.
         ThreadView {
             seq: before.seq,
+            block: before.block.clone(),
             ..after
         },
         before
