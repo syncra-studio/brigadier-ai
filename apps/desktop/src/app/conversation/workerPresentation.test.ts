@@ -22,3 +22,9 @@ test("only work that landed or was used counts as done; a worker stopped before 
   assert.equal(outcomeWords([task("stopped"), task("failed")]), "1 stopped · 1 failed");
   assert.equal(outcomeWords([task("running")]), "");
 });
+
+test("a worker its session paused reads paused on the Workers card, never stopped (D118, every CLI)", () => {
+  const paused = { ...task("paused"), quotaWait: null, blockedReason: null };
+  assert.equal(outcomeWords([task("done"), paused]), "1 done · 1 paused");
+  assert.equal(outcomeWords([{ ...paused, blockedReason: "Waiting for a dependency" }]), "");
+});

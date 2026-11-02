@@ -56,6 +56,7 @@ import { workerName } from "@/app/conversation/rowWords";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { ThreadFind } from "@/app/conversation/ThreadFind";
+import { taskRuns } from "@/app/conversation/taskActivity";
 import { AboveComposer } from "@/app/conversation/AboveComposer";
 import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
 import { LoadEarlier } from "@/app/conversation/LoadEarlier";
@@ -1015,7 +1016,7 @@ export function ConversationView({
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
     isLoading: conversationId !== null && cliView === null && !unreadable,
-    isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
+    isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some(taskRuns),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,
     queue,

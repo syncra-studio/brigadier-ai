@@ -1,3 +1,4 @@
+import { userPaused } from "@/app/conversation/taskActivity";
 import type { Task } from "@/ipc/generated";
 
 /** The worker's conversation is done when it has returned its answer, even before landing. */
@@ -17,11 +18,11 @@ export function workerOutcome(task: Task): "done" | "stopped" | "failed" | null 
   return "done";
 }
 
-/** "1 done · 1 stopped": the finished workers by how they ended, zeros left out. */
+/** "1 done · 1 paused · 1 stopped": the finished workers by how they ended, and the paused ones (D118), zeros left out. */
 export function outcomeWords(tasks: readonly Task[]): string {
-  const counts = { done: 0, stopped: 0, failed: 0 };
+  const counts = { done: 0, paused: 0, stopped: 0, failed: 0 };
   for (const task of tasks) {
-    const outcome = workerOutcome(task);
+    const outcome = userPaused(task) ? "paused" : workerOutcome(task);
     if (outcome) counts[outcome] += 1;
   }
   return Object.entries(counts)
