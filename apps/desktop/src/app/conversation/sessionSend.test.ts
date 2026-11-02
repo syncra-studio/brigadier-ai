@@ -80,6 +80,7 @@ test("a send to one of the session's workers keeps its own row", () => {
 
 test("a `brigadier wait` on another session is its reply's row, under the newest wait on it that began before it (D138)", () => {
   assert.deepEqual(waitArgs(`brigadier wait 4f2a9c1e --timeout 600 2>&1`), ["4f2a9c1e"]);
+  assert.deepEqual(waitArgs(`brigadier wait 93572595 --timeout 600`), ["93572595"], "a short id of digits only");
   assert.deepEqual(waitArgs(`brigadier wait`), [], "no ids: it waits on the workers");
   const waiting = call(`brigadier wait 4f2a9c1e`, "inProgress", null);
   const kind = sessionWait(waiting.step, waiting.event, {});

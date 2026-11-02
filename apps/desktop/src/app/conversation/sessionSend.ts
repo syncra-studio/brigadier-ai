@@ -133,8 +133,8 @@ export function sendArgs(command: string): { to: string; text: string } | null {
 export function waitArgs(command: string): string[] | null {
   const found = brigadierArgs(command, "wait");
   if (found?.length !== 1) return null;
-  // An id is a word (a redirect such as `2>` is none); `--timeout`'s value is no id.
-  return found[0]!.filter((arg, index, args) => /^\w[\w-]*$/.test(arg) && !/^\d+$/.test(arg) && args[index - 1] !== "--timeout");
+  // An id is a word, digits only too (a redirect such as `2>` is none); `--timeout`'s value is no id.
+  return found[0]!.filter((arg, index, args) => /^\w[\w-]*$/.test(arg) && args[index - 1] !== "--timeout");
 }
 
 /**
