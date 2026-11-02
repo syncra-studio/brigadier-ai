@@ -1663,7 +1663,8 @@ test("a switch's divider stays where it was drawn live when the turn ends: in it
     at({ type: "message", itemId: "a2", role: "assistant", text: "DONE FOLLOW" }, 2000),
   ];
   const [block] = cliBlocks({ entries, turns: [cut, { ...turn("k1", 1500, 2100, "done"), requests: ["r1", "r9"] }] }, "conv", board);
-  const sequence = blockSequence(block!);
+  const steers = block!.steers.map((steer) => ({ position: steer.position, text: steer.text, atMs: steer.message.createdAtMs, attachments: steer.message.attachments }));
+  const sequence = blockSequence({ ...block!, steers });
   const answer = answerIndex(block!.texts, true);
   const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true).flatMap((part) =>
     part.type === "between" ? [part.entry.kind] : [...(part.items.length ? ["fold"] : []), ...(part.kept ?? []).map((entry) => entry.kind === "orchestrator" ? entry.steps[0]!.kind.type : entry.kind), ...(part.answer ? ["answer"] : [])]);
