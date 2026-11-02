@@ -801,6 +801,9 @@ export async function send(
         items.splice(Math.min(slot ?? items.length, items.length), 0, outcome.item);
         return { ...current, queue: { ...current.queue, items } };
       });
+      // Its turn, when its time comes, is placed as a sent one's is (seen live: one judged to wait
+      // played out below the view).
+      if (localId) expectSentTurn(conversationId, outcome.item.id);
     }
   } finally {
     if (localId && useApp.getState().pending.some((entry) => entry.localId === localId)) {

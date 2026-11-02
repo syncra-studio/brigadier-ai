@@ -182,8 +182,8 @@ export function threadActions(): number {
   return actions;
 }
 
-/** Messages just sent, by conversation: their row's id, placed when it shows. */
-const sentTurns = new Map<string, string>();
+/** Messages sent, by conversation: their rows' ids, each placed when it shows (a queued one once its turn comes). */
+const sentTurns = new Map<string, Set<string>>();
 
 /**
  * The user sent the message shown as row `id` in conversation `key`: its turn is placed when
@@ -191,7 +191,7 @@ const sentTurns = new Map<string, string>();
  */
 export function expectSentTurn(key: string, id: string): void {
   actions += 1;
-  sentTurns.set(key, id);
+  sentTurns.set(key, (sentTurns.get(key) ?? new Set()).add(id));
 }
 
 /**
@@ -388,10 +388,10 @@ export class ThreadScroller {
     }
     if (this.newestUser !== previous) this.answering = false;
     if (this.newestUser !== null && this.newestUser !== previous) {
-      const sent = this.key !== null && sentTurns.get(this.key) === this.newestUser;
+      const sent = this.key !== null && !!sentTurns.get(this.key)?.has(this.newestUser);
       const edited = this.editSentAtMs !== null && performance.now() - this.editSentAtMs < EDIT_WINDOW_MS;
       if (sent || edited) {
-        if (sent && this.key !== null) sentTurns.delete(this.key);
+        if (sent && this.key !== null) sentTurns.get(this.key)?.delete(this.newestUser);
         this.editSentAtMs = null;
         // The thread's first turn is followed from the bottom, with no room.
         if (this.firstTurn(rows)) {
@@ -747,8 +747,8 @@ export class ThreadScroller {
     this.size = { width: layout.viewport.clientWidth, height: layout.viewport.clientHeight };
     this.paddingPx = layout.padding();
     const key = this.key;
-    if (key !== null && this.newestUser !== null && sentTurns.get(key) === this.newestUser) {
-      sentTurns.delete(key);
+    if (key !== null && this.newestUser !== null && sentTurns.get(key)?.has(this.newestUser)) {
+      sentTurns.get(key)?.delete(this.newestUser);
       // The thread's first turn (sent from the new-chat view) is followed from the bottom.
       if (!this.firstTurn(layout.rows())) {
         this.place(this.newestUser);

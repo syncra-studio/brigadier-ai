@@ -837,6 +837,24 @@ test("an unseen conversation with a running turn opens at the bottom", () => {
   assert.equal(fake.scrollTop, fake.max);
 });
 
+test("messages sent while the thread worked (queued) are each placed once their own turn shows, wherever the view was (screen pass)", () => {
+  const fake = new Fake();
+  conversation(fake, 30);
+  const id = key();
+  const scroller = open(fake, id, true);
+  // Both waited in the queue; the user read further up meanwhile.
+  expectSentTurn(id, "queued-1");
+  expectSentTurn(id, "queued-2");
+  for (const [row, up] of [["queued-1", 2000], ["queued-2", 1500]] as const) {
+    scroller.setRunning(false);
+    userScroll(fake, scroller, fake.max - up);
+    fake.rows.push(fake.row(row, 60, "user"));
+    scroller.rowsChanged();
+    assert.ok(fake.room > 0, row);
+    assert.equal(distance(fake), 1, row);
+  }
+});
+
 test("a user row not sent here doesn't move the view", () => {
   const fake = new Fake();
   conversation(fake, 6);
