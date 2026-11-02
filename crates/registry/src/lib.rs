@@ -442,6 +442,8 @@ impl Catalog {
     }
 
     fn user(roots: &Roots) -> Self {
+        #[cfg(test)]
+        catalog::READS.with(|reads| reads.set((reads.get().0 + 1, reads.get().1)));
         let mut problems = Vec::new();
         let codex = servers::codex_config(roots, &mut problems);
         let (servers, disabled): (Vec<Server>, Vec<Server>) =

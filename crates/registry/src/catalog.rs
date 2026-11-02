@@ -80,6 +80,12 @@ pub struct Row {
     pub different_per_agent: bool,
 }
 
+// Test-only count of this thread's user-setup reads and skill-folder hashes.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 pub fn fingerprint(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -90,6 +96,8 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 /// Hash file names and bytes, including supporting files and hidden files. Unreadable or
 /// cyclic trees get no content identity, so they cannot accidentally merge with another tree.
 pub fn skill_fingerprint(path: &Path) -> Option<String> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set((reads.get().0, reads.get().1 + 1)));
     fn visit(path: &Path, hasher: &mut Sha256, ancestors: &mut Vec<PathBuf>) -> Option<()> {
         let canonical = std::fs::canonicalize(path).ok()?;
         if ancestors.contains(&canonical) {
@@ -224,10 +232,15 @@ impl Catalog {
         projects: &[PathBuf],
         data_dir: Option<&Path>,
     ) -> Vec<Row> {
+        // The user's part is read once; each project adds only its own files.
+        let user = Self::read(roots, None);
         let mut catalogs = Vec::new();
         for project in std::iter::once(None).chain(projects.iter().map(|path| Some(path.as_path())))
         {
-            let mut catalog = Self::read(roots, project);
+            let mut catalog = match project {
+                Some(project) => user.for_project(roots, project),
+                None => user.clone(),
+            };
             let mut plugins = crate::plugins::claude_definitions(roots, project);
             if let Some(project) = project {
                 let layer = crate::servers::read_toml(
@@ -267,6 +280,8 @@ impl Catalog {
     /// Desktop/Cursor rows remain import offers (`agent == None`).
     pub fn rows(catalogs: &[Self]) -> Vec<Row> {
         let mut grouped: BTreeMap<(Kind, String, String), Row> = BTreeMap::new();
+        // Every project's catalog repeats the user's skills: hash each folder once.
+        let mut hashed: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
         let mut add = |kind: Kind, name: &str, endpoint: Option<String>, definition: Definition| {
             let key = (
                 kind,
@@ -351,7 +366,10 @@ impl Catalog {
                         ),
                     };
                     let file = path.join("SKILL.md");
-                    let fingerprint = skill_fingerprint(path)
+                    let fingerprint = hashed
+                        .entry(path.clone())
+                        .or_insert_with(|| skill_fingerprint(path))
+                        .clone()
                         .unwrap_or_else(|| fingerprint(file.to_string_lossy().as_bytes()));
                     let provenance = Provenance {
                         agent: Some(agent),
@@ -564,6 +582,35 @@ pub fn library(data_dir: &Path) -> Catalog {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn many_registered_projects_read_the_users_setup_once() {
+        let home = std::env::temp_dir().join(format!(
+            "catalog-many-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join(".claude/skills/example")).unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        std::fs::write(
+            home.join(".claude/skills/example/SKILL.md"),
+            "---\nname: example\n---\n",
+        )
+        .unwrap();
+        let projects: Vec<PathBuf> = (0..40).map(|i| home.join(format!("project-{i}"))).collect();
+        for project in &projects {
+            std::fs::create_dir_all(project).unwrap();
+        }
+        let roots = crate::Roots::from_vars([("HOME".into(), home.display().to_string())]).unwrap();
+        READS.with(|reads| reads.set((0, 0)));
+        let rows = Catalog::read_rows(&roots, &projects);
+        assert!(rows.iter().any(|row| row.name == "example"));
+        // Neither grows with the number of registered projects.
+        assert_eq!(READS.with(std::cell::Cell::get), (1, 1));
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn client_label_is_cosmetic_but_other_arguments_are_not() {
