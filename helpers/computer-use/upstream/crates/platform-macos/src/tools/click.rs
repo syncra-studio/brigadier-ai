@@ -1583,6 +1583,24 @@ fn perform_ax_click(
                     false,
                 ));
             }
+            // A text area has no press action (AXPress fails with -25206). What
+            // a click into it is for is a caret to type at: focus it and put the
+            // caret at the end of its text, confirmed by reading the caret back.
+            if matches!(role.as_str(), "AXTextArea" | "AXTextField") {
+                if let Some(len) = unsafe { crate::document_edit::place_caret_at_end(element) } {
+                    return Ok((
+                        format!(
+                            "✅ [{idx}] {role} has no press action, so it was focused and its \
+                             caret put at the end of its text ({len} characters); confirmed by \
+                             reading the caret back. type_text now adds text there."
+                        ),
+                        false,
+                        false,
+                        true,
+                        false,
+                    ));
+                }
+            }
         }
 
         if let (Some(target), Some(selection)) = (
