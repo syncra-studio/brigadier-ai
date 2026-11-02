@@ -1,0 +1,70 @@
+Why: Minimize a dialog's root owner to hand the front back only when that owner is one of the target app's own windows, by the same rule that matched the dialog; a dialog owned by another process's window, such as the user's, is never minimized through it.
+
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+index b34fb6d59..2e9b0b086 100644
+--- a/crates/platform-windows/src/input/foreground_watch.rs
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -232,14 +232,24 @@ impl Watch {
+             // owner, since a modal dialog cannot be minimized.
+             if !handed {
+                 use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
+-                let minimized = match self.target {
++                let minimized = match &self.target {
+                     Target::Launch(_) => event_hwnd,
+-                    Target::Processes(_, _) => {
++                    Target::Processes(targets, windows) => {
+                         let owner = unsafe { GetAncestor(event_hwnd, GA_ROOTOWNER) };
+-                        if owner.0.is_null() {
+-                            event_hwnd
+-                        } else {
++                        let owner_pid = window_process(owner);
++                        // Only the target app's own owner: a dialog may be owned
++                        // by another process's window, such as the user's.
++                        let own = !owner.0.is_null()
++                            && policy::input_window_matches(
++                                owner_pid != 0 && targets.contains(&owner_pid),
++                                windows.contains(&(owner.0 as usize)),
++                                process_name(owner_pid)
++                                    .is_none_or(|name| name == "applicationframehost"),
++                            );
++                        if own {
+                             owner
++                        } else {
++                            event_hwnd
+                         }
+                     }
+                 };
+@@ -266,7 +276,9 @@ impl Watch {
+                             super::hand_back_by_minimizing(prior, event_hwnd, allowed)
+                         },
+                         Target::Processes(_, _) => unsafe {
+-                            super::hand_back_by_minimizing_owner(prior, event_hwnd, allowed)
++                            super::hand_back_by_minimizing_owner(
++                                prior, event_hwnd, minimized, allowed,
++                            )
+                         },
+                     };
+                 }
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+index 9799d7c97..63d63a489 100644
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -200,15 +200,14 @@ pub(crate) unsafe fn hand_back_by_minimizing(
+ /// such as a modal dialog: minimize its root owner instead, which hides the
+ /// owner's dialogs with it. Live (2026-11-02, Windows 11 26300): Notepad's
+ /// Save as dialog kept the front after the attached hand-back; minimizing its
+-/// owner gave the front back to the user's window within 4 ms.
++/// owner gave the front back to the user's window within 4 ms. The caller
++/// passes `owner` only once it is proven to be the target app's own window.
+ pub(crate) unsafe fn hand_back_by_minimizing_owner(
+     prior: HWND,
+     displaced: HWND,
++    owner: HWND,
+     allowed: impl Fn() -> bool,
+ ) -> bool {
+-    use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
+-    let owner = unsafe { GetAncestor(displaced, GA_ROOTOWNER) };
+-    let owner = if owner.0.is_null() { displaced } else { owner };
+     unsafe { hand_back_by_minimizing_window(prior, displaced, owner, allowed) }
+ }
+ 

@@ -232,14 +232,24 @@ impl Watch {
             // owner, since a modal dialog cannot be minimized.
             if !handed {
                 use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
-                let minimized = match self.target {
+                let minimized = match &self.target {
                     Target::Launch(_) => event_hwnd,
-                    Target::Processes(_, _) => {
+                    Target::Processes(targets, windows) => {
                         let owner = unsafe { GetAncestor(event_hwnd, GA_ROOTOWNER) };
-                        if owner.0.is_null() {
-                            event_hwnd
-                        } else {
+                        let owner_pid = window_process(owner);
+                        // Only the target app's own owner: a dialog may be owned
+                        // by another process's window, such as the user's.
+                        let own = !owner.0.is_null()
+                            && policy::input_window_matches(
+                                owner_pid != 0 && targets.contains(&owner_pid),
+                                windows.contains(&(owner.0 as usize)),
+                                process_name(owner_pid)
+                                    .is_none_or(|name| name == "applicationframehost"),
+                            );
+                        if own {
                             owner
+                        } else {
+                            event_hwnd
                         }
                     }
                 };
@@ -266,7 +276,9 @@ impl Watch {
                             super::hand_back_by_minimizing(prior, event_hwnd, allowed)
                         },
                         Target::Processes(_, _) => unsafe {
-                            super::hand_back_by_minimizing_owner(prior, event_hwnd, allowed)
+                            super::hand_back_by_minimizing_owner(
+                                prior, event_hwnd, minimized, allowed,
+                            )
                         },
                     };
                 }

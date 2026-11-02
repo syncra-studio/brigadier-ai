@@ -200,15 +200,14 @@ pub(crate) unsafe fn hand_back_by_minimizing(
 /// such as a modal dialog: minimize its root owner instead, which hides the
 /// owner's dialogs with it. Live (2026-11-02, Windows 11 26300): Notepad's
 /// Save as dialog kept the front after the attached hand-back; minimizing its
-/// owner gave the front back to the user's window within 4 ms.
+/// owner gave the front back to the user's window within 4 ms. The caller
+/// passes `owner` only once it is proven to be the target app's own window.
 pub(crate) unsafe fn hand_back_by_minimizing_owner(
     prior: HWND,
     displaced: HWND,
+    owner: HWND,
     allowed: impl Fn() -> bool,
 ) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
-    let owner = unsafe { GetAncestor(displaced, GA_ROOTOWNER) };
-    let owner = if owner.0.is_null() { displaced } else { owner };
     unsafe { hand_back_by_minimizing_window(prior, displaced, owner, allowed) }
 }
 

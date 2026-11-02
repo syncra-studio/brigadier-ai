@@ -210,6 +210,8 @@ Patches applied, in order:
 
 - `patches/0176-windows-validated-profile-quarantine-and-process-exit.diff`: Rename exited task profiles by validated handle into pinned tombstones before deletion, and retain launched Notepad process handles to detect exit between polls while preserving saved documents.
 
+- `patches/0182-windows-dialog-owner-hand-back-target-only.diff`: Minimize a dialog's root owner to hand the front back only when that owner is one of the target app's own windows, by the same rule that matched the dialog; a dialog owned by another process's window, such as the user's, is never minimized through it.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
