@@ -1665,10 +1665,10 @@ test("a switch's divider stays where it was drawn live when the turn ends: in it
   const [block] = cliBlocks({ entries, turns: [cut, { ...turn("k1", 1500, 2100, "done"), requests: ["r1", "r9"] }] }, "conv", board);
   const sequence = blockSequence(block!);
   const answer = answerIndex(block!.texts, true);
-  const drawn = turnParts(turnActivity(sequence, false), answer, true, false, () => true).flatMap((part) =>
+  const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true).flatMap((part) =>
     part.type === "between" ? [part.entry.kind] : [...(part.items.length ? ["fold"] : []), ...(part.kept ?? []).map((entry) => entry.kind === "orchestrator" ? entry.steps[0]!.kind.type : entry.kind), ...(part.answer ? ["answer"] : [])]);
   // Live: commands, the switch, DONE, the follow-up. Done: the switch stays above the follow-up.
-  assert.deepEqual(drawn, ["fold", "providerTransition", "answer", "steer"]);
+  assert.deepEqual(parts, ["fold", "providerTransition", "answer", "steer"]);
 });
 
 test("a thread whose turns repeat a message never repeats a node id", () => {
