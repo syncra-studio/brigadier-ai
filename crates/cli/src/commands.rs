@@ -281,8 +281,8 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "title",
                 "TEXT",
-                "A short name for it: two to four plain words, like \"Login redirect\"; from the \
-                 prompt by default.",
+                "A short name for its job: two to four plain words, like \"Fix login redirect\", \
+                 never a place like \"repo root\"; from the prompt by default.",
             ),
             flag(
                 "agent",

@@ -616,6 +616,8 @@ mod tests {
             "Files:** the exact files or names it owns. Two workers never share a file; two that need one run in order or get exact names up front.",
             "Acceptance:** the exact commands that must pass; \"commit, merge into my branch (below), then say done with the commit ids and each command's last lines\".",
             "Add \"Ask me (your parent) if something blocks you; don't guess on scope.\"",
+            // O57 item 2: the orchestrator names its worker's job.
+            "Start it with `--title \"<its job in 2-4 words>\"`",
             "The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`).",
             "Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.",
             "A plan or brief built from decisions cites their ids. Lines of your own say \"proposed\", and a gap the decisions don't cover goes to the user, never a silent fill.",

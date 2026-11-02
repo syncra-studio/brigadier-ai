@@ -6,6 +6,7 @@ Brief: five lines.
 5. Acceptance: the exact commands that must pass; "commit, merge into my branch (below), then say done with the commit ids and each command's last lines".
 
 Add "Ask me (your parent) if something blocks you; don't guess on scope."
+Start it with `--title "<its job in 2-4 words>"` ("Add timed marks"): its name in the thread and on the Workers card, never a place ("repo root") or a file.
 
 - The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`).
 - Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.
