@@ -270,8 +270,12 @@ impl SessionManager {
                 && !state.seam.held
         });
         let again = state.ask_again.contains(&item.id);
+        // The CLI's own turn for its background jobs' end runs: only that work holds (D113).
+        let own = cli.is_some() && state.own_turn && !again;
         let frame = if again {
             unjudged_frame(&shown)
+        } else if own {
+            background_frame(&shown)
         } else {
             deciding_frame(&shown)
         };
@@ -339,6 +343,9 @@ impl SessionManager {
             self.kick(conv);
             item.deciding = false;
             return item;
+        }
+        if steered && own {
+            state.woken.insert(item.id.clone());
         }
         state.deciding.push(item.id.clone());
         state.judged_in_block.insert(item.id.clone());

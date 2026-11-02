@@ -368,12 +368,16 @@ struct ConvState {
     deciding: Vec<String>,
     /// Those of them given to the session on a turn of their own, woken to judge them while
     /// its work held with no turn running: the pending message that starts that turn is the
-    /// queued one, not yet the user's message of a request, and never goes again.
+    /// queued one, not yet the user's message of a request, and never goes again. Also those
+    /// steered into the CLI's own turn for its background jobs' end ([`Self::own_turn`]).
     woken: HashSet<String>,
     /// The running turn started with a message the user sent while the session's work still
     /// held (its workers or its CLI's background commands): it goes on with that work, in its
     /// block ([`crate::thread_view::ThreadTurn::joins`]).
     turn_joins: bool,
+    /// The running turn is one the CLI began on its own for its background jobs' end: only that
+    /// work holds its block, so a message sent meanwhile is answered in it (D113).
+    own_turn: bool,
     /// The turn's judging is settled, even while the rest of its end is being recorded.
     judging_ended: bool,
     /// Queued messages given to the session to judge in the open block (D25): each is judged
@@ -2675,6 +2679,7 @@ impl SessionManager {
                 state.stopped_open.remove(request);
             }
             state.turn_joins = holds && !users.is_empty();
+            state.own_turn = false;
             // A user's message with no work held opens a new block: each waiting message is
             // judged again in it (D25).
             state.opens_block = !holds && !users.is_empty();
@@ -5049,6 +5054,7 @@ impl SessionManager {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
                         state.busy = true;
+                        state.own_turn = true;
                         state.judging_ended = false;
                         state.interrupted = false;
                         state.limit_hit = None;

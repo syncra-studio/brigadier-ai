@@ -675,6 +675,96 @@ async fn a_message_steered_first_into_the_clis_own_turn_joins_the_block() {
     flow.stop().await;
 }
 
+/// D113 when the CLI wakes itself: a message sent while a turn the CLI began on its own for its
+/// background job's end runs is judged as with only background work holding, under that frame,
+/// and left unjudged it joins the block once, never asked again (seen live on Claude: the plain
+/// frame got it judged wait and answered twice).
+#[tokio::test]
+async fn a_message_sent_during_the_clis_own_wake_turn_is_answered_in_the_block() {
+    use brigadier_providers::{ProviderEvent, Role};
+    type Events = Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>>;
+    let say = |item: &str, role, text: &str| ProviderEvent::Message {
+        item_id: item.into(),
+        role,
+        text: text.into(),
+    };
+    let events: Events = Arc::default();
+    let answers = Answers::default();
+    let script: Script = {
+        let (events, answers) = (events.clone(), answers.clone());
+        Arc::new(move |turn| {
+            let (events, answers) = (events.clone(), answers.clone());
+            Box::pin(async move {
+                (answers.lock().unwrap().entry("inputs".into()))
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(turn.input));
+                let first = turn.input.contains("Start the job.");
+                let user = if first { "user-1" } else { "user-2" };
+                let _ = turn.events.send(say(user, Role::User, &turn.input)).await;
+                if first {
+                    let _ = (turn.events)
+                        .send(ProviderEvent::BackgroundJobs {
+                            running: vec!["job".into()],
+                        })
+                        .await;
+                    *events.lock().unwrap() = Some(turn.events.clone());
+                    return Reply::text("Started it in the background.");
+                }
+                Reply::text("Four.")
+            })
+        })
+    };
+    let flow = Flow::start("block-own-wake-turn", Options::default(), script).await;
+    flow.say("Start the job.").await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually_async("the first turn to end", || conv.idle()).await;
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    for event in [
+        ProviderEvent::BackgroundJobs {
+            running: Vec::new(),
+        },
+        ProviderEvent::TurnStarted { turn_id: None },
+        say("wake", Role::Assistant, "The job printed abc."),
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually_async("its own turn to run", || {
+        let conv = conv.clone();
+        async move { conv.is_busy().await }
+    })
+    .await;
+
+    flow.say("What is 2+2?").await;
+    let board = flow
+        .until("it to join", |board| {
+            board.queue.items.is_empty() && board.requests.len() == 2
+        })
+        .await;
+    flow.idle().await;
+    let given: Vec<String> = (inputs(&answers).into_iter())
+        .filter(|input| input.contains("What is 2+2?"))
+        .collect();
+    assert!(
+        given.len() == 1 && given[0].contains("only background work is in progress"),
+        "{given:#?}"
+    );
+    assert_eq!(read(&answers, "you didn't judge it"), 0);
+    // Its request is the first block's, and no turn draws a second block.
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    assert!(
+        board
+            .requests
+            .keys()
+            .all(|id| view.turns[0].requests.contains(id))
+            && view.turns[1..].iter().all(|turn| turn.joins),
+        "{:#?}",
+        view.turns
+    );
+    flow.stop().await;
+}
+
 /// O38 on Codex: a follow-up judged `wait` while a subagent runs past its turn stays queued
 /// through the judge turn's end, and goes on its own turn once the subagent ends, with no turn
 /// open (D24, D25).
