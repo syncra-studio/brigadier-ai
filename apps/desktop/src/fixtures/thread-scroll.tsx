@@ -125,6 +125,8 @@ function requests(id: string): UserRequest[] {
 let sentWorking = false;
 /** A sent message's CLI hasn't said it yet: the fixture says when (`cliSays`). */
 let sentUnsaid = false;
+/** A sent message waits in the queue, as one sent while the turn works does. */
+let sentQueued = false;
 /** The id of the message sent last. */
 let lastSent: string | null = null;
 
@@ -208,6 +210,10 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
     }
     case "sendMessage": {
       await wait(100);
+      if (sentQueued) {
+        const item = { id: `queued-${sequence++}`, text: req.text, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null };
+        return { method: req.method, outcome: { type: "queued", item } };
+      }
       const list = (stored[req.conversationId] ??= []);
       const message: Message = {
         id: `sent-${sequence++}`, conversationId: req.conversationId, seq: list.length + 1, role: "user",
@@ -937,6 +943,41 @@ const steps = {
     cliLag.ownIds = false;
     return frames;
   },
+  /**
+   * At the bottom of a long thread, a send while its turn works waits in the queue; once its own
+   * turn shows (the message keeps the queued item's id), it is placed in view with no scroll by hand.
+   */
+  async sendWhileWorking() {
+    await open("long");
+    await userScroll(max());
+    await settle(300);
+    const before = useBoard.getState().board!;
+    useBoard.setState({ board: { ...before, run: "running" } });
+    sentQueued = true;
+    const text = "A question sent while it works.";
+    await send({ text, attachments: [], mentions: [] });
+    sentQueued = false;
+    await settle(300);
+    const item = useBoard.getState().board!.queue.items.find((each) => each.text === text);
+    // Its turn: the work ended, the message goes on as its own turn.
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "idle", queue: { ...board.queue, items: [] } } } : {}));
+    const list = stored["long"]!;
+    appended({
+      id: item!.id, conversationId: "long", seq: list.length + 1, role: "user", text, blob: null, createdAtMs: Date.now(),
+      attachments: [], mentions: [], model: null, requestId: `queued-request-${sequence++}`, parentId: list.at(-1)?.id ?? null,
+    } as Message);
+    await settle(600);
+    const sent = [...document.querySelectorAll<HTMLElement>('[data-role="user"]')].find((each) => each.textContent?.includes(text));
+    const box = viewport().getBoundingClientRect();
+    const at = sent?.getBoundingClientRect();
+    return {
+      queued: !!item,
+      inView: !!at && at.top >= box.top && at.bottom <= stackTop(),
+      userTop: at ? round(at.top - viewTop()) : null,
+      room: roomHeight(),
+      distance: distance(),
+    };
+  },
 };
 
 async function drive(): Promise<void> {
@@ -950,8 +991,9 @@ async function drive(): Promise<void> {
     const only = new URLSearchParams(location.search).get("only");
     for (const [name, step] of Object.entries(steps)) {
       if (only !== null && name !== only) continue;
-      // A cold open needs a page that opened nothing yet: it runs on its own.
-      if (only === null && name === "coldOpen") continue;
+      // A cold open needs a page that opened nothing yet, and a send while working one that sent
+      // nothing yet: each runs on its own.
+      if (only === null && (name === "coldOpen" || name === "sendWhileWorking")) continue;
       // Where a run that ran out of time stopped.
       document.body.dataset["scrollStep"] = name;
       result[name] = await step();

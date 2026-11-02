@@ -229,3 +229,19 @@ test("a conversation opened for the first time shows its replies whole, never pl
   assert.deepEqual({ shown, empty, placeholders }, { shown: true, empty: 0, placeholders: 0 });
   assert.ok(rows > 0);
 });
+
+// O57 item 16: at the bottom of a long thread, a send while its turn works waits in the queue;
+// once its own turn shows, it is placed as a sent one is, near the top with room below, with no
+// scroll by hand. On a page of its own: an earlier step's sent turn would place it anyway.
+test("a message sent while the thread works shows its turn in view once it starts", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1&only=sendWhileWorking", "thread-scroll-result", 60000)) as {
+    error?: string;
+    viewport: { height: number };
+    sendWhileWorking: { queued: boolean; inView: boolean; userTop: number | null; room: number; distance: number };
+  };
+  assert.equal(seen.error, undefined);
+  const { queued, inView, userTop, room } = seen.sendWhileWorking;
+  assert.deepEqual({ queued, inView }, { queued: true, inView: true });
+  assert.ok(room > 0, `room ${room}`);
+  assert.ok(userTop !== null && userTop < seen.viewport.height / 3, `top ${userTop}`);
+});
