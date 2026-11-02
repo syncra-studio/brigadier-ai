@@ -20,6 +20,7 @@ struct Seen {
     made_main: Vec<u32>,
     menu_pressed: usize,
     selected: usize,
+    closed: Vec<u32>,
 }
 
 type Shared = Arc<Mutex<Seen>>;
@@ -71,6 +72,53 @@ impl MenuBar for FakeMenuBar {
         self.0.lock().unwrap().selected += 1;
         Some("all 5 characters of the AXTextArea".to_owned())
     }
+    /// Window 7 closes; window 8 stays open (a save sheet); 9 has no button.
+    fn close_window(&self, _pid: i32, window_id: u32) -> Option<bool> {
+        self.0.lock().unwrap().closed.push(window_id);
+        match window_id {
+            7 => Some(true),
+            8 => Some(false),
+            _ => None,
+        }
+    }
+}
+
+#[tokio::test]
+async fn cmd_w_with_a_disabled_close_menu_item_presses_the_close_button() {
+    let (registry, seen) = build();
+    let closed = registry
+        .invoke(
+            "hotkey",
+            json!({"pid": 1, "window_id": 7, "keys": ["cmd", "w"]}),
+        )
+        .await;
+    assert!(
+        text_of(&closed).contains("window is gone"),
+        "{}",
+        text_of(&closed)
+    );
+    assert_eq!(closed.structured_content.unwrap()["effect"], "confirmed");
+    let open = registry
+        .invoke(
+            "hotkey",
+            json!({"pid": 1, "window_id": 8, "keys": ["cmd", "w"]}),
+        )
+        .await;
+    assert!(text_of(&open).contains("still open"), "{}", text_of(&open));
+    assert_eq!(open.structured_content.unwrap()["effect"], "unverifiable");
+    assert_eq!(seen.lock().unwrap().posted, 0);
+    registry
+        .invoke(
+            "hotkey",
+            json!({"pid": 1, "window_id": 9, "keys": ["cmd", "w"]}),
+        )
+        .await;
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.closed, [7, 8, 9]);
+    assert_eq!(
+        seen.posted, 1,
+        "no close button: the driver posts the combo"
+    );
 }
 
 fn build() -> (ToolRegistry, Shared) {

@@ -70,6 +70,54 @@ pub trait MenuBar: Send + Sync {
     /// given), or else of the first one in that window. Returns what was
     /// selected, for the answer.
     fn select_all_text(&self, pid: i32, window_id: Option<u32>) -> Option<String>;
+    /// Presses `window_id`'s own close button through accessibility.
+    /// `None` when it has none to press; else whether the window is gone
+    /// from the window list afterwards.
+    fn close_window(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        None
+    }
+}
+
+/// The answer for ⌘W done with the window's close button.
+fn closed_window_result(display: &str, pid: i32, window_id: u32, gone: bool) -> ToolResult {
+    use cua_driver_core::action_record::{
+        ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, ActualDelivery,
+        EvidenceKind, RequestedDelivery,
+    };
+    let (text, record) = if gone {
+        (
+            format!(
+                "Closed window {window_id} of pid {pid} ({display}) with its close button: the \
+                 window is gone from the window list."
+            ),
+            ActionExecutionRecord::builder(
+                ActionEffect::Confirmed,
+                ActionTransport::MacosAxAction,
+                RequestedDelivery::Background,
+            )
+            .evidence(ActionEvidence {
+                kind: EvidenceKind::WindowChange,
+                detail: "the window left the window list".into(),
+            }),
+        )
+    } else {
+        (
+            format!(
+                "Pressed the close button of window {window_id} of pid {pid} ({display}), but the \
+                 window is still open: the app may be asking to save. Read the window to see."
+            ),
+            ActionExecutionRecord::builder(
+                ActionEffect::Unverifiable,
+                ActionTransport::MacosAxAction,
+                RequestedDelivery::Background,
+            ),
+        )
+    };
+    let result = ToolResult::text(text);
+    match record.actual_delivery(ActualDelivery::Background).build() {
+        Ok(record) => result.with_action_record(record),
+        Err(_) => result,
+    }
 }
 
 /// Puts Brigadier's menu shortcuts in front of the driver's `hotkey`.
@@ -190,6 +238,14 @@ impl Tool for MenuShortcut {
                     .with_structured(json!({}));
             }
         }
+        // Close Window is disabled while the app is in the background (Finder),
+        // and the posted combo never reaches it. The window's own close button
+        // does the same and works from the background.
+        if let (true, 0, Some(window_id)) = (key.eq_ignore_ascii_case("w"), modifiers, window_id) {
+            if let Some(gone) = self.menu_bar.close_window(pid, window_id) {
+                return closed_window_result(&display, pid, window_id, gone);
+            }
+        }
         self.inner.invoke(args).await
     }
 }
@@ -218,6 +274,26 @@ impl MenuBar for System {
 
     fn select_all_text(&self, pid: i32, window_id: Option<u32>) -> Option<String> {
         unsafe { system::select_all_text(pid, window_id) }
+    }
+
+    fn close_window(&self, pid: i32, window_id: u32) -> Option<bool> {
+        if !unsafe { system::press_close_button(pid, window_id) } {
+            return None;
+        }
+        // The window leaves the window list once the app has closed it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1000);
+        loop {
+            let open = crate::window_list::windows(Some(pid))
+                .iter()
+                .any(|w| w.id == window_id);
+            if !open {
+                return Some(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Some(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }
 
@@ -279,6 +355,27 @@ mod system {
             }
             CFRelease(element as CFTypeRef);
         }
+        pressed
+    }
+
+    /// Press the window's enabled AXCloseButton. `true` when AX accepted it.
+    pub unsafe fn press_close_button(pid: i32, window_id: u32) -> bool {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return false;
+        }
+        let mut pressed = false;
+        for window in copy_ax_windows_including(app, pid, window_id) {
+            if !pressed && ax_get_window_id(window) == Some(window_id) {
+                if let Some(button) = copy_element_attr(window, "AXCloseButton") {
+                    pressed = copy_bool_attr(button, "AXEnabled") != Some(false)
+                        && perform_action(button, "AXPress") == kAXErrorSuccess;
+                    CFRelease(button as CFTypeRef);
+                }
+            }
+            CFRelease(window as CFTypeRef);
+        }
+        CFRelease(app as CFTypeRef);
         pressed
     }
 
