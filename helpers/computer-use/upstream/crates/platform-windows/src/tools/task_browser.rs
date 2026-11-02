@@ -1130,29 +1130,117 @@ impl Profile {
         self.marker_file.lock().unwrap().take();
         self.directory.lock().unwrap().take();
         drop(current);
-        // Keep the ownership proof until the contents are gone, so a sharing
-        // violation or helper crash leaves enough evidence for the next sweep.
-        for entry in std::fs::read_dir(&self.path)? {
-            let entry = entry?;
-            if entry.file_name() == "brigadier-task-owner.json" {
-                continue;
-            }
-            if entry.file_type()?.is_dir() {
-                std::fs::remove_dir_all(entry.path())?;
-            } else {
-                std::fs::remove_file(entry.path())?;
-            }
-        }
-        let marker = self.path.join("brigadier-task-owner.json");
-        std::fs::remove_file(&marker)?;
-        if let Err(error) = std::fs::remove_dir(&self.path) {
-            if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(marker) {
-                let _ = file.write_all(&serde_json::to_vec(&record)?);
-            }
-            return Err(error.into());
-        }
+        let quarantine = quarantine_profile(&self.path, &record)?;
+        delete_quarantined(quarantine, &record)?;
         Ok(())
     }
+}
+
+struct QuarantinedProfile {
+    path: PathBuf,
+    directory: File,
+    _parent: File,
+}
+
+fn quarantine_profile(path: &Path, record: &Marker) -> Result<QuarantinedProfile> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
+    let root = path.parent().context("task profile has no parent")?;
+    reject_reparse_ancestors(path)?;
+    let open = |path: &Path| {
+        OpenOptions::new()
+            .access_mode(0x10000 | FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(path)
+    };
+    // DELETE access plus no FILE_SHARE_DELETE pins both names during removal.
+    // Rename the validated handle, never whichever directory now occupies path.
+    let parent = open(root)?;
+    let directory = open(path)?;
+    if directory_id(&directory)? != record.directory {
+        bail!("task profile was replaced before quarantine");
+    }
+    let tombstone =
+        std::path::absolute(root)?.join(format!("retired-{}-{}", record.nonce, nonce()?));
+    let name: Vec<u16> = tombstone.as_os_str().encode_wide().collect();
+    let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let size = offset + name.len() * 2;
+    let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
+    unsafe {
+        let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        (*info).FileNameLength = (name.len() * 2) as u32;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            storage.as_mut_ptr().cast::<u8>().add(offset).cast(),
+            name.len(),
+        );
+        SetFileInformationByHandle(
+            HANDLE(directory.as_raw_handle()),
+            FileRenameInfo,
+            info.cast(),
+            size as u32,
+        )?;
+    }
+    let current = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES.0)
+        .share_mode(7)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(&tombstone)?;
+    if directory_id(&current)? != record.directory {
+        bail!("quarantined task profile was replaced");
+    }
+    let owner: Marker =
+        serde_json::from_slice(&std::fs::read(tombstone.join("brigadier-task-owner.json"))?)?;
+    if owner != *record {
+        bail!("quarantined task ownership changed");
+    }
+    Ok(QuarantinedProfile {
+        path: tombstone,
+        directory,
+        _parent: parent,
+    })
+}
+
+fn delete_quarantined(profile: QuarantinedProfile, record: &Marker) -> Result<()> {
+    use windows::Win32::Storage::FileSystem::{
+        FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+    };
+    reject_reparse_tree(&profile.path)?;
+    // Preserve the proof until all contents are removed, for retry after a crash.
+    for entry in std::fs::read_dir(&profile.path)? {
+        let entry = entry?;
+        if entry.file_name() == "brigadier-task-owner.json" {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    let marker = profile.path.join("brigadier-task-owner.json");
+    std::fs::remove_file(&marker)?;
+    let disposition = FILE_DISPOSITION_INFO {
+        DeleteFile: true.into(),
+    };
+    let deleted = unsafe {
+        SetFileInformationByHandle(
+            HANDLE(profile.directory.as_raw_handle()),
+            FileDispositionInfo,
+            &disposition as *const _ as *const _,
+            std::mem::size_of_val(&disposition) as u32,
+        )
+    };
+    if let Err(error) = deleted {
+        if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(marker) {
+            let _ = file.write_all(&serde_json::to_vec(record)?);
+        }
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 fn reject_reparse_tree(path: &Path) -> Result<()> {
@@ -1195,13 +1283,21 @@ fn sweep_stale(root: &Path) -> Result<()> {
                 bail!("oversize task marker");
             }
             let mut record: Marker = serde_json::from_slice(&bytes)?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            let tombstone = name
+                .strip_prefix(&format!("retired-{}-", record.nonce))
+                .is_some_and(|suffix| {
+                    suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+                });
             if record.schema != "brigadier-task-browser-v1"
                 || record.nonce.len() != 32
                 || !record.nonce.bytes().all(|b| b.is_ascii_hexdigit())
-                || path.file_name().and_then(|name| name.to_str())
-                    != Some(&format!("task-{}", record.nonce))
+                || (name != format!("task-{}", record.nonce) && !tombstone)
                 || directory_id(&directory)? != record.directory
-                || !process_gone(record.creator_pid)
+                || (!process_gone(record.creator_pid) && !(tombstone && record.retired))
                 || !browser_gone(&record)
             {
                 bail!("task profile is unproven or still owned");
@@ -1270,6 +1366,9 @@ pub(super) fn start_cleanup() {
             for profile in PROFILES.lock().unwrap().iter() {
                 let _ = profile.cleanup_exited();
             }
+            if let Ok(root) = task_root() {
+                let _ = sweep_stale(&root);
+            }
             // A Notepad tab can retain unsaved content without writing this file.
             // Wait for all Notepad processes to exit; runtime teardown is also a
             // cleanup boundary, and never removes files written or replaced.
@@ -1284,6 +1383,45 @@ pub(super) fn start_cleanup() {
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
+    #[test]
+    fn swapped_profile_is_never_deleted_and_tombstone_stays_pinned() {
+        let root = tempfile::tempdir().unwrap();
+        let path = fixture(root.path(), 0);
+        let record: Marker =
+            serde_json::from_slice(&std::fs::read(path.join("brigadier-task-owner.json")).unwrap())
+                .unwrap();
+        let validated = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+            .open(&path)
+            .unwrap();
+        assert_eq!(directory_id(&validated).unwrap(), record.directory);
+        drop(validated);
+        let moved = root.path().join("checked-original");
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("Bookmarks"), "user profile").unwrap();
+        assert!(quarantine_profile(&path, &record).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path.join("Bookmarks")).unwrap(),
+            "user profile"
+        );
+
+        let quarantine = quarantine_profile(&moved, &record).unwrap();
+        assert!(
+            std::fs::rename(&quarantine.path, root.path().join("swapped-tombstone")).is_err(),
+            "DELETE handle without share-delete must pin the tombstone"
+        );
+        let tombstone = quarantine.path.clone();
+        delete_quarantined(quarantine, &record).unwrap();
+        assert!(!tombstone.exists());
+        assert_eq!(
+            std::fs::read_to_string(path.join("Bookmarks")).unwrap(),
+            "user profile"
+        );
+    }
+
     fn fixture(root: &Path, creator_pid: u32) -> PathBuf {
         let id = nonce().unwrap();
         let path = root.join(format!("task-{id}"));

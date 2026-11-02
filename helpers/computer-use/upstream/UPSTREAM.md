@@ -208,6 +208,8 @@ Patches applied, in order:
 
 - `patches/0181-windows-launch-hand-back-next-visible-window.diff`: Check the next visible window, not the next window, when a launched app is minimized to hand the front back: hidden IME and helper windows sit right under it, Windows activates the next visible window, and placing the user's window right under the app is ignored, so a launch refused to hand the front back. The owner route of 0180 now shares the same check.
 
+- `patches/0176-windows-validated-profile-quarantine-and-process-exit.diff`: Rename exited task profiles by validated handle into pinned tombstones before deletion, and retain launched Notepad process handles to detect exit between polls while preserving saved documents.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

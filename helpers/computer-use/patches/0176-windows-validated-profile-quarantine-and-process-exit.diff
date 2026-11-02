@@ -1,0 +1,517 @@
+Why: Rename exited task profiles by validated handle into pinned tombstones before deletion, and retain launched Notepad process handles to detect exit between polls while preserving saved documents.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index f6fff85bd..dbdd46af1 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2831,6 +2831,7 @@ impl Tool for LaunchAppTool {
+         // ShellExecuteExW. Both branches still need to handle `urls`
+         // (additional URLs always go through ShellExecuteExW since the
+         // Start Menu doesn't activate by URL).
++        let document_process = fresh_document_cleanup.process_tracker();
+         let pid = if let Some(pid) = reused_task_pid {
+             pid
+         } else if let Some(aumid) = aumid_for_uwp.clone() {
+@@ -2839,8 +2840,13 @@ impl Tool for LaunchAppTool {
+             // Once submitted, a broker may still open the file after our
+             // deadline. Keep it even when activation cannot be confirmed.
+             fresh_document_cleanup.launched();
++            let document_process = document_process.clone();
+             let activation = tokio::task::spawn_blocking(move || {
+-                crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone)
++                let result = crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone);
++                if let (Ok(pid), Some(tracker)) = (&result, &document_process) {
++                    tracker.capture_pid(*pid);
++                }
++                result
+             });
+             let activation =
+                 tokio::time::timeout(std::time::Duration::from_secs(15), activation).await;
+@@ -2892,6 +2898,7 @@ impl Tool for LaunchAppTool {
+             // backstop for any *other* blocking broker dialog (SmartScreen, an
+             // elevation/consent surface) so a bad target can't hang the daemon.
+             let task_spawn = task_profile.clone();
++            let document_process = document_process.clone();
+             let launch = tokio::task::spawn_blocking(move || -> anyhow::Result<u32> {
+                 use windows::core::{PCWSTR, PWSTR};
+                 use windows::Win32::Foundation::CloseHandle;
+@@ -2960,6 +2967,9 @@ impl Tool for LaunchAppTool {
+                                 &startup,
+                                 &mut process,
+                             )?;
++                            if let Some(tracker) = &document_process {
++                                tracker.capture_handle(process.hProcess);
++                            }
+                             let _ = CloseHandle(process.hThread);
+                             let _ = CloseHandle(process.hProcess);
+                         }
+@@ -2996,6 +3006,9 @@ impl Tool for LaunchAppTool {
+                         ShellExecuteExW(&mut info)?;
+                     }
+                     if !info.hProcess.is_invalid() {
++                        if let Some(tracker) = &document_process {
++                            tracker.capture_handle(info.hProcess);
++                        }
+                         let p = unsafe { GetProcessId(info.hProcess) };
+                         unsafe {
+                             let _ = CloseHandle(info.hProcess);
+@@ -3006,6 +3019,10 @@ impl Tool for LaunchAppTool {
+                     }
+                 };
+
++                if let Some(tracker) = &document_process {
++                    tracker.capture_pid(pid);
++                }
++
+                 // Open any additional URLs in the default browser (no focus
+                 // steal, no pid capture for these — Swift's NSWorkspace flow
+                 // behaves the same way for secondary URLs).
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+index 3274ef505..72acf3ba5 100644
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -322,6 +322,7 @@ pub(super) async fn notepad_document_window(
+                     if count == 0
+                         && super::launch_policy::document_title_matches(&window.title, &filename)
+                     {
++                        record_document_window(&filename, window.pid);
+                         return Some(window); // classic Notepad has no tabs
+                     }
+                     for index in 0..count {
+@@ -339,6 +340,7 @@ pub(super) async fn notepad_document_window(
+                             .and_then(|p| p.CurrentIsSelected().ok())
+                             .is_some_and(|s| s.as_bool());
+                         if selected {
++                            record_document_window(&filename, window.pid);
+                             return Some(window);
+                         }
+                     }
+@@ -408,31 +410,112 @@ mod fresh_document_tests {
+ }
+
+ /// Retain ownership after submission; saved or replaced documents are preserved.
+-pub(super) struct UnlaunchedDocument(Option<FreshDocument>);
++pub(super) struct UnlaunchedDocument(Option<FreshDocument>, Option<DocumentProcess>);
+ impl UnlaunchedDocument {
+     pub(super) fn new(path: Option<std::path::PathBuf>) -> Self {
+-        Self(path.and_then(|path| FreshDocument::track(path).ok()))
++        let document = path.and_then(|path| FreshDocument::track(path).ok());
++        let process = document.as_ref().map(|document| document.process.clone());
++        Self(document, process)
++    }
++    pub(super) fn process_tracker(&self) -> Option<DocumentProcess> {
++        self.1.clone()
+     }
+     pub(super) fn launched(&mut self) {
+         if let Some(document) = self.0.take() {
+-            DOCUMENTS.lock().unwrap().push((document, false));
++            DOCUMENTS.lock().unwrap().push(document);
+         }
+     }
+ }
+ impl Drop for UnlaunchedDocument {
+     fn drop(&mut self) {
++        if let Some(process) = &self.1 {
++            process.0.lock().unwrap().finished = true;
++        }
+         if let Some(document) = self.0.as_ref() {
+             document.remove_empty();
+         }
+     }
+ }
+
+-static DOCUMENTS: std::sync::Mutex<Vec<(FreshDocument, bool)>> = std::sync::Mutex::new(Vec::new());
++static DOCUMENTS: std::sync::Mutex<Vec<FreshDocument>> = std::sync::Mutex::new(Vec::new());
+
+ struct FreshDocument {
+     path: std::path::PathBuf,
+     identity: (u32, u32, u32, u32, u32),
+     scope: Option<String>,
++    process: DocumentProcess,
++    relinquished: std::sync::atomic::AtomicBool,
++}
++
++#[derive(Clone, Default)]
++pub(super) struct DocumentProcess(std::sync::Arc<std::sync::Mutex<DocumentProcessState>>);
++#[derive(Default)]
++struct DocumentProcessState {
++    handle: Option<std::os::windows::io::OwnedHandle>,
++    verified_window: bool,
++    finished: bool,
++}
++impl DocumentProcess {
++    pub(super) fn capture_handle(&self, handle: windows::Win32::Foundation::HANDLE) {
++        use std::os::windows::io::BorrowedHandle;
++        if handle.is_invalid() {
++            return;
++        }
++        // Duplicate while the launch API still owns its handle: even a process
++        // which already exited retains an unambiguous kernel identity.
++        let owned = unsafe { BorrowedHandle::borrow_raw(handle.0) }
++            .try_clone_to_owned()
++            .ok();
++        if let Some(owned) = owned {
++            self.0.lock().unwrap().handle = Some(owned);
++        }
++    }
++    pub(super) fn capture_pid(&self, pid: u32) {
++        use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
++        if self.0.lock().unwrap().handle.is_some() {
++            return;
++        }
++        if let Ok(handle) = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
++            self.capture_handle(handle);
++            let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
++        }
++    }
++    fn ready(&self, notepad_running: bool) -> bool {
++        use std::os::windows::io::AsRawHandle;
++        use windows::Win32::{
++            Foundation::{HANDLE, WAIT_OBJECT_0},
++            System::Threading::WaitForSingleObject,
++        };
++        let state = self.0.lock().unwrap();
++        state.finished
++            && match &state.handle {
++                Some(handle) => {
++                    (unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), 0) })
++                        == WAIT_OBJECT_0
++                        && (state.verified_window || !notepad_running)
++                }
++                None => false, // An unproven broker launch can still complete later.
++            }
++    }
++}
++
++fn record_document_window(filename: &str, pid: u32) {
++    for document in DOCUMENTS.lock().unwrap().iter() {
++        if document
++            .path
++            .file_name()
++            .is_some_and(|name| name == filename)
++        {
++            let process = DocumentProcess::default();
++            process.capture_pid(pid);
++            let mut next = process.0.lock().unwrap();
++            if let Some(handle) = next.handle.take() {
++                let mut state = document.process.0.lock().unwrap();
++                state.handle = Some(handle);
++                state.verified_window = true;
++            }
++        }
++    }
+ }
+
+ impl FreshDocument {
+@@ -467,10 +550,15 @@ impl FreshDocument {
+             path,
+             identity,
+             scope: cua_driver_core::tool::current_dispatch_runtime_scope(),
++            process: DocumentProcess::default(),
++            relinquished: std::sync::atomic::AtomicBool::new(false),
+         })
+     }
+
+     fn remove_empty(&self) -> bool {
++        if self.relinquished.load(std::sync::atomic::Ordering::Acquire) {
++            return false;
++        }
+         use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+         use windows::Win32::Storage::FileSystem::{
+             FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+@@ -487,6 +575,8 @@ impl FreshDocument {
+             return false;
+         };
+         if Self::information(&file).ok() != Some(self.identity) {
++            self.relinquished
++                .store(true, std::sync::atomic::Ordering::Release);
+             return false;
+         }
+         let disposition = FILE_DISPOSITION_INFO {
+@@ -505,16 +595,15 @@ impl FreshDocument {
+ }
+
+ pub(super) fn cleanup_documents(scope: Option<&str>) {
+-    DOCUMENTS.lock().unwrap().retain(|(document, _)| {
++    DOCUMENTS.lock().unwrap().retain(|document| {
+         document.scope.as_deref() != scope || (!document.remove_empty() && document.path.exists())
+     });
+ }
+
+ pub(super) fn poll_documents(notepad_running: bool) {
+-    DOCUMENTS.lock().unwrap().retain_mut(|(document, seen)| {
+-        // Do not mistake an asynchronous shell launch for an already closed app.
+-        *seen |= notepad_running;
+-        notepad_running || !*seen || (!document.remove_empty() && document.path.exists())
++    DOCUMENTS.lock().unwrap().retain(|document| {
++        !document.process.ready(notepad_running)
++            || (!document.remove_empty() && document.path.exists())
+     });
+ }
+
+@@ -543,6 +632,33 @@ mod unlaunched_document_tests {
+ #[cfg(test)]
+ mod document_cleanup_tests {
+     use super::*;
++    #[test]
++    fn process_exit_between_polls_cleans_an_unobserved_document() {
++        use std::os::windows::{io::AsRawHandle, process::CommandExt};
++        let path = create_notepad_document().unwrap();
++        let mut guard = UnlaunchedDocument::new(Some(path.clone()));
++        let tracker = guard.process_tracker().unwrap();
++        guard.launched();
++        let mut child = std::process::Command::new("cmd.exe")
++            .args(["/C", "exit", "0"])
++            .creation_flags(0x08000000)
++            .spawn()
++            .unwrap();
++        tracker.capture_handle(windows::Win32::Foundation::HANDLE(child.as_raw_handle()));
++        child.wait().unwrap();
++        assert!(
++            !tracker.ready(false),
++            "do not clean up while launch verification is pending"
++        );
++        drop(guard);
++        assert!(
++            tracker.ready(false),
++            "exit is detected without ever observing a running Notepad"
++        );
++        poll_documents(false);
++        assert!(!path.exists());
++    }
++
+     #[test]
+     fn runtime_cleanup_keeps_another_runtimes_document() {
+         let path = create_notepad_document().unwrap();
+@@ -552,7 +668,7 @@ mod document_cleanup_tests {
+             path.file_stem().unwrap().to_string_lossy()
+         );
+         document.scope = Some(scope.clone());
+-        DOCUMENTS.lock().unwrap().push((document, false));
++        DOCUMENTS.lock().unwrap().push(document);
+         cleanup_documents(Some("another-runtime"));
+         assert!(path.exists());
+         cleanup_documents(Some(&scope));
+diff --git a/crates/platform-windows/src/tools/task_browser.rs b/crates/platform-windows/src/tools/task_browser.rs
+index 5322608c9..d5ac71947 100644
+--- a/crates/platform-windows/src/tools/task_browser.rs
++++ b/crates/platform-windows/src/tools/task_browser.rs
+@@ -1130,29 +1130,117 @@ impl Profile {
+         self.marker_file.lock().unwrap().take();
+         self.directory.lock().unwrap().take();
+         drop(current);
+-        // Keep the ownership proof until the contents are gone, so a sharing
+-        // violation or helper crash leaves enough evidence for the next sweep.
+-        for entry in std::fs::read_dir(&self.path)? {
+-            let entry = entry?;
+-            if entry.file_name() == "brigadier-task-owner.json" {
+-                continue;
+-            }
+-            if entry.file_type()?.is_dir() {
+-                std::fs::remove_dir_all(entry.path())?;
+-            } else {
+-                std::fs::remove_file(entry.path())?;
+-            }
++        let quarantine = quarantine_profile(&self.path, &record)?;
++        delete_quarantined(quarantine, &record)?;
++        Ok(())
++    }
++}
++
++struct QuarantinedProfile {
++    path: PathBuf,
++    directory: File,
++    _parent: File,
++}
++
++fn quarantine_profile(path: &Path, record: &Marker) -> Result<QuarantinedProfile> {
++    use std::os::windows::ffi::OsStrExt;
++    use windows::Win32::Storage::FileSystem::{
++        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
++    };
++    let root = path.parent().context("task profile has no parent")?;
++    reject_reparse_ancestors(path)?;
++    let open = |path: &Path| {
++        OpenOptions::new()
++            .access_mode(0x10000 | FILE_READ_ATTRIBUTES.0)
++            .share_mode(3)
++            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
++            .open(path)
++    };
++    // DELETE access plus no FILE_SHARE_DELETE pins both names during removal.
++    // Rename the validated handle, never whichever directory now occupies path.
++    let parent = open(root)?;
++    let directory = open(path)?;
++    if directory_id(&directory)? != record.directory {
++        bail!("task profile was replaced before quarantine");
++    }
++    let tombstone =
++        std::path::absolute(root)?.join(format!("retired-{}-{}", record.nonce, nonce()?));
++    let name: Vec<u16> = tombstone.as_os_str().encode_wide().collect();
++    let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
++    let size = offset + name.len() * 2;
++    let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
++    unsafe {
++        let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
++        (*info).FileNameLength = (name.len() * 2) as u32;
++        std::ptr::copy_nonoverlapping(
++            name.as_ptr(),
++            storage.as_mut_ptr().cast::<u8>().add(offset).cast(),
++            name.len(),
++        );
++        SetFileInformationByHandle(
++            HANDLE(directory.as_raw_handle()),
++            FileRenameInfo,
++            info.cast(),
++            size as u32,
++        )?;
++    }
++    let current = OpenOptions::new()
++        .access_mode(FILE_READ_ATTRIBUTES.0)
++        .share_mode(7)
++        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
++        .open(&tombstone)?;
++    if directory_id(&current)? != record.directory {
++        bail!("quarantined task profile was replaced");
++    }
++    let owner: Marker =
++        serde_json::from_slice(&std::fs::read(tombstone.join("brigadier-task-owner.json"))?)?;
++    if owner != *record {
++        bail!("quarantined task ownership changed");
++    }
++    Ok(QuarantinedProfile {
++        path: tombstone,
++        directory,
++        _parent: parent,
++    })
++}
++
++fn delete_quarantined(profile: QuarantinedProfile, record: &Marker) -> Result<()> {
++    use windows::Win32::Storage::FileSystem::{
++        FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
++    };
++    reject_reparse_tree(&profile.path)?;
++    // Preserve the proof until all contents are removed, for retry after a crash.
++    for entry in std::fs::read_dir(&profile.path)? {
++        let entry = entry?;
++        if entry.file_name() == "brigadier-task-owner.json" {
++            continue;
+         }
+-        let marker = self.path.join("brigadier-task-owner.json");
+-        std::fs::remove_file(&marker)?;
+-        if let Err(error) = std::fs::remove_dir(&self.path) {
+-            if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(marker) {
+-                let _ = file.write_all(&serde_json::to_vec(&record)?);
+-            }
+-            return Err(error.into());
++        if entry.file_type()?.is_dir() {
++            std::fs::remove_dir_all(entry.path())?;
++        } else {
++            std::fs::remove_file(entry.path())?;
+         }
+-        Ok(())
+     }
++    let marker = profile.path.join("brigadier-task-owner.json");
++    std::fs::remove_file(&marker)?;
++    let disposition = FILE_DISPOSITION_INFO {
++        DeleteFile: true.into(),
++    };
++    let deleted = unsafe {
++        SetFileInformationByHandle(
++            HANDLE(profile.directory.as_raw_handle()),
++            FileDispositionInfo,
++            &disposition as *const _ as *const _,
++            std::mem::size_of_val(&disposition) as u32,
++        )
++    };
++    if let Err(error) = deleted {
++        if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(marker) {
++            let _ = file.write_all(&serde_json::to_vec(record)?);
++        }
++        return Err(error.into());
++    }
++    Ok(())
+ }
+
+ fn reject_reparse_tree(path: &Path) -> Result<()> {
+@@ -1195,13 +1283,21 @@ fn sweep_stale(root: &Path) -> Result<()> {
+                 bail!("oversize task marker");
+             }
+             let mut record: Marker = serde_json::from_slice(&bytes)?;
++            let name = path
++                .file_name()
++                .and_then(|name| name.to_str())
++                .unwrap_or_default();
++            let tombstone = name
++                .strip_prefix(&format!("retired-{}-", record.nonce))
++                .is_some_and(|suffix| {
++                    suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
++                });
+             if record.schema != "brigadier-task-browser-v1"
+                 || record.nonce.len() != 32
+                 || !record.nonce.bytes().all(|b| b.is_ascii_hexdigit())
+-                || path.file_name().and_then(|name| name.to_str())
+-                    != Some(&format!("task-{}", record.nonce))
++                || (name != format!("task-{}", record.nonce) && !tombstone)
+                 || directory_id(&directory)? != record.directory
+-                || !process_gone(record.creator_pid)
++                || (!process_gone(record.creator_pid) && !(tombstone && record.retired))
+                 || !browser_gone(&record)
+             {
+                 bail!("task profile is unproven or still owned");
+@@ -1270,6 +1366,9 @@ pub(super) fn start_cleanup() {
+             for profile in PROFILES.lock().unwrap().iter() {
+                 let _ = profile.cleanup_exited();
+             }
++            if let Ok(root) = task_root() {
++                let _ = sweep_stale(&root);
++            }
+             // A Notepad tab can retain unsaved content without writing this file.
+             // Wait for all Notepad processes to exit; runtime teardown is also a
+             // cleanup boundary, and never removes files written or replaced.
+@@ -1284,6 +1383,45 @@ pub(super) fn start_cleanup() {
+ #[cfg(test)]
+ mod cleanup_tests {
+     use super::*;
++    #[test]
++    fn swapped_profile_is_never_deleted_and_tombstone_stays_pinned() {
++        let root = tempfile::tempdir().unwrap();
++        let path = fixture(root.path(), 0);
++        let record: Marker =
++            serde_json::from_slice(&std::fs::read(path.join("brigadier-task-owner.json")).unwrap())
++                .unwrap();
++        let validated = OpenOptions::new()
++            .access_mode(FILE_READ_ATTRIBUTES.0)
++            .share_mode(3)
++            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
++            .open(&path)
++            .unwrap();
++        assert_eq!(directory_id(&validated).unwrap(), record.directory);
++        drop(validated);
++        let moved = root.path().join("checked-original");
++        std::fs::rename(&path, &moved).unwrap();
++        std::fs::create_dir(&path).unwrap();
++        std::fs::write(path.join("Bookmarks"), "user profile").unwrap();
++        assert!(quarantine_profile(&path, &record).is_err());
++        assert_eq!(
++            std::fs::read_to_string(path.join("Bookmarks")).unwrap(),
++            "user profile"
++        );
++
++        let quarantine = quarantine_profile(&moved, &record).unwrap();
++        assert!(
++            std::fs::rename(&quarantine.path, root.path().join("swapped-tombstone")).is_err(),
++            "DELETE handle without share-delete must pin the tombstone"
++        );
++        let tombstone = quarantine.path.clone();
++        delete_quarantined(quarantine, &record).unwrap();
++        assert!(!tombstone.exists());
++        assert_eq!(
++            std::fs::read_to_string(path.join("Bookmarks")).unwrap(),
++            "user profile"
++        );
++    }
++
+     fn fixture(root: &Path, creator_pid: u32) -> PathBuf {
+         let id = nonce().unwrap();
+         let path = root.join(format!("task-{id}"));
