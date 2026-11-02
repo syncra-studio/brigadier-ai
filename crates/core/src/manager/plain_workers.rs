@@ -116,17 +116,71 @@ fn title_of(given: Option<&str>, prompt: &str) -> String {
     // The task itself: a brief's first part that names one. Target says the outcome; Change
     // quotes the user ("user requested one Brigadier worker…", seen live); a part saying "none"
     // ("Target: none (no repo files)") names nothing, so the next one does.
-    let part = (prompt.lines().map(brief_part)).find(|(label, text)| {
-        !text.trim().is_empty()
-            && !(!label.is_empty()
-                && (text.split(|c: char| !c.is_alphanumeric()).next())
-                    .is_some_and(|word| word.eq_ignore_ascii_case("none")))
-    });
+    let part = (prompt.lines().map(brief_part))
+        .map(|(label, text)| (label, past_place(text)))
+        .find(|(label, text)| {
+            !text.trim().is_empty()
+                && !(!label.is_empty()
+                    && (text.split(|c: char| !c.is_alphanumeric()).next())
+                        .is_some_and(|word| word.eq_ignore_ascii_case("none")))
+        });
     let title = short_title(part.unwrap_or_else(|| brief_part(prompt)).1);
     if title.is_empty() {
         "Worker".to_owned()
     } else {
         title
+    }
+}
+
+/// Words that only say where a worker works ("repo root", "the repository root of this
+/// checkout"), never what it does.
+const PLACE_WORDS: &[&str] = &[
+    "repo",
+    "repository",
+    "root",
+    "checkout",
+    "worktree",
+    "folder",
+    "directory",
+    "codebase",
+    "project",
+    "workspace",
+    "current",
+    "top",
+    "level",
+    "top-level",
+    "whole",
+    "entire",
+    "local",
+    "main",
+    "the",
+    "this",
+    "its",
+    "of",
+    "in",
+    "at",
+];
+
+/// `text` past a lead that only names a place (`brief help`'s Target starts with the repo area):
+/// "repo root — create g3c.txt" is "create g3c.txt", and a text that is only a place is empty,
+/// so the brief's next part names the job (O57 item 2: workers titled "repo root").
+fn past_place(text: &str) -> &str {
+    let place = |lead: &str| {
+        let mut words = lead
+            .split(|c: char| !c.is_alphanumeric() && c != '-')
+            .filter(|word| !word.is_empty())
+            .peekable();
+        words.peek().is_some()
+            && words.all(|word| PLACE_WORDS.contains(&word.to_lowercase().as_str()))
+    };
+    let lead = [" — ", " – ", " - ", ", ", "; ", ": ", ". "]
+        .iter()
+        .filter_map(|stop| text.find(stop).map(|at| (at, stop.len())))
+        .min();
+    match lead {
+        Some((at, len)) if place(&text[..at]) => text[at + len..].trim_start(),
+        None if place(text.trim_end_matches(['.', ';'])) => "",
+        _ => text,
     }
 }
 
@@ -1931,6 +1985,28 @@ mod tests {
             ),
         ];
         for (brief, title) in briefs {
+            assert_eq!(title_of(None, brief), title, "{brief}");
+        }
+        // A Target that leads with its place names the job after it, or the next part does
+        // (O57 item 2, demo9: workers titled "repo root" and "repo root of this").
+        for (brief, title) in [
+            (
+                "1. Target: repo root — create g3c.txt with timed marks.\n2. Change: x",
+                "create g3c.txt with timed marks",
+            ),
+            (
+                "Target: repo root of this checkout; write marks 1 to 12 into g3b.txt",
+                "write marks 1 to 12",
+            ),
+            (
+                "1. Target: repo root.\n2. Change: Build a small notes tool in Python.",
+                "Build a small notes tool",
+            ),
+            (
+                "Target: project README, add a license line",
+                "project README, add a license",
+            ),
+        ] {
             assert_eq!(title_of(None, brief), title, "{brief}");
         }
         // A plain prompt that starts with "None" is still its own title.
