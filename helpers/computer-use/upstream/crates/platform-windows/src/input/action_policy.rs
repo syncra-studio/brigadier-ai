@@ -1,6 +1,14 @@
 //! Portable identities for exact native button commands.
-pub fn common_dialog_accept(dialog_class: &str, button_class: &str, control_id: i32) -> bool {
-    dialog_class == "#32770" && button_class.eq_ignore_ascii_case("button") && control_id == 1
+/// The dialog command a common dialog's button sends: IDOK (1) or IDCANCEL (2).
+pub fn common_dialog_command(
+    dialog_class: &str,
+    button_class: &str,
+    control_id: i32,
+) -> Option<i32> {
+    (dialog_class == "#32770"
+        && button_class.eq_ignore_ascii_case("button")
+        && matches!(control_id, 1 | 2))
+    .then_some(control_id)
 }
 
 pub fn caption_close(
@@ -20,11 +28,12 @@ pub fn caption_close(
 mod tests {
     use super::*;
     #[test]
-    fn only_the_common_dialog_default_button_uses_idok() {
-        assert!(common_dialog_accept("#32770", "Button", 1));
-        assert!(!common_dialog_accept("Notepad", "Button", 1));
-        assert!(!common_dialog_accept("#32770", "Edit", 1));
-        assert!(!common_dialog_accept("#32770", "Button", 2));
+    fn only_common_dialog_ok_and_cancel_buttons_send_their_command() {
+        assert_eq!(common_dialog_command("#32770", "Button", 1), Some(1));
+        assert_eq!(common_dialog_command("#32770", "Button", 2), Some(2));
+        assert_eq!(common_dialog_command("Notepad", "Button", 1), None);
+        assert_eq!(common_dialog_command("#32770", "Edit", 1), None);
+        assert_eq!(common_dialog_command("#32770", "Button", 3), None);
     }
     #[test]
     fn native_caption_or_winui_close_identity_is_required() {

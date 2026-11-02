@@ -192,36 +192,39 @@ fn send_command(
     Ok(())
 }
 
-/// Exact IDOK control in a native common dialog. Do this before Invoke:
-/// UIA can reject the disabled dialog's button with UIA_E_ELEMENTNOTENABLED.
-fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<HWND> {
+/// Exact IDOK or IDCANCEL control in a native common dialog, with its id.
+/// Do this before Invoke: UIA can reject the disabled dialog's button with
+/// UIA_E_ELEMENTNOTENABLED, and Invoke on a background dialog's button
+/// activates the dialog in its own thread, which raises it over the user's
+/// window for a few ms. The button's own WM_COMMAND activates nothing.
+fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<(HWND, i32)> {
     unsafe {
         if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId {
             return None;
         }
-        let button = GetDlgItem(hwnd, 1).ok()?;
-        if !crate::input::action_policy::common_dialog_accept(
-            &class_name(hwnd),
-            &class_name(button),
-            GetDlgCtrlID(button),
-        ) || GetParent(button).ok()? != hwnd
-            || !IsWindowEnabled(button).as_bool()
-        {
-            return None;
-        }
         let native = element.CurrentNativeWindowHandle().ok();
+        let (button, id) = [1, 2].into_iter().find_map(|id| {
+            let button = GetDlgItem(hwnd, id).ok()?;
+            let usable = crate::input::action_policy::common_dialog_command(
+                &class_name(hwnd),
+                &class_name(button),
+                GetDlgCtrlID(button),
+            ) == Some(id)
+                && GetParent(button).ok()? == hwnd
+                && IsWindowEnabled(button).as_bool();
+            let named = native == Some(button)
+                || element.CurrentAutomationId().ok()?.to_string() == id.to_string();
+            (usable && named).then_some((button, id))
+        })?;
         if native == Some(button) {
-            return Some(button);
-        }
-        if element.CurrentAutomationId().ok()?.to_string() != "1" {
-            return None;
+            return Some((button, id));
         }
         let r = element.CurrentBoundingRectangle().ok()?;
         let mut b = windows::Win32::Foundation::RECT::default();
         GetWindowRect(button, &mut b).ok()?;
         let x = r.left + (r.right - r.left) / 2;
         let y = r.top + (r.bottom - r.top) / 2;
-        (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some(button)
+        (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some((button, id))
     }
 }
 
@@ -426,18 +429,25 @@ fn try_click_guarded(
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
     if !expand_only {
-        if let Some(button) = common_dialog_button(HWND(hwnd as *mut _), &element) {
+        // The token may come from the owner's read, which lists the dialog's controls.
+        let dialog = element_root_window(HWND(hwnd as *mut _), &element);
+        if let Some((button, id)) = common_dialog_button(dialog, &element) {
+            let readback = Readback::new(dialog.0 as usize as u64, Some(ptr));
             return super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
                 ensure_active(cancelled)?;
                 let dispatch = send_command(
-                    HWND(hwnd as *mut _),
+                    dialog,
                     WM_COMMAND,
-                    WPARAM(1),
+                    WPARAM(id as usize),
                     LPARAM(button.0 as isize),
                 );
                 let observed = readback.finish(
                     Some(ptr),
-                    "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)",
+                    if id == 1 {
+                        "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)"
+                    } else {
+                        "Common-dialog IDCANCEL WM_COMMAND"
+                    },
                     ActionTransport::WindowsSendMessage,
                 );
                 if let Err(error) = dispatch {

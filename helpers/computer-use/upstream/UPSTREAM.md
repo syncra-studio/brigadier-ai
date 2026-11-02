@@ -236,6 +236,8 @@ Patches applied, in order:
 
 - `patches/0194-windows-dialog-owner-hidden-for-owner-read-token.diff`: Clicking a background dialog's button through a token read from its owner window also hides the owner while the dialog closes: the owner's read lists the dialog's controls, and the click now looks up the window the element really lives in, so the closing dialog no longer raises itself and its owner over the user's window (4 ms, Notepad Save as Cancel).
 
+- `patches/0195-windows-common-dialog-cancel-sends-idcancel.diff`: A click on a common dialog's Cancel button sends the button's own IDCANCEL WM_COMMAND to the dialog, as Save already sends IDOK, and resolves the dialog from the element when the token came from the owner's read: UI Automation Invoke on the background dialog's Win32 button activated the dialog in the app's own thread, which raised it over the user's window for 6 ms.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
