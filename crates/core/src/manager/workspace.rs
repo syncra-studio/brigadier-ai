@@ -489,6 +489,64 @@ mod tests {
         assert!(quickest < Duration::from_millis(150), "{quickest:?}");
     }
 
+    /// A burst of events (a build's, a checkout's) is said a few times while it goes on, the
+    /// last after its end. The events are sent here, so the OS can't hand them over in one go.
+    #[tokio::test]
+    async fn a_burst_is_said_a_few_times() {
+        let (events_tx, events) = std_mpsc::channel();
+        let mut watch = WorkspaceWatch::read(
+            "/repo".into(),
+            Vec::new(),
+            Vec::new(),
+            || None,
+            events,
+            None,
+        );
+        let (tx, mut said) = tokio::sync::mpsc::unbounded_channel();
+        let listening = tokio::spawn(async move {
+            while watch.changed().await.is_some() {
+                if tx.send(Instant::now()).is_err() {
+                    return;
+                }
+            }
+        });
+        let started = Instant::now();
+        let mut sent = 0;
+        // When the last event was sent: on a loaded machine the sleep after it can outlast its say.
+        let mut last_sent = started;
+        while started.elapsed() < Duration::from_millis(1500) {
+            last_sent = Instant::now();
+            events_tx
+                .send(event(&[format!("/repo/generated/out-{sent}.txt").as_str()]))
+                .unwrap();
+            sent += 1;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // The say after the last event, then whatever still follows it.
+        let mut times = Vec::new();
+        let deadline = tokio::time::Instant::now() + crate::test_patience();
+        while times.last().is_none_or(|last| *last < last_sent) {
+            match tokio::time::timeout_at(deadline, said.recv()).await {
+                Ok(Some(at)) => times.push(at),
+                _ => break,
+            }
+        }
+        while let Ok(Some(at)) = tokio::time::timeout(Duration::from_millis(800), said.recv()).await
+        {
+            times.push(at);
+        }
+        listening.abort();
+        assert!(
+            (2..=10).contains(&times.len()),
+            "{sent} events said {} times",
+            times.len()
+        );
+        assert!(
+            times.last().is_some_and(|last| *last >= last_sent),
+            "said after the burst's last event"
+        );
+    }
+
     #[tokio::test]
     async fn failed_watch_polls_and_drop_stops_its_thread() {
         let path = std::env::temp_dir().join(format!(
