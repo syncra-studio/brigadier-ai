@@ -208,9 +208,6 @@ fn refused(message: impl Into<String>) -> CliReply {
 
 /// The kind of work an independent review is (`models_guidance.md`).
 const REVIEW_WORK: &str = "Independent review";
-/// The routing row a plain `brigadier start` takes when it names no work, agent or model
-/// (D167): the orchestrator chooses "a worker", the routing picks its CLI, model and effort.
-const DEFAULT_WORK: &str = "Bounded implementation";
 /// `--reviewing session`: the session's own work, such as the job's plan.
 const SESSION_AUTHOR: &str = "session";
 
@@ -300,10 +297,7 @@ impl SessionManager {
         let work = start
             .work
             .clone()
-            .or_else(|| (!reviewing.is_empty()).then(|| REVIEW_WORK.to_owned()))
-            .or_else(|| {
-                (start.agent.is_none() && start.model.is_none()).then(|| DEFAULT_WORK.to_owned())
-            });
+            .or_else(|| (!reviewing.is_empty()).then(|| REVIEW_WORK.to_owned()));
         let review = if !reviewing.is_empty()
             || work
                 .as_deref()
