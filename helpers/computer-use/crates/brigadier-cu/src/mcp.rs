@@ -380,11 +380,6 @@ mod tests {
     #[test]
     fn linux_real_registry_tool_list_budget() {
         assert_real_tool_list_budget();
-        let small = lean::tools_list(agent_tools_list(&crate::one_shot_registry(false)), true);
-        let serialized = serde_json::to_string(&small).unwrap();
-        for word in ["macOS", "Safari", "Finder", "AppKit", "Spotlight"] {
-            assert!(!serialized.contains(word), "{word} in the Linux tools/list");
-        }
     }
 
     fn assert_real_tool_list_budget() {
@@ -405,6 +400,14 @@ mod tests {
             bytes / 4
         );
         let serialized = serde_json::to_string(&small).unwrap();
+        if !cfg!(target_os = "macos") {
+            for word in ["macOS", "Safari", "Finder", "AppKit", "Spotlight"] {
+                assert!(
+                    !serialized.contains(word),
+                    "{word} in this platform's tools/list"
+                );
+            }
+        }
         for hidden in cu_layer::catalog::OFFERED
             .iter()
             .filter(|name| {
