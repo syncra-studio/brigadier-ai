@@ -34,6 +34,12 @@ impl Observation {
         if !self.activated && self.uncertain_broker {
             return ("A Windows broker activation event could not be attributed to this launch. Keeping your window in front is unconfirmed.", true);
         }
+        if self.activated && !self.foreground_seen && self.restored && self.placed_behind {
+            return ("Windows reported an app activation event, but the app was never seen in front: your window was in front at every check, including at reply time. The app's window opened on top of yours and was placed behind your window.", false);
+        }
+        if self.activated && !self.foreground_seen && self.restored {
+            return ("Windows reported an app activation event, but the app was never seen in front: your window was in front at every check, including at reply time.", false);
+        }
         if self.activated && !self.foreground_seen {
             return ("Windows reported an app activation event, but the app was not confirmed in front. Keeping your window in front is unconfirmed; monitoring remains bounded.", true);
         }
@@ -441,6 +447,32 @@ mod lease_tests {
         .report()
         .0
         .contains("not confirmed in front"));
+    }
+    #[test]
+    fn an_activation_event_with_the_user_window_always_in_front_says_so() {
+        let kept = Observation {
+            activated: true,
+            restored: true,
+            ..Default::default()
+        };
+        let (text, failed) = kept.report();
+        assert!(
+            text.contains("your window was in front at every check"),
+            "{text}"
+        );
+        assert!(!failed);
+        let (covered, _) = Observation {
+            placed_behind: true,
+            ..kept
+        }
+        .report();
+        assert!(covered.contains("placed behind your window"), "{covered}");
+        let (lost, failed) = Observation {
+            restored: false,
+            ..kept
+        }
+        .report();
+        assert!(lost.contains("not confirmed in front") && failed, "{lost}");
     }
 }
 
