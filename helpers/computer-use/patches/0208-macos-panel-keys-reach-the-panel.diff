@@ -1,0 +1,214 @@
+Why: On macOS keys for an Open/Save panel go to the panel service process that draws it, so Go to Folder, Escape, arrows and Return work on a background panel, and its Go to Folder sheet counts as the panel's key window; the front guard watches the window order from the start of each action with its own restore cap, so a sheet the panel orders in is put back under the user's window within a poll (#675).
+
+diff --git a/crates/platform-macos/src/ax/panel.rs b/crates/platform-macos/src/ax/panel.rs
+index 3fe6bba4e..78dd6734d 100644
+--- a/crates/platform-macos/src/ax/panel.rs
++++ b/crates/platform-macos/src/ax/panel.rs
+@@ -158,6 +158,88 @@ pub fn keyboard_pid(pid: i32, wid: u32) -> Option<i32> {
+     }
+ }
+ 
++/// The process to post the panel's key events to. A client-served panel
++/// window (TextEdit's Open panel) hosts its content from the AppKit panel
++/// service, and only that service acts on the keys: posted to the client
++/// they are dropped, Go to Folder included. Falls back to [`keyboard_pid`].
++pub fn event_pid(pid: i32, wid: u32) -> Option<i32> {
++    let server = keyboard_pid(pid, wid)?;
++    let content = unsafe { content_service_pid(pid, wid) };
++    Some(content.unwrap_or(server))
++}
++
++/// The panel service pid behind the content of panel `wid`, if any. Most
++/// remote elements report the client's pid; a few (the split view's
++/// splitter) report the service's, so look a few levels down.
++unsafe fn content_service_pid(pid: i32, wid: u32) -> Option<i32> {
++    let app = AXUIElementCreateApplication(pid);
++    if app.is_null() {
++        return None;
++    }
++    AXUIElementSetMessagingTimeout(app, 0.1);
++    let windows = copy_ax_windows_including(app, pid, wid);
++    CFRelease(app as CFTypeRef);
++    let mut roots = Vec::new();
++    for window in windows {
++        if roots.is_empty() && ax_get_window_id(window) == Some(wid) {
++            roots.push(owned(window));
++        } else {
++            CFRelease(window as CFTypeRef);
++        }
++    }
++    let deadline = Instant::now() + Duration::from_millis(150);
++    let found = find_window_in_tree(
++        roots,
++        |element| {
++            let mut element_pid = 0;
++            AXUIElementGetPid(element.as_ptr() as AXUIElementRef, &mut element_pid)
++                == kAXErrorSuccess
++                && element_pid != pid
++                && crate::apps::path_of_pid(element_pid)
++                    .is_some_and(|path| panel_service_path(&path))
++        },
++        |element| {
++            copy_children(element.as_ptr() as AXUIElementRef)
++                .into_iter()
++                .map(|e| owned(e))
++                .collect()
++        },
++        || Instant::now() < deadline,
++    )?;
++    let mut service = 0;
++    (AXUIElementGetPid(found.as_ptr() as AXUIElementRef, &mut service) == kAXErrorSuccess)
++        .then_some(service)
++}
++
++/// The window id of the sheet the exact Open/Save panel `wid` of `pid` shows
++/// (its Go to Folder sheet), if any.
++pub fn panel_sheet_window(pid: i32, wid: u32) -> Option<u32> {
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return None;
++        }
++        AXUIElementSetMessagingTimeout(app, 0.1);
++        let windows = copy_ax_windows_including(app, pid, wid);
++        CFRelease(app as CFTypeRef);
++        let mut found = None;
++        for window in windows {
++            if found.is_none() && ax_get_window_id(window) == Some(wid) && is_panel(window) {
++                for child in copy_children(window) {
++                    if found.is_none()
++                        && copy_string_attr(child, "AXRole").as_deref() == Some("AXSheet")
++                    {
++                        found = ax_get_window_id(child);
++                    }
++                    CFRelease(child as CFTypeRef);
++                }
++            }
++            CFRelease(window as CFTypeRef);
++        }
++        found
++    }
++}
++
+ /// Whether the exact Open/Save panel `wid` of `pid` shows a sheet (its Go to
+ /// Folder sheet). `None` when the window isn't such a panel.
+ pub fn panel_has_sheet(pid: i32, wid: u32) -> Option<bool> {
+diff --git a/crates/platform-macos/src/input/skylight.rs b/crates/platform-macos/src/input/skylight.rs
+index 8dd04d802..9b3400b50 100644
+--- a/crates/platform-macos/src/input/skylight.rs
++++ b/crates/platform-macos/src/input/skylight.rs
+@@ -300,6 +300,20 @@ pub fn enter_exact_window_key(pid: pid_t, target_wid: u32) -> Result<WindowKeySc
+     let before = key_focus_of_pid(pid);
+     let previous = before.window;
+     let order_before = app_window_order(pid);
++    // An Open/Save panel's own sheet (Go to Folder) holds its keys while it
++    // is shown: keys addressed to the panel go to that sheet, as they would
++    // for a user, and no sibling window can receive them.
++    if before.window.is_some_and(|key| {
++        key != target_wid && crate::ax::panel::panel_sheet_window(pid, target_wid) == Some(key)
++    }) {
++        return Ok(WindowKeyScope {
++            pid,
++            target: target_wid,
++            previous,
++            order_before,
++            primed: KeyPrime::AlreadyKey,
++        });
++    }
+     let primed = prime_exact_window_key(
+         target_wid,
+         || key_focus_of_pid(pid),
+diff --git a/crates/platform-macos/src/key_focus_guard.rs b/crates/platform-macos/src/key_focus_guard.rs
+index d175241fb..d6b2391c9 100644
+--- a/crates/platform-macos/src/key_focus_guard.rs
++++ b/crates/platform-macos/src/key_focus_guard.rs
+@@ -251,7 +251,7 @@ fn user_switched_recently() -> bool {
+ /// can raise a window a moment after the call that caused it returns (a
+ /// banner, a sheet, or a menu that a renderer process opens later).
+ const ORDER_WATCH: Duration = Duration::from_millis(2500);
+-const ORDER_POLL: Duration = Duration::from_millis(20);
++const ORDER_POLL: Duration = Duration::from_millis(10);
+ const MAX_RESTORES_PER_WATCH: u32 = 3;
+ 
+ /// One target's watch after a guarded action.
+@@ -264,6 +264,9 @@ struct Watch {
+     order: bool,
+     /// [`crate::window_change_detector::intentional_epoch`] when armed.
+     epoch: u64,
++    /// Counts registrations: each guarded action gets its own restore cap,
++    /// also when one watcher thread keeps running across actions.
++    generation: u64,
+ }
+ 
+ /// Keep restoring the user's window above `target`, and undoing the target's
+@@ -272,11 +275,13 @@ struct Watch {
+ fn watch_order_after_action(target: i32, front: i32, order: bool, epoch: u64) {
+     static WATCHING: OnceLock<Mutex<HashMap<i32, Watch>>> = OnceLock::new();
+     let watching = WATCHING.get_or_init(|| Mutex::new(HashMap::new()));
++    static GENERATION: AtomicU64 = AtomicU64::new(0);
+     let watch = Watch {
+         until: Instant::now() + ORDER_WATCH,
+         front,
+         order,
+         epoch,
++        generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+     };
+     {
+         let mut map = watching
+@@ -296,6 +301,7 @@ fn watch_order_after_action(target: i32, front: i32, order: bool, epoch: u64) {
+             // re-activated in a loop.
+             let mut restores = 0;
+             let mut reverts = 0;
++            let mut generation = None;
+             loop {
+                 std::thread::sleep(ORDER_POLL);
+                 let current = watching
+@@ -304,6 +310,11 @@ fn watch_order_after_action(target: i32, front: i32, order: bool, epoch: u64) {
+                     .get(&target)
+                     .copied();
+                 let Some(current) = current else { return };
++                if generation != Some(current.generation) {
++                    generation = Some(current.generation);
++                    restores = 0;
++                    reverts = 0;
++                }
+                 // An activation the driver asked for since (bring_to_front,
+                 // foreground delivery) is not reverted.
+                 if reverts < MAX_RESTORES_PER_WATCH
+@@ -533,6 +544,10 @@ pub fn protect(target_pid: i32) -> Option<Lease> {
+     if !ensure_target_tap(target_pid) {
+         tracing::warn!(target_pid, "key-focus guard: target event tap unavailable");
+     }
++    // Watch the window order from now on, not only once the action ends: a
++    // window the target orders in during the action (an Open panel's Go to
++    // Folder sheet) is put back under the user's window within a poll.
++    watch_order_after_action(target_pid, front, !lease.above_before, lease.epoch);
+     Some(lease)
+ }
+ 
+diff --git a/crates/platform-macos/src/tools/hotkey.rs b/crates/platform-macos/src/tools/hotkey.rs
+index fdae0b4fc..9c6582443 100644
+--- a/crates/platform-macos/src/tools/hotkey.rs
++++ b/crates/platform-macos/src/tools/hotkey.rs
+@@ -290,7 +290,7 @@ impl Tool for HotkeyTool {
+         }
+ 
+         let panel_pid = if !fg {
+-            window_id.and_then(|wid| crate::ax::panel::keyboard_pid(pid, wid))
++            window_id.and_then(|wid| crate::ax::panel::event_pid(pid, wid))
+         } else {
+             None
+         };
+diff --git a/crates/platform-macos/src/tools/press_key.rs b/crates/platform-macos/src/tools/press_key.rs
+index 3dab511a2..92e0a90f3 100644
+--- a/crates/platform-macos/src/tools/press_key.rs
++++ b/crates/platform-macos/src/tools/press_key.rs
+@@ -325,7 +325,7 @@ impl Tool for PressKeyTool {
+         let pre_focus_ptr: Option<usize> = pre_focus_guard.as_ref().map(|g| g.as_ptr());
+ 
+         let panel_pid = if !fg {
+-            window_id.and_then(|wid| crate::ax::panel::keyboard_pid(pid, wid))
++            window_id.and_then(|wid| crate::ax::panel::event_pid(pid, wid))
+         } else {
+             None
+         };

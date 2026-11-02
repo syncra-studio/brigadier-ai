@@ -638,9 +638,13 @@ unsafe fn run_appkit(_cfg: CursorConfig, rx: std::sync::mpsc::Receiver<OverlayMs
         .expect("run_appkit must be called from the main thread");
 
     let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-    // NSApplicationActivationPolicyAccessory = 1 (no Dock icon, no menu bar)
+    // NSApplicationActivationPolicyProhibited = 2: no Dock icon, no menu
+    // bar, and never the active app. Under Accessory (1), finishLaunching
+    // activates a process started from a terminal, which moves the user's key
+    // focus and leaves the key-focus guard nothing to restore (it never
+    // guards the driver's own process). The overlay window still shows.
     // setActivationPolicy: returns BOOL (success), not void.
-    let _: bool = msg_send![app, setActivationPolicy: 1i64];
+    let _: bool = msg_send![app, setActivationPolicy: 2i64];
     // Finish launching without presenting a UI (needed for NSApp.run())
     let _: () = msg_send![app, finishLaunching];
 

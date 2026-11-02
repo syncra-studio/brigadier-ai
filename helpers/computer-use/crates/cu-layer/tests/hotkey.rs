@@ -267,7 +267,8 @@ async fn go_to_folder_that_shows_no_sheet_says_it_did_not_open() {
         let args = json!({"pid": 1, "window_id": 90, "keys": ["cmd", "shift", "g"]});
         let result = registry.invoke("hotkey", args).await;
         if opened {
-            assert_eq!(text_of(&result), "posted");
+            assert_eq!(text_of(&result), cu_layer::hotkey::GO_TO_FOLDER_OPENED);
+            assert_eq!(result.structured_content.unwrap()["effect"], "confirmed");
         } else {
             assert_eq!(result.is_error, Some(true));
             assert_eq!(text_of(&result), cu_layer::hotkey::GO_TO_FOLDER_NOT_OPENED);
