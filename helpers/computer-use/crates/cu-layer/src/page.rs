@@ -59,6 +59,51 @@ pub fn authorize(_tool: &str, args: &Value) -> Result<(), String> {
     }
 }
 
+const SAFARI: &str = "com.apple.Safari";
+
+/// Why Safari's page text wasn't read through its scripting.
+const SAFARI_NOT_ALLOWED: &str = "Safari's page can't be read through Safari's scripting: \
+    macOS Automation doesn't allow computer use to control Safari. The user can allow it in \
+    System Settings > Privacy & Security > Automation; until then a page Safari doesn't draw \
+    (a covered window) can't be read.";
+
+/// Safari's page text in the current tab of the window, by window number.
+const SAFARI_PAGE_TEXT: &str = r#"on run argv
+  tell application "Safari" to return text of current tab of (first window whose id is ((item 1 of argv) as integer))
+end run"#;
+
+#[derive(Debug)]
+enum SafariText {
+    /// Automation for Safari isn't allowed (or not yet asked): nothing sent.
+    NotAllowed,
+    Failed,
+}
+
+/// The page text of Safari's window `window_id` through Safari's scripting,
+/// whose window id is the window number. It needs no JavaScript setting.
+/// Sends no Apple Event unless Automation is already allowed, so it never
+/// shows a consent prompt.
+fn safari_page_text(pid: i32, window_id: u32) -> Result<String, SafariText> {
+    use platform_macos::apple_events::{automation_permission, run_script, AutomationPermission};
+    let owned = platform_macos::windows::all_windows()
+        .iter()
+        .any(|window| window.window_id == window_id && window.pid == pid);
+    if !owned {
+        return Err(SafariText::Failed);
+    }
+    match automation_permission(SAFARI) {
+        AutomationPermission::Granted => {}
+        AutomationPermission::NotRunning => return Err(SafariText::Failed),
+        _ => return Err(SafariText::NotAllowed),
+    }
+    run_script(
+        SAFARI_PAGE_TEXT,
+        &[&window_id.to_string()],
+        std::time::Duration::from_secs(5),
+    )
+    .map_err(|_| SafariText::Failed)
+}
+
 pub struct MacOsPageBackend {
     cdp_sessions: Arc<CdpSessionCache>,
 }
@@ -102,6 +147,26 @@ impl PageBackend for MacOsPageBackend {
 
         if use_ax_fallback {
             return ax_text_fallback(pid, window_id).await;
+        }
+
+        // Safari's own scripting reads the page even in a covered window,
+        // which WebKit neither draws nor exposes to accessibility.
+        if bundle_id == SAFARI {
+            match tokio::task::spawn_blocking(move || safari_page_text(pid, window_id)).await? {
+                Ok(text) if !text.trim().is_empty() => return Ok(text),
+                // No Apple Event at all: the JavaScript route would show
+                // macOS's consent prompt over the user's window.
+                Err(SafariText::NotAllowed) => {
+                    let text = ax_text_fallback(pid, window_id)
+                        .await
+                        .map_err(|error| anyhow::anyhow!("{error} {SAFARI_NOT_ALLOWED}"))?;
+                    return Ok(format!(
+                        "{SAFARI_NOT_ALLOWED} This text comes from the accessibility tree \
+                         instead:\n{text}"
+                    ));
+                }
+                _ => {}
+            }
         }
 
         // Try JS path first; on error, read the AX tree and say why.

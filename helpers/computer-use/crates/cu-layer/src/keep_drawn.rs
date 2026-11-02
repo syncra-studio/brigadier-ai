@@ -268,8 +268,9 @@ pub const NO_PAGE: &str = "This browser window's page is not in the tree: the br
 /// Added to [`NO_PAGE`] when the window is fully covered.
 pub const NO_PAGE_COVERED: &str = " The window is fully covered by other windows, and the \
     browser doesn't draw a page in a window opened or kept behind them. page get_text reads \
-    it when the browser's JavaScript is available; otherwise ask the user to uncover the \
-    window.";
+    its text: in Safari through Safari's scripting when macOS Automation for Safari is \
+    allowed, in other browsers when their JavaScript is available. Otherwise ask the user \
+    to uncover the window.";
 
 /// Adds [`NO_PAGE`] to a whole read (no query, not truncated) of a browser
 /// window whose tree has no web area, so an empty page isn't taken for an
