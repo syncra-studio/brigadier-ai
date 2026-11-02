@@ -1,8 +1,8 @@
 name: CI
 
 # Every push to main and every pull request: formatting, bindings, typecheck and lint, the app's
-# and the Rust workspace's tests, Linux and Windows clippy, and the Linux app's build and launch
-# smoke check, in parallel jobs.
+# and the Rust workspace's tests, Linux and Windows clippy, the Linux app's build and launch
+# smoke check, and the computer-use helper's live test on Linux, in parallel jobs.
 # The macOS and Windows builds and their smoke checks run nightly (nightly.yml), which also runs
 # on release tags.
 #
@@ -413,4 +413,43 @@ jobs:
         with:
           name: smoke-report-Linux
           path: ${{ runner.temp }}/smoke-report.json
+          if-no-files-found: warn
+
+  cu-linux-live:
+    name: Computer use live test (Linux)
+    # Real GTK apps on Xvfb under mutter in a container, driven over the helper's stdio MCP:
+    # helpers/computer-use/tests/linux-live. A cold build is ~8 min; a warm one ~2.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the helper's Linux build
+        id: cu-live-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target/linux-live/cargo-registry
+            target/linux-live/target
+          key: cu-linux-live-${{ runner.arch }}-${{ hashFiles('helpers/computer-use/Cargo.lock', 'helpers/computer-use/tests/linux-live/Dockerfile') }}-${{ github.sha }}
+          restore-keys: cu-linux-live-${{ runner.arch }}-${{ hashFiles('helpers/computer-use/Cargo.lock', 'helpers/computer-use/tests/linux-live/Dockerfile') }}-
+      - name: Live test
+        run: helpers/computer-use/tests/linux-live/run.sh
+      - name: Save the helper's Linux build
+        # Saved before the report, so a failing test still keeps the build. Pull requests restore
+        # the base branch's build without uploading their own.
+        if: always() && github.event_name != 'pull_request' && steps.cu-live-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/linux-live/cargo-registry
+            target/linux-live/target
+          key: ${{ steps.cu-live-cache.outputs.cache-primary-key }}
+      - name: Step table
+        if: always()
+        run: cat target/linux-live/out/linux-live-report.md >>"$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: computer-use-live-Linux
+          path: target/linux-live/out
           if-no-files-found: warn
