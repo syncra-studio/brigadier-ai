@@ -24,6 +24,7 @@ export const SteerBubble: FC<{ text: string; atMs: number; attachments: readonly
   return (
     <div
       data-slot="request-steer"
+      data-message-id={requestId}
       className="group/steer flex max-w-7/10 min-w-0 flex-col items-end gap-y-1 self-end"
     >
       <div className="bg-muted text-foreground rounded-bubble max-w-full min-w-0 px-4 py-2.5 wrap-anywhere [&_.aui-md-inline-code]:bg-foreground/10">
