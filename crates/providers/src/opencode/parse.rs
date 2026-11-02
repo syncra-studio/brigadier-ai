@@ -367,8 +367,13 @@ impl Parser {
 
     fn turn_end(&mut self, status: TurnStatus, at: Option<i64>) -> ProviderEvent {
         let started = self.turn_started_ms.take();
-        // A request a stopped turn left unanswered is gone with it.
-        self.asked.clear();
+        // A request a stopped turn left unanswered is gone with it; a sub-agent's stays, as it
+        // may run on in the background and still waits for its answer (D69).
+        self.asked.retain(|_, (asker, _)| {
+            self.session
+                .as_deref()
+                .is_some_and(|own| asker.as_str() != own)
+        });
         self.rejected.clear();
         ProviderEvent::TurnCompleted {
             turn_id: None,
@@ -1253,6 +1258,15 @@ mod tests {
             matches!(&asked[..], [ProviderEvent::ApprovalRequested { request }] if request.id == "per_3")
         );
         assert_eq!(parser.asked["per_3"].0, "ses_sub");
+        // The turn ends while a background sub-agent still waits: its request stays answerable,
+        // the session's own unanswered one goes with the turn.
+        parser.feed(&line("permission.asked", json!({"id": "per_4", "sessionID": S, "action": "edit", "resources": ["d.txt"], "source": {"type": "tool", "messageID": "m", "id": "call_d"}})));
+        parser.feed(&line(
+            "session.execution.succeeded",
+            json!({"sessionID": S}),
+        ));
+        assert!(parser.asked.contains_key("per_3"));
+        assert!(!parser.asked.contains_key("per_4"));
     }
 
     /// A sub-agent asks under its own session (v2.2.3, w23's live sample), which starts with
