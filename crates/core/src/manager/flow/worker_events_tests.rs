@@ -398,8 +398,10 @@ async fn a_workers_end_holds_the_work_until_the_turn_that_carries_it_starts() {
     })
     .await;
     until_nets(&seen, 1).await;
-    flow.settled().await;
-    assert!(!flow.manager.cli_holds(&flow.conversation), "its turn came");
+    super::eventually("its turn to come", || {
+        !flow.manager.cli_holds(&flow.conversation)
+    })
+    .await;
     flow.stop().await;
 }
 

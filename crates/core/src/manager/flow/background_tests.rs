@@ -240,6 +240,78 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
     flow.stop().await;
 }
 
+/// A command outliving its turn ends during a later turn, so Brigadier tells the CLI of it in a
+/// turn of its own once that turn ends. Its hidden word opens that turn, which goes on with the
+/// one before: the block reads open from there, not only once the CLI shows an item, seconds
+/// on (seen live on Codex: the block read over in between; the same on every CLI, D24, D94).
+#[tokio::test]
+async fn brigadiers_hidden_word_of_a_jobs_end_keeps_the_block_open() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let (waking, woken) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let (wake, woke) = (waking.clone(), woken.clone());
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let flow = Flow::start(
+        "hidden-wake-open",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (waking, woken, events) = (wake.clone(), woke.clone(), events.clone());
+            async move {
+                let command = |status, exit_code, output: Option<&str>| ProviderEvent::Command {
+                    item_id: "cmd-1".into(),
+                    command: "sleep 20 && echo xyz".into(),
+                    cwd: None,
+                    status,
+                    exit_code,
+                    output: output.map(str::to_owned),
+                    duration_ms: None,
+                    kept: None,
+                };
+                if turn.input.contains("finished after your turn") {
+                    waking.notify_one();
+                    woken.notified().await;
+                    return Reply::text("It printed xyz.");
+                }
+                if turn.input.contains("2+2") {
+                    let sender = events.lock().unwrap().clone().unwrap();
+                    let done = command(ItemStatus::Completed, Some(0), Some("xyz\n"));
+                    sender.send(done).await.unwrap();
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    return Reply::text("4");
+                }
+                let _ = turn
+                    .events
+                    .send(command(ItemStatus::InProgress, None, None))
+                    .await;
+                *events.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started it; it runs in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start the command.").await;
+    rested(&flow).await;
+    flow.say("What is 2+2?").await;
+    waking.notified().await;
+    // Its hidden word may read as a turn of its own for a moment, until noted as Brigadier's.
+    super::eventually("the block to read open in the wake turn", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == 2 && view.turns.last().is_some_and(|turn| turn.end.is_none())
+    })
+    .await;
+    woken.notify_one();
+    flow.settled().await;
+    flow.stop().await;
+}
+
 /// How a lingering Codex command's end reaches Brigadier: its item's end and its terminal
 /// leaving `/ps`, in either order, or the terminal's leaving alone.
 #[derive(Clone, Copy, Debug)]

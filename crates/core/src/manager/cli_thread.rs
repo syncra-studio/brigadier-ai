@@ -307,19 +307,23 @@ impl SessionManager {
             // Claude says `/compact`'s (or the message it compacted for) only after it, and
             // that message starts the turn. Nor is a turn Brigadier sent a message for while the
             // work held (`joins`): its message may come after the CLI's first items (D25, D72).
+            // Brigadier's own hidden word that opens it (a job's end it tells) is no user
+            // message either: the turn goes on with the one before from there, not only once
+            // the CLI shows an item, seconds on (seen live on Codex: the block read over).
             let on_its_own = live.open
                 && live.awaiting_user
                 && !live.joins
                 && event.is_some_and(|event| {
-                    shown_live(event)
-                        && !matches!(
-                            event,
-                            ProviderEvent::Message {
-                                role: Role::User,
-                                ..
-                            } | ProviderEvent::CompactionStarted { .. }
-                                | ProviderEvent::CompactionEnded { .. }
-                        )
+                    daemon_context
+                        || (shown_live(event)
+                            && !matches!(
+                                event,
+                                ProviderEvent::Message {
+                                    role: Role::User,
+                                    ..
+                                } | ProviderEvent::CompactionStarted { .. }
+                                    | ProviderEvent::CompactionEnded { .. }
+                            ))
                 });
             if on_its_own {
                 live.awaiting_user = false;
