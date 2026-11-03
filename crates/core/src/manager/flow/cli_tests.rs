@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use brigadier_cli::protocol::{
-    Agent, Answer, CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, Permission, SESSION_ENV,
-    StartRequest,
+    Agent, Answer, Capability, CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, Permission,
+    SESSION_ENV, StartRequest,
 };
 use brigadier_providers::ProviderKind;
 use serde_json::{Value, json};
@@ -2435,6 +2435,121 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
             .any(|(provider, spec)| *provider == ProviderKind::Codex
                 && spec.model.as_deref() == Some("gpt-6-astra")
                 && spec.effort.as_deref() == Some("medium"))
+    );
+    flow.stop().await;
+}
+
+/// Computer use's model (D18): a worker with the computer tools, by `--work "Computer use"`
+/// as the brigade skill says or bare `--with computer-use`, takes the "Computer use" row that
+/// Settings › Computer use and Settings › Routing both set: the shipped order, the user's own,
+/// and with Claude signed out the order's next row, on Codex.
+#[tokio::test]
+async fn computer_use_workers_take_the_computer_use_row() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("Done.");
+            }
+            let Some(phase) = ["shipped", "mine", "codex only"]
+                .into_iter()
+                .find(|phase| turn.input.contains(&format!("Use apps: {phase}.")))
+            else {
+                return Reply::text("Noted.");
+            };
+            let bare = StartRequest {
+                with: vec![Capability::ComputerUse],
+                local: true,
+                ..start("Look at the app.")
+            };
+            let instructed = StartRequest {
+                work: Some("Computer use".into()),
+                ..bare.clone()
+            };
+            for (how, request) in [("bare", bare), ("instructed", instructed)] {
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock()
+                    .unwrap()
+                    .insert(format!("{phase} {how}"), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-computer-use-row", Options::default(), script).await;
+    let reported = |n: usize| {
+        move |b: &super::Board| {
+            b.tasks.len() == n
+                && b.tasks
+                    .values()
+                    .all(|t| t.state == crate::work::TaskState::Reported)
+        }
+    };
+    let check = |phase: &str, expected: (Value, Value, Value), source: &str| {
+        let seen = answers.lock().unwrap().clone();
+        for how in ["bare", "instructed"] {
+            let started = &seen[&format!("{phase} {how}")];
+            assert_eq!(picked_of(started), expected, "{phase} {how}: {seen:#?}");
+            assert_eq!(started["row"]["work"], "Computer use", "{seen:#?}");
+            assert_eq!(started["row"]["source"], source, "{seen:#?}");
+        }
+    };
+
+    flow.say("Use apps: shipped.").await;
+    flow.until("the shipped row's workers reported", reported(2))
+        .await;
+    flow.settled().await;
+    check(
+        "shipped",
+        (json!("claude"), json!("claude-opus-5-5"), json!("high")),
+        "shipped",
+    );
+
+    // The model picked on either page: the user's row.
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Computer use | codex | gpt-6-luna | low | Your choice. |\n",
+    )
+    .unwrap();
+    flow.say("Use apps: mine.").await;
+    flow.until("the user's row's workers reported", reported(4))
+        .await;
+    flow.settled().await;
+    check(
+        "mine",
+        (json!("codex"), json!("gpt-6-luna"), json!("low")),
+        "user",
+    );
+
+    // Only Codex usable: the shipped order's Claude row is skipped for its Codex row.
+    std::fs::write(flow.manager.models_rules_path(), "").unwrap();
+    flow.behavior
+        .signed_out
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Claude);
+    flow.manager
+        .runtime
+        .refresh_providers(Some(ProviderKind::Claude));
+    flow.until("Claude is signed out", |_| {
+        !flow
+            .manager
+            .runtime
+            .provider_signed_in(ProviderKind::Claude)
+    })
+    .await;
+    flow.say("Use apps: codex only.").await;
+    flow.until("the Codex-only workers reported", reported(6))
+        .await;
+    flow.settled().await;
+    check(
+        "codex only",
+        (json!("codex"), Value::Null, json!("high")),
+        "shipped",
     );
     flow.stop().await;
 }

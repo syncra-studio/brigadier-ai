@@ -2,9 +2,14 @@ import { useEffect } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
-import { Badge, Button } from "@/components/controls";
-import { SettingsCard, SettingsRow } from "@/components/shared";
-import type { ComputerPermission, ComputerUseStatus, PermissionState } from "@/ipc/generated";
+import { TargetPicker, useListedModels } from "@/app/settings/routing/pickers";
+import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
+import { rowModelName, targetModel, withFirst, withOrder, workRows } from "@/app/settings/routing/words";
+import { Badge, Button, SettingsSelectTrigger } from "@/components/controls";
+import { ProviderGlyph } from "@/components/icons";
+import { effortLabel, SettingsCard, SettingsRow } from "@/components/shared";
+import type { ComputerPermission, ComputerUseStatus, OverrideTarget, PermissionState } from "@/ipc/generated";
+import { useModelGroups } from "@/lib/setup";
 import {
   checkUnreadOnce,
   grantComputerPermission,
@@ -19,6 +24,7 @@ import {
   useCheckingUnread,
   useComputerUse,
 } from "@/state/computerUse";
+import { saveModelRules, useModelRules, useModelRulesRead } from "@/state/modelRules";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
@@ -39,6 +45,7 @@ export const COMPUTER_USE_ROWS = {
         : "Sessions, Chats and their workers can see and control apps in the background.";
     },
   },
+  model: { label: "Model for computer use", description: "Which model a worker uses when it works in apps. Also in Settings › Routing." },
   menuBar: { label: "Show in menu bar", description: "See which sessions are using apps, and stop them" },
   accessibility: { label: "Accessibility", description: "Read what's in app windows and use their controls" },
   screenRecording: { label: "Screen Recording", description: "See app windows, to check what happened" },
@@ -50,8 +57,8 @@ export const COMPUTER_USE_ROWS = {
 export function computerUseRows() {
   const rows = COMPUTER_USE_ROWS;
   return onMac()
-    ? [rows.enable, rows.menuBar, rows.accessibility, rows.screenRecording, rows.setup]
-    : [rows.enable, rows.desktop, rows.setup];
+    ? [rows.enable, rows.model, rows.menuBar, rows.accessibility, rows.screenRecording, rows.setup]
+    : [rows.enable, rows.model, rows.desktop, rows.setup];
 }
 
 /** Whether this system lists the page: macOS, Windows and Linux, from the app's own info. */
@@ -62,7 +69,7 @@ export function computerUseAvailable(): boolean {
 
 /**
  * Settings › Computer use: whether sessions, Chats and workers may use apps on this Mac, the
- * menu-bar item, the two macOS permissions the helper needs, and where setup stands. Showing it
+ * model a worker uses for it, the menu-bar item, the two macOS permissions the helper needs, and where setup stands. Showing it
  * starts nothing, but for one check of permissions nothing has read yet while computer use is on.
  */
 export function ComputerUsePage() {
@@ -75,6 +82,11 @@ export function ComputerUsePage() {
         <SettingsSection title="Enable">
           <SettingsCard>
             <EnableRow />
+          </SettingsCard>
+        </SettingsSection>
+        <SettingsSection title="Model">
+          <SettingsCard>
+            <ModelRow />
           </SettingsCard>
         </SettingsSection>
         <SettingsSection title="This computer">
@@ -95,6 +107,11 @@ export function ComputerUsePage() {
       <SettingsSection title="Enable">
         <SettingsCard>
           <EnableRow />
+        </SettingsCard>
+      </SettingsSection>
+      <SettingsSection title="Model">
+        <SettingsCard>
+          <ModelRow />
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title="Menu bar">
@@ -146,6 +163,51 @@ function EnableRow() {
   return (
     <SettingsRow label={row.label} description={row.description} error={save.error}>
       <SettingsSwitch label={row.label} checked={on} onCheckedChange={(next) => save.run(() => setSetting("computerUse", next))} />
+    </SettingsRow>
+  );
+}
+
+/** The kind of work in the rules file a worker with the computer tools is: Routing's row of the same name. */
+const COMPUTER_USE_WORK = "Computer use";
+
+/**
+ * The model for computer use: the "Computer use" row of the rules file, the same Settings ›
+ * Routing shows. A pick goes first in its order (the shipped one, until you have your own),
+ * the rest after it; nothing is picked until the file is read, so a save never writes over it.
+ */
+function ModelRow() {
+  useModelRulesRead();
+  const rules = useModelRules((s) => s.view);
+  const error = useModelRules((s) => s.error);
+  const groups = useModelGroups();
+  const models = useListedModels();
+  const save = useAction();
+  const row = COMPUTER_USE_ROWS.model;
+  const work = workRows(rules).find((found) => found.work === COMPUTER_USE_WORK);
+  const now = rules && work?.rows.find((found) => !refusingRule(rules.rules, rowChoice(found, models), found.work));
+  const pick = (target: OverrideTarget) => {
+    if (!rules || !work) return;
+    const picked = { work: work.work, agent: target.provider, model: targetModel(target), effort: null, reason: "Your choice." };
+    void save.run(() => saveModelRules(withOrder(rules.rows, work.work, withFirst(work.rows, picked)), rules.rules));
+  };
+  return (
+    <SettingsRow label={row.label} description={row.description} error={save.error ?? (rules ? null : error)}>
+      <TargetPicker label={row.label} onPick={pick} align="end" {...(now && { opensOn: now.agent })}>
+        <SettingsSelectTrigger
+          label={row.label}
+          data-slot="computer-use-model"
+          disabled={!work || save.busy}
+          placeholder={!now}
+          icon={now && <ProviderGlyph provider={now.agent} className="size-3.5 shrink-0" />}
+        >
+          {now ? (
+            <>
+              {rowModelName(groups, now.agent, now.model)}
+              {now.effort && <span className="text-muted-foreground"> · {effortLabel(now.effort)}</span>}
+            </>
+          ) : !rules ? (error ? "Couldn't read" : "Loading…") : "Pick a model"}
+        </SettingsSelectTrigger>
+      </TargetPicker>
     </SettingsRow>
   );
 }

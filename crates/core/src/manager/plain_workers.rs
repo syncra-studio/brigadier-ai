@@ -118,6 +118,9 @@ fn refused(message: impl Into<String>) -> CliReply {
 
 /// The kind of work an independent review is (`models_guidance.md`).
 const REVIEW_WORK: &str = "Independent review";
+/// The kind of work a worker with the computer tools is (`models_guidance.md`), the row
+/// Settings › Computer use and Settings › Routing both set.
+const COMPUTER_USE_WORK: &str = "Computer use";
 /// `--reviewing session`: the session's own work, such as the job's plan.
 const SESSION_AUTHOR: &str = "session";
 
@@ -213,7 +216,13 @@ impl SessionManager {
         let work = start
             .work
             .clone()
-            .or_else(|| (!reviewing.is_empty()).then(|| REVIEW_WORK.to_owned()));
+            .or_else(|| (!reviewing.is_empty()).then(|| REVIEW_WORK.to_owned()))
+            .or_else(|| {
+                start
+                    .with
+                    .contains(&Capability::ComputerUse)
+                    .then(|| COMPUTER_USE_WORK.to_owned())
+            });
         let review = if !reviewing.is_empty()
             || work
                 .as_deref()
@@ -252,6 +261,10 @@ impl SessionManager {
                 let mut fit = None;
                 for row in order {
                     let provider = provider_of(row.agent);
+                    // A row whose CLI has no signed-in account can't run: the next row takes it.
+                    if !self.runtime.provider_signed_in(provider) {
+                        continue;
+                    }
                     let model =
                         (row.model != "default").then(|| self.listed_model(provider, &row.model));
                     if self
