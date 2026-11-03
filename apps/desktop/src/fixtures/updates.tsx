@@ -68,6 +68,7 @@ mockIPC((command, payload) => {
 }, { shouldMockEvents: true });
 void startAppUpdate();
 
+useApp.setState((state) => ({ settings: { ...state.settings, sidebarMode: "projects" } }));
 useApp.setState({
   catalogLoaded: true,
   connection: { status: "connected", daemon: null, reason: null },

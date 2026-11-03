@@ -60,6 +60,7 @@ mod fresh_base;
 mod fusion_offer;
 mod gh;
 mod git_actions;
+mod inbox;
 mod inbox_store;
 pub mod integrations;
 mod kept;

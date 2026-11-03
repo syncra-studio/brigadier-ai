@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { forksUnderSources } from "@/app/conversation/forks";
 import { ChatActions } from "@/app/shell/ChatActions";
@@ -9,6 +9,7 @@ import { NameDialog } from "@/app/shell/NameDialog";
 import { useShortcuts } from "@/app/shortcuts";
 import { openSearch } from "@/app/shell/SearchDialog";
 import { Flyout } from "@/app/shell/Flyout";
+import { INBOX_FOLDED, InboxSidebar, SIDEBAR_LIST } from "@/app/shell/InboxSidebar";
 import { NewChatRow } from "@/app/shell/NewChatRow";
 import { ProjectRow, underSource } from "@/app/shell/ProjectRow";
 import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
@@ -37,7 +38,7 @@ import {
 } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
 import { pickClick, pickedIn, prunePicked } from "@/state/picking";
-import { useTabStates } from "@/state/tabStates";
+import { useRowMark, useTabStates } from "@/state/tabStates";
 import { useApp } from "@/state/store";
 
 // ----- the Home panel --------------------------------------------------------------------
@@ -121,38 +122,42 @@ function useInboxSections(): Sections {
 
 type SectionId = "pinned" | "projects" | "chats";
 const SECTIONS_KEY = "brigadier.sidebarSections";
+const INBOX_SECTIONS_KEY = "brigadier.inboxSections";
 
-function cachedFolded(): SectionId[] {
+function cachedFolded<T extends string>(key: string, initial: T[]): T[] {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "[]");
-    return Array.isArray(value) ? value.filter((id): id is SectionId => typeof id === "string") : [];
+    const saved = localStorage.getItem(key);
+    if (saved === null) return initial;
+    const value: unknown = JSON.parse(saved);
+    return Array.isArray(value) ? value.filter((id): id is T => typeof id === "string") : initial;
   } catch {
-    return [];
+    return initial;
   }
 }
 
-/** Which sections are folded away, remembered across launches. */
-function useFoldedSections() {
-  const [folded, setFolded] = useState(cachedFolded);
-  const setOpen = (id: SectionId, open: boolean) => {
+/** Which sections are folded away, remembered across launches; `initial` until the user folds one. */
+function useFoldedSections<T extends string>(key: string, initial: T[] = []) {
+  const [folded, setFolded] = useState(() => cachedFolded(key, initial));
+  const setOpen = (id: T, open: boolean) => {
     const next = open ? folded.filter((entry) => entry !== id) : [...folded, id];
     setFolded(next);
     try {
-      localStorage.setItem(SECTIONS_KEY, JSON.stringify(next));
+      localStorage.setItem(key, JSON.stringify(next));
     } catch {
       // Storage can be unavailable; the sections then open again on the next launch.
     }
   };
   return {
     folded,
-    isOpen: (id: SectionId) => !folded.includes(id),
+    isOpen: (id: T) => !folded.includes(id),
     setOpen,
   };
 }
 
 /**
- * The sidebar panel on Home: its header (title and search), New chat, then Pinned (when there
- * are any), Projects with their sessions, and Chats. Each section folds away from its title.
+ * The sidebar panel on Home: its header (title, the Inbox | Projects switch and search), New chat,
+ * then the Inbox (D7) or, in Projects mode, Pinned (when there are any), Projects with their
+ * sessions, and Chats. Each section folds away from its title.
  */
 export function AppSidebar() {
   const { pinned, chats, projects, sessions } = useInboxSections();
@@ -163,7 +168,10 @@ export function AppSidebar() {
   const isChatDraft = useApp((s) => s.selection.type === "draft" && s.selection.kind === "chat");
   const catalogLoaded = useApp((s) => s.catalogLoaded);
   const shortcuts = useShortcuts();
-  const sections = useFoldedSections();
+  const sections = useFoldedSections<SectionId>(SECTIONS_KEY);
+  const inboxSections = useFoldedSections(INBOX_SECTIONS_KEY, INBOX_FOLDED);
+  // Everyone starts in Inbox (D8); every window reads the same daemon setting.
+  const inboxMode = useApp((s) => s.settings.sidebarMode !== "projects");
   const [dialog, setDialog] = useState<DialogState>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -186,10 +194,13 @@ export function AppSidebar() {
     return rows;
   }, [pinned, projects, sessions, chats, expandedProjects, folded]);
   const shownRef = useRef(shown);
+  const onShown = useCallback((ids: string[]) => {
+    shownRef.current = ids;
+    prunePicked("sidebar", ids);
+  }, []);
   useEffect(() => {
-    shownRef.current = shown;
-    prunePicked("sidebar", shown);
-  }, [shown]);
+    if (!inboxMode) onShown(shown);
+  }, [inboxMode, onShown, shown]);
 
   const actions = useMemo<RowActions>(
     () => ({
@@ -214,97 +225,107 @@ export function AppSidebar() {
         <NewChatRow active={isChatDraft} />
       </NavList>
 
-      <div className="scroll-edge-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pt-1 pb-2">
-        {pinned.length > 0 && (
+      {inboxMode ? (
+        <InboxSidebar
+          activeId={activeId}
+          actions={actions}
+          isOpen={inboxSections.isOpen}
+          setOpen={inboxSections.setOpen}
+          onShown={onShown}
+        />
+      ) : (
+        <div className={SIDEBAR_LIST}>
+          {pinned.length > 0 && (
+            <NavSection
+              title="Pinned"
+              open={sections.isOpen("pinned")}
+              onOpenChange={(open) => sections.setOpen("pinned", open)}
+            >
+              <NavList>
+                {pinned.map((conversation) => (
+                  <ConversationRow
+                    key={conversation.id}
+                    conversation={conversation}
+                    active={conversation.id === activeId}
+                    actions={actions}
+                  />
+                ))}
+              </NavList>
+            </NavSection>
+          )}
+
           <NavSection
-            title="Pinned"
-            open={sections.isOpen("pinned")}
-            onOpenChange={(open) => sections.setOpen("pinned", open)}
+            title="Projects"
+            open={sections.isOpen("projects")}
+            onOpenChange={(open) => sections.setOpen("projects", open)}
+            actions={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <RowAction
+                    aria-label="Add project"
+                    className="size-icon-button-sm"
+                    onClick={() => openAddProject()}
+                  >
+                    <Plus />
+                  </RowAction>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Add project</TooltipContent>
+              </Tooltip>
+            }
           >
             <NavList>
-              {pinned.map((conversation) => (
+              {projects.map((project) => (
+                <ProjectRow
+                  key={project.id}
+                  project={project}
+                  sessions={sessions[project.id] ?? NO_SESSIONS}
+                  activeId={activeId}
+                  drafting={draftProjectId === project.id}
+                  actions={actions}
+                  onSettings={onProjectSettings}
+                  onRemove={setRemoving}
+                />
+              ))}
+              {catalogLoaded && projects.length === 0 && (
+                <ProjectsEmptyPrompt />
+              )}
+            </NavList>
+          </NavSection>
+
+          <NavSection
+            title="Chats"
+            open={sections.isOpen("chats")}
+            onOpenChange={(open) => sections.setOpen("chats", open)}
+            actions={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <RowAction
+                    aria-label="New chat"
+                    className="size-icon-button-sm"
+                    onClick={() => select({ type: "draft", kind: "chat" })}
+                  >
+                    <Plus />
+                  </RowAction>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">New chat</TooltipContent>
+              </Tooltip>
+            }
+          >
+            <NavList>
+              {chats.map((conversation) => (
                 <ConversationRow
                   key={conversation.id}
                   conversation={conversation}
                   active={conversation.id === activeId}
                   actions={actions}
+                  forked={underSource(conversation, chats)}
                 />
               ))}
+              {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
             </NavList>
           </NavSection>
-        )}
-
-        <NavSection
-          title="Projects"
-          open={sections.isOpen("projects")}
-          onOpenChange={(open) => sections.setOpen("projects", open)}
-          actions={
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <RowAction
-                  aria-label="Add project"
-                  className="size-icon-button-sm"
-                  onClick={() => openAddProject()}
-                >
-                  <Plus />
-                </RowAction>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Add project</TooltipContent>
-            </Tooltip>
-          }
-        >
-          <NavList>
-            {projects.map((project) => (
-              <ProjectRow
-                key={project.id}
-                project={project}
-                sessions={sessions[project.id] ?? NO_SESSIONS}
-                activeId={activeId}
-                drafting={draftProjectId === project.id}
-                actions={actions}
-                onSettings={onProjectSettings}
-                onRemove={setRemoving}
-              />
-            ))}
-            {catalogLoaded && projects.length === 0 && (
-              <ProjectsEmptyPrompt />
-            )}
-          </NavList>
-        </NavSection>
-
-        <NavSection
-          title="Chats"
-          open={sections.isOpen("chats")}
-          onOpenChange={(open) => sections.setOpen("chats", open)}
-          actions={
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <RowAction
-                  aria-label="New chat"
-                  className="size-icon-button-sm"
-                  onClick={() => select({ type: "draft", kind: "chat" })}
-                >
-                  <Plus />
-                </RowAction>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">New chat</TooltipContent>
-            </Tooltip>
-          }
-        >
-          <NavList>
-            {chats.map((conversation) => (
-              <ConversationRow
-                key={conversation.id}
-                conversation={conversation}
-                active={conversation.id === activeId}
-                actions={actions}
-                forked={underSource(conversation, chats)}
-              />
-            ))}
-            {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
-          </NavList>
-        </NavSection>
-      </div>
+        </div>
+      )}
 
       {error && (
         <Banner tone="error" text={error} onDismiss={() => setError(null)} />
@@ -418,11 +439,13 @@ function FlyoutConversation({
   nested?: boolean;
   pick: (choose: () => void) => void;
 }) {
+  const { hover } = useRowMark(conversation.id);
   return (
     <li>
       <NavRow
         data-active={active}
         aria-current={active ? "page" : undefined}
+        title={hover ?? undefined}
         className={cn("pe-1.5", nested && "ps-8")}
         onClick={() => pick(() => openConversation(conversation.id))}
       >

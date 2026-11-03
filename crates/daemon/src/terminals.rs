@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -49,6 +49,11 @@ pub struct Terminals {
     lingering: Arc<Mutex<HashMap<String, Arc<Terminal>>>>,
     feed: broadcast::Sender<TerminalOutput>,
     next: AtomicU64,
+    /// What shells closed by a session's sleep showed, by conversation and tab, until the tab
+    /// opens a new one ([`Self::close_idle`]).
+    // shortcut: a tab closed while asleep leaves its tail here until archive or delete; fine at
+    // one tail per tab a user had open, drop it on closeTerminal if that ever matters.
+    kept: Mutex<HashMap<(String, Option<String>), String>>,
     /// Ends a worker terminal's process tree.
     platform: Option<Arc<dyn Platform>>,
     /// Where the agents' own installers put them ([`CliEnv::installer_folder`]): on Windows
@@ -76,6 +81,8 @@ struct Terminal {
     ended: watch::Sender<bool>,
     pid: Option<u32>,
     account_sign_in: Mutex<Option<AccountSignIn>>,
+    /// Closed idle by its session's sleep, not ended by itself or its tab.
+    asleep: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -106,6 +113,18 @@ impl Terminal {
             return Some(true);
         }
         foreground_busy(lock(&self.master).as_ref(), self.pid)
+    }
+
+    /// Runs nothing: no command in front of the shell and no process under it (a background
+    /// job). Unknown counts as running.
+    fn idle(&self, platform: &dyn Platform) -> bool {
+        self.busy() == Some(false)
+            && self.pid.is_some_and(|pid| {
+                platform
+                    .processes()
+                    .descendants(pid)
+                    .is_ok_and(|below| below.is_empty())
+            })
     }
 
     fn snapshot(&self) -> TerminalSnapshot {
@@ -156,6 +175,7 @@ impl Terminals {
             lingering: Arc::new(Mutex::new(HashMap::new())),
             feed,
             next: AtomicU64::new(1),
+            kept: Mutex::new(HashMap::new()),
             platform: None,
             agent_folders: Vec::new(),
         }
@@ -242,10 +262,15 @@ impl Terminals {
             command.env("PATH", path);
         }
         let terminal = self.spawn(conversation, session, shell, cwd, command, size, None)?;
+        // What the tab's shell showed before its session slept comes first, then the new one's.
+        let kept = lock(&self.kept)
+            .remove(&(conversation.to_owned(), session.map(str::to_owned)))
+            .unwrap_or_default();
+        lock(&terminal.scrollback).insert_str(0, &kept);
         // A new shell's first output already streams to the connection that subscribed
         // before opening it; sending it here too would show it twice.
         Ok(TerminalInfo {
-            scrollback: String::new(),
+            scrollback: kept,
             ..terminal.info()
         })
     }
@@ -288,6 +313,7 @@ impl Terminals {
             ended: watch::Sender::new(false),
             pid,
             account_sign_in: Mutex::new(None),
+            asleep: AtomicBool::new(false),
         });
         lock(&self.live).insert(id.clone(), terminal.clone());
         let live = self.live.clone();
@@ -544,6 +570,7 @@ impl Terminals {
                 .collect();
             ids.iter().filter_map(|id| live.remove(id)).collect()
         };
+        lock(&self.kept).retain(|(owner, _), _| owner != conversation);
         if ended.is_empty() {
             return;
         }
@@ -561,6 +588,45 @@ impl Terminals {
             ended
                 .iter()
                 .for_each(|terminal| terminal.end(self.platform.as_ref()));
+        }
+    }
+
+    /// Closes `conversation`'s shells that run nothing (its session goes to sleep), keeping
+    /// what each showed for the next [`Self::open_session`] of its tab. Where running can't be
+    /// told (no platform, Windows), every shell stays.
+    pub fn close_idle(&self, conversation: &str) {
+        let Some(platform) = self.platform.as_deref() else {
+            return;
+        };
+        let ours: Vec<Arc<Terminal>> = lock(&self.live)
+            .values()
+            .filter(|terminal| terminal.conversation == conversation)
+            .cloned()
+            .collect();
+        for terminal in ours {
+            // A worker's terminal reads busy: its CLI runs in front.
+            if !terminal.idle(platform) {
+                continue;
+            }
+            {
+                let mut live = lock(&self.live);
+                if !live
+                    .get(&terminal.id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &terminal))
+                {
+                    continue;
+                }
+                live.remove(&terminal.id);
+            }
+            let mut tail = lock(&terminal.scrollback).clone();
+            tail.push_str("\r\n");
+            lock(&self.kept).insert(
+                (terminal.conversation.clone(), terminal.session.clone()),
+                tail,
+            );
+            terminal.asleep.store(true, Ordering::Relaxed);
+            tracing::info!(terminal = %terminal.id, conversation, "idle terminal closed for sleep");
+            terminal.end(self.platform.as_ref());
         }
     }
 
@@ -631,6 +697,7 @@ fn pump_output(
     let _ = feed.send(TerminalOutput::Exited {
         terminal_id: terminal.id.clone(),
         code,
+        asleep: terminal.asleep.load(Ordering::Relaxed),
     });
     terminal.ended.send_replace(true);
     if let Some(on_exit) = lock(&terminal.on_exit).take() {
@@ -706,6 +773,10 @@ impl TerminalHost for Terminals {
         // Sized as a tab starts; the tab resizes it when it shows.
         self.open_session(conversation, Some(key), cwd.to_owned(), 120, 32)
             .map(|terminal| terminal.id)
+    }
+
+    fn close_idle(&self, conversation: &str) {
+        Terminals::close_idle(self, conversation);
     }
 
     fn type_in(&self, conversation: &str, id: &str, data: &str) -> brigadier_core::Result<()> {
@@ -1066,6 +1137,101 @@ mod tests {
                 .is_some_and(|text| text.contains("started-42"))
         );
         assert_eq!(terminals.output("other-busy-test", &shell.id), None);
+        terminals.close_all();
+    }
+
+    /// A session's sleep closes only a shell that runs nothing, and the tab's next shell
+    /// shows what it showed; one running `sleep` in front or in the background stays (D13).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sleep_closes_idle_shells_and_replays_their_output() {
+        use brigadier_ipc::protocol::TerminalOutput;
+
+        let data =
+            Temp(std::env::temp_dir().join(format!("brig-terminals-sleep-{}", std::process::id())));
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(data.to_path_buf()),
+        })
+        .unwrap();
+        let terminals = Terminals::with_platform(platform.clone());
+        let mut feed = terminals.subscribe();
+        let cwd = std::env::temp_dir().display().to_string();
+        let open = |key: &str| {
+            terminals
+                .open_session("sleep-test", Some(key), cwd.clone(), 80, 24)
+                .unwrap()
+                .id
+        };
+        let (idle, front, back) = (open("idle"), open("front"), open("back"));
+        let busy = |id: &str| terminals.get(id).unwrap().busy();
+        for id in [&idle, &front, &back] {
+            assert!(eventually(|| busy(id) == Some(false)), "{:?}", busy(id));
+        }
+        terminals.write(&idle, "echo kept-$((40+2))\n").unwrap();
+        terminals.write(&front, "sleep 100\n").unwrap();
+        terminals.write(&back, "sleep 100 &\n").unwrap();
+        assert!(eventually(|| terminals
+            .output("sleep-test", &idle)
+            .is_some_and(|text| text.contains("kept-42"))));
+        assert!(eventually(|| busy(&front) == Some(true)));
+        let pid = terminals.get(&back).unwrap().pid.unwrap();
+        assert!(eventually(|| platform
+            .processes()
+            .descendants(pid)
+            .is_ok_and(|below| !below.is_empty())));
+        assert_eq!(busy(&back), Some(false), "a background job isn't in front");
+
+        terminals.close_idle("sleep-test");
+        let mut listed: Vec<String> = terminals
+            .list("sleep-test")
+            .into_iter()
+            .map(|terminal| terminal.id)
+            .collect();
+        listed.sort();
+        let mut kept = vec![front.clone(), back.clone()];
+        kept.sort();
+        assert_eq!(listed, kept);
+        let exited = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(TerminalOutput::Exited {
+                    terminal_id,
+                    asleep,
+                    ..
+                }) = feed.recv().await
+                    && terminal_id == idle
+                {
+                    return asleep;
+                }
+            }
+        })
+        .await
+        .expect("the idle shell ended");
+        assert!(exited, "its exit says asleep");
+
+        let reopened = terminals
+            .open_session("sleep-test", Some("idle"), cwd.clone(), 80, 24)
+            .unwrap();
+        assert_ne!(reopened.id, idle);
+        assert!(
+            reopened.scrollback.contains("kept-42"),
+            "{}",
+            reopened.scrollback
+        );
+        assert!(
+            terminals
+                .output("sleep-test", &reopened.id)
+                .is_some_and(|text| text.contains("kept-42"))
+        );
+        // Kept once: the next new shell of that tab starts clean.
+        terminals.close(&reopened.id);
+        let again = terminals
+            .open_session("sleep-test", Some("idle"), cwd, 80, 24)
+            .unwrap();
+        assert!(again.scrollback.is_empty());
+        for id in [&front, &back] {
+            let pid = terminals.get(id).unwrap().pid.unwrap();
+            let _ = platform.processes().kill_tree(pid);
+        }
         terminals.close_all();
     }
 

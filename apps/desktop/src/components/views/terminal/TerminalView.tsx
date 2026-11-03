@@ -79,7 +79,8 @@ const RESET = "\u001b[0m";
 
 /**
  * A shell the daemon runs, shown live: `open` starts it (or re-attaches to it) at the view's
- * size. When it ends, `onExit` hears its exit code (a pane's tab just closes). `restored` gives
+ * size. When it ends, `onExit` hears its exit code (a pane's tab just closes), and whether its
+ * session's sleep closed it (the tab opens a new shell instead). `restored` gives
  * output to show above the shell's, `onClear` hears ⌘K, `onTitle` hears the titles the shell
  * sets, and `reader` learns how to read what the view shows, until the function it returns is
  * called.
@@ -96,7 +97,7 @@ export function TerminalView({
   className,
 }: {
   open: (cols: number, rows: number) => Promise<TerminalInfo>;
-  onExit?: (code: number | null) => void;
+  onExit?: (code: number | null, asleep: boolean) => void;
   restored?: () => string | null;
   onClear?: () => void;
   onTitle?: (title: string) => void;
@@ -175,9 +176,13 @@ export function TerminalView({
       }
       ended = true;
       if (!onExit) return;
+      if (output.asleep) {
+        onExit(output.code, true);
+        return;
+      }
       const code = output.code === null ? "" : ` with code ${output.code}`;
       terminal.write(`\r\n${DIM}[Process exited${code}.]${RESET}\r\n`);
-      onExit(output.code);
+      onExit(output.code, false);
     };
     const stop = onTerminalOutput((output) => {
       if (id === null) early.push(output);

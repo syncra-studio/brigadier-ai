@@ -128,14 +128,17 @@ export function onTerminalOutput(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-/** From the bridge: a terminal printed something, or its shell ended (its tab goes). */
+/**
+ * From the bridge: a terminal printed something, or its shell ended (its tab goes). A shell
+ * closed by its session's sleep keeps its tab, which starts a new one when it shows again.
+ */
 export function emitTerminalOutput(output: TerminalOutput): void {
   for (const listener of listeners) listener(output);
   if (output.type !== "exited") return;
   const owner = shells.get(output.terminalId);
   if (!owner) return;
   shells.delete(output.terminalId);
-  forgetTab(owner.place, owner.tab);
+  if (!output.asleep) forgetTab(owner.place, owner.tab);
 }
 
 /** The tab's shell is `terminalId` now (a daemon started again gives it a new one). */

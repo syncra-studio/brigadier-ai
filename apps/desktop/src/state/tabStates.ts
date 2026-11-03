@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { request } from "@/ipc/client";
 import type { Conversation, EventEnvelope, SettledTab } from "@/ipc/generated";
 import { type RowActivity, rowActivity, stoppedOf, useActivity, useRowActivity } from "@/state/activity";
+import { unread as isUnread, useFinishedAt } from "@/state/lastOpened";
 import { useApp } from "@/state/store";
 
 /**
@@ -75,12 +76,6 @@ export const TAB_STATE_WORDS: Record<Exclude<SessionState, "done">, { one: strin
   stopped: { one: "Stopped", many: "stopped" },
 };
 
-export const SESSION_STATUS_WORDS = Object.fromEntries(
-  Object.entries(TAB_STATE_WORDS).map(([state, words]) => [state, words.one]),
-) as Record<Exclude<SessionState, "done">, string>;
-
-export type SessionStatus = { state: Exclude<SessionState, "done">; reason: string | null };
-
 /**
  * A waiting card wins over failures, live work, a stop and a recorded turn's end; a sign-in only
  * while nothing works, as the session goes on without it. Not for the session the user is looking
@@ -99,56 +94,66 @@ function needsYou({ awaiting, running }: RowActivity, viewing: boolean): boolean
   return awaiting !== "signIn" || !running;
 }
 
-/** The displayed state word (never Done: a finished session shows only its unread dot) with the waiting card or quota reset named on hover. */
-export function sessionStatus(
+
+/** A row's mark: a spinner, the red error mark, the blue dot, or nothing; never a word (D3). */
+export type RowLook = "working" | "error" | "dot" | null;
+export type RowMark = { look: RowLook; hover: string | null };
+
+const NO_MARK: RowMark = { look: null, hover: null };
+
+const hhmm = (atMs: number) => {
+  const at = new Date(atMs);
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+};
+
+/**
+ * The one mark of a row, tab or flyout (D4, D9, D11): needs you and an unread reply share the dot,
+ * the hover says which. Stopped, asleep with nothing unread, or read: nothing (D10, D12).
+ */
+export function rowMark(
   activity: RowActivity,
-  quotaWait: { resetsAtMs: number | null } | null,
-  stopped = false,
-  turnEnded = false,
-  viewing = false,
-): SessionStatus | null {
-  const state = tabState(activity, quotaWait !== null, stopped, turnEnded, viewing);
-  if (!state || state === "done") return null;
-  let reason: string | null = null;
-  if (state === "needsYou") {
-    reason = activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "sign-in";
-  } else if (state === "working" && quotaWait && !activity.running) {
-    const at = quotaWait.resetsAtMs === null ? null : new Date(quotaWait.resetsAtMs);
-    reason = at === null ? "waiting for a usage limit" : `waiting for reset ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  { quotaWait = null, stopped = false, unread = false, viewing = false }: {
+    quotaWait?: { resetsAtMs: number | null } | null;
+    stopped?: boolean;
+    unread?: boolean;
+    viewing?: boolean;
+  } = {},
+): RowMark {
+  switch (tabState(activity, quotaWait !== null, stopped, false, viewing)) {
+    case "needsYou":
+      return { look: "dot", hover: `Needs you · ${activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "sign-in"}` };
+    case "failed":
+      return { look: "error", hover: "Failed" };
+    case "working":
+      if (quotaWait && !activity.running) {
+        return { look: "working", hover: quotaWait.resetsAtMs === null ? "Waiting for usage limit" : `Waiting for usage limit · resets ${hhmm(quotaWait.resetsAtMs)}` };
+      }
+      return { look: "working", hover: "Working" };
+    case "stopped":
+      return NO_MARK;
+    default:
+      return unread ? { look: "dot", hover: "New reply" } : NO_MARK;
   }
-  return { state, reason };
 }
 
-/** Needs you has its dot until it's looked at; a finished session uses the unread dot, failures their own red mark. */
-export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean, stopped = false, turnEnded = false, viewing = false) {
-  const state = tabState(activity, quotaWait, stopped, turnEnded, viewing);
-  return { working: state === "working", error: state === "failed", unread: state === "needsYou" || (state === "done" && unread) };
-}
-
-export function useSidebarIndicators(id: string, unread = false) {
-  const activity = useRowActivity(id);
-  const quotaWait = useApp((s) => !!s.conversations[id]?.quotaWait);
-  const stopped = useActivity((s) => stoppedOf(s.byConversation[id]));
-  const turnEnded = useActivity((s) => s.byConversation[id]?.turnEndedAtMs !== undefined);
-  const viewing = useViewing(id);
-  return sidebarIndicators(activity, quotaWait, unread, stopped, turnEnded, viewing);
-}
-
-/** Whether `id` is the conversation in front of the user. */
-function useViewing(id: string): boolean {
-  return useApp((s) => s.selection.type === "conversation" && s.selection.id === id);
-}
-
-export function useSessionStatus(id: string): SessionStatus | null {
+/** `id`'s mark, from the activity store, its usage wait and the unread clock. */
+export function useRowMark(id: string): RowMark {
   const activity = useRowActivity(id);
   const resets = useApp((s) => {
     const wait = s.conversations[id]?.quotaWait;
     return wait ? (wait.resetsAtMs ?? NaN) : null;
   });
   const stopped = useActivity((s) => stoppedOf(s.byConversation[id]));
-  const turnEnded = useActivity((s) => s.byConversation[id]?.turnEndedAtMs !== undefined);
   const viewing = useViewing(id);
-  return sessionStatus(activity, resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets }, stopped, turnEnded, viewing);
+  const finished = useFinishedAt(id);
+  const seen = useApp((s) => s.conversations[id]?.seenAtMs);
+  const quotaWait = resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets };
+  return rowMark(activity, { quotaWait, stopped, unread: isUnread(finished, seen, viewing), viewing });
+}
+
+/** Whether `id` is the conversation in front of the user. */
+function useViewing(id: string): boolean {
+  return useApp((s) => s.selection.type === "conversation" && s.selection.id === id);
 }
 
 export function stillGoing(id: string): boolean {
@@ -164,9 +169,10 @@ const NONE = "-";
 
 export function useTabStates(ids: readonly string[]): (SessionState | null)[] {
   const waiting = useApp((s) => ids.map((id) => (s.conversations[id]?.quotaWait ? "1" : "0")).join(""));
+  const viewing = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const states = useActivity((s) => ids.map((id, index) => {
     const own = s.byConversation[id];
-    return tabState(rowActivity(own), waiting[index] === "1", stoppedOf(own), own?.turnEndedAtMs !== undefined) ?? NONE;
+    return tabState(rowActivity(own), waiting[index] === "1", stoppedOf(own), own?.turnEndedAtMs !== undefined, id === viewing) ?? NONE;
   }).join(" "));
   return states === "" ? [] : states.split(" ").map((state) => state === NONE ? null : state as SessionState);
 }

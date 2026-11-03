@@ -13,6 +13,7 @@ import {
 } from "@/state/actions";
 import { applyActivityEvents, applyActivityNews, loadActivity } from "@/state/activity";
 import { applyThreadNews, resyncThreadViews } from "@/state/cliThread";
+import { migrateLastOpened } from "@/state/lastOpened";
 import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, applyBoardNews, forgetKeptBoards, sideBoardIds } from "@/state/board";
@@ -62,15 +63,19 @@ function flush() {
   }
 }
 
+/** The open conversation and the side chat beside it. */
+function shownIds(): string[] {
+  const { selection } = useApp.getState();
+  return [...(selection.type === "conversation" ? [selection.id] : []), ...sideBoardIds()];
+}
+
 /** Reloads everything the UI holds: used after (re)connecting and after missing events.
  * Threads and kept boards other than the shown ones may be stale, so they are dropped and reload
  * when opened. The shown conversations' boards and the Brain tab's session workers are read
  * again. */
 async function resync() {
-  const { selection, threads } = useApp.getState();
-  const openId = selection.type === "conversation" ? selection.id : null;
-  // The open conversation and the side chat beside it keep their threads.
-  const shown = [...(openId ? [openId] : []), ...sideBoardIds()];
+  const { threads } = useApp.getState();
+  const shown = shownIds();
   useApp.setState({
     threads: Object.fromEntries(
       shown.flatMap((id) => (threads[id] ? [[id, threads[id]] as const] : [])),
@@ -83,6 +88,7 @@ async function resync() {
   // A ratings research that ran while the app was closed tells of what it found.
   void checkResearchNews().catch(() => {});
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates(), loadConnect()]);
+  migrateLastOpened(useApp.getState().conversations);
   await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks(), resyncThreadViews(shown)]);
   prewarmConversations();
 }
@@ -160,6 +166,12 @@ function onBridgeEvent(message: BridgeEvent) {
         applyBoardNews(news);
       }
       break;
+    case "threadNewsMissed":
+      // Some turn news never came: every row's state and the shown threads are read again (D4).
+      void Promise.all([loadActivity(), resyncThreadViews(shownIds())]).catch((error: unknown) => {
+        console.error("catching up on missed thread news failed", error);
+      });
+      break;
     case "workspaceChanged":
       emitWorkspaceChanged(message.target);
       refreshSettledTabsSoon();
@@ -170,6 +182,8 @@ function onBridgeEvent(message: BridgeEvent) {
     case "windowVisibility":
       setSamplingPaused(!message.visible);
       useApp.setState({ windowVisible: message.visible });
+      // Cheap insurance: the rows are read again when the window shows (D4).
+      if (message.visible) void loadActivity().catch(() => {});
       break;
     case "openConversation":
       openConversation(message.conversationId);

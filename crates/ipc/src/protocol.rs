@@ -1111,6 +1111,21 @@ pub enum Request {
         id: ConversationId,
         pinned: bool,
     },
+    /// Marks a conversation done, or brings it back.
+    SetDone {
+        id: ConversationId,
+        done: bool,
+    },
+    /// Snoozes a conversation until `until_ms`, or wakes it (`null`).
+    Snooze {
+        id: ConversationId,
+        until_ms: Option<i64>,
+    },
+    /// A conversation's replies were seen up to `at_ms`.
+    MarkSeen {
+        id: ConversationId,
+        at_ms: i64,
+    },
     AppendMessage {
         conversation_id: ConversationId,
         text: String,
@@ -1900,6 +1915,15 @@ pub enum Response {
     SetPinned {
         conversation: Box<Conversation>,
     },
+    SetDone {
+        conversation: Box<Conversation>,
+    },
+    Snooze {
+        conversation: Box<Conversation>,
+    },
+    MarkSeen {
+        conversation: Box<Conversation>,
+    },
     AppendMessage {
         message: Box<Message>,
     },
@@ -2235,6 +2259,9 @@ pub enum ServerFrame {
     ThreadNews {
         news: Vec<brigadier_core::thread_view::ThreadNews>,
     },
+    /// This connection fell behind the threads' news and some was dropped: the app reads
+    /// its rows' activity and the threads it shows again. Live only.
+    ThreadNewsMissed,
     /// What this connection's search with `id` found next, or that it ended. Live only.
     Search {
         id: u32,
@@ -2333,6 +2360,10 @@ pub enum TerminalOutput {
     Exited {
         terminal_id: String,
         code: Option<u32>,
+        /// Closed idle because its session went to sleep: the tab stays, and opening it
+        /// again starts a new shell with this one's output above it.
+        #[serde(default)]
+        asleep: bool,
     },
 }
 

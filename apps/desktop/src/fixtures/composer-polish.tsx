@@ -4,7 +4,7 @@
  * whose one request is over; IPC is mocked and records what the composer sends. It drives the
  * real keys (`fixtureInput`) and writes what it saw as JSON into `<pre id="composer-polish-result">`.
  */
-import "@/fixtures/cliView";
+import { followBoardRun } from "@/fixtures/cliView";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -158,6 +158,7 @@ const setState = (state: UserRequest["state"]) =>
   );
 
 /** The conversation's model's state, as the daemon would publish it. */
+followBoardRun();
 const setRun = (run: RunState) => useBoard.setState(({ board }) => (board ? { board: { ...board, run } } : {}));
 
 /** What has the keyboard, by its label. */
