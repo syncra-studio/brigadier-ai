@@ -14,9 +14,17 @@ import { useWorkerRows } from "@/state/cliThread";
  * One worker: `[g] Name · what it does · 1m 2s · +12 −3`, from its row (its CLI's events and git):
  * while it works its call at work, shimmering, else its state. Its pause/resume and End while
  * its CLI runs (D199).
- * Opens its thread.
+ * Opens its thread. A `lone` row (the strip's only one) has no hover fill.
  */
-export const StripRow = memo(function StripRow({ conversationId, taskId }: { conversationId: string; taskId: string }) {
+export const StripRow = memo(function StripRow({
+  conversationId,
+  taskId,
+  lone = false,
+}: {
+  conversationId: string;
+  taskId: string;
+  lone?: boolean;
+}) {
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
   const row = useWorkerRows(conversationId).find((each) => each.id === taskId);
@@ -32,7 +40,7 @@ export const StripRow = memo(function StripRow({ conversationId, taskId }: { con
         data-slot="workers-strip-row"
         data-worker-state={state.kind}
         onClick={() => setPanel(taskId)}
-        className="hover:bg-foreground/5 rounded-control flex min-w-0 flex-1 flex-col items-stretch px-2 text-start text-sm"
+        className={cn("rounded-control flex min-w-0 flex-1 flex-col items-stretch px-2 text-start text-sm", !lone && "hover:bg-foreground/5")}
       >
         <span className="min-h-row flex min-w-0 items-center gap-1.5">
           <WorkerGlyph taskId={taskId} className="size-4 shrink-0" />
