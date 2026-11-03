@@ -593,11 +593,13 @@ async fn a_nudge_that_cannot_be_steered_is_a_turn_of_its_own() {
                 event,
                 DomainEvent::RunStateChanged {
                     state: RunState::Starting | RunState::Running,
+                    step: None,
                     ..
                 }
             )
         })
         .count();
+    // Setup steps (D206) are the same Starting, so only step-less changes count.
     assert_eq!(
         working, 2,
         "the user's turn starting and running, nothing else"
