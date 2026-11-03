@@ -65,45 +65,61 @@ impl SessionManager {
         self.data_dir.join("thread-images").join(&id.0)
     }
 
-    /// Retains a generated file before logging the event, so its recorded path outlasts the CLI.
+    /// Capture image bytes before recording the event, while a worker's temp folder exists.
     pub(super) async fn retain_thread_image(
         &self,
         id: &ConversationId,
-        mut event: ProviderEvent,
+        event: ProviderEvent,
     ) -> ProviderEvent {
-        if let ProviderEvent::Image {
-            item_id,
-            status: ItemStatus::Completed,
-            path: Some(path),
-            ..
-        } = &mut event
-        {
-            let source = PathBuf::from(&*path);
-            let ext = source
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("png");
-            let target = self
-                .thread_images_dir(id)
-                .join(format!("{}.{ext}", kept_name(item_id)));
-            let retained = blocking(move || {
-                if std::fs::metadata(&source).map_err(image_io)?.len() > MAX_IMAGE {
-                    return Err(Error::Invalid("This image is over 11 MB".into()));
+        let paths = match &event {
+            ProviderEvent::Image { status: ItemStatus::Completed, path: Some(path), .. } => vec![path.clone()],
+            ProviderEvent::ToolCall { name, input, .. } =>
+                super::thread_items::image_path(name, input.as_deref()).into_iter().collect(),
+            ProviderEvent::Message { role: brigadier_providers::Role::Assistant, text, .. } => answer_image_paths(text),
+            _ => Vec::new(),
+        };
+        if !paths.is_empty() {
+            let paths: Vec<_> = paths.iter().map(|path| self.image_source(id, path)).collect();
+            let directory = self.thread_images_dir(id);
+            let result = blocking(move || {
+                for path in paths {
+                    // Invalid/missing references do not interrupt the answer or expose bytes.
+                    let _ = crate::thread_image_files::retain_image(&directory, &path);
                 }
-                std::fs::create_dir_all(target.parent().expect("image folder"))
-                    .map_err(image_io)?;
-                std::fs::copy(source, &target).map_err(image_io)?;
-                Ok(target)
-            })
-            .await;
-            match retained {
-                Ok(target) => *path = target.to_string_lossy().into_owned(),
-                Err(err) => {
-                    tracing::warn!(conversation = %id, error = %err, "could not retain a generated image")
-                }
+                Ok(())
+            }).await;
+            if let Err(err) = result {
+                tracing::warn!(conversation = %id, error = %err, "could not retain thread images");
             }
         }
         event
+    }
+
+    /// Where an item's path points: a relative one is under the conversation's checkout.
+    fn image_source(&self, id: &ConversationId, path: &str) -> PathBuf {
+        let path = PathBuf::from(path);
+        if path.is_absolute() {
+            return path;
+        }
+        self.changes_checkout(id)
+            .map(|(path, _)| path)
+            .unwrap_or_else(|| self.owned_dir("orch", &id.0))
+            .join(path)
+    }
+
+    /// Only absolute, content-validated images can cross the agent-path trust boundary.
+    pub async fn read_local_image(&self, id: &ConversationId, path: &str) -> Result<(String, String)> {
+        self.core.conversation(id)?;
+        let source = PathBuf::from(path);
+        if !source.is_absolute() {
+            return Err(Error::Invalid("An image needs an absolute path".into()));
+        }
+        let retained = crate::thread_image_files::retained_path(&self.thread_images_dir(id), &source);
+        blocking(move || {
+            let path = if retained.is_file() { retained } else { source };
+            let (bytes, mime) = crate::thread_image_files::read_image(&path)?;
+            Ok((brigadier_providers::image_base64(&bytes), mime.to_owned()))
+        }).await
     }
 
     /// The copy kept of generated image `item` ([`Self::retain_thread_image`]), if there is one.
@@ -169,6 +185,9 @@ impl SessionManager {
                 _ => None,
             });
         if let Some(file) = proof {
+            if mime(Path::new(&file)).is_some_and(|mime| mime.starts_with("image/")) {
+                return self.read_local_image(id, &file).await;
+            }
             return read_bounded(PathBuf::from(file)).await;
         }
         // An image the CLI looked at or made, at the path its item names.
@@ -192,17 +211,7 @@ impl SessionManager {
             _ => None,
         }
         .ok_or_else(|| Error::Invalid("This image is no longer there".into()))?;
-        let path = PathBuf::from(path);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            let base = self
-                .changes_checkout(id)
-                .map(|(path, _)| path)
-                .unwrap_or_else(|| self.owned_dir("orch", &id.0));
-            base.join(path)
-        };
-        read_bounded(path).await
+        self.read_local_image(id, &self.image_source(id, &path).to_string_lossy()).await
     }
 
     pub(super) async fn delete_thread_images(&self, id: &ConversationId) -> Result<()> {
@@ -238,4 +247,29 @@ async fn read_bounded(path: PathBuf) -> Result<(String, String)> {
         Ok((brigadier_providers::image_base64(&bytes), mime.to_owned()))
     })
     .await
+}
+
+/// Markdown image/link destinations, including angle-wrapped paths with spaces and reference
+/// definitions. Backtick paths are also common in answers describing a generated image.
+fn answer_image_paths(text: &str) -> Vec<String> {
+    static PATHS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let paths = PATHS.get_or_init(|| regex::Regex::new(
+        r#"(?:\]\(\s*|\]:\s*|`)(?:<([^>]+)>|([^\s)`]+))"#
+    ).expect("image paths regex"));
+    paths.captures_iter(text).filter_map(|capture| {
+        let path = capture.get(1).or_else(|| capture.get(2))?.as_str();
+        let path = path.strip_prefix("file://").unwrap_or(path);
+        // Markdown encodes spaces and non-ASCII characters in destinations.
+        let mut bytes = Vec::new();
+        let mut input = path.as_bytes().iter().copied();
+        while let Some(byte) = input.next() {
+            if byte == b'%' {
+                let a = (input.next()? as char).to_digit(16)?;
+                let b = (input.next()? as char).to_digit(16)?;
+                bytes.push((a * 16 + b) as u8);
+            } else { bytes.push(byte); }
+        }
+        let path = String::from_utf8(bytes).ok()?;
+        Path::new(&path).is_absolute().then_some(path)
+    }).collect()
 }
