@@ -230,9 +230,6 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Thread cards | `Action card/Question` | `app/conversation/QuestionAction.tsx` | `QuestionAction` | |
 | Thread cards | `Action card/Plan` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Thread cards | `Phase plan action` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Thread cards | `Changes file row` | — | — | Pen only: the code was removed with the in-thread Changes card (D174) |
-| Thread cards | `Merge warning row` | — | — | Pen only: the code was removed in b1014e45c |
-| Thread cards | `Revert confirm row` | — | — | Pen only: the code was removed with the in-thread Changes card (D174) |
 | Thread cards | `Open pill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
 | Thread cards | `Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
 | Thread cards | `Plan frame` | — | — | Pen only: the code was removed in cb94ccca9 |
@@ -274,12 +271,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Composer | `Dictation bar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
 | Composer | `Waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
 | Composer | `Composer hint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
-| Composer menus, rail & queue | `Capsule pill` | — | — | Pen only: the code was removed with the changes pill (D204) |
 | Composer menus, rail & queue | `Step list` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Composer menus, rail & queue | `Run capsule` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Composer menus, rail & queue | `Capsule` | — | — | Pen only: the code was removed with the changes pill (D204) |
-| Composer menus, rail & queue | `Request capsule` | — | — | Pen only: the code was removed with the changes pill (D204) |
-| Composer menus, rail & queue | `Diff pill` | — | — | Pen only: the code was removed with the changes pill (D204) |
 | Composer menus, rail & queue | `Moved notice` | — | — | Pen only: the code was removed in efa933d5a |
 | Composer menus, rail & queue | `Rail pill` | `app/conversation/RailPill.tsx` | `RailPill` | |
 | Composer menus, rail & queue | `Stand-in pill` | `app/shell/StandInPill.tsx` | `StandInPill` | |
