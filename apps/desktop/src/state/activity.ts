@@ -85,8 +85,12 @@ export function workHolds(activity: Activity | undefined): boolean {
 /** Its CLI works: its turn is open, or Brigadier hands it a message. */
 const works = (activity: Activity) => activity.turnOpen || activity.run === "starting";
 
-/** Nothing works, and its CLI did not take the turn or its last turn failed or was cut off. */
-const failedOf = (activity: Activity) => !works(activity) && (activity.run === "failed" || activity.ended === "failed");
+/**
+ * Nothing works, and its CLI did not take the turn or its last turn failed or was cut off. A turn
+ * a limit cut ends failed while Brigadier still runs it on, switching account or CLI: not yet.
+ */
+const failedOf = (activity: Activity) =>
+  !works(activity) && (activity.run === "failed" || (activity.ended === "failed" && activity.run !== "running"));
 
 /** Nothing works, and the user stopped its CLI's last turn. */
 export const stoppedOf = (activity: Activity | undefined): boolean =>

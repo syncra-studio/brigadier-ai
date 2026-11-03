@@ -100,6 +100,18 @@ test("a failed or cut-off last turn reads Failed until the next turn opens; a fa
 });
 
 
+test("a turn a limit cut while Brigadier switches it to another account or CLI never reads Failed", () => {
+  applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "running" })]);
+  applyActivityNews({ conversationId: "c7", entries: [], opened: true });
+  applyActivityNews({ conversationId: "c7", entries: [], ended: "failed" });
+  assert.equal(tabState(row("c7"), false), null, "the switch holds the run");
+  applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "starting" })]);
+  assert.equal(tabState(row("c7"), false), "working");
+  applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "idle" })]);
+  assert.equal(tabState(row("c7"), false), "failed", "nowhere to go: the run lets go, failed");
+});
+
+
 const workerRow = (working: boolean): WorkerRow => ({
   id: "worker", number: 1, title: "Worker", agent: "codex", model: null, startedAtMs: 1,
   working, lastEnd: working ? null : "done", gone: false, lastEventAtMs: 1, limit: null,
