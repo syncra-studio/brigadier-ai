@@ -91,15 +91,12 @@ async fn block(name: &str) -> (Flow, Answers, Arc<tokio::sync::Notify>) {
     block_judged(name, "WAITS").await
 }
 
-/// Waits until `text` waits in the queue, judged (no longer Deciding).
+/// Waits until `text` waits in the queue, judged.
 async fn waits(flow: &Flow, text: &str) -> crate::work::QueuedMessage {
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
     let board = flow
         .until("it to wait, judged", |board| {
-            board
-                .queue
-                .items
-                .iter()
-                .any(|item| item.text == text && !item.deciding)
+            !conv.is_judging() && board.queue.items.iter().any(|item| item.text == text)
         })
         .await;
     board

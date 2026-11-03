@@ -57,6 +57,7 @@ import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { localImagePath, useLocalImage } from "@/state/threadImages";
 
 type MarkdownTextProps = Partial<TextMessagePartProps> & {
   components?: Parameters<typeof memoizeMarkdownComponents>[0];
@@ -81,6 +82,32 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
    */
   plainLeads?: boolean | undefined;
 };
+
+/** Agent-written paths are read and validated by the daemon, then shown as data URLs. */
+export function MarkdownImage({ src, alt, className }: { src?: string | Blob | undefined; alt?: string | undefined; className?: string | undefined }) {
+  const conversationId = useLinkConversation();
+  const source = typeof src === "string" ? src : "";
+  const path = localImagePath(source);
+  const local = useLocalImage(conversationId, path);
+  const [broken, setBroken] = useState<string | null>(null);
+  const direct = /^(?:data:image\/|blob:|https?:\/\/)/i.test(source);
+  const url = path ? local.url : direct ? source : null;
+  const unavailable = broken === source || (path ? !!local.error || !conversationId : !direct);
+  if (!url || unavailable) {
+    return (
+      <span data-slot="markdown-image-placeholder" role="img" aria-label={alt || "Image"} className="bg-foreground/5 text-muted-foreground my-3 flex h-20 w-36 items-center justify-center rounded-lg text-xs">
+        {unavailable ? "Not available" : <span className="shimmer">Loading</span>}
+      </span>
+    );
+  }
+  return (
+    <ImagePreview url={url} name={alt || "Image"}>
+      <button type="button" aria-label={`View ${alt || "image"}`} className="aui-md-img my-3 block cursor-zoom-in">
+        <img src={url} alt={alt ?? ""} onError={() => setBroken(source)} className={cn("max-h-80 max-w-full rounded-lg", className)} />
+      </button>
+    </ImagePreview>
+  );
+}
 
 type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
 
@@ -960,15 +987,7 @@ export const defaultComponents = {
         {...props}
       />
     ),
-    // An image in an answer opens in the image viewer.
-    img: ({ src, alt, className }) =>
-      typeof src === "string" && src ? (
-        <ImagePreview url={src} name={alt || "Image"}>
-          <button type="button" aria-label={`View ${alt || "image"}`} className="aui-md-img my-3 block cursor-zoom-in">
-            <img src={src} alt={alt ?? ""} className={cn("max-h-80 max-w-full rounded-lg", className)} />
-          </button>
-        </ImagePreview>
-      ) : null,
+    img: MarkdownImage,
     hr: ({ className, ...props }) => (
       <hr
         className={cn("aui-md-hr border-muted-foreground/20 my-3", className)}

@@ -1530,7 +1530,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             item_id,
             index,
         } => Response::MoveQueued {
-            queue: heap(|| core.move_queued(&conversation_id, &item_id, index)).await?,
+            // Through the sessions: a judge still out on it loses its say.
+            queue: heap(|| sessions.move_queued(&conversation_id, &item_id, index)).await?,
         },
         Request::ResumeQueue { conversation_id } => Response::ResumeQueue {
             queue: heap(|| sessions.resume_queue(conversation_id)).await?,
@@ -1572,6 +1573,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| core.pin_draft_attachments(scope, attachments)).await?;
             Response::PinDraftAttachments
         }
+        Request::PrepareCardAnswer {
+            conversation_id,
+            text,
+            attachments,
+            mentions,
+        } => Response::PrepareCardAnswer {
+            text: heap(|| {
+                sessions.prepare_card_answer(conversation_id, text, attachments, mentions)
+            })
+            .await?,
+        },
         Request::ReadAttachment { id } => Response::ReadAttachment {
             data: BASE64.encode(heap(|| core.read_attachment(&id)).await?),
         },
@@ -1974,6 +1986,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             let (data, mime) =
                 heap(|| sessions.read_thread_image(&conversation_id, &item_id)).await?;
             Response::ReadThreadImage { data, mime }
+        }
+        Request::ReadLocalImage {
+            conversation_id,
+            path,
+        } => {
+            let (data, mime) = heap(|| sessions.read_local_image(&conversation_id, &path)).await?;
+            Response::ReadLocalImage { data, mime }
         }
         Request::StopBackgroundTask {
             conversation_id,

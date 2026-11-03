@@ -10,6 +10,7 @@ import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { ActionFileList } from "@/components/conversation";
 import type { AnswerInput } from "@/ipc/generated";
 import { answerQuestion } from "@/state/actions";
+import { forgetDraft, saveDraft } from "@/state/drafts";
 import { useBoard } from "@/state/board";
 
 /** Where the user is on an open question card: what a visit to Settings must not lose. */
@@ -38,6 +39,13 @@ function keepQuestion(id: string, change: Partial<KeptQuestion>): void {
 }
 
 function forgetQuestion(id: string): void {
+  const question = useBoard.getState().board?.questions[id];
+  const count = question ? questionRound(question).length : (useKept.getState().byCard[id]?.drafts.length ?? 0);
+  for (let page = 0; page < count; page += 1) {
+    const scope = `card-${id}-${page}`;
+    saveDraft(scope, "", [], []);
+    forgetDraft(scope);
+  }
   useKept.setState((s) => {
     const byCard = { ...s.byCard };
     delete byCard[id];
@@ -184,6 +192,7 @@ export function QuestionAction({
             }
           : undefined
       }
+      draftScope={`card-${id}-${at}`}
       initialText={drafts[at] ?? (given !== null && picked < 0 && givenMarks === null && given !== SKIPPED ? given : "")}
       placeholder={
         item.options.length > 0

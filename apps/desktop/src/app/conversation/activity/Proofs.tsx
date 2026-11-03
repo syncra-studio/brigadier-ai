@@ -1,4 +1,4 @@
-import type { FC, ReactNode } from "react";
+import { type FC, type ReactNode, useState } from "react";
 
 import { kindOf, LAST_LINES, printed, type Proof } from "@/app/conversation/activity/previewProofs";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
@@ -15,13 +15,17 @@ function textOf(url: string): string {
 
 /** The proofs, two to a row: each cropped to the top of what it shows, "1. What it shows" and when under it. */
 export const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefined }[]; conversationId: string | null }> = ({ proofs, conversationId }) => {
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
   const media = useThreadImages(conversationId, proofs.map(({ proof }) => proof.id));
   const images = proofs.flatMap(({ proof }, index) => (kindOf(proof) === "screenshot" ? [{ name: proof.caption ?? proof.name, url: media[index]?.url ?? null }] : []));
   const frame = "border-border block h-44.5 w-full overflow-hidden rounded-lg border";
   return (
     <div data-slot="turn-proofs" className="grid grid-cols-2 gap-3">
       {proofs.map(({ proof, atMs }, index) => {
-        const { url, error } = media[index] ?? { url: null, error: null };
+        const image = media[index];
+        const unavailable = !!image?.error || (!!image?.url && failed.has(image.url));
+        const url = unavailable ? null : image?.url;
+        const error = unavailable ? "Not available" : null;
         // What it shows in the thread's words; a proof taken without them goes by its file's name.
         const label = proof.caption ?? proof.name;
         const kind = kindOf(proof);
@@ -39,11 +43,11 @@ export const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefi
         } else if (kind === "recording") {
           shown = <video src={url} controls muted playsInline preload="metadata" aria-label={label} title={label} className={cn(frame, "object-cover object-top")} />;
         } else {
-          const at = images.findIndex((image) => image.url === url);
+          const at = images.findIndex((each) => each.url === url);
           shown = (
             <ImagePreview url={url} name={label} gallery={{ images, index: Math.max(at, 0) }}>
               <button type="button" aria-label={`Open ${label}`} title={label} className={cn(frame, "focus-visible:ring-ring group/proof relative focus-visible:ring-2 focus-visible:outline-none")}>
-                <img src={url} alt={label} className="size-full object-cover object-top" />
+                <img src={url} alt={label} onError={() => setFailed((before) => new Set(before).add(url))} className="size-full object-cover object-top" />
                 <span aria-hidden className="group-hover/proof:bg-background/20 pointer-events-none absolute inset-0 transition-colors" />
               </button>
             </ImagePreview>

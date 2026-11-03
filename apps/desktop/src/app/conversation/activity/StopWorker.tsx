@@ -11,7 +11,7 @@ const BUTTON = "text-foreground/60 hover:text-foreground shrink-0";
 
 /**
  * The user's End for one worker while it is at work, waits or is paused (UI audit M4, D199), on
- * its strip row, its context card row, its Workers list row and in its view's header: no
+ * its strip row, its context card row and its Workers list row (not its view's header): no
  * confirm, its work stays on its branch. The thread says "You ended ‹worker›".
  */
 export function StopWorker({ row, name }: { row: WorkerRow; name: string }) {

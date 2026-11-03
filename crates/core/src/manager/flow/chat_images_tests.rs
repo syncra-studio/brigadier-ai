@@ -20,7 +20,12 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-const PNG: &[u8] = b"a sunset";
+/// A 1×1 PNG: only a real image is kept and read back.
+const PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 218, 99, 100, 248, 207, 80, 15, 0, 3,
+    134, 1, 128, 90, 52, 125, 107, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 /// Codex's image generation in a turn: the item starts, then completes with the file Codex
 /// saved, as the app-server reports it.
@@ -196,4 +201,96 @@ async fn a_codex_tab_chat_makes_an_image_and_it_goes_with_the_chat() {
     let kept = image_is_shown(&flow, &chat, &source).await;
     images_go_with(&flow, &chat, &kept).await;
     flow.stop().await;
+}
+
+/// An image the thread views and one its answer names are copied as they are recorded: closing
+/// the worker that made them, which removes its temp folder, doesn't take them away. A path that
+/// is no image is refused, and an image of this thread is not one for another conversation.
+#[tokio::test]
+async fn images_a_thread_views_and_answers_with_outlast_their_files() {
+    let folder = std::env::temp_dir().join(format!("worker-temp-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let (viewed, named, notes) = (
+        folder.join("viewed.png"),
+        folder.join("named one.png"),
+        folder.join("notes.png"),
+    );
+    for file in [&viewed, &named] {
+        std::fs::write(file, PNG).unwrap();
+    }
+    std::fs::write(&notes, "text").unwrap();
+    let (input, answer) = (
+        serde_json::json!({ "path": viewed }).to_string(),
+        format!(
+            "Here it is:\n\n![Named](<{}>)\n\n![Notes]({})",
+            named.display(),
+            notes.display()
+        ),
+    );
+    let flow = Flow::start(
+        "thread-images-outlast",
+        Options::default(),
+        script(move |turn| {
+            let (input, answer) = (input.clone(), answer.clone());
+            async move {
+                if turn.chat().is_none() {
+                    return Reply::text("ok");
+                }
+                turn.emit(ProviderEvent::ToolCall {
+                    item_id: "view_1".into(),
+                    name: "view_image".into(),
+                    input: Some(input),
+                    status: ItemStatus::Completed,
+                    output: None,
+                    kept: None,
+                })
+                .await;
+                Reply::text(&answer)
+            }
+        }),
+    )
+    .await;
+    let chat = codex_chat(&flow).await;
+    flow.say_to(&chat, "Show me.").await;
+    answered(&flow, &chat).await;
+    std::fs::remove_dir_all(&folder).unwrap();
+    let (data, mime) = flow
+        .manager
+        .read_thread_image(&chat, "view_1")
+        .await
+        .unwrap();
+    assert_eq!(
+        (data.as_str(), mime.as_str()),
+        (brigadier_providers::image_base64(PNG).as_str(), "image/png")
+    );
+    let (data, _) = flow
+        .manager
+        .read_local_image(&chat, &named.to_string_lossy())
+        .await
+        .unwrap();
+    assert_eq!(data, brigadier_providers::image_base64(PNG));
+    // Nothing was kept of the text, and a relative path is refused.
+    assert!(
+        flow.manager
+            .read_local_image(&chat, &notes.to_string_lossy())
+            .await
+            .is_err()
+    );
+    assert!(
+        flow.manager
+            .read_local_image(&chat, "picture.png")
+            .await
+            .is_err()
+    );
+    // Another conversation has no copy, and the original has gone.
+    assert!(
+        flow.manager
+            .read_local_image(&flow.conversation, &named.to_string_lossy())
+            .await
+            .is_err()
+    );
+    // The copies go with the thread.
+    let own = flow.dir.join("data/thread-images").join(&chat.0);
+    assert_eq!(std::fs::read_dir(&own).unwrap().count(), 2);
+    images_go_with(&flow, &chat, &own).await;
 }

@@ -348,12 +348,14 @@ export const ChipComposerInput: FC<
     isAction?: (item: Unstable_TriggerItem) => boolean;
     /** One line (under an action card): it doesn't grow, it scrolls. */
     line?: boolean;
+    /** A card answer grows to a few lines. */
+    compact?: boolean;
     /** The rich field, whose text is Markdown. */
     rich?: boolean;
     /** The chips its text makes (all of them by default). */
     kinds?: ChipKinds;
   }
-> = ({ formatter, mentionLook, onMention, isAction, line = false, rich = false, kinds = ALL_CHIPS, className, children, ...props }) => {
+> = ({ formatter, mentionLook, onMention, isAction, line = false, compact = false, rich = false, kinds = ALL_CHIPS, className, children, ...props }) => {
   const [scrolled, setScrolled] = useState(false);
   const editor = useRef<LexicalEditor | null>(null);
   const directivePluginProps = useMemo(
@@ -408,7 +410,9 @@ export const ChipComposerInput: FC<
           "relative w-full cursor-text",
           "[&_.aui-lexical-input]:caret-primary [&_.aui-lexical-input]:whitespace-pre-wrap [&_.aui-lexical-input]:break-words [&_.aui-lexical-input]:outline-none",
           "[&_.aui-lexical-placeholder]:text-muted-foreground/60 [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:inset-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:select-none",
-          line
+          compact
+            ? "max-h-32 overflow-y-auto text-code [&_.aui-lexical-input]:min-h-5 [&_.aui-lexical-placeholder]:top-0"
+            : line
             ? "max-h-control-md text-sm [&_.aui-lexical-input]:min-h-control-md [&_.aui-lexical-input]:px-1 [&_.aui-lexical-input]:py-1.5 [&_.aui-lexical-placeholder]:px-1 [&_.aui-lexical-placeholder]:py-1.5"
             : "max-h-composer-max data-scrolled:mask-fade-top text-base [&_.aui-lexical-input]:min-h-composer [&_.aui-lexical-input]:px-2 [&_.aui-lexical-input]:py-2.5 [&_.aui-lexical-placeholder]:px-2 [&_.aui-lexical-placeholder]:py-2.5",
           className,

@@ -383,7 +383,7 @@ impl SessionManager {
                     (
                         state.context,
                         state.seam.base.flatten(),
-                        state.limit_hit.is_some(),
+                        state.limit_hit.is_some() || state.model_failed,
                     )
                 };
                 // A move to another CLI asked for in this turn comes now; one cut by a limit
@@ -520,6 +520,39 @@ impl SessionManager {
             .find(|choice| self.fallback_refusal(choice).is_none())
     }
 
+    /// The model a session goes on with when its CLI gave up on `from` (at capacity, overloaded,
+    /// a server or network error): the next `Fallback` row of the user's routing whose model
+    /// this run (`tried`) hasn't seen fail, on an account that can take it, that the user's rules
+    /// allow. Another agent's row needs "another agent when all are out" on.
+    pub(in crate::manager) fn next_session_model(
+        &self,
+        from: &ModelChoice,
+        tried: &[crate::manager::fallback::TriedModel],
+    ) -> Option<ModelChoice> {
+        let settings = self.core.settings();
+        let now = now_ms();
+        self.after_row_of(self.fallback_rows(), from)
+            .into_iter()
+            .filter(|choice| !tried.contains(&self.tried_model(choice)))
+            .filter(|choice| {
+                choice.provider == from.provider
+                    || (settings.switch_providers
+                        && crate::routing::availability::provider_on(&settings, choice.provider))
+            })
+            .filter(|choice| {
+                crate::accounts::ready(
+                    &settings,
+                    choice.provider,
+                    choice.model.as_deref(),
+                    &self.runtime.account_candidates(choice.provider),
+                    &[],
+                    now,
+                )
+                .is_some()
+            })
+            .find(|choice| self.fallback_refusal(choice).is_none())
+    }
+
     /// The model and effort a session goes on with on another agent, `provider` (D25, D34): the
     /// first `Fallback` row of the user's routing that names that agent and that the user's
     /// rules allow. Never a model or effort no row names; with none, why, in plain words.
@@ -593,6 +626,26 @@ impl SessionManager {
         carried: Vec<Message>,
         landed: bool,
     ) {
+        let death = format!(
+            "usage limit on {} · continued on {}",
+            from.label(),
+            to.provider.label()
+        );
+        self.seam_to_agent_because(conv, death, to, carried, landed)
+            .await;
+        self.kick(conv);
+    }
+
+    /// [`Self::seam_to_agent`], whatever the reason: `death` is the divider's. The next turn is
+    /// the caller's to start.
+    pub(super) async fn seam_to_agent_because(
+        &self,
+        conv: &Arc<ConvLive>,
+        death: String,
+        to: ModelChoice,
+        carried: Vec<Message>,
+        landed: bool,
+    ) {
         let Ok(conversation) = self.core.conversation(&conv.id) else {
             return;
         };
@@ -602,11 +655,6 @@ impl SessionManager {
         let Setup::Session { orchestrator, .. } = &mut setup else {
             return;
         };
-        let death = format!(
-            "usage limit on {} · continued on {}",
-            from.label(),
-            to.provider.label()
-        );
         *orchestrator = to;
         if let Err(err) = self.core.set_setup(conv.id.clone(), setup).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not move the session to another agent"; conversation = %conv.id, error = %err);
@@ -677,7 +725,6 @@ impl SessionManager {
         if stopped {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }
-        self.kick(conv);
     }
 
     /// The CLI's context overflowed ("prompt is too long"): the generation ends without a note.
