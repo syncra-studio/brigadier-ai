@@ -1,5 +1,6 @@
 import { findModel, type ModelGroup } from "@/components/shared/model-selector";
 import type {
+  DismissedSuggestion,
   GuidanceRow,
   MergedModel,
   ModelInfo,
@@ -7,6 +8,7 @@ import type {
   OverrideTarget,
   ProviderKind,
   QualityTier,
+  RoutingSuggestion,
   TaskCategory,
 } from "@/ipc/generated";
 import { CLIS } from "@/ipc/generated/clis";
@@ -177,3 +179,18 @@ export function rankedFor<M extends { model: MergedModel; strength: number }>(mo
 export function faded(model: MergedModel): boolean {
   return model.legacy;
 }
+
+/** The suggestion for a kind of work the user ordered: a better-rated model than the first of their order. */
+export function suggestionFor(rules: ModelRules | null, work: string): RoutingSuggestion | null {
+  return rules?.suggestions.find((suggestion) => suggestion.work === work) ?? null;
+}
+
+/** The dismissed suggestions with `suggestion` added: hidden while its model rates what it rates now (one per kind and model). */
+export function withDismissed(dismissed: readonly DismissedSuggestion[], suggestion: RoutingSuggestion): DismissedSuggestion[] {
+  const { work, row, score } = suggestion;
+  const same = (gone: DismissedSuggestion) => gone.work === work && gone.agent === row.agent && gone.model.toLowerCase() === row.model.toLowerCase();
+  return [...dismissed.filter((gone) => !same(gone)), { work, agent: row.agent, model: row.model, score }];
+}
+
+/** A rating as the page shows it: "9.5". */
+export const ratingText = (score: number) => (Math.round(score * 10) / 10).toFixed(1);

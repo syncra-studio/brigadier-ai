@@ -1,6 +1,6 @@
 # Model guidance
 
-Advice only. Edit this table to change the advice. User rows with the same Work replace these rows.
+Advice only, and the fallback: the automatic rows of each kind of work come from the model ratings (one per agent, best-rated first); these rows stand in for a kind where no model is rated. User rows with the same Work replace them.
 
 | Work | Agent | Model | Effort | Reason |
 | --- | --- | --- | --- | --- |

@@ -30,6 +30,7 @@ import { startPagesFlush } from "@/state/pagesFlush";
 import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyConnectEvents, loadConnect } from "@/state/connect";
 import { applyUsageEvents } from "@/state/usage";
+import { applyRatingsEvents, checkResearchNews } from "@/state/ratingsNews";
 import { onDictationDisconnected, onDictationUpdate } from "@/state/dictation";
 import { openFeedback } from "@/state/feedback";
 import { emitCleanProgress, openUninstall } from "@/state/storage";
@@ -52,6 +53,7 @@ function flush() {
   applySettledTabEvents(batch);
   applyBrainEvents(batch);
   applyUsageEvents(batch);
+  applyRatingsEvents(batch);
   applyUpdateEvents(batch);
   applyConnectEvents(batch);
   noteFlush(started, batch.map(({ event }) => event.type));
@@ -78,6 +80,8 @@ async function resync() {
   forgetKeptBoards();
   // Ready and merged count commits in each tab's worktree: they come when they come.
   void loadSettledTabs().catch(() => {});
+  // A ratings research that ran while the app was closed tells of what it found.
+  void checkResearchNews().catch(() => {});
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates(), loadConnect()]);
   await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks(), resyncThreadViews(shown)]);
   prewarmConversations();

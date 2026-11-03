@@ -477,6 +477,7 @@ pub fn read(output: &ReadOutput) -> String {
 pub fn start_row(row: &StartRow) -> String {
     let whose = match row.source.as_str() {
         "user" => "Your row",
+        "ratings" => "The automatic row (from the ratings)",
         _ => "The shipped row",
     };
     let picked = match row.picked.as_slice() {
