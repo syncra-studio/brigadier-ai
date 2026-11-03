@@ -144,8 +144,9 @@ mod tests {
         // call on one card, 0.28 KB (harness D36); workers' disposable output in their $TMPDIR,
         // results inline instead of links, and new sessions proposed on a card, 0.48 KB (the
         // 10-26 artifact rule; proposed).
-        // Chat-only, user-started Fusion and its offer command add 0.30 KB (L7, L9).
-        assert!(SKILL.len() <= 11_650, "{} bytes", SKILL.len());
+        // Chat-only, user-started Fusion and its offer command add 0.30 KB (L7, L9). The
+        // Computer use row for a worker using apps, 0.04 KB (D18).
+        assert!(SKILL.len() <= 11_700, "{} bytes", SKILL.len());
         for line in [
             "Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.",
             "with the results themselves, research findings too; never a record or skill file link, and a report, plan or page only when the user asks for that document or to save it",
