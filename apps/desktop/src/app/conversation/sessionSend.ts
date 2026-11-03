@@ -30,14 +30,17 @@ function nameWords(text: string): string[] {
 /**
  * The one session of `sessions` a `brigadier send` or `wait` names by its title (D201), as
  * `brigadier` reads it (`manager::cli::named`): its whole title, else the one title holding each
- * word; null when none or several do.
+ * word, the one in this session's project first; null when none or several do.
  */
-export function titled(sessions: readonly { id: string; title: string }[], to: string): string | null {
+export function titled(sessions: readonly { id: string; title: string; projectId?: string | null }[], to: string, here: string | null = null): string | null {
   const words = nameWords(to);
   if (words.length === 0) return null;
   const whole = sessions.filter(({ title }) => nameWords(title).join(" ") === words.join(" "));
   const found = whole.length > 0 ? whole : sessions.filter(({ title }) => words.every((word) => nameWords(title).join(" ").includes(word)));
-  return found.length === 1 ? found[0]!.id : null;
+  // A name several projects' sessions share means the one in this session's project.
+  const near = found.filter(({ projectId }) => here !== null && projectId === here);
+  const picked = found.length > 1 && near.length > 0 ? near : found;
+  return picked.length === 1 ? picked[0]!.id : null;
 }
 
 /** A heredoc fed to the command line as one argument: `"$(cat <<'EOF'` … `EOF` `)"`. */

@@ -739,12 +739,26 @@ impl SessionManager {
             }
         }
         if found.is_empty() {
+            let here = sessions
+                .iter()
+                .find(|(_, session)| session.id == caller.conversation_id)
+                .and_then(|(_, session)| session.project_id.clone());
             let others: Vec<&Conversation> = sessions
                 .iter()
                 .map(|(_, session)| session)
                 .filter(|session| session.id != caller.conversation_id)
                 .collect();
-            return match named(&others, id).as_slice() {
+            let mut found = named(&others, id);
+            // A name several projects' sessions share means the one in the caller's project.
+            let near: Vec<_> = found
+                .iter()
+                .copied()
+                .filter(|session| here.is_some() && session.project_id == here)
+                .collect();
+            if found.len() > 1 && !near.is_empty() {
+                found = near;
+            }
+            return match found.as_slice() {
                 [] => Err(not_found()),
                 [one] => Ok(Target::Session(Box::new((*one).clone()))),
                 many => Err(CliReply::error(

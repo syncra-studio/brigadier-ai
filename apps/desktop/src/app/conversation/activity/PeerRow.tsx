@@ -74,7 +74,7 @@ export function usePeerLookup(steps: readonly BlockOrchestratorStep[]): PeerLook
   const named = useApp(
     useShallow((s) => {
       const others = () => Object.values(s.conversations).filter((conversation) => conversation.id !== view?.id);
-      const sessions = targets.map((to) => (s.conversations[to] ? to : (Object.keys(s.conversations).find((id) => namesId(id, to)) ?? titled(others(), to) ?? undefined)));
+      const sessions = targets.map((to) => (s.conversations[to] ? to : (Object.keys(s.conversations).find((id) => namesId(id, to)) ?? titled(others(), to, here) ?? undefined)));
       return [
         ...sessions,
         ...[...ids, ...sessions.flatMap((id) => id ?? [])].flatMap((id) => {

@@ -240,7 +240,8 @@ async fn two_sessions(flow: &Flow, seen: &Seen) -> ConversationId {
 }
 
 /// D201: the one call reaches another session by the name its user calls it (its title, any
-/// case); a name more than one holds lists them, an unknown one says so.
+/// case), the caller's project's first; a name more than one holds lists them, an unknown one
+/// says so.
 #[tokio::test]
 async fn a_session_is_reached_by_its_title_and_an_unclear_name_lists_them() {
     let (flow, seen) = flow("sessions-by-title", false).await;
@@ -252,7 +253,11 @@ async fn a_session_is_reached_by_its_title_and_an_unclear_name_lists_them() {
     let message = sent["message"].as_str().unwrap().to_owned();
     super::eventually("B to take it", || seen.took(&b, &message) == 1).await;
     let c = flow
-        .add_session(&format!("{title} notes"), None, ProviderKind::Claude)
+        .add_session(
+            &format!("{title} notes"),
+            Some("third"),
+            ProviderKind::Claude,
+        )
         .await;
     let unclear = refused(call(&flow, &seen, &a, send(&title[..3], "Which?")).await);
     assert!(
@@ -261,6 +266,10 @@ async fn a_session_is_reached_by_its_title_and_an_unclear_name_lists_them() {
         "{unclear}"
     );
     assert!(refused(call(&flow, &seen, &a, send("nobody here", "?")).await).contains("no session"));
+    // A title another project's session shares: the caller's project's.
+    let twin = flow.add_session(&title, None, ProviderKind::Claude).await;
+    let sent = ok(call(&flow, &seen, &a, send(&title, "Near.")).await);
+    assert_eq!(sent["id"], crate::manager::cli::short(&twin.0), "{sent:#}");
     flow.settled_in(&b).await;
 }
 

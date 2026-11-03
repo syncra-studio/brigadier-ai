@@ -87,6 +87,9 @@ test("a session named by its title is one `send && wait`, its row the wait's, ta
   assert.equal(titled(sessions, "docs"), "b2", "a whole title wins");
   assert.equal(titled(sessions, "doc"), null, "several hold it");
   assert.equal(titled(sessions, "nobody"), null);
+  const twins = [{ id: "x1", title: "Docs", projectId: "p1" }, { id: "x2", title: "Docs", projectId: "p2" }];
+  assert.equal(titled(twins, "docs", "p2"), "x2", "a title two projects share: this project's");
+  assert.equal(titled(twins, "docs"), null);
   const waiting = call(`brigadier wait "Remember for this session"`, "inProgress", null);
   const wait = { kind: sessionWait(waiting.step, waiting.event, {})!, atMs: 1000 };
   assert.deepEqual(wait.kind.to, ["Remember for this session"]);
