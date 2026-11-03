@@ -1,49 +1,56 @@
-import { create } from "zustand";
+import { request } from "@/ipc/client";
+import type { Conversation } from "@/ipc/generated";
+import { useActivity } from "@/state/activity";
+import { useApp } from "@/state/store";
 
 /**
- * When the user last had each conversation open, remembered with the app's other view state: a
- * conversation that finished something since (a request, or an answer to another session, the
- * daemon keeps when) shows an unread dot in the sidebar (SESSION-MESSAGING-PLAN.md §6.4).
+ * One unread clock for the row and the view (D4): when a conversation last finished something
+ * (a turn, a request, or an answer to another session), against the time up to which the user has
+ * seen it, which the daemon keeps so every window agrees.
  */
-export const LAST_OPENED_KEY = "brigadier.lastOpened";
-
-function savedLastOpened(): Record<string, number> {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(LAST_OPENED_KEY) ?? "{}");
-    if (!value || typeof value !== "object") return {};
-    return Object.fromEntries(
-      Object.entries(value).filter(([, at]) => typeof at === "number" && Number.isFinite(at)),
-    );
-  } catch {
-    return {};
-  }
-}
-
-export const useLastOpened = create<{ at: Record<string, number> }>(() => ({ at: savedLastOpened() }));
-
-/** The user has `id` open at `atMs` (or saw what came until then). */
-export function markOpened(id: string, atMs: number): void {
-  const { at } = useLastOpened.getState();
-  if ((at[id] ?? 0) >= atMs) return;
-  const next = { ...at, [id]: atMs };
-  useLastOpened.setState({ at: next });
-  try {
-    localStorage.setItem(LAST_OPENED_KEY, JSON.stringify(next));
-  } catch {
-    /* Keep in memory. */
-  }
-}
-
-/**
- * Whether a conversation finished something since the user last had it open: a request of it
- * finished, or (a session) it answered what another session asked.
- */
-export function unread(finishedAtMs: number | undefined, lastOpenedMs: number | undefined, open: boolean): boolean {
-  return !open && finishedAtMs !== undefined && finishedAtMs > (lastOpenedMs ?? 0);
-}
-
-/** When a conversation last finished something, for its unread dot. */
-export function lastFinished(conversation: { finishedAtMs?: number; peerAtMs?: number } | null | undefined): number | undefined {
-  const at = Math.max(conversation?.finishedAtMs ?? 0, conversation?.peerAtMs ?? 0);
+export function finishedAt(
+  conversation: { finishedAtMs?: number; peerAtMs?: number } | null | undefined,
+  turnEndedAtMs: number | undefined,
+): number | undefined {
+  const at = Math.max(turnEndedAtMs ?? 0, conversation?.finishedAtMs ?? 0, conversation?.peerAtMs ?? 0);
   return at > 0 ? at : undefined;
+}
+
+/** Whether a conversation finished something the user hasn't seen; never the one in front of them. */
+export function unread(finishedAtMs: number | undefined, seenAtMs: number | undefined, open: boolean): boolean {
+  return !open && finishedAtMs !== undefined && finishedAtMs > (seenAtMs ?? 0);
+}
+
+/** `id`'s finish time, from the catalog and the activity store. */
+export function useFinishedAt(id: string): number | undefined {
+  const finished = useApp((s) => finishedAt(s.conversations[id], undefined));
+  const turnEnded = useActivity((s) => s.byConversation[id]?.turnEndedAtMs);
+  return Math.max(finished ?? 0, turnEnded ?? 0) || undefined;
+}
+
+/** The user saw `id` up to `atMs` (a finish time): written only when it moves the clock on. */
+export function markSeen(id: string, atMs: number): void {
+  const conversation = useApp.getState().conversations[id];
+  if (!conversation || (conversation.seenAtMs ?? 0) >= atMs) return;
+  // At once here, so the dot clears without waiting for the daemon's event.
+  useApp.setState((s) => ({ conversations: { ...s.conversations, [id]: { ...conversation, seenAtMs: atMs } } }));
+  void request({ method: "markSeen", id, atMs }).catch(() => {});
+}
+
+/** Where each window kept its own "last opened" before the daemon did. */
+const LAST_OPENED_KEY = "brigadier.lastOpened";
+
+/** Hands the old per-window times to the daemon once, so an update doesn't dot every row. */
+export function migrateLastOpened(conversations: Readonly<Record<string, Conversation>>): void {
+  let saved: unknown;
+  try {
+    saved = JSON.parse(localStorage.getItem(LAST_OPENED_KEY) ?? "null");
+    localStorage.removeItem(LAST_OPENED_KEY);
+  } catch {
+    return;
+  }
+  if (!saved || typeof saved !== "object") return;
+  for (const [id, at] of Object.entries(saved)) {
+    if (typeof at === "number" && Number.isFinite(at) && conversations[id]) markSeen(id, at);
+  }
 }

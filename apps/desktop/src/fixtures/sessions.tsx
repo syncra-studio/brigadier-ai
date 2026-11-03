@@ -23,7 +23,7 @@ import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Conversation, ConversationActivity, ConversationView, Environment, EventEnvelope, FileEntry, Project, Question, Request, ThreadView, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
-import { useLastOpened } from "@/state/lastOpened";
+import { markSeen } from "@/state/lastOpened";
 import { useToasts } from "@/state/toasts";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
@@ -73,7 +73,7 @@ const session = (id: string, title: string, updatedAtMs: number, extra: Partial<
   id, kind: "session", projectId: project, title, pinnedAtMs: null, createdAtMs: updatedAtMs, updatedAtMs, setup: null,
   lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null, ...extra,
 });
-// Resets at 14:05 today, as the "waiting for reset" row says.
+// Resets at 14:05 today, as the "Waiting for usage limit" row says.
 const RESET = new Date(new Date().setHours(14, 5, 0, 0)).getTime();
 const conversations = [
   // Two sessions working that once shared a workspace: a row each; an archived third is left out.
@@ -104,9 +104,9 @@ if (params.has("questions")) conversations.push(
 if (params.has("unread")) for (const conversation of conversations) conversation.finishedAtMs = 1;
 if (params.has("unreadOnly")) conversations.push(session("w12-a", "Unread reply", -1));
 if (params.has("doneRead")) conversations.push(session("done-read", "A finished turn", -4));
-if (params.has("neverRan")) conversations.push(session("never-ran", "Never ran", -3, { finishedAtMs: 500 }));
+if (params.has("neverRan")) conversations.push(session("never-ran", "Never ran", -3));
 if (params.has("pinned")) conversations.find((each) => each.id === "w1-b")!.pinnedAtMs = 1;
-useLastOpened.setState({ at: Object.fromEntries(conversations.map((each) => [each.id, params.has("unread") ? 0 : 100])) });
+for (const each of conversations) each.seenAtMs = params.has("unread") ? 0 : 100;
 if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
 useApp.setState({
   catalogLoaded: true,
@@ -177,15 +177,21 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
     const status = row.querySelector<HTMLElement>('[data-slot="row-status"]');
     return {
       title: button.querySelector('[data-slot="row-title"]')?.textContent?.trim(),
-      status: status?.dataset.status ? `${status.dataset.status}:${status.textContent?.trim() ?? ""}` : null,
+      status: status?.dataset.status ?? null,
       tip: status?.title || null,
       active: button.dataset.active === "true",
       mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-unread"]') ? "unread" : null,
       error: !!button.querySelector('[data-slot="status-error"]'),
       plain: status ? plainStatus(status) : true,
-      words: status?.querySelector('[data-slot="status-word"]')?.textContent ?? null,
+      words: wordsOf(button),
     };
   });
+
+/** Any text on a row beyond its title: rows carry no state words (D3). */
+const wordsOf = (button: HTMLElement) => {
+  const title = button.querySelector('[data-slot="row-title"]')?.textContent ?? "";
+  return button.textContent?.replace(title, "").trim() || null;
+};
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (check: () => boolean) => { for (let n = 0; n < 200 && !check(); n++) await wait(20); };
@@ -196,36 +202,28 @@ const projectHeader = () => {
 };
 /** Anything worker-shaped in the sidebar: a session's workers show in the session, never under its row. */
 const workerRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot^="session-worker"], [data-task]')].map((row) => row.textContent?.trim());
-/**
- * How each row with a state shares its width: the title's share of the row's inside in percent, and
- * whether the state's own words ("Needs you") show whole, the reason being cut first.
- */
+/** How each row with a mark shares its width: the title's share of the row's inside in percent. */
 const rowWidths = () => [...document.querySelectorAll<HTMLElement>('[data-slot="row-status"][data-status]')]
-  .filter((status) => status.dataset.status !== "unread")
   .map((status) => {
     const button = status.closest("button")!;
     const title = button.querySelector('[data-slot="row-title"]')!;
-    const words = status.querySelector<HTMLElement>('[data-slot="status-word"]')!;
     const style = getComputedStyle(button);
     const inside = button.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     return {
       title: title.textContent?.trim(),
       titleShare: Math.round((title.getBoundingClientRect().width / inside) * 100),
-      stateWhole: words.scrollWidth <= words.clientWidth,
     };
   });
-/** A row's title cut for a long title: whether it overflows, how it ends, and whether it stays clear of the state word. */
+/** A row's title cut for a long title: whether it overflows and how it ends, and any word beside it. */
 const cut = (title: string) => {
   const button = [...document.querySelectorAll<HTMLButtonElement>("li li button")].find((each) => each.querySelector('[data-slot="row-title"]')?.textContent === title)!;
   const text = button.querySelector<HTMLElement>('[data-slot="row-title"]')!;
-  const word = button.querySelector<HTMLElement>('[data-slot="status-word"]');
   const style = getComputedStyle(text);
   return {
     overflows: text.scrollWidth > text.clientWidth,
     ellipsis: style.textOverflow,
     mask: style.maskImage,
-    clear: word ? text.getBoundingClientRect().right <= word.getBoundingClientRect().left : null,
-    word: word?.textContent ?? null,
+    word: wordsOf(button),
   };
 };
 
@@ -461,37 +459,39 @@ function Fixture() {
         await until(() => doneReadRow()?.mark === "unread");
         const before = doneReadRow();
         useApp.setState({ selection: { type: "conversation", id: "done-read" } });
+        // What the open conversation's view does (not drawn here): it saw up to the turn's end.
+        markSeen("done-read", 200);
         await until(() => doneReadRow()?.active && doneReadRow()?.mark === null);
         useApp.setState({ selection: { type: "none" } });
         await until(() => !doneReadRow()?.active);
         const afterClose = doneReadRow();
         applyActivityNews({ conversationId: "done-read", entries: [], opened: true });
-        await until(() => doneReadRow()?.status === "working:Working");
+        await until(() => doneReadRow()?.status === "working");
         applyActivityNews({ conversationId: "done-read", entries: [], ended: "done", turnEndedAtMs: Date.now() + 100 });
-        await until(() => doneReadRow()?.status === "done:Done" && doneReadRow()?.mark === "unread");
+        await until(() => doneReadRow()?.status === "dot" && doneReadRow()?.mark === "unread");
         setResult(JSON.stringify({ before, afterClose, nextTurn: doneReadRow() }));
       })();
       return;
     }
     if (params.has("workerActivity")) {
       void (async () => {
-        await until(() => workerActivityRow()?.status === "working:Working");
+        await until(() => workerActivityRow()?.status === "working");
         const before = rows().filter((row) => ["Workers still running", "Approval with workers", "Question with workers"].includes(row.title ?? ""));
         applyActivityNews({ conversationId: "worker-activity", entries: [], workers: [liveWorker("one", false), liveWorker("two", true), liveWorker("three", true)] });
         await wait(100);
         const someWorking = workerActivityRow();
         applyActivityNews({ conversationId: "worker-activity", entries: [], workers: [liveWorker("one", false), liveWorker("two", false), liveWorker("three", false)] });
-        await until(() => workerActivityRow()?.status === "done:Done");
+        await until(() => workerActivityRow()?.status === null);
         const idle = workerActivityRow();
         useActivity.setState((s) => ({ byConversation: { ...s.byConversation, ...Object.fromEntries([activity("worker-activity", { workersWorking: true, turnEndedAtMs: 1 })]) } }));
-        await until(() => workerActivityRow()?.status === "working:Working");
+        await until(() => workerActivityRow()?.status === "working");
         setResult(JSON.stringify({ before, someWorking, idle, reconnected: workerActivityRow(), threadReads: requests.filter((method) => method === "threadView") }));
       })();
       return;
     }
     if (params.has("questions")) {
       void (async () => {
-        await until(() => questionRow("question")?.status === "needsYou:Needs you");
+        await until(() => questionRow("question")?.status === "dot");
         const before = [questionRow("question"), questionRow("question-approval")];
         // Opening a session hides its waiting-question dot while it is in front of the user.
         useApp.setState({ selection: { type: "conversation", id: "question" } });
@@ -501,7 +501,7 @@ function Fixture() {
           envelope("conversation:question", { type: "questionUpdated", question: answered("q", "question", "Use blue") }),
           envelope("conversation:question-approval", { type: "questionUpdated", question: answered("qa", "question-approval", "Skipped") }),
         ]);
-        await until(() => questionRow("question")?.status === "working:Working" && questionRow("question-approval")?.status === "needsYou:Needs you");
+        await until(() => questionRow("question")?.status === "working" && questionRow("question-approval")?.status === "dot");
         setResult(JSON.stringify({ before, opened, after: [questionRow("question"), questionRow("question-approval")] }));
       })();
       return;
@@ -518,7 +518,7 @@ function Fixture() {
           const unread = row.querySelector<HTMLElement>('[data-slot="status-unread"]');
           const spinner = row.querySelector<HTMLElement>('[data-slot="status-spinner"]');
           const error = row.closest("button")?.querySelector<HTMLElement>('[data-slot="status-error"]');
-          const info = { beforeMark, error: !!error, plain: plainStatus(row), state: row.dataset.status ?? "done", rowWords: row.querySelector('[data-slot="status-word"]')?.textContent ?? null,
+          const info = { beforeMark, error: !!error, plain: plainStatus(row), state: row.dataset.status ?? null, rowWords: wordsOf(row.closest("button")!),
             unreadSize: unread?.getBoundingClientRect().width ?? null, unreadSlot: unread?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerSize: spinner ? Number.parseFloat(getComputedStyle(spinner).width) : null, spinnerSlot: spinner?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerDuration: spinner ? getComputedStyle(spinner).animationDuration : null,
@@ -578,13 +578,12 @@ function Fixture() {
         setTimeout(async () => {
           seen.rowsAfter = rows().map((row) => row.title);
           seen.projectHeaderAfter = projectHeader();
-          // A title too long for its row, beside a state word (issue 551): cut with "…" before the
-          // word, never faded under it; with no word, it fades out as before.
+          // A title too long for its row fades out at the end; no row has a word beside it (D3).
           const long = "Add a line at the end of hello.txt that says: checked by w124";
           useApp.setState((state) => ({ conversations: { ...state.conversations, "w13-a": { ...state.conversations["w13-a"]!, title: long }, "w11-a": { ...state.conversations["w11-a"]!, title: `${long}, again` } } }));
           await until(() => rowButton(long) !== undefined);
           seen.cut = cut(long);
-          // "Paused task" with its Stopped word, as any row with one.
+          // "Paused task", stopped: no mark, no word.
           seen.cutStopped = cut(`${long}, again`);
           setResult(JSON.stringify(seen));
         }, 100);

@@ -37,7 +37,7 @@ import {
 } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
 import { pickClick, pickedIn, prunePicked } from "@/state/picking";
-import { useTabStates } from "@/state/tabStates";
+import { useRowMark, useTabStates } from "@/state/tabStates";
 import { useApp } from "@/state/store";
 
 // ----- the Home panel --------------------------------------------------------------------
@@ -418,11 +418,13 @@ function FlyoutConversation({
   nested?: boolean;
   pick: (choose: () => void) => void;
 }) {
+  const { hover } = useRowMark(conversation.id);
   return (
     <li>
       <NavRow
         data-active={active}
         aria-current={active ? "page" : undefined}
+        title={hover ?? undefined}
         className={cn("pe-1.5", nested && "ps-8")}
         onClick={() => pick(() => openConversation(conversation.id))}
       >

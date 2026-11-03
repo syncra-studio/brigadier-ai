@@ -49,7 +49,6 @@ import {
 import { useBrowserOn } from "@/state/links";
 import { tabTitle } from "@/state/sessionTabTitle";
 import { useApp } from "@/state/store";
-import { useSessionStatus, useSidebarIndicators } from "@/state/tabStates";
 import { NewTabTools } from "../side-panel/NewTabTools";
 
 /** After a close, how long the pointer may be away from the tabs before they take the room back. */
@@ -113,8 +112,6 @@ export function SessionTabBar({
   useMockupTab(id);
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
-  const status = useSessionStatus(id);
-  const { error } = useSidebarIndicators(id);
   const strip = useRef<HTMLDivElement>(null);
   const mac = useApp((s) => s.info?.platform === "macos");
   const cwd = useCheckoutRoot();
@@ -253,8 +250,6 @@ export function SessionTabBar({
           title={chatTitle}
           active={active === CHAT_TAB}
           separator={active !== CHAT_TAB && tabs.length > 0 && tabs[0]?.id !== active || undefined}
-          status={status}
-          error={error}
           onRename={onRename}
         />
         <div
