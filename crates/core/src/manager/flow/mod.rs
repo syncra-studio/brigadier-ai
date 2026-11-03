@@ -42,6 +42,8 @@ static PATIENCE: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(crate:
 #[derive(Clone)]
 pub(crate) struct Turn {
     pub provider: ProviderKind,
+    /// The model its CLI was started on.
+    pub model: Option<String>,
     /// The tool set its session was started with: a thread's is [`ToolSet::Thread`].
     pub tools: brigadier_providers::ToolSet,
     /// Brigadier's instructions for the session (its system prompt addition), and a worker's
@@ -106,6 +108,8 @@ pub(crate) struct Reply {
     pub crash: Option<i32>,
     /// The turn fails on this error (an API error, say), which isn't retried.
     pub error: Option<String>,
+    /// The turn fails with its model at capacity, which isn't retried.
+    pub at_capacity: bool,
     /// Its text streams first, the CLI saying it is the turn's final answer.
     pub answer: bool,
 }
@@ -122,6 +126,14 @@ impl Reply {
     pub fn failed(message: impl Into<String>) -> Self {
         Self {
             error: Some(message.into()),
+            ..Self::default()
+        }
+    }
+
+    /// The turn fails with its model at capacity, an error the CLI doesn't retry.
+    pub fn at_capacity() -> Self {
+        Self {
+            at_capacity: true,
             ..Self::default()
         }
     }
@@ -146,6 +158,9 @@ impl Reply {
         }
     }
 }
+
+/// The line a real CLI gave up with (worker fabe89d3).
+pub(crate) const AT_CAPACITY: &str = "Selected model is at capacity. Please try a different model.";
 
 pub(crate) type Script = Arc<dyn Fn(Turn) -> BoxFuture<'static, Reply> + Send + Sync>;
 
@@ -670,6 +685,8 @@ pub(crate) struct FakeBehavior {
     pub fail_starts: std::sync::atomic::AtomicBool,
     /// How many CLI starts failed so.
     pub failed_starts: std::sync::atomic::AtomicU32,
+    /// CLI starts on these models fail.
+    pub fail_start_models: Mutex<Vec<String>>,
 }
 
 /// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
@@ -880,6 +897,17 @@ impl Provider for FakeCli {
                     "the CLI would not start".into(),
                 ));
             }
+            if spec.model.as_ref().is_some_and(|model| {
+                self.behavior
+                    .fail_start_models
+                    .lock()
+                    .unwrap()
+                    .contains(model)
+            }) {
+                return Err(brigadier_providers::Error::Spawn(
+                    "the CLI would not start on that model".into(),
+                ));
+            }
             let held = self.behavior.hold_start.lock().unwrap().take();
             if let Some((reached, release)) = held {
                 reached.notify_one();
@@ -947,6 +975,7 @@ impl Provider for FakeCli {
             let brief = BRIEFS.lock().unwrap().get(&native_id).cloned();
             let session = Arc::new(FakeSession {
                 kind: self.kind,
+                model: spec.model.clone(),
                 transcript: self.transcripts.join(&native_id),
                 session_file,
                 behavior: self.behavior.clone(),
@@ -1146,6 +1175,7 @@ impl Replayer for NoRecordings {
 
 struct FakeSession {
     kind: ProviderKind,
+    model: Option<String>,
     /// Its transcript ([`transcribe`]).
     transcript: PathBuf,
     /// Its session file in Claude Code's shape ([`FakeBehavior::session_file`]).
@@ -1267,6 +1297,7 @@ impl ProviderSession for FakeSession {
             let cwd = self.cwd.clone();
             let turn = Turn {
                 provider: self.kind,
+                model: self.model.clone(),
                 tools: self.tools,
                 prompt,
                 input: input_text(&input),
@@ -1394,6 +1425,7 @@ impl ProviderSession for FakeSession {
                         || reply.crash.is_some()
                         || reply.limit.is_some()
                         || reply.error.is_some()
+                        || reply.at_capacity
                         || stops.0.load(std::sync::atomic::Ordering::SeqCst);
                     let unread = {
                         let mut running = running.lock().unwrap();
@@ -1450,6 +1482,19 @@ impl ProviderSession for FakeSession {
                                 message: "You've hit your usage limit.".into(),
                                 will_retry: false,
                                 limit: Some(limit),
+                                code: None,
+                            },
+                        })
+                        .await;
+                    TurnStatus::Failed
+                } else if reply.at_capacity {
+                    let _ = tx
+                        .send(ProviderEvent::Error {
+                            error: brigadier_providers::ProviderError {
+                                kind: brigadier_providers::ErrorKind::Overloaded,
+                                message: AT_CAPACITY.into(),
+                                will_retry: false,
+                                limit: None,
                                 code: None,
                             },
                         })
@@ -2623,6 +2668,8 @@ mod mention_tests;
 mod merge_by_user_tests;
 #[cfg(unix)]
 mod merge_queue_tests;
+#[cfg(unix)]
+mod model_capacity_tests;
 #[cfg(unix)]
 mod no_push_tests;
 #[cfg(unix)]

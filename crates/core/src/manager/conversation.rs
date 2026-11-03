@@ -389,6 +389,17 @@ struct ConvState {
     /// The running turn failed on a usage limit (which window, and its reset, when the CLI
     /// said).
     limit_hit: Option<LimitHit>,
+    /// Its CLI gave up on the running turn because its model can't serve it now (at capacity,
+    /// overloaded, a server or network error): the next model goes on when the turn ends.
+    model_failed: bool,
+    /// The models its CLI gave up on in this run, never tried again in it. A run lasts until a
+    /// turn gets through, or nothing else can take it.
+    failed_models: Vec<super::fallback::TriedModel>,
+    /// The model this run started on (the one the user or routing chose): it goes back there
+    /// when nothing else can take it.
+    run_origin: Option<ModelChoice>,
+    /// The next turn goes on, on another model of its CLI, from one that could not serve it.
+    off_failed_model: bool,
     /// The running turn is one of its own that compacts the context: messages sent meanwhile
     /// wait for the next turn.
     compacting: bool,
@@ -2780,6 +2791,7 @@ impl SessionManager {
             state.landed = false;
             state.watchdog.begin(now_ms());
             state.limit_hit = None;
+            state.model_failed = false;
             state.turn_error = None;
             state.unshown_error = None;
             state.last_reply = None;
@@ -2871,7 +2883,8 @@ impl SessionManager {
                 }
                 let message = err.to_string();
                 self.fail_start_step(&conv.id, &message).await;
-                self.fail_turn(&conv, users, envelopes, &message).await;
+                self.turn_could_not_start(&conv, users, envelopes, &message)
+                    .await;
                 return;
             }
         };
@@ -2888,12 +2901,13 @@ impl SessionManager {
         if session && reseed && successor.is_none() {
             successor = self.seam_unresumed(&conv, &cli, &users).await;
         }
-        let (landed, landed_envelopes, after_limit) = {
+        let (landed, landed_envelopes, after_limit, off_failed_model) = {
             let mut state = conv.state.lock().await;
             (
                 std::mem::take(&mut state.continuing),
                 std::mem::take(&mut state.continuing_envelopes),
                 std::mem::take(&mut state.after_limit),
+                std::mem::take(&mut state.off_failed_model),
             )
         };
         // What the resumed session already holds isn't read again: it carries on with it.
@@ -2941,6 +2955,8 @@ impl SessionManager {
                     watchdog::CARRY_ON
                 } else if after_limit {
                     prompts::CONTINUE_AFTER_LIMIT
+                } else if off_failed_model {
+                    super::fallback::CONTINUE_ON_MODEL
                 } else {
                     prompts::CONTINUE_ON_ACCOUNT
                 },
@@ -3004,7 +3020,8 @@ impl SessionManager {
                 self.seam_not_started(&conv, successor).await;
             }
             let message = format!("The CLI did not take the turn: {err}");
-            self.fail_turn(&conv, users, envelopes, &message).await;
+            self.turn_could_not_start(&conv, users, envelopes, &message)
+                .await;
             return;
         }
         conv.state.lock().await.transition_send_accepted = true;
@@ -5011,6 +5028,9 @@ impl SessionManager {
                             },
                         }));
                 }
+                if self.seam_on(conv) && super::fallback::model_failed(error) {
+                    conv.state.lock().await.model_failed = true;
+                }
                 // An error that ends a request's turn is said once, by the failed request in
                 // the thread; a limit has its own hand-over, which says it in the thread
                 // (#506), and an error with no request to carry it is a notice.
@@ -5253,6 +5273,7 @@ impl SessionManager {
                         state.busy = true;
                         state.interrupted = false;
                         state.limit_hit = None;
+                        state.model_failed = false;
                         state.turn_error = None;
                         state.unshown_error = None;
                         state.last_reply = None;
@@ -5523,7 +5544,17 @@ impl SessionManager {
         if self.finish_thread_stall(conv).await {
             return;
         }
-        let (limit_hit, ended, landed, carried, served, end_commands, unshown, unread) = {
+        let (
+            limit_hit,
+            model_failed,
+            ended,
+            landed,
+            carried,
+            served,
+            end_commands,
+            unshown,
+            unread,
+        ) = {
             let mut state = conv.state.lock().await;
             // A Codex command still running when its turn ended goes on as its CLI's job; one
             // that ended unread is told as one that ends after it.
@@ -5549,6 +5580,7 @@ impl SessionManager {
             // Taken now, so no turn starts on it in between.
             let end_commands = (std::mem::take(&mut state.end_commands)
                 && state.limit_hit.is_none()
+                && !state.model_failed
                 && state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli)))
             .then(|| {
                 state.closing = true;
@@ -5618,7 +5650,22 @@ impl SessionManager {
             // interrupts it first. Its request isn't over until a hand-over is chosen: it goes
             // on elsewhere, or waits for quota, or fails then. No turn starts meanwhile.
             let limited = limit_hit.filter(|_| status != TurnStatus::Completed);
-            if limited.is_some() {
+            // Its model can't serve it now: likewise, the next model goes on with it.
+            let model_failed = std::mem::take(&mut state.model_failed)
+                && status == TurnStatus::Failed
+                && limited.is_none();
+            if status == TurnStatus::Completed {
+                state.failed_models.clear();
+                state.run_origin = None;
+            }
+            if model_failed {
+                state.run_origin.get_or_insert_with(|| cli.model.clone());
+                let failed = self.tried_model(&cli.model);
+                if !state.failed_models.contains(&failed) {
+                    state.failed_models.push(failed);
+                }
+            }
+            if limited.is_some() || model_failed {
                 state.hand_over = Some(HandOver {
                     request: served.clone(),
                     stopped: false,
@@ -5632,12 +5679,14 @@ impl SessionManager {
             if let Some(request) = &served
                 && let Some(ended) = ended.clone()
                 && limited.is_none()
+                && !model_failed
             {
                 let ended = auto_resume_ended(&mut state, request, ended);
                 state.outcomes.insert(request.clone(), ended);
             }
             (
                 limited,
+                model_failed,
                 ended,
                 state.landed,
                 std::mem::take(&mut state.in_turn),
@@ -5659,6 +5708,47 @@ impl SessionManager {
                 .await;
         }
         self.release_held(conv).await;
+        if model_failed {
+            // A move asked for in this turn goes on there (S38c), else the next Fallback row.
+            let asked = self.take_move(conv, cli.provider).await;
+            let tried = conv.state.lock().await.failed_models.clone();
+            let cause = match asked {
+                Some(_) => crate::work::ProviderTransitionCause::ManualSwitch,
+                None => crate::work::ProviderTransitionCause::AutomaticFallback,
+            };
+            if let Some(to) = asked.or_else(|| self.next_session_model(&cli.model, &tried)) {
+                self.prepare_provider_transition(
+                    conv,
+                    cli.model.clone(),
+                    to.clone(),
+                    cause,
+                    served.clone(),
+                )
+                .await;
+                // Not from inside the CLI's own event pump: closing the CLI waits for it.
+                let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
+                self.spawn(async move {
+                    manager
+                        .move_session_model(&conv, &cli.model, to, carried, landed)
+                        .await;
+                    manager.kick(&conv);
+                });
+                return;
+            }
+            // Nothing can take it: the run is over, it goes back to the model the run started
+            // on, and the turn fails, saying so.
+            let back_on = self.end_session_run(conv, &cli.model).await;
+            let said = ended.clone().map(|ended| match ended {
+                RequestState::Failed { error } => RequestState::Failed {
+                    error: super::fallback::nothing_takes_it(&error, &tried, back_on.as_ref()),
+                },
+                other => other,
+            });
+            self.turn_fails(conv, &served, said).await;
+            // What waited goes on there, as after any failed turn.
+            self.go_back_to_run_origin(conv, &cli.model, back_on, true)
+                .await;
+        }
         if let Some(limit) = limit_hit {
             self.runtime.note_limit(&cli.account, limit.clone()).await;
             #[cfg(test)]
@@ -5741,23 +5831,7 @@ impl SessionManager {
                 return;
             }
             // Nowhere to go: the turn fails (unless the user stopped it meanwhile).
-            let unserved = {
-                let mut state = conv.state.lock().await;
-                let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
-                match (&served, ended) {
-                    (Some(request), Some(ended)) if !stopped => {
-                        let ended = auto_resume_ended(&mut state, request, ended);
-                        state.outcomes.insert(request.clone(), ended);
-                        None
-                    }
-                    // No request says the limit: the thread does.
-                    (None, Some(RequestState::Failed { error })) if !stopped => Some(error),
-                    _ => None,
-                }
-            };
-            if let Some(error) = unserved {
-                self.moment(&conv.id, error).await;
-            }
+            self.turn_fails(conv, &served, ended).await;
         }
         self.set_run(&conv.id, RunState::Idle, None).await;
         self.settle_requests(&conv.id).await;
@@ -5774,6 +5848,194 @@ impl SessionManager {
             return;
         }
         self.kick(conv);
+    }
+
+    /// The session's run of model failures is over: the model it started on, where that is
+    /// another than `on`, its model now.
+    async fn end_session_run(&self, conv: &ConvLive, on: &ModelChoice) -> Option<ModelChoice> {
+        let mut state = conv.state.lock().await;
+        state.failed_models.clear();
+        state
+            .run_origin
+            .take()
+            .filter(|origin| !super::fallback::same_model(origin, on))
+    }
+
+    /// Nothing could take the session: it goes back to `origin`, with its row in the thread now,
+    /// as nothing launches until the next message, which tries that first. No turn starts in
+    /// between: the hand-over holds them, stopped so a move's successor waits for that message.
+    /// `kick`: what waits may go on there at once, not what a turn that never started kept.
+    async fn go_back_to_run_origin(
+        &self,
+        conv: &Arc<ConvLive>,
+        on: &ModelChoice,
+        origin: Option<ModelChoice>,
+        kick: bool,
+    ) {
+        let Some(origin) = origin else {
+            return;
+        };
+        conv.state.lock().await.hand_over = Some(HandOver {
+            request: None,
+            stopped: true,
+        });
+        let (manager, conv, on) = (self.arc(), conv.clone(), on.clone());
+        // Not from inside the CLI's own event pump: closing the CLI waits for it.
+        self.spawn(async move {
+            manager
+                .file_session_move_back(&conv, on.clone(), origin.clone())
+                .await;
+            manager
+                .move_session_model(&conv, &on, origin, Vec::new(), false)
+                .await;
+            if kick {
+                manager.kick(&conv);
+            }
+        });
+    }
+
+    /// The session goes from `on` to `to`: the same CLI session on another model of its CLI, or
+    /// a successor on another CLI. The next turn is the caller's to start.
+    async fn move_session_model(
+        &self,
+        conv: &Arc<ConvLive>,
+        on: &ModelChoice,
+        to: ModelChoice,
+        carried: Vec<Message>,
+        landed: bool,
+    ) {
+        if to.provider == on.provider {
+            self.switch_model(conv, to, carried, landed).await;
+        } else {
+            let death = format!(
+                "{} could not serve it (at capacity or failing) · continued on {}",
+                super::fallback::model_label(on),
+                super::fallback::model_label(&to)
+            );
+            self.seam_to_agent_because(conv, death, to, carried, landed)
+                .await;
+        }
+    }
+
+    /// A turn on the model its run moved to could not start: the next model goes on with what
+    /// it carried. A session in no such run, or with no model left, fails the turn as ever.
+    async fn turn_could_not_start(
+        &self,
+        conv: &Arc<ConvLive>,
+        users: Vec<Message>,
+        envelopes: Vec<(Envelope, Option<String>)>,
+        message: &str,
+    ) {
+        let conversation = self.core.conversation(&conv.id).ok();
+        let on = conversation.as_ref().and_then(setup_choice);
+        let tried = {
+            let mut state = conv.state.lock().await;
+            match &on {
+                Some(on) if self.seam_on(conv) && !state.failed_models.is_empty() => {
+                    let failed = self.tried_model(on);
+                    if !state.failed_models.contains(&failed) {
+                        state.failed_models.push(failed);
+                    }
+                    Some(state.failed_models.clone())
+                }
+                _ => None,
+            }
+        };
+        let (Some(on), Some(tried)) = (on, tried) else {
+            return self.fail_turn(conv, users, envelopes, message).await;
+        };
+        let Some(to) = self.next_session_model(&on, &tried) else {
+            let back_on = self.end_session_run(conv, &on).await;
+            let said = super::fallback::nothing_takes_it(message, &tried, back_on.as_ref());
+            self.fail_turn(conv, users, envelopes, &said).await;
+            return self.go_back_to_run_origin(conv, &on, back_on, false).await;
+        };
+        crate::logging::private_trace!(conv.private_logs, info, "the model a session moved to could not start"; conversation = %conv.id, error = %message);
+        let request = {
+            let mut state = conv.state.lock().await;
+            state.busy = false;
+            state.awaiting_start = false;
+            // Back in front, kept so under the inbox's lock.
+            self.keep_carried(&conv.id, &envelopes).await;
+            let mut inbox = envelopes;
+            inbox.append(&mut state.inbox);
+            state.inbox = inbox;
+            state.request.take()
+        };
+        self.prepare_provider_transition(
+            conv,
+            on.clone(),
+            to.clone(),
+            crate::work::ProviderTransitionCause::AutomaticFallback,
+            request,
+        )
+        .await;
+        self.move_session_model(conv, &on, to, users, false).await;
+        self.kick(conv);
+    }
+
+    /// A turn handed over with nowhere to go ends `ended` (unless the user stopped it
+    /// meanwhile); one with no request says so in the thread.
+    async fn turn_fails(
+        &self,
+        conv: &Arc<ConvLive>,
+        served: &Option<String>,
+        ended: Option<RequestState>,
+    ) {
+        let unserved = {
+            let mut state = conv.state.lock().await;
+            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+            match (served, ended) {
+                (Some(request), Some(ended)) if !stopped => {
+                    let ended = auto_resume_ended(&mut state, request, ended);
+                    state.outcomes.insert(request.clone(), ended);
+                    None
+                }
+                // No request says the limit: the thread does.
+                (None, Some(RequestState::Failed { error })) if !stopped => Some(error),
+                _ => None,
+            }
+        };
+        if let Some(error) = unserved {
+            self.moment(&conv.id, error).await;
+        }
+    }
+
+    /// The session's model can't serve it now and another model of its CLI can: the same CLI
+    /// session resumes on that one (D14). The failed turn's messages (`carried`) go on there
+    /// as [`Self::switch_account`]'s do.
+    async fn switch_model(
+        &self,
+        conv: &Arc<ConvLive>,
+        to: ModelChoice,
+        carried: Vec<Message>,
+        landed: bool,
+    ) {
+        let setup = self
+            .core
+            .conversation(&conv.id)
+            .ok()
+            .and_then(|conversation| {
+                let mut setup = conversation.setup?;
+                let Setup::Session { orchestrator, .. } = &mut setup else {
+                    return None;
+                };
+                *orchestrator = to;
+                Some(setup)
+            });
+        let recorded = match setup {
+            Some(setup) => self.core.set_setup(conv.id.clone(), setup).await.is_ok(),
+            None => false,
+        };
+        if !recorded {
+            self.fail_quota_handover(conv, "Could not record the model it moved to.")
+                .await;
+            return;
+        }
+        conv.restarting(WriteCause::Reroute).await;
+        conv.close_cli().await;
+        conv.state.lock().await.off_failed_model = landed;
+        self.go_on_where_it_stopped(conv, carried, landed).await;
     }
 
     /// `cli`'s account hit its limit and another account of its provider can take the work:
@@ -5811,6 +6073,19 @@ impl SessionManager {
         if let Err(err) = self.run_on_account(&conv.id, &cli.model, &next).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it moved to"; conversation = %conv.id, error = %err);
         }
+        self.go_on_where_it_stopped(conv, carried, landed).await;
+        self.kick(conv);
+    }
+
+    /// The same CLI session goes on after a hand-over: the failed turn's messages (`carried`)
+    /// go again, or, once the CLI had begun that turn (`landed`), a note to carry on goes in
+    /// their place. The next turn is the caller's to start.
+    async fn go_on_where_it_stopped(
+        &self,
+        conv: &Arc<ConvLive>,
+        carried: Vec<Message>,
+        landed: bool,
+    ) {
         let stopped = {
             let mut state = conv.state.lock().await;
             // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
@@ -5831,7 +6106,6 @@ impl SessionManager {
         if stopped {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }
-        self.kick(conv);
     }
 
     /// Records that the conversation now runs on `account`, in its own choice (where the app's
