@@ -169,6 +169,24 @@ def assistant_after(v, ms, text):
             and text.lower() in m["text"].lower()]
 
 
+def worker_event_words(jsonl):
+    """The user messages of a Claude transcript that carry the worker-events word."""
+    words = []
+    for line in open(jsonl):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if row.get("type") != "user":
+            continue
+        content = (row.get("message") or {}).get("content")
+        text = content if isinstance(content, str) else "".join(
+            b.get("text") or "" for b in content or [] if isinstance(b, dict))
+        if "[worker events wn-" in text:
+            words.append(text)
+    return words
+
+
 def turns(ipc_data, conv, from_ms, to_ms):
     """The thread's own turns the daemon metered for `conv` between the two times."""
     path = os.path.join(ipc_data, "routing.sqlite")
@@ -355,18 +373,26 @@ class Smoke:
         time.sleep(3)
         follow_code, steer_code = code("F"), code("S")
         follow_out, _ = self.send("C1", f"Also, put the code {follow_code} in your answer.", codes=[follow_code])
-        time.sleep(5)
+        follow_deciding = False
+
+        def look_deciding():
+            nonlocal follow_deciding
+            for item in self.view("C1")["queue"]["items"]:
+                if item.get("deciding") and follow_code in item["text"]:
+                    follow_deciding = True
+
+        # The judge settles it in seconds (D157): look while it decides.
+        sent_at = time.time()
+        while time.time() < sent_at + 5:
+            look_deciding()
+            time.sleep(0.1)
         _, steer_id = self.send("C1", f"And put the code {steer_code} in your answer too.", steer=True, codes=[steer_code])
         steer_at = now_ms()
         deferred, deferred_after, cmd_end = {}, None, None
-        follow_deciding = False
         deadline = time.time() + long + 150
         t1 = None
         while time.time() < deadline:
             v = self.view("C1")
-            for item in v["queue"]["items"]:
-                if item.get("deciding") and follow_code in item["text"]:
-                    follow_deciding = True
             running = any(s["status"] == "inProgress" and self.runs("C1", s, f"hold.sh {long}") for s in tool_steps(v))
             if not running and cmd_end is None:
                 cmd_end = now_ms()
@@ -525,9 +551,11 @@ class Smoke:
                   f"{[st['status'] for st in ran]}")
         check(sc, "the worker shows in its session's Workers row", len(seen) == 1, f"{len(seen)} workers seen")
         check(sc, "the worker is never in the sidebar", not in_sidebar, f"in the sidebar: {sorted(in_sidebar)}")
-        closed = [st for st in v["orchestratorSteps"] if st["kind"].get("type") == "stopped"
-                  and st["kind"].get("taskId") in seen and st["kind"].get("reason") == "Closed by its session."]
-        check(sc, "close stopped the worker", len(closed) == 1, f"{len(closed)} closes")
+        closed = [t["id"] for t in v.get("tasks", []) if t["id"] in seen and (t.get("plain") or {}).get("closed")]
+        check(sc, "close ended the worker", len(closed) == 1, f"{len(closed)} closed")
+        # It had finished: its close files no "Stopped" row (D104).
+        stopped = [st for st in v["orchestratorSteps"] if st["kind"].get("type") == "stopped" and st["kind"].get("taskId") in seen]
+        check(sc, "the finished worker reads finished, not stopped", not stopped, f"{len(stopped)} Stopped rows")
         check(sc, "the answer carries the worker's reply", assistant_after(v, start, reply_code), f"no answer with {reply_code}")
 
     def scenario_workers(self):
@@ -557,14 +585,12 @@ class Smoke:
         check(sc, "the request is stopped", req and state_of(req) == "stopped", f"state {state_of(req) if req else 'none'}")
         waits = [st["status"] for st in tool_steps(v) if st.get("requestId") == rid and self.runs("C1", st, "brigadier wait")]
         check(sc, "the wait ended with the Stop", waits and "inProgress" not in waits, f"waits: {waits}")
-        try:
-            entries = self.ipc.call({"method": "threadView", "conversationId": self.convs["C1"]})["view"]["entries"]
-        except RuntimeError:
-            entries = []
-        nets = [e for e in entries if e["event"].get("type") == "message" and e["event"].get("role") == "user"
-                and "[worker events wn-" in (e["event"].get("text") or "")]
-        check(sc, "the worker's end reaches the thread once", len(nets) == 1 and late in nets[0]["event"]["text"],
-              f"{len(nets)} net messages" + (f": {nets[0]['event']['text'][:200]!r}" if nets else ""))
+        # The net's word is internal (hidden from the thread view), so read it from C1's own transcript.
+        self.note_native()
+        native = self.native.get("C1", (None, ""))[1]
+        nets = [t for f in self.claude_files() if f.endswith(f"{native}.jsonl") for t in worker_event_words(f)]
+        check(sc, "the worker's end reaches the thread once", len(nets) == 1 and late in nets[0],
+              f"{len(nets)} net messages" + (f": {nets[0][:200]!r}" if nets else ""))
         n = turns(self.data, self.convs["C1"], stopped_at + 1000, now_ms())
         check(sc, "one turn starts for it", n == 1, f"{n} turns metered after the Stop")
     # -- scenario 5: every finished request has a real answer --

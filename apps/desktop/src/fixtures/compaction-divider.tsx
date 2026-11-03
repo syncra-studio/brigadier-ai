@@ -8,7 +8,9 @@
  * a thread taller than the view, at its bottom, through Brigadier's compaction as the app hears
  * it: the compaction running, its end and the `/compact` Claude echoes said by the stream before
  * the turns are read again, then read. IPC is mocked, no daemon. What the thread shows goes to
- * `<pre id="compaction-divider-result">`.
+ * `<pre id="compaction-divider-result">`. `?case=rebirth`: a hand-off as the app hears it, frame by
+ * frame: the note turn and its goal 13 fix running, the seam closed, then the successor carrying
+ * on (core-goals D120).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -24,6 +26,7 @@ import { useApp } from "@/state/store";
 const params = new URLSearchParams(location.search);
 const MIDTURN = params.get("case") === "midturn";
 const LIVE = params.get("case") === "live";
+const REBIRTH = params.get("case") === "rebirth";
 const LAST = params.has("last");
 
 const ID = "compaction-divider";
@@ -57,7 +60,7 @@ const earlier: ThreadView = {
   turns: Array.from({ length: 6 }, (_, n) => turn(`u${n}`, n * 10, n * 10 + 5, "done", [`r${n}`])),
 };
 
-const thread: ThreadView = LIVE ? earlier : MIDTURN
+const thread: ThreadView = LIVE || REBIRTH ? earlier : MIDTURN
   ? {
       entries: [
         at(0, user("u1", "Tidy the release notes.")),
@@ -133,7 +136,46 @@ for (let tries = 0; tries < 100 && blocks().length === 0; tries++) await wait(50
 await wait(300);
 const frames = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 const bubbleTexts = () => [...document.querySelectorAll("[data-role=user]")].map((bubble) => text(bubble.querySelector(".aui-user-message-content")) ?? text(bubble));
-if (LIVE) {
+if (REBIRTH) {
+  const NUDGE = "[Brigadier] A fresh session will continue this work.";
+  const seam = { n: 1, open: true, at: null, carried: false, nudge: "n1", note: null, start: null, death: null, movedTo: null };
+  const noteTurn: ThreadView = {
+    entries: [...earlier.entries, at(70, user("n1", `${NUDGE} Finish the step you are on…`)), at(72, reply("h1", "Handed off.")),
+      at(73, user("f1", `${NUDGE} Hand-off check: your hand-off note at /x/1.md leaves out…`)), at(75, reply("h2", "Fixed."))],
+    turns: [...earlier.turns, turn("n1", 70, 72, "done", []), turn("f1", 73, 76, "done", [])],
+    seams: [seam],
+  };
+  const steps: { step: string; seams: (string | null)[]; asked: boolean; texts: string; order: string[] }[] = [];
+  const note = (step: string) =>
+    steps.push({
+      step,
+      seams: [...document.querySelectorAll("[data-slot=seam]")].map(text),
+      asked: bubbleTexts().some((said) => said?.startsWith("[Brigadier]") ?? false),
+      texts: text(document.querySelector("main")) ?? "",
+      order: [...document.querySelectorAll("[data-role=user], [data-slot=seam], [data-slot=aui_assistant-message-content][data-answer]")].map((element) =>
+        element.matches("[data-role=user]") ? "user" : element.matches("[data-slot=seam]") ? "seam" : "answer",
+      ).slice(-3),
+    });
+  const show = async (step: string, next: ThreadView) => {
+    useCliThread.setState((state) => ({ views: { ...state.views, [ID]: next } }));
+    for (let frame = 0; frame < 8; frame++) {
+      await frames();
+      note(step);
+    }
+  };
+  note("before");
+  await show("writing", noteTurn);
+  await show("closed", { ...noteTurn, seams: [{ ...seam, open: false, note: "/x/1.md" }] });
+  await show("successor", {
+    entries: [...noteTurn.entries, at(80, user("s1", "Carry on from the hand-off note.")), at(84, reply("c1", "Carrying on with step 6."))],
+    turns: [...noteTurn.turns, turn("s1", 80, 85, "done", [])],
+    seams: [{ ...seam, open: false, at: "s1", carried: true, note: "/x/1.md" }],
+  });
+  const result = document.createElement("pre");
+  result.id = "compaction-divider-result";
+  result.textContent = JSON.stringify({ failed: text(document.querySelector("[data-slot=turn-render-error]")), steps });
+  document.body.append(result);
+} else if (LIVE) {
   const viewport = document.querySelector<HTMLElement>("[data-slot=aui_thread-viewport]")!;
   const steps: { step: string; top: number; bottom: number; asked: boolean }[] = [];
   const note = (step: string) =>

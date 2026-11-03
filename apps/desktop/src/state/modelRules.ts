@@ -31,12 +31,12 @@ export function prefetchModelRules(): void {
   if (useApp.getState().connection.status === "connected") void loadModelRules();
 }
 
-/** Reads the rules file whenever the page opens (and on reconnecting). */
-export function useModelRulesRead(): void {
+/** Reads the rules file whenever the page opens (and on reconnecting); `once`, only while none was read yet. */
+export function useModelRulesRead(once = false): void {
   const connected = useApp((s) => s.connection.status === "connected");
   useEffect(() => {
-    if (connected) void loadModelRules();
-  }, [connected]);
+    if (connected && !(once && useModelRules.getState().view !== null)) void loadModelRules();
+  }, [connected, once]);
 }
 
 /** Writes the rows and rules to the file; what the daemon read back replaces the view. */

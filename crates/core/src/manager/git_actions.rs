@@ -9,6 +9,7 @@
 //! works in the project folder will work. One that will make its own copy shows it read-only;
 //! the window keeps to that, as only it knows how the session will be set up.
 
+use brigadier_providers::KindFacts as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -439,7 +440,7 @@ impl SessionManager {
                 // out until its reset.
                 match self
                     .runtime
-                    .switch_target(&account, choice.model.as_deref())
+                    .switch_target(&account, choice.model.as_deref(), None)
                     .filter(|next| !limited.contains(&(next.clone(), model.clone())))
                 {
                     Some(next) => account = next,
@@ -502,14 +503,15 @@ impl SessionManager {
             && self.provider_ready(chosen.provider)
             && switched_on(chosen)
             && !excluded(chosen.provider, chosen.model.as_deref())
-            && let Some(account) = self
-                .runtime
-                .switch_target(&self.runtime.account_for(chosen), chosen.model.as_deref())
+            && let Some(account) = self.runtime.switch_target(
+                &self.runtime.account_for(chosen),
+                chosen.model.as_deref(),
+                None,
+            )
         {
             return Ok((chosen.clone(), account, None));
         }
-        let ready = ProviderKind::ALL
-            .into_iter()
+        let ready = brigadier_providers::adapters::kinds()
             .filter(|provider| self.provider_ready(*provider));
         for (provider, (model, effort)) in ready.flat_map(|provider| {
             self.writer_models(provider)
@@ -580,7 +582,7 @@ impl SessionManager {
     }
 
     /// Shared tool-less transport. The caller's deadline covers startup and the reply; cleanup
-    /// continues independently if closing a CLI takes longer than the remaining budget.
+    /// continues on its own after.
     pub(super) async fn run_writer_until(
         &self,
         choice: &ModelChoice,
@@ -611,7 +613,6 @@ impl SessionManager {
             mcp_servers: Vec::new(),
             tools: ToolSet::None,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
@@ -677,16 +678,15 @@ impl SessionManager {
         .await
         .unwrap_or_else(|_| Err(Error::Provider("the message writer took too long".into())));
         let runtime = self.runtime.clone();
-        let (done, cleaned) = tokio::sync::oneshot::channel();
+        // The reply is in: its CLI's close goes on beside the caller, which never waits for it
+        // (a second or more on every CLI, D177).
         self.spawn(async move {
             if let Some(session) = running {
                 session.close().await;
             }
             let _ = runtime.ledger().dispose(&owner).await;
             let _ = tokio::fs::remove_dir_all(&dir).await;
-            let _ = done.send(());
         });
-        let _ = tokio::time::timeout_at(deadline, cleaned).await;
         written
     }
 
@@ -716,10 +716,12 @@ impl SessionManager {
     /// The provider's cheapest model for a one-off chore, at low effort where it has efforts:
     /// see [`chore_model`]. When its list has none, the chore isn't done.
     pub(super) fn cheapest(&self, provider: ProviderKind) -> Result<(String, Option<String>)> {
-        let family = match provider {
-            ProviderKind::Claude => "haiku",
-            ProviderKind::Codex => "luna",
+        let Some(adapter) = brigadier_providers::adapters::adapter(provider) else {
+            return Err(Error::Invalid(format!(
+                "{provider} is not a CLI Brigadier drives"
+            )));
         };
+        let family = adapter.chore_family;
         let settings = self.core.settings();
         let available =
             |id: &str| crate::routing::availability::model_available(&settings, provider, id);
@@ -747,7 +749,7 @@ impl SessionManager {
                 provider.label()
             ))
         })?;
-        let effort = (provider == ProviderKind::Codex).then(|| "low".to_owned());
+        let effort = adapter.chore_effort.map(str::to_owned);
         Ok((model, effort))
     }
 }
@@ -965,10 +967,7 @@ mod tests {
     fn chore(provider: ProviderKind, listed: &[ModelInfo], hidden: &[&str]) -> Option<String> {
         let registry = brigadier_router::Registry::bundled();
         let merged = brigadier_router::merge(&registry, &[(provider, listed)], &[], &[]);
-        let family = match provider {
-            ProviderKind::Claude => "haiku",
-            ProviderKind::Codex => "luna",
-        };
+        let family = brigadier_providers::adapters::adapter(provider)?.chore_family;
         chore_model(listed, &merged, family, |id| !hidden.contains(&id))
     }
 

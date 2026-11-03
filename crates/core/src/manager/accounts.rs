@@ -1,7 +1,7 @@
 //! Settings → Accounts: adding and removing the user's extra CLI accounts. Signing one in is
 //! the CLI's own sign-in, run by the daemon in a terminal with the account's home.
 
-use brigadier_providers::ProviderKind;
+use brigadier_providers::{KindFacts as _, ProviderKind};
 
 use super::SessionManager;
 use crate::accounts::AccountRef;
@@ -12,6 +12,16 @@ impl SessionManager {
     /// Adds an extra account of `provider`: its home is made, linked to the user's own, and
     /// ready for the CLI's own sign-in.
     pub async fn add_account(&self, provider: ProviderKind) -> Result<AccountEntry> {
+        // Refused before it is saved: an entry its CLI can't give a home would stay behind.
+        if brigadier_providers::adapters::adapter(provider)
+            .and_then(|adapter| adapter.home)
+            .is_none()
+        {
+            return Err(Error::Invalid(format!(
+                "{} takes no extra accounts",
+                provider.label()
+            )));
+        }
         let entry = AccountEntry {
             id: format!("acct-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
             provider,
@@ -32,8 +42,11 @@ impl SessionManager {
                 "the account's folder couldn't be set up".into(),
             ));
         }
-        // The folders the user trusts are trusted on the new account too.
-        if provider == ProviderKind::Claude {
+        // The folders the user trusts are trusted on the new account too, where it keeps its
+        // own trust.
+        if brigadier_providers::trust::account_file(provider, &self.runtime.account_home(&entry.id))
+            .is_some()
+        {
             self.reconcile_trust().await;
         }
         Ok(entry)
@@ -59,6 +72,8 @@ impl SessionManager {
                     .into(),
             ));
         }
+        // Kept first: an account whose chats couldn't be kept stays (D111).
+        self.runtime.keep_account_sessions(id).await?;
         if let Err(err) = self.runtime.sign_out(&entry).await {
             tracing::warn!(account = id, error = %err, "the account's CLI didn't sign out");
         }

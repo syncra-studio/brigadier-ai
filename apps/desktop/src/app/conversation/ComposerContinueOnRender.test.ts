@@ -10,7 +10,8 @@ test("a session's model picker continues on another agent from its models, and t
   assert.deepEqual(seen.claude, { line: null, models: ["Opus 5.5Default"] });
   // The other agent's list says a pick continues there; picking its model moves the session on it.
   const line = "Picking a model continues on Codex: fresh context, with a hand-off note.";
-  assert.deepEqual(seen.codex, { line, models: ["GPT-5.5"] });
+  // Each agent's list marks its own default (D41).
+  assert.deepEqual(seen.codex, { line, models: ["GPT-5.5Default", "GPT-5.5 Mini"] });
   assert.deepEqual(seen.asked, [{ provider: "codex", model: { provider: "codex", model: "gpt-5.5", effort: "medium" } }]);
   // ↓ from the search to the picked model, ← to its agent, ↓ browses the next, Space into its
   // models, ← back, → into its models, typing searches, the first Escape clears the search and
@@ -19,13 +20,13 @@ test("a session's model picker continues on another agent from its models, and t
     ["ArrowDown", "Opus 5.5Default"],
     ["ArrowLeft", "Claude Code"],
     ["ArrowDown", "Codex"],
-    [" ", "GPT-5.5"],
+    [" ", "GPT-5.5Default"],
     ["ArrowLeft", "Codex"],
-    ["ArrowRight", "GPT-5.5"],
+    ["ArrowRight", "GPT-5.5Default"],
     ["g", "search:g"],
     ["Escape", "search:"],
   ]);
   assert.equal(seen.browsingLine, line);
-  assert.deepEqual(seen.searched, ["GPT-5.5Codex"]);
+  assert.deepEqual(seen.searched, ["GPT-5.5CodexDefault", "GPT-5.5 MiniCodex"]);
   assert.equal(seen.openAfterEscape, true);
 });

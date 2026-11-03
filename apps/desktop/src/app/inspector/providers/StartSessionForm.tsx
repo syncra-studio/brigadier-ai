@@ -10,6 +10,7 @@ import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { startRawSession } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
+import { cliFacts, PROVIDERS } from "@/lib/providerKinds";
 
 /** Model choices for a provider: the CLI's default, then its live list. */
 function modelOptions(overview: ProviderOverview | undefined) {
@@ -25,7 +26,7 @@ function modelOptions(overview: ProviderOverview | undefined) {
 
 export function StartSessionForm() {
   const overviews = useApp((s) => s.providers.view?.providers ?? []);
-  const [provider, setProvider] = useState<ProviderKind>("claude");
+  const [provider, setProvider] = useState<ProviderKind>(PROVIDERS[0]!);
   const [cwd, setCwd] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
@@ -68,7 +69,7 @@ export function StartSessionForm() {
             variant="outline"
             value={provider}
             onValueChange={(value) => {
-              if (value === "claude" || value === "codex") {
+              if (value) {
                 setProvider(value);
                 setModel("");
                 setEffort("");
@@ -76,12 +77,11 @@ export function StartSessionForm() {
             }}
             aria-label="Provider"
           >
-            <ToggleGroupItem value="claude" className="text-xs">
-              Claude Code
-            </ToggleGroupItem>
-            <ToggleGroupItem value="codex" className="text-xs">
-              Codex
-            </ToggleGroupItem>
+            {PROVIDERS.map((id) => (
+              <ToggleGroupItem key={id} value={id} className="text-xs">
+                {cliFacts(id).label}
+              </ToggleGroupItem>
+            ))}
           </ToggleGroup>
           <Picker
             label="Model"

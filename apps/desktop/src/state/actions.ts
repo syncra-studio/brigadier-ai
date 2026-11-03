@@ -41,9 +41,9 @@ import { providerForSetting } from "@/state/providerDestination";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
-import { onRealActivity, realActivity, workHolds } from "@/state/activity";
-import { useCliThread } from "@/state/cliThread";
-import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
+import { onRealActivity, realActivity, rowActivity, useActivity, workHolds } from "@/state/activity";
+import { loadThreadView, useCliThread, useUnreadThreads } from "@/state/cliThread";
+import { workerDone } from "@/app/conversation/workerPresentation";
 import {
   boardHeld,
   boardOf,
@@ -256,30 +256,90 @@ let beforeSettings: Selection = { type: "draft", kind: "chat" };
 export function select(selection: Selection, mode: HistoryMode = "push"): Promise<void> {
   const asked = ++selecting;
   if (selection.type === "conversation" && !conversationHeld(selection.id)) {
-    // Nothing of it is held yet: it shows once its view and the code of its replies are in,
-    // whole and as it really stands (#484, #500), unless something else is asked for meanwhile.
-    // A view that fails to load shows it anyway, with its error and Retry.
-    const loaded = loadConversation(selection.id).catch((error: unknown) => {
-      console.error("loading the conversation failed", error);
-    });
+    // Nothing of it is held yet: it shows once its view, its CLI's thread and the code of its
+    // replies are in, whole and as it really stands (#484, #500), unless something else is asked
+    // for meanwhile; the thread shown before stays until then, never a blank one. A view that
+    // fails to load shows it anyway, with its error and Retry; a thread that fails to read, from
+    // the messages Brigadier keeps.
     const code = import("@/app/conversation/threadCode").then((thread) => thread.preloadThreadCode()).catch(() => {});
-    return Promise.all([loaded, code]).then(() => {
-      if (asked === selecting) show(selection, mode, false);
+    return Promise.all([readRecords(selection.id), readThread(selection.id), code]).then(() => {
+      if (asked === selecting) show(selection, mode);
     });
   }
-  show(selection, mode, true);
+  show(selection, mode);
   return Promise.resolve();
 }
 
 /** The newest `select`: an earlier one still waiting for its conversation shows nothing. */
 let selecting = 0;
 
-/** Whether a conversation's thread and board are held, so it can show at once as it stands. */
+/**
+ * Whether a conversation's thread, board and CLI thread are held, so it can show at once as it
+ * stands: live events keep what is held current, and a reconnect reads again what shows.
+ */
 function conversationHeld(id: string): boolean {
+  return recordsHeld(id) && !!useCliThread.getState().views[id];
+}
+
+/** Whether a conversation's messages and board are held. */
+function recordsHeld(id: string): boolean {
   return !!useApp.getState().threads[id] && boardHeld(id);
 }
 
-function show(selection: Selection, mode: HistoryMode, refresh: boolean): void {
+/** Reads a conversation's records unless they are held; never throws (it shows with its error). */
+function readRecords(id: string): Promise<void> | undefined {
+  if (recordsHeld(id)) return undefined;
+  return loadConversation(id).catch((error: unknown) => {
+    console.error("loading the conversation failed", error);
+  });
+}
+
+/** Reads a conversation's CLI thread unless it is held. */
+function readThread(id: string): Promise<void> | undefined {
+  return useCliThread.getState().views[id] ? undefined : loadThreadView(id);
+}
+
+/**
+ * Reads ahead, one at a time while the page is idle, the conversations likely opened next:
+ * every running one and the ten most recently updated. Each then opens at once as it stands, and
+ * a running one's thread follows its stream while it isn't shown.
+ */
+export function prewarmConversations(conversations = useApp.getState().conversations): void {
+  const { byConversation } = useActivity.getState();
+  const live = Object.values(conversations).filter((conversation) => conversation.lifecycle !== "archived");
+  const running = live.filter((conversation) => rowActivity(byConversation[conversation.id]).running);
+  const recent = live.toSorted((a, b) => b.updatedAtMs - a.updatedAtMs).slice(0, PREWARM_RECENT);
+  warming = [...new Set([...running, ...recent].map((conversation) => conversation.id))];
+  if (!prewarming) void prewarmNext();
+}
+
+const PREWARM_RECENT = 10;
+let warming: string[] = [];
+let prewarming = false;
+
+async function prewarmNext(): Promise<void> {
+  prewarming = true;
+  try {
+    for (let id = warming.shift(); id !== undefined; id = warming.shift()) {
+      // One whose thread didn't read is read again when it opens, not on every change of the list.
+      if (conversationHeld(id) || useUnreadThreads.getState().failed[id]) continue;
+      await idle();
+      await Promise.all([readRecords(id), readThread(id)]);
+    }
+  } finally {
+    prewarming = false;
+  }
+}
+
+/** Once the page is idle (or a moment has passed, where it never says so). */
+function idle(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestIdleCallback === "function") requestIdleCallback(() => resolve(), { timeout: 500 });
+    else setTimeout(resolve, 50);
+  });
+}
+
+function show(selection: Selection, mode: HistoryMode): void {
   const { selection: shown } = useApp.getState();
   if (selection !== shown) {
     cancelSettingReveal();
@@ -304,11 +364,6 @@ function show(selection: Selection, mode: HistoryMode, refresh: boolean): void {
     const beside = boardOf(selection.id);
     useBoard.setState({ board: takeKeptBoard(selection.id) ?? (beside?.loaded ? beside : emptyBoard(selection.id)) });
   }
-  // What is held is read again, in case something was missed; it shows meanwhile.
-  if (!refresh) return;
-  void loadConversation(selection.id).catch((error: unknown) => {
-    console.error("loading the conversation failed", error);
-  });
 }
 
 /** What was shown when Settings opened (what the Inspector's Orchestrator tab starts on). */
@@ -644,6 +699,7 @@ export async function send(
     updateThread(conversationId, () => emptyThread);
     // A new conversation has nothing to read: it shows at once, its events filling it.
     keepBoard({ ...emptyBoard(conversationId), loaded: true });
+    useCliThread.setState((state) => ({ views: { ...state.views, [conversationId]: { entries: [], turns: [] } } }));
     // Only follow the new conversation if the user is still looking at the draft.
     if (useApp.getState().selection === selection) {
       useApp.setState({ draft: emptyDraft(null) });
@@ -745,6 +801,9 @@ export async function send(
         items.splice(Math.min(slot ?? items.length, items.length), 0, outcome.item);
         return { ...current, queue: { ...current.queue, items } };
       });
+      // Its turn, when its time comes, is placed as a sent one's is (seen live: one judged to wait
+      // played out below the view).
+      if (localId) expectSentTurn(conversationId, outcome.item.id);
     }
   } finally {
     if (localId && useApp.getState().pending.some((entry) => entry.localId === localId)) {
@@ -886,6 +945,12 @@ export async function restoreQueued(
   item: QueuedMessage,
   index: number,
 ): Promise<void> {
+  // One for a worker goes back as that worker's (goal 8).
+  if (item.worker) {
+    await sendToWorker(conversationId, item.worker, item, { queueIndex: index });
+    await loadConversation(conversationId).catch(() => {});
+    return;
+  }
   const { outcome } = await request({
     method: "sendMessage",
     conversationId,
@@ -1021,12 +1086,6 @@ export async function runQueuedHere(conversationId: string, itemId: string): Pro
 /** Dismisses the notice above the composer made at `atMs`, for good (D51). */
 export async function dismissNotice(conversationId: string, atMs: number): Promise<void> {
   await request({ method: "dismissNotice", conversationId, atMs });
-}
-
-/** Dismisses the notice of a queued message the session sent on to one of its workers. */
-export async function dismissSent(conversationId: string, itemId: string): Promise<void> {
-  const { queue } = await request({ method: "dismissSent", conversationId, itemId });
-  showQueue(conversationId, queue);
 }
 
 export async function resumeQueue(conversationId: string): Promise<void> {
@@ -1218,20 +1277,6 @@ export async function dontResume(conversationId: string): Promise<void> {
   await request({ method: "dontResume", conversationId });
 }
 
-/**
- * The Workers strip's Stop all: stops every running or waiting worker of the conversation; the
- * ids stopped. They show stopped at once. The CLI's own background agents are the Subagents
- * strip's, with a Stop all of its own: they go on.
- */
-export async function stopWorkers(conversationId: string): Promise<string[]> {
-  const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
-  return showStopped(
-    { conversationId, turn: false, tasks: ids },
-    async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
-    (taskIds) => taskIds,
-  );
-}
-
 /** The user's notes on a mockup, with the marked screenshots, to the mockup's worker. */
 export async function sendMockupNotes(taskId: string, text: string, attachments: AttachmentRef[]): Promise<void> {
   await request({ method: "sendMockupNotes", taskId, text, attachments });
@@ -1245,8 +1290,9 @@ export async function sendToWorker(
   conversationId: string,
   taskId: string,
   message: { text: string; attachments: AttachmentRef[]; mentions: Mention[] },
+  how: { steer?: boolean; queueIndex?: number } = {},
 ): Promise<{ queued: boolean }> {
-  const { queued } = await request({ method: "sendToWorker", conversationId, taskId, ...message });
+  const { queued } = await request({ method: "sendToWorker", conversationId, taskId, ...message, ...how });
   return { queued };
 }
 

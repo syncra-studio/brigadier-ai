@@ -664,6 +664,8 @@ fn worker_job(
 ) -> brigadier_providers::ProviderEvent {
     brigadier_providers::ProviderEvent::BackgroundTask {
         task: brigadier_providers::BackgroundTask {
+            command: None,
+            provider: None,
             id: "bg1".into(),
             item_id: None,
             kind: brigadier_providers::BackgroundTaskKind::Shell,
@@ -747,6 +749,10 @@ async fn a_worker_whose_own_background_commands_still_run_still_works() {
         !working().await
     })
     .await;
-    assert!(!flow.manager.work_holds(&conv).await);
+    // Its word owes the session a turn, which holds the work until it starts (D24, D94).
+    super::eventually_async("the turn its word owes to start", || async {
+        !flow.manager.work_holds(&conv).await
+    })
+    .await;
     flow.stop().await;
 }

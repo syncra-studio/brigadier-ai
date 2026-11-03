@@ -13,20 +13,27 @@ export function workerNow(row: WorkerRow, now: number): WorkerNow {
   const state = workerStateOf(row, now);
   if (state.kind !== "working") return state;
   const step = (row.steps ?? []).findLast((each) => !isPlumbing(each.name));
-  if (step) return { kind: "working", word: stepWords({ ...step, status: "inProgress" }).doing, step: true };
+  if (step) return { kind: "working", word: callWords(step), step: true };
   const doing = row.doing;
   switch (doing?.type) {
     case "call":
-      return isPlumbing(doing.step.name) ? state : { kind: "working", word: stepWords({ ...doing.step, status: "inProgress" }).doing, step: true };
+      return isPlumbing(doing.step.name) ? state : { kind: "working", word: callWords(doing.step), step: true };
     case "thinking":
       return { kind: "working", word: "Thinking…" };
     case "writing":
       return { kind: "working", word: "Writing…" };
     case "said":
-      return { kind: "working", word: doing.line, step: true };
+      // Plain words: no markdown marks (D195).
+      return { kind: "working", word: doing.line.replace(/`|\*\*|^#+\s+|^[-*]\s+/g, ""), step: true };
     default:
       return state;
   }
+}
+
+/** A call at work in plain words: a compound command's shell bits read "Running a command" (D195). */
+function callWords(step: StepAtWork): string {
+  const words = stepWords({ ...step, status: "inProgress" });
+  return words.kind === "run" && /[;&|<>`$(]/.test(words.object ?? "") ? "Running a command" : words.doing;
 }
 
 /** A worker's state, or what it does: `step` when its words are its call's. */
@@ -38,25 +45,6 @@ export type WorkerNow = WorkerState & { step?: true };
  */
 export function nowInLine(state: WorkerNow): string {
   return state.step && !/^\p{Lu}\p{Ll}+ing\b/u.test(state.word) ? state.word : lowerFirst(state.word);
-}
-
-/**
- * A call at work, as the engine names a worker's (`worker_rows::step_of`), from an item of a
- * CLI's thread; `null` for what is no call, or one that ended.
- */
-export function stepAtWork(event: ProviderEvent): StepAtWork | null {
-  switch (event.type) {
-    case "command":
-      return event.status === "inProgress" && event.command ? { name: "shell", detail: event.command } : null;
-    case "toolCall":
-      return event.status === "inProgress" ? { name: event.name, detail: detailOf(event.input) } : null;
-    case "fileChanges":
-      return event.status === "inProgress" ? { name: "apply_patch", detail: changesDetail(event.changes.map((change) => change.path)) } : null;
-    case "image":
-      return event.status === "inProgress" ? { name: "imagegen", detail: event.prompt } : null;
-    default:
-      return null;
-  }
 }
 
 /**

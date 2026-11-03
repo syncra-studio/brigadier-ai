@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ExclamationMarkCircle, Spinner } from "@/components/icons";
 import { Button } from "@/components/controls";
 import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
@@ -8,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { loadProviders, refreshProviders } from "@/state/actions";
 import { closeSetupTerminal } from "@/state/onboarding";
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 /*
  * Signing an extra account in, in a terminal row on the Providers page.
@@ -123,7 +123,7 @@ export function SetupTerminal({
     [],
   );
 
-  const label = PROVIDER_LABELS[provider];
+  const label = cliFacts(provider).label;
   const failed = exit !== null && exit.code !== 0;
   const expanded = shown ?? (failed || stuck);
   const status =

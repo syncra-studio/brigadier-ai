@@ -149,6 +149,19 @@ async fn a_cli_s_own_questions_are_the_thread_s_card_and_the_answer_the_tool_s_r
     );
     // One turn: the answer went as the tool's result, not as a message.
     assert_eq!(inputs.lock().unwrap().len(), 1);
+    // D170: each answered question is the ledger's Decision, in the user's words.
+    let ledger = std::fs::read_to_string(
+        flow.manager
+            .session_dir(&flow.conversation)
+            .record()
+            .join(crate::manager::session_dir::LEDGER_FILE),
+    )
+    .unwrap();
+    assert!(
+        ledger.contains("asked \"Which file?\"; the user answered: c.txt")
+            && ledger.contains("asked \"Which size?\"; the user answered: M"),
+        "{ledger}"
+    );
     flow.stop().await;
 }
 

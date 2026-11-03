@@ -3,7 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import type { RequestOf } from "@/ipc/client";
-import type { Conversation, FolderTrust, Project } from "@/ipc/generated";
+import type { Conversation, FolderTrust, Project, TrustFailure } from "@/ipc/generated";
 import { type AppState, useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
 import { folderTrust, setFolderTrust, toAsk, trustFailureText } from "@/state/trust";
@@ -56,16 +56,16 @@ test("a project given another folder is asked about again", () => {
 
 test("a failure names the agent that may ask again, in plain words", () => {
   assert.equal(
-    trustFailureText("Codex: Codex's config.toml can't be edited safely: bad table", true),
+    trustFailureText({ provider: "codex", reason: "Codex's config.toml can't be edited safely: bad table" }, true),
     "Saved. Brigadier couldn't record it for Codex, so Codex may ask again in its terminal: Codex's config.toml can't be edited safely: bad table",
   );
-  assert.match(trustFailureText("disk full", true), /^Saved\. .*: disk full$/);
-  assert.match(trustFailureText("Claude: locked", false), /^Saved\. .*: Claude: locked$/);
+  assert.match(trustFailureText({ provider: null, reason: "disk full" }, true), /^Saved\. .*: disk full$/);
+  assert.match(trustFailureText({ provider: "claude", reason: "locked" }, false), /^Saved\. .*: Claude: locked$/);
 });
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 let sent: RequestOf<"setFolderTrust">[];
-let failures: string[];
+let failures: TrustFailure[];
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
@@ -98,7 +98,7 @@ test("answering records the folder's trust and stores the project, so it is not 
 });
 
 test("what couldn't be written in an agent's settings is shown, and the answer still stands", async () => {
-  failures = ["Codex: locked"];
+  failures = [{ provider: "codex", reason: "locked" }];
   await setFolderTrust("p", "/code/p", true);
   assert.equal(folderTrust(useApp.getState().projects.p, "/code/p"), true);
   assert.deepEqual(

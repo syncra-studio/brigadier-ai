@@ -1,7 +1,6 @@
 //! Turn trees retained by session refs, independent of the user's index.
 
 use std::collections::BTreeSet;
-use std::fs;
 
 use crate::{DiffStat, Error, Oid, Repo, Result, command::TempIndex, parse};
 
@@ -282,55 +281,8 @@ impl Repo {
             }))
     }
 
-    /// Files changed after the turn, to name before asking to restore the start tree.
-    pub fn changes_after_turn(&self, session: &str, turn: u64) -> Result<Vec<String>> {
-        Ok(self
-            .diff_scope(
-                &self.turn_tree(session, turn, true)?,
-                &self.snapshot_tree()?,
-            )?
-            .1)
-    }
-
-    /// Restore the complete start tree, after the caller's confirmation. The expected current
-    /// tree prevents overwriting edits made while the confirmation was open. HEAD and the real
-    /// index stay untouched; ignored files are not removed.
-    pub fn revert_turn(&self, session: &str, turn: u64, expected: &Oid) -> Result<Vec<String>> {
-        let lock = self.landing_lock();
-        let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(what) = self.busy()? {
-            return Err(Error::Invalid(format!("checkout is busy ({what})")));
-        }
-        let current = self.snapshot_tree()?;
-        if &current != expected {
-            return Err(Error::Invalid(
-                "files changed since confirmation; review them again".into(),
-            ));
-        }
-        let target = self.turn_tree(session, turn, false)?;
-        let paths = self.diff_scope(&current, &target)?.1;
-        // A file the start tree brings back may be on disk again, ignored, so in no snapshot:
-        // the checkout below would write over it.
-        let (now, then) = (self.file_blobs(&current)?, self.file_blobs(&target)?);
-        if let Some(path) = paths.iter().find(|path| {
-            !now.contains_key(*path)
-                && then.contains_key(*path)
-                && fs::symlink_metadata(self.root().join(path)).is_ok()
-        }) {
-            return Err(Error::Invalid(format!(
-                "{path} is in the way (an ignored file); move it first"
-            )));
-        }
-        let index = TempIndex::new()?;
-        self.index_cmd(&index, &["read-tree", &current.0])?;
-        self.index_cmd(&index, &["update-index", "--refresh"])?;
-        // Two-tree checkout refuses untracked/ignored collisions rather than deleting them.
-        self.index_cmd(&index, &["read-tree", "-m", "-u", &current.0, &target.0])?;
-        Ok(paths)
-    }
-
     /// The file review's two trees, initially the turn's immutable snapshots. Keep advances
-    /// only the review base; file Undo advances only the review end. The card never reads these.
+    /// only the review base; file Undo advances only the review end.
     pub fn turn_review_trees(&self, session: &str, turn: u64) -> Result<(Oid, Oid)> {
         let prefix = format!("{}turn-{turn}-review", session_refs(session)?);
         Ok((
@@ -444,37 +396,6 @@ mod tests {
     }
 
     #[test]
-    fn revert_restores_start_tree_and_names_later_files() {
-        let (_dir, repo) = fixture("revert");
-        fs::write(repo.root.join("preexisting"), "dirty before start\n").unwrap();
-        let start = repo.snapshot_turn("s1", 1, false).unwrap();
-        fs::write(repo.root.join("new"), "turn\n").unwrap();
-        fs::remove_file(repo.root.join("delete")).unwrap();
-        repo.commit_changes("Turn", true).unwrap();
-        repo.snapshot_turn("s1", 1, true).unwrap();
-        fs::write(repo.root.join("later"), "after\n").unwrap();
-        assert_eq!(repo.changes_after_turn("s1", 1).unwrap(), ["later"]);
-        let expected = repo.snapshot_tree().unwrap();
-        fs::write(repo.root.join("later"), "raced\n").unwrap();
-        assert!(repo.revert_turn("s1", 1, &expected).is_err());
-        let expected = repo.snapshot_tree().unwrap();
-        let index = fs::read(repo.git_dir().unwrap().join("index")).unwrap();
-        let head = repo.resolve("HEAD").unwrap();
-        repo.revert_turn("s1", 1, &expected).unwrap();
-        assert_eq!(repo.snapshot_tree().unwrap(), start);
-        assert!(
-            repo.diff(&start, &repo.snapshot_tree().unwrap())
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(repo.resolve("HEAD").unwrap(), head);
-        assert_eq!(
-            fs::read(repo.git_dir().unwrap().join("index")).unwrap(),
-            index
-        );
-    }
-
-    #[test]
     fn a_renamed_file_names_where_it_came_from() {
         let (_dir, repo) = fixture("rename-source");
         let start = repo.snapshot_turn("s1", 1, false).unwrap();
@@ -487,25 +408,6 @@ mod tests {
             Some("rename")
         );
         assert_eq!(repo.rename_source(&start, &end, "binary").unwrap(), None);
-    }
-
-    #[test]
-    fn revert_leaves_an_ignored_file_in_the_way_alone() {
-        let (_dir, repo) = fixture("revert-ignored");
-        repo.snapshot_turn("s1", 1, false).unwrap();
-        // The turn deletes a tracked file and ignores its path; the user makes it again.
-        fs::remove_file(repo.root.join("delete")).unwrap();
-        fs::write(repo.root.join(".gitignore"), "ignored\ndelete\n").unwrap();
-        repo.commit_changes("Turn", true).unwrap();
-        repo.snapshot_turn("s1", 1, true).unwrap();
-        fs::write(repo.root.join("delete"), "the user's own\n").unwrap();
-        let expected = repo.snapshot_tree().unwrap();
-        let err = repo.revert_turn("s1", 1, &expected).unwrap_err();
-        assert!(err.to_string().contains("delete"), "{err}");
-        assert_eq!(
-            fs::read_to_string(repo.root.join("delete")).unwrap(),
-            "the user's own\n"
-        );
     }
 
     #[test]
@@ -690,16 +592,15 @@ mod tests {
     }
 
     #[test]
-    fn unborn_repository_can_snapshot_and_revert() {
+    fn unborn_repository_can_snapshot() {
         let (dir, git) = test_git("20261022-0805-take-over-5-sessions-w45-unborn");
         let root = dir.join("repo");
         git.init(&root).unwrap();
         let repo = git.open(&root).unwrap();
         let start = repo.snapshot_turn("s1", 0, false).unwrap();
         fs::write(root.join("new"), "hello\n").unwrap();
-        repo.snapshot_turn("s1", 0, true).unwrap();
-        repo.revert_turn("s1", 0, &repo.snapshot_tree().unwrap())
-            .unwrap();
-        assert_eq!(repo.snapshot_tree().unwrap(), start);
+        let end = repo.snapshot_turn("s1", 0, true).unwrap();
+        assert_ne!(end, start);
+        assert_eq!(repo.turn_tree("s1", 0, false).unwrap(), start);
     }
 }

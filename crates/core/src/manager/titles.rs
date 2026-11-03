@@ -72,15 +72,21 @@ impl SessionManager {
         if tokio::time::Instant::now() >= deadline {
             return None;
         }
-        generated_title(&reply)
+        generated_title(&reply, input)
     }
 }
 
 /// Reject prose, structured replies and overlong output rather than replacing a useful local
-/// fallback with a broken title. Keep identifiers and non-English case intact.
-fn generated_title(reply: &str) -> Option<String> {
+/// fallback with a broken title. Keep identifiers and non-English case intact. "Title" from the
+/// instruction, in a title of a message that never says it, is the instruction leaking in.
+fn generated_title(reply: &str, input: &str) -> Option<String> {
     let title = reply.trim();
+    let says_title = |text: &str| {
+        text.split(|c: char| !c.is_alphanumeric())
+            .any(|word| word.eq_ignore_ascii_case("title"))
+    };
     if title.is_empty()
+        || (says_title(title) && !says_title(input))
         || title.chars().count() > 36
         || title.split_whitespace().count() > 5
         || title.contains(['\n', '\r', '`', '"', '{', '}', '*'])

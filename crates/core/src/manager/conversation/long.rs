@@ -3,7 +3,7 @@
 //! the keep-instructions (run2-D7); its own auto-compaction is the backstop. Codex compacts by
 //! itself at its own point (run2-D6). Nothing goes back into the conversation after a compaction
 //! (D13): the thread pulls what it needs with `brigadier context`. After
-//! [`SESSION_HANDOFF_AFTER`] compactions in one CLI session (D16), or when compaction fails or
+//! [`HANDOFF_AFTER`] compactions in one CLI session (D16), or when compaction fails or
 //! loops (run2-D10), the session goes on in a fresh one at its seam.
 
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Cli, ConvLive, ConvState};
 use crate::manager::SessionManager;
-use crate::manager::long_sessions::SESSION_HANDOFF_AFTER;
+use crate::manager::long_sessions::HANDOFF_AFTER;
 use crate::manager::seam::Phase;
 use crate::work::RunState;
 
@@ -114,7 +114,7 @@ impl SessionManager {
         if let Some(why) = owed {
             self.long_fallback(conv, cli, &why).await;
         }
-        if cli.provider != ProviderKind::Claude {
+        if !brigadier_compacts(cli.provider) {
             return;
         }
         let mut state = conv.state.lock().await;
@@ -126,6 +126,27 @@ impl SessionManager {
         {
             state.long.compact_due = true;
         }
+    }
+
+    /// Compacts a session's orchestrator at its next turn boundary, the way a context past its
+    /// point does (goal 2's proofs).
+    #[cfg(debug_assertions)]
+    pub(crate) async fn debug_compact_session(
+        &self,
+        id: &crate::model::ConversationId,
+    ) -> crate::Result<()> {
+        let conv = self.conv(id)?;
+        {
+            let mut state = conv.state.lock().await;
+            if conv.kind != crate::model::ConversationKind::Session || state.cli.is_none() {
+                return Err(crate::Error::Invalid(
+                    "only a running session's orchestrator compacts this way".into(),
+                ));
+            }
+            state.long.compact_due = true;
+        }
+        self.kick(&conv);
+        Ok(())
     }
 
     /// The compaction due before anything else the next turn would take: the CLI to compact,
@@ -151,16 +172,22 @@ impl SessionManager {
     pub(super) async fn long_compact(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>) {
         let instructions = self
             .long_mode(conv, cli.provider)
-            .filter(|_| cli.provider == ProviderKind::Claude)
+            .filter(|_| brigadier_compacts(cli.provider))
             .and_then(|mode| mode.compact_instructions());
         self.set_run(&conv.id, RunState::Running, None).await;
-        // Claude keeps it as the user's message `/compact …`: Brigadier's, never a bubble (L12).
-        if cli.provider == ProviderKind::Claude {
+        // A CLI that runs commands from text (Claude) keeps it as the user's message
+        // `/compact …`: Brigadier's, never a bubble (L12).
+        if super::super::cli_commands::commands_as_text(cli.provider) {
             let words = match &instructions {
                 Some(instructions) => format!("/compact {instructions}"),
                 None => "/compact".to_owned(),
             };
-            self.note_sent(&conv.id, &brigadier_providers::TurnInput::text(words), &[]);
+            self.note_sent(
+                &conv.id,
+                &brigadier_providers::TurnInput::text(words),
+                &[],
+                &[],
+            );
         }
         if let Err(err) = cli.session.compact(instructions).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not compact the session"; conversation = %conv.id, error = %err);
@@ -177,7 +204,7 @@ impl SessionManager {
     /// The CLI compacted a long session's context: its size is the one after, when the CLI
     /// says, else unknown until it reports one. Nothing goes back into the conversation (D13).
     /// A failed compaction, one that leaves the context near its point, or the
-    /// [`SESSION_HANDOFF_AFTER`]th in this CLI session (D16) hands off to a fresh one.
+    /// [`HANDOFF_AFTER`]th in this CLI session (D16) hands off to a fresh one.
     pub(super) async fn long_compacted(
         &self,
         conv: &Arc<ConvLive>,
@@ -219,7 +246,7 @@ impl SessionManager {
         })
         .await
         .unwrap_or(0);
-        if count >= SESSION_HANDOFF_AFTER {
+        if count >= HANDOFF_AFTER {
             let why = format!("it compacted {count} times in a row");
             self.long_handoff(conv, cli, &why, false).await;
         }
@@ -292,4 +319,11 @@ impl SessionManager {
         let busy = conv.state.lock().await.busy;
         self.seam_nudge(conv, Some(cli), used, busy).await;
     }
+}
+
+/// Whether Brigadier asks `provider` to compact at its point, with what the summary must keep
+/// (Claude); otherwise the CLI compacts by itself at the limit it was given.
+fn brigadier_compacts(provider: ProviderKind) -> bool {
+    brigadier_providers::adapters::adapter(provider)
+        .is_some_and(|adapter| adapter.brigadier_compacts)
 }

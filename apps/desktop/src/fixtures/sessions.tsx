@@ -355,11 +355,11 @@ async function rowThread() {
     "w2-a": { ...state.conversations["w2-a"]!, setup: workingIn({ type: "newWorktree", base: "main", branch: "brigadier/w2/session", path: "/tmp/sessions-fixture/w2", start: null }) },
     "w3-a": { ...state.conversations["w3-a"]!, setup: workingIn({ type: "localCheckout", branch: "main" }) },
   } }));
-  await pick("Fix the login", ["Fork", "Fork in a new worktree"]);
+  await pick("Fix the login", ["Fork", "Fork to a new worktree"]);
   await until(() => forks.length > 0);
   seen.forks = forks;
   seen.read = requests.filter((request) => /^(getConversation|threadView) w2-a$/.test(request));
-  await pick("Tidy the docs", ["Fork", "Fork in the same folder"]);
+  await pick("Tidy the docs", ["Fork", "Fork here"]);
   await until(() => toastTexts().some((text) => text?.startsWith("Nothing to fork")));
   seen.toasts = toastTexts();
   seen.forksAfter = forks.length;

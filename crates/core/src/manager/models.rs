@@ -3,7 +3,6 @@ use super::SessionManager;
 use crate::{Error, Result, now_ms};
 use crate::{GuidanceRow, ModelRule, ModelRules};
 use brigadier_cli::models::{Account, AgentAccounts, Guidance, Model, ModelsOutput, Rule, Usage};
-use brigadier_cli::protocol::Agent;
 use brigadier_providers::{AllowedModels, ProviderKind};
 use std::path::PathBuf;
 
@@ -13,19 +12,6 @@ pub(super) const DEFAULT_RULES: &str = include_str!("models_default.md");
 /// The Work whose rows a session moves to another agent with (S38, D25, D34).
 pub(crate) const FALLBACK_WORK: &str = "Fallback";
 
-fn agent(provider: ProviderKind) -> Agent {
-    match provider {
-        ProviderKind::Claude => Agent::Claude,
-        ProviderKind::Codex => Agent::Codex,
-    }
-}
-/// An agent as the rules file names it.
-fn word(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Claude => "claude",
-        ProviderKind::Codex => "codex",
-    }
-}
 fn rank(effort: &str) -> Option<usize> {
     [
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
@@ -52,11 +38,9 @@ fn rows(text: &str) -> Vec<GuidanceRow> {
             if cells.len() != 5 {
                 return None;
             }
-            let agent = match cells[1] {
-                "claude" => ProviderKind::Claude,
-                "codex" => ProviderKind::Codex,
-                _ => return None,
-            };
+            // An agent as the rules file names it: a CLI Brigadier drives.
+            let agent = ProviderKind::parse(cells[1])
+                .filter(|kind| brigadier_providers::adapters::adapter(*kind).is_some())?;
             Some(GuidanceRow {
                 work: cells[0].into(),
                 agent,
@@ -70,7 +54,7 @@ fn rows(text: &str) -> Vec<GuidanceRow> {
 fn guidance(shipped: &str, user: &str) -> Vec<Guidance> {
     let shown = |row: GuidanceRow, source: &str| Guidance {
         work: row.work,
-        agent: agent(row.agent),
+        agent: row.agent,
         model: row.model,
         effort: row.effort,
         reason: row.reason,
@@ -125,16 +109,19 @@ fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
             names: names(),
             work,
         },
-        "allow claude" => ModelRule::Allow {
-            agent: Some(ProviderKind::Claude),
-            names: names(),
-            work,
-        },
-        "allow codex" => ModelRule::Allow {
-            agent: Some(ProviderKind::Codex),
-            names: names(),
-            work,
-        },
+        // `allow <agent>`: an agent Brigadier drives.
+        other
+            if let Some(agent) = other
+                .strip_prefix("allow ")
+                .and_then(ProviderKind::parse)
+                .filter(|agent| brigadier_providers::adapters::adapter(*agent).is_some()) =>
+        {
+            ModelRule::Allow {
+                agent: Some(agent),
+                names: names(),
+                work,
+            }
+        }
         "effort-ceiling" => {
             rank(value).ok_or_else(|| Error::Invalid(format!("invalid model rule: {rule}")))?;
             ModelRule::EffortCeiling {
@@ -214,7 +201,7 @@ fn rule_text(rule: &ModelRule) -> String {
         ModelRule::Forbid { names, .. } => format!("forbid{scope}: {}", names.join(", ")),
         ModelRule::Allow { agent, names, .. } => format!(
             "allow{}{scope}: {}",
-            agent.map_or(String::new(), |p| format!(" {}", word(p))),
+            agent.map_or(String::new(), |p| format!(" {}", p.id())),
             names.join(", ")
         ),
         ModelRule::EffortCeiling { effort, .. } => format!("effort-ceiling{scope}: {effort}"),
@@ -288,7 +275,7 @@ fn rewrite(text: &str, rows: &[GuidanceRow], rules: &[ModelRule]) -> String {
         format!(
             "| {} | {} | {} | {} | {} |",
             r.work.trim(),
-            word(r.agent),
+            r.agent.id(),
             r.model.trim(),
             r.effort.as_deref().unwrap_or("").trim(),
             r.reason.trim()
@@ -356,13 +343,12 @@ impl SessionManager {
         if cfg!(test) {
             return self.data_dir.join("models.md");
         }
-        std::env::var_os("BRIGADIER_MODELS_FILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::home_dir()
-                    .unwrap_or_else(|| self.data_dir.clone())
-                    .join(".brigadier/models.md")
-            })
+        rules_file(
+            std::env::var_os("BRIGADIER_MODELS_FILE"),
+            std::env::var_os("BRIGADIER_DATA_DIR").is_some_and(|dir| !dir.is_empty()),
+            &self.data_dir,
+            std::env::home_dir(),
+        )
     }
     /// Settings › Routing's read of the rules file, as it is on disk now (S32).
     pub fn model_rules(&self) -> Result<ModelRules> {
@@ -393,6 +379,18 @@ impl SessionManager {
     }
     /// `brigadier start --work`'s rows: the user's order of that work, else the shipped rows,
     /// first to last (S32).
+    /// Every kind of work the routing names, in its order, once each.
+    pub(super) fn work_kinds(&self) -> Result<Vec<String>> {
+        let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
+        let mut kinds: Vec<String> = Vec::new();
+        for row in guidance(GUIDANCE, &user) {
+            if !kinds.iter().any(|kind| same_work(kind, &row.work)) {
+                kinds.push(row.work);
+            }
+        }
+        Ok(kinds)
+    }
+
     pub(super) fn work_rows(&self, work: &str) -> Result<Vec<Guidance>> {
         let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
         Ok(guidance(GUIDANCE, &user)
@@ -414,10 +412,7 @@ impl SessionManager {
         let settings = self.core.settings();
         let mut candidates = Vec::new();
         for (position, row) in rows.into_iter().enumerate() {
-            let provider = match row.agent {
-                Agent::Claude => ProviderKind::Claude,
-                Agent::Codex => ProviderKind::Codex,
-            };
+            let provider = row.agent;
             // A default model can silently become a frontier model: there is no implicit
             // default fallback for this chore, even when a light model is unavailable.
             if row.model.trim().is_empty()
@@ -523,10 +518,7 @@ impl SessionManager {
             .unwrap_or_default()
             .into_iter()
             .map(|row| {
-                let provider = match row.agent {
-                    Agent::Claude => ProviderKind::Claude,
-                    Agent::Codex => ProviderKind::Codex,
-                };
+                let provider = row.agent;
                 crate::model::ModelChoice {
                     provider,
                     model: (!row.model.is_empty() && !row.model.eq_ignore_ascii_case("default"))
@@ -571,6 +563,16 @@ impl SessionManager {
             .max_by_key(|m| version(&m.id))
             .map_or_else(|| model.to_owned(), |m| m.id.clone())
     }
+    /// What a model and effort of `provider` run as (D77: no false off-routing line).
+    pub(super) fn runs_as(
+        &self,
+        provider: ProviderKind,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> (Option<String>, Option<String>) {
+        let catalog = self.runtime.overview(provider).and_then(|o| o.models);
+        runs_as(catalog.as_ref(), model, effort)
+    }
     pub(super) fn model_policy(&self) -> Result<Policy> {
         Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?)
     }
@@ -583,16 +585,7 @@ impl SessionManager {
         work: Option<&str>,
     ) -> Result<Option<String>> {
         let catalog = self.runtime.overview(provider).and_then(|o| o.models);
-        let selected = catalog.as_ref().and_then(|c| {
-            c.models.iter().find(|m| {
-                model.map_or(m.is_default, |id| {
-                    m.id.eq_ignore_ascii_case(id)
-                        || m.resolved
-                            .as_deref()
-                            .is_some_and(|r| r.eq_ignore_ascii_case(id))
-                })
-            })
-        });
+        let selected = listed(catalog.as_ref(), model);
         let names: Vec<_> = model
             .into_iter()
             .chain(selected.map(|m| m.id.as_str()))
@@ -642,12 +635,12 @@ impl SessionManager {
         let policy = Policy::parse(&user)?;
         let shipped = GUIDANCE;
         let mut models = Vec::new();
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             if let Some(catalog) = self.runtime.overview(provider).and_then(|o| o.models) {
                 let age_s = Some((now - catalog.fetched_at_ms).max(0) / 1000);
                 for model in catalog.models {
                     models.push(Model {
-                        agent: agent(provider),
+                        agent: provider,
                         model: model.id,
                         available: true,
                         efforts: model.efforts,
@@ -710,7 +703,7 @@ impl SessionManager {
                     why,
                     id: a.account.account.clone().unwrap_or_else(|| "own".into()),
                     name: a.name,
-                    agent: agent(a.account.provider),
+                    agent: a.account.provider,
                     current: a.in_use,
                     you: current.as_ref().is_some_and(|cli| cli.account == a.account),
                     logged_in: a.status.is_some_and(|s| s.logged_in),
@@ -721,10 +714,9 @@ impl SessionManager {
             })
             .collect();
         let settings = self.core.settings();
-        let agents = ProviderKind::ALL
-            .into_iter()
+        let agents = brigadier_providers::adapters::kinds()
             .map(|provider| AgentAccounts {
-                agent: agent(provider),
+                agent: provider,
                 switch_accounts: settings.switches_accounts(provider),
             })
             .collect();
@@ -802,9 +794,132 @@ fn fit(windows: &[Usage], limited: Option<Option<i64>>) -> String {
         "ok".into()
     }
 }
+/// The catalog's entry for `model`, matched by id or resolved id; none is its default model.
+fn listed<'a>(
+    catalog: Option<&'a brigadier_providers::ModelCatalog>,
+    model: Option<&str>,
+) -> Option<&'a brigadier_providers::ModelInfo> {
+    catalog?.models.iter().find(|m| {
+        model.map_or(m.is_default, |id| {
+            m.id.eq_ignore_ascii_case(id)
+                || m.resolved
+                    .as_deref()
+                    .is_some_and(|r| r.eq_ignore_ascii_case(id))
+        })
+    })
+}
+
+/// `opus` and the `claude-opus-5-5` it resolves to are one model; none is the CLI's default
+/// model, and no effort that model's default effort; a model the catalog doesn't list is its
+/// own id. Both lowercased.
+fn runs_as(
+    catalog: Option<&brigadier_providers::ModelCatalog>,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let entry = listed(catalog, model);
+    let model = entry
+        .map(|m| m.resolved.as_deref().unwrap_or(&m.id))
+        .or(model);
+    let effort = effort.or(entry.and_then(|m| m.default_effort.as_deref()));
+    (
+        model.map(str::to_ascii_lowercase),
+        effort.map(str::to_ascii_lowercase),
+    )
+}
+
+/// The rules file: the one `BRIGADIER_MODELS_FILE` names, else a scratch data dir's own (a
+/// development run, `BRIGADIER_DATA_DIR`), never the user's (D31), else the user's in their home.
+fn rules_file(
+    named: Option<std::ffi::OsString>,
+    scratch: bool,
+    data_dir: &std::path::Path,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    match named {
+        Some(file) => PathBuf::from(file),
+        None if scratch => data_dir.join("models.md"),
+        None => home
+            .unwrap_or_else(|| data_dir.to_owned())
+            .join(".brigadier/models.md"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// A development run on a scratch data dir keeps its own routing: setting a row there never
+    /// writes the user's (demo8 wrote it); the installed app keeps the user's own.
+    #[test]
+    fn a_scratch_data_dir_keeps_its_own_rules() {
+        let data = std::path::Path::new("/tmp/scratch-data");
+        let home = Some(PathBuf::from("/Users/me"));
+        assert_eq!(
+            super::rules_file(None, true, data, home.clone()),
+            data.join("models.md")
+        );
+        assert_eq!(
+            super::rules_file(None, false, data, home.clone()),
+            PathBuf::from("/Users/me/.brigadier/models.md")
+        );
+        assert_eq!(
+            super::rules_file(Some("/x/m.md".into()), true, data, home),
+            PathBuf::from("/x/m.md")
+        );
+    }
+
     use super::*;
+    #[test]
+    fn an_alias_its_id_the_default_and_its_effort_are_one_choice() {
+        let model = |id: &str, resolved: Option<&str>, is_default: bool, effort: Option<&str>| {
+            brigadier_providers::ModelInfo {
+                id: id.into(),
+                display_name: id.into(),
+                description: String::new(),
+                resolved: resolved.map(Into::into),
+                efforts: vec![],
+                default_effort: effort.map(Into::into),
+                is_default,
+                input_modalities: vec![],
+                fast: None,
+                legacy: false,
+            }
+        };
+        let catalog = brigadier_providers::ModelCatalog {
+            provider: ProviderKind::Claude,
+            models: vec![
+                model("opus", Some("claude-opus-5-5"), true, Some("high")),
+                model("claude-opus-5-5", None, false, Some("high")),
+                model("sonnet", Some("claude-sonnet-5-5"), false, None),
+            ],
+            cli_version: None,
+            fetched_at_ms: 0,
+        };
+        let same = |a, b| runs_as(Some(&catalog), a, None) == runs_as(Some(&catalog), b, None);
+        assert!(same(Some("opus"), Some("claude-opus-5-5")));
+        assert!(same(Some("Claude-Opus-5-5"), Some("opus")));
+        assert!(same(None, Some("claude-opus-5-5")));
+        assert!(!same(Some("sonnet"), Some("opus")));
+        assert!(!same(None, Some("sonnet")));
+        assert!(same(Some("unlisted"), Some("UNLISTED")));
+        assert!(!same(Some("unlisted"), None));
+        assert_eq!(
+            runs_as(None, Some("opus"), None),
+            runs_as(None, Some("opus"), None)
+        );
+        assert_ne!(
+            runs_as(None, Some("opus"), None),
+            runs_as(None, Some("claude-opus-5-5"), None)
+        );
+        // No effort is the model's default effort; the default model runs as its resolved id.
+        let opus = runs_as(Some(&catalog), Some("opus"), Some("HIGH"));
+        assert_eq!(opus, runs_as(Some(&catalog), None, None));
+        assert_eq!(opus.0.as_deref(), Some("claude-opus-5-5"));
+        assert_ne!(opus, runs_as(Some(&catalog), None, Some("low")));
+        assert_ne!(
+            runs_as(Some(&catalog), Some("sonnet"), None),
+            runs_as(Some(&catalog), Some("sonnet"), Some("high"))
+        );
+    }
     #[test]
     fn user_row_overrides_shipped_row() {
         let rows = guidance(
@@ -890,7 +1005,7 @@ mod tests {
     fn shipped_default_has_no_rules() {
         let policy = Policy::parse(DEFAULT_RULES).unwrap();
         assert!(policy.entries.is_empty());
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             assert!(!policy.restricts_models(provider));
             assert!(
                 policy

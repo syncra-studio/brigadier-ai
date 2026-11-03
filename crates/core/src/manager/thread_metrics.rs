@@ -646,6 +646,8 @@ mod tests {
                 3_500,
                 OrchestratorStepKind::Created {
                     task_id: TaskId("t1".into()),
+                    off_routing: None,
+                    row: None,
                 },
             ),
             step(

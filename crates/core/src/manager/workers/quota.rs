@@ -1,11 +1,13 @@
 //! A quota pause belongs to one worker. Its durable wait retains the task and workspace;
 //! neither a lead handoff nor another worker's account change cancels it.
+use brigadier_providers::KindFacts as _;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use brigadier_providers::{LimitHit, LimitKind, Origin, ProviderKind, TurnInput};
+use brigadier_providers::{LimitHit, LimitKind, Origin, TurnInput};
 use serde::{Deserialize, Serialize};
 
 use super::TaskLive;
+use crate::accounts::AccountRef;
 use crate::manager::conversation::Cli;
 use crate::manager::seam::{Phase, SeamEnd, read_seam, write_seam};
 use crate::manager::session_dir::write_atomic;
@@ -17,7 +19,7 @@ use crate::work::{
 };
 use crate::{Error, Result, now_ms};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Transition {
     id: String,
     from: ModelChoice,
@@ -157,10 +159,7 @@ impl SessionManager {
                     .unwrap_or_default()
                     .into_iter()
                     .map(|row| ModelChoice {
-                        provider: match row.agent {
-                            brigadier_cli::protocol::Agent::Claude => ProviderKind::Claude,
-                            brigadier_cli::protocol::Agent::Codex => ProviderKind::Codex,
-                        },
+                        provider: row.agent,
                         model: (!row.model.eq_ignore_ascii_case("default"))
                             .then(|| row.model.clone()),
                         effort: row.effort,
@@ -276,13 +275,20 @@ impl SessionManager {
                 return;
             }
             let choices = self.worker_quota_choices(&task).await;
+            let session = self.last_worker_native_id(&task).await;
             let mut target = None;
             for choice in &choices {
+                // A `default` row's quota is its default model's (#678).
+                let model = self
+                    .runs_as(choice.provider, choice.model.as_deref(), None)
+                    .0;
                 let account = crate::accounts::ready(
                     &self.core.settings(),
                     choice.provider,
-                    choice.model.as_deref(),
-                    &self.runtime.account_candidates(choice.provider),
+                    model.as_deref(),
+                    &self
+                        .runtime
+                        .resume_candidates(choice.provider, session.as_deref()),
                     &[],
                     now_ms(),
                 );
@@ -305,13 +311,16 @@ impl SessionManager {
                 let reset = choices
                     .iter()
                     .flat_map(|choice| {
+                        let model = self
+                            .runs_as(choice.provider, choice.model.as_deref(), None)
+                            .0;
                         self.runtime
                             .account_candidates(choice.provider)
                             .into_iter()
                             .filter(|candidate| candidate.logged_in)
                             .filter_map(move |candidate| {
                                 candidate.quota.as_ref().and_then(|quota| {
-                                    crate::accounts::ready_again_at(quota, choice.model.as_deref())
+                                    crate::accounts::ready_again_at(quota, model.as_deref())
                                 })
                             })
                     })
@@ -362,53 +371,9 @@ impl SessionManager {
                 cause,
                 wait_tries: wait.tries,
             };
-            let path = self.worker_record(&task).join("quota-transition.json");
-            if blocking(move || {
-                write_atomic(
-                    &path,
-                    &serde_json::to_vec(&intent).map_err(|err| Error::Invalid(err.to_string()))?,
-                )
-            })
-            .await
-            .is_err()
-            {
-                return;
-            }
-            let predecessor = live
-                .cli()
-                .await
-                .map(|cli| cli.session.native_id())
-                .or(task.native_session.clone());
-            live.close_cli().await;
-            live.allow_revival().await;
-            if live.state.lock().await.quota_cancelled {
-                return;
-            }
-            let changed_provider = target.provider != task.route.choice.provider;
-            if changed_provider {
-                let record = self.worker_record(&task);
-                if blocking(move || {
-                    let mut seam = read_seam(&record);
-                    seam.phase = Phase::Closed { end: SeamEnd { predecessor, hot_tokens: None, nudged_at_ms: None, closed_at_ms: now_ms(), death: Some("its provider hit a usage limit; continue from the worker's records and check git before repeating work".into()), stopped: false, shown: Vec::new(), moved_to: None } };
-                    write_seam(&record, &seam)
-                }).await.is_err() { return; }
-            }
-            if self
-                .update_task(&task.conversation_id, &task.id, |task| {
-                    task.route.choice = target;
-                    task.attempts.push(Attempt {
-                        route: task.route.clone(),
-                        started_at_ms: now_ms(),
-                        ended_at_ms: None,
-                        end: None,
-                    });
-                })
-                .await
-                .is_err()
-            {
-                return;
-            }
-            let Ok(task) = self.task_by_id(&task.conversation_id, &task.id).await else {
+            let why = "its provider hit a usage limit; continue from the worker's records and check git before repeating work";
+            let changed_provider = intent.to.provider != task.route.choice.provider;
+            let Ok(Some(task)) = self.move_worker(&live, &task, &intent, why, false).await else {
                 return;
             };
             let input = "[Quota is available again. Check git status and git log first: earlier commands may have completed. Continue the existing task without repeating completed work.]";
@@ -532,23 +497,8 @@ impl SessionManager {
         let already = self.core.board(&task.conversation_id).await.is_ok_and(|board| board.orchestrator_steps.iter().any(|step|
             matches!(&step.kind, OrchestratorStepKind::ProviderTransition { id, .. } if id == &intent.id)));
         if !already {
-            let mut to = cli.model.clone();
-            to.account = Some(cli.account.choice_id());
-            self.orchestrator_step_in(
-                &task.conversation_id,
-                task.request_id.clone(),
-                OrchestratorStepKind::ProviderTransition {
-                    task_id: Some(task.id.clone()),
-                    id: intent.id,
-                    cause: intent.cause,
-                    from: intent.from,
-                    to,
-                    account: cli.account.clone(),
-                    account_label: self.runtime.account_label(&cli.account),
-                    started_at_ms: now_ms(),
-                },
-            )
-            .await;
+            self.file_worker_transition(&task, intent.clone(), cli.model.clone(), &cli.account)
+                .await;
         }
         if self
             .update_task(&task.conversation_id, &task.id, |task| {
@@ -576,5 +526,260 @@ impl SessionManager {
             }
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    /// The one switch row of a worker's move (goal 1), in its session's thread.
+    async fn file_worker_transition(
+        &self,
+        task: &Task,
+        intent: Transition,
+        mut to: ModelChoice,
+        account: &AccountRef,
+    ) {
+        to.account = Some(account.choice_id());
+        self.orchestrator_step_in(
+            &task.conversation_id,
+            task.request_id.clone(),
+            OrchestratorStepKind::ProviderTransition {
+                task_id: Some(task.id.clone()),
+                id: intent.id,
+                cause: intent.cause,
+                from: intent.from,
+                to,
+                account: account.clone(),
+                account_label: self.runtime.account_label(account),
+                started_at_ms: now_ms(),
+            },
+        )
+        .await;
+    }
+
+    /// Goal 1's move of a worker to `intent.to`: the intent its next launch confirms as one
+    /// switch row, its CLI closed, its seam closed when the CLI changes (`why` tells its
+    /// successor), its route on the target. `pins`: its session chose it, so the pins it was
+    /// started with follow it. `None` when a stop took it meanwhile.
+    async fn move_worker(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        intent: &Transition,
+        why: &str,
+        pins: bool,
+    ) -> Result<Option<Task>> {
+        let path = self.worker_record(task).join("quota-transition.json");
+        let bytes = serde_json::to_vec(intent).map_err(|err| Error::Invalid(err.to_string()))?;
+        blocking(move || write_atomic(&path, &bytes)).await?;
+        let predecessor = live
+            .cli()
+            .await
+            .map(|cli| cli.session.native_id())
+            .or(task.native_session.clone());
+        self.note_worker_cut(&task.id);
+        live.close_cli().await;
+        live.allow_revival().await;
+        if live.state.lock().await.quota_cancelled {
+            return Ok(None);
+        }
+        let target = intent.to.clone();
+        if target.provider != task.route.choice.provider {
+            let (record, why) = (self.worker_record(task), why.to_owned());
+            blocking(move || {
+                let mut seam = read_seam(&record);
+                seam.phase = Phase::Closed {
+                    end: SeamEnd {
+                        predecessor,
+                        hot_tokens: None,
+                        nudged_at_ms: None,
+                        closed_at_ms: now_ms(),
+                        death: Some(why),
+                        stopped: false,
+                        shown: Vec::new(),
+                        moved_to: None,
+                    },
+                };
+                write_seam(&record, &seam)
+            })
+            .await?;
+        }
+        let follow = |pin: &mut brigadier_router::Pin| {
+            if pin.provider.is_some() {
+                pin.provider = Some(target.provider);
+            }
+            if pin.model.is_some() {
+                pin.model.clone_from(&target.model);
+            }
+            if pin.effort.is_some() {
+                pin.effort.clone_from(&target.effort);
+            }
+        };
+        let task = self
+            .update_task(&task.conversation_id, &task.id, |task| {
+                if pins {
+                    task.pin.as_mut().map(follow);
+                    if let Some(policy) = task.plain.as_mut().and_then(|p| p.quota_policy.as_mut())
+                    {
+                        follow(&mut policy.pin);
+                        policy.avoid_providers.retain(|p| *p != target.provider);
+                    }
+                }
+                fallback::end_attempt(task, None);
+                task.route.choice = target.clone();
+                task.attempts.push(Attempt {
+                    route: task.route.clone(),
+                    started_at_ms: now_ms(),
+                    ended_at_ms: None,
+                    end: None,
+                });
+            })
+            .await?;
+        Ok(Some(task))
+    }
+
+    /// Its session moves a worker that didn't switch on its own (`brigadier switch`): to
+    /// `named`, else by the D82 order to the first choice another account can take, through
+    /// goal 1's same move and its one "Switched to" row. One that was working or waiting for
+    /// quota goes on there with "Continue where you stopped."; a paused one stays paused and an
+    /// idle one idle (D7, D118), going on there once resumed or messaged.
+    pub(in crate::manager) async fn switch_worker(
+        &self,
+        task: &Task,
+        named: Option<ModelChoice>,
+    ) -> Result<(ModelChoice, AccountRef)> {
+        let live = self.task_live(task);
+        let _managed = live.manage.lock().await;
+        let was_cancelled = live.cancel_quota().await;
+        let settled = live.settle.lock().await;
+        let rerouting = live.reroute.lock().await;
+        let task = self.task_by_id(&task.conversation_id, &task.id).await?;
+        if task.state.is_final() {
+            return Err(Error::Invalid("the worker has ended".into()));
+        }
+        if let Some(why) = super::unsettled(&live, &task).await {
+            return Err(self.left_as_it_was(&live, &task, was_cancelled, why).await);
+        }
+        let wait = task.quota_wait.clone();
+        let goes_on = !super::explicitly_paused(&task)
+            && (wait.is_some()
+                || matches!(
+                    task.state,
+                    TaskState::Running | TaskState::Starting | TaskState::Blocked
+                ));
+        let current = match live.cli().await {
+            Some(cli) => cli.account.clone(),
+            None => wait
+                .as_ref()
+                .and_then(|wait| wait.account.clone())
+                .unwrap_or_else(|| self.runtime.account_for(&task.route.choice)),
+        };
+        let now = self.runs_as(
+            task.route.choice.provider,
+            task.route.choice.model.as_deref(),
+            task.route.choice.effort.as_deref(),
+        );
+        let choices = match &named {
+            Some(choice) => vec![choice.clone()],
+            None => self.worker_quota_choices(&task).await,
+        };
+        let session = self.last_worker_native_id(&task).await;
+        let mut target = None;
+        for choice in choices {
+            let runs = self.runs_as(
+                choice.provider,
+                choice.model.as_deref(),
+                choice.effort.as_deref(),
+            );
+            // Where it runs now is no switch: another account of it is.
+            let here = choice.provider == current.provider && runs == now;
+            let avoid = if here {
+                vec![current.clone()]
+            } else {
+                Vec::new()
+            };
+            if let Some(account) = crate::accounts::ready(
+                &self.core.settings(),
+                choice.provider,
+                runs.0.as_deref(),
+                &self
+                    .runtime
+                    .resume_candidates(choice.provider, session.as_deref()),
+                &avoid,
+                now_ms(),
+            ) {
+                target = Some((choice, account));
+                break;
+            }
+        }
+        let Some((mut target, account)) = target else {
+            return Err(self
+                .left_as_it_was(
+                    &live,
+                    &task,
+                    was_cancelled,
+                    match &named {
+                        Some(choice) => format!(
+                            "no account of {} can take it now",
+                            brigadier_providers::KindFacts::label(choice.provider)
+                        ),
+                        None => "no other account or routing row can take it now; name one with \
+                         --agent, --model or --effort"
+                            .into(),
+                    },
+                )
+                .await);
+        };
+        target.account = Some(account.choice_id());
+        self.cancel_worker_quota(&live, &task).await?;
+        live.state.lock().await.quota_cancelled = false;
+        let mut from = wait
+            .as_ref()
+            .and_then(|wait| wait.model.clone())
+            .unwrap_or_else(|| task.route.choice.clone());
+        from.account = Some(current.choice_id());
+        let intent = Transition {
+            id: uuid::Uuid::new_v4().to_string(),
+            from,
+            to: target.clone(),
+            cause: ProviderTransitionCause::ManualSwitch,
+            wait_tries: wait.as_ref().map_or(0, |wait| wait.tries),
+        };
+        let why = "its session moved it to another CLI; continue from the worker's records and check git before repeating work";
+        let Some(task) = self.move_worker(&live, &task, &intent, why, true).await? else {
+            return Err(Error::Invalid("the worker was stopped meanwhile".into()));
+        };
+        if !goes_on {
+            // Nothing launches now: its row goes in now, and no launch confirms it again.
+            let path = self.worker_record(&task).join("quota-transition.json");
+            let _ = blocking(move || {
+                std::fs::remove_file(path).or_else(|err| match err.kind() {
+                    std::io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(Error::Invalid(err.to_string())),
+                })
+            })
+            .await;
+            self.file_worker_transition(&task, intent, target.clone(), &account)
+                .await;
+            return Ok((target, account));
+        }
+        drop((rerouting, settled));
+        // Not `message_worker`: its quota cancel would take the intent its launch confirms.
+        if let Err(err) = self
+            .send_worker_text(&task.conversation_id, &task, super::RESUME_WORDS.into())
+            .await
+        {
+            // It waits for its session's next message there.
+            let _ = self
+                .update_task_if(
+                    &task.conversation_id,
+                    &task.id,
+                    |task| !task.state.is_final(),
+                    |task| {
+                        task.state = TaskState::Reported;
+                        task.error = Some(err.to_string());
+                    },
+                )
+                .await;
+            return Err(err);
+        }
+        Ok((target, account))
     }
 }

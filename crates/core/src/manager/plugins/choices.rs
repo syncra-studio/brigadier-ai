@@ -326,7 +326,7 @@ mod regression_tests {
             brigadier_registry::Catalog::read_rows(&roots, std::slice::from_ref(&project));
         // The live fixture still has an old global Codex sharing copy of this server.
         let mut mirror = rows[0].definitions[0].clone();
-        mirror.provenance.agent = Some(brigadier_registry::Agent::Codex);
+        mirror.provenance.agent = Some(brigadier_providers::ProviderKind::Codex);
         mirror.provenance.project = None;
         mirror.provenance.plugin = Some("proj-everything@brigadier".into());
         rows[0].definitions.insert(0, mirror);

@@ -517,6 +517,7 @@ fn an_outside_edit_is_told_when_the_page_is_next_read() {
     );
 }
 
+#[ignore = "macOS drops FSEvents under the suite's write storm; run serially, see full-checks"]
 #[test]
 fn the_watcher_tells_outside_edits_new_files_and_deletions() {
     let folder = Folder::new();
@@ -524,7 +525,26 @@ fn the_watcher_tells_outside_edits_new_files_and_deletions() {
     let page = pages.create().unwrap();
     let mut changes = pages.subscribe();
     // Generous: file events can take a while on a busy machine.
-    let within = Duration::from_secs(10);
+    let within = crate::test_patience();
+    // A new watch hears nothing for its first seconds there, and what is written meanwhile is
+    // never told: a page is written until it is.
+    let probe = uuid::Uuid::now_v7().simple().to_string();
+    let deadline = Instant::now() + within;
+    for round in 0.. {
+        let text = format!("probe {round}\n");
+        fs::write(pages.inner.path(&probe), &text).unwrap();
+        let expected = PageChange {
+            id: probe.clone(),
+            revision: Some(revision(text.as_bytes())),
+        };
+        if told(&mut changes, &expected, Duration::from_secs(1)) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the watch never heard the folder"
+        );
+    }
 
     let edited = "---\ntitle: \"Elsewhere\"\n---\n\nedited\n";
     fs::write(pages.inner.path(&page.id), edited).unwrap();
@@ -553,5 +573,18 @@ fn the_watcher_tells_outside_edits_new_files_and_deletions() {
 impl Pages {
     fn path_exists(&self, id: &str) -> bool {
         self.inner.path(id).is_file()
+    }
+}
+
+#[test]
+fn opening_in_the_background_returns_before_its_watcher_and_then_watches() {
+    let folder = Folder::new();
+    let pages = Pages::open_in_background(folder.0.join(PAGES_DIR));
+    // Usable at once, watched or not.
+    assert!(pages.list().unwrap().is_empty());
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while lock(&pages.watch).is_none() {
+        assert!(Instant::now() < deadline, "the pages watcher never started");
+        thread::sleep(std::time::Duration::from_millis(20));
     }
 }

@@ -7,7 +7,7 @@ import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
-import { account, snapshot, status as agentStatus, window as quotaWindow } from "@/fixtures/agents";
+import { account, OPENCODE_MISSING, snapshot, status as agentStatus, window as quotaWindow } from "@/fixtures/agents";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { colourOf, fillsCard, surface, switchLook, wait as pause } from "@/fixtures/look";
 import { accounts, overviews, projects, usageView } from "@/fixtures/providersData";
@@ -48,7 +48,7 @@ const noDownloader = params.has("nodownloader");
 const look = params.get("drive") === "look";
 /** Codex as the daemon finds it, in the missing drive: nowhere at first. */
 const missingCodex = (fields: Partial<NonNullable<ProviderOverview["status"]>>) =>
-  overviews.map((entry) =>
+  [...overviews, OPENCODE_MISSING].map((entry) =>
     entry.provider === "codex" && entry.status ? { ...entry, status: { ...entry.status, ...fields } } : entry,
   );
 
@@ -60,7 +60,7 @@ useApp.setState((state) => ({
   providers: {
     ...state.providers,
     view: {
-      providers: missing ? missingCodex({ path: null, version: null, loggedIn: false, plan: null }) : overviews,
+      providers: missing ? missingCodex({ path: null, version: null, loggedIn: false, plan: null }) : [...overviews, OPENCODE_MISSING],
       sessions: [],
       fixtures: [],
     },

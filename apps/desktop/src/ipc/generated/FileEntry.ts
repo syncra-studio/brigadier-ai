@@ -3,6 +3,7 @@ import type { FileImage } from "./FileImage";
 import type { ProviderEvent } from "./ProviderEvent";
 import type { Said } from "./Said";
 import type { TextPhase } from "./TextPhase";
+import type { Wake } from "./Wake";
 
 /**
  * One thing a CLI's session file holds, as its live stream says it.
@@ -39,4 +40,13 @@ phase?: TextPhase,
  * Who wrote a user message Brigadier sent the CLI, as Brigadier noted it when it sent it:
  * none for one it has no note of (sent before it noted them, or never sent by it).
  */
-said?: Said, };
+said?: Said, 
+/**
+ * The requests of the user's messages Brigadier sent in it, as it noted them when it sent
+ * it: the stored messages it is, by id, before the turn naming them is read.
+ */
+requests?: Array<string>, 
+/**
+ * The background job's end it tells: the CLI's notice, or Brigadier's message to the CLI.
+ */
+wake?: Wake, };

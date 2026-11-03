@@ -75,10 +75,16 @@ export function plainCode(text: string): string {
 }
 
 /**
- * The thread's row for a card: what it asks while open ("Asking questions"), how many it asked
+ * The thread's row for a card: what it asks while open ("Asking questions · waiting"), how many it asked
  * once answered ("Asked 3 questions"), each question and its answer under the row.
  */
 export function questionRowWords(question: Question): string {
+  const words = askedWords(question);
+  // Open, its one row says it waits too: no second "Waiting for your answer" line (D161).
+  return questionOpen(question) ? `${words} · waiting` : words;
+}
+
+function askedWords(question: Question): string {
   const open = questionOpen(question);
   switch (question.kind.type) {
     case "merge":

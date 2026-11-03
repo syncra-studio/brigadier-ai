@@ -131,6 +131,8 @@ impl SessionManager {
         };
         if self.recorded_workspace(id).is_none() {
             self.ensure_target(id, Path::new(repo), environment).await?;
+        } else {
+            self.check_joined(&conversation).await?;
         }
         self.recorded_workspace(id)
             .map(Some)
@@ -195,7 +197,7 @@ impl SessionManager {
     /// Whether a thread on `provider` gets its output hook, which trims long `Bash` output:
     /// a Claude thread only (Codex doesn't run it).
     pub(crate) fn thread_hooked(&self, provider: ProviderKind) -> bool {
-        provider == ProviderKind::Claude
+        brigadier_providers::adapters::adapter(provider).is_some_and(|adapter| adapter.output_hook)
     }
 
     /// The thread's instructions: the standing instructions, and what the user's settings add
@@ -251,10 +253,15 @@ impl SessionManager {
             .as_ref()
             .and_then(|launch| launch.workspace.as_ref())
             .map(|workspace| workspace.path.as_path());
-        if self.allowed_before(&conv.id, &mut request, workspace) {
+        // What its level allows on every CLI goes, where its CLI asks more (Codex).
+        let level_allows = cli.launch.as_ref().is_some_and(|launch| {
+            brigadier_providers::policy::level_allows(launch.access, &request, workspace)
+        });
+        if level_allows || self.allowed_before(&conv.id, &mut request, workspace) {
             self.answer_thread(conv, cli, request, ApprovalDecision::Allow)
                 .await;
         } else {
+            // Its CLI's own subagents' too: the user answers, as in the plain CLI (D166).
             self.ask_user_for_thread(conv, cli, request).await;
             // Raised while its card opened, after the waiting cards were looked at: it goes.
             if self.raised_to_full(&conv.id, cli) {

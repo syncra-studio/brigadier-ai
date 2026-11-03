@@ -1,11 +1,9 @@
 //! Plain data-dir Library operations and durable catalog choices.
-use super::{PluginKind, provider};
-use brigadier_providers::ProviderKind;
-use brigadier_registry::adapter::adapters;
+use super::PluginKind;
 use brigadier_registry::add_parse;
 use brigadier_registry::item::{Item, ServerSpec, SkillSource, SkillSpec, TransportSpec};
 use brigadier_registry::library::{self, Origin};
-use brigadier_registry::{Agent, Catalog, Secret};
+use brigadier_registry::{Catalog, Secret};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -502,13 +500,6 @@ fn remove_plain(root: &Path, name: &str) -> Result<(), String> {
         std::fs::remove_file(origin).map_err(|e| e.to_string())?;
     }
     Ok(())
-}
-
-pub(crate) fn agent_of(kind: ProviderKind) -> Option<Agent> {
-    adapters()
-        .into_iter()
-        .map(|adapter| adapter.agent())
-        .find(|agent| provider(*agent) == kind)
 }
 
 // The page/CLI path serializes durable choices independently of legacy sync jobs.

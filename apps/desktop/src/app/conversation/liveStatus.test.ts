@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { answeredHead, elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
+import { cliBlocks } from "@/app/conversation/cliBlocks";
+import { elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { OrchestratorStep, ProviderEvent, Question, Task, UserRequest } from "@/ipc/generated";
+import type { OrchestratorStep, ProviderEvent, Question, Task, ThreadView, UserRequest } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval } from "@/state/board";
+import { mergeEntries } from "@/state/cliThread";
 
 const base = Object.values(night.tasks)[0] as unknown as Task;
 let next = 0;
@@ -117,6 +119,8 @@ test("only a card or a question for the user reads as needing them", () => {
   assert.equal(head(input({ approvals: byId([allowed]) }))?.tone, "busy");
   const question = { id: "q", requestId: "r1", answer: null, answeredAtMs: null } as unknown as Question;
   assert.deepEqual(head(input({ questions: byId([question]) }, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou", waitsOn: "answer" });
+  // A turn of no request of its own (a successor carrying on) waits on the card it asked, not "Thinking" (D161).
+  assert.equal(head(input({ questions: byId([question]) }, { requestIds: [], cardWait: true }))?.waitsOn, "answer");
   // A question in the lead's text: nothing reads as needing them.
   assert.equal(head(input({}, { state: "waiting" })), null);
   // A change ready to land waits for the user once the lead's turn is over.
@@ -150,10 +154,13 @@ test("a landing change reads as landing", () => {
 });
 
 test("the lead's retries show while its CLI retries, and clear when it goes on", () => {
-  assert.equal(doingOf(error("network"), "Thinking"), "Reconnecting");
+  // Why, in plain words from the error's kind, the same on every CLI (D99).
+  assert.equal(doingOf(error("network"), "Thinking"), "The model didn't answer, reconnecting");
+  assert.equal(doingOf(error("server"), null), "The model's service failed, reconnecting");
+  assert.equal(doingOf(error("invalidRequest"), null), "Reconnecting");
   assert.equal(doingOf(error("overloaded"), null), "The model is busy, reconnecting");
   // The attempt, when the provider says it.
-  assert.equal(doingOf(error("network", true, "API request failed (unknown); retry 2 of 10 in 1200 ms"), null), "Reconnecting 2/10");
+  assert.equal(doingOf(error("network", true, "API request failed (unknown); retry 2 of 10 in 1200 ms"), null), "The model didn't answer, reconnecting 2/10");
   assert.equal(doingOf(error("overloaded", true, "Reconnecting... 3/5"), null), "The model is busy, reconnecting 3/5");
   assert.equal(doingOf({ type: "reasoningDelta" } as unknown as ProviderEvent, "Reconnecting 2/10"), null);
   assert.equal(doingOf(error("network", false), "Searching the web"), "Searching the web");
@@ -167,7 +174,8 @@ test("the lead's retries show while its CLI retries, and clear when it goes on",
 test("the lead's live line names what a CLI tool does", () => {
   assert.equal(sending("WebSearch"), "Searching the web");
   assert.equal(sending("WebFetch"), "Reading a web page");
-  assert.equal(sending("mcp__linear__search_issues"), "Using a tool");
+  // Any other tool's own row names it; the line never says a vague "Using a tool".
+  assert.equal(sending("mcp__linear__search_issues"), null);
 });
 
 test("a message to another session: its own row names where it goes", () => {
@@ -226,17 +234,6 @@ test("a worker open in the user's terminal waits on the user", () => {
     { text: "Working in your terminal", tone: "needsYou" });
 });
 
-test("an answered request's line shows once it waits or a late result reopened it", () => {
-  // Still in the same working span: neither waiting nor reopened.
-  const span = { waiting: false, reopened: false };
-  // What the thread merely does between its turns shows only once it waits or a late result reopened it.
-  assert.equal(answeredHead({ text: "Thinking", tone: "busy" }, span), null);
-  assert.deepEqual(answeredHead({ text: "Thinking", tone: "busy" }, { ...span, reopened: true }), { text: "Thinking", tone: "busy" });
-  // What waits on the user shows whatever else.
-  assert.deepEqual(answeredHead({ text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" }, span),
-    { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
-});
-
 test("a run's elapsed time is short", () => {
   assert.equal(elapsedWords(42_000), "42s");
   assert.equal(elapsedWords(6 * 60_000 + 59_000), "6m");
@@ -255,4 +252,44 @@ test("a lead that waits on its own background command says so until the command'
   // The command's end starts the lead's turn for it: that turn's own line shows.
   assert.deepEqual(head(input({ ...leading, requests: working(1) })), { text: "Thinking", tone: "busy" });
   assert.deepEqual(head(input({ requests: working() })), { text: "Thinking", tone: "busy" });
+});
+
+test("a subagent's approval wait in a CLI turn reads as awaiting approval, on the request the CLI's message carries", () => {
+  const view: ThreadView = {
+    entries: [
+      { event: { type: "message", itemId: "cli-u1", role: "user", text: "Use a subagent" }, atMs: 1000, requests: ["r1"] },
+      { event: { type: "toolCall", itemId: "agent", name: "Agent", input: '{"description":"Run sleep"}', status: "inProgress", output: null }, atMs: 1100 },
+      { event: { type: "command", itemId: "sub-c", command: "sleep 40", cwd: null, status: "inProgress", exitCode: null, output: null, durationMs: null }, atMs: 1200, parent: "agent" },
+    ],
+    turns: [],
+  };
+  const [block] = cliBlocks(view, "c");
+  const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as ShownApproval;
+  assert.deepEqual(head(input({ ...leading, approvals: byId([approval]) }, { requestIds: block!.requestIds })),
+    { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
+});
+
+test("a follow-up's subagent approval reads as awaiting approval when the turn was read before the CLI's message was", () => {
+  // Read as the turn opened: the CLI's file already held the message, the engine had not bound
+  // it to its request yet, so the turn names none.
+  const read: ThreadView = {
+    entries: [
+      { event: { type: "message", itemId: "cli-u1", role: "user", text: "First" }, atMs: 1000, said: { by: "user" }, requests: ["r0"] },
+      { event: { type: "message", itemId: "a1", role: "assistant", text: "Done." }, atMs: 1500 },
+      { event: { type: "message", itemId: "cli-u2", role: "user", text: "Use a subagent" }, atMs: 2000 },
+    ],
+    turns: [
+      { userMessage: "cli-u1", startedAtMs: 1000, endedAtMs: 1500, end: "done", error: null, requests: ["r0"] },
+      { userMessage: "cli-u2", startedAtMs: 2000, endedAtMs: null, end: null, error: null, requests: [] },
+    ],
+  };
+  // The live stream's word of the message, with its request, comes after.
+  const view = { ...read, entries: mergeEntries(read.entries, [
+    { event: { type: "message", itemId: "cli-u2", role: "user", text: "Use a subagent" }, atMs: 2001, said: { by: "user" }, requests: ["r1"] },
+    { event: { type: "toolCall", itemId: "agent", name: "Agent", input: '{"description":"Run node"}', status: "inProgress", output: null }, atMs: 2100 },
+  ]) };
+  const block = cliBlocks(view, "c").at(-1)!;
+  const approval = { id: "a", requestId: "r1", state: { type: "pending" } } as unknown as ShownApproval;
+  assert.deepEqual(head(input({ ...leading, approvals: byId([approval]) }, { requestIds: block.requestIds })),
+    { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
 });

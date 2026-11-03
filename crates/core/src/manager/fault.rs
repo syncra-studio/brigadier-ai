@@ -8,7 +8,7 @@
 //! any kind), it fires:
 //! 1. the quota monitor holds the provider at a limit until the chosen reset, so no read can
 //!    lift it early;
-//! 2. the session's transcript gets a notice saying a limit was injected;
+//! 2. the daemon's log says a limit was injected (the thread shows only what a real limit shows);
 //! 3. the CLI's running turn is interrupted, so its in-flight tool activity stops;
 //! 4. when that turn ends, the session reports the limit (a rate-limit notification and a
 //!    usage-limit error) just before the turn's end, as a CLI at its limit would. An injected
@@ -21,12 +21,13 @@
 //! Nothing else is made up: the turn's own end is the CLI's, and everything after the error is
 //! the real fallback path.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use brigadier_providers::{
-    ErrorKind, ItemStatus, LimitHit, LimitKind, NoticeLevel, ProviderError, ProviderEvent,
-    ProviderKind, TurnStatus,
+    ErrorKind, ItemStatus, LimitHit, LimitKind, ProviderError, ProviderEvent, ProviderKind,
+    TurnStatus,
 };
 
 use super::SessionManager;
@@ -51,6 +52,8 @@ pub enum InjectedError {
     Auth,
     /// The account's credits ran out.
     Billing,
+    /// The model declined the turn (a safety refusal, D143).
+    Refusal,
 }
 
 impl InjectedError {
@@ -62,6 +65,7 @@ impl InjectedError {
                 "Invalid authentication credentials. Please sign in again.",
             ),
             Self::Billing => (ErrorKind::Billing, "Credit balance is too low"),
+            Self::Refusal => (ErrorKind::Policy, "The model declined to answer this turn"),
         };
         ProviderError {
             kind,
@@ -109,24 +113,18 @@ impl Faults {
     }
 }
 
-/// `BRIGADIER_FAULT=<claude|codex>-limit[:tool-calls=N][:window=ID][:reset=MINUTES]`, for
+/// `BRIGADIER_FAULT=<cli id>-limit[:tool-calls=N][:window=ID][:reset=MINUTES]`, for
 /// scripted runs: arms a limit for the first worker the daemon starts on that provider.
 fn env_fault() -> Option<(ProviderKind, String, u32, u32)> {
     let spec = std::env::var("BRIGADIER_FAULT").ok()?;
     let mut parts = spec.split(':');
-    let provider = match parts.next()? {
-        "claude-limit" => ProviderKind::Claude,
-        "codex-limit" => ProviderKind::Codex,
-        _ => return None,
-    };
-    let (mut window, mut reset, mut calls) = (
-        match provider {
-            ProviderKind::Claude => "five_hour".to_owned(),
-            ProviderKind::Codex => "primary".to_owned(),
-        },
-        60,
-        3,
-    );
+    let adapter = parts
+        .next()?
+        .strip_suffix("-limit")
+        .and_then(ProviderKind::parse)
+        .and_then(brigadier_providers::adapters::adapter)?;
+    let provider = adapter.kind;
+    let (mut window, mut reset, mut calls) = ((*adapter.usual_windows.first()?).to_owned(), 60, 3);
     for part in parts {
         match part.split_once('=')? {
             ("tool-calls", value) => calls = value.parse().ok()?,
@@ -189,6 +187,16 @@ impl SessionManager {
             },
         );
         Ok(())
+    }
+
+    /// Compacts a conversation's orchestrator (at its next turn boundary) or a task's idle
+    /// worker now, through its CLI's own compaction and the same path an automatic one takes.
+    pub async fn debug_compact(&self, key: FaultKey) -> Result<()> {
+        tracing::info!(?key, "a compaction asked for by a development build");
+        match key {
+            FaultKey::Conversation(id) => self.debug_compact_session(&id).await,
+            FaultKey::Task(id) => self.debug_compact_worker(&id).await,
+        }
     }
 
     /// Makes storing a kept output fail (`on`), as on a full disk, or work again.
@@ -327,27 +335,19 @@ impl SessionManager {
                     tracing::warn!(error = %err, "could not interrupt the session for an injected limit");
                 }
             });
-            let message = match &fault.what {
-                Injected::Limit(limit) => format!(
-                    "Development fault injection: {}'s {} window is treated as used up until \
-                     the chosen reset; the running turn is being interrupted.",
-                    fault.provider.label(),
-                    limit.window.as_deref().unwrap_or("usage")
+            // Logged, not shown: the thread shows only what a real limit shows (goal 1).
+            match &fault.what {
+                Injected::Limit(limit) => tracing::info!(
+                    provider = %fault.provider,
+                    window = limit.window.as_deref().unwrap_or("usage"),
+                    "injected usage limit fired; the running turn is being interrupted"
                 ),
-                Injected::Error(error) => format!(
-                    "Development fault injection: {} reports {error:?}; the running turn is \
-                     being interrupted.",
-                    fault.provider.label()
+                Injected::Error(error) => tracing::info!(
+                    provider = %fault.provider,
+                    ?error,
+                    "injected provider error fired; the running turn is being interrupted"
                 ),
-            };
-            let notice = ProviderEvent::Notice {
-                level: NoticeLevel::Warning,
-                message,
-            };
-            if !ends {
-                return vec![event, notice];
             }
-            before.push(notice);
         }
         if !ends {
             return vec![event];
@@ -358,38 +358,35 @@ impl SessionManager {
         };
         drop(armed);
         match fault.what {
-            Injected::Limit(limit) => {
-                before.extend(self.limit_report(fault.provider, limit));
-                before.push(event);
-            }
-            Injected::Error(error) => {
-                before.push(ProviderEvent::Error {
-                    error: error.error(fault.provider),
-                });
-                // A CLI that hit the error ends its turn failed, not stopped.
-                before.push(match event {
-                    ProviderEvent::TurnCompleted {
-                        turn_id,
-                        duration_ms,
-                        usage,
-                        ..
-                    } => ProviderEvent::TurnCompleted {
-                        turn_id,
-                        status: TurnStatus::Failed,
-                        duration_ms,
-                        usage,
-                    },
-                    other => other,
-                });
-            }
+            Injected::Limit(limit) => before.extend(self.limit_report(cli, limit)),
+            Injected::Error(error) => before.push(ProviderEvent::Error {
+                error: error.error(fault.provider),
+            }),
         }
+        // A CLI that hit a limit or an error ends its turn failed, never as the user's Stop.
+        before.push(match event {
+            ProviderEvent::TurnCompleted {
+                turn_id,
+                duration_ms,
+                usage,
+                ..
+            } => ProviderEvent::TurnCompleted {
+                turn_id,
+                status: TurnStatus::Failed,
+                duration_ms,
+                usage,
+            },
+            other => other,
+        });
         before
     }
 
-    /// What a CLI at its limit reports: its quota with the limit, and a usage-limit error.
-    fn limit_report(&self, provider: ProviderKind, limit: LimitHit) -> Vec<ProviderEvent> {
+    /// What a CLI at its limit reports: its own account's quota with the limit, and a
+    /// usage-limit error.
+    fn limit_report(&self, cli: &Cli, limit: LimitHit) -> Vec<ProviderEvent> {
+        let provider = cli.provider;
         let mut events = Vec::new();
-        if let Some(quota) = self.runtime.monitor().current(provider, now_ms()) {
+        if let Some(quota) = self.runtime.monitor().current_for(&cli.account, now_ms()) {
             events.push(ProviderEvent::RateLimits { quota });
         }
         events.push(ProviderEvent::Error {

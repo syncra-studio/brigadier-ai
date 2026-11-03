@@ -1,16 +1,12 @@
 import { Button } from "@/components/controls";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { BrigadierGlyph, Check, Copy, ProviderGlyph, Spinner, X } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { UpdateItem, UpdateTarget } from "@/ipc/generated";
+import { cliFacts } from "@/lib/providerKinds";
 import { skipUpdate, startUpdate, useUpdates } from "@/state/updates";
 
-export const UPDATE_NAMES: Record<UpdateTarget, string> = {
-  app: "Brigadier",
-  claude: PROVIDER_LABELS.claude,
-  codex: PROVIDER_LABELS.codex,
-};
+export const updateName = (target: UpdateTarget): string => target === "app" ? "Brigadier" : cliFacts(target).label;
 
 /**
  * One update in the updates list: the app's or agent's mark, name and versions, then Update (or
@@ -19,7 +15,7 @@ export const UPDATE_NAMES: Record<UpdateTarget, string> = {
 export function UpdateRow({ item }: { item: UpdateItem }) {
   const asked = useUpdates((s) => s.errors[item.target]);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
-  const name = UPDATE_NAMES[item.target];
+  const name = updateName(item.target);
   const { progress, action } = item;
   const shownError = asked ?? (progress.type === "failed" ? progress.error : null);
   const take = () => void startUpdate(item);

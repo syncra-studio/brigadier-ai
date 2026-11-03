@@ -27,8 +27,8 @@ use brigadier_core::{
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
     SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TrackedPullRequest, TrackedWork,
-    TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn,
-    WorkerDiff, WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn, WorkerDiff,
+    WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -67,6 +67,8 @@ pub enum InjectedError {
     Auth,
     /// Credits run out.
     Billing,
+    /// The model declines the turn (D143).
+    Refusal,
 }
 
 /// What an archive, restore or delete did to one of its conversations.
@@ -557,11 +559,6 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
-    /// Dismisses the notice of a queued message the session sent on to one of its workers.
-    DismissSent {
-        conversation_id: ConversationId,
-        item_id: String,
-    },
     /// Dismisses the notice above the composer made at `at_ms` (D51).
     DismissNotice {
         conversation_id: ConversationId,
@@ -571,8 +568,8 @@ pub enum Request {
     Interrupt {
         conversation_id: ConversationId,
     },
-    /// Continues the latest request after it was stopped, in the same block; the queue
-    /// unpauses and runs after it.
+    /// Continues the latest request after it was stopped, as a block of its own (the stopped one
+    /// keeps its end); the queue unpauses and runs after it.
     Resume {
         conversation_id: ConversationId,
     },
@@ -655,17 +652,6 @@ pub enum Request {
         scope: String,
         attachments: Vec<AttachmentRef>,
     },
-    /// Preview the later files before confirming a turn snapshot restore.
-    PrepareTurnRevert {
-        conversation_id: ConversationId,
-        request_id: String,
-    },
-    /// Restore the turn's start tree, only while the confirmed current tree still matches.
-    RevertTurn {
-        conversation_id: ConversationId,
-        request_id: String,
-        expected_tree: String,
-    },
     /// The changes agents made in a session's checkout that the user hasn't kept or undone yet
     /// (the file review, a turn diff card's Undo All and Keep All): every file, or `path`'s.
     GetPendingChanges {
@@ -732,6 +718,10 @@ pub enum Request {
     /// stream's after them, and its turns. `threadNews` frames extend it.
     ThreadView {
         conversation_id: ConversationId,
+        /// Only its newest this many turns: what it shows at once when it opens (D46).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        newest_turns: Option<u32>,
     },
     /// The user's Continue now on a turn that waits for a usage, spend or credits limit: its
     /// messages go now (MA5).
@@ -742,14 +732,6 @@ pub enum Request {
     DontResume {
         conversation_id: ConversationId,
     },
-    /// Whether the user's copy of the `/brigade` skill (`~/.brigadier/brigade/SKILL.md`)
-    /// overrides the shipped one (S15).
-    GetBrigadeSkill,
-    /// Settings' Reset to shipped: the user's copy goes; new sessions get the shipped skill.
-    ResetBrigadeSkill,
-    /// Settings' Create: the user's copy, written as the shipped skill to edit; one already
-    /// there is kept as it is.
-    CreateBrigadeSkill,
     /// Settings › Routing: the user's rules file (`~/.brigadier/models.md`) as it is on disk
     /// now, beside the shipped guidance (S32).
     GetModelRules,
@@ -998,8 +980,10 @@ pub enum Request {
     },
     /// The user's one message to one of the session's own workers (the composer's To:): it
     /// goes to the worker, with its attachments and mentions, as `brigadier send` sends; the
-    /// session's thread shows "You messaged ‹worker›" and its next turn hears of it. An error
-    /// means the worker did not take it.
+    /// session's thread shows "You messaged ‹worker›" and its next turn hears of it. Sent
+    /// while the worker works and not `steer`ed, it waits in the session's queue for that
+    /// worker (at `queue_index`, back from an edit) and goes as its next turn. An error means
+    /// neither took it.
     SendToWorker {
         conversation_id: ConversationId,
         task_id: TaskId,
@@ -1007,6 +991,12 @@ pub enum Request {
         attachments: Vec<AttachmentRef>,
         #[serde(default)]
         mentions: Vec<Mention>,
+        #[serde(default)]
+        #[ts(as = "Option<bool>", optional)]
+        steer: bool,
+        #[serde(default)]
+        #[ts(optional)]
+        queue_index: Option<u32>,
     },
     /// Interrupts a worker's turn; `resumeTask` continues it.
     PauseTask {
@@ -1333,6 +1323,13 @@ pub enum Request {
         error: InjectedError,
         after_tool_calls: u32,
     },
+    /// Development builds only: compacts a conversation's orchestrator (at its next turn
+    /// boundary) or a task's idle worker through its CLI's own compaction; what follows is the
+    /// real path, a hand-off after the third.
+    #[cfg(debug_assertions)]
+    DebugCompact {
+        target: FaultTarget,
+    },
     /// Development builds only: adds `text` to the `learned` items of the next report a worker
     /// of the conversation submits (the continuity battery's false claim).
     #[cfg(debug_assertions)]
@@ -1640,9 +1637,6 @@ pub enum Response {
     RunQueuedHere {
         queue: MessageQueue,
     },
-    DismissSent {
-        queue: MessageQueue,
-    },
     DismissNotice,
     Interrupt,
     Resume,
@@ -1670,12 +1664,6 @@ pub enum Response {
         data: String,
     },
     PinDraftAttachments,
-    PrepareTurnRevert {
-        preview: TurnRevert,
-    },
-    RevertTurn {
-        outcome: UndoOutcome,
-    },
     GetPendingChanges {
         pending: PendingChanges,
     },
@@ -1695,18 +1683,6 @@ pub enum Response {
     },
     ContinueWaiting,
     DontResume,
-    GetBrigadeSkill {
-        custom: bool,
-        path: String,
-    },
-    ResetBrigadeSkill {
-        custom: bool,
-        path: String,
-    },
-    CreateBrigadeSkill {
-        custom: bool,
-        path: String,
-    },
     GetModelRules {
         rules: ModelRules,
     },
@@ -1852,7 +1828,7 @@ pub enum Response {
         task_ids: Vec<TaskId>,
     },
     SendMockupNotes,
-    /// `queued`: it went into the worker's running turn.
+    /// `queued`: it waits in the session's queue for the worker.
     SendToWorker {
         queued: bool,
     },
@@ -2037,6 +2013,8 @@ pub enum Response {
     #[cfg(debug_assertions)]
     DebugInjectError,
     #[cfg(debug_assertions)]
+    DebugCompact,
+    #[cfg(debug_assertions)]
     DebugPlantLearned,
     StartRawSession {
         session: Box<RawSession>,
@@ -2109,7 +2087,7 @@ pub enum SendOutcome {
     /// It is in the transcript (a new turn, or steered into the running one).
     Sent { message: Box<Message> },
     /// It waits in the queue.
-    Queued { item: QueuedMessage },
+    Queued { item: Box<QueuedMessage> },
 }
 
 /// A slice of an artifact's text.

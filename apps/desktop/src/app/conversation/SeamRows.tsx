@@ -1,18 +1,22 @@
 import type { FC } from "react";
 
 import { type BlockSeam, seamMove } from "@/app/conversation/blocks";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ROW } from "@/components/conversation";
 import { LabeledDivider } from "@/components/shared";
+import { cliFacts } from "@/lib/providerKinds";
 
-/** "Continued on Codex" where a thread went on in another CLI (S38c); nothing for a hand-off. */
+/**
+ * Where a thread went on in another CLI: "Continued on Codex" (S38c). A hand-off on the same CLI
+ * shows nothing, its note turn under the hood (core-goals D193).
+ */
 export const SeamDivider: FC<{ seam: BlockSeam }> = ({ seam }) => {
   const movedTo = seamMove(seam);
-  return movedTo ? (
+  if (!movedTo) return null;
+  return (
     <LabeledDivider data-slot="seam" role="status">
-      Continued on {PROVIDER_LABELS[movedTo]}
+      {`Continued on ${cliFacts(movedTo).label}`}
     </LabeledDivider>
-  ) : null;
+  );
 };
 
 /**

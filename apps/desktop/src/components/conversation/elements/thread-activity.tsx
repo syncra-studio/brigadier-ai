@@ -1,4 +1,4 @@
-import { type ComponentProps, createContext, type ReactNode, useContext, useRef, useState } from "react";
+import { type ComponentProps, createContext, type KeyboardEvent, type ReactNode, useContext, useRef, useState } from "react";
 
 import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE } from "@/components/conversation/elements/activity-row";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout/collapsible";
@@ -24,9 +24,19 @@ function showInGroup(row: HTMLElement) {
   else if (top < shown.top) list.scrollTop -= shown.top - top;
 }
 
+/** Enter or Space on a row presses it, as on a button. */
+function press(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    event.currentTarget.click();
+  }
+}
+
 /** One row of a thread's activity that opens to its detail when it has one. */
-export function ThreadActivity({ detail, detailClassName, autoOpen = false, className, children, onOpenChange, ...props }: ComponentProps<"div"> & {
+export function ThreadActivity({ detail, detailClassName, autoOpen = false, className, children, onOpenChange, onOpen, ...props }: ComponentProps<"div"> & {
   detail?: ReactNode;
+  /** With no detail: what a click on it opens elsewhere (a subagent's transcript in the side panel). */
+  onOpen?: (() => void) | undefined;
   detailClassName?: string;
   /** Opens it as if the user had: from the start, and each time it turns true. */
   autoOpen?: boolean;
@@ -42,6 +52,12 @@ export function ThreadActivity({ detail, detailClassName, autoOpen = false, clas
     if (autoOpen) setOpen(true);
   }
   const row = className ?? ROW;
+  if (!detail && onOpen) {
+    return <div role="button" tabIndex={0} {...props} onClick={onOpen} onKeyDown={press} className={cn(row, ROW_TOGGLE)}>
+      {children}
+      <ChevronRightAlt aria-hidden className={CHEVRON} />
+    </div>;
+  }
   if (!detail) return <div className={row} {...props}>{children}</div>;
   // Opened inside a group, it shows itself in the group's list: at once, and again once its detail has its height.
   const opened = (now: boolean) => {
@@ -52,14 +68,7 @@ export function ThreadActivity({ detail, detailClassName, autoOpen = false, clas
   };
   return <Collapsible ref={root} {...props} open={open} onOpenChange={opened}>
     <CollapsibleTrigger asChild>
-      <div role="button" tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
-            event.preventDefault();
-            event.currentTarget.click();
-          }
-        }}
-        className={cn(row, ROW_TOGGLE)}>
+      <div role="button" tabIndex={0} onKeyDown={press} className={cn(row, ROW_TOGGLE)}>
         {children}
         <ChevronRightAlt aria-hidden className={CHEVRON} />
       </div>

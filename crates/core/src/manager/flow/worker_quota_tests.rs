@@ -5,7 +5,8 @@ use super::{Flow, Options, Reply};
 use crate::work::{
     OrchestratorStepKind, ProviderTransitionCause, QuotaRecoveryMode, Task, TaskState,
 };
-use brigadier_cli::protocol::{Agent, CliRequest};
+use brigadier_cli::protocol::CliRequest;
+use brigadier_providers::ProviderKind as Agent;
 use brigadier_providers::{LimitHit, LimitKind, ProviderKind};
 use std::sync::{Arc, Mutex};
 
@@ -242,6 +243,16 @@ async fn a_worker_reset_resumes_native_history_and_confirms_once() {
     let turns = seen.lock().unwrap().clone();
     assert_eq!(turns.len(), 2);
     assert_eq!(turns[0].2, turns[1].2);
+    // D126: its "Resumed on" row tells it went on; no "started working" beside it.
+    let board = flow.board().await;
+    assert!(
+        !board
+            .worker_steps
+            .iter()
+            .any(|step| step.kind == crate::work::WorkerStepKind::Resumed),
+        "{:?}",
+        board.worker_steps
+    );
     let resumed = worker(&flow).await;
     assert_eq!(task.workspace, resumed.workspace);
     assert!(resumed.quota_wait.is_none());
@@ -371,6 +382,13 @@ async fn a_failed_worker_send_has_no_completed_transition() {
             .all(|step| !matches!(step.kind, OrchestratorStepKind::ProviderTransition { .. }))
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
+    // Its row keeps the model it was on: no switch shows that didn't happen (goal 1).
+    let rows = flow
+        .manager
+        .worker_rows_of(&flow.conversation, false)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].agent, ProviderKind::Claude);
     let task = worker(&flow).await;
     assert!(
         task.quota_wait

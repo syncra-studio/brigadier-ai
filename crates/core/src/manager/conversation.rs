@@ -16,6 +16,7 @@
 //!   message (unless the queue is paused). So results reach the orchestrator before the
 //!   user's next queued message, and never mixed into another request's turn unlabelled.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,7 +47,7 @@ use crate::sessions::{
 use crate::tools::Role;
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, HeldBy, InjectionKind, OrchestratorStepKind,
-    QueuedMessage, QuotaWait, RequestState, RunState, TaskId,
+    QueuedMessage, QuotaWait, RequestState, RunState, TaskId, TaskState,
 };
 use crate::{Error, Result, now_ms};
 
@@ -107,6 +108,8 @@ fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
 }
 /// Messages carried verbatim when a conversation's CLI session is started over.
 const RESEED_MESSAGES: usize = 40;
+/// A user message this long after the thread's last one comes "after a gap" (D170).
+const GAP_MS: i64 = 30 * 60 * 1000;
 /// Bytes of transcript carried when a conversation's CLI session is started over.
 const RESEED_BYTES: usize = 48_000;
 /// Messages of an @-mentioned conversation that go along as context.
@@ -199,6 +202,10 @@ pub(crate) struct Envelope {
 mod continue_on;
 pub(super) mod long;
 pub(super) mod queue_judging;
+
+/// Why a queued message's Steer leaves it queued while the thread compacts.
+const COMPACTING_STEER: &str =
+    "Can't steer while compacting. Your message will run when compaction finishes.";
 pub(super) mod quota;
 use long::thrashing;
 mod seam;
@@ -273,6 +280,11 @@ struct ConvState {
     /// a command whose item still runs at its turn's end lingers; its terminal's leaving the
     /// list ends it too, should its item's end not come (D21).
     terminals: HashMap<String, String>,
+    /// Codex commands the turn went on from (`terminals`) that ended while it still ran, by
+    /// item: their words, end and output's tail, and how many of the model's calls ended since.
+    /// One whose end no call of its model's read (at most the turn's last ended since) is told
+    /// as a lingering one's is: Codex never says it (D177: a `brigadier ask` answered so).
+    unread_ends: HashMap<String, (String, String, String, u32)>,
     /// The request whose turn left Codex commands running (`lingering`): it works until each
     /// has ended and the thread heard of it. While they run, as while the CLI's own background
     /// jobs do (`background`), the CLI stays up (nothing retires it).
@@ -352,29 +364,19 @@ struct ConvState {
     /// Brigadier's own notes for the running turn held the same way: steered in once no
     /// command runs, else carried by the next turn.
     held_notes: Vec<String>,
-    /// The steered requests and Deciding queued messages marked as waiting behind them,
-    /// unmarked when the last ends.
+    /// The steered requests marked as waiting behind them, unmarked when the last ends.
     held_requests: Vec<String>,
-    held_items: Vec<String>,
-    /// Queued messages the session has to judge (run2-D40), given to it while a turn ran and
-    /// still Deciding: each joins by itself after [`queue_judging::DECIDING_WAIT`], or when its
-    /// turn completes.
-    deciding: Vec<String>,
-    /// Those of them given to the session on a turn of their own, woken to judge them while
-    /// its work held with no turn running: the pending message that starts that turn is the
-    /// queued one, not yet the user's message of a request, and never goes again.
-    woken: HashSet<String>,
+    /// Those of them a `brigadier wait` already ended for: the next wait blocks (goal 3).
+    held_told: Vec<String>,
     /// The running turn started with a message the user sent while the session's work still
     /// held (its workers or its CLI's background commands): it goes on with that work, in its
     /// block ([`crate::thread_view::ThreadTurn::joins`]).
     turn_joins: bool,
-    /// The turn's judging is settled, even while the rest of its end is being recorded.
-    judging_ended: bool,
+    /// The open block's `brigadier` look-ups, and whether its drift note went (D167).
+    look_ups: u32,
+    drift_noted: bool,
     /// Those being handed to a worker right now: no timer, turn end or pump settles them.
     claimed: HashSet<String>,
-    /// Queued messages that joined unjudged, newest last: the session's late judgment of one
-    /// hears so.
-    joined_unjudged: Vec<String>,
     /// Replies that were streaming when a message was steered in, and the request they
     /// answer (the one before the steer).
     replying_for: HashMap<String, String>,
@@ -425,6 +427,19 @@ struct ConvState {
 }
 
 impl ConvState {
+    /// The drift note (D167) for the turn starting now: when the block took more look-ups than
+    /// one `brigadier state` call would, once a block. A new block counts afresh.
+    fn drift_note(&mut self, opens_block: bool) -> Option<String> {
+        let note = (self.look_ups > prompts::MAX_LOOK_UPS && !self.drift_noted)
+            .then(|| prompts::drift_note(self.look_ups));
+        self.drift_noted |= note.is_some();
+        if opens_block {
+            self.look_ups = 0;
+            self.drift_noted = false;
+        }
+        note
+    }
+
     /// Whether its wait for a limit ends by itself at the reset: a usage window's does, at most
     /// A spend control or credits never does. Usage windows retain automatic intent.
     fn goes_on_its_own(&self) -> bool {
@@ -463,11 +478,10 @@ impl ConvState {
         carried
     }
 
-    /// The requests and queued messages marked as waiting behind a command, unless none are.
-    fn take_held(&mut self) -> Option<(Vec<String>, Vec<String>)> {
+    /// The requests marked as waiting behind a command, unless none are.
+    fn take_held(&mut self) -> Option<Vec<String>> {
         let requests = std::mem::take(&mut self.held_requests);
-        let items = std::mem::take(&mut self.held_items);
-        (!requests.is_empty() || !items.is_empty()).then_some((requests, items))
+        (!requests.is_empty()).then_some(requests)
     }
 
     /// The thread's oldest command running now, which a message sent in waits behind.
@@ -477,12 +491,18 @@ impl ConvState {
 
     /// Work holding a request; proven apps retain process ownership independently below.
     fn has_cli_work(&self) -> bool {
+        self.background
+            .as_ref()
+            .is_some_and(|jobs| !jobs.owed.is_empty())
+            || self.runs_cli_work()
+    }
+
+    /// Its CLI's work that still runs: a job, or a command past its turn.
+    fn runs_cli_work(&self) -> bool {
         self.background.as_ref().is_some_and(|jobs| {
-            !jobs.owed.is_empty()
-                || jobs
-                    .running
-                    .iter()
-                    .any(|(id, _)| !self.persistent_apps.contains(id))
+            jobs.running
+                .iter()
+                .any(|(id, _)| !self.persistent_apps.contains(id))
         }) || self
             .lingering
             .keys()
@@ -493,6 +513,16 @@ impl ConvState {
     /// Native process ownership: app-only CLIs must not be retired while their apps run.
     fn has_cli_jobs(&self) -> bool {
         self.background.as_ref().is_some_and(Background::waits)
+            || !self.lingering.is_empty()
+            || self.lingering_request.is_some()
+    }
+
+    /// [`Self::has_cli_jobs`] but for ended jobs whose turn is still owed: their end was told
+    /// already, or comes in a turn of its own, so nothing of them is cut by what comes next.
+    fn runs_cli_jobs(&self) -> bool {
+        self.background
+            .as_ref()
+            .is_some_and(|jobs| !jobs.running.is_empty())
             || !self.lingering.is_empty()
             || self.lingering_request.is_some()
     }
@@ -586,6 +616,14 @@ pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
 
+/// How long a turn's end waits for the turn a background command that ended during it may
+/// start: the block it ends never reads over between the two (D153). A CLI that took that end
+/// in the turn starts none, and the block closes this much later.
+#[cfg(not(test))]
+pub(super) const WAKE_SETTLE: Duration = Duration::from_secs(3);
+#[cfg(test)]
+pub(super) const WAKE_SETTLE: Duration = Duration::from_millis(300);
+
 /// How long a Codex command whose terminal left `/ps` waits for its item's end, which brings
 /// its exit code and output (Codex drains the output first), before it ends without them.
 #[cfg(not(test))]
@@ -648,29 +686,50 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) hand_over_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
-    /// Tests: pauses a queue judgment after reading its queue item, before reserving it.
+    /// Tests: pauses a worker row's drain after its worker took it, before it leaves the queue.
     #[cfg(test)]
-    pub(super) queue_judgment_pause:
+    pub(super) worker_delivery_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl ConvLive {
+    /// Ends the reservation `claim_worker_row` made.
+    pub(super) async fn unclaim(&self, item_id: &str) {
+        self.state.lock().await.claimed.remove(item_id);
+    }
+
     /// The conversation's CLI session, while one runs.
     pub(crate) async fn cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.clone()
     }
 
     /// Brigadier's requests its running turn carries ([`ConvState::carried_requests`]), and
-    /// whether that turn joins the work before it ([`ConvState::turn_joins`]).
-    pub(super) async fn carried_turn(&self) -> (Vec<String>, bool) {
+    /// whether that turn joins the work before it ([`ConvState::turn_joins`]), and whether no
+    /// turn of Brigadier's runs: one the CLI starts then is its own, sent nothing to join.
+    pub(super) async fn carried_turn(&self) -> (Vec<String>, bool, bool) {
         let state = self.state.lock().await;
-        (state.carried_requests(), state.turn_joins)
+        (
+            state.carried_requests(),
+            state.busy && state.turn_joins,
+            !state.busy,
+        )
+    }
+
+    /// Whether the running turn is a hand-off's own ([`seam::SeamLive::quiet`]).
+    pub(super) async fn quiet_turn(&self) -> bool {
+        let state = self.state.lock().await;
+        state.busy && state.seam.quiet
     }
 
     /// Tests: the request the rest of the turn answers, as a queued message joining it sets it.
     #[cfg(test)]
     pub(super) async fn answer_request(&self, request: &str) {
         self.state.lock().await.request = Some(request.to_owned());
+    }
+
+    /// A `brigadier` look-up of this conversation's own session, counted for the drift note.
+    pub(super) async fn looked_up(&self) {
+        self.state.lock().await.look_ups += 1;
     }
 
     pub fn new(id: ConversationId, kind: ConversationKind, private_logs: bool) -> Self {
@@ -703,7 +762,8 @@ impl ConvLive {
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
-            queue_judgment_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            worker_delivery_pause: std::sync::Mutex::new(None),
         }
     }
 
@@ -769,8 +829,8 @@ impl ConvLive {
         self.state.lock().await.has_cli_jobs()
     }
 
-    async fn has_cli_work(&self) -> bool {
-        self.state.lock().await.has_cli_work()
+    async fn runs_cli_work(&self) -> bool {
+        self.state.lock().await.runs_cli_work()
     }
 
     /// Tracks the thread's command `item` (`words`) by its `status` as what messages sent into
@@ -781,7 +841,7 @@ impl ConvLive {
         item: &str,
         words: &str,
         status: ItemStatus,
-    ) -> Option<(Vec<String>, Vec<String>)> {
+    ) -> Option<Vec<String>> {
         let mut state = self.state.lock().await;
         if status == ItemStatus::InProgress {
             if !state.holding.iter().any(|(of, _)| of == item) {
@@ -1175,13 +1235,14 @@ impl SessionManager {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
             }
         }
-        // No turn runs or waits to run: the next queued message goes.
+        // No turn runs or waits to run: the next queued message goes; while the block stays
+        // open it waits for the next one (D25), and the block's end kicks it then.
         let waiting = conv.kind == ConversationKind::Session
             && activity.running.is_none()
             && activity.carried.is_empty()
             && !board.queue.paused
             && board.queue.ready_to_send().is_some();
-        if waiting {
+        if waiting && !self.queue_holds(&conv).await {
             self.kick(&conv);
         }
     }
@@ -1267,10 +1328,21 @@ impl SessionManager {
         state.last_activity_ms = now_ms();
         if state.busy && !state.compacting {
             if steer {
+                // In the running turn's block from the first frame: marked in the write that stores it.
                 let message = self
                     .core
-                    .append_user_message(id.clone(), text, attachments, mentions)
+                    .append_steered_message(
+                        id.clone(),
+                        text,
+                        attachments,
+                        mentions,
+                        state.request.clone(),
+                    )
                     .await?;
+                let brigade = queue_judging::judges_queue(&conversation);
+                if brigade {
+                    conv.frame(&message.id, queue_judging::STEERED.to_owned());
+                }
                 let steered = match &state.cli {
                     Some(cli) => {
                         match self
@@ -1278,7 +1350,13 @@ impl SessionManager {
                             .await
                         {
                             Ok((input, user)) => {
-                                self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                                self.note_skill_sent(
+                                    &conv.id,
+                                    &input,
+                                    &user,
+                                    std::slice::from_ref(&message),
+                                    cli.provider,
+                                );
                                 cli.session.steer(input).await.is_ok()
                             }
                             Err(_) => false,
@@ -1293,6 +1371,9 @@ impl SessionManager {
                     state.in_turn.push(message.clone());
                 } else {
                     // The turn is still starting (or just ended): the next turn carries it.
+                    if brigade {
+                        conv.frame(&message.id, queue_judging::STEERED.to_owned());
+                    }
                     state.pending.push(message.clone());
                 }
                 drop(state);
@@ -1305,7 +1386,7 @@ impl SessionManager {
                 // A Chat judges it too, as a session does (run2-D46); a side chat doesn't.
                 drop(state);
                 return self
-                    .queue_to_judge(&conv, text, attachments, mentions, queue_index, false)
+                    .queue_to_judge(&conv, text, attachments, mentions, queue_index)
                     .await;
             }
             let item = self
@@ -1317,12 +1398,18 @@ impl SessionManager {
         // No turn runs, but the Chat's work still holds (its workers, its CLI's background
         // commands): as a session's, the message joins that work, Deciding, on a turn that wakes
         // the Chat to judge it now. A Steer still goes straight in.
-        if !steer && !paused && queue_judging::judges_queue(&conversation) {
+        let mut holds = false;
+        let mut into = None;
+        if !paused && queue_judging::judges_queue(&conversation) {
             drop(state);
-            if self.work_holds(&conv).await {
+            holds = self.work_holds(&conv).await;
+            if !steer && holds {
                 return self
-                    .queue_to_judge(&conv, text, attachments, mentions, queue_index, true)
+                    .queue_to_judge(&conv, text, attachments, mentions, queue_index)
                     .await;
+            }
+            if steer && holds {
+                into = self.request_for(&id).await;
             }
             state = conv.state.lock().await;
         }
@@ -1334,10 +1421,15 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
+        // Steered into the work that holds with no turn running: it takes it (D25), in its
+        // open block from the first frame.
         let message = self
             .core
-            .append_user_message(id.clone(), text, attachments, mentions)
+            .append_steered_message(id.clone(), text, attachments, mentions, into)
             .await?;
+        if steer && holds {
+            conv.frame(&message.id, queue_judging::STEERED.to_owned());
+        }
         state.pending.push(message.clone());
         drop(state);
         self.kick(&conv);
@@ -1354,36 +1446,88 @@ impl SessionManager {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
     ) -> Result<crate::work::MessageQueue> {
-        self.conv(id)?
-            .user_write(
-                self.core
-                    .edit_queued(id, item_id, text, attachments, mentions),
-            )
-            .await
+        let conv = self.conv(id)?;
+        // A worker's row on its way to it is fixed: the delivery takes the words it read.
+        let _routing = conv.queue_routing.lock().await;
+        if conv.state.lock().await.claimed.contains(item_id) {
+            return Err(Error::Invalid(
+                "this message is on its way to its worker; delete it and send it again".into(),
+            ));
+        }
+        conv.user_write(
+            self.core
+                .edit_queued(id, item_id, text, attachments, mentions),
+        )
+        .await
     }
 
-    /// Sends a queued message now, into the running turn (or as a new turn when none runs).
+    /// Reserves worker row `item_id` for one delivery, with the row as it is now (an edit
+    /// before the claim goes with it; one after is refused): None when it left the queue or
+    /// another delivery (a drain, the user's Steer) has it.
+    pub(super) async fn claim_worker_row(
+        &self,
+        conversation_id: &ConversationId,
+        item_id: &str,
+    ) -> Option<(Arc<ConvLive>, crate::work::QueuedMessage)> {
+        let conv = self.conv(conversation_id).ok()?;
+        let _routing = conv.queue_routing.lock().await;
+        let board = self.core.board(conversation_id).await.ok()?;
+        let item = board
+            .queue
+            .items
+            .into_iter()
+            .find(|item| item.id == item_id)?;
+        let fresh = conv.state.lock().await.claimed.insert(item_id.to_string());
+        fresh.then_some((conv.clone(), item))
+    }
+
+    /// Sends a queued message now, into the running turn (or as a new turn when none runs); while
+    /// compacting it stays queued, saying so.
     pub async fn steer_queued(&self, id: ConversationId, item_id: String) -> Result<()> {
         self.admit()?;
         let conv = self.conv(&id)?;
+        // The user's message for a worker goes to that worker now (goal 8).
+        if let Some(item) = self
+            .core
+            .board(&id)
+            .await?
+            .queue
+            .items
+            .into_iter()
+            .find(|item| item.id == item_id && item.worker.is_some())
+        {
+            return self.steer_queued_to_worker(&id, item).await;
+        }
         let routing = conv.queue_routing.lock().await;
         // At a seam it stays queued for the successor (S22).
-        if conv.state.lock().await.seam.held {
+        let (held, compacting) = {
+            let state = conv.state.lock().await;
+            (state.seam.held, state.compacting)
+        };
+        if held {
             return Ok(());
         }
-        // One the running turn has to judge joins without going again (run2-D46).
-        if self.steered_delivered(&conv, &item_id).await? {
-            return Ok(());
+        if compacting {
+            return Err(Error::Invalid(COMPACTING_STEER.into()));
         }
+        // The work in progress takes it (D25); with no turn running, in its open block from
+        // the first frame.
+        let busy = conv.state.lock().await.busy;
+        let holds = !busy && self.work_holds(&conv).await;
+        let into = if holds {
+            self.request_for(&id).await
+        } else {
+            None
+        };
         let message = conv
             .user_write(async {
-                let item = self.core.take_queued(&id, &item_id).await?;
-                conv.goes_on_own_turn(&item);
-                self.core.append_queued(id.clone(), item).await
+                let item = self.core.queued(&id, &item_id).await?;
+                self.append_queued(id.clone(), item, into).await
             })
             .await?;
         drop(routing);
-        self.join_working(&conv, message).await;
+        let frame = (busy || holds).then(|| queue_judging::STEERED.to_owned());
+        self.join_working(&conv, message, frame).await;
         Ok(())
     }
 
@@ -1403,11 +1547,18 @@ impl SessionManager {
         let id = &conv.id;
         // A reply instead of "Build it" closes the plan's card (harness D7).
         self.plan_replied(id).await;
-        let (busy, held) = {
+        let (busy, held, compacting, quiet) = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
-            (state.busy, state.seam.held)
+            (
+                state.busy,
+                state.seam.held,
+                state.compacting,
+                state.busy && state.seam.quiet,
+            )
         };
+        // No steer while compacting: it waits in the queue and goes once compaction is done.
+        let steer = steer && !compacting;
         // At a seam a message waits, kept in the queue, for the successor (S22).
         if held {
             let item = conv
@@ -1419,28 +1570,49 @@ impl SessionManager {
             self.arm_seam_hold(conv).await;
             return Ok(SendOutcome::Queued(item));
         }
-        if steer && busy {
-            let message = conv
+        // The successor's own first turn runs: it waits in the queue for that turn's end (D193).
+        if quiet && !steer {
+            let item = conv
                 .user_write(
                     self.core
-                        .append_user_message(id.clone(), text, attachments, mentions),
+                        .enqueue(id, text, attachments, mentions, queue_index),
                 )
                 .await?;
-            self.join_working(conv, message.clone()).await;
+            return Ok(SendOutcome::Queued(item));
+        }
+        if steer && busy {
+            // In the running turn's block from the first frame: marked in the write that stores it.
+            let into = conv.running_request().await;
+            let message = conv
+                .user_write(self.core.append_steered_message(
+                    id.clone(),
+                    text,
+                    attachments,
+                    mentions,
+                    into,
+                ))
+                .await?;
+            self.join_working(
+                conv,
+                message.clone(),
+                Some(queue_judging::STEERED.to_owned()),
+            )
+            .await;
             return Ok(SendOutcome::Sent(message));
         }
         if busy && !paused {
             // The session judges it, as it waits Deciding (run2-D40).
             return self
-                .queue_to_judge(conv, text, attachments, mentions, queue_index, false)
+                .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
         // No turn runs, but the session's work still holds (its workers, its CLI's background
         // commands): the message joins that work all the same, Deciding, on a turn that wakes
         // the session to judge it now. A Steer still goes straight in.
-        if !steer && !paused && self.work_holds(conv).await {
+        let holds = !paused && self.work_holds(conv).await;
+        if !steer && holds {
             return self
-                .queue_to_judge(conv, text, attachments, mentions, queue_index, true)
+                .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
         if busy || paused {
@@ -1453,12 +1625,25 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
+        // Steered into the work that holds with no turn running: it takes it (D25), in its
+        // open block from the first frame.
+        let into = if steer && holds {
+            self.request_for(id).await
+        } else {
+            None
+        };
         let message = conv
-            .user_write(
-                self.core
-                    .append_user_message(id.clone(), text, attachments, mentions),
-            )
+            .user_write(self.core.append_steered_message(
+                id.clone(),
+                text,
+                attachments,
+                mentions,
+                into,
+            ))
             .await?;
+        if steer && holds {
+            conv.frame(&message.id, queue_judging::STEERED.to_owned());
+        }
         conv.state.lock().await.pending.push(message.clone());
         self.kick(conv);
         Ok(SendOutcome::Sent(message))
@@ -1467,11 +1652,21 @@ impl SessionManager {
     /// Sends `message` into the running turn, which the thread shows it inside; else (the
     /// turn just ended, or is still starting) the next turn carries it.
     /// Whether a session's or a Chat's work still holds while no turn of its CLI runs: one of
-    /// its workers still works (its own background commands count), or a background command of
-    /// its CLI still runs or owes the turn its end starts. Its block stays open meanwhile, and
+    /// its workers still works (its own background commands count) or is paused, or a background command of
+    /// its CLI still runs or one's end waits for the turn it starts (`CliJobs::waking`). Its block stays open meanwhile, and
     /// what the user sends goes on in it. A side chat's or a tab chat's never holds: it keeps
     /// the plain queue.
     pub(super) async fn work_holds(&self, conv: &ConvLive) -> bool {
+        self.holds(conv, true).await
+    }
+
+    /// Whether a queued message waits for the work: as [`Self::work_holds`], but paused workers
+    /// alone don't hold it, as they may wait for that very message; it goes on as usual.
+    pub(super) async fn queue_holds(&self, conv: &ConvLive) -> bool {
+        self.holds(conv, false).await
+    }
+
+    async fn holds(&self, conv: &ConvLive, paused_hold: bool) -> bool {
         let brigade = conv.kind == ConversationKind::Session
             || self
                 .core
@@ -1480,16 +1675,30 @@ impl SessionManager {
         if !brigade {
             return false;
         }
-        if conv.has_cli_work().await || self.has_running_workers(&conv.id).await {
+        // A job's end holds it only until the CLI's turn for it starts, as the thread reads
+        // it: an end no turn of the session's follows (a subagent's own command) holds nothing.
+        if conv.runs_cli_work().await
+            || self.cli_holds(&conv.id)
+            || self.has_running_workers(&conv.id).await
+        {
             return true;
         }
-        self.core
-            .tasks(&conv.id)
-            .await
-            .is_ok_and(|tasks| self.workers_working(&tasks))
+        // A paused worker keeps its work open too, until it resumes or stops (D159).
+        self.core.tasks(&conv.id).await.is_ok_and(|tasks| {
+            self.workers_working(&tasks)
+                || (paused_hold && tasks.iter().any(|task| task.state == TaskState::Paused))
+        })
     }
 
-    pub(super) async fn join_working(&self, conv: &Arc<ConvLive>, message: Message) {
+    pub(super) async fn join_working(
+        &self,
+        conv: &Arc<ConvLive>,
+        message: Message,
+        frame: Option<String>,
+    ) {
+        if let Some(frame) = &frame {
+            conv.frame(&message.id, frame.clone());
+        }
         let mut state = conv.state.lock().await;
         let cli = state
             .cli
@@ -1504,7 +1713,13 @@ impl SessionManager {
                     .await
                 {
                     Ok((input, user)) => {
-                        self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+                        self.note_skill_sent(
+                            &conv.id,
+                            &input,
+                            &user,
+                            std::slice::from_ref(&message),
+                            cli.provider,
+                        );
                         cli.session.steer(input).await.is_ok()
                     }
                     Err(_) => false,
@@ -1528,7 +1743,10 @@ impl SessionManager {
             // The rest of the turn answers the new message: its own request.
             std::mem::replace(&mut state.request, message.request_id.clone())
         } else {
-            // The turn is still starting (or none runs): the next turn carries it.
+            // The turn is still starting (or none runs): the next turn carries it, framed.
+            if let Some(frame) = frame {
+                conv.frame(&message.id, frame);
+            }
             state.pending.push(message.clone());
             None
         };
@@ -1549,6 +1767,8 @@ impl SessionManager {
     /// first, and its release is written again after it, so none keeps waiting on an ended command.
     async fn hold(&self, conv: &ConvLive, requests: &[String], held: HeldBy) {
         self.mark_held(conv, requests, Some(held)).await;
+        // A `brigadier wait` holding it ends, so it is read now.
+        self.worker_events.added.notify_waiters();
         let released: Vec<String> = {
             let state = conv.state.lock().await;
             requests
@@ -1560,6 +1780,19 @@ impl SessionManager {
         if !released.is_empty() {
             self.mark_held(conv, &released, None).await;
         }
+    }
+
+    /// Whether a message sent to the session waits behind one of its thread's commands, and
+    /// no `brigadier wait` ended for it yet: the one it runs ends for it, once (goal 3).
+    pub(super) async fn message_held(&self, id: &ConversationId) -> bool {
+        let Some(conv) = self.convs_lock().get(id).cloned() else {
+            return false;
+        };
+        let mut state = conv.state.lock().await;
+        let held: Vec<String> = state.held_requests.to_vec();
+        let new = held.iter().any(|id| !state.held_told.contains(id));
+        state.held_told = held;
+        new
     }
 
     /// Marks steered requests as waiting behind the thread's command `held`, or as read now.
@@ -1578,9 +1811,8 @@ impl SessionManager {
         words: &str,
         status: ItemStatus,
     ) {
-        if let Some((requests, items)) = conv.holding_command(item, words, status).await {
+        if let Some(requests) = conv.holding_command(item, words, status).await {
             self.mark_held(conv, &requests, None).await;
-            self.mark_items_held(conv, &items, None).await;
         }
         if status != ItemStatus::InProgress {
             self.steer_held(conv).await;
@@ -1612,9 +1844,8 @@ impl SessionManager {
             state.notes.extend(notes);
             state.take_held()
         };
-        if let Some((requests, items)) = held {
+        if let Some(requests) = held {
             self.mark_held(conv, &requests, None).await;
-            self.mark_items_held(conv, &items, None).await;
         }
     }
 
@@ -1635,11 +1866,11 @@ impl SessionManager {
         // The queue's next item becomes the user's message in one step for a merge's look.
         let popped = conv
             .user_write(async {
-                let Some(item) = self.core.pop_queued(&conv.id).await? else {
+                let Some(item) = self.core.next_queued(&conv.id).await? else {
                     return Ok(None);
                 };
                 conv.goes_on_own_turn(&item);
-                Ok(Some(self.core.append_queued(conv.id.clone(), item).await))
+                Ok(Some(self.append_queued(conv.id.clone(), item, None).await))
             })
             .await;
         match popped {
@@ -1701,7 +1932,7 @@ impl SessionManager {
             .filter(|_| state.busy && !state.compacting && !state.interrupted && !state.seam.held);
         if let Some(cli) = cli {
             let input = TurnInput::text(text.clone());
-            self.note_sent(&conv.id, &input, &[]);
+            self.note_sent(&conv.id, &input, &[], &[]);
             if cli.session.steer(input).await.is_ok() {
                 drop(state);
                 return;
@@ -1749,7 +1980,7 @@ impl SessionManager {
                 }
                 // The rest (another session's message, a seam's word) is Brigadier's too.
                 if !super::cli_thread::internal_input(&input) {
-                    self.note_sent(id, &input, &[]);
+                    self.note_sent(id, &input, &[], &[]);
                 }
                 if cli.session.steer(input).await.is_ok() {
                     drop(state);
@@ -2078,7 +2309,10 @@ impl SessionManager {
                 .all_messages(&id)
                 .await?
                 .into_iter()
-                .find(|message| message.id == request && message.role == MessageRole::User)
+                .find(|message| {
+                    message.id == request
+                        && matches!(message.role, MessageRole::User | MessageRole::Peer)
+                })
         {
             let mut state = conv.state.lock().await;
             let note = if by_itself {
@@ -2151,7 +2385,6 @@ impl SessionManager {
             }
             // A turn of its own, for no request.
             state.busy = true;
-            state.judging_ended = false;
             state.interrupted = false;
             state.compacting = true;
             state.request = None;
@@ -2177,13 +2410,14 @@ impl SessionManager {
                 )));
             }
             self.set_run(&id, RunState::Running, None).await;
-            // The user's own `/compact`, as Claude keeps it.
-            if cli.provider == ProviderKind::Claude {
+            // The user's own `/compact`, as a CLI that runs commands from text keeps it.
+            if super::cli_commands::commands_as_text(cli.provider) {
                 let input = TurnInput::text("/compact");
                 self.note_sent(
                     &id,
                     &input,
                     &[(0, super::cli_thread::solid_len("/compact"))],
+                    &[],
                 );
             }
             cli.session
@@ -2395,10 +2629,12 @@ impl SessionManager {
         // The work still holds with no turn running (its workers, its CLI's background commands):
         // a message of the user's starting this turn goes on with that work.
         let holds = self.work_holds(&conv).await;
+        let queue_held = holds && self.queue_holds(&conv).await;
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         let mut carry = false;
         // `origin`: the request the envelopes belong to, which their notes speak of.
+        let drift: Option<String>;
         let (users, envelopes, request, mut user_notes) = loop {
             let mut state = conv.state.lock().await;
             if state.busy
@@ -2448,11 +2684,12 @@ impl SessionManager {
             } else {
                 Vec::new()
             };
-            if users.is_empty() && envelopes.is_empty() && !session {
-                match self.core.pop_queued(&conv.id).await {
+            // A Chat's waiting message, too, waits for the block to close (D25).
+            if users.is_empty() && envelopes.is_empty() && !session && !queue_held {
+                match self.core.next_queued(&conv.id).await {
                     Ok(Some(item)) => {
                         conv.goes_on_own_turn(&item);
-                        match self.core.append_queued(conv.id.clone(), item).await {
+                        match self.append_queued(conv.id.clone(), item, None).await {
                             Ok(message) => users.push(message),
                             Err(err) => {
                                 crate::logging::private_trace!(conv.private_logs, warn, "could not send a queued message"; conversation = %conv.id, error = %err);
@@ -2479,7 +2716,9 @@ impl SessionManager {
                 // Nothing left to say: the thread is idle and the requests settle.
                 self.idle_without_turn(&conv).await;
                 self.settle_requests(&conv.id).await;
-                if session && !sent_queued && self.send_queued(&conv).await {
+                // While the block stays open (D24) a waiting message stays queued until it
+                // ends (D157).
+                if !queue_held && session && !sent_queued && self.send_queued(&conv).await {
                     sent_queued = true;
                     continue;
                 }
@@ -2503,7 +2742,6 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
-            state.judging_ended = false;
             state.interrupted = false;
             state.landed = false;
             state.watchdog.begin(now_ms());
@@ -2517,21 +2755,26 @@ impl SessionManager {
                 state.stopped_open.remove(request);
             }
             state.turn_joins = holds && !users.is_empty();
-            // A queued message woken to be judged is no user message of a request yet: nothing
-            // sends it again (it is in the queue, Deciding).
-            state.in_turn = users
-                .iter()
-                .filter(|message| !state.woken.contains(&message.id))
-                .cloned()
-                .collect();
+            // A user's message with no work held opens a new block.
+            drift = state.drift_note(!holds && !users.is_empty());
+            state.in_turn = users.clone();
+            // A hand-off's own turn, for no request of the user's: never shown working (D193).
+            state.seam.quiet = session
+                && users.is_empty()
+                && request.is_none()
+                && envelopes
+                    .iter()
+                    .all(|(envelope, _)| envelope.kind == InjectionKind::Seam);
             state.in_turn_envelopes.clone_from(&envelopes);
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
             break (users, envelopes, request, notes);
         };
         self.settle_requests(&conv.id).await;
-        self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
-            .await;
+        if !conv.state.lock().await.seam.quiet {
+            self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
+                .await;
+        }
         if session && !users.is_empty() {
             // Work left ready whose pull request was merged on GitHub since (by the user, while
             // the tab was idle) is recorded first, so this request starts from the new base.
@@ -2545,8 +2788,17 @@ impl SessionManager {
             }
             // The user's message brings back the session's worktree a merge removed
             // (THREAD-PLAN.md Q9), from the base's tip now.
+            // A worktree that couldn't be made ends the turn with why: it never runs in the
+            // scratch folder instead.
             if let Err(err) = self.effective_workspace(&conv.id).await {
                 crate::logging::private_trace!(conv.private_logs, warn, "could not make the session's worktree"; conversation = %conv.id, error = %err);
+                if !self.is_attached(&conv) {
+                    return;
+                }
+                let message = err.to_string();
+                self.fail_start_step(&conv.id, &message).await;
+                self.fail_turn(&conv, users, envelopes, &message).await;
+                return;
             }
             // A note the workspace left (a fresh branch) reaches this turn.
             user_notes.append(&mut conv.state.lock().await.notes);
@@ -2559,7 +2811,22 @@ impl SessionManager {
         } else {
             None
         };
-        let cli = match self.ensure_cli(&conv).await {
+        // A joined folder gone or off its branch: no turn starts, report-only ones too (goal 9).
+        let joined = match self.core.conversation(&conv.id) {
+            Ok(conversation) if session => self.check_joined(&conversation).await,
+            _ => Ok(()),
+        };
+        // After setting up a worktree, starting the CLI is its setup line's last step.
+        if session && self.reached_start_step(&conv.id).await.is_some() {
+            self.start_step(&conv.id, crate::work::StartStep::Cli, None)
+                .await;
+        }
+        let cli = match async {
+            joined?;
+            self.ensure_cli(&conv).await
+        }
+        .await
+        {
             Ok(cli) => cli,
             // Archived or deleted meanwhile: its cleanup took this turn's work along (a
             // restored one starts over from what is in its log).
@@ -2569,6 +2836,7 @@ impl SessionManager {
                     self.seam_not_started(&conv, successor).await;
                 }
                 let message = err.to_string();
+                self.fail_start_step(&conv.id, &message).await;
                 self.fail_turn(&conv, users, envelopes, &message).await;
                 return;
             }
@@ -2600,10 +2868,14 @@ impl SessionManager {
             .filter(|(envelope, _)| !landed_envelopes.contains(envelope))
             .cloned()
             .collect();
-        let notes: Vec<String> = unread
+        let mut notes: Vec<String> = unread
             .iter()
             .map(|(envelope, _)| envelope.text.clone())
             .collect();
+        // D170: a successor's turn has its hand-off instead.
+        if successor.is_none() && !reseed {
+            notes.extend(self.gap_note(&conv.id, &users).await);
+        }
         let unsent: Vec<Message> = users
             .iter()
             .filter(|message| !landed.contains(&message.id))
@@ -2639,6 +2911,10 @@ impl SessionManager {
                     prompts::CONTINUE_ON_ACCOUNT
                 },
             );
+        }
+        // Seen, never shown: one plain note, nothing blocked (D167).
+        if let Some(note) = &drift {
+            prepend_said(&mut input, &mut user, note);
         }
         let handoff = match &successor {
             Some(successor) => Some(self.seam_handoff(&conv, &cli, successor).await),
@@ -2680,7 +2956,7 @@ impl SessionManager {
         }
         // Who wrote what of the rest, the user's words and Brigadier's around them (L12).
         if !super::cli_thread::internal_input(&input) {
-            self.note_skill_sent(&conv.id, &input, &user, cli.provider);
+            self.note_skill_sent(&conv.id, &input, &user, &unsent, cli.provider);
         }
         {
             let mut state = conv.state.lock().await;
@@ -2716,6 +2992,12 @@ impl SessionManager {
         let mut users = users;
         let mut envelopes = envelopes;
         let mut message = message;
+        // A hand-off ask (the nudge or its fix) that never reached the CLI isn't sent again: the
+        // seam closes after its hold, the successor carrying what the note leaves out (D121).
+        let asked_note = envelopes
+            .iter()
+            .any(|(envelope, _)| Self::asks_for_note(envelope));
+        envelopes.retain(|(envelope, _)| !Self::asks_for_note(envelope));
         let failed = {
             let mut state = conv.state.lock().await;
             state.busy = false;
@@ -2741,12 +3023,7 @@ impl SessionManager {
                     },
                 );
             }
-            // A queued message woken to be judged waits in the queue instead (`end_judging`).
-            let woken = std::mem::take(&mut state.woken);
-            let mut pending: Vec<Message> = users
-                .into_iter()
-                .filter(|message| !woken.contains(&message.id))
-                .collect();
+            let mut pending: Vec<Message> = users;
             pending.append(&mut state.pending);
             state.pending = pending;
             // Back in front, kept so under the inbox's lock.
@@ -2756,7 +3033,9 @@ impl SessionManager {
             state.inbox = inbox;
             failed
         };
-        self.end_judging(conv, false).await;
+        if asked_note {
+            self.arm_seam_hold(conv).await;
+        }
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
         if failed.is_none() {
@@ -3059,11 +3338,6 @@ impl SessionManager {
                 ConversationKind::Chat => ToolSet::Thread,
             },
             skill_plugins: computer.iter().map(|kit| kit.plugin.clone()).collect(),
-            // Every session and Chat is a brigade (G20); a tab chat is its session's helper.
-            installed_skills: match tab_checkout {
-                Some(_) => Vec::new(),
-                None => self.brigade_plugin().into_iter().collect(),
-            },
             // Its agent's own setup, as its CLI loads it.
             switched_off: Default::default(),
             // A tab chat reads its session's checkout, never its own to clean up. A thread writes
@@ -3226,7 +3500,7 @@ impl SessionManager {
             plugins: resolved,
             plugin_lease,
             provider: choice.provider,
-            meter: TokenMeter::new(resumed && choice.provider == ProviderKind::Codex)
+            meter: TokenMeter::new(resumed && cumulative_usage(choice.provider))
                 .on_account(account.account.clone())
                 .starting(cause)
                 .with_tools(tools_key),
@@ -3242,6 +3516,7 @@ impl SessionManager {
         let manager = self.arc();
         let pumped = cli.clone();
         let pumping = conv.clone();
+        let events = self.session_events(EventSource::Conversation(&conv.id), &cli, events);
         self.spawn(async move { manager.pump_conversation(pumping, pumped, events).await });
         Ok(cli)
     }
@@ -3256,10 +3531,10 @@ impl SessionManager {
                 .ledger()
                 .artifacts(&owner)
                 .into_iter()
-                .filter(|artifact| match artifact {
-                    Artifact::ClaudeSession { session_id, .. } => session_id == native_id,
-                    Artifact::CodexThread { thread_id, .. } => thread_id == native_id,
-                    _ => false,
+                .filter(|artifact| {
+                    artifact
+                        .native_session()
+                        .is_some_and(|(_, id)| id == native_id)
                 })
                 .collect();
             if made.is_empty() {
@@ -3369,7 +3644,11 @@ impl SessionManager {
                 at += super::cli_thread::solid_len(&frame);
                 ordered.push(InputPart::Text(frame));
             }
-            user.extend(authored.into_iter().map(|(from, to)| (at + from, at + to)));
+            // Another session's words are never the user's (goal 4): the thread reads them by
+            // their header, as that session's.
+            if message.role != MessageRole::Peer {
+                user.extend(authored.into_iter().map(|(from, to)| (at + from, at + to)));
+            }
             for part in inline {
                 if let InputPart::Text(text) = &part {
                     let len = super::cli_thread::solid_len(text);
@@ -3973,14 +4252,18 @@ impl SessionManager {
             };
             tokio::select! {
                 event = events.recv() => {
-                    self.note_thread_progress(&conv, &cli, event.as_ref()).await;
-                    // Auto-joined messages belong to this turn's final request list (#629).
-                    // Settle them while it is still busy, before persisting its end.
-                    if let Some(ProviderEvent::TurnCompleted { status, .. }) = &event {
-                        let completed = *status == TurnStatus::Completed
-                            && conv.state.lock().await.limit_hit.is_none();
-                        self.end_judging(&conv, completed).await;
+                    // Brigadier quitting closes the CLI mid-turn: a CLI that says the turn was
+                    // interrupted on its way out reads as one whose process just ended, cut by
+                    // the quit (H1), never the user's Stop. The same for every CLI.
+                    if matches!(
+                        &event,
+                        Some(ProviderEvent::TurnCompleted { status: TurnStatus::Interrupted, .. })
+                    ) && !self.admitting.load(std::sync::atomic::Ordering::Acquire)
+                        && conv.state.lock().await.closing
+                    {
+                        continue;
                     }
+                    self.note_thread_progress(&conv, &cli, event.as_ref()).await;
                     self.follow_cli_thread(&conv, event.as_ref()).await;
                     match event {
                     // Never stored.
@@ -4019,7 +4302,7 @@ impl SessionManager {
                         deadline = None;
                         self.store_deltas(&conv, std::mem::take(&mut deltas), &mut said).await;
                         if matches!(event, ProviderEvent::TurnCompleted { .. }) {
-                            self.remember_claude_prompts(&conv.id, &cli).await;
+                            self.remember_mcp_prompts(&conv.id, &cli).await;
                             said.clear();
                         }
                         // A CLI that starts (again) tells its MCP servers anew.
@@ -4034,16 +4317,11 @@ impl SessionManager {
                         ) {
                             self.record_held_looked(&conv).await;
                         }
-                        let mut exited = false;
-                        for event in
-                            self.session_events(EventSource::Conversation(&conv.id), &cli, event)
-                        {
-                            exited |= matches!(event, ProviderEvent::Exited { .. });
-                            self.snapshot_event(&conv.id, &event).await;
-                            let classify = matches!(event, ProviderEvent::Command { .. } | ProviderEvent::ToolCall { .. } | ProviderEvent::BackgroundTask { .. });
-                            crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
-                            if classify { self.classify_persistent_apps(&conv).await; }
-                        }
+                        let exited = matches!(event, ProviderEvent::Exited { .. });
+                        self.snapshot_event(&conv.id, &event).await;
+                        let classify = matches!(event, ProviderEvent::Command { .. } | ProviderEvent::ToolCall { .. } | ProviderEvent::BackgroundTask { .. });
+                        crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
+                        if classify { self.classify_persistent_apps(&conv).await; }
                         if exited {
                             break;
                         }
@@ -4075,18 +4353,26 @@ impl SessionManager {
         }
         self.store_deltas(&conv, deltas, &mut said).await;
         self.record_held_looked(&conv).await;
-        self.remember_claude_prompts(&conv.id, &cli).await;
+        self.remember_mcp_prompts(&conv.id, &cli).await;
         self.cli_command_probes.end(&conv.id, cli.plugin_lease.id());
         cli.plugin_lease.release();
         self.grants.revoke(&cli.grants);
         conv.items().cli_ended();
-        let (was_busy, closing, failed, jobs, current) = {
+        let (was_busy, closing, failed, jobs, current, cut) = {
             let mut state = conv.state.lock().await;
             // No CLI that took over since: its MCP servers ended with it.
             let current = state
                 .cli
                 .as_ref()
                 .is_none_or(|current| Arc::ptr_eq(current, &cli));
+            // Its commands still running ended with it, their ends never to come: none is
+            // taken for the next CLI's to linger past that one's turn.
+            let cut = if current {
+                state.command_words.clear();
+                std::mem::take(&mut state.commands)
+            } else {
+                HashSet::new()
+            };
             if state
                 .cli
                 .as_ref()
@@ -4167,8 +4453,13 @@ impl SessionManager {
                 failed,
                 jobs,
                 current,
+                cut,
             )
         };
+        if !cut.is_empty() {
+            self.end_running_calls(&conv, false, |item, _| cut.contains(item))
+                .await;
+        }
         if current {
             self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::Ended)
                 .await;
@@ -4278,6 +4569,17 @@ impl SessionManager {
         if !own_shell {
             return;
         }
+        let how = exit.map_or_else(
+            || format!("{status:?}").to_lowercase(),
+            |code| format!("exit {code}"),
+        );
+        let output = output.unwrap_or_default();
+        let tail: String = {
+            let chars: Vec<char> = output.chars().collect();
+            chars[chars.len().saturating_sub(JOB_OUTPUT_TAIL)..]
+                .iter()
+                .collect()
+        };
         {
             let mut state = conv.state.lock().await;
             if status == ItemStatus::InProgress {
@@ -4295,24 +4597,21 @@ impl SessionManager {
                     .insert(item.to_owned(), words.to_owned());
                 return;
             }
-            state.command_words.remove(item);
+            let words = state.command_words.remove(item);
             if !state.lingering.contains_key(item) {
                 state.persistent_commands.remove(item);
+                if let Some(words) = words
+                    && state.busy
+                    && state.terminals.values().any(|of| of == item)
+                {
+                    state
+                        .unread_ends
+                        .insert(item.to_owned(), (words, how, tail, 0));
+                }
                 return;
             }
         }
-        let status = exit.map_or_else(
-            || format!("{status:?}").to_lowercase(),
-            |code| format!("exit {code}"),
-        );
-        let output = output.unwrap_or_default();
-        let tail: String = {
-            let chars: Vec<char> = output.chars().collect();
-            chars[chars.len().saturating_sub(JOB_OUTPUT_TAIL)..]
-                .iter()
-                .collect()
-        };
-        self.lingering_ended(conv, item, &status, tail).await;
+        self.lingering_ended(conv, item, &how, tail).await;
     }
 
     /// A Codex background terminal of the thread's own shell was listed, or left the list
@@ -4377,7 +4676,8 @@ impl SessionManager {
             label: "background command finished".into(),
             task_id: None,
             text: format!(
-                "[your background command `{words}` finished after your turn · {status}]\n{}",
+                "{}{words}` finished after your turn · {status}]\n{}",
+                crate::thread_view::WAKE_MARK,
                 String::from_utf8_lossy(&text)
             ),
         };
@@ -4575,7 +4875,11 @@ impl SessionManager {
                     && !error.will_retry
                     && self
                         .runtime
-                        .switch_target(&cli.account, cli.model.model.as_deref())
+                        .switch_target(
+                            &cli.account,
+                            cli.model.model.as_deref(),
+                            Some(&cli.session.native_id()),
+                        )
                         .is_some();
                 let limited =
                     (error.kind == ErrorKind::UsageLimit && !error.will_retry) || account_bound;
@@ -4832,7 +5136,6 @@ impl SessionManager {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
                         state.busy = true;
-                        state.judging_ended = false;
                         state.interrupted = false;
                         state.limit_hit = None;
                         state.turn_error = None;
@@ -4856,7 +5159,9 @@ impl SessionManager {
                     self.net_heard(&conv.id, label);
                     self.session_message_taken(&conv.id, label);
                 }
-                if let Some(request) = started {
+                if let Some(request) = started
+                    && !conv.state.lock().await.seam.quiet
+                {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
                         .await;
                 }
@@ -4865,6 +5170,10 @@ impl SessionManager {
                 }
             }
             ProviderEvent::Usage { total, last, calls } => {
+                // A call of its model's ended: it may have read the ends before it.
+                for end in conv.state.lock().await.unread_ends.values_mut() {
+                    end.3 += 1;
+                }
                 // Claude sums a turn's calls; the context its last call read came apart.
                 let context = conv.context_used().await;
                 self.note_use(
@@ -5013,6 +5322,18 @@ impl SessionManager {
         let Some(turn) = conv.items().turn() else {
             return;
         };
+        self.end_running_calls(conv, true, |_, of| of == Some(turn))
+            .await;
+    }
+
+    /// Ends, failed (`stopped`: by the user's Stop), the rows of the calls still running that
+    /// `ends` picks by item and turn.
+    async fn end_running_calls(
+        &self,
+        conv: &Arc<ConvLive>,
+        stopped: bool,
+        ends: impl Fn(&str, Option<i64>) -> bool,
+    ) {
         let Ok(board) = self.core.board(&conv.id).await else {
             return;
         };
@@ -5020,17 +5341,18 @@ impl SessionManager {
         for step in &board.orchestrator_steps {
             let mut kind = step.kind.clone();
             if let OrchestratorStepKind::Tool {
+                item_id,
                 status: status @ ItemStatus::InProgress,
-                stopped,
+                stopped: was_stopped,
                 through_position,
                 ended_at_ms,
-                turn: Some(of),
+                turn,
                 ..
             } = &mut kind
-                && *of == turn
+                && ends(item_id, *turn)
             {
                 *status = ItemStatus::Failed;
-                *stopped = true;
+                *was_stopped = stopped;
                 *through_position = 0;
                 *ended_at_ms = Some(now);
                 self.orchestrator_step_in(&conv.id, step.request_id.clone(), kind)
@@ -5086,10 +5408,12 @@ impl SessionManager {
         if self.finish_thread_stall(conv).await {
             return;
         }
-        let (limit_hit, ended, landed, carried, served, end_commands, unshown) = {
+        let (limit_hit, ended, landed, carried, served, end_commands, unshown, unread) = {
             let mut state = conv.state.lock().await;
-            // A Codex command still running when its turn ended goes on as its CLI's job.
+            // A Codex command still running when its turn ended goes on as its CLI's job; one
+            // that ended unread is told as one that ends after it.
             let words = std::mem::take(&mut state.command_words);
+            let mut unread = Vec::new();
             if status == TurnStatus::Completed
                 && (conv.kind == ConversationKind::Session || cli.launch.is_some())
             {
@@ -5098,7 +5422,14 @@ impl SessionManager {
                         state.lingering.insert(item, words);
                     }
                 }
+                for (item, (words, how, tail, calls)) in std::mem::take(&mut state.unread_ends) {
+                    if calls <= 1 {
+                        state.lingering.insert(item.clone(), words);
+                        unread.push((item, how, tail));
+                    }
+                }
             }
+            state.unread_ends.clear();
             state.commands.clear();
             // Taken now, so no turn starts on it in between.
             let end_commands = (std::mem::take(&mut state.end_commands)
@@ -5112,6 +5443,7 @@ impl SessionManager {
             state.busy = false;
             state.unowned_turn = false;
             state.compacting = false;
+            state.seam.quiet = false;
             state.last_activity_ms = now_ms();
             state.replying_for.clear();
             let ended = match status {
@@ -5197,8 +5529,12 @@ impl SessionManager {
                 served,
                 end_commands,
                 unshown,
+                unread,
             )
         };
+        for (item, how, tail) in unread {
+            self.lingering_ended(conv, &item, &how, tail).await;
+        }
         // Its workers' events no wait took reach it now, once (S29).
         self.net_soon(&conv.id);
         // A `brigadier wait` on this session looks again (S30).
@@ -5238,10 +5574,11 @@ impl SessionManager {
                 return;
             }
             // Another account of the provider first, with switching on.
-            if let Some(next) = self
-                .runtime
-                .switch_target(&cli.account, cli.model.model.as_deref())
-            {
+            if let Some(next) = self.runtime.switch_target(
+                &cli.account,
+                cli.model.model.as_deref(),
+                Some(&cli.session.native_id()),
+            ) {
                 // Its turn goes on there. Not from inside the CLI's own event pump: closing the
                 // CLI waits for it.
                 let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
@@ -5676,7 +6013,7 @@ impl SessionManager {
             .settings()
             .default_chat_model
             .unwrap_or(ModelChoice {
-                provider: ProviderKind::Claude,
+                provider: brigadier_providers::adapters::default_kind(),
                 model: None,
                 effort: None,
                 fast: None,
@@ -5880,6 +6217,45 @@ impl SessionManager {
         }
     }
 
+    /// D170: a user message after a gap of [`GAP_MS`] carries the ledger's open items, oldest
+    /// first, so the thread needn't look them up. A side or tab chat has no ledger of its own.
+    async fn gap_note(&self, id: &ConversationId, users: &[Message]) -> Option<String> {
+        let first = users.first()?;
+        let own = self
+            .core
+            .conversation(id)
+            .is_ok_and(|record| record.side_of.is_none() && record.tab_chat.is_none());
+        if !own {
+            return None;
+        }
+        let page = self
+            .core
+            .list_messages(
+                id.clone(),
+                None,
+                u32::try_from(users.len() + 1).unwrap_or(u32::MAX),
+            )
+            .await
+            .ok()?;
+        let before = page.messages.first()?;
+        if first.created_at_ms - before.created_at_ms < GAP_MS || before.id == first.id {
+            return None;
+        }
+        let record = self.session_dir(id).record();
+        let ledger = super::blocking(move || super::cli_ledger::Ledger::read(&record))
+            .await
+            .ok()?;
+        let open = ledger.open();
+        (!open.is_empty()).then(|| {
+            let items: Vec<&str> = open.iter().map(|entry| entry.text.as_str()).collect();
+            format!(
+                "[Brigadier: the user writes after a gap; raise the oldest open question first and \
+                 say how many more wait. Open items:]\n{}",
+                items.join("\n")
+            )
+        })
+    }
+
     async fn has_history(&self, id: &ConversationId) -> bool {
         self.core
             .list_messages(id.clone(), None, 2)
@@ -5966,11 +6342,67 @@ impl SessionManager {
                     state,
                     error,
                     request_id: request,
+                    step: None,
                 }],
             )
             .await
         {
             crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store the run state"; conversation = %id, error = %err);
+        }
+    }
+
+    /// Records the start step the turn of `id` reached (`Starting` again, with it); with
+    /// `error`, the step that failed. A hand-off's quiet turn shows none.
+    pub(crate) async fn start_step(
+        &self,
+        id: &ConversationId,
+        step: crate::work::StartStep,
+        error: Option<String>,
+    ) {
+        let Ok(conv) = self.conv(id) else { return };
+        let request = {
+            let state = conv.state.lock().await;
+            if state.seam.quiet {
+                return;
+            }
+            state.request.clone()
+        };
+        if let Err(err) = self
+            .core
+            .record_conversation(
+                id,
+                vec![DomainEvent::RunStateChanged {
+                    conversation_id: id.clone(),
+                    state: RunState::Starting,
+                    error,
+                    request_id: request,
+                    step: Some(step),
+                }],
+            )
+            .await
+        {
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store the start step"; conversation = %id, error = %err);
+        }
+    }
+
+    /// The start step the turn of `id` still starting last reached, if it reached one.
+    async fn reached_start_step(&self, id: &ConversationId) -> Option<crate::work::StartStep> {
+        let board = self.core.board(id).await.ok()?;
+        if board.run != RunState::Starting {
+            return None;
+        }
+        board
+            .start_steps
+            .last()
+            .filter(|record| record.position >= board.run_since)
+            .map(|record| record.step)
+    }
+
+    /// The turn of `id` failed before its CLI's first output: the step it had reached shows
+    /// the failure.
+    async fn fail_start_step(&self, id: &ConversationId, error: &str) {
+        if let Some(step) = self.reached_start_step(id).await {
+            self.start_step(id, step, Some(error.to_owned())).await;
         }
     }
 
@@ -6025,10 +6457,16 @@ impl NativeIds {
     /// A reset is read the same for every provider.
     fn reset(&mut self) {
         self.noted += 1;
-        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        for provider in brigadier_providers::adapters::kinds() {
             self.known.insert(provider, None);
         }
     }
+}
+
+/// Whether `provider`'s usage reports are totals over the session's whole life, so a resumed
+/// session's first report only sets the baseline.
+pub(super) fn cumulative_usage(provider: ProviderKind) -> bool {
+    brigadier_providers::adapters::adapter(provider).is_some_and(|adapter| adapter.cumulative_usage)
 }
 
 /// Takes every envelope of one request from the inbox, in arrival order: the request of the
@@ -6491,7 +6929,7 @@ mod tests {
         tokio::time::timeout(crate::test_patience(), async {
             loop {
                 let state = conv.state.lock().await;
-                if state.unowned_turn {
+                if state.unowned_turn && state.seam.seen {
                     assert!(!state.busy);
                     break;
                 }
@@ -6501,6 +6939,7 @@ mod tests {
         })
         .await
         .expect("the nudge started its own CLI turn");
+        // A message came while the note turn runs.
         flow.manager.arm_seam_hold(&conv).await;
         tokio::time::timeout(Duration::from_secs(2), stopped.notified())
             .await
@@ -6517,6 +6956,91 @@ mod tests {
             read_seam(&record).seams[0].end.death.as_deref(),
             Some("it was still working a minute after a message came")
         );
+        flow.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_seam_hold_ends_when_the_cli_takes_the_nudge_in() {
+        use super::super::flow::{FakeBehavior, Flow, Options, Reply};
+        use super::super::seam::{Phase, SeamConfig, SeamFile, read_seam, write_seam};
+
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let stopped = Arc::new(tokio::sync::Notify::new());
+        let (at_note, after_stop) = (reached.clone(), stopped.clone());
+        let flow = Flow::start(
+            "seam-nudge-heard",
+            Options {
+                behavior: Arc::new(FakeBehavior {
+                    session_file: true,
+                    ..FakeBehavior::default()
+                }),
+                ..Options::default()
+            },
+            Arc::new(move |turn| {
+                let (at_note, after_stop) = (at_note.clone(), after_stop.clone());
+                Box::pin(async move {
+                    if turn.input.starts_with(crate::thread_view::NUDGE_MARK) {
+                        at_note.notify_one();
+                        turn.stopped().await;
+                        after_stop.notify_one();
+                        Reply::text("")
+                    } else {
+                        Reply::text("Answered.")
+                    }
+                })
+            }),
+        )
+        .await;
+        flow.say("Start.").await;
+        flow.settled().await;
+        *flow.manager.seam.lock().unwrap() = SeamConfig {
+            tokens: 60_000,
+            hold: Duration::from_millis(50),
+            long: None,
+            tokens_set: false,
+        };
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.live_cli().await.unwrap();
+        let record = flow.manager.session_dir(&conv.id).record();
+        write_seam(
+            &record,
+            &SeamFile {
+                phase: Phase::Nudged {
+                    at_ms: now_ms(),
+                    tokens: 70_000,
+                    predecessor: Some(cli.session.native_id()),
+                },
+                ..SeamFile::default()
+            },
+        )
+        .unwrap();
+        conv.state.lock().await.seam.held = true;
+        let nudge = format!("{} write the note", crate::thread_view::NUDGE_MARK);
+        cli.session
+            .steer(TurnInput::text(nudge.clone()))
+            .await
+            .unwrap();
+        reached.notified().await;
+        // The previous turn's end armed the hold while the nudge was on its way (OpenCode, live).
+        flow.manager.arm_seam_hold(&conv).await;
+        flow.manager
+            .on_conversation_event(
+                &conv,
+                &cli,
+                ProviderEvent::Message {
+                    item_id: "nudge".into(),
+                    role: ProviderRole::User,
+                    text: nudge,
+                },
+            )
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), stopped.notified())
+                .await
+                .is_err(),
+            "the note turn the CLI took in runs to its own end"
+        );
+        assert!(matches!(read_seam(&record).phase, Phase::Nudged { .. }));
         flow.stop().await;
     }
 

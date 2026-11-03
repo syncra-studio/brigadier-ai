@@ -93,7 +93,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
   // A command still running when the user's Stop ended its thread was stopped.
   const stoppedBy = useContext(StoppedBy);
   stopped ||= status === "inProgress" && stoppedBy !== null;
-  // A CLI's failed command reply starts with "Exit code N", which the box's ending says: read, not shown.
+  // An older record's failed command reply starts with "Exit code N", which the box's ending says: read, not shown.
   const cli = cliRunOutput(output);
   if (cli.exit !== null && (exit === null || exit === cli.exit)) {
     output = cli.output;

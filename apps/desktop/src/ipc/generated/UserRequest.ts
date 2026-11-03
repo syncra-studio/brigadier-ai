@@ -73,7 +73,7 @@ heldBy?: HeldBy,
  */
 backgroundJobs?: number, 
 /**
- * What it changed in its session's checkout (the turn diff card, the files-changed pill):
+ * What it changed in its session's checkout (the turn diff card, Review and Revert):
  * the thread's own edits and commands and its workers' landings, never what the user
  * changed meanwhile. Absent on requests from before it was kept, and while it changed
  * nothing.

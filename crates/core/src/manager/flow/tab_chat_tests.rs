@@ -104,7 +104,7 @@ async fn say(flow: &Flow, chat: &ConversationId, text: &str) {
 }
 
 /// Every stored event, of every stream.
-async fn every_event(flow: &Flow) -> Vec<brigadier_store::StoredEvent> {
+pub(super) async fn every_event(flow: &Flow) -> Vec<brigadier_store::StoredEvent> {
     let mut events = Vec::new();
     let mut after = 0;
     loop {
@@ -118,6 +118,21 @@ async fn every_event(flow: &Flow) -> Vec<brigadier_store::StoredEvent> {
             return events;
         }
     }
+}
+
+/// What every stored write of request `id` says it was steered into.
+pub(super) async fn steer_marks(flow: &Flow, id: &str) -> Vec<Option<String>> {
+    every_event(flow)
+        .await
+        .iter()
+        .filter_map(|event| serde_json::from_str(event.payload.get()).ok())
+        .filter_map(|event| match event {
+            crate::DomainEvent::RequestUpdated { request } if request.id == id => {
+                Some(request.steered_into)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Where the flow's own Claude CLI keeps a session's files.

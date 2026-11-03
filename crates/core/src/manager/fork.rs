@@ -12,8 +12,10 @@
 //!
 //! A session's fork works from the commit that was current at that answer: the last commit
 //! its copied requests landed, or where the session stood before its first landing when they
-//! landed none. It gets a new branch there, in the user's checkout ("in the same folder", only
-//! for a session working there) or in a worktree of its own.
+//! landed none. It gets a new branch there, in the user's checkout ("in the same folder", for a
+//! session working there) or in a worktree of its own. A session in a worktree forks "in the same
+//! folder" by joining that worktree on its branch, as a session started in an existing worktree
+//! does (goal 9, D188): no branch is made or switched there.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -37,10 +39,9 @@ use crate::{Error, Result};
 /// Events of a stream read at once while copying it.
 const COPY_PAGE: u32 = 500;
 
-/// Why a session in its own worktree doesn't fork "in the same folder" (#648): that folder is
-/// its worktree, which it keeps to itself.
+/// Why a session whose worktree isn't made yet can't fork "in the same folder": there is none.
 pub(super) const WORKTREE_FORK: &str =
-    "This session works in its own worktree: fork it in a new worktree.";
+    "This session's worktree isn't made yet: fork it in a new worktree.";
 
 impl SessionManager {
     /// Starts a new conversation from the answer `message_id` of `source`: the thread up to
@@ -62,7 +63,7 @@ impl SessionManager {
             && matches!(
                 conversation.setup,
                 Some(Setup::Session {
-                    environment: Environment::NewWorktree { .. },
+                    environment: Environment::NewWorktree { path: None, .. },
                     ..
                 })
             )
@@ -138,11 +139,13 @@ impl SessionManager {
         // Keep checkout admission locked from the environment's git side effects through
         // recording the new session, just as starting a local-checkout session does.
         let admitting = if place == ForkPlace::Workspace {
-            Some(self.local_checkouts.lock().await)
+            Some(self.shared_workspaces.lock().await)
         } else {
             None
         };
         let id = ConversationId::generate();
+        // "In the same folder" for a session in a worktree: it joins that worktree (D188).
+        let mut joined = None;
         let setup = match conversation.setup.clone() {
             Some(Setup::Session {
                 repo,
@@ -152,13 +155,27 @@ impl SessionManager {
                 workers_see_uncommitted,
                 plan_mode,
             }) => {
-                let start = self
-                    .fork_commit(&repo, &environment, &board, &copied)
-                    .await?;
-                let prefix = self.branch_prefix(&conversation.id).await;
-                let environment = self
-                    .fork_environment(&repo, &environment, place, &start, &id, &prefix)
-                    .await?;
+                let environment = match (&environment, place) {
+                    (
+                        Environment::NewWorktree {
+                            path: Some(path), ..
+                        },
+                        ForkPlace::Workspace,
+                    ) => {
+                        let at = self.existing_place(&repo, path).await?;
+                        let environment = at.environment.clone();
+                        joined = Some(at);
+                        environment
+                    }
+                    _ => {
+                        let start = self
+                            .fork_commit(&repo, &environment, &board, &copied)
+                            .await?;
+                        let prefix = self.branch_prefix(&conversation.id).await;
+                        self.fork_environment(&repo, &environment, place, &start, &id, &prefix)
+                            .await?
+                    }
+                };
                 Some(Setup::Session {
                     repo,
                     environment,
@@ -189,6 +206,11 @@ impl SessionManager {
                 },
             )
             .await?;
+        let joined_folder = joined.is_some();
+        let fork = match joined {
+            Some(place) => self.let_into(fork, place).await?,
+            None => fork,
+        };
         drop(admitting);
 
         // Every id that names the source's things is swapped for the fork's own.
@@ -243,6 +265,9 @@ impl SessionManager {
                 write_atomic(&record.join("forked.json"), text.as_bytes())
             })
             .await?;
+        }
+        if joined_folder {
+            self.tell_if_shared(&fork).await?;
         }
         Ok(fork)
     }
@@ -460,9 +485,6 @@ impl SessionManager {
                 start: Some(start.to_owned()),
             }),
             ForkPlace::Workspace => {
-                if let Some(holder) = self.checkout_holder(repo, None) {
-                    return Err(super::checkout_taken(&holder));
-                }
                 let (git, repo, start, same, name) = (
                     self.git.clone(),
                     repo.to_owned(),
@@ -500,25 +522,16 @@ impl SessionManager {
         }
     }
 
-    /// "Title (2)", or the next number free among the source's forks.
+    /// "Fork of ‹title›", numbered "(2)" on when the source has been forked under it before.
     fn fork_title(&self, title: &str) -> String {
-        let base = match title.rsplit_once(" (") {
-            Some((base, number))
-                if number
-                    .strip_suffix(')')
-                    .is_some_and(|n| n.parse::<u32>().is_ok()) =>
-            {
-                base
-            }
-            _ => title,
-        };
+        let base = format!("Fork of {title}");
         let taken = self
             .core
             .catalog()
             .conversations
             .iter()
             .filter_map(|conversation| {
-                let rest = conversation.title.strip_prefix(base)?;
+                let rest = conversation.title.strip_prefix(&base)?;
                 if rest.is_empty() {
                     return Some(1);
                 }
@@ -527,8 +540,10 @@ impl SessionManager {
                     .parse::<u32>()
                     .ok()
             })
-            .max()
-            .unwrap_or(1);
-        format!("{base} ({})", taken.max(1) + 1)
+            .max();
+        match taken {
+            Some(taken) => format!("{base} ({})", taken + 1),
+            None => base,
+        }
     }
 }

@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { ModelGroup } from "@/components/shared/model-selector";
-import { checkoutHolder, environmentRequest } from "@/app/conversation/draftEnvironment";
+import { environmentRequest } from "@/app/conversation/draftEnvironment";
 import { allowedPick } from "@/app/settings/routing/ruleWords";
 import type {
-  EnvironmentKind,
   ModelChoice,
   ModelRule,
   PermissionLevel,
@@ -22,7 +21,7 @@ import {
 } from "@/lib/setup";
 import { type DraftTarget, getRepoInfo } from "@/state/actions";
 import { useModelRules } from "@/state/modelRules";
-import { type DraftSetup, emptyDraft, type Selection, useApp } from "@/state/store";
+import { type DraftEnvironment, type DraftSetup, emptyDraft, type Selection, useApp } from "@/state/store";
 
 export type RepoState = { info: RepoInfo | null; error: string | null; loading: boolean };
 
@@ -90,13 +89,15 @@ export type ResolvedDraft = {
   repoPath: string | null;
   repo: RepoState & { reload: () => void };
   draft: DraftSetup;
-  /** Where the session works: a new worktree of its own, or the project's own folder. */
-  environment: EnvironmentKind;
-  /** New worktree: the base branch. Local checkout: the branch the project's folder has checked out. */
+  /** Where the session works: a new worktree of its own, the project's own folder, or an
+      existing worktree. */
+  environment: DraftEnvironment;
+  /** New worktree: the base branch. Local checkout: the branch the project's folder has checked
+      out. */
   base: string | null;
   permission: PermissionLevel;
   model: ModelChoice;
-  /** What the draft starts with when no model is picked: the picker's Default. */
+  /** The picker's Default: Settings' default, else the CLI's own; not the project's last pick. */
   defaultModel: ModelChoice;
   groups: ModelGroup[];
   target: DraftTarget | null;
@@ -121,23 +122,17 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   const noModel = nothingAvailable(listed, groups);
   const repoPath = project?.repos[0]?.path ?? null;
   const repo = useRepoInfo(kind === "session" ? repoPath : null);
-  const holder = useApp((s) =>
-    repoPath && draft.environment === "localCheckout"
-      ? (checkoutHolder(Object.values(s.conversations), repoPath)?.title ?? null)
-      : null,
-  );
-
   // An effort above the user's ceiling comes down to one it allows: the picker can't be left on
   // what the rules refuse, so Send isn't either.
   const rules = useModelRules((s) => s.view?.rules ?? NO_RULES);
   // The same object while nothing it is made from changes: the composer and its send hang on it.
   return useMemo(() => {
     const model = allowedPick(rules, groups, resolveModel(draft.model, kind, project, settings, groups));
-    const defaultModel = allowedPick(rules, groups, resolveModel(null, kind, project, settings, groups));
+    const defaultModel = allowedPick(rules, groups, resolveModel(null, kind, null, settings, groups));
     const permission = resolvePermission(draft.permission, settings);
     const { environment } = draft;
     const current = repo.info?.currentBranch ?? null;
-    const base = environment === "localCheckout" ? current : (draft.base ?? current);
+    const base = environment === "localCheckout" ? current : environment === "existingWorktree" ? null : (draft.base ?? current);
 
     let problem: string | null = null;
     let waiting = false;
@@ -149,7 +144,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
     } else if (!project || !repoPath) {
       problem = "This project has no repository yet. Add one in its settings.";
     } else {
-      const place = environmentRequest({ ...draft, current, loading: repo.loading, holder });
+      const place = environmentRequest({ ...draft, current, loading: repo.loading });
       if ("problem" in place) {
         problem = place.problem;
         waiting = place.waiting ?? false;
@@ -183,5 +178,5 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
       waiting,
       noModel,
     };
-  }, [kind, project, settings, draft, groups, noModel, repoPath, repo, holder, rules]);
+  }, [kind, project, settings, draft, groups, noModel, repoPath, repo, rules]);
 }

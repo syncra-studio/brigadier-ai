@@ -44,13 +44,13 @@ test("the context card's Workers row names each worker at work by its row, with 
 
     // A few: a line each with its state; the finished ones in the outcome line, not lines of their own.
     const few = text([
-      row("t2", "Find bar fixes", { waiting: [{ kind: "permission", what: "rm -rf dist", card: null }] }),
+      row("t2", "Find bar fixes", { waiting: [{ kind: "question", what: "rm -rf dist", card: null }] }),
       row("t1", "Demo of the fixes", { lastEventAtMs: NOW - 34 * 60_000 }),
       row("t4", "Settings fixes", { working: false, lastEnd: "done", merged: true, ahead: 1 }),
       row("t5", "Readme", { working: false, lastEnd: "stopped" }),
     ]);
     assert.match(few, /Find bar fixes needs you.*Demo of the fixes quiet 34m/);
-    assert.match(few, /1 done · 1 stopped/);
+    assert.match(few, /1 done · 1 ended/);
     assert.doesNotMatch(few, /Settings fixes|rm -rf/);
 
     // Its turn over but its own background commands still running (its tests, a wait on them):
@@ -63,6 +63,11 @@ test("the context card's Workers row names each worker at work by its row, with 
     assert.match(background, /1 done/);
     assert.doesNotMatch(background, /2 done/);
 
+    // A lone worker that finished: its own line, by name, never a bare "1 done" (D104).
+    const lone = text([row("t4", "Task curl output", { working: false, lastEnd: "done", gone: true })]);
+    assert.match(lone, /Task curl output/);
+    assert.doesNotMatch(lone, /1 done/);
+
     // More than a few: the one row of avatars with the count.
     const many = text(["t1", "t2", "t3", "t4"].map((id) => row(id, `Worker ${id}`)));
     assert.match(many, /4 working/);
@@ -72,7 +77,7 @@ test("the context card's Workers row names each worker at work by its row, with 
   }
 });
 
-test("the context card's Workers lists no subagent of the session's CLI", async () => {
+test("the context card's Workers lists the session CLI's subagents as workers (D50)", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { WorkersSummary } = await server.ssrLoadModule("/src/app/side-panel/WorkerSummary.tsx");
@@ -83,12 +88,12 @@ test("the context card's Workers lists no subagent of the session's CLI", async 
       return ReactDOMServer.renderToStaticMarkup(React.createElement(WorkersSummary, { conversationId: "c" }))
         .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     };
-    // Only subagents: no Workers section at all.
-    assert.equal(text([subagent("n1", "Explore the parser"), subagent("n2", "Review the diff")]).trim(), "");
-    // Beside a worker: the worker alone.
+    // Only subagents: a Workers section with a line each, as workers have.
+    assert.equal(text([subagent("n1", "Explore the parser"), subagent("n2", "Review the diff")]).trim(), "Workers Explore the parser working Review the diff working");
+    // Beside a worker: both, alike.
     const mixed = text([row("t1", "Demo of the fixes"), subagent("n1", "Explore the parser")]);
     assert.match(mixed, /Demo of the fixes working/);
-    assert.doesNotMatch(mixed, /Explore the parser/);
+    assert.match(mixed, /Explore the parser working/);
   } finally {
     await server.close();
   }

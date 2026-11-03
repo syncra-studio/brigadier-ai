@@ -1,4 +1,4 @@
-import { type FC, type ReactNode, useContext } from "react";
+import { type FC, type ReactNode, useContext, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { Briefs } from "@/app/conversation/activity/Briefs";
@@ -7,13 +7,16 @@ import { QuietBrief } from "@/app/conversation/activity/QuietBrief";
 import { WorkerName } from "@/app/conversation/activity/WorkerName";
 import { type BlockRow, lifecycleWord } from "@/app/conversation/blocks";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
+import { useViewConversation } from "@/app/conversation/viewContext";
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
+import { workedBy } from "@/app/side-panel/WorkerThread";
 import { ROW, ROW_DETAIL, ThreadActivity } from "@/components/conversation";
-import { CheckCircle, Chat, Commit, StopCircle } from "@/components/icons";
+import { CheckCircle, Chat, Commit, ListOrderedIcon, PauseCircle, PlayCircle, StopCircle } from "@/components/icons";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";
 import { useBoard } from "@/state/board";
+import { loadWorkerThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
  * How workers show in the thread (THREAD-UX-PLAN.md §3.4): sentences in the row recipe of the
@@ -128,11 +131,11 @@ function lifecycleWordOf(task: Task): ReturnType<typeof lifecycleWord> {
 /** The reason the engine files with a worker the user stopped (`USER_STOP_REASON` there). */
 const USER_STOP_REASON = "Stopped by the user";
 
-/** The lead's actions on its team that show as rows. */
-export type TeamStepKind = Extract<OrchestratorStepKind, { type: "messaged" | "answered" | "stopped" | "landed" | "reviewed" }>;
+/** The lead's actions on its team that show as rows; a worker started shows only when it is off the routing (D77). */
+export type TeamStepKind = Extract<OrchestratorStepKind, { type: "messaged" | "answered" | "stopped" | "paused" | "resumed" | "landed" | "reviewed" | "created" }>;
 
-export function isTeamStep(kind: { type: string }): kind is TeamStepKind {
-  return ["messaged", "answered", "stopped", "landed", "reviewed"].includes(kind.type);
+export function isTeamStep(kind: { type: string; offRouting?: string | undefined }): kind is TeamStepKind {
+  return ["messaged", "answered", "stopped", "paused", "resumed", "landed", "reviewed"].includes(kind.type) || (kind.type === "created" && !!kind.offRouting);
 }
 
 /** "the change from", "the changes from": what a Landed or Reviewed row names before its workers. */
@@ -142,11 +145,20 @@ const changesFrom = (taskIds: readonly string[]) => (taskIds.length > 1 ? "the c
 export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = ({ kind, atMs }) => {
   // How long the worker had run when it was stopped: its attempts up to the step's own time, so
   // a later restart or handoff never changes what this row says.
-  const stoppedMs = useBoard((s) => {
-    if (kind.type !== "stopped" || atMs === undefined) return 0;
-    const attempts = s.board?.tasks[kind.taskId]?.attempts ?? [];
+  // The same number its panel says (D53): its turns' time, read as the panel reads it; its
+  // attempts' wall clock only until that read answers.
+  const conversationId = useViewConversation()?.id ?? null;
+  const stopped = kind.type === "stopped" && atMs !== undefined ? kind.taskId : null;
+  const turns = useWorkerThreads((s) => (stopped ? s.views[stopped]?.turns : undefined));
+  useEffect(() => {
+    if (stopped && conversationId && !turns) loadWorkerThread(conversationId, stopped).catch(() => undefined);
+  }, [stopped, conversationId, turns]);
+  const attemptsMs = useBoard((s) => {
+    if (!stopped || atMs === undefined) return 0;
+    const attempts = s.board?.tasks[stopped]?.attempts ?? [];
     return attempts.reduce((sum, a) => (a.startedAtMs < atMs ? sum + Math.min(a.endedAtMs ?? atMs, atMs) - a.startedAtMs : sum), 0);
   });
+  const stoppedMs = turns && atMs !== undefined ? workedBy(turns, atMs) : attemptsMs;
   let icon: ReactNode;
   let line: ReactNode;
   let detail: ReactNode = undefined;
@@ -155,6 +167,11 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
       line = kind.byUser ? <>You messaged <WorkerName taskId={kind.taskId} /></> : <>Messaged <WorkerName taskId={kind.taskId} /></>;
       detail = kind.text ? <QuietBrief>{kind.text}</QuietBrief> : undefined;
+      break;
+    case "created":
+      icon = <ListOrderedIcon aria-hidden className="size-4 shrink-0" />;
+      line = <><WorkerName taskId={kind.taskId} /> runs off your routing</>;
+      detail = kind.offRouting ? <QuietBrief>{kind.offRouting}</QuietBrief> : undefined;
       break;
     case "answered":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
@@ -183,13 +200,22 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       );
       break;
     case "stopped": {
-      // The user's own Stop (one worker's, or Stop all) says so on the row; the lead's says why.
+      // The user's own End says so on the row; the lead's says why. Ending reads "Ended" (D199).
       const byUser = kind.reason === USER_STOP_REASON;
       icon = <StopCircle aria-hidden className="size-4 shrink-0" />;
-      line = <>{byUser ? "You stopped" : "Stopped"} <WorkerName taskId={kind.taskId} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
+      line = <>{byUser ? "You ended" : "Ended"} <WorkerName taskId={kind.taskId} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
       detail = kind.reason && !byUser ? <QuietBrief>{kind.reason}</QuietBrief> : undefined;
       break;
     }
+    // The lead's `brigadier pause` and `resume` (D7).
+    case "paused":
+      icon = <PauseCircle aria-hidden className="size-4 shrink-0" />;
+      line = <>Paused <WorkerName taskId={kind.taskId} /></>;
+      break;
+    case "resumed":
+      icon = <PlayCircle aria-hidden className="size-4 shrink-0" />;
+      line = <>Resumed <WorkerName taskId={kind.taskId} /></>;
+      break;
     case "landed":
       icon = <Commit aria-hidden className="size-4 shrink-0" />;
       line =

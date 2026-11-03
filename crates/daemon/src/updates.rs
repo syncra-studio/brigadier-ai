@@ -16,6 +16,7 @@
 //! A faked CLI's Update runs the program `BRIGADIER_FAKE_UPDATE_RUN` names (with the CLI's name
 //! as its argument) instead of anything real, so a stub can stand in for success or failure.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::Read;
@@ -28,6 +29,7 @@ use brigadier_core::{
     streams,
 };
 use brigadier_providers::ProviderKind;
+use brigadier_providers::adapters::UpdateLimits;
 use brigadier_providers::cli::{CliEnv, parse_version};
 use brigadier_providers::process;
 use brigadier_store::{NewEvent, Retention};
@@ -109,8 +111,8 @@ pub async fn check(daemon: &Daemon) {
         found.push(item);
     }
 
-    for kind in ProviderKind::ALL {
-        let target = target_of(kind);
+    for kind in brigadier_providers::adapters::kinds() {
+        let target = UpdateTarget::Provider(kind);
         let Some(status) = daemon.runtime.overview(kind).and_then(|o| o.status) else {
             continue;
         };
@@ -141,7 +143,13 @@ pub async fn check(daemon: &Daemon) {
             found.retain(|item| item.target != running);
             found.push(row);
         }
-        found.sort_by_key(|item| item.target as u8);
+        // The app first, then the CLIs in the order they are registered.
+        found.sort_by_key(|item| match item.target {
+            UpdateTarget::App => None,
+            UpdateTarget::Provider(kind) => {
+                Some(brigadier_providers::adapters::kinds().position(|known| known == kind))
+            }
+        });
         state.view = UpdatesView {
             items: found,
             checked_at_ms: Some(now_ms()),
@@ -391,11 +399,15 @@ fn install_of(real: &Path, package: &str) -> Install {
     Install::Native
 }
 
-fn package_of(kind: ProviderKind) -> &'static str {
-    match kind {
-        ProviderKind::Claude => "@anthropic-ai/claude-code",
-        ProviderKind::Codex => "@openai/codex",
-    }
+fn package_of(kind: ProviderKind) -> Option<&'static str> {
+    brigadier_providers::adapters::adapter(kind).map(|adapter| adapter.npm_package)
+}
+
+/// What `kind`'s settings allow its updater to install.
+fn limits_of(env: &CliEnv, kind: ProviderKind) -> UpdateLimits {
+    brigadier_providers::adapters::adapter(kind).map_or_else(UpdateLimits::default, |adapter| {
+        (adapter.update_limits)(env)
+    })
 }
 
 /// The newer version of a CLI its install can take, and how to take it.
@@ -407,12 +419,9 @@ async fn cli_update(
     current: &str,
 ) -> Option<UpdateItem> {
     let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-    let package = package_of(kind);
+    let package = package_of(kind)?;
     let install = install_of(&real, package);
-    let limits = match kind {
-        ProviderKind::Claude => claude_limits(env),
-        ProviderKind::Codex => Limits::default(),
-    };
+    let limits = limits_of(env, kind);
     if limits.updates_off {
         return None;
     }
@@ -439,7 +448,7 @@ async fn cli_update(
         UpdateAction::Manual { command: display }
     };
     Some(UpdateItem {
-        target: target_of(kind),
+        target: UpdateTarget::Provider(kind),
         current: current.into(),
         latest,
         action,
@@ -455,11 +464,8 @@ fn update_command(
     path: &Path,
 ) -> Option<(PathBuf, Vec<OsString>)> {
     let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-    let package = package_of(kind);
-    let channel = match kind {
-        ProviderKind::Claude => claude_limits(env).channel,
-        ProviderKind::Codex => "latest",
-    };
+    let package = package_of(kind)?;
+    let channel = limits_of(env, kind).channel;
     let spec = format!("{package}@{channel}");
     let args = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
     match install_of(&real, package) {
@@ -486,7 +492,7 @@ fn update_command(
 
 /// The update command as the user would type it.
 fn command_line(kind: ProviderKind, path: &Path, install: &Install, channel: &str) -> String {
-    let spec = format!("{}@{channel}", package_of(kind));
+    let spec = format!("{}@{channel}", package_of(kind).unwrap_or_default());
     match install {
         Install::Native => {
             let program = path.file_stem().map_or_else(
@@ -500,94 +506,6 @@ fn command_line(kind: ProviderKind, path: &Path, install: &Install, channel: &st
         Install::Bun => format!("bun add -g {spec}"),
         Install::Homebrew { cask: true, name } => format!("brew upgrade --cask {name}"),
         Install::Homebrew { cask: false, name } => format!("brew upgrade {name}"),
-    }
-}
-
-/// What a CLI's settings allow its updater to install.
-struct Limits {
-    /// The npm dist-tag its updater follows.
-    channel: &'static str,
-    /// The newest version it may run.
-    maximum: Option<String>,
-    /// Updates are turned off altogether.
-    updates_off: bool,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            channel: "latest",
-            maximum: None,
-            updates_off: false,
-        }
-    }
-}
-
-/// Claude Code's release channel and limits, as `claude update` reads them: managed settings
-/// first, then the user's (Brigadier runs the update from the home folder, outside any
-/// project's settings).
-fn claude_limits(env: &CliEnv) -> Limits {
-    let read = |path: PathBuf| -> Value {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
-    };
-    let managed = managed_claude_settings().map(read).unwrap_or_default();
-    let user = match env.var("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
-        Some(dir) => read(PathBuf::from(dir).join("settings.json")),
-        None => env
-            .home()
-            .map(|home| read(home.join(".claude").join("settings.json")))
-            .unwrap_or_default(),
-    };
-    limits_from(
-        &managed,
-        &user,
-        env.var("DISABLE_UPDATES").and_then(|v| v.to_str()),
-    )
-}
-
-/// [`claude_limits`] from the managed and user settings and the `DISABLE_UPDATES` variable.
-fn limits_from(managed: &Value, user: &Value, disable_updates: Option<&str>) -> Limits {
-    let channel = [managed, user]
-        .iter()
-        .find_map(|settings| settings.get("autoUpdatesChannel").and_then(Value::as_str))
-        .map_or("latest", |channel| match channel {
-            "stable" => "stable",
-            _ => "latest",
-        });
-    let truthy = |value: Option<&str>| {
-        value.is_some_and(|value| !value.is_empty() && value != "0" && value != "false")
-    };
-    let updates_off = truthy(disable_updates)
-        || [managed, user].iter().any(|settings| {
-            truthy(
-                settings
-                    .get("env")
-                    .and_then(|env| env.get("DISABLE_UPDATES"))
-                    .and_then(Value::as_str),
-            )
-        });
-    Limits {
-        channel,
-        maximum: managed
-            .get("requiredMaximumVersion")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        updates_off,
-    }
-}
-
-fn managed_claude_settings() -> Option<PathBuf> {
-    if cfg!(target_os = "macos") {
-        Some("/Library/Application Support/ClaudeCode/managed-settings.json".into())
-    } else if cfg!(windows) {
-        Some(r"C:\Program Files\ClaudeCode\managed-settings.json".into())
-    } else if cfg!(unix) {
-        Some("/etc/claude-code/managed-settings.json".into())
-    } else {
-        None
     }
 }
 
@@ -628,18 +546,10 @@ async fn brew_version(
 
 // ----- helpers ---------------------------------------------------------------------------
 
-fn target_of(kind: ProviderKind) -> UpdateTarget {
-    match kind {
-        ProviderKind::Claude => UpdateTarget::Claude,
-        ProviderKind::Codex => UpdateTarget::Codex,
-    }
-}
-
 fn provider_of(target: UpdateTarget) -> Option<ProviderKind> {
     match target {
         UpdateTarget::App => None,
-        UpdateTarget::Claude => Some(ProviderKind::Claude),
-        UpdateTarget::Codex => Some(ProviderKind::Codex),
+        UpdateTarget::Provider(kind) => Some(kind),
     }
 }
 
@@ -771,9 +681,9 @@ fn faked_targets() -> HashSet<UpdateTarget> {
             .split(',')
             .filter_map(|name| match name.trim() {
                 "app" => Some(UpdateTarget::App),
-                "claude" => Some(UpdateTarget::Claude),
-                "codex" => Some(UpdateTarget::Codex),
-                _ => None,
+                name => brigadier_providers::adapters::kinds()
+                    .find(|kind| kind.id() == name)
+                    .map(UpdateTarget::Provider),
             })
             .collect();
     }

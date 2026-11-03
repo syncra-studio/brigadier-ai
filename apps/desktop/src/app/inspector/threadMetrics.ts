@@ -1,5 +1,6 @@
 import type { CacheCauses, ProviderTokens, RequestContext, RequestSummary, ThreadEdits } from "@/ipc/generated";
 import { formatDuration, formatTokens } from "@/lib/format";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** The thread's own commits in a line: how many, and the lines it changed (on the user's own checkout, uncommitted ones too). */
 export function editsLine(edits: ThreadEdits | null): string {
@@ -49,10 +50,6 @@ export function growthRows(requests: readonly RequestContext[], limit: number): 
 /** A time after the request was sent: tenths of a second under a minute, else "6m 40s". */
 export function formatSince(ms: number): string {
   return ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : formatDuration(ms);
-}
-
-function providerName(provider: ProviderTokens["provider"]): string {
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
 export type SummaryRow = {
@@ -106,11 +103,12 @@ export function summaryRows(summaries: readonly RequestSummary[], limit: number)
         times: times.join(" · "),
         providers: summary.providers.map((tokens) => {
           const cost = tokens.costUsd !== null ? `, $${tokens.costUsd.toFixed(2)}` : "";
-          // Codex's cached share of its input, which its comparisons rely on (BUILD-PLAN B0).
+          // A CLI that reports no cache writes is judged by its cached share of input (BUILD-PLAN B0).
+          const facts = cliFacts(tokens.provider);
           const input = tokens.input + tokens.cachedInput;
           const share =
-            tokens.provider === "codex" && input > 0 ? `, ${Math.round((tokens.cachedInput / input) * 100)}% of input cached` : "";
-          return `${providerName(tokens.provider)} ${formatTokens(tokens.raw)} raw, ${formatTokens(tokens.rawWithoutCacheReads)} without cache reads${cost}${share}`;
+            !facts.reportsCacheWrites && input > 0 ? `, ${Math.round((tokens.cachedInput / input) * 100)}% of input cached` : "";
+          return `${facts.vendor} ${formatTokens(tokens.raw)} raw, ${formatTokens(tokens.rawWithoutCacheReads)} without cache reads${cost}${share}`;
         }),
         steps: summary.steps
           .map((step) => {

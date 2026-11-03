@@ -160,21 +160,34 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/waiting.schema.json"),
     },
     Command {
+        name: "state",
+        summary: "Everything you need now, in one call: workers, brief, rules, open items, \
+                  routing (run it after any compaction).",
+        details: "The same as `brigadier context` with no part: your workers with their state \
+                  and progress, and each small part whole; the big parts (whole ledger, \
+                  transcript, skills, MCP servers, project files) listed with the command that \
+                  opens them.",
+        args: &[],
+        available: true,
+        schema: include_str!("../schemas/state.schema.json"),
+    },
+    Command {
         name: "context",
         summary: "Everything about your job, on pull: brief, decisions, open items, ledger, \
                   transcript, skills, MCP servers, project, routing.",
         details: "Nothing of it is put into your conversation (D13): run `brigadier context` \
-                  when you start and after any compaction, then open what you need. Alone it \
+                  after any compaction, then open what you need. Alone it \
                   lists each part with its size and the command that opens it. `brief`: your \
                   task as `brigadier start` gave it, or a session's first request. \
                   `decisions`: the rules and decisions still standing, quoted with their ids. \
                   `open`: open items and the cards waiting on the user. `ledger`: the whole \
                   ledger. A worker reads its session's ledger (read-only) and then its own. \
                   `checkpoint`: the session's checkpoint. `transcript`: your own records, the \
-                  last items, `--grep` hits or one `--item`. `skills [<name>]`: the skills of \
-                  your agent's setup, or one skill's whole text. `mcps`: the MCP servers that \
-                  exist and which you have (a worker has only the ones it was started with, \
-                  D18). `project`: the checkout's own CLAUDE.md and AGENTS.md (D17) and the \
+                  last items, `--grep` hits or one `--item`; a worker's `--session` reads its \
+                  session's thread. `skills [<name>]`: the skills of your session's setup, or \
+                  one skill's whole text (a worker's CLI loads none: it pulls one here). \
+                  `mcps`: the setup's MCP servers and which were loaded at your launch; \
+                  `brigadier mcp` calls any of them. `project`: the checkout's own CLAUDE.md and AGENTS.md (D17) and the \
                   project's facts. `routing`: `brigadier models`' guidance.",
         args: &[
             Arg::Positional {
@@ -212,7 +225,12 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "item",
                 "ID",
-                "transcript: one exact item, as a search hit names it.",
+                "transcript: one exact item, as a search hit names it, or positions as \
+                 `--last` prints them (`7`, `0-8`), earlier fresh contexts' too.",
+            ),
+            switch(
+                "session",
+                "transcript: a worker reads its session's thread instead of its own records.",
             ),
         ],
         available: true,
@@ -276,14 +294,13 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "title",
                 "TEXT",
-                "A short name for it: two to four plain words, like \"Login redirect\"; from the \
-                 prompt by default.",
+                "A short name for its job: two to four plain words, like \"Fix login redirect\", \
+                 never a place like \"repo root\"; from the prompt by default.",
             ),
-            choice(
+            flag(
                 "agent",
                 "AGENT",
-                &["claude", "codex"],
-                "Which CLI runs it; this session's by default.",
+                "Which CLI runs it, by its id; this session's by default.",
             ),
             flag(
                 "model",
@@ -378,17 +395,23 @@ pub const COMMANDS: &[Command] = &[
         summary: "Send a worker of yours or another session a message, or answer a worker's \
                   permission prompt.",
         details: "A message is queued into its turn if it is working, else it starts a turn. \
-                  Another session (an id of `brigadier sessions --all`) gets it as a message \
-                  from this session, never as its user's, and may answer with `brigadier send` \
-                  back. Message another session only when the user asks, or when it is \
-                  absolutely needed. Another session's workers are out of reach. --allow or \
-                  --deny answers the permission prompt a worker's CLI shows (a `needs-input` \
-                  event of `brigadier wait`).",
+                  Another session (its title, as the user names it, or an id of `brigadier sessions \
+                  --all`) gets it as a message \
+                  from this session, never as its user's, and answers with `brigadier send` \
+                  back (`brigadier help sessions`). Message another session only when the user \
+                  asks, or when it is absolutely needed. Another session's workers are out of \
+                  reach. A worker's \
+                  permission prompt (a `needs-input` event of `brigadier wait`) reaches only \
+                  you, never the user: judge it yourself and answer it with --allow, or \
+                  --deny <reason>; the worker waits until you do.",
         args: &[
-            positional("id", "The worker, or another session."),
+            positional("id", "The worker, or another session (its id or title)."),
             switch("allow", "Allow what its permission prompt asks."),
-            switch("deny", "Deny what its permission prompt asks."),
-            rest("text", "The message.", false),
+            switch(
+                "deny",
+                "Deny what its permission prompt asks; the text is the reason its CLI is told.",
+            ),
+            rest("text", "The message, or a --deny's reason.", false),
         ],
         available: true,
         schema: include_str!("../schemas/send.schema.json"),
@@ -400,11 +423,13 @@ pub const COMMANDS: &[Command] = &[
                   its CLI showed: its commits, merged or not, uncommitted files, the commands \
                   it ran and how each exited), needs input, \
                   failed, interrupted, gone, usage limit, fresh context, quiet (20 minutes \
-                  without a word while it works). Without ids, any of them. Each event is \
+                  without a word while it works), or a message sent to you meanwhile, so you read \
+                  it now (`message`). Without ids, any of them. Each event is \
                   heard once, kept across a restart. Keep one running in the background while \
                   workers run: it wakes you when it returns. Given sessions instead, it returns \
                   at the end of their turn (once it took what you sent it), with its last \
-                  message.",
+                  message; or with its answer, when it sends you one meanwhile (given here only, not \
+                  again as a message), or `removed` when its user deleted your message unread.",
         args: &[
             rest("id", "The workers, or the sessions, to wait for.", false),
             flag("timeout", "SECONDS", "Give up after this long."),
@@ -414,7 +439,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "close",
-        summary: "Close one of this session's workers.",
+        summary: "End one of this session's workers for good, its work kept on its branch (the user's \"end it\").",
         details: "Stops its CLI and removes it from `brigadier workers`. Unfinished changes \
                   are kept as a commit on its branch.",
         args: &[positional("id", "The worker.")],
@@ -422,39 +447,50 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/close.schema.json"),
     },
     Command {
-        name: "queue",
-        summary: "Judge a message the user sent while you work: join, wait, worker or \
-                  new-session.",
-        details: "A message the user sends while you work reaches you at once, under a \
-                  `[queued message <id> …]` line, and waits in their queue, Deciding, until you \
-                  judge it. join: it belongs to this work; act on it now. wait: a request of \
-                  its own; it comes again on its own turn once this work is done. worker <id>: \
-                  it belongs to the work of one of your workers (`brigadier workers`); its \
-                  words go to that worker. new-session: a request of its own that could run \
-                  apart; the user is offered a new session for it. One left unjudged joins this \
-                  work by itself shortly, or when your turn ends.",
+        name: "pause",
+        summary: "Pause one of this session's workers (the user's \"stop it\", \"pause it\").",
+        details: "Its turn ends now, as Esc ends it, and its CLI session is kept. What you \
+                  send it meanwhile waits for `brigadier resume`; `brigadier wait` doesn't \
+                  wait on it.",
         args: &[
-            positional(
-                "id",
-                "The queued message, from its `[queued message <id> …]` line.",
-            ),
-            Arg::Positional {
-                name: "judgment",
-                help: "Where it goes.",
-                required: true,
-                rest: false,
-                choices: &["join", "wait", "worker", "new-session"],
-            },
-            Arg::Positional {
-                name: "worker",
-                help: "worker: the worker it goes to.",
-                required: false,
-                rest: false,
-                choices: &[],
-            },
+            positional("id", "The worker."),
+            rest("note", "What it should know when it goes on.", false),
         ],
         available: true,
-        schema: include_str!("../schemas/queue.schema.json"),
+        schema: include_str!("../schemas/pause.schema.json"),
+    },
+    Command {
+        name: "resume",
+        summary: "Resume a paused worker (the user's \"carry on\"), with an optional note.",
+        details: "It gets what you sent it while paused and the note, then \"Continue where \
+                  you stopped.\", in one turn of the same session: one call, no `send` first.",
+        args: &[
+            positional("id", "The worker."),
+            rest("note", "What it should know as it goes on.", false),
+        ],
+        available: true,
+        schema: include_str!("../schemas/resume.schema.json"),
+    },
+    Command {
+        name: "switch",
+        summary: "Move a worker that didn't switch on its own to another account, agent, \
+                  model or effort.",
+        details: "Without flags: the next account or routing row that can take it, in the \
+                  order a usage limit uses. A working worker, or one waiting for a reset, goes \
+                  on there at once with \"Continue where you stopped.\"; a paused one stays \
+                  paused until `brigadier resume`.",
+        args: &[
+            positional("id", "The worker."),
+            flag("agent", "AGENT", "The CLI it moves to."),
+            flag(
+                "model",
+                "MODEL",
+                "The model; another agent's default when not given.",
+            ),
+            flag("effort", "EFFORT", "The reasoning effort."),
+        ],
+        available: true,
+        schema: include_str!("../schemas/switch.schema.json"),
     },
     Command {
         name: "continue-on",
@@ -468,10 +504,10 @@ pub const COMMANDS: &[Command] = &[
         args: &[
             Arg::Positional {
                 name: "agent",
-                help: "The CLI to continue on.",
+                help: "The CLI to continue on, by its id.",
                 required: true,
                 rest: false,
-                choices: &["claude", "codex"],
+                choices: &[],
             },
             switch("after-turn", "Move once the running turn ends."),
         ],
@@ -765,7 +801,11 @@ pub const COMMANDS: &[Command] = &[
                 "N",
                 "search: max hits (default 8); read: max UTF-8 bytes per item.",
             ),
-            flag("item", "ID", "read: exact item id printed by search."),
+            flag(
+                "item",
+                "ID",
+                "read: exact item id printed by search, or positions (`7`, `0-8`).",
+            ),
             choice(
                 "role",
                 "ROLE",
@@ -792,6 +832,28 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/brain.schema.json"),
     },
     Command {
+        name: "mcp",
+        summary: "Call any MCP server of your session's setup, loaded at your launch or not.",
+        details: "The same on every CLI, for a session's thread and every worker, with no \
+                  restart (D5). `list`: the setup's servers, and which your CLI loaded at \
+                  launch. `tools <server>`: its tools, each with its input schema. `call \
+                  <server> <tool> [<json>]`: runs one tool with the JSON object of its \
+                  arguments (none: `{}`) and prints all it \
+                  answered; an error it answers exits non-zero. One connection per server is \
+                  kept for you while you use it, so what a call opens or returns stays good \
+                  for your next call. `mcp run` is the local wrapper the CLIs' configs name.",
+        args: &[
+            action(&["list", "tools", "call"], "What to do."),
+            rest(
+                "args",
+                "tools: <server>; call: <server> <tool> [<json>].",
+                false,
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/mcp.schema.json"),
+    },
+    Command {
         name: "transcript",
         summary: "Search and read this session's own records.",
         details: "`search <words…>` is `brain search` within this session and its workers: \
@@ -806,7 +868,11 @@ pub const COMMANDS: &[Command] = &[
                 "N",
                 "search: max hits (default 8); read: max UTF-8 bytes per item.",
             ),
-            flag("item", "ID", "read: exact item id printed by search."),
+            flag(
+                "item",
+                "ID",
+                "read: exact item id printed by search, or positions (`7`, `0-8`).",
+            ),
             choice(
                 "role",
                 "ROLE",
@@ -954,13 +1020,15 @@ pub const COMMANDS: &[Command] = &[
         name: "feedback",
         summary: "Offer the user a report to Brigadier's developers, on a card.",
         details: "`offer --kind bug|idea --title <title> <body…>`: when the user seems annoyed \
-                  with Brigadier itself (never their own project's code), or asks you to report \
-                  something to its developers. The card's Send files it on GitHub as the user; \
-                  nothing is sent without their click. body: what happened and what they \
+                  with Brigadier itself (never their own project's code), when Brigadier, a CLI, \
+                  you or a worker acts abnormally (a bug, stuck, looping, repeating, ending \
+                  wrong), or when the user asks you to report something to its developers. The \
+                  card's Send files it on GitHub as the user; nothing is sent without their \
+                  click. body: what happened and what they \
                   expected, steps if known, a few plain lines in their words; no secrets, \
                   paths or project code. With no body, or `-`, it comes from standard input. \
-                  One offer per incident: unless --asked, refused while an earlier one is \
-                  unanswered or after they dismissed one.",
+                  One offer per incident: unless --asked, refused for a report still unanswered \
+                  on its card or that they dismissed.",
         args: &[
             action(&["offer"], "What to do."),
             choice(
@@ -1085,6 +1153,104 @@ impl Command {
     }
 }
 
+/// A how-to page of `brigadier help <topic>`: what a session's instructions point to.
+#[derive(Debug)]
+pub struct Topic {
+    pub name: &'static str,
+    pub summary: &'static str,
+    pub text: &'static str,
+}
+
+/// Every topic, in the order `brigadier help` lists them.
+pub const TOPICS: &[Topic] = &[
+    Topic {
+        name: "orchestrate",
+        summary: "Who does what: you, your subagents, your workers; reporting.",
+        text: include_str!("help/orchestrate.md"),
+    },
+    Topic {
+        name: "workers",
+        summary: "Which worker, one short job, waves and every `wait` event.",
+        text: concat!(
+            include_str!("help/workers.md"),
+            "\n",
+            include_str!("help/briefs.md"),
+            "\n",
+            include_str!("help/routing.md")
+        ),
+    },
+    Topic {
+        name: "approvals",
+        summary: "Answering a worker's permission prompt yourself.",
+        text: include_str!("help/approvals.md"),
+    },
+    Topic {
+        name: "routing",
+        summary: "Which agent, model and effort a worker runs on.",
+        text: include_str!("help/routing.md"),
+    },
+    Topic {
+        name: "briefs",
+        summary: "A worker's brief: five lines, and what it carries.",
+        text: include_str!("help/briefs.md"),
+    },
+    Topic {
+        name: "asking",
+        summary: "Grilling the user, and what always needs their yes.",
+        text: include_str!("help/asking.md"),
+    },
+    Topic {
+        name: "integrate",
+        summary: "Merging workers' steps, watching what ends later, gotchas.",
+        text: include_str!("help/integrate.md"),
+    },
+    Topic {
+        name: "reviews",
+        summary: "Plan reviews and end verification.",
+        text: include_str!("help/reviews.md"),
+    },
+    Topic {
+        name: "context",
+        summary: "What to pull, and where it comes from.",
+        text: include_str!("help/context.md"),
+    },
+    Topic {
+        name: "commands",
+        summary: "The commands an orchestrator uses, with their flags.",
+        text: include_str!("help/commands.md"),
+    },
+    // The reply rule (a session's answer goes to a `wait` on it, never also as a message) and a
+    // removed message ending that `wait` are proposed (goal 4, D122).
+    Topic {
+        name: "sessions",
+        summary: "Messaging another session, and answering one.",
+        text: include_str!("help/sessions.md"),
+    },
+    Topic {
+        name: "fusion",
+        summary: "Running a Fusion the user started in a top-level Chat.",
+        text: include_str!("help/fusion.md"),
+    },
+];
+
+/// The topic called `name`.
+pub fn topic(name: &str) -> Option<&'static Topic> {
+    TOPICS.iter().find(|topic| topic.name == name)
+}
+
+/// `brigadier help <topic>`: its page, then the help of the command of the same name.
+pub fn topic_help(topic: &Topic) -> String {
+    match find(topic.name) {
+        Some(command) => format!(
+            "{}\n`brigadier {}` itself:\n{}",
+            topic.text,
+            command.name,
+            command_help(command)
+        ),
+        None => topic.text.to_owned(),
+    }
+}
+
 /// `brigadier --help`.
 pub fn help() -> String {
     let width = COMMANDS.iter().map(|c| c.name.len()).max().unwrap_or(0);
@@ -1102,6 +1268,10 @@ pub fn help() -> String {
             "  {:width$}  {}{soon}\n",
             command.name, command.summary
         ));
+    }
+    out.push_str("\nHow-to topics (`brigadier help <topic>`):\n");
+    for topic in TOPICS {
+        out.push_str(&format!("  {:width$}  {}\n", topic.name, topic.summary));
     }
     out.push_str(
         "\nEvery command takes --json for machine-readable output.\n\

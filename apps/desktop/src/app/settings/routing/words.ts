@@ -9,7 +9,8 @@ import type {
   QualityTier,
   TaskCategory,
 } from "@/ipc/generated";
-import { VENDOR_LABELS } from "@/lib/routing";
+import { CLIS } from "@/ipc/generated/clis";
+import { cliFacts } from "@/lib/providerKinds";
 
 /*
  * The words and small sums Settings › Routing is drawn with: the rows of the rules file merged
@@ -70,7 +71,7 @@ export function withFirst(order: readonly GuidanceRow[], row: GuidanceRow): Guid
 export function workName(work: string): string {
   const agent = /^fusion-(.+)$/.exec(work)?.[1];
   if (!agent) return work;
-  return `Fusion · ${VENDOR_LABELS[agent as ProviderKind] ?? capital(agent)} consult`;
+  return `Fusion · ${CLIS.find((cli) => cli.id === agent)?.vendor ?? capital(agent)} consult`;
 }
 
 /** "Opus" from "opus": a family word as a name. */
@@ -115,7 +116,7 @@ export function rowModel(models: readonly ModelInfo[], word: string): ModelInfo 
  * matches it ("Opus").
  */
 export function rowModelName(groups: readonly ModelGroup[], agent: ProviderKind, model: string): string {
-  if (model === "default") return `${VENDOR_LABELS[agent]}'s default`;
+  if (model === "default") return `${cliFacts(agent).vendor}'s default`;
   const models = groups.find((group) => group.provider === agent)?.models ?? [];
   return (findModel(groups, { provider: agent, model, effort: null }) ?? rowModel(models, model))?.displayName ?? capital(model);
 }
@@ -144,7 +145,7 @@ export function targetModel(target: OverrideTarget): string {
 export function shortPlaceName(target: OverrideTarget, groups: readonly ModelGroup[]): string {
   switch (target.type) {
     case "vendor":
-      return `${VENDOR_LABELS[target.provider]}'s default`;
+      return `${cliFacts(target.provider).vendor}'s default`;
     case "family":
       return rowModelName(groups, target.provider, target.family);
     case "model":

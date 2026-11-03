@@ -5,7 +5,6 @@ import { FixtureList } from "@/app/inspector/providers/FixtureList";
 import { RawSessionView } from "@/app/inspector/providers/RawSessionView";
 import { SessionList } from "@/app/inspector/providers/SessionList";
 import {
-  PROVIDER_LABELS,
   QuotaWindows,
   Section,
   useAction,
@@ -22,6 +21,7 @@ import type { ProviderOverview } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { loadProviders, refreshProviders, simulateUsageLimit } from "@/state/actions";
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 // Development builds only: not part of a release bundle.
 const FaultControl = import.meta.env.DEV
@@ -106,7 +106,7 @@ function ProviderCard({ overview }: { overview: ProviderOverview }) {
   return (
     <div className="bg-card flex flex-col gap-2 rounded-lg border p-3 text-xs">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium">{PROVIDER_LABELS[overview.provider]}</span>
+        <span className="text-sm font-medium">{cliFacts(overview.provider).label}</span>
         {status === null ? (
           <Badge variant="secondary">checking…</Badge>
         ) : ready ? (

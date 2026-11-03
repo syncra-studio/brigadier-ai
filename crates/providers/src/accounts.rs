@@ -1,7 +1,8 @@
 //! More than one login per CLI: each extra account is a CLI home of its own that only Brigadier
-//! uses (`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex). The CLI keeps its own login
-//! in it, in its own way (Claude Code keys its Keychain entry on the folder; Codex writes
-//! `auth.json` or a keyring entry keyed on it); Brigadier never reads or writes a credential.
+//! uses (`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex, `OPENCODE_DB` for OpenCode's
+//! database in it). The CLI keeps its own login in it, in its own way (Claude Code keys its
+//! Keychain entry on the folder; Codex writes `auth.json` or a keyring entry keyed on it;
+//! OpenCode a row of its database); Brigadier never reads or writes a credential.
 //! The user's own login, the one their terminal uses, stays the first account and is never
 //! touched.
 //!
@@ -10,6 +11,10 @@
 //! their own home (Claude from `projects`, Codex from `sessions`), so the links are what let a
 //! conversation move from one account to another and still resume (checked with Claude Code
 //! 2.1.295 and codex-cli 0.161.0, `docs/evidence/2026-10-09-accounts.md`).
+//!
+//! OpenCode keeps its login and its sessions in one database, so nothing of it can be linked:
+//! its adapter carries a session into an account's database when the session moves there
+//! ([`crate::opencode`]). Its config stays the user's, being in a folder the account doesn't move.
 //!
 //! A login in the environment would win over the home's own login, so an account's processes
 //! run without the variables in [`auth_vars`].
@@ -23,62 +28,55 @@ use std::path::{Path, PathBuf};
 use crate::cli::CliEnv;
 use crate::model::ProviderKind;
 
-/// The variable that moves a CLI's home.
+/// Where a CLI keeps its login and history, for one that takes more than one account.
+pub struct Home {
+    /// The variable that moves the CLI's home (`CLAUDE_CONFIG_DIR`).
+    pub var: &'static str,
+    /// The file in an account's folder the variable names, for a CLI whose variable names a
+    /// file rather than a folder (OpenCode's `OPENCODE_DB`); `None`: the folder itself.
+    pub file: Option<&'static str>,
+    /// The home's folder in the user's home folder when the variable is unset (`.claude`).
+    pub default_dir: &'static str,
+    /// Variables that sign the CLI in on their own, ahead of the login kept in its home.
+    pub auth_vars: &'static [&'static str],
+    /// Other variables an account's processes run without (they'd point back at the main
+    /// home's login).
+    pub unset: &'static [&'static str],
+    /// What an account's home links back to the main home: the session history the CLI resumes
+    /// from, and the user's personal instructions, agents, skills and the like. Folders
+    /// ([`Shared::Dir`]) are made in the main home when missing, so a session written from any
+    /// account lands where every other account (and the user's terminal) finds it.
+    pub shared: &'static [Shared],
+    /// Files a new account's home starts with, when absent: `(name, contents)`.
+    pub seed: &'static [(&'static str, &'static str)],
+    /// Makes the adapter of the account whose home is at the path.
+    pub for_account: ForAccount,
+}
+
+/// Makes the adapter of an account, from its home ([`Home::for_account`]).
+pub type ForAccount = fn(
+    std::sync::Arc<dyn brigadier_sandbox::Platform>,
+    &CliEnv,
+    &Path,
+) -> std::sync::Arc<dyn crate::Provider>;
+
+fn home_of(kind: ProviderKind) -> Option<&'static Home> {
+    crate::adapters::adapter(kind).and_then(|adapter| adapter.home)
+}
+
+/// The variable that moves a CLI's home; empty for a CLI without one.
 pub fn home_var(kind: ProviderKind) -> &'static str {
-    match kind {
-        ProviderKind::Claude => "CLAUDE_CONFIG_DIR",
-        ProviderKind::Codex => "CODEX_HOME",
-    }
+    home_of(kind).map_or("", |home| home.var)
 }
 
-/// Variables that sign a CLI in on their own, ahead of the login kept in its home: Claude
-/// Code's API key, bearer token and long-lived OAuth token
-/// (<https://code.claude.com/docs/en/authentication#authentication-precedence>); Codex's
-/// API keys and access token (named in codex-cli 0.161.0's binary).
+/// Variables that sign a CLI in on their own, ahead of the login kept in its home.
 pub fn auth_vars(kind: ProviderKind) -> &'static [&'static str] {
-    match kind {
-        ProviderKind::Claude => &[
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-        ],
-        ProviderKind::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
-    }
+    home_of(kind).map_or(&[], |home| home.auth_vars)
 }
 
-/// What an account's home links back to the main home: the session history the CLI resumes
-/// from, and the user's personal instructions, agents, skills and the like. Folders
-/// ([`Shared::Dir`]) are made in the main home when missing, so a session written from any
-/// account lands where every other account (and the user's terminal) finds it.
+/// What an account's home links back to the main home ([`Home::shared`]).
 pub fn shared(kind: ProviderKind) -> &'static [Shared] {
-    use Shared::{Dir, Optional};
-    match kind {
-        ProviderKind::Claude => &[
-            Dir("projects"),
-            Optional("CLAUDE.md"),
-            Optional("agents"),
-            Optional("commands"),
-            Optional("skills"),
-            // The installed plugins, and the settings that enable them and name their
-            // marketplaces (`enabledPlugins`, `extraKnownMarketplaces`): the plugins folder
-            // alone loads none of them. Claude writes the settings through the link.
-            Optional("plugins"),
-            Optional("settings.json"),
-        ],
-        ProviderKind::Codex => &[
-            Dir("sessions"),
-            Dir("archived_sessions"),
-            Dir("generated_images"),
-            Optional("config.toml"),
-            Optional("AGENTS.md"),
-            Optional("skills"),
-            Optional("prompts"),
-            Optional("rules"),
-            // The installed plugins (`config.toml` enables them) and the user's hooks.
-            Optional("plugins"),
-            Optional("hooks.json"),
-        ],
-    }
+    home_of(kind).map_or(&[], |home| home.shared)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,14 +98,12 @@ impl Shared {
 /// The user's own home for `kind`, the one their terminal uses: what `env` sets, else the
 /// default (`~/.claude`, `~/.codex`).
 pub fn main_home(kind: ProviderKind, env: &CliEnv) -> Option<PathBuf> {
-    match env.var(home_var(kind)).filter(|dir| !dir.is_empty()) {
+    let facts = home_of(kind)?;
+    match env.var(facts.var).filter(|dir| !dir.is_empty()) {
+        // A file's variable: the folder it is in.
+        Some(file) if facts.file.is_some() => Path::new(file).parent().map(Path::to_owned),
         Some(dir) => Some(PathBuf::from(dir)),
-        None => env.home().map(|home| {
-            home.join(match kind {
-                ProviderKind::Claude => ".claude",
-                ProviderKind::Codex => ".codex",
-            })
-        }),
+        None => env.home().map(|home| home.join(facts.default_dir)),
     }
 }
 
@@ -122,12 +118,13 @@ impl CliEnv {
                 key.to_str().is_none_or(|key| {
                     !auth_vars(kind).contains(&key)
                         && key != home_var(kind)
-                        && !(kind == ProviderKind::Claude
-                            && key == "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+                        && !home_of(kind).is_some_and(|home| home.unset.contains(&key))
                 })
             })
             .collect();
-        vars.push((home_var(kind).into(), home.as_os_str().to_owned()));
+        let file = home_of(kind).and_then(|facts| facts.file);
+        let value = file.map_or_else(|| home.to_owned(), |file| home.join(file));
+        vars.push((home_var(kind).into(), value.into_os_string()));
         self.with_vars(vars)
     }
 }
@@ -136,16 +133,13 @@ impl CliEnv {
 /// [`shared`]). Safe to repeat: an existing link is kept, and so is anything the CLI put in
 /// its place. A link the main home no longer backs is left for the CLI to report.
 ///
-/// A new Claude home starts with a `.claude.json` that says its first-run setup is done
-/// (`hasCompletedOnboarding`, the key Claude Code 2.1.295 keeps there): the user went
-/// through it with their own login, and a terminal that resumes a session on this account
-/// must not ask again. Nothing else of the user's own `.claude.json` is copied.
+/// A new home starts with the adapter's [`Home::seed`] files.
 pub fn prepare_home(kind: ProviderKind, main: &Path, home: &Path) -> io::Result<()> {
     create_private_dir(home)?;
-    if kind == ProviderKind::Claude {
-        let config = home.join(".claude.json");
-        if std::fs::symlink_metadata(&config).is_err() {
-            std::fs::write(&config, "{\n  \"hasCompletedOnboarding\": true\n}\n")?;
+    for (name, contents) in home_of(kind).map_or(&[][..], |facts| facts.seed) {
+        let file = home.join(name);
+        if std::fs::symlink_metadata(&file).is_err() {
+            std::fs::write(&file, contents)?;
         }
     }
     for entry in shared(kind) {
@@ -163,22 +157,6 @@ pub fn prepare_home(kind: ProviderKind, main: &Path, home: &Path) -> io::Result<
         link_to(&target, &link, meta.is_dir())?;
     }
     Ok(())
-}
-
-/// Claude's config file for the user's own login, where their user servers (`mcpServers`) and
-/// each project's local ones (`projects.<path>.mcpServers`) are: `.claude.json` in
-/// `CLAUDE_CONFIG_DIR`, else in the home folder, as Claude Code itself picks it (an old
-/// `.config.json` in the config folder wins when present).
-pub fn main_config_file(env: &CliEnv) -> Option<PathBuf> {
-    let set = env
-        .var(home_var(ProviderKind::Claude))
-        .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from);
-    let home = env.home().or_else(|| set.clone())?;
-    Some(brigadier_registry::claude_config::config_file(
-        &home,
-        set.as_deref(),
-    ))
 }
 
 /// Deletes an account's home. Links are removed, never followed: what they point to in the
@@ -326,6 +304,47 @@ mod tests {
         );
     }
 
+    /// An OpenCode account's variable names the database in its folder; the keys of its
+    /// sign-in integrations are dropped, a token the session's own commands use stays.
+    #[test]
+    fn an_opencode_account_runs_on_its_own_database_with_no_login_key() {
+        let env = CliEnv::from_vars([
+            (OsString::from("HOME"), OsString::from("/home/me")),
+            (
+                OsString::from("OPENCODE_API_KEY"),
+                OsString::from("sentinel"),
+            ),
+            (OsString::from("OPENAI_API_KEY"), OsString::from("sentinel")),
+            (OsString::from("GITHUB_TOKEN"), OsString::from("kept")),
+            (
+                OsString::from("OPENCODE_DB"),
+                OsString::from("/elsewhere/x.db"),
+            ),
+        ]);
+        let account = env.for_account(ProviderKind::OpenCode, Path::new("/data/accounts/a3"));
+        assert_eq!(
+            account.var("OPENCODE_DB"),
+            Some(std::ffi::OsStr::new("/data/accounts/a3/opencode.db"))
+        );
+        for name in auth_vars(ProviderKind::OpenCode) {
+            assert_eq!(account.var(name), None, "{name}");
+        }
+        assert_eq!(
+            account.var("GITHUB_TOKEN"),
+            Some(std::ffi::OsStr::new("kept"))
+        );
+        // The main home: the set database's folder, else OpenCode's data folder.
+        assert_eq!(
+            main_home(ProviderKind::OpenCode, &env),
+            Some(PathBuf::from("/elsewhere"))
+        );
+        let unset = CliEnv::from_vars([(OsString::from("HOME"), OsString::from("/home/me"))]);
+        assert_eq!(
+            main_home(ProviderKind::OpenCode, &unset),
+            Some(PathBuf::from("/home/me/.local/share/opencode"))
+        );
+    }
+
     #[test]
     fn the_main_home_is_the_variable_or_the_default() {
         let set = CliEnv::from_vars([(OsString::from("CODEX_HOME"), OsString::from("/x"))]);
@@ -421,24 +440,6 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(home.join("config.toml")).unwrap(),
             "model = \"x\"\n"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn claudes_main_config_file_follows_its_config_dir_or_the_home() {
-        let set = CliEnv::from_vars([
-            (OsString::from("HOME"), OsString::from("/home/me")),
-            (OsString::from("CLAUDE_CONFIG_DIR"), OsString::from("/cfg")),
-        ]);
-        assert_eq!(
-            main_config_file(&set),
-            Some(PathBuf::from("/cfg/.claude.json"))
-        );
-        let unset = CliEnv::from_vars([(OsString::from("HOME"), OsString::from("/home/me"))]);
-        assert_eq!(
-            main_config_file(&unset),
-            Some(PathBuf::from("/home/me/.claude.json"))
         );
     }
 

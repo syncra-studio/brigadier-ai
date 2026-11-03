@@ -19,7 +19,7 @@ import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { whenIdle } from "@/lib/preloadable";
-import { account, OVERVIEWS, window as quotaWindow } from "@/fixtures/agents";
+import { account, OPENCODE_MISSING, OVERVIEWS, window as quotaWindow } from "@/fixtures/agents";
 import type {
   AccountRef,
   AccountUsage,
@@ -68,7 +68,7 @@ useApp.setState((state) => ({
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
   settings: { ...state.settings, browserEnabled: true, computerUse: true },
-  providers: { ...state.providers, view: { providers: OVERVIEWS, sessions: [], fixtures: [] } },
+  providers: { ...state.providers, view: { providers: [...OVERVIEWS, OPENCODE_MISSING], sessions: [], fixtures: [] } },
   conversations,
   selection: { type: "conversation", id: "open" },
 }));

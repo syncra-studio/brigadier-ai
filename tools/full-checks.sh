@@ -82,6 +82,33 @@ run pnpm build
 run pnpm --filter @brigadier/desktop stage-sidecar --debug
 run cargo clippy --locked --workspace --all-targets -- -D warnings
 run cargo test --locked --workspace --lib --bins --tests
+# The file-watch tests are ignored above: under the suite's write storm macOS drops file events
+# (#686). They run here on their own, one at a time.
+watch_tests=(
+  manager::flow::workspace_tests::the_watch_hears_files_and_staging_but_not_ignored_folders
+  manager::workspace::tests::new_watches_after_a_switch_say_one_more_change
+  pages::tests::the_watcher_tells_outside_edits_new_files_and_deletions
+  tests::watcher_refreshes_on_config_and_skill_edits_through_symlinks
+)
+watch_run=(cargo test --locked --no-fail-fast -p brigadier-core -p brigadier-registry --lib -- --ignored --test-threads=1 --exact "${watch_tests[@]}")
+if [ "$(uname)" = Darwin ]; then
+  # A busy Mac drops file events even with these tests alone, so here a failure is reported
+  # but doesn't stop the checks; CI (Linux) gates them.
+  watch_status=0
+  watch_out="$(run "${watch_run[@]}" 2>&1)" || watch_status=$?
+  printf '%s\n' "$watch_out"
+  if [ "$watch_status" -ne 0 ]; then
+    {
+      echo
+      echo "!!! WARNING: file-watch tests FAILED (macOS may have dropped file events, #686):"
+      printf '%s\n' "$watch_out" | sed -n 's/^test \(.*\) \.\.\. FAILED$/!!!   \1/p'
+      echo "!!! The checks go on; CI runs these on Linux and stops on them."
+      echo
+    } >&2
+  fi
+else
+  run "${watch_run[@]}"
+fi
 if [ "$(uname)" = Darwin ]; then
   # The computer-use helper is its own workspace (macOS only); its output sits beside the main
   # build's, where stage-sidecar puts it.

@@ -38,22 +38,39 @@ test("a strip row says what its worker does while it works, shimmering, else its
   }
 });
 
-test("a subagent's strip row is plain: a neutral mark, its task and time, no worker glyph or name", async () => {
+test("a subagent's strip row is a worker's: its glyph, its name, what it does and its time (D50)", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
-    const { StripRow, SubagentRow } = await server.ssrLoadModule("/src/app/conversation/activity/StripRow.tsx");
+    const { StripRow } = await server.ssrLoadModule("/src/app/conversation/activity/StripRow.tsx");
     const { useCliThread } = await server.ssrLoadModule("/src/state/cliThread.ts");
     const subagent = { ...row({ id: "native:c:call1", title: "Explore the parser" }), native: { conversationId: "c", callId: "call1", backgroundId: null, prompt: "" } };
     Object.assign(useCliThread.getInitialState().views, { c: { entries: [], turns: [], workers: [subagent] } });
-    // A worker's row carries its glyph (the two-tone avatar in its own colour); a subagent's never does.
-    assert.match(renderSubagent(StripRow), /text-glyph-/);
-    const html = renderSubagent(SubagentRow);
-    assert.doesNotMatch(html, /text-glyph-/);
-    assert.match(html, /data-slot="subagents-strip-row"/);
-    assert.equal(html.match(/<svg/g)?.length, 1);
-    assert.match(html, /data-slot="subagent-mark"[^>]*><svg/);
-    const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    assert.match(text, /^Explore the parser \d+s$/);
+    const html = renderSubagent(StripRow);
+    assert.match(html, /text-glyph-/);
+    assert.match(html, /data-slot="workers-strip-row"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a subagent's panel, opened from its row, is headed by its task as its row says it and shows its last words from its session's thread (D96)", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { WorkersTab } = await server.ssrLoadModule("/src/app/side-panel/Agents.tsx");
+    const { AgentsPanelContext } = await server.ssrLoadModule("/src/app/conversation/WorkerChip.tsx");
+    const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
+    const { useCliThread } = await server.ssrLoadModule("/src/state/cliThread.ts");
+    const call = { event: { type: "toolCall", itemId: "call2", name: "Agent", input: JSON.stringify({ description: "Run sleep then ls src", prompt: "Run it." }), status: "completed", output: null }, atMs: NOW - 5000, updatedAtMs: NOW };
+    // Its last words came after its call ended: the session's thread holds them once read again.
+    const said = { event: { type: "message", itemId: "s1", role: "assistant", text: "Ran it: greet.js, index.js" }, atMs: NOW, parent: "call2" };
+    const turn = { userMessage: "u1", startedAtMs: NOW - 6000, endedAtMs: NOW + 10, end: "done", error: null, requests: [] };
+    Object.assign(useCliThread.getInitialState().views, { c: { entries: [call, said], turns: [turn], workers: [] } });
+    const html = ReactDOMServer.renderToStaticMarkup(
+      React.createElement(TooltipProvider, null, React.createElement(AgentsPanelContext.Provider, { value: { panel: "native:c:call2", setPanel: () => {} } },
+        React.createElement(WorkersTab as React.FC<{ conversationId: string }>, { conversationId: "c" }))),
+    );
+    assert.match(html, /<h2[^>]*>Run sleep then ls src<\/h2>/);
+    assert.match(html, /Ran it: greet\.js, index\.js/);
   } finally {
     await server.close();
   }

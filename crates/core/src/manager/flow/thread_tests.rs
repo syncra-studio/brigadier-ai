@@ -80,15 +80,9 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         let (provider, spec) = &specs[0];
         assert_eq!(*provider, thread);
         assert_eq!(spec.tools, ToolSet::Thread);
-        // Claude adds the skill overlay as a directory; Codex uses its skill roots API.
+        // No skill overlay (D58).
         let folder = flow.manager.session_dir(&flow.conversation);
-        let mut expected_dirs = vec![folder.record()];
-        if thread == ProviderKind::Claude {
-            expected_dirs.push(folder.root().join("overlay"));
-        } else {
-            assert_eq!(spec.skill_plugins, [folder.root().join("overlay")]);
-        }
-        assert_eq!(spec.add_dirs, expected_dirs);
+        assert_eq!(spec.add_dirs, vec![folder.record()]);
         assert_eq!(spec.cwd, worktree);
         assert!(spec.owned_cwd, "a New worktree is Brigadier's");
         let scratch = spec.sweep_dir.clone().expect("its sweep folder");
@@ -941,8 +935,9 @@ pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
 }
 
 /// The thread offers a drafted report to Brigadier's developers once per incident: once in a
-/// request, none while the last offer is unanswered, again after the user sent it, never after
-/// they dismissed one. The user's answer is kept once.
+/// request, never again while its card is unanswered or after they dismissed it, again after the
+/// user sent it, and a new incident's beside an unanswered card (D131). The user's answer is kept
+/// once.
 #[tokio::test]
 async fn the_thread_offers_feedback_once_per_incident() {
     let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
@@ -962,6 +957,18 @@ async fn the_thread_offers_feedback_once_per_incident() {
                                 "title": "Stop leaves the tab spinning",
                                 "body": "After Stop the tab keeps its spinner.",
                                 "asked": true,
+                            }),
+                        )
+                        .await;
+                    log.lock().unwrap().push((reply.is_error, reply.text));
+                } else if turn.is_orchestrator() && turn.input.contains("sidebar") {
+                    let reply = turn
+                        .call(
+                            "offer_feedback",
+                            json!({
+                                "kind": "bug",
+                                "title": "The sidebar lost my sessions",
+                                "body": "The sidebar shows no sessions.",
                             }),
                         )
                         .await;
@@ -1001,8 +1008,16 @@ async fn the_thread_offers_feedback_once_per_incident() {
                     body,
                 } => {
                     assert_eq!(*kind, crate::work::FeedbackKind::Bug);
-                    assert_eq!(title, "Stop leaves the tab spinning");
-                    assert_eq!(body, "After Stop the tab keeps its spinner.");
+                    assert!(matches!(
+                        (title.as_str(), body.as_str()),
+                        (
+                            "Stop leaves the tab spinning",
+                            "After Stop the tab keeps its spinner."
+                        ) | (
+                            "The sidebar lost my sessions",
+                            "The sidebar shows no sessions."
+                        )
+                    ));
                     assert!(step.request_id.is_some(), "under the user's request");
                     Some(id.clone())
                 }
@@ -1035,14 +1050,14 @@ async fn the_thread_offers_feedback_once_per_incident() {
     let shown = offers(&board);
     assert_eq!(shown.len(), 1);
 
-    // Unanswered: no new offer.
+    // Unanswered: that report isn't offered again.
     flow.say("Still broken.").await;
     let board = flow.settled().await;
     let second = taken(&replies);
     assert!(
         second
             .iter()
-            .all(|reply| reply.0 && reply.1.contains("hasn't answered")),
+            .all(|reply| reply.0 && reply.1.contains("unanswered")),
         "{second:?}"
     );
     assert_eq!(offers(&board).len(), 1);
@@ -1103,7 +1118,7 @@ async fn the_thread_offers_feedback_once_per_incident() {
         .collect();
     assert_eq!(answers, vec![(true, vec![filed(482), filed(483)])]);
 
-    // Dismissed: none again in this session.
+    // Dismissed: that report never again in this session.
     flow.manager
         .answer_feedback_offer(&flow.conversation, &shown[1], false, Vec::new())
         .await
@@ -1125,6 +1140,13 @@ async fn the_thread_offers_feedback_once_per_incident() {
     let fifth = taken(&replies);
     assert!(fifth.iter().all(|reply| !reply.0), "{fifth:?}");
     assert_eq!(offers(&board).len(), 3);
+
+    // A new incident gets its own card, beside the asked-for one still unanswered (D131).
+    flow.say("Now the sidebar is empty.").await;
+    let board = flow.settled().await;
+    let sixth = taken(&replies);
+    assert!(sixth.len() == 1 && !sixth[0].0, "{sixth:?}");
+    assert_eq!(offers(&board).len(), 4);
     flow.stop().await;
 }
 
@@ -1132,8 +1154,8 @@ async fn the_thread_offers_feedback_once_per_incident() {
 type Offered = Arc<Mutex<Vec<(String, bool, String)>>>;
 
 /// Asked to report several things at once, the thread offers a card for each (#483): up to ten
-/// in a request, each title once, each answered on its own. Any card of that request still
-/// unanswered, or dismissed, holds back the next unasked offer.
+/// in a request, each title once, each answered on its own. A card unanswered or dismissed holds
+/// back only its own report: a different one is offered (D131), unasked in one request too.
 #[tokio::test]
 async fn several_feedback_cards_are_offered_when_asked() {
     let replies: Offered = Arc::default();
@@ -1157,6 +1179,17 @@ async fn several_feedback_cards_are_offered_when_asked() {
                             )
                             .await;
                         log.lock().unwrap().push((title, reply.is_error, reply.text));
+                    }
+                } else if turn.is_orchestrator() && turn.input.contains("worker died") {
+                    // Two incidents in one request, unasked: each its own card (D131).
+                    for title in ["Context hangs", "Worker killed"] {
+                        let reply = turn
+                            .call(
+                                "offer_feedback",
+                                json!({"kind": "bug", "title": title, "body": "It broke."}),
+                            )
+                            .await;
+                        log.lock().unwrap().push((title.into(), reply.is_error, reply.text));
                     }
                 } else if turn.is_orchestrator() {
                     let reply = turn
@@ -1235,16 +1268,14 @@ async fn several_feedback_cards_are_offered_when_asked() {
     assert_eq!(answered.len(), 9);
     assert!(!answered.contains(&shown[5]));
 
-    // One card of that request unanswered, though the last one was sent: no unasked offer.
+    // One card of that request unanswered: a different report is still offered (D131).
     flow.say("Ugh, still broken.").await;
-    flow.settled().await;
+    let board = flow.settled().await;
     let second = taken(&replies);
-    assert!(
-        second.len() == 1 && second[0].1 && second[0].2.contains("hasn't answered"),
-        "{second:?}"
-    );
+    assert!(second.len() == 1 && !second[0].1, "{second:?}");
+    assert_eq!(offers(&board).len(), 11);
 
-    // One of them dismissed: none either.
+    // Its own card unanswered: that report isn't offered again, a dismissal elsewhere aside.
     flow.manager
         .answer_feedback_offer(&flow.conversation, &shown[5], false, Vec::new())
         .await
@@ -1253,10 +1284,20 @@ async fn several_feedback_cards_are_offered_when_asked() {
     let board = flow.settled().await;
     let third = taken(&replies);
     assert!(
-        third.len() == 1 && third[0].1 && third[0].2.contains("dismissed"),
+        third.len() == 1 && third[0].1 && third[0].2.contains("unanswered"),
         "{third:?}"
     );
-    assert_eq!(offers(&board).len(), 10);
+    assert_eq!(offers(&board).len(), 11);
+
+    // Two different incidents in one request, unasked: both are offered.
+    flow.say("Context was slow and the worker died.").await;
+    let board = flow.settled().await;
+    let fourth = taken(&replies);
+    assert!(
+        fourth.len() == 2 && fourth.iter().all(|reply| !reply.1),
+        "{fourth:?}"
+    );
+    assert_eq!(offers(&board).len(), 13);
     flow.stop().await;
 }
 

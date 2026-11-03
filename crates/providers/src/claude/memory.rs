@@ -54,11 +54,13 @@ impl Watch {
             .flatten()
             .map(|bound| bound.identity().parts());
         removal::recheck(&bound).ok()?;
-        Some(Artifact::ClaudeMemoryDir {
-            path: self.path.display().to_string(),
-            identity: bound.identity().parts(),
-            project_identity,
-        })
+        Some(super::files::artifact(
+            super::files::kinds::MEMORY_DIR,
+            &self.path,
+            std::iter::once(bound.identity().parts())
+                .chain(project_identity)
+                .collect(),
+        ))
     }
 
     pub(super) async fn record(&self, ledger: &dyn Ledger) {
@@ -133,15 +135,23 @@ mod tests {
             Watch::start(&self.0, Path::new("/repo")).unwrap()
         }
         fn remove(&self, artifact: Artifact) {
-            let Artifact::ClaudeMemoryDir {
+            let Artifact::CliFile {
+                kind,
                 path,
-                identity,
-                project_identity,
+                identities,
+                ..
             } = artifact
             else {
                 panic!("not a memory directory")
             };
-            remove(&self.0, Path::new(&path), identity, project_identity).unwrap();
+            assert_eq!(kind, files::kinds::MEMORY_DIR);
+            remove(
+                &self.0,
+                Path::new(&path),
+                identities[0],
+                identities.get(1).copied(),
+            )
+            .unwrap();
         }
     }
     impl Drop for Fixture {

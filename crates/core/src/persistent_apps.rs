@@ -301,6 +301,8 @@ mod tests {
             let live = LiveTurn {
                 commands: vec![("call".into(), command.into())],
                 background: vec![BackgroundTask {
+                    command: None,
+                    provider: None,
                     id: "job".into(),
                     item_id: Some("call".into()),
                     kind: BackgroundTaskKind::Shell,

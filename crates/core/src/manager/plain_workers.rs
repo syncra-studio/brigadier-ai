@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use brigadier_cli::models::Guidance;
 use brigadier_cli::protocol::{
-    self as cli, Answer, Capability, CliReply, CloseOutput, ErrorCode, EventKind, SendOutput,
-    StartOutput, StartRequest, WaitEvent, WaitOutput,
+    self as cli, Answer, Capability, CliReply, CloseOutput, ErrorCode, EventKind, ManageOutput,
+    SendOutput, StartOutput, StartRequest, WaitEvent, WaitOutput,
 };
 use brigadier_git::WorktreeSpec;
 use brigadier_providers::{ApprovalDecision, ProviderKind, TurnStatus};
@@ -51,7 +51,15 @@ use crate::work::{
 use crate::{Error, Result, now_ms};
 
 /// How long a message sent to a worker still starting waits for its CLI.
-const CLI_START: Duration = Duration::from_secs(60);
+#[cfg(not(test))]
+fn cli_start() -> Duration {
+    Duration::from_secs(60)
+}
+/// A test holding a worker's start on a busy machine can pass the minute.
+#[cfg(test)]
+fn cli_start() -> Duration {
+    crate::test_patience()
+}
 /// What a worker's turn a restart cut off is told as it goes on by itself (D9 a).
 const RESUMED_AFTER_RESTART: &str = "[Brigadier restarted while you were working on this, and \
 your turn goes on now. Your last steps may have finished after your record of them: check git \
@@ -105,11 +113,93 @@ fn title_of(given: Option<&str>, prompt: &str) -> String {
     if let Some(given) = given.map(str::trim).filter(|title| !title.is_empty()) {
         return given.to_owned();
     }
-    [prompt]
-        .into_iter()
-        .map(short_title)
-        .find(|title| !title.is_empty())
-        .unwrap_or_else(|| "Worker".to_owned())
+    // The task itself: a brief's first part that names one. Target says the outcome; Change
+    // quotes the user ("user requested one Brigadier worker…", seen live); a part saying "none"
+    // ("Target: none (no repo files)") names nothing, so the next one does.
+    let part = (prompt.lines().map(brief_part))
+        .map(|(label, text)| (label, past_place(text)))
+        .find(|(label, text)| {
+            !text.trim().is_empty()
+                && !(!label.is_empty()
+                    && (text.split(|c: char| !c.is_alphanumeric()).next())
+                        .is_some_and(|word| word.eq_ignore_ascii_case("none")))
+        });
+    let title = short_title(part.unwrap_or_else(|| brief_part(prompt)).1);
+    if title.is_empty() {
+        "Worker".to_owned()
+    } else {
+        title
+    }
+}
+
+/// Words that only say where a worker works ("repo root", "the repository root of this
+/// checkout"), never what it does.
+const PLACE_WORDS: &[&str] = &[
+    "repo",
+    "repository",
+    "root",
+    "checkout",
+    "worktree",
+    "folder",
+    "directory",
+    "codebase",
+    "project",
+    "workspace",
+    "current",
+    "top",
+    "level",
+    "top-level",
+    "whole",
+    "entire",
+    "local",
+    "main",
+    "the",
+    "this",
+    "its",
+    "of",
+    "in",
+    "at",
+];
+
+/// `text` past a lead that only names a place (`brief help`'s Target starts with the repo area):
+/// "repo root — create g3c.txt" is "create g3c.txt", and a text that is only a place is empty,
+/// so the brief's next part names the job (O57 item 2: workers titled "repo root").
+fn past_place(text: &str) -> &str {
+    let place = |lead: &str| {
+        let mut words = lead
+            .split(|c: char| !c.is_alphanumeric() && c != '-')
+            .filter(|word| !word.is_empty())
+            .peekable();
+        words.peek().is_some()
+            && words.all(|word| PLACE_WORDS.contains(&word.to_lowercase().as_str()))
+    };
+    let lead = [" — ", " – ", " - ", ", ", "; ", ": ", ". "]
+        .iter()
+        .filter_map(|stop| text.find(stop).map(|at| (at, stop.len())))
+        .min();
+    match lead {
+        Some((at, len)) if place(&text[..at]) => text[at + len..].trim_start(),
+        None if place(text.trim_end_matches(['.', ';'])) => "",
+        _ => text,
+    }
+}
+
+/// A brief part's short label and its first words past its list number and that label:
+/// "1. Target: Fix the login" is ("Target", "Fix the login") (`brigadier help briefs` numbers
+/// its parts); the label is empty when it has none.
+fn brief_part(prompt: &str) -> (&str, &str) {
+    let line = prompt.trim_start();
+    let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let line = match line[digits..].strip_prefix(['.', ')']) {
+        Some(rest) if digits > 0 && rest.starts_with(char::is_whitespace) => rest.trim_start(),
+        _ => line,
+    };
+    match line.find(": ") {
+        Some(at) if line[..at].split_whitespace().count() <= 2 && !line[..at].contains('\n') => {
+            (&line[..at], line[at + 2..].trim_start())
+        }
+        _ => ("", line),
+    }
 }
 
 fn refused(message: impl Into<String>) -> CliReply {
@@ -149,20 +239,6 @@ impl ReviewAuthors {
     }
 }
 
-fn provider_of(agent: cli::Agent) -> ProviderKind {
-    match agent {
-        cli::Agent::Claude => ProviderKind::Claude,
-        cli::Agent::Codex => ProviderKind::Codex,
-    }
-}
-
-fn agent_of(provider: ProviderKind) -> cli::Agent {
-    match provider {
-        ProviderKind::Claude => cli::Agent::Claude,
-        ProviderKind::Codex => cli::Agent::Codex,
-    }
-}
-
 impl SessionManager {
     /// `brigadier start`: a new plain worker of the calling session.
     pub(super) async fn cli_start(
@@ -172,6 +248,14 @@ impl SessionManager {
     ) -> Result<CliReply> {
         if caller.task_id.is_some() {
             return Ok(refused("refused: a worker can't start workers of its own"));
+        }
+        if let Some(agent) = start.agent
+            && brigadier_providers::adapters::adapter(agent).is_none()
+        {
+            return Ok(CliReply::error(
+                ErrorCode::Usage,
+                super::cli::unknown_agent(agent),
+            ));
         }
         let conversation = self.core.conversation(&caller.conversation_id)?;
         // A session's workers work in its repository; a Chat's in the one `--repo` names, or
@@ -250,7 +334,7 @@ impl SessionManager {
                 let mut order: Vec<&Guidance> = rows.iter().collect();
                 if let Some(authors) = &review {
                     order.retain(|row| start.agent.is_none_or(|agent| agent == row.agent));
-                    order.sort_by_key(|row| authors.providers.contains(&provider_of(row.agent)));
+                    order.sort_by_key(|row| authors.providers.contains(&row.agent));
                 } else if let Some(agent) = start.agent {
                     // D34: `--agent` takes that agent's own row of the order first, its model
                     // and effort, before another agent's.
@@ -260,7 +344,7 @@ impl SessionManager {
                 let first = order.first().map(|row| (*row).clone());
                 let mut fit = None;
                 for row in order {
-                    let provider = provider_of(row.agent);
+                    let provider = row.agent;
                     // A row whose CLI has no signed-in account can't run: the next row takes it.
                     if !self.runtime.provider_signed_in(provider) {
                         continue;
@@ -278,16 +362,16 @@ impl SessionManager {
                     {
                         continue;
                     }
-                    let free = review.is_none()
-                        || self
-                            .choice_available(&ModelChoice {
-                                provider,
-                                model,
-                                effort: row.effort.clone(),
-                                fast: None,
-                                account: None,
-                            })
-                            .await;
+                    // D170: every start skips a row whose account is out of quota itself.
+                    let free = self
+                        .choice_available(&ModelChoice {
+                            provider,
+                            model,
+                            effort: row.effort.clone(),
+                            fast: None,
+                            account: None,
+                        })
+                        .await;
                     if free {
                         fit = Some(row.clone());
                         break;
@@ -299,26 +383,13 @@ impl SessionManager {
                         return Ok(CliReply::error(
                             ErrorCode::NotFound,
                             format!(
-                                "no row for the work \"{work}\"; `brigadier models` lists each \
-                                 kind of work"
+                                "no row for the work \"{work}\"; the kinds of work: {}",
+                                self.work_kinds()?.join(", ")
                             ),
                         ));
                     }
                 }
             }
-        };
-        let quota_policy = crate::work::WorkerQuotaPolicy {
-            work: work.clone(),
-            pin: brigadier_router::Pin {
-                provider: start.agent.map(provider_of),
-                model: start.model.clone(),
-                effort: start.effort.clone(),
-                by_user: false,
-            },
-            avoid_providers: review
-                .as_ref()
-                .map(|authors| authors.providers.clone())
-                .unwrap_or_default(),
         };
         let mut picked = Vec::new();
         let agent = start.agent.or_else(|| {
@@ -326,20 +397,33 @@ impl SessionManager {
             picked.push("agent".to_owned());
             Some(row.agent)
         });
-        let provider = match agent {
-            Some(cli::Agent::Claude) => ProviderKind::Claude,
-            Some(cli::Agent::Codex) => ProviderKind::Codex,
-            None => own.provider,
-        };
+        let provider = agent.unwrap_or(own.provider);
         let chat = matches!(conversation.setup, Some(Setup::Chat { .. }));
+        let pinned_model = start.model.is_some();
         let model = match (start.model, &row) {
-            (Some(model), _) => Some(model),
+            // A family word (`astra`) runs as the model it names, as a row's does.
+            (Some(model), _) => Some(self.listed_model(provider, &model)),
             // A row's model is its agent's: another agent keeps its own default.
             (None, Some(row)) if agent == Some(row.agent) => {
                 picked.push("model".to_owned());
                 (row.model != "default").then(|| self.listed_model(provider, &row.model))
             }
             (None, _) => None,
+        };
+        // The pin holds the model the worker runs (`gpt-6-astra` for `--model astra`), so its
+        // quota recovery keeps matching its own model.
+        let quota_policy = crate::work::WorkerQuotaPolicy {
+            work: work.clone(),
+            pin: brigadier_router::Pin {
+                provider: start.agent,
+                model: pinned_model.then(|| model.clone()).flatten(),
+                effort: start.effort.clone(),
+                by_user: false,
+            },
+            avoid_providers: review
+                .as_ref()
+                .map(|authors| authors.providers.clone())
+                .unwrap_or_default(),
         };
         let effort = start.effort.or_else(|| {
             let effort = row.as_ref()?.effort.clone()?;
@@ -402,6 +486,9 @@ impl SessionManager {
             fast: None,
             account: None,
         };
+        let off_routing = self
+            .off_routing(work.as_deref(), review.as_ref(), &choice)
+            .await?;
         let plain = PlainWorker {
             quota_policy: Some(quota_policy),
             permission,
@@ -413,6 +500,9 @@ impl SessionManager {
             computer_use: start.with.contains(&Capability::ComputerUse),
             closed: false,
             auto_resumed: false,
+            paused: false,
+            held: Vec::new(),
+            resume_input: None,
         };
         let mockup = start.mockup.then_some(MockupPart::Builds);
         let task = crate::heap(|| {
@@ -429,10 +519,17 @@ impl SessionManager {
         if unnamed {
             self.title_unnamed_worker(&task);
         }
+        let row = row.map(|row| cli::StartRow {
+            work: row.work,
+            source: row.source,
+            picked,
+        });
         self.orchestrator_step(
             &caller.conversation_id,
             crate::work::OrchestratorStepKind::Created {
                 task_id: task.id.clone(),
+                off_routing: off_routing.clone(),
+                row: row.as_ref().map(brigadier_cli::render::start_row),
             },
         )
         .await;
@@ -440,16 +537,87 @@ impl SessionManager {
             worker: worker_row(&task, &Default::default()),
             permission: permission_word(permission),
             base,
-            row: row.map(|row| cli::StartRow {
-                work: row.work,
-                source: row.source,
-                picked,
-            }),
+            row,
             review: review.map(|authors| cli::StartReview {
                 other_provider: !authors.providers.contains(&provider),
                 of: authors.ids,
-                authors: authors.providers.into_iter().map(agent_of).collect(),
+                authors: authors.providers,
             }),
+            off_routing,
+        }))
+    }
+
+    /// D8, D77: whether `choice` is what the user's routing picks now for `work`: the first
+    /// row of its order the rules allow, or a later one while each allowed row before it is
+    /// out of quota (a review's order puts the authors' providers last). `None` when it is;
+    /// else the line that says what the routing names. It never refuses or changes the start.
+    async fn off_routing(
+        &self,
+        work: Option<&str>,
+        review: Option<&ReviewAuthors>,
+        choice: &ModelChoice,
+    ) -> Result<Option<String>> {
+        let Some(work) = work else {
+            return Ok(Some(
+                "Off your routing: no kind of work was named, so no routing row picked it.".into(),
+            ));
+        };
+        let mut rows = self.work_rows(work)?;
+        if let Some(authors) = review {
+            rows.sort_by_key(|row| authors.providers.contains(&row.agent));
+        }
+        let (mut first, mut named) = (None, None);
+        for row in &rows {
+            let model = (row.model != "default").then(|| self.listed_model(row.agent, &row.model));
+            if self
+                .model_refusal(
+                    row.agent,
+                    model.as_deref(),
+                    row.effort.as_deref(),
+                    Some(work),
+                )?
+                .is_some()
+            {
+                continue;
+            }
+            let runs = self.runs_as(row.agent, model.as_deref(), row.effort.as_deref());
+            if row.agent == choice.provider
+                && runs
+                    == self.runs_as(
+                        choice.provider,
+                        choice.model.as_deref(),
+                        choice.effort.as_deref(),
+                    )
+            {
+                return Ok(None);
+            }
+            let words = format!(
+                "{} {}{}",
+                brigadier_providers::KindFacts::label(row.agent),
+                model.as_deref().unwrap_or("its default model"),
+                row.effort
+                    .as_deref()
+                    .map(|effort| format!(" · {effort}"))
+                    .unwrap_or_default()
+            );
+            first.get_or_insert_with(|| words.clone());
+            // A `default` row's quota is its default model's, whose own windows count too.
+            let row_choice = ModelChoice {
+                provider: row.agent,
+                model: runs.0,
+                effort: row.effort.clone(),
+                fast: None,
+                account: None,
+            };
+            if self.choice_available(&row_choice).await {
+                named = Some(words);
+                break;
+            }
+        }
+        let work = rows.first().map_or(work, |row| row.work.as_str());
+        Ok(Some(match named.or(first) {
+            Some(words) => format!("Off your routing: its {work} row names {words}."),
+            None => format!("Off your routing: no row for {work} is allowed now."),
         }))
     }
 
@@ -783,6 +951,15 @@ impl SessionManager {
             _ => None,
         };
         let error = match &cutoff {
+            // Its orchestrator picks the next model itself (D143, D48); never the same again.
+            Some(AttemptEnd::Error {
+                kind: brigadier_providers::ErrorKind::Policy,
+                ..
+            }) => Some(format!(
+                "Its model declined this turn: switch it to the next model in your routing \
+                 (`brigadier switch {} --agent … --model …`), then tell it to go on.",
+                short(&task.id.0)
+            )),
             Some(AttemptEnd::Error { message, .. }) => Some(message.clone()),
             _ => None,
         };
@@ -794,23 +971,47 @@ impl SessionManager {
         // The turn finished, one way or another: a later cut-off may go on by itself again. An
         // interrupted one (a quit closing its CLI) is still the turn that was cut off (D9 a).
         let finished = status != TurnStatus::Interrupted;
+        // Its word owes its session's CLI a turn from before the task reads reported, so its
+        // block never reads over in between (D24, D153).
+        if !super::workers::explicitly_paused(task) {
+            self.owe_cli_turn(&task.conversation_id);
+        }
+        live.reporting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Its session paused it meanwhile (D7): the pause took this turn's end, and its
+        // session hears nothing of it.
         let updated = self
-            .update_task_with_step(&task.conversation_id, &task.id, step, |task| {
-                task.state = state;
-                task.blocked_reason = blocked.clone();
-                if finished && let Some(plain) = &mut task.plain {
-                    plain.auto_resumed = false;
-                }
-                if error.is_some() {
-                    task.error = error.clone();
-                }
-                if let Some(outputs) = outputs {
-                    task.outputs = outputs;
-                }
-            })
+            .update_task_if_with_step(
+                &task.conversation_id,
+                &task.id,
+                |task| !super::workers::explicitly_paused(task),
+                step,
+                |task| {
+                    task.state = state;
+                    task.blocked_reason = blocked.clone();
+                    if finished && let Some(plain) = &mut task.plain {
+                        plain.auto_resumed = false;
+                    }
+                    // A successful later turn recovers the previous turn's error.
+                    if error.is_some() || kind == EventKind::TurnEnded {
+                        task.error = error.clone();
+                    }
+                    if let Some(outputs) = outputs {
+                        task.outputs = outputs;
+                    }
+                },
+            )
             .await;
-        if let Err(err) = updated {
-            tracing::warn!(task = %task.id, error = %err, "could not record a worker's turn end");
+        match updated {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                live.reporting
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not record a worker's turn end");
+            }
         }
         let mut event = event(&task.id, kind);
         match &cutoff {
@@ -826,6 +1027,14 @@ impl SessionManager {
         // What git and its CLI showed as the turn ended, beside its own words (harness P1).
         self.with_facts(task, &mut event).await;
         self.worker_event(&task.conversation_id, &task.id, None, event);
+        live.reporting
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        // The user's next message for it goes now; after a stop or a failure it waits (§5.3).
+        if kind == EventKind::TurnEnded {
+            let (manager, conversation, worker) =
+                (self.arc(), task.conversation_id.clone(), task.id.clone());
+            self.spawn(async move { manager.drain_worker_queue(&conversation, &worker).await });
+        }
     }
 
     /// A plain worker's CLI asks permission: the card under Waiting on you is open, and its
@@ -960,13 +1169,15 @@ impl SessionManager {
     /// start` reaches its CLI once that is up. True when it went into a running turn.
     async fn send_plain(&self, task: &Task, text: String) -> Result<bool> {
         let live = self.task_live(task);
+        let _managed = live.manage.lock().await;
+        let task = &self.task_by_id(&task.conversation_id, &task.id).await?;
         if task.state == TaskState::Starting {
-            let up = tokio::time::Instant::now() + CLI_START;
+            let up = tokio::time::Instant::now() + cli_start();
             while live.cli().await.is_none() && tokio::time::Instant::now() < up {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
-        let queued = live.busy().await;
+        let queued = live.busy().await || super::workers::explicitly_paused(task);
         self.message_worker(&task.conversation_id, task, text)
             .await?;
         Ok(queued)
@@ -1017,11 +1228,14 @@ impl SessionManager {
     }
 
     /// The user's message to one of session `conversation_id`'s workers, from its composer's
-    /// To: (one message, then the worker's thread). It goes as `brigadier send` sends, with
-    /// the user's pastes, attachments and mentions as a turn takes them; the session's thread
-    /// shows "You messaged ‹worker›" and its next turn hears it, without starting one. An
-    /// error means the worker did not take it; once it did, nothing after fails the send.
-    /// True when it went into a running turn.
+    /// To: (one message, then the worker's thread). Sent while the worker works and not
+    /// `steer`ed, it waits in the session's queue for that worker (`queue_index`: its place,
+    /// back from an edit) and goes as the worker's next turn (goal 8); else it goes now, as
+    /// `brigadier send` sends, with the user's pastes, attachments and mentions as a turn takes
+    /// them. The session's thread shows "You messaged ‹worker›" and its next turn hears it,
+    /// without starting one. An error means neither the worker nor the queue took it; once one
+    /// did, nothing after fails the send. True when it waits in the queue.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_to_worker(
         &self,
         conversation_id: ConversationId,
@@ -1029,6 +1243,8 @@ impl SessionManager {
         text: String,
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
+        steer: bool,
+        queue_index: Option<u32>,
     ) -> Result<bool> {
         self.admit()?;
         // Held to the end: the session does not close under a message on its way.
@@ -1052,16 +1268,182 @@ impl SessionManager {
                 )));
             }
         }
-        let live = self.task_live(&task);
+        // Paused by its session (D7), even a steer waits in the queue for its resume.
+        if super::workers::explicitly_paused(&task)
+            || (!steer && self.task_live(&task).busy().await)
+        {
+            self.core
+                .enqueue_as(
+                    &conversation_id,
+                    text,
+                    attachments,
+                    mentions,
+                    queue_index,
+                    false,
+                    Some(task.id.clone()),
+                )
+                .await?;
+            // Its turn may have ended meanwhile.
+            self.drain_worker_queue(&conversation_id, &task.id).await;
+            return Ok(true);
+        }
+        self.deliver_direct(&conversation_id, &task, &text, &attachments, &mentions)
+            .await?;
+        Ok(false)
+    }
+
+    /// The next message the user queued for worker `task_id` goes to it once it isn't working:
+    /// kept in the queue until the worker took it, and left there, waiting, when it can't (an
+    /// ended or closed worker, a failed send).
+    /// Boxed: a worker's turn end drains it, and delivering may start the worker again.
+    pub(crate) fn drain_worker_queue<'a>(
+        &'a self,
+        conversation_id: &'a ConversationId,
+        task_id: &'a TaskId,
+    ) -> brigadier_providers::BoxFuture<'a, ()> {
+        Box::pin(self.drain_worker_queue_now(conversation_id, task_id))
+    }
+
+    async fn drain_worker_queue_now(&self, conversation_id: &ConversationId, task_id: &TaskId) {
+        let Ok(task) = self.direct_recipient(conversation_id, task_id).await else {
+            return;
+        };
+        // A paused worker holds new messages (D7) until it is resumed.
+        if task.state == TaskState::Paused || self.task_live(&task).busy().await {
+            return;
+        }
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        let Some(head) = board
+            .queue
+            .items
+            .into_iter()
+            .find(|item| item.worker.as_ref() == Some(task_id))
+        else {
+            return;
+        };
+        let Some((conv, item)) = self.claim_worker_row(conversation_id, &head.id).await else {
+            return;
+        };
+        let delivered = match self
+            .deliver_direct(
+                conversation_id,
+                &task,
+                &item.text,
+                &item.attachments,
+                &item.mentions,
+            )
+            .await
+        {
+            Ok(()) => {
+                #[cfg(test)]
+                {
+                    let pause = conv.worker_delivery_pause.lock().unwrap().clone();
+                    if let Some((reached, release)) = pause {
+                        reached.notify_one();
+                        release.notified().await;
+                    }
+                }
+                if let Err(err) = self.core.take_queued(conversation_id, &item.id).await {
+                    tracing::warn!(task = %task.id, error = %err, "could not take a message its worker took out of the queue");
+                }
+                true
+            }
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "a queued message could not go to its worker; it waits");
+                false
+            }
+        };
+        conv.unclaim(&item.id).await;
+        // A turn end while this row was claimed found it taken and drained nothing: look again.
+        if delivered {
+            self.drain_worker_queue(conversation_id, task_id).await;
+        }
+    }
+
+    /// The user's Steer on their queued message for a worker: it goes to that worker now, into
+    /// its running turn or as a turn of its own, and leaves the queue once it did.
+    pub(crate) async fn steer_queued_to_worker(
+        &self,
+        conversation_id: &ConversationId,
+        item: crate::work::QueuedMessage,
+    ) -> Result<()> {
+        let _working = self.enter(conversation_id)?;
+        let Some(worker) = &item.worker else {
+            return Err(Error::Invalid("that message is not for a worker".into()));
+        };
+        let task = self.direct_recipient(conversation_id, worker).await?;
+        // Already on its way (a drain) or gone: it reaches the worker once.
+        let Some((conv, item)) = self.claim_worker_row(conversation_id, &item.id).await else {
+            return Ok(());
+        };
+        let sent = match self
+            .deliver_direct(
+                conversation_id,
+                &task,
+                &item.text,
+                &item.attachments,
+                &item.mentions,
+            )
+            .await
+        {
+            Ok(()) => self
+                .core
+                .take_queued(conversation_id, &item.id)
+                .await
+                .map(|_| ()),
+            Err(err) => Err(err),
+        };
+        conv.unclaim(&item.id).await;
+        // As in a drain: a turn end while this row was claimed drained nothing.
+        if sent.is_ok() {
+            self.drain_worker_queue(conversation_id, &task.id).await;
+        }
+        sent
+    }
+
+    /// Each worker's next queued message, for those not working (after a restart).
+    pub(crate) async fn drain_worker_queues(&self, conversation_id: &ConversationId) {
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        let mut workers: Vec<TaskId> = Vec::new();
+        for worker in board
+            .queue
+            .items
+            .iter()
+            .filter_map(|item| item.worker.clone())
+        {
+            if !workers.contains(&worker) {
+                workers.push(worker);
+            }
+        }
+        for worker in workers {
+            self.drain_worker_queue(conversation_id, &worker).await;
+        }
+    }
+
+    /// The user's message gives worker `task` a turn now: steered into its running one, else
+    /// a turn of its own. The session's thread shows "You messaged ‹worker›".
+    pub(crate) async fn deliver_direct(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        text: &str,
+        attachments: &[AttachmentRef],
+        mentions: &[Mention],
+    ) -> Result<()> {
+        let live = self.task_live(task);
         if task.state == TaskState::Starting {
-            let up = tokio::time::Instant::now() + CLI_START;
+            let up = tokio::time::Instant::now() + cli_start();
             while live.cli().await.is_none() && tokio::time::Instant::now() < up {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
         // Under its settle lock, looked at again: a stop meanwhile wins, never a revival.
         let settled = live.settle.lock().await;
-        let task = self.direct_recipient(&conversation_id, &task_id).await?;
+        let task = self.direct_recipient(conversation_id, &task.id).await?;
         if self.is_stopping(&task.id) {
             return Err(Error::Invalid(format!(
                 "worker {} is stopping",
@@ -1079,16 +1461,15 @@ impl SessionManager {
             }
         };
         let input = self
-            .direct_input(&conversation_id, scratch, &text, &attachments, &mentions)
+            .direct_input(conversation_id, scratch, text, attachments, mentions)
             .await?;
-        let queued = live.busy().await;
-        self.deliver_to_worker(&conversation_id, &task, input)
+        self.deliver_to_worker(conversation_id, &task, input)
             .await?;
         drop(settled);
         // It reached the worker: the record and the note only log their failures.
         let shown = super::brains::cut(text.trim(), crate::work::STEP_TEXT_MAX);
         self.orchestrator_step(
-            &conversation_id,
+            conversation_id,
             crate::work::OrchestratorStepKind::Messaged {
                 task_id: task.id.clone(),
                 text: Some(shown.clone()),
@@ -1096,9 +1477,9 @@ impl SessionManager {
             },
         )
         .await;
-        self.note_next_turn(&conversation_id, user_messaged_note(&task, &shown))
+        self.note_next_turn(conversation_id, user_messaged_note(&task, &shown))
             .await;
-        Ok(queued)
+        Ok(())
     }
 
     /// Session `conversation_id`'s own plain worker `task_id`, while it can take a message
@@ -1202,7 +1583,7 @@ impl SessionManager {
             let decision = match answer {
                 Answer::Allow => ApprovalDecision::Allow,
                 Answer::Deny => ApprovalDecision::Deny {
-                    message: String::new(),
+                    message: text.unwrap_or_default(),
                 },
             };
             self.answer_card(task.conversation_id.clone(), card.id.clone(), decision)
@@ -1324,6 +1705,21 @@ impl SessionManager {
             let added = self.worker_events.added.notified();
             tokio::pin!(added);
             added.as_mut().enable();
+            // Read before the events: one seen idle and no longer reporting has its event in.
+            let board = self.core.board(parent).await?;
+            // One that reported, or waits to land, is idle: it sends nothing until messaged.
+            // A worker its session paused sends nothing until resumed; a quota wait goes on.
+            let can_send = board.tasks.values().any(|task| {
+                task.plain
+                    .as_ref()
+                    .is_some_and(|plain| !plain.closed && !plain.paused)
+                    && !task.state.is_final()
+                    && (!matches!(task.state, TaskState::Reported | TaskState::ReadyToLand)
+                        || self.tasks_lock().get(&task.id).is_some_and(|live| {
+                            live.reporting.load(std::sync::atomic::Ordering::SeqCst)
+                        }))
+                    && (tasks.is_empty() || tasks.contains(&task.id))
+            });
             // Held and answered with no await in between: a wait cut off takes nothing.
             let events = self.hold_for_wait(parent, &tasks, &holder).await?;
             if !events.is_empty() {
@@ -1331,16 +1727,23 @@ impl SessionManager {
                     CliReply::ok(&WaitOutput {
                         events,
                         timed_out: false,
+                        message: false,
                     }),
                     Some(self.held_events(parent, holder)),
                 ));
             }
-            let board = self.core.board(parent).await?;
-            let can_send = board.tasks.values().any(|task| {
-                task.plain.as_ref().is_some_and(|plain| !plain.closed)
-                    && !task.state.is_final()
-                    && (tasks.is_empty() || tasks.contains(&task.id))
-            });
+            // A message sent to the session meanwhile waits behind this wait's command on a CLI
+            // that reads it only once the command ends: end it, so it is read now (goal 3).
+            if self.message_held(parent).await {
+                return Ok((
+                    CliReply::ok(&WaitOutput {
+                        events: Vec::new(),
+                        timed_out: false,
+                        message: true,
+                    }),
+                    None,
+                ));
+            }
             if !can_send {
                 break false;
             }
@@ -1359,9 +1762,186 @@ impl SessionManager {
             CliReply::ok(&WaitOutput {
                 events: Vec::new(),
                 timed_out: ended,
+                message: false,
             }),
             None,
         ))
+    }
+
+    /// `brigadier pause` (D7).
+    pub(super) async fn cli_pause(
+        &self,
+        caller: &CliCaller,
+        id: &str,
+        note: Option<String>,
+    ) -> Result<CliReply> {
+        let task = match self.own_worker(caller, id).await {
+            Ok(task) => task,
+            Err(reply) => return Ok(reply),
+        };
+        let done = self.pause_task(task.id.clone()).await?;
+        // Held as a message to the paused worker is, and goes with its resume: one call (D150).
+        if let Some(note) = note {
+            self.send_plain(&task, note).await?;
+        }
+        Ok(CliReply::ok(&ManageOutput {
+            id: short(&task.id.0),
+            done,
+            to: None,
+            off_routing: None,
+            worker: self.worker_now(&task).await,
+        }))
+    }
+
+    /// `brigadier resume` (D7).
+    pub(super) async fn cli_resume(
+        &self,
+        caller: &CliCaller,
+        id: &str,
+        note: Option<String>,
+    ) -> Result<CliReply> {
+        let task = match self.own_worker(caller, id).await {
+            Ok(task) => task,
+            Err(reply) => return Ok(reply),
+        };
+        // Held as a message to the paused worker is, and goes with the resume: no row of its own.
+        if let Some(note) = note
+            && super::workers::explicitly_paused(&task)
+        {
+            self.send_plain(&task, note).await?;
+        }
+        self.resume_task(task.id.clone()).await?;
+        Ok(CliReply::ok(&ManageOutput {
+            id: short(&task.id.0),
+            done: true,
+            to: None,
+            off_routing: None,
+            worker: self.worker_now(&task).await,
+        }))
+    }
+
+    /// `brigadier switch`: a flag not given keeps what it runs now on its own agent, and is
+    /// that agent's default on another. A place off its routing moves all the same, with the
+    /// one line a start off it gets (D8, D77).
+    pub(super) async fn cli_switch(
+        &self,
+        caller: &CliCaller,
+        id: &str,
+        agent: Option<ProviderKind>,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<CliReply> {
+        let task = match self.own_worker(caller, id).await {
+            Ok(task) => task,
+            Err(reply) => return Ok(reply),
+        };
+        if let Some(agent) = agent
+            && brigadier_providers::adapters::adapter(agent).is_none()
+        {
+            return Ok(CliReply::error(
+                ErrorCode::Usage,
+                super::cli::unknown_agent(agent),
+            ));
+        }
+        let now = &task.route.choice;
+        let named = (agent.is_some() || model.is_some() || effort.is_some()).then(|| {
+            let provider = agent.unwrap_or(now.provider);
+            let same = provider == now.provider;
+            ModelChoice {
+                provider,
+                model: match model {
+                    Some(model) => Some(self.listed_model(provider, &model)),
+                    None if same => now.model.clone(),
+                    None => None,
+                },
+                effort: effort.or_else(|| same.then(|| now.effort.clone()).flatten()),
+                fast: None,
+                account: None,
+            }
+        });
+        let work = task
+            .plain
+            .as_ref()
+            .and_then(|plain| plain.quota_policy.as_ref())
+            .and_then(|policy| policy.work.clone());
+        if let Some(choice) = &named {
+            if let Some(rule) = self.model_refusal(
+                choice.provider,
+                choice.model.as_deref(),
+                choice.effort.as_deref(),
+                work.as_deref(),
+            )? {
+                return Ok(refused(rule));
+            }
+            // D18: the servers it was granted, on its new CLI too.
+            if choice.provider != now.provider
+                && let (Some(plain), Some(workspace)) = (&task.plain, &task.workspace)
+            {
+                let cwd = workspace.worktree.as_deref().unwrap_or(&workspace.scratch);
+                if let Err(message) = self
+                    .worker_grants_named(
+                        &task.conversation_id,
+                        choice.provider,
+                        std::path::Path::new(cwd),
+                        &plain.mcps,
+                    )
+                    .await
+                {
+                    return Ok(CliReply::error(ErrorCode::NotFound, message));
+                }
+            }
+        }
+        let (to, account) = self.switch_worker(&task, named.clone()).await?;
+        let off_routing = match named {
+            Some(_) => {
+                let mut choice = to.clone();
+                choice.account = None;
+                self.off_routing(work.as_deref(), None, &choice).await?
+            }
+            None => None,
+        };
+        if let Some(line) = &off_routing {
+            self.orchestrator_step(
+                &caller.conversation_id,
+                crate::work::OrchestratorStepKind::Created {
+                    task_id: task.id.clone(),
+                    off_routing: Some(line.clone()),
+                    row: None,
+                },
+            )
+            .await;
+        }
+        let words = format!(
+            "{} {}{} on {}",
+            brigadier_providers::KindFacts::label(to.provider),
+            to.model.as_deref().unwrap_or("its default model"),
+            to.effort
+                .as_deref()
+                .map(|effort| format!(" · {effort}"))
+                .unwrap_or_default(),
+            self.runtime.account_label(&account),
+        );
+        Ok(CliReply::ok(&ManageOutput {
+            id: short(&task.id.0),
+            done: true,
+            to: Some(words),
+            off_routing,
+            worker: self.worker_now(&task).await,
+        }))
+    }
+
+    /// Whether `task`'s work is all in its session's branch, by git read now: its commits
+    /// merged and nothing uncommitted left in its worktree.
+    async fn worker_landed(&self, task: &Task) -> bool {
+        let rows = self
+            .worker_rows_of(&task.conversation_id, true)
+            .await
+            .unwrap_or_default();
+        rows.iter()
+            .find(|row| row.id == task.id)
+            .is_some_and(|row| {
+                row.merged && row.diff.as_ref().is_none_or(|diff| diff.files.is_empty())
+            })
     }
 
     /// `brigadier close`: stops one of the caller's workers for good. Unfinished changes are
@@ -1372,22 +1952,25 @@ impl SessionManager {
             Err(reply) => return Ok(reply),
         };
         // A worker closed after a turn that ended done is done, not stopped: its row reads so
-        // after a restart too, when no CLI event of its is held any more.
-        let done = self.worker_turn_done(&task.id);
-        let closed = self
-            .stop_worker(
+        // after a restart too, when no CLI event of its is held any more. So is one whose work
+        // already merged with nothing left over, its turn only reporting it (demo12).
+        let done = self.worker_turn_done(&task.id) || self.worker_landed(&task).await;
+        // A finished worker closed files no "Stopped" row: it finished (D104).
+        let closed = if done {
+            self.stop_if(task.id.clone(), |state| !state.is_final(), true)
+                .await?
+        } else {
+            self.stop_worker(
                 &task.conversation_id,
                 &task,
                 "Closed by its session.".to_owned(),
             )
-            .await?;
+            .await?
+        };
         if task.plain.is_some() {
             self.update_task(&task.conversation_id, &task.id, |task| {
                 if let Some(plain) = &mut task.plain {
                     plain.closed = true;
-                }
-                if done && task.state == TaskState::Stopped {
-                    task.state = TaskState::Done;
                 }
             })
             .await?;
@@ -1396,6 +1979,7 @@ impl SessionManager {
         Ok(CliReply::ok(&CloseOutput {
             id: short(&task.id.0),
             closed,
+            worker: self.worker_now(&task).await,
         }))
     }
 }
@@ -1426,5 +2010,85 @@ mod tests {
         );
         assert_eq!(title_of(Some("  "), "Fix it"), "Fix it");
         assert_eq!(title_of(None, "   "), "Worker");
+        // A numbered brief's first part names it, not its number (D104).
+        assert_eq!(
+            title_of(
+                None,
+                "1. Target: TASK.md in this repo, step 1 only (the curl). Outcome: x"
+            ),
+            "TASK.md in this repo, step"
+        );
+        assert_eq!(
+            title_of(None, "Target (proposed): Read TASK.md and report"),
+            "Read TASK.md and report"
+        );
+        // A part saying "none" names no task: the next part does (seen live: "none (no repo files)").
+        assert_eq!(
+            title_of(
+                None,
+                "1. Target: none (no repo files).\n2. Change: Run the curl in TASK.md step 1.\n3. Do not touch: x"
+            ),
+            "Run the curl in TASK.md"
+        );
+        // Real briefs from both CLIs: the title reads as the task, never the user's quoted words.
+        let briefs = [
+            // Codex (screen pass 11-02): its Change quotes the request.
+            (
+                "Target: run a shell command and report its output.\nChange: user requested one Brigadier worker to run echo ALPHA and report it.\nDo not touch: all files; no git operations or modifications.\nFiles: none.",
+                "run a shell command",
+            ),
+            (
+                "Target: count lines in the repository root README.md.\nChange: L1 user rule: \"Start one worker on the claude model opus to count README lines.\"\nFiles: README.md, read only.",
+                "count lines in the repository",
+            ),
+            // Claude.
+            (
+                "Target: search this repository for README.md and report its line count.\nChange: L1 user says \"first, search this repo and tell me how many lines README.md has\"; read only.",
+                "search this repository for README.md",
+            ),
+            (
+                "Target (L1): carry out TASK.md step 1 and report its output first line.\nChange (L1, L2): run curl -s https://example.com; then run date at the end, as the user requested.",
+                "carry out TASK.md step 1",
+            ),
+            (
+                "Target: add a one-line README.md in the current checkout.\nChange: the user requested a worker add a one-line README.md; write one suitable short line.",
+                "add a one-line README.md",
+            ),
+        ];
+        for (brief, title) in briefs {
+            assert_eq!(title_of(None, brief), title, "{brief}");
+        }
+        // A Target that leads with its place names the job after it, or the next part does
+        // (O57 item 2, demo9: workers titled "repo root" and "repo root of this").
+        for (brief, title) in [
+            (
+                "1. Target: repo root — create g3c.txt with timed marks.\n2. Change: x",
+                "create g3c.txt with timed marks",
+            ),
+            (
+                "Target: repo root of this checkout; write marks 1 to 12 into g3b.txt",
+                "write marks 1 to 12",
+            ),
+            (
+                "1. Target: repo root.\n2. Change: Build a small notes tool in Python.",
+                "Build a small notes tool",
+            ),
+            (
+                "Target: project README, add a license line",
+                "project README, add a license",
+            ),
+        ] {
+            assert_eq!(title_of(None, brief), title, "{brief}");
+        }
+        // A plain prompt that starts with "None" is still its own title.
+        assert_eq!(
+            title_of(None, "None of the tests pass\nFix them"),
+            "None of the tests pass"
+        );
+        assert_eq!(title_of(None, "3 bugs to fix in login"), "3 bugs to fix");
+        assert_eq!(
+            title_of(None, "Fix the login page: it fails"),
+            "Fix the login page"
+        );
     }
 }

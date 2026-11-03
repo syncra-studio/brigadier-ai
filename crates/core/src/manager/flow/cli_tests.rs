@@ -3,11 +3,12 @@
 //! calling session's own workers, and a grant that isn't the named session's is refused. Each
 //! answer fits its command's checked-in `--json` schema.
 
+use brigadier_providers::ProviderKind as Agent;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use brigadier_cli::protocol::{
-    Agent, Answer, Capability, CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, Permission,
+    Answer, Capability, CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, Permission,
     SESSION_ENV, StartRequest,
 };
 use brigadier_providers::ProviderKind;
@@ -53,7 +54,9 @@ pub(super) async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         CliRequest::Send { .. } => "send",
         CliRequest::Wait { .. } => "wait",
         CliRequest::Close { .. } => "close",
-        CliRequest::Queue { .. } => "queue",
+        CliRequest::Pause { .. } => "pause",
+        CliRequest::Resume { .. } => "resume",
+        CliRequest::Switch { .. } => "switch",
         CliRequest::ContinueOn { .. } => "continue-on",
         CliRequest::Tool { tool, .. } => tool.command(),
         CliRequest::Ask { .. } => "ask",
@@ -536,6 +539,100 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
     flow.stop().await;
 }
 
+#[tokio::test]
+async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
+    for mode in ["finished", "close", "cleanup"] {
+        let script: Script = Arc::new(|turn| {
+            Box::pin(async move {
+                if !turn.is_orchestrator() {
+                    std::fs::write(turn.cwd.join("marks.txt"), "unfinished marks\n").unwrap();
+                } else if turn.input.contains("Start one.") {
+                    let started =
+                        brigadier(&turn, CliRequest::Start(Box::new(start("Write marks.")))).await;
+                    assert!(started.get("error").is_none(), "{started}");
+                } else if turn.input.contains("Close it.") {
+                    let workers = brigadier(&turn, CliRequest::Workers).await;
+                    let id = workers["workers"][0]["id"].as_str().unwrap().to_owned();
+                    let closed = brigadier(&turn, CliRequest::Close { id }).await;
+                    assert_eq!(closed["closed"], true, "{closed}");
+                }
+                Reply::text("Done.")
+            })
+        });
+        let flow = Flow::start(
+            &format!("20261030-1141-core-goals-w130-keep-{mode}"),
+            Options::default(),
+            script,
+        )
+        .await;
+        flow.say("Start one.").await;
+        flow.until("worker finished", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == crate::work::TaskState::Reported)
+        })
+        .await;
+        flow.settled().await;
+        let task = flow.core.tasks(&flow.conversation).await.unwrap().remove(0);
+        let workspace = task.workspace.as_ref().unwrap();
+        let path = std::path::Path::new(workspace.worktree.as_ref().unwrap());
+        let branch = workspace.branch.as_ref().unwrap();
+        assert!(path.join("marks.txt").exists());
+        match mode {
+            "finished" => {
+                flow.manager
+                    .dispose_task(&task, crate::work::TaskState::Done)
+                    .await
+            }
+            "close" => {
+                flow.say("Close it.").await;
+                flow.until("worker closed", |board| {
+                    board
+                        .tasks
+                        .get(&task.id)
+                        .is_some_and(|task| task.state.is_final())
+                })
+                .await;
+                flow.idle().await;
+            }
+            _ => {
+                let leftovers = flow
+                    .manager
+                    .runtime
+                    .ledger()
+                    .dispose(&format!("task:{}", task.id))
+                    .await;
+                assert!(leftovers.is_clean(), "{leftovers:?}");
+            }
+        }
+        assert!(!path.exists(), "{mode}: the worker's worktree was removed");
+        assert_eq!(
+            super::git(&flow.repo, &["show", &format!("{branch}:marks.txt")]),
+            "unfinished marks",
+            "{mode}"
+        );
+        assert_eq!(
+            super::git(&flow.repo, &["log", "-1", "--format=%s", branch]),
+            "Unfinished changes kept when the worker closed",
+            "{mode}"
+        );
+        assert_eq!(
+            super::git(
+                &flow.repo,
+                &[
+                    "rev-list",
+                    "--count",
+                    branch,
+                    &format!("^{}", workspace.base.as_ref().unwrap())
+                ]
+            ),
+            "1"
+        );
+        flow.stop().await;
+    }
+}
+
 /// `brigadier start`'s request for `prompt`, with nothing else given.
 pub(super) fn start(prompt: &str) -> StartRequest {
     StartRequest {
@@ -736,7 +833,7 @@ fn starting(answers: Answers) -> Script {
                 "send me",
                 brigadier(&turn, send(&me, Some("Hello."), None)).await,
             );
-            // b still lives, between turns: nothing more comes from it in a second.
+            // b still lives, idle between turns: nothing can come from it, so it ends at once.
             keep("wait idle", brigadier(&turn, wait(&[], Some(1))).await);
             // A server no setup has isn't granted (D18).
             keep(
@@ -1051,7 +1148,8 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     }
     assert_eq!(answers["worker starts"]["error"]["code"], "refused");
     assert_eq!(answers["worker workers"]["workers"], json!([]));
-    assert_eq!(answers["wait idle"]["timedOut"], true);
+    // Its workers idle (reported), nothing can come: it ends at once, not at its timeout.
+    assert_eq!(answers["wait idle"]["timedOut"], false);
     assert_eq!(answers["wait idle"]["events"], json!([]));
 
     // What `wait` took was not sent again; the one event no wait took (Docs's worker said hi)
@@ -1064,9 +1162,9 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         "{net}"
     );
 
-    // The thread shows "Messaged ‹worker›" for the message that reached one, and "Stopped
-    // ‹worker›" for the close; an answer to a permission prompt, and a refused send or close,
-    // file nothing.
+    // The thread shows "Messaged ‹worker›" for the message that reached one; the close of a
+    // worker that finished files no "Stopped ‹worker›" (D104), and an answer to a permission
+    // prompt, and a refused send or close, file nothing.
     use crate::work::OrchestratorStepKind;
     let steps: Vec<OrchestratorStepKind> = flow
         .events()
@@ -1083,18 +1181,22 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         .collect();
     assert_eq!(
         steps,
-        vec![
-            OrchestratorStepKind::Messaged {
-                task_id: a.id.clone(),
-                text: Some("And stop.".into()),
-                by_user: false,
-            },
-            OrchestratorStepKind::Stopped {
-                task_id: a.id.clone(),
-                reason: "Closed by its session.".into(),
-            },
-        ]
+        vec![OrchestratorStepKind::Messaged {
+            task_id: a.id.clone(),
+            text: Some("And stop.".into()),
+            by_user: false,
+        },]
     );
+    // Nor a "‹worker› stopped" row of its own: it ends done (D104).
+    let stopped: Vec<_> = flow
+        .board()
+        .await
+        .worker_steps
+        .into_iter()
+        .filter(|step| step.task_id == a.id && step.kind == crate::work::WorkerStepKind::Stopped)
+        .collect();
+    assert_eq!(stopped, vec![], "{:?}", a.state);
+    assert_eq!(a.state, crate::work::TaskState::Done);
     flow.stop().await;
 }
 
@@ -1298,6 +1400,8 @@ async fn the_user_messages_a_worker_directly() {
             vec![crate::model::Mention::Task {
                 id: task.id.clone(),
             }],
+            false,
+            None,
         )
         .await
         .unwrap();
@@ -1331,10 +1435,12 @@ async fn the_user_messages_a_worker_directly() {
             "Also round the corners.".into(),
             Vec::new(),
             Vec::new(),
+            true,
+            None,
         )
         .await
         .unwrap();
-    assert!(queued);
+    assert!(!queued, "steered in: nothing waits in the queue");
     super::eventually("the running turn to take it", || {
         list("steered")
             .first()
@@ -1384,8 +1490,15 @@ async fn the_user_messages_a_worker_directly() {
     let heard = list("worker").len();
     let other = flow.add_session("Other", None, ProviderKind::Claude).await;
     let send = |to: crate::model::ConversationId, text: &str, files| {
-        flow.manager
-            .send_to_worker(to, task.id.clone(), text.into(), files, Vec::new())
+        flow.manager.send_to_worker(
+            to,
+            task.id.clone(),
+            text.into(),
+            files,
+            Vec::new(),
+            true,
+            None,
+        )
     };
     let err = send(other, "Hi.", Vec::new()).await.unwrap_err();
     assert!(err.to_string().contains("isn't this session's"), "{err}");
@@ -2310,7 +2423,7 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
                     (
                         "agent flag",
                         StartRequest {
-                            agent: Some(brigadier_cli::protocol::Agent::Claude),
+                            agent: Some(Agent::Claude),
                             ..by("Review")
                         },
                     ),
@@ -2326,14 +2439,14 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
                     (
                         "agent's row",
                         StartRequest {
-                            agent: Some(brigadier_cli::protocol::Agent::Codex),
+                            agent: Some(Agent::Codex),
                             ..by("Docs")
                         },
                     ),
                     (
                         "work rule",
                         StartRequest {
-                            agent: Some(brigadier_cli::protocol::Agent::Claude),
+                            agent: Some(Agent::Claude),
                             model: Some("claude-sonnet-5-5".into()),
                             ..by("Docs")
                         },
@@ -2551,6 +2664,307 @@ async fn computer_use_workers_take_the_computer_use_row() {
         (json!("codex"), Value::Null, json!("high")),
         "shipped",
     );
+    flow.stop().await;
+}
+
+/// Goal 12 (D8, D77): a worker the routing doesn't pick now for its work still starts, and
+/// its start says what the routing names, to the session and in the thread; one it picks says
+/// nothing. A family word reads as the model it names; a review's work counts when only
+/// `--reviewing` names it; a lower row counts only while each row above it is out of quota; a
+/// Settings change is the next start's routing, and Automatic again is the shipped row.
+#[tokio::test]
+async fn a_start_off_the_routing_runs_and_says_so() {
+    const WORK: &str = "Mechanical changes and search";
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("Done.");
+            }
+            // A round said while workers still run comes queued: it joins this work.
+            let by = |work: Option<&str>| StartRequest {
+                work: work.map(str::to_owned),
+                local: true,
+                ..start("Reply once.")
+            };
+            let mut starts: Vec<(&str, StartRequest)> = Vec::new();
+            if turn.input.contains("Route A.") {
+                starts.push(("row", by(Some(WORK))));
+                starts.push((
+                    "family word",
+                    StartRequest {
+                        agent: Some(Agent::Codex),
+                        model: Some("astra".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "model id",
+                    StartRequest {
+                        model: Some("gpt-6-astra".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "other model",
+                    StartRequest {
+                        model: Some("gpt-6-luna".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "other effort",
+                    StartRequest {
+                        effort: Some("high".into()),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "lower row",
+                    StartRequest {
+                        agent: Some(Agent::Claude),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "default effort",
+                    StartRequest {
+                        effort: Some("high".into()),
+                        ..by(Some("Bounded implementation"))
+                    },
+                ));
+                starts.push(("no work", by(None)));
+                starts.push((
+                    "review",
+                    StartRequest {
+                        reviewing: vec!["session".into()],
+                        ..by(None)
+                    },
+                ));
+            } else if turn.input.contains("Route B.") {
+                starts.push(("first row out", by(Some(WORK))));
+                starts.push((
+                    "next row",
+                    StartRequest {
+                        agent: Some(Agent::Claude),
+                        ..by(Some(WORK))
+                    },
+                ));
+                starts.push((
+                    "after a default row out",
+                    StartRequest {
+                        agent: Some(Agent::Claude),
+                        ..by(Some("Fallback"))
+                    },
+                ));
+            } else if turn.input.contains("Route C.") || turn.input.contains("Route D.") {
+                let at = if turn.input.contains("Route C.") {
+                    "C"
+                } else {
+                    "D"
+                };
+                let models = brigadier(&turn, CliRequest::Models).await;
+                seen.lock().unwrap().insert(format!("models {at}"), models);
+                starts.push((at, by(Some(WORK))));
+            }
+            for (name, request) in starts {
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock().unwrap().insert(name.into(), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-start-off-routing", Options::default(), script).await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        format!(
+            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Independent review | codex | astra | high | Other. |\n| Independent review | claude | opus | high | Own. |\n| Bounded implementation | codex | astra |  | Its default effort. |\n| Fallback | codex | default | medium | Its default model. |\n| Fallback | claude | sonnet | low | Next. |\n"
+        ),
+    )
+    .unwrap();
+    let reported = |n: usize| {
+        move |b: &crate::board::Board| {
+            b.tasks.len() == n
+                && b.tasks
+                    .values()
+                    .all(|t| t.state == crate::work::TaskState::Reported)
+        }
+    };
+    flow.say("Route A.").await;
+    flow.until("every start reported", reported(9)).await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    let off = |name: &str| seen[name]["offRouting"].clone();
+    let first = json!(format!(
+        "Off your routing: its {WORK} row names Codex gpt-6-astra · medium."
+    ));
+    // A row with no effort runs its model's default one: `--effort high` names the same.
+    for name in ["row", "family word", "model id", "review", "default effort"] {
+        assert!(seen[name]["worker"].is_object(), "{name}: {seen:#?}");
+        assert_eq!(off(name), Value::Null, "{name}: {seen:#?}");
+    }
+    assert_eq!(
+        picked_of(&seen["family word"]),
+        (json!("codex"), json!("gpt-6-astra"), json!("medium"))
+    );
+    assert_eq!(
+        picked_of(&seen["review"]),
+        (json!("codex"), json!("gpt-6-astra"), json!("high"))
+    );
+    // The quota pin holds the model it runs, never the family word, so recovery keeps it.
+    let pins: Vec<_> = flow
+        .board()
+        .await
+        .tasks
+        .values()
+        .filter_map(|t| t.plain.as_ref()?.quota_policy.as_ref()?.pin.model.clone())
+        .collect();
+    assert!(pins.iter().any(|m| m == "gpt-6-astra"), "{pins:?}");
+    assert!(!pins.iter().any(|m| m == "astra"), "{pins:?}");
+    // Off the routing: it runs on what was asked, and says what the routing names.
+    assert_eq!(
+        picked_of(&seen["other model"]),
+        (json!("codex"), json!("gpt-6-luna"), json!("medium"))
+    );
+    assert_eq!(off("other model"), first, "{seen:#?}");
+    assert_eq!(off("other effort"), first);
+    // A lower row while the first is free: its own provider is no reason (D8).
+    // (The fake Claude lists no sonnet model: the family word runs as written.)
+    assert_eq!(
+        picked_of(&seen["lower row"]),
+        (json!("claude"), json!("sonnet"), json!("low"))
+    );
+    assert_eq!(off("lower row"), first);
+    assert_eq!(
+        off("no work"),
+        json!("Off your routing: no kind of work was named, so no routing row picked it.")
+    );
+    // The thread's line comes from the start's step, the same words.
+    let board = flow.board().await;
+    let lines: Vec<Option<String>> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            crate::work::OrchestratorStepKind::Created { off_routing, .. } => {
+                Some(off_routing.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let no_work = "Off your routing: no kind of work was named, so no routing row picked it.";
+    assert_eq!(lines.len(), 9, "{lines:?}");
+    assert_eq!(lines.iter().filter(|line| line.is_some()).count(), 4);
+    assert!(
+        lines
+            .iter()
+            .flatten()
+            .all(|line| json!(line) == first || line == no_work)
+    );
+    // Its start row says what the row picked, the reply's words; a start with no Work, nothing.
+    let rows: Vec<(Option<String>, Option<String>)> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            crate::work::OrchestratorStepKind::Created {
+                off_routing, row, ..
+            } => Some((off_routing.clone(), row.clone())),
+            _ => None,
+        })
+        .collect();
+    let picked_all = format!("Your row \"{WORK}\" picked its agent, model and effort.");
+    assert!(
+        rows.iter()
+            .any(|(_, row)| row.as_deref() == Some(picked_all.as_str())),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .filter(|(off, _)| off.as_deref() == Some(no_work))
+            .all(|(_, row)| row.is_none()),
+        "{rows:?}"
+    );
+
+    // The first row's model out of quota: the next row is the routing's; the first still is too.
+    let now = crate::now_ms();
+    flow.manager.runtime.monitor().note(
+        &crate::accounts::AccountRef::new(ProviderKind::Codex, None),
+        &brigadier_providers::QuotaSnapshot {
+            provider: ProviderKind::Codex,
+            windows: vec![brigadier_providers::QuotaWindow {
+                id: "astra_week".into(),
+                label: "astra_week".into(),
+                used_percent: 100.0,
+                resets_at_ms: Some(now + 3_600_000),
+                window_minutes: Some(7 * 24 * 60),
+                bucket: None,
+                model: Some("gpt-6-astra".into()),
+            }],
+            limit: None,
+            observed_at_ms: now,
+            source: brigadier_providers::QuotaSource::Read,
+        },
+        now,
+    );
+    flow.say("Route B.").await;
+    flow.until("the quota starts reported", reported(12)).await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(seen["next row"]["offRouting"], Value::Null, "{seen:#?}");
+    assert_eq!(seen["first row out"]["offRouting"], Value::Null);
+    // A `default` row's model is out by its own window: the next row is the routing's too.
+    assert_eq!(seen["after a default row out"]["offRouting"], Value::Null);
+
+    // Settings › Routing changes the row: `brigadier models` and the next start follow it.
+    let user_row = |model: &str, effort: &str| crate::model::GuidanceRow {
+        work: WORK.into(),
+        agent: ProviderKind::Claude,
+        model: model.into(),
+        effort: Some(effort.into()),
+        reason: "Mine.".into(),
+    };
+    flow.manager
+        .set_model_rules(&[user_row("opus", "high")], &[])
+        .unwrap();
+    flow.say("Route C.").await;
+    flow.until("the start after the change reported", reported(13))
+        .await;
+    flow.settled().await;
+    // Automatic again: no row of the user's, so the shipped one.
+    flow.manager.set_model_rules(&[], &[]).unwrap();
+    flow.say("Route D.").await;
+    flow.until("the start on Automatic reported", reported(14))
+        .await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    let row_of = |at: &str| {
+        seen[&format!("models {at}")]["guidance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["work"] == WORK)
+            .map(|row| (row["model"].clone(), row["source"].clone()))
+    };
+    assert_eq!(
+        row_of("C"),
+        Some((json!("opus"), json!("user"))),
+        "{seen:#?}"
+    );
+    assert_eq!(
+        picked_of(&seen["C"]),
+        (json!("claude"), json!("claude-opus-5-5"), json!("high"))
+    );
+    assert_eq!(seen["C"]["offRouting"], Value::Null);
+    assert_eq!(row_of("D"), Some((json!("sonnet"), json!("shipped"))));
+    assert_eq!(
+        picked_of(&seen["D"]),
+        (json!("claude"), json!("sonnet"), json!("medium"))
+    );
+    assert_eq!(seen["D"]["offRouting"], Value::Null);
     flow.stop().await;
 }
 
@@ -2828,7 +3242,7 @@ fn rows_script(answers: Answers) -> Script {
 }
 
 /// STRIP-DOWN-PLAN S14: a session's own workers reach its thread view as rows, from their
-/// CLIs' events and git: working, needs you with the CLI's permission prompt (answered by
+/// CLIs' events and git: working, its CLI's permission prompt waiting on the session (answered by
 /// the session's `send --allow`), done, +/− and commits against the session's branch, and
 /// merged once that branch has them. They come as thread news too, and never as sidebar rows.
 #[tokio::test]
@@ -2840,6 +3254,7 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     };
     let flow = Flow::start("cli-worker-rows", options, rows_script(answers.clone())).await;
     let mut news = flow.manager.subscribe_thread_news();
+    let mut sent: Vec<Vec<crate::thread_view::WorkerRow>> = Vec::new();
     flow.say("Start them.").await;
     flow.until("a asks", |_| answers.lock().unwrap().contains_key("asking"))
         .await;
@@ -2850,17 +3265,16 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
             .cloned()
             .unwrap_or_else(|| panic!("no row {title}: {:#?}", view.workers))
     };
-    super::eventually_async("a's prompt in its row", || {
+    // Its prompt waits on the session, never the user (D48): no card the user sees, nothing
+    // under Waiting on you.
+    super::eventually_async("a's prompt on the board", || {
         let manager = flow.manager.clone();
         let id = flow.conversation.clone();
         async move {
-            let view = manager.thread_view_with_workers(&id).await.unwrap();
-            let row = view
-                .workers
-                .iter()
-                .find(|row| row.title.starts_with("Asker"))
-                .cloned();
-            row.filter(|row| !row.waiting.is_empty()).is_some()
+            let board = manager.core.board(&id).await.unwrap();
+            board.approvals.values().any(|card| {
+                card.for_orchestrator() && card.state == crate::work::CardState::Pending
+            })
         }
     })
     .await;
@@ -2871,30 +3285,15 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
         .unwrap();
     let a = rows(&view, "Asker");
     assert!(a.working, "{a:#?}");
-    assert_eq!(a.waiting.len(), 1);
-    assert_eq!(
-        a.waiting[0].kind,
-        crate::thread_view::WorkerWaitKind::Permission
-    );
-    assert!(a.waiting[0].what.contains("curl"), "{a:#?}");
-    assert!(a.waiting[0].card.is_some());
+    assert!(a.waiting.is_empty(), "{a:#?}");
     assert_eq!(a.agent, ProviderKind::Claude);
-    // The prompt came as thread news too, before it is answered (news is debounced).
-    let mut sent = Vec::new();
-    while !sent
-        .iter()
-        .any(|rows: &Vec<crate::thread_view::WorkerRow>| {
-            rows.iter().any(|row| !row.waiting.is_empty())
-        })
-    {
-        let item = tokio::time::timeout(std::time::Duration::from_secs(20), news.recv())
-            .await
-            .expect("the prompt's rows as news")
-            .unwrap();
-        if let Some(rows) = item.workers {
-            sent.push(rows);
-        }
-    }
+    let board = flow.manager.core.board(&flow.conversation).await.unwrap();
+    assert!(
+        board
+            .activity(&flow.conversation, Default::default())
+            .is_none_or(|activity| activity.approvals.is_empty()),
+        "the user's activity counts no worker prompt"
+    );
     answers
         .lock()
         .unwrap()
@@ -2963,7 +3362,7 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     assert!(b.merged, "{b:#?}");
     assert_eq!(b.ahead, 0);
 
-    // The rows came as thread news too, the prompt included, ending with none working (news
+    // The rows came as thread news too, never with the prompt, ending with none working (news
     // is debounced: the last may come after the turn settled).
     while !sent
         .last()
@@ -2979,7 +3378,7 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     }
     assert!(
         sent.iter()
-            .any(|rows| rows.iter().any(|row| !row.waiting.is_empty())),
+            .all(|rows| rows.iter().all(|row| row.waiting.is_empty())),
         "{sent:#?}"
     );
     // Never sidebar rows.
@@ -3054,7 +3453,8 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
     assert!(row.gone, "{row:#?}");
     assert_eq!(row.last_end, Some(crate::thread_view::TurnEnd::Done));
     // Closed after a turn that ended done, it reads done after a restart too, with none of
-    // its CLI's events held.
+    // its CLI's events held, and its last word stays its turn's recorded end: its panel's
+    // "Worked for" doesn't run on to the moment it's opened.
     flow.manager.forget_worker_reads();
     let rows = flow
         .manager
@@ -3066,6 +3466,13 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
         Some(crate::thread_view::TurnEnd::Done),
         "{rows:#?}"
     );
+    let ended = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .worker(&flow.board().await.tasks[&row.id]);
+    let ended = crate::thread_view::last_turn(&ended.join("record")).and_then(|t| t.ended_at_ms);
+    assert!(ended.is_some(), "its turn's end is recorded");
+    assert_eq!(rows[0].last_event_at_ms, ended, "{rows:#?}");
     super::eventually_async("its thread to read after close", || {
         let manager = flow.manager.clone();
         let id = flow.conversation.clone();
@@ -3093,7 +3500,10 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
         .filter(|artifact| {
             matches!(
                 artifact,
-                brigadier_providers::Artifact::ClaudeSession { .. }
+                brigadier_providers::Artifact::Session {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    ..
+                }
             )
         })
         .count();
@@ -3161,6 +3571,134 @@ async fn a_codex_thread_gets_the_stop_hook_too() {
     assert_eq!(stop.command, flow.manager.config.daemon_exe);
     assert_eq!(stop.args, ["hook", "stop"]);
     assert!(thread.output_hook.is_none());
+    flow.stop().await;
+}
+
+/// D48: a worker's permission prompt is its session's to answer, never the user's. It reaches
+/// the session as worker news naming the tool, the command and how to answer; the session's
+/// `send --deny <reason>` tells the worker's CLI that reason, as its orchestrator's; and the
+/// worker's thread shows the prompt and the answer as rows.
+#[tokio::test]
+async fn a_workers_prompt_is_answered_by_its_session_with_a_reason() {
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                let keep = |name: &str, value: Value| {
+                    answers.lock().unwrap().insert(name.into(), value);
+                };
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if let Some(Role::Worker { .. }) = worker {
+                    let decision = turn.ask_approval("touch /tmp/outside.txt", "touch").await;
+                    keep("decision", json!(format!("{decision:?}")));
+                    return Reply::text("Carried on.");
+                }
+                if !turn.input.contains("Start it.") {
+                    return Reply::text("Noted.");
+                }
+                let id =
+                    id_of(&brigadier(&turn, CliRequest::Start(Box::new(start("Touch it.")))).await);
+                let asked = wait_for(&turn, &[&id], 1).await;
+                keep("asked", json!(asked));
+                keep(
+                    "denied",
+                    brigadier(
+                        &turn,
+                        send(&id, Some("outside its worktree"), Some(Answer::Deny)),
+                    )
+                    .await,
+                );
+                keep("ended", json!(wait_for(&turn, &[&id], 1).await));
+                keep("id", json!(id));
+                Reply::text("Done.")
+            })
+        })
+    };
+    let options = Options {
+        permission: crate::model::PermissionLevel::AcceptEdits,
+        ..Options::default()
+    };
+    let flow = Flow::start("cli-worker-deny", options, script).await;
+    flow.say("Start it.").await;
+    flow.until("the session's turn ends", |_| {
+        answers.lock().unwrap().contains_key("id")
+    })
+    .await;
+    flow.settled().await;
+    let answers = answers.lock().unwrap().clone();
+    let asked = &answers["asked"][0];
+    assert_eq!(asked["event"], "needs-input", "{asked:#}");
+    assert_eq!(
+        asked["asks"], "permission for Bash: touch /tmp/outside.txt",
+        "{asked:#}"
+    );
+    assert_eq!(
+        answers["denied"]["answered"], "deny",
+        "{:#}",
+        answers["denied"]
+    );
+    assert!(
+        answers["decision"]
+            .as_str()
+            .unwrap()
+            .contains("Your orchestrator declined this: outside its worktree"),
+        "{}",
+        answers["decision"]
+    );
+    let board = flow.board().await;
+    let card = board
+        .approvals
+        .values()
+        .find(|card| card.for_orchestrator())
+        .expect("its prompt");
+    assert_eq!(
+        card.state,
+        crate::work::CardState::Denied {
+            by: brigadier_providers::Decider::Orchestrator,
+            message: Some("outside its worktree".into()),
+        }
+    );
+    // Never the user's: nothing waits on them.
+    assert!(
+        board
+            .activity(&flow.conversation, Default::default())
+            .is_none_or(|activity| activity.approvals.is_empty())
+    );
+    assert_eq!(board.tasks.len(), 1);
+    let task = board.tasks.keys().next().cloned().expect("its task");
+    let thread = flow
+        .manager
+        .worker_thread(&flow.conversation, &task)
+        .await
+        .unwrap();
+    let shown: Vec<_> = thread
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            brigadier_providers::ProviderEvent::ApprovalRequested { request } => {
+                request.command.clone()
+            }
+            brigadier_providers::ProviderEvent::ApprovalResolved {
+                decision,
+                decided_by,
+                ..
+            } => Some(format!("{decided_by:?} {decision:?}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "touch /tmp/outside.txt".to_owned(),
+            "Orchestrator Deny { message: \"outside its worktree\" }".to_owned()
+        ],
+        "{:#?}",
+        thread.entries
+    );
     flow.stop().await;
 }
 
@@ -3250,7 +3788,8 @@ async fn compiler_environment_uses_the_sessions_working_folder_cargo_config() {
         spec.env
             .iter()
             .any(|(key, value)| key == "BRIGADIER_BUILD_RUSTC_WRAPPER"
-                && value == spec.cwd.join("./cache-wrapper").to_str().unwrap())
+                // The launcher resolves the folder (macOS temp folders sit behind a symlink).
+                && value == spec.cwd.canonicalize().unwrap().join("./cache-wrapper").to_str().unwrap())
     );
     flow.stop().await;
 }

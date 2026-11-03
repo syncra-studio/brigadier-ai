@@ -4034,7 +4034,7 @@ pub enum PlanType {
     EduPlus,
     #[serde(rename = "edu_pro")]
     EduPro,
-    #[serde(rename = "unknown")]
+    #[serde(rename = "unknown", other)]
     Unknown,
 }
 impl ::std::fmt::Display for PlanType {
@@ -4214,7 +4214,7 @@ pub enum RateLimitResetCreditStatus {
     Redeeming,
     #[serde(rename = "redeemed")]
     Redeemed,
-    #[serde(rename = "unknown")]
+    #[serde(rename = "unknown", other)]
     Unknown,
 }
 impl ::std::fmt::Display for RateLimitResetCreditStatus {
@@ -4280,7 +4280,7 @@ pub struct RateLimitResetCreditsSummary {
 pub enum RateLimitResetType {
     #[serde(rename = "codexRateLimits")]
     CodexRateLimits,
-    #[serde(rename = "unknown")]
+    #[serde(rename = "unknown", other)]
     Unknown,
 }
 impl ::std::fmt::Display for RateLimitResetType {

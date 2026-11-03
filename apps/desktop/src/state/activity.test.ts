@@ -3,7 +3,9 @@ import { test } from "node:test";
 
 import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
+import { applyToBoard, emptyBoard } from "@/state/board";
 import { sessionStatus, sidebarIndicators, tabState } from "@/state/tabStates";
+import { turnState } from "@/app/conversation/cliBlocks";
 
 const on = (conversationId: string, event: unknown): EventEnvelope =>
   ({ stream: `conversation:${conversationId}`, event }) as EventEnvelope;
@@ -33,12 +35,12 @@ test("a task state alone does not prove a worker CLI works; its count still show
   assert.equal(row("c3").workers, 0);
 });
 
-const servers = (taskId: string | null, list: { name: string; status: string }[]) =>
+const servers = (taskId: string | null, list: { name: string; status: string; managed?: boolean }[]) =>
   on("c4", { type: "mcpServersUpdated", conversationId: "c4", taskId, provider: "claude", atStart: false, boot: "b",
     servers: list.map((server) => ({ ...server, tools: [], transport: null })) });
 
-test("an MCP server of the session's own CLI that wants a sign-in needs the user; a claude.ai connector or a worker's doesn't", () => {
-  applyActivityEvents([servers(null, [{ name: "claude.ai Gmail", status: "needs-auth" }, { name: "github", status: "connected" }])]);
+test("an MCP server of the session's own CLI that wants a sign-in needs the user; one managed elsewhere or a worker's doesn't", () => {
+  applyActivityEvents([servers(null, [{ name: "Gmail", status: "needs-auth", managed: true }, { name: "github", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
   applyActivityEvents([servers("t1", [{ name: "linear", status: "needs-auth" }])]);
   assert.equal(row("c4").awaiting, null, "a worker's server");
@@ -47,6 +49,26 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.deepEqual(sessionStatus(row("c4"), null), { state: "needsYou", reason: "sign-in" });
   applyActivityEvents([servers(null, [{ name: "linear", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
+});
+
+const card = (id: string, taskId: string | null, agent?: string, conversationId = "c5") =>
+  on(conversationId, { type: "approvalUpdated", approval: { id, conversationId, taskId, requestId: null, position: 0, state: { type: "pending" },
+    createdAtMs: 0, resolvedAtMs: null, subject: { type: "cli", request: { id, kind: "command", tool: "Bash", command: "touch /x", cwd: null, paths: [], reason: null, escalation: false, input: null, ...(agent && { agent }) } } } });
+
+test("a worker CLI's permission prompt never needs the user: its orchestrator answers it (D48); the session's own does", () => {
+  applyActivityEvents([card("w", "t1")]);
+  assert.equal(row("c5").awaiting, null);
+  const board = applyToBoard(emptyBoard("c5"), card("w", "t1"));
+  assert.deepEqual(Object.keys(board.approvals), [], "no card for the user");
+  applyActivityEvents([card("own", null)]);
+  assert.equal(row("c5").awaiting, "approval");
+  assert.deepEqual(Object.keys(applyToBoard(board, card("own", null)).approvals), ["own"]);
+});
+
+test("the session CLI's own subagent's permission request is the user's card, as its own is (D166)", () => {
+  applyActivityEvents([card("sub", null, "toolu_agent", "c6")]);
+  assert.equal(row("c6").awaiting, "approval");
+  assert.deepEqual(Object.keys(applyToBoard(emptyBoard("c6"), card("sub", null, "toolu_agent", "c6")).approvals), ["sub"]);
 });
 
 const stopped = () => stoppedOf(useActivity.getState().byConversation.stopped);
@@ -76,6 +98,29 @@ test("a failed or cut-off last turn reads Failed until the next turn opens; a fa
   assert.equal(row("c5").awaiting, "failed");
   const reloaded = fromSnapshot({ conversationId: "c6", run: "idle", tasks: [], approvals: [], questions: [], failed: true });
   assert.equal(rowActivity(reloaded).awaiting, "failed", "a failed last turn through a reconnect");
+});
+
+
+test("a turn a limit cut while Brigadier switches it to another account or CLI never reads Failed", () => {
+  applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "running" })]);
+  applyActivityNews({ conversationId: "c7", entries: [], opened: true });
+  applyActivityNews({ conversationId: "c7", entries: [], ended: "failed" });
+  assert.equal(tabState(row("c7"), false), null, "the switch holds the run");
+  applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "starting" })]);
+  assert.equal(tabState(row("c7"), false), "working");
+  applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "idle" })]);
+  assert.equal(tabState(row("c7"), false), "failed", "nowhere to go: the run lets go, failed");
+});
+
+
+test("D180: a turn a limit cut whose work goes on elsewhere stays working in the thread, the row and the tab", () => {
+  applyActivityNews({ conversationId: "c8", entries: [], opened: true });
+  applyActivityNews({ conversationId: "c8", entries: [], ended: "handedOver" });
+  applyActivityEvents([on("c8", { type: "runStateChanged", conversationId: "c8", state: "idle" })]);
+  assert.equal(tabState(row("c8"), false), "working", "even through a run that reads idle mid-switch");
+  assert.deepEqual(turnState({ end: "handedOver", error: "Claude's usage limit was reached." }), { state: "working", error: null }, "no Stopped header, no Try again line");
+  applyActivityNews({ conversationId: "c8", entries: [], ended: "failed" });
+  assert.equal(tabState(row("c8"), false), "failed", "nothing to switch to: it failed");
 });
 
 
@@ -149,6 +194,15 @@ test("a session stays Working while its CLI's background commands hold its turn,
   const snapshot = fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], commandsWorking: true });
   assert.equal(rowActivity(snapshot).running, true);
   assert.equal(rowActivity({ ...snapshot, commandsWorking: false }).running, false);
+});
+
+test("a background subagent of its CLI holds its work past its turn: what is sent meanwhile waits in its block (D113)", () => {
+  const id = "subagent";
+  applyActivityNews({ conversationId: id, entries: [], opened: true });
+  applyActivityNews({ conversationId: id, entries: [], ended: "done", jobs: { subagents: true } });
+  assert.equal(workHolds(useActivity.getState().byConversation[id]), true, "the send path queues it, as the daemon does");
+  applyActivityNews({ conversationId: id, entries: [], jobs: {} });
+  assert.equal(workHolds(useActivity.getState().byConversation[id]), false);
 });
 
 test("a session's work holds with no turn running while one of its workers or its CLI's background commands still work", () => {

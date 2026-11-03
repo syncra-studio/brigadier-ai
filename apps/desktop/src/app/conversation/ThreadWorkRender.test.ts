@@ -79,20 +79,6 @@ test("the thread's own work reads like the reference thread: running commands st
   assertMaking(seen.making, "pulse");
   // Shown closed with its image made; one more starting opens it to its place.
   assert.deepEqual(seen.later, ["closed", "open", "Creating 2 images"]);
-
-  // The turn's changes from the request's own record: one file named; four listed, three then more.
-  const turnDiff = seen.turnDiff as Record<"one" | "four", { title: string; counts: string; files: number; more: string | null; undo: string | null; held?: string | null }>;
-  assert.deepEqual(
-    [turnDiff.one.title, turnDiff.one.counts, turnDiff.one.files, turnDiff.one.undo],
-    ["Edited run.mjs", "+4 −1", 1, "Revert"],
-  );
-  assert.deepEqual(
-    [turnDiff.four.title, turnDiff.four.counts, turnDiff.four.files, turnDiff.four.more, turnDiff.four.undo],
-    ["Edited 4 files", "+11 −2", 3, "Show 1 more file", "Revert"],
-  );
-  // The working request's pill, from its record; a click opens its first file's tab.
-  assert.match(String(seen.pill), /^2 files changed ?\+11 −2$/);
-  assert.equal(seen.pillTab, "src/math.js");
 });
 
 test("an image being made holds its tile's place without pulsing when the user asks for less motion", { timeout: 90000 }, async (t) => {

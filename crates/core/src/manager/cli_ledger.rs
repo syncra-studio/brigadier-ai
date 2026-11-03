@@ -117,7 +117,7 @@ pub(crate) struct Stamp {
 }
 
 impl Stamp {
-    fn now(record: &Path) -> Self {
+    pub(crate) fn now(record: &Path) -> Self {
         Self {
             at: jiff::Zoned::now().strftime("%m-%d %H:%M").to_string(),
             generation: super::seam::read_seam(record).generation,
@@ -578,6 +578,24 @@ pub(crate) fn check(ledger: &Ledger, file: &str, text: &str) -> LedgerCheck {
         unknown,
         no_id,
     }
+}
+
+/// Goal 13's check of a hand-off note (core-goals D9): the open items (questions and promises)
+/// still open that `note` doesn't name by id. One with no id must be in it word for word.
+pub(crate) fn handoff_gaps<'a>(ledger: &'a Ledger, note: &str) -> Vec<&'a Entry> {
+    let cites = cited(note);
+    ledger
+        .open()
+        .into_iter()
+        .filter(|entry| match entry.id {
+            Some(id) => !cites.contains(&id),
+            // Every line of it, its list mark aside: a continuation line is part of the item.
+            None => !entry.text.lines().all(|line| {
+                let line = line.trim();
+                note.contains(list_body(line).unwrap_or(line).trim())
+            }),
+        })
+        .collect()
 }
 
 /// `check`'s text: each list that isn't empty, entries verbatim.

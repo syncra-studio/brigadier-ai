@@ -1014,6 +1014,8 @@ mod tests {
     fn task(status: BackgroundTaskStatus) -> ProviderEvent {
         ProviderEvent::BackgroundTask {
             task: BackgroundTask {
+                command: None,
+                provider: None,
                 id: "reused-id".into(),
                 item_id: Some("call".into()),
                 kind: BackgroundTaskKind::Shell,

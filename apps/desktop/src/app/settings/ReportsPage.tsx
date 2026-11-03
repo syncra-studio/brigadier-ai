@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { Button } from "@/components/controls";
 import { SettingsCard, SettingsRow } from "@/components/shared";
+import { cliFacts } from "@/lib/providerKinds";
 
 export const REPORTS_ROWS = [{ label: "Continuity nightly", description: "Recall, decisions, tokens, compactions and cold returns" }];
 
@@ -88,7 +89,7 @@ export function ReportsPage() {
 /** Uses the same sections, cards and rows as every Settings page. */
 export function ContinuityNumbers({ report }: { report: ContinuityReport }) {
   return <>
-    {report.providers.map((provider) => <SettingsSection key={provider.provider} title={provider.provider === "claude" ? "Claude" : "Codex"}>
+    {report.providers.map((provider) => <SettingsSection key={provider.provider} title={cliFacts(provider.provider).vendor}>
       <SettingsCard>
         <SettingsRow label={provider.status} description={provider.reason} />
         {provider.arms.map((arm) => <ArmNumbers key={`${arm.block}-${arm.profile}-${arm.arm}`} arm={arm} />)}

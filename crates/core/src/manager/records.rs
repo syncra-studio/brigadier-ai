@@ -53,6 +53,9 @@ pub(crate) struct RecordSearch {
     pub role: Option<String>,
     #[serde(default)]
     pub tool: Option<String>,
+    /// Only `session` itself, never its workers': a worker reading its session's thread.
+    #[serde(skip)]
+    pub exact: bool,
 }
 
 /// `brigadier brain read` and `transcript read`.
@@ -189,12 +192,13 @@ impl SessionManager {
             }
             (None, None) => None,
         };
+        let exact = args.exact;
         let synced: Vec<RecordSession> = sessions
             .into_iter()
             .filter(|session| {
-                scope
-                    .as_deref()
-                    .is_none_or(|scope| within(&session.key, scope))
+                scope.as_deref().is_none_or(|scope| {
+                    session.key == scope || !exact && within(&session.key, scope)
+                })
             })
             .collect();
         let limit = args.limit.unwrap_or(HITS).clamp(1, HITS_MAX);
@@ -203,15 +207,14 @@ impl SessionManager {
             for session in &synced {
                 sync_session(&brain, session)?;
             }
-            let mut hits = brain
-                .search_records_filtered(
-                    &query,
-                    scope.as_deref(),
-                    limit,
-                    args.role.as_deref(),
-                    args.tool.as_deref(),
-                )
-                .map_err(super::brains::brain_error)?;
+            let (role, tool) = (args.role.as_deref(), args.tool.as_deref());
+            let mut hits = match scope.as_deref() {
+                Some(session) if exact => {
+                    brain.search_session_records(&query, session, limit, role, tool)
+                }
+                scope => brain.search_records_filtered(&query, scope, limit, role, tool),
+            }
+            .map_err(super::brains::brain_error)?;
             for hit in &mut hits {
                 mark_stale(hit);
                 if let Some(session) = synced.iter().find(|session| session.key == hit.session) {
@@ -281,7 +284,16 @@ impl SessionManager {
                 return Ok("No transcript yet.\n".to_owned());
             }
             let from = (count - i64::from(last).min(READ_MAX)).max(0);
-            read_span(&session, from, count - 1)
+            let text = read_span(&session, from, count - 1)?;
+            Ok(if from > 0 {
+                format!(
+                    "[#0–#{} come before, earlier generations' too: `--item <#>` or \
+                     `--item <from>-<to>` opens them]\n{text}",
+                    from - 1
+                )
+            } else {
+                text
+            })
         })
         .await
     }
@@ -918,6 +930,15 @@ pub(crate) fn read_span(session: &RecordSession, from: i64, to: i64) -> Result<S
     Ok(text.trim_end().to_owned())
 }
 
+/// A position (`7`, `#7`) or span (`0-8`, `#0–#8`) as `--item` may name one.
+fn position_span(item: &str) -> Option<(i64, i64)> {
+    let at = |n: &str| n.trim().trim_start_matches('#').parse::<i64>().ok();
+    match item.split_once(['-', '–']) {
+        Some((from, to)) => Some((at(from)?, at(to)?)),
+        None => at(item).map(|n| (n, n)),
+    }
+}
+
 fn validate_role(role: Option<&str>) -> Result<()> {
     if role.is_some_and(|role| !matches!(role, "user" | "assistant" | "tool")) {
         return Err(Error::Invalid(
@@ -931,6 +952,13 @@ fn validate_role(role: Option<&str>) -> Result<()> {
 /// inside a codepoint advance to the next boundary so successive pages do not repeat bytes.
 fn read_items(session: &RecordSession, args: &RecordRead) -> Result<String> {
     validate_role(args.role.as_deref())?;
+    // `--item 7`, `#7` or `0-8`: positions as a span read prints them, every generation's.
+    if let Some((from, to)) = args.item.as_deref().and_then(position_span)
+        && args.from.is_none()
+        && args.to.is_none()
+    {
+        return read_span(session, from, to);
+    }
     if args.item.is_none()
         && args.role.is_none()
         && args.tool.is_none()

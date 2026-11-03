@@ -1,20 +1,23 @@
 import {
   type KeyboardEvent,
   type ReactNode,
+  useContext,
   useId,
   useMemo,
   useState,
 } from "react";
 
 
+import { worktreeLabel } from "@/app/conversation/draftEnvironment";
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 
 import { PickerRow } from "@/app/conversation/PickerRow";
 import { RailPill } from "@/app/conversation/RailPill";
 import { MENU, ROW, ROW_ACTIVE } from "@/app/conversation/railMenu";
 import { UsageRemaining } from "@/app/conversation/UsageRemaining";
+import { ViewContext } from "@/app/conversation/viewContext";
 
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
+import { MenuRow, Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 
 import {
   Branch,
@@ -26,7 +29,9 @@ import {
   X,
 } from "@/components/icons";
 
-import type { EnvironmentKind, Project } from "@/ipc/generated";
+import type { Project } from "@/ipc/generated";
+
+import { shortPath } from "@/lib/format";
 
 import { cn } from "@/lib/utils";
 
@@ -34,13 +39,14 @@ import { select } from "@/state/actions";
 
 import { openAddProject } from "@/state/addProject";
 
-import { useApp } from "@/state/store";
+import { type DraftEnvironment, useApp } from "@/state/store";
 import { SettingsSearch } from "@/components/shared";
 
 
 /*
  * The utility bar on the composer rail, shown on a new chat only: the project, where the
- * session works, and its branch. Each is a ghost pill (icon and value, no chevron) that opens
+ * session works (a new worktree, the local checkout, or an existing branch where it is checked
+ * out, beside any session there), and its branch. Each is a ghost pill (icon and value, no chevron) that opens
  * a menu upward. A session's repository and environment are fixed once it starts, so the bar
  * goes with the first send.
  */
@@ -96,8 +102,11 @@ export function ProjectCombobox({
   // A typed path is a folder to add: "Add ~/code/app".
   const typedPath = /^(~|\/|[A-Za-z]:[\\/])/.test(query.trim()) ? query.trim() : "";
   const shown = sorted.filter((entry) => entry.name.toLowerCase().includes(needle));
+  const { draftModel } = useContext(ViewContext);
   const choose = (id: string | null) => {
     setOpen(false);
+    // The model the composer shows stays: another project's last pick doesn't replace it.
+    if (draftModel && id !== (project?.id ?? null)) updateDraft(id, { model: draftModel });
     // The same draft, for another project: no new place to go back from.
     select(
       id ? { type: "draft", kind: "session", projectId: id } : { type: "draft", kind: "chat" },
@@ -220,20 +229,22 @@ export function ProjectCombobox({
 
 // ----- where the session works -----------------------------------------------------------
 
-const PLACES: Record<EnvironmentKind, { label: string; icon: ReactNode }> = {
+const PLACES: Record<DraftEnvironment, { label: string; icon: ReactNode }> = {
   newWorktree: { label: "New worktree", icon: <BranchAlt /> },
   localCheckout: { label: "Local checkout", icon: <Desktop /> },
+  existingWorktree: { label: "Existing worktree", icon: <Folder /> },
 };
 
-/** The "Work in" menu: a new worktree (the default) or the local checkout, and the usage left. */
+/** The "Work in" menu: a new worktree (the default), the local checkout or an existing worktree, and the usage left. */
 export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
   const [open, setOpen] = useState(false);
   const projectId = resolved.project?.id ?? null;
   const repoName = resolved.repo.info?.name ?? resolved.project?.name ?? "the repository";
   const current = resolved.repo.info?.currentBranch;
-  const tips: Record<EnvironmentKind, string> = {
+  const tips: Record<DraftEnvironment, string> = {
     newWorktree: `Create a copy of ${repoName} to work in parallel.`,
     localCheckout: `Work in ${repoName} itself, on ${current ?? "the branch it has checked out"}.`,
+    existingWorktree: `Work in another worktree of ${repoName}, on its branch, beside any session there.`,
   };
   const place = PLACES[resolved.environment];
   return (
@@ -245,7 +256,7 @@ export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className={cn(MENU, "w-2xs")}>
         <p className="text-muted-foreground px-2 py-1 text-sm">Work in</p>
-        {(Object.keys(PLACES) as EnvironmentKind[]).map((kind) => (
+        {(Object.keys(PLACES) as DraftEnvironment[]).map((kind) => (
           <button
             key={kind}
             type="button"
@@ -275,14 +286,16 @@ export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
 
 /**
  * The branch pill. A new worktree's picks its base: a search (not focused on open), the branches
- * (checked-out first, ✓ on the pick) in a fixed-height list. The local checkout's shows the
- * branch the project's folder has checked out, which the session works on.
+ * (checked-out first, ✓ on the pick) in a fixed-height list. An existing worktree's picks the
+ * folder to work in, each with its branch; the project's own checkout (Local checkout) and a
+ * running worker's aren't offered. The local checkout's shows the branch the project's folder
+ * has checked out, which the session works on.
  */
 export function BranchPopover({ resolved }: { resolved: ResolvedDraft }) {
   return resolved.environment === "localCheckout" ? (
     <CheckedOutBranch resolved={resolved} />
   ) : (
-    <BasePopover resolved={resolved} />
+    <BasePopover resolved={resolved} existing={resolved.environment === "existingWorktree"} />
   );
 }
 
@@ -309,27 +322,37 @@ function CheckedOutBranch({ resolved }: { resolved: ResolvedDraft }) {
   );
 }
 
-function BasePopover({ resolved }: { resolved: ResolvedDraft }) {
+function BasePopover({ resolved, existing }: { resolved: ResolvedDraft; existing: boolean }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const listId = useId();
   const projectId = resolved.project?.id ?? null;
   const { info, error, loading } = resolved.repo;
-  const picked = resolved.base;
+  const picked = existing ? resolved.draft.worktree : resolved.base;
   const repoName = info?.name ?? resolved.project?.name ?? "";
+  const conversations = useApp((s) => s.conversations);
 
-  const branches = useMemo(() => {
+  // A row: what is picked, what it shows, and its grey detail.
+  const rows = useMemo(() => {
     if (!info) return [];
+    if (existing) {
+      // The other worktrees (the folder with its branch); the checkout is Local checkout's.
+      return info.branches
+        .flatMap(({ name, checkedOutAt, worker }) =>
+          checkedOutAt && checkedOutAt !== info.path && !worker ? [{ key: checkedOutAt, label: worktreeLabel(checkedOutAt, conversations), detail: name }] : [],
+        )
+        .toSorted((a, b) => a.label.localeCompare(b.label));
+    }
     const current = info.currentBranch;
     // The checked-out branch first, then the rest by name.
     return info.branches
-      .map((branch) => branch.name)
-      .toSorted((a, b) => Number(b === current) - Number(a === current) || a.localeCompare(b));
-  }, [info]);
+      .map(({ name }) => ({ key: name, label: name, detail: undefined }))
+      .toSorted((a, b) => Number(b.key === current) - Number(a.key === current) || a.key.localeCompare(b.key));
+  }, [info, existing, conversations]);
   const needle = query.trim().toLowerCase();
-  const matches = branches.filter((name) => name.toLowerCase().includes(needle));
-  const pick = (name: string) => {
-    updateDraft(projectId, { base: name });
+  const matches = rows.filter((row) => `${row.label} ${row.detail ?? ""} ${existing ? row.key : ""}`.toLowerCase().includes(needle));
+  const pick = (key: string) => {
+    updateDraft(projectId, existing ? { worktree: key } : { base: key });
     setOpen(false);
   };
   const { index, setIndex, onKeyDown } = useHighlight(matches.length, needle);
@@ -344,11 +367,11 @@ function BasePopover({ resolved }: { resolved: ResolvedDraft }) {
     >
       <PopoverTrigger asChild>
         <RailPill
-          icon={<Branch />}
-          label="Base branch"
-          title="What branch should this session start from?"
+          icon={existing ? <Folder /> : <Branch />}
+          label={existing ? "Worktree" : "Base branch"}
+          title={existing ? "Which worktree should this session work in?" : "What branch should this session start from?"}
         >
-          {picked ?? (loading ? "…" : "Pick a branch")}
+          {existing ? (picked ? worktreeLabel(picked, conversations) : "Pick a worktree") : (picked ?? (loading ? "…" : "Pick a branch"))}
         </RailPill>
       </PopoverTrigger>
       <PopoverContent
@@ -363,12 +386,12 @@ function BasePopover({ resolved }: { resolved: ResolvedDraft }) {
         onKeyDown={(event) => {
           // From the menu itself or its search; a focused row's own Enter stays its own.
           if (event.target !== event.currentTarget && !(event.target instanceof HTMLInputElement)) return;
-          onKeyDown(event, (at) => matches[at] && pick(matches[at]));
+          onKeyDown(event, (at) => matches[at] && pick(matches[at].key));
         }}
       >
         <SettingsSearch
           variant="bordered"
-          label={`Search ${repoName} branches`}
+          label={`Search ${repoName} ${existing ? "worktrees" : "branches"}`}
           value={query}
           onChange={setQuery}
           clearable={false}
@@ -378,32 +401,39 @@ function BasePopover({ resolved }: { resolved: ResolvedDraft }) {
           aria-controls={listId}
           className="mb-1"
         />
-        <p className="text-muted-foreground px-2 py-1 text-sm">Local branches</p>
-        <div id={listId} role="listbox" aria-label="Branches" className="h-command-list overflow-y-auto">
+        <p className="text-muted-foreground px-2 py-1 text-sm">{existing ? "Worktrees" : "Local branches"}</p>
+        <div id={listId} role="listbox" aria-label={existing ? "Worktrees" : "Branches"} className="h-command-list overflow-y-auto">
           {error && (
             <p role="alert" className="text-destructive px-2 py-1 text-xs">
-              Branches unavailable: {error}
+              {existing ? "Worktrees" : "Branches"} unavailable: {error}
             </p>
           )}
           {!info && loading && (
             <p className="text-muted-foreground px-2 py-1 text-sm">Reading the repository…</p>
           )}
           {info && matches.length === 0 && (
-            <p className="text-muted-foreground px-2 py-1 text-sm">No branches found</p>
+            <p className="text-muted-foreground px-2 py-1 text-sm">{existing ? "No other worktrees" : "No branches found"}</p>
           )}
-          {matches.map((name, at) => (
+          {matches.map(({ key, label, detail }, at) => (
             <button
-              key={name}
+              key={key}
               type="button"
               role="option"
-              aria-selected={name === picked}
+              aria-selected={key === picked}
               onPointerMove={() => setIndex(at)}
-              onClick={() => pick(name)}
+              onClick={() => pick(key)}
+              title={existing ? shortPath(key) : undefined}
               className={cn(ROW, at === index && ROW_ACTIVE)}
             >
-              <Branch className="text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate">{name}</span>
-              {name === picked && <Check />}
+              {existing ? (
+                <MenuRow twoLine icon={<Folder />} title={label} detail={detail} />
+              ) : (
+                <>
+                  <Branch className="text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                </>
+              )}
+              {key === picked && <Check />}
             </button>
           ))}
         </div>

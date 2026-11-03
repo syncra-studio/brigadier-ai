@@ -166,11 +166,12 @@ pub(crate) fn forget_file(tx: &Transaction, path: &str) -> Result<()> {
 }
 
 /// Entries matching `query`, newest first: every session's,
-/// or only `session`'s and its workers' (`<session>/…`).
+/// or only `session`'s and its workers' (`<session>/…`); with `exact`, only `session`'s.
 pub(crate) fn search(
     conn: &Connection,
     query: &str,
     session: Option<&str>,
+    exact: bool,
     limit: u32,
     role: Option<&str>,
     tool: Option<&str>,
@@ -185,7 +186,7 @@ pub(crate) fn search(
                 r.cited_path, r.cited_line, r.cited_hash, r.item_id, r.tool \
          FROM records_fts JOIN records r ON r.rid = records_fts.rowid \
          WHERE records_fts MATCH ?1 \
-           AND (?2 IS NULL OR r.session = ?2 OR substr(r.session, 1, length(?2) + 1) = ?2 || '/') \
+           AND (?2 IS NULL OR r.session = ?2 OR (NOT ?7 AND substr(r.session, 1, length(?2) + 1) = ?2 || '/')) \
            AND (?5 IS NULL OR r.role = ?5) \
            AND (?6 IS NULL OR r.tool = ?6) \
          ORDER BY r.at_ms DESC, r.position DESC, bm25(records_fts), r.rid DESC LIMIT ?3",
@@ -197,7 +198,8 @@ pub(crate) fn search(
             limit.clamp(1, 100),
             LEAD_CHARS,
             role,
-            tool
+            tool,
+            exact
         ],
         |row| {
             let source: String = row.get(1)?;

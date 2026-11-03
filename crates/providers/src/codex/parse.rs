@@ -833,6 +833,12 @@ impl Parser {
         out: &mut Vec<Output>,
     ) {
         let approval_id = format!("codex-{}", rpc_id);
+        // A subagent asks on its own thread, which its row is named by (D69).
+        let agent = params
+            .get("threadId")
+            .and_then(Value::as_str)
+            .filter(|thread| self.thread_id.as_deref().is_some_and(|own| own != *thread))
+            .map(str::to_owned);
         // Codex's own question tool: the user's question card (harness D7).
         if method == "item/tool/requestUserInput" {
             let Some((ids, questions)) = asked_questions(&params) else {
@@ -886,7 +892,11 @@ impl Parser {
                 ) else {
                     return self.unsupported(rpc_id, method, out);
                 };
-                // An approved command runs outside the sandbox (see the adapter's docs).
+                // Outside the sandbox only when the model asked for it (its justification is the
+                // reason, as is a retry without the sandbox) or for extra permissions; else an
+                // approved command runs in it (`untrusted` asks before every command).
+                let escalation = ask.reason.is_some() || ask.additional_permissions.is_some();
+                let network = ask.network_approval_context.is_some();
                 let reason = ask.reason.clone();
                 // "Allow … for this session": Brigadier allows later commands with the same first
                 // words itself; Codex's session cache (`acceptForSession`) holds this one.
@@ -911,9 +921,11 @@ impl Parser {
                             ask.network_approval_context
                                 .map(|network| format!("network access to {}", network.host))
                         }),
-                        escalation: true,
+                        escalation,
                         input: ask.command.clone(),
                         grant: grant.clone(),
+                        network,
+                        agent: None,
                     },
                     PendingKind::Command {
                         grant: grant.is_some(),
@@ -938,6 +950,8 @@ impl Parser {
                     .unwrap_or_default();
                 // Asking to write a whole folder: a session grant must cover it too.
                 paths.extend(ask.grant_root.clone());
+                // Asking for more than the sandbox's writable roots, else a plain edit.
+                let escalation = ask.grant_root.is_some() || ask.reason.is_some();
                 (
                     ApprovalRequest {
                         id: approval_id.clone(),
@@ -946,12 +960,14 @@ impl Parser {
                         command: None,
                         cwd: None,
                         paths,
-                        escalation: true,
+                        escalation,
                         reason: ask.reason.or_else(|| {
                             ask.grant_root.map(|root| format!("write access to {root}"))
                         }),
                         input: None,
                         grant: None,
+                        network: false,
+                        agent: None,
                     },
                     PendingKind::FileChange,
                 )
@@ -978,12 +994,15 @@ impl Parser {
                         escalation: true,
                         input: Some(clip(&requested.to_string(), OUTPUT_CLIP)),
                         grant: None,
+                        network: false,
+                        agent: None,
                     },
                     PendingKind::Permissions(requested),
                 )
             }
             _ => return self.unsupported(rpc_id, method, out),
         };
+        let request = ApprovalRequest { agent, ..request };
         out.push(Output::Event(ProviderEvent::ApprovalRequested { request }));
         out.push(Output::Control(Control::Approval {
             approval_id,
@@ -1463,15 +1482,165 @@ fn startup_status(
         status,
         tools: Vec::new(),
         transport: None,
+        managed: false,
+        label: None,
     })
+}
+
+/// The thread's shell commands as its events say them, which tell a background terminal from a
+/// command its turn runs: Codex's `/ps` lists every command's process while it runs, the one
+/// the turn waits on included (checked on 0.166.0).
+#[derive(Debug, Default)]
+pub(crate) struct CommandItems {
+    /// Commands the running turn waits on, or a turn the user stopped waited on (the Stop ends
+    /// them: Codex says no end of their own).
+    running: HashSet<String>,
+    /// Commands that ended since the last turn began: Codex may still list their process.
+    ended: HashSet<String>,
+    /// When each command not ended yet began, which a background terminal's age starts from.
+    started: HashMap<String, i64>,
+}
+
+impl CommandItems {
+    pub(crate) fn note(&mut self, event: &ProviderEvent, at: i64) {
+        match event {
+            ProviderEvent::Command {
+                item_id,
+                status: ItemStatus::InProgress,
+                ..
+            } => {
+                // A new command while others run: the turn went on from them (a yield), so they
+                // are in the background. shortcut: commands a turn starts side by side and waits
+                // on together read as background too; tell them apart if Codex ever says so.
+                if !self.started.contains_key(item_id) {
+                    self.running.clear();
+                    self.running.insert(item_id.clone());
+                    self.started.insert(item_id.clone(), at);
+                }
+            }
+            ProviderEvent::Command { item_id, .. } => {
+                self.running.remove(item_id);
+                self.started.remove(item_id);
+                self.ended.insert(item_id.clone());
+            }
+            ProviderEvent::TurnStarted { .. } => self.ended.clear(),
+            // The model goes on while they run: Codex stopped waiting for them (a command
+            // yields after a while, or at once when the model asks), so they are in the
+            // background. Codex reports its usage only as its model takes the turn back, so a
+            // report while they run is a yield too, also one it polls at once with no words
+            // (checked on 0.166.0: none comes while a command it waits on runs).
+            ProviderEvent::Usage { .. }
+            | ProviderEvent::MessageDelta { .. }
+            | ProviderEvent::ReasoningDelta { .. }
+            | ProviderEvent::Reasoning { .. }
+            | ProviderEvent::Message {
+                role: Role::Assistant,
+                ..
+            } => self.running.clear(),
+            // A command still running when its turn completes goes on in the background.
+            ProviderEvent::TurnCompleted { status, .. } if *status != TurnStatus::Interrupted => {
+                self.running.clear();
+            }
+            // The Stop ended those its turn waited on: none goes on (`outliving_turn`).
+            ProviderEvent::TurnCompleted { .. } => {
+                let running = &self.running;
+                self.started.retain(|item, _| !running.contains(item));
+            }
+            _ => {}
+        }
+    }
+
+    /// The user allowed the command of item `item` at `at`: Codex asks before it runs one, so
+    /// its age starts here, not at its item's start.
+    pub(crate) fn allowed(&mut self, item: &str, at: i64) {
+        if let Some(started) = self.started.get_mut(item) {
+            *started = at;
+        }
+    }
+
+    /// Whether the command of item `item` is no background terminal: its turn runs it, or it
+    /// ended.
+    fn foreground(&self, item: &str) -> bool {
+        self.running.contains(item) || self.ended.contains(item)
+    }
+}
+
+/// The background terminal in `known` whose command `event` ends, ended at `now`: Codex says a
+/// command's end as it ends, while `/ps` may list its process until after its turn ended.
+pub(crate) fn ended_terminal(
+    event: &ProviderEvent,
+    known: &mut HashMap<String, BackgroundTask>,
+    now: i64,
+) -> Option<BackgroundTask> {
+    let ProviderEvent::Command {
+        item_id, status, ..
+    } = event
+    else {
+        return None;
+    };
+    if *status == ItemStatus::InProgress {
+        return None;
+    }
+    let id = known
+        .iter()
+        .find(|(_, task)| task.item_id.as_ref() == Some(item_id))?
+        .0
+        .clone();
+    let mut task = known.remove(&id)?;
+    task.status = BackgroundTaskStatus::Completed;
+    task.ended_at_ms = Some(now);
+    Some(task)
+}
+
+/// The commands still running as their turn completes that no listing named yet: they go on
+/// in the background, which `/ps` says only at its next listing, seconds on (seen live: the
+/// work read over meanwhile). Each is a terminal from now on, by its item, until that listing
+/// names it ([`background_terminals`]) or its item ends ([`ended_terminal`]).
+pub(crate) fn outliving_turn(
+    event: &ProviderEvent,
+    commands: &CommandItems,
+    known: &mut HashMap<String, BackgroundTask>,
+) -> Vec<BackgroundTask> {
+    if !matches!(event, ProviderEvent::TurnCompleted { status, .. } if *status == TurnStatus::Completed)
+    {
+        return Vec::new();
+    }
+    let mut said = Vec::new();
+    for (item, at) in &commands.started {
+        if known
+            .values()
+            .any(|task| task.item_id.as_deref() == Some(item))
+        {
+            continue;
+        }
+        let task = BackgroundTask {
+            id: item.clone(),
+            item_id: Some(item.clone()),
+            kind: BackgroundTaskKind::Terminal,
+            label: String::new(),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: *at,
+            ended_at_ms: None,
+            output_file: None,
+            summary: None,
+            last_line: None,
+            command: None,
+            provider: Some(ProviderKind::Codex),
+        };
+        known.insert(item.clone(), task.clone());
+        said.push(task);
+    }
+    said
 }
 
 /// The thread's background terminals as `thread/backgroundTerminals/list` gives them, against
 /// those `known` from the last listing: each new one as running, each one gone as ended at
-/// `now`. `known` becomes this listing's.
+/// `now`. `known` becomes this listing's. A command's process `commands` says isn't in the
+/// background is none.
 pub(crate) fn background_terminals(
     listed: &Value,
     known: &mut HashMap<String, BackgroundTask>,
+    commands: &CommandItems,
     now: i64,
 ) -> Vec<BackgroundTask> {
     let mut changed = Vec::new();
@@ -1485,6 +1654,24 @@ pub(crate) fn background_terminals(
         let Some(id) = terminal.get("processId").and_then(Value::as_str) else {
             continue;
         };
+        if !known.contains_key(id)
+            && terminal
+                .get("itemId")
+                .and_then(Value::as_str)
+                .is_some_and(|item| commands.foreground(item))
+        {
+            continue;
+        }
+        let item = terminal.get("itemId").and_then(Value::as_str);
+        // One said as its turn completed (`outliving_turn`): the same task, named now.
+        if let Some(mut task) = item.and_then(|item| known.remove(item)) {
+            let command = terminal.get("command").and_then(Value::as_str);
+            task.label = command.unwrap_or_default().to_owned();
+            task.command = command.map(str::to_owned);
+            changed.push(task.clone());
+            listing.insert(id.to_owned(), task);
+            continue;
+        }
         let task = known.remove(id).unwrap_or_else(|| {
             let task = BackgroundTask {
                 id: id.to_owned(),
@@ -1499,11 +1686,21 @@ pub(crate) fn background_terminals(
                     .unwrap_or_default()
                     .to_owned(),
                 status: BackgroundTaskStatus::Running,
-                started_at_ms: now,
+                // A command the model went on from began before it was listed as a terminal.
+                started_at_ms: terminal
+                    .get("itemId")
+                    .and_then(Value::as_str)
+                    .and_then(|item| commands.started.get(item).copied())
+                    .unwrap_or(now),
                 ended_at_ms: None,
                 output_file: None,
                 summary: None,
                 last_line: None,
+                command: terminal
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                provider: Some(ProviderKind::Codex),
             };
             changed.push(task.clone());
             task
@@ -1549,6 +1746,8 @@ pub fn listed_mcp_servers(
                 status,
                 tools,
                 transport: server.http_origin.map(|_| "http".to_owned()),
+                managed: false,
+                label: None,
             })
         })
         .collect();
@@ -1752,6 +1951,7 @@ mod tests {
     #[test]
     fn background_terminals_start_and_end_as_listed() {
         let mut known = HashMap::new();
+        let none = CommandItems::default();
         let listed = |ids: &[&str]| {
             json!({ "data": ids.iter().map(|id| json!({ "processId": id, "itemId": format!("call_{id}"),
                 "command": format!("sleep 30 # {id}"), "cwd": "/w", "osPid": 4242 })).collect::<Vec<_>>() })
@@ -1765,7 +1965,7 @@ mod tests {
                 said.sort_by(|a, b| a.0.cmp(&b.0));
                 said
             };
-        let first = background_terminals(&listed(&["7"]), &mut known, 1_000);
+        let first = background_terminals(&listed(&["7"]), &mut known, &none, 1_000);
         assert_eq!(
             (
                 first[0].kind,
@@ -1784,23 +1984,258 @@ mod tests {
             said(background_terminals(
                 &listed(&["7", "9"]),
                 &mut known,
+                &none,
                 2_000
             )),
             [("9".to_owned(), BackgroundTaskStatus::Running, None)]
         );
         assert_eq!(
-            said(background_terminals(&listed(&["9"]), &mut known, 3_000)),
+            said(background_terminals(
+                &listed(&["9"]),
+                &mut known,
+                &none,
+                3_000
+            )),
             [("7".to_owned(), BackgroundTaskStatus::Completed, Some(3_000))]
         );
         assert_eq!(
             said(background_terminals(
                 &json!({ "data": [] }),
                 &mut known,
+                &none,
                 4_000
             )),
             [("9".to_owned(), BackgroundTaskStatus::Completed, Some(4_000))]
         );
         assert!(known.is_empty());
+    }
+
+    /// A command still running as its turn completes is a background terminal from that end
+    /// on, not from `/ps`'s next listing seconds later (seen live: its block read over in
+    /// between); that listing names the same task, and its item's end or its leaving the list
+    /// ends it. A stopped turn's commands go on with none.
+    #[test]
+    fn a_command_outliving_its_turn_is_a_terminal_from_its_turns_end() {
+        let command = |item: &str, status| ProviderEvent::Command {
+            item_id: item.into(),
+            command: "sleep 20 && echo done".into(),
+            cwd: None,
+            status,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        };
+        let turn = |status| ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status,
+            duration_ms: None,
+            usage: None,
+        };
+        let started = ProviderEvent::TurnStarted { turn_id: None };
+        let listed = json!({ "data": [{ "processId": "9", "itemId": "exec-a",
+            "command": "sleep 20 && echo done", "cwd": "/w" }] });
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-a", ItemStatus::InProgress)] {
+            commands.note(event, 5);
+        }
+        let end = turn(TurnStatus::Completed);
+        commands.note(&end, 0);
+        let said = outliving_turn(&end, &commands, &mut known);
+        assert_eq!(
+            said.iter()
+                .map(|task| (task.id.as_str(), task.status, task.started_at_ms))
+                .collect::<Vec<_>>(),
+            [("exec-a", BackgroundTaskStatus::Running, 5)]
+        );
+        // `/ps` names it: the same task, now with its command.
+        let named = background_terminals(&listed, &mut known, &commands, 7);
+        assert_eq!(
+            named
+                .iter()
+                .map(|task| (task.id.as_str(), task.label.as_str(), task.status))
+                .collect::<Vec<_>>(),
+            [(
+                "exec-a",
+                "sleep 20 && echo done",
+                BackgroundTaskStatus::Running
+            )]
+        );
+        assert!(background_terminals(&listed, &mut known, &commands, 8).is_empty());
+        let gone = background_terminals(&json!({ "data": [] }), &mut known, &commands, 9);
+        assert_eq!(
+            (gone[0].id.as_str(), gone[0].status),
+            ("exec-a", BackgroundTaskStatus::Completed)
+        );
+        // Its item ending before any listing ends it too.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-b", ItemStatus::InProgress), &end] {
+            commands.note(event, 5);
+        }
+        assert_eq!(outliving_turn(&end, &commands, &mut known).len(), 1);
+        let done = command("exec-b", ItemStatus::Completed);
+        let ended = ended_terminal(&done, &mut known, 6).expect("it ends with its item");
+        assert_eq!(ended.id, "exec-b");
+        assert!(known.is_empty());
+        // A stopped turn's command: none, then or at the next turn's end.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        let stop = turn(TurnStatus::Interrupted);
+        for event in [&started, &command("exec-c", ItemStatus::InProgress), &stop] {
+            commands.note(event, 5);
+        }
+        assert!(outliving_turn(&stop, &commands, &mut known).is_empty());
+        commands.note(&started, 6);
+        commands.note(&end, 7);
+        assert!(outliving_turn(&end, &commands, &mut known).is_empty());
+    }
+
+    /// Codex's `/ps` lists the command its turn waits on (checked on 0.166.0): it is no
+    /// background terminal while its turn waits on it, nor once it ended, nor when the user
+    /// stopped that turn (Codex says no end of the command; the Stop ends it). One the model
+    /// went on from, or still running when its turn completes, is.
+    #[test]
+    fn a_turns_own_command_is_no_background_terminal() {
+        let python = "python3 -c \"import time; time.sleep(30)\"";
+        let listed = |item: &str| {
+            json!({ "data": [{ "command": python, "cwd": "/w", "itemId": item,
+                "osPid": null, "processId": "77432", "cpuPercent": null, "rssKb": null }],
+                "nextCursor": null })
+        };
+        let command = |item: &str, status| ProviderEvent::Command {
+            item_id: item.into(),
+            command: format!("/bin/zsh -lc '{python}'"),
+            cwd: Some("/w".into()),
+            status,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        };
+        let turn = |status| ProviderEvent::TurnCompleted {
+            turn_id: Some("u".into()),
+            status,
+            duration_ms: None,
+            usage: None,
+        };
+        let started = ProviderEvent::TurnStarted {
+            turn_id: Some("u".into()),
+        };
+
+        // Stopped while it ran: listed before and after the turn's end, never a terminal.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-a", ItemStatus::InProgress)] {
+            commands.note(event, 0);
+        }
+        assert!(background_terminals(&listed("exec-a"), &mut known, &commands, 1).is_empty());
+        commands.note(&turn(TurnStatus::Interrupted), 0);
+        assert!(background_terminals(&listed("exec-a"), &mut known, &commands, 2).is_empty());
+        assert!(known.is_empty());
+
+        // Ended in its turn, still listed as the turn ends: no terminal either.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-b", ItemStatus::InProgress)] {
+            commands.note(event, 0);
+        }
+        assert!(background_terminals(&listed("exec-b"), &mut known, &commands, 1).is_empty());
+        for event in [
+            &command("exec-b", ItemStatus::Completed),
+            &turn(TurnStatus::Completed),
+        ] {
+            commands.note(event, 0);
+        }
+        assert!(background_terminals(&listed("exec-b"), &mut known, &commands, 2).is_empty());
+        assert!(background_terminals(&json!({ "data": [] }), &mut known, &commands, 3).is_empty());
+
+        // Still running when its turn completes: a background terminal from then on, and its
+        // leaving the list ends it.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [&started, &command("exec-c", ItemStatus::InProgress)] {
+            commands.note(event, 0);
+        }
+        assert!(background_terminals(&listed("exec-c"), &mut known, &commands, 1).is_empty());
+        commands.note(&turn(TurnStatus::Completed), 0);
+        let tasks = background_terminals(&listed("exec-c"), &mut known, &commands, 2);
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| (task.id.as_str(), task.status))
+                .collect::<Vec<_>>(),
+            [("77432", BackgroundTaskStatus::Running)]
+        );
+        // The next turn's start doesn't take it back.
+        commands.note(&started, 0);
+        assert!(background_terminals(&listed("exec-c"), &mut known, &commands, 3).is_empty());
+        let tasks = background_terminals(&json!({ "data": [] }), &mut known, &commands, 4);
+        assert_eq!(tasks[0].status, BackgroundTaskStatus::Completed);
+
+        // The model went on while it ran (its yield): a background terminal in its turn too.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [
+            &started,
+            &command("exec-d", ItemStatus::InProgress),
+            &ProviderEvent::MessageDelta {
+                item_id: "msg".into(),
+                text: "OK".into(),
+                phase: None,
+            },
+        ] {
+            commands.note(event, 0);
+        }
+        // Its age runs from when the command began (its approval, when it asked), not from
+        // when it was first listed.
+        commands.allowed("exec-d", 1);
+        let listed_d = background_terminals(&listed("exec-d"), &mut known, &commands, 2);
+        assert_eq!(listed_d.len(), 1);
+        assert_eq!(listed_d[0].started_at_ms, 1);
+        // The model polled it to its end in its turn: it ends with its item, not when `/ps`
+        // next misses it after the turn (that end would owe the thread a turn).
+        let done = command("exec-d", ItemStatus::Completed);
+        commands.note(&done, 0);
+        assert!(ended_terminal(&command("exec-x", ItemStatus::Completed), &mut known, 2).is_none());
+        let ended = ended_terminal(&done, &mut known, 2).expect("its terminal ends");
+        assert_eq!(
+            (ended.id.as_str(), ended.status, ended.ended_at_ms),
+            ("77432", BackgroundTaskStatus::Completed, Some(2))
+        );
+        commands.note(&turn(TurnStatus::Completed), 0);
+        assert!(background_terminals(&listed("exec-d"), &mut known, &commands, 3).is_empty());
+        assert!(background_terminals(&json!({ "data": [] }), &mut known, &commands, 4).is_empty());
+
+        // The turn ran another command while it ran (a yield, with no words between): a
+        // background terminal, its own repeated start never taking it back.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        for event in [
+            &started,
+            &command("exec-e", ItemStatus::InProgress),
+            &command("exec-f", ItemStatus::InProgress),
+            &command("exec-f", ItemStatus::Completed),
+            &command("exec-e", ItemStatus::InProgress),
+        ] {
+            commands.note(event, 0);
+        }
+        assert_eq!(
+            background_terminals(&listed("exec-e"), &mut known, &commands, 1).len(),
+            1
+        );
+
+        // The model took the turn back while it ran (its usage came) and polled it with no
+        // words: a background terminal, ending with its item.
+        let (mut commands, mut known) = (CommandItems::default(), HashMap::new());
+        let usage = ProviderEvent::Usage {
+            total: TokenUsage::default(),
+            last: None,
+            calls: Vec::new(),
+        };
+        for event in [&started, &command("exec-g", ItemStatus::InProgress), &usage] {
+            commands.note(event, 0);
+        }
+        assert_eq!(
+            background_terminals(&listed("exec-g"), &mut known, &commands, 1).len(),
+            1
+        );
+        let done = command("exec-g", ItemStatus::Completed);
+        commands.note(&done, 0);
+        assert!(ended_terminal(&done, &mut known, 2).is_some());
     }
 
     #[test]
@@ -2536,10 +2971,76 @@ mod tests {
             })
             .expect("an approval");
         assert_eq!(request.command.as_deref(), Some("rm -rf /other/wt"));
+        assert!(request.escalation);
         assert_eq!(
             request.paths,
             vec!["write /other/wt", "read /data", "network"]
         );
+    }
+
+    /// A subagent asks on its own thread (0.166.0, w23's live sample): the request is the
+    /// subagent's, named by its thread as its row is (D69); the session's own names none.
+    #[test]
+    fn a_subagents_approval_names_its_thread() {
+        let mut parser = Parser::live();
+        events(
+            &mut parser,
+            &json!({ "method": "turn/started", "params": { "threadId": "01a193c1-3a35",
+                "turn": { "id": "u0", "items": [], "status": "inProgress" } } }),
+        );
+        let mut asked = |thread: &str| {
+            let line = json!({ "id": 9, "method": "item/commandExecution/requestApproval", "params": {
+                "itemId": "exec-4c2d", "threadId": thread, "turnId": "01a193c1-4a3a", "startedAtMs": 0,
+                "command": "/bin/zsh -lc \"sleep 2 && python3 -c 'print(6*7)'\"", "cwd": "/w" } });
+            events(&mut parser, &line)
+                .into_iter()
+                .find_map(|event| match event {
+                    ProviderEvent::ApprovalRequested { request } => Some(request),
+                    _ => None,
+                })
+                .expect("an approval")
+                .agent
+        };
+        assert_eq!(asked("01a193c1-4a05").as_deref(), Some("01a193c1-4a05"));
+        assert_eq!(asked("01a193c1-3a35"), None);
+    }
+
+    #[test]
+    fn a_plain_ask_is_no_escalation_so_the_level_can_answer_it() {
+        let mut parser = Parser::live();
+        let ask = |parser: &mut Parser, line: Value| {
+            events(parser, &line)
+                .into_iter()
+                .find_map(|event| match event {
+                    ProviderEvent::ApprovalRequested { request } => Some(request),
+                    _ => None,
+                })
+                .expect("an approval")
+        };
+        let ls = ask(
+            &mut parser,
+            json!({ "id": 1, "method": "item/commandExecution/requestApproval",
+            "params": { "itemId": "c1", "command": "/bin/zsh -c ls", "cwd": "/w", "startedAtMs": 0,
+                "threadId": "t1", "turnId": "u1" }}),
+        );
+        let edit = ask(
+            &mut parser,
+            json!({ "id": 2, "method": "item/fileChange/requestApproval",
+            "params": { "itemId": "f1", "startedAtMs": 0, "threadId": "t1", "turnId": "u1" }}),
+        );
+        let outside = ask(
+            &mut parser,
+            json!({ "id": 3, "method": "item/commandExecution/requestApproval",
+            "params": { "itemId": "c2", "command": "/bin/zsh -c ls", "cwd": "/w", "startedAtMs": 0,
+                "reason": "List a folder outside the workspace", "threadId": "t1", "turnId": "u1" }}),
+        );
+        assert!(!ls.escalation && !edit.escalation && outside.escalation);
+        assert!(crate::policy::level_allows(Access::AcceptEdits, &ls, None));
+        assert!(!crate::policy::level_allows(
+            Access::AcceptEdits,
+            &outside,
+            None
+        ));
     }
 
     #[test]
@@ -2625,6 +3126,8 @@ mod tests {
             status,
             tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
             transport: transport.map(str::to_owned),
+            managed: false,
+            label: None,
         }
     }
 

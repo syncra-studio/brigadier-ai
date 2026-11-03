@@ -259,10 +259,7 @@
   },
   "$defs": {
     "agent": {
-      "enum": [
-        "claude",
-        "codex"
-      ]
+      "type": "string"
     }
   }
 }

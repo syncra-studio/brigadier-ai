@@ -5,9 +5,10 @@
 //! after a restart. Refused, in plain words, while its turn runs without --after-turn, for a
 //! worker, for a CLI turned off and when the rules allow no model there.
 
+use brigadier_providers::ProviderKind as Agent;
 use std::sync::{Arc, Mutex};
 
-use brigadier_cli::protocol::{Agent, CliRequest, GRANT_ENV, SESSION_ENV};
+use brigadier_cli::protocol::{CliRequest, GRANT_ENV, SESSION_ENV};
 use brigadier_providers::ProviderKind;
 use serde_json::Value;
 
@@ -184,6 +185,66 @@ async fn asked_from_its_turn_a_claude_session_continues_on_codex_once_with_its_n
         .await
         .unwrap();
     assert_eq!(again.0, ContinueWhen::Already);
+    flow.stop().await;
+}
+
+/// demo9 O57 item 15: a background job ends inside the turn that asks for the move (the CLI tells
+/// its end there, as Claude does with a message that woke it while only that job held its block):
+/// once that turn ends the session still moves, though the job's end is still owed a turn of
+/// its own for a while.
+#[tokio::test]
+async fn a_job_that_ended_inside_the_asking_turn_never_holds_the_move() {
+    let turns = Turns::default();
+    let script: Script = {
+        let turns = turns.clone();
+        Arc::new(move |turn: Turn| {
+            let turns = turns.clone();
+            Box::pin(async move {
+                turns.lock().unwrap().push((
+                    turn.provider,
+                    turn.native_id.clone(),
+                    turn.input.clone(),
+                ));
+                if turn.provider == ProviderKind::Codex {
+                    return Reply::text("Carrying on, on Codex.");
+                }
+                if turn.input.starts_with(NUDGE_MARK) {
+                    std::fs::write(note_of(&turn.input), "Doing now: nothing.").unwrap();
+                    return Reply::text("Handed off.");
+                }
+                if turn.input.contains("Move to Codex.") {
+                    for running in [vec!["job".to_owned()], Vec::new()] {
+                        let _ = turn
+                            .events
+                            .send(brigadier_providers::ProviderEvent::BackgroundJobs { running })
+                            .await;
+                    }
+                    let answer = brigadier(
+                        &turn,
+                        CliRequest::ContinueOn {
+                            agent: Agent::Codex,
+                            after_turn: true,
+                        },
+                    )
+                    .await;
+                    assert_eq!(answer["when"], "after-turn", "{answer}");
+                    return Reply::text("The job ended; moving to Codex after this turn.");
+                }
+                Reply::text("Noted.")
+            })
+        })
+    };
+    let flow = Flow::start("continue-on-owed-job", options(), script).await;
+    flow.say("Move to Codex.").await;
+    flow.until("a turn on Codex", |_| {
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(provider, ..)| *provider == ProviderKind::Codex)
+    })
+    .await;
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
     flow.stop().await;
 }
 
@@ -493,6 +554,7 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
         note: Some("Next: wait."),
         start_path: &record.join("handoff/1-start.md"),
         death: None,
+        check: "Hand-off check: the ledger has no open items.",
         entries: &entries,
         blobs: flow.core.store().blobs().root(),
     });

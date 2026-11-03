@@ -18,7 +18,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     error?: string;
     viewport: { width: number; height: number };
     firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; topFadeScrolls: boolean; topFadeAt: number; bottomFade: number; buttonOverText: number };
-    button: { within: Button; past: Button };
+    button: { within: Button; past: Button; overText: number };
     switchBack: { offset: number; restoredOffset: number | null; early: (number | null)[]; loading: boolean; placeholders: number; distance: number; restoredDistance: number };
     revealedBack: { offset: number; restoredOffset: number | null };
     fullscreen: {
@@ -45,11 +45,14 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
       grownWindow: number;
     };
     resizeAtBottom: { placed: number; shrunk: number; grown: number };
+    cardAtSend: { placed: { userTop: number; room: number }; shown: { tops: number[]; room: number } };
+    approvalAtWork: { placed: { userTop: number; room: number }; shown: { tops: number[]; room: number }; gone: { tops: number[]; room: number } };
+    shrinkWithBrowserMove: { placed: number; tops: number[] };
     returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
-    sendScrolledUp: { top: number; after: number; button: boolean };
+    sendScrolledUp: { moved: boolean; distance: number; inView: boolean; button: boolean };
     newChat: { userTop: number | null; top: number };
-    capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
     working: { distance: number; rows: number };
+    fractionalRows: number[];
     sendBeforeItsTurnIsRead: { t: number; row: string | null; top: number | null; blank: boolean }[];
   };
   assert.equal(seen.error, undefined);
@@ -79,6 +82,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.deepEqual(seen.button.past.size, [32, 32]);
   near(seen.button.past.aboveStack, 24, "button above the composer");
   near(seen.button.past.offCentre, 0, "button off the column's centre");
+  // Shown, the solid background reaches the button's top and the text fades out over the 32px
+  // above it: no text runs under the button.
+  near(seen.button.overText, -32, "the fade's top above the shown button's top by");
 
   // A switch away and back restores the place, while the history and long replies load late: its
   // distance from the bottom, within the pixel fractional rows round the scroll height by, and
@@ -88,8 +94,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(switchBack.restoredOffset !== null && Math.abs(switchBack.restoredOffset - switchBack.offset) <= 1, `row at ${switchBack.restoredOffset}, was ${switchBack.offset}`);
   const shown = switchBack.early.filter((offset) => offset !== null);
   assert.ok(shown.every((offset) => offset === shown.at(-1)), `moved while loading: ${switchBack.early.join(", ")}`);
-  // While its history loads the column stays empty, saying so only to a screen reader.
-  assert.deepEqual([switchBack.loading, switchBack.placeholders], [true, 0]);
+  // While its history loads the conversation shown before stays: never an empty, loading column.
+  assert.deepEqual([switchBack.loading, switchBack.placeholders], [false, 0]);
   // An old turn scrolled to, once mounted, is found again in its place.
   assert.ok(seen.revealedBack.restoredOffset !== null && Math.abs(seen.revealedBack.restoredOffset - seen.revealedBack.offset) <= 1, `old turn at ${seen.revealedBack.restoredOffset}, was ${seen.revealedBack.offset}`);
 
@@ -127,15 +133,11 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   near(composerGrows.atBottom.lastGap, 32, "last content to the notice");
   near(composerGrows.atBottom.button.aboveStack, 24, "button above the notice");
   assert.equal(composerGrows.shrunk.distance, 0);
-  near(seen.capsule.atBottom.capsuleInStack, 0, "capsule at the top of the footer");
-  assert.equal(seen.capsule.atBottom.capsule, true);
-  near(seen.capsule.atBottom.lastGap, 32, "last content to the capsule");
-  near(seen.capsule.button.aboveStack, 24, "button above the capsule");
 
   // A send: a critically damped spring of about half a second, to 1px above the bottom, puts the
   // turn's end a third of the way down the view (at least 240px), room below it down to the
-  // composer. The answer fills the room without moving the view and runs on under the composer,
-  // the button showing; back at the bottom, it is followed.
+  // composer. The answer fills the room without moving the view, then is followed; scrolled up,
+  // it runs on under the composer, the button showing; back at the bottom, it is followed.
   const { send } = seen;
   // The conversation view has Find: its bar's band (2.75rem + 1.5rem) stays above the first row.
   near(send.topPadding, 68, "the list's top padding");
@@ -155,8 +157,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(send.placed.room > 0, geometry);
   assert.deepEqual(send.filled.tops, [send.filled.top], "the view moved while the answer filled the room");
   assert.equal(send.filled.room, 0);
-  assert.ok(send.filled.distance > 24, `the answer ran on below: ${send.filled.distance}`);
-  assert.equal(send.filled.button.shown, true);
+  assert.ok(send.filled.distance <= 1, `past the room the answer is followed: ${send.filled.distance}`);
+  assert.equal(send.filled.button.shown, false);
   assert.deepEqual(send.unfollowed.tops, [send.unfollowed.top]);
   assert.ok(send.unfollowed.distance > 200, "the answer went on under the composer");
   assert.equal(send.unfollowed.button.shown, true);
@@ -166,6 +168,19 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(send.shrunkWindow, 0);
   assert.equal(send.grownWindow, 0);
   assert.deepEqual(seen.resizeAtBottom, { placed: 1, shrunk: 0, grown: 0 });
+  // A card above the composer right after a send: the room takes it and the message stays put.
+  const card = `card at send: ${JSON.stringify(seen.cardAtSend)}`;
+  assert.deepEqual(seen.cardAtSend.shown.tops, [seen.cardAtSend.placed.userTop], card);
+  assert.ok(seen.cardAtSend.shown.room < seen.cardAtSend.placed.room && seen.cardAtSend.shown.room > 0, card);
+  // A working turn's approval card coming as its rows shrink (its words replaced by the ask), and
+  // going: the room takes both, so the message never moves in a painted frame.
+  const asked = `approval at work: ${JSON.stringify(seen.approvalAtWork)}`;
+  assert.deepEqual(seen.approvalAtWork.shown.tops, [seen.approvalAtWork.placed.userTop], asked);
+  assert.deepEqual(seen.approvalAtWork.gone.tops, [seen.approvalAtWork.placed.userTop], asked);
+  assert.ok(seen.approvalAtWork.shown.room > 0, asked);
+
+  // Its rows shrinking as the browser moves the view in the same frame: the message stays put.
+  assert.deepEqual(seen.shrinkWithBrowserMove.tops, [seen.shrinkWithBrowserMove.placed], JSON.stringify(seen.shrinkWithBrowserMove));
 
   // Left right after a send and back once it answered: the bottom, without the room.
   const { returnAfterSend } = seen;
@@ -174,8 +189,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(returnAfterSend.roomBack, 0);
   near(returnAfterSend.lastGap, 32, "returned to the bottom");
   assert.equal(returnAfterSend.button, false);
-  // Scrolled up, a send doesn't move the view: the turn is added below, the scroll button shown.
-  assert.deepEqual(seen.sendScrolledUp, { top: seen.sendScrolledUp.top, after: seen.sendScrolledUp.top, button: true });
+  // Scrolled up, a send still places its turn: the view goes to it, its message in view with room
+  // below, 1px from the bottom, and no scroll button (spec §4.6).
+  assert.deepEqual(seen.sendScrolledUp, { moved: true, distance: 1, inView: true, button: false });
 
   // The first message of a new chat sits at the top padding; an unseen working chat opens at
   // its bottom.
@@ -183,6 +199,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(seen.newChat.top, 0);
   assert.equal(seen.working.distance, 0);
   assert.ok(seen.working.rows >= 2);
+
+  // Rows of fractional height keep the content's height whichever of them are mounted.
+  assert.equal(new Set(seen.fractionalRows).size, 1, `content heights: ${seen.fractionalRows.join(", ")}`);
   // A send whose message its CLI says before the view reads its turns again: the bubble shows
   // from the first frame, under one row all along (never mounted afresh under the CLI's id, the
   // view thrown off the sent turn's place into room not drawn yet), and stays where it was placed.
@@ -204,4 +223,20 @@ test("a conversation opened for the first time shows its replies whole, never pl
   const { shown, empty, placeholders, rows } = seen.coldOpen;
   assert.deepEqual({ shown, empty, placeholders }, { shown: true, empty: 0, placeholders: 0 });
   assert.ok(rows > 0);
+});
+
+// O57 item 16: at the bottom of a long thread, a send while its turn works waits in the queue;
+// once its own turn shows, it is placed as a sent one is, near the top with room below, with no
+// scroll by hand. On a page of its own: an earlier step's sent turn would place it anyway.
+test("a message sent while the thread works shows its turn in view once it starts", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1&only=sendWhileWorking", "thread-scroll-result", 60000)) as {
+    error?: string;
+    viewport: { height: number };
+    sendWhileWorking: { queued: boolean; inView: boolean; userTop: number | null; room: number; distance: number };
+  };
+  assert.equal(seen.error, undefined);
+  const { queued, inView, userTop, room } = seen.sendWhileWorking;
+  assert.deepEqual({ queued, inView }, { queued: true, inView: true });
+  assert.ok(room > 0, `room ${room}`);
+  assert.ok(userTop !== null && userTop < seen.viewport.height / 3, `top ${userTop}`);
 });

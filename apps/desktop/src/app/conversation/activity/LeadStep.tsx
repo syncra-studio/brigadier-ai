@@ -1,12 +1,16 @@
+import { useContext } from "react";
+
 import { type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { EditedFileRows, editedFiles } from "@/app/conversation/activity/EditedFiles";
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { leadStepDetail } from "@/app/conversation/activity/leadStepDetail";
-import { basename, type StepWords, toolStepWords, webSearchWords } from "@/app/conversation/activity/words";
+import { basename, isSubagentStart, type StepWords, toolStepWords, webSearchWords } from "@/app/conversation/activity/words";
 import { useViewConversation } from "@/app/conversation/viewContext";
+import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import type { Task } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 import { useBoard } from "@/state/board";
+import { subagentPanel } from "@/state/nativeWorkers";
 
 function hostOf(url: string): string {
   try {
@@ -50,11 +54,22 @@ export function tookFor(step: LeadStep): string | undefined {
   return ms >= 1000 ? `in ${formatDuration(ms)}` : undefined;
 }
 
-/** One step of the lead's own work, as a row of its group; it opens to what the step did. */
+/** How long a subagent's call ran, once over, after its row's words: "· 15s" (D96). */
+export function ranFor(ms: number | undefined): string | undefined {
+  return ms !== undefined && ms >= 1000 ? `· ${formatDuration(ms)}` : undefined;
+}
+
+/** One step of the lead's own work, as a row of its group; it opens to what the step did, a subagent's to its transcript (D96). */
 export function LeadStepRow({ step }: { step: LeadStep }) {
   const tasks = useBoard((s) => s.board?.tasks);
   const conversationId = useViewConversation()?.id ?? null;
+  const { setPanel } = useContext(AgentsPanelContext);
   const described = describeLeadStep(step, tasks);
+  const { kind } = step;
+  if (kind.type === "tool" && conversationId && isSubagentStart(kind.name)) {
+    const ran = kind.status === "inProgress" || kind.endedAtMs === undefined || step.atMs === undefined ? undefined : kind.endedAtMs - step.atMs;
+    return <StepRow {...described} trail={ranFor(ran)} onOpen={() => setPanel(subagentPanel(conversationId, kind.itemId))} slot="orchestrator-step" />;
+  }
   // A file change with its files counted: a row per file, each with its link and "+7 −2".
   const files = editedFiles(step);
   if (files) return <EditedFileRows step={step} files={files} conversationId={conversationId} />;

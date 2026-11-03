@@ -129,6 +129,24 @@ fn script(seen: Arc<Seen>) -> Script {
                 .unwrap()
                 .push((turn.native_id.clone(), turn.account.clone()));
             let said = crate::manager::seam::without_handoff(&turn.input);
+            if turn
+                .input
+                .contains("Hand-off check: your hand-off note at ")
+            {
+                // Goal 13's fix: the note names the open item it left out.
+                let path = turn.input["Hand-off check: your hand-off note at ".len()
+                    + turn
+                        .input
+                        .find("Hand-off check: your hand-off note at ")
+                        .unwrap()..]
+                    .split(" leaves out")
+                    .next()
+                    .unwrap()
+                    .to_owned();
+                let text = std::fs::read_to_string(&path).unwrap();
+                std::fs::write(&path, format!("{text}\nCarrying L1.")).unwrap();
+                return Reply::text("Fixed.");
+            }
             if turn.input.starts_with(NUDGE_MARK) {
                 std::fs::write(
                     note_of(&turn.input),
@@ -758,4 +776,115 @@ async fn a_successor_keeps_its_workers_routing_account_and_grants() {
         assert_eq!(task.route.choice.effort.as_deref(), Some("low"), "{name}");
         flow.stop().await;
     }
+}
+
+/// Goals 2 + 13 for a worker: three compactions → rebirth → three → rebirth. Each first note
+/// leaves its open promise out; the check asks once, the worker names it, and each successor's
+/// first message carries the note and the check that passed (core-goals D9, D121).
+#[tokio::test]
+async fn a_worker_goes_through_two_rebirths_its_check_fixing_its_note_each_time() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-seam-cycle", seen.clone()).await;
+    let ledger = record(&flow, &task);
+    std::fs::create_dir_all(&ledger).unwrap();
+    std::fs::write(
+        ledger.join("ledger.md"),
+        "- L1 · 11-01 21:05 · gen 1 · Open: promise to report the grow count\n\
+         - L2 · 11-01 21:06 · gen 1 · Decision: grow in steps of one\n",
+    )
+    .unwrap();
+    let mut heard = 1;
+    for generation in [2, 3] {
+        for _ in 0..crate::manager::long_sessions::HANDOFF_AFTER {
+            send(&flow, &task, "Grow.").await;
+            heard += 1;
+            until(&flow, "the grow heard", || seen.heard("finished") == heard).await;
+        }
+        until(&flow, "the generation closed", || {
+            matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+        })
+        .await;
+        flow.idle().await;
+        send(&flow, &task, "Next.").await;
+        heard += 1;
+        until(&flow, "the successor", || {
+            seam_file(&flow, &task).generation == generation
+        })
+        .await;
+        until(&flow, "its turn heard", || seen.heard("finished") == heard).await;
+        flow.idle().await;
+    }
+    let fixes = seen.given("Hand-off check: your hand-off note at");
+    assert_eq!(fixes.len(), 2, "{fixes:#?}");
+    for (_, fix) in &fixes {
+        assert!(fix.starts_with(NUDGE_MARK));
+        assert!(
+            fix.contains("L1 · 11-01 21:05") && !fix.contains("L2 ·"),
+            "{fix}"
+        );
+    }
+    let starts = seen.given(HANDOFF_MARK);
+    assert_eq!(starts.len(), 2, "{starts:#?}");
+    for (_, start) in &starts {
+        assert!(start.contains("Carrying L1."), "{start}");
+        assert!(
+            start.contains("Hand-off check: every open item of the ledger (1) is in the note"),
+            "{start}"
+        );
+        assert!(start.contains(CONTEXT_POINTER));
+    }
+    // The fix turns are the worker's own: its session hears none of them.
+    assert_eq!(seen.heard("finished"), heard);
+    let view = flow
+        .manager
+        .worker_thread(&flow.conversation, &task.id)
+        .await
+        .unwrap();
+    assert_eq!(view.seams.len(), 2, "{:?}", view.seams);
+    assert!(
+        view.seams
+            .iter()
+            .all(|seam| seam.nudge.is_some() && seam.at.is_some()),
+        "{:?}",
+        view.seams
+    );
+    flow.stop().await;
+}
+
+/// Development builds' on-demand compaction of an idle worker goes through its CLI's own
+/// compaction: its session hears none of them, and the third asks for its note (goal 2).
+// Uses the debug-only fault injections, as tab_chat_tests does.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn three_compactions_asked_for_on_an_idle_worker_hand_it_off_unheard() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-seam-debug-compact", seen.clone()).await;
+    let key = || crate::manager::fault::FaultKey::Task(task.id.clone());
+    for n in 1..=crate::manager::long_sessions::HANDOFF_AFTER {
+        flow.manager.debug_compact(key()).await.unwrap();
+        until(&flow, "the compaction counted", || {
+            read_long(&record(&flow, &task)).compactions == n
+                || matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+        })
+        .await;
+        flow.idle().await;
+    }
+    until(&flow, "the generation closed", || {
+        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+    })
+    .await;
+    assert_eq!(seen.given(NUDGE_MARK).len(), 1);
+    assert_eq!(
+        seen.heard("finished"),
+        1,
+        "{:?}",
+        seen.parent.lock().unwrap()
+    );
+    // The next message starts its successor, as after any hand-off.
+    send(&flow, &task, "Next.").await;
+    until(&flow, "the successor", || {
+        seam_file(&flow, &task).generation == 2
+    })
+    .await;
+    flow.stop().await;
 }

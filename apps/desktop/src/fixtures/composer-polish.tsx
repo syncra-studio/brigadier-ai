@@ -267,6 +267,19 @@ async function pausedCase(seen: Record<string, unknown>) {
 const placeholder = () => field()?.getAttribute("aria-placeholder") ?? null;
 
 /**
+ * Its request (re)started at `at`, its message sent then, as it would be: the thread's block,
+ * whose time the placeholder reads (D94), starts with it.
+ */
+function startAt(at: number, more: Partial<UserRequest> = {}) {
+  useApp.setState(({ threads }) => ({
+    threads: { ...threads, [id]: { ...threads[id]!, items: threads[id]!.items.map((message) => (message.id === "u1" ? { ...message, createdAtMs: at } : message.id === "a1" ? { ...message, createdAtMs: at + 1 } : message)) } },
+  }));
+  useBoard.setState(({ board }) =>
+    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "working" }, startedAtMs: at, endedAtMs: null, ...more } } } } : {},
+  );
+}
+
+/**
  * #297: while a task runs, the empty composer's placeholder says for how long ("Working for 2m
  * 5s"), from a second in, ticking; typed text hides it, and the request's end takes it away.
  */
@@ -274,9 +287,7 @@ async function workingCase(seen: Record<string, unknown>) {
   await until("the editor", () => field() !== null);
   seen.idle = placeholder();
   // A request that has worked for a while.
-  useBoard.setState(({ board }) =>
-    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "working" }, startedAtMs: Date.now() - 125_000, endedAtMs: null } } } } : {},
-  );
+  startAt(Date.now() - 125_000);
   await until("the working placeholder", () => placeholder()?.startsWith("Working for") ?? false, 3000).catch(() => {});
   const first = placeholder();
   seen.working = first;
@@ -286,18 +297,14 @@ async function workingCase(seen: Record<string, unknown>) {
   await until("the placeholder back", () => placeholder() === seen.idle, 3000).catch(() => {});
   seen.done = placeholder();
   // One that just started: the usual words for its first second.
-  useBoard.setState(({ board }) =>
-    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "working" }, startedAtMs: Date.now(), endedAtMs: null } } } } : {},
-  );
+  startAt(Date.now());
   await sleep(100);
   seen.justStarted = placeholder();
   await until("a second in", () => placeholder()?.startsWith("Working for") ?? false, 3000).catch(() => {});
   seen.secondIn = placeholder();
   // #366: once it only waits for the answer to its question card, nothing working, no timer.
   const at = Date.now() - 125_000;
-  useBoard.setState(({ board }) =>
-    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, startedAtMs: at, worked: [{ fromMs: at, toMs: null }] } } } } : {},
-  );
+  startAt(at, { worked: [{ fromMs: at, toMs: null }] });
   await until("the timer", () => placeholder()?.startsWith("Working for 2m") ?? false, 3000).catch(() => {});
   // #446: a follow-up joins the running turn as a request of its own, started now: the turn's
   // time still runs from its first message, as its work header says.

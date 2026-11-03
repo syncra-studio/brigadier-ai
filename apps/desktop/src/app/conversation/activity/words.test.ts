@@ -84,6 +84,24 @@ test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("Bash", "completed", "ls apps/desktop"), "Listed files in desktop");
 });
 
+test("each CLI's own name for a tool reads as the same action, never the bare name", () => {
+  for (const [mine, other, detail] of [
+    ["glob", "Glob", "**/*.js"],
+    ["grep", "Grep", "add"],
+    ["webfetch", "WebFetch", "https://tauri.app/start/"],
+    ["websearch", "WebSearch", "tauri"],
+    ["skill", "Skill", "brigade"],
+  ] as const) {
+    for (const status of ["inProgress", "completed"] as const) {
+      assert.equal(lead(mine, status, detail), lead(other, status, detail));
+      assert.doesNotMatch(lead(mine, status, detail), /^(Using|Used) (glob|grep|webfetch|websearch|skill)$/);
+    }
+  }
+  assert.equal(lead("list", "inProgress", "src"), "Listing files in src");
+  // OpenCode names its skill by `id`.
+  assert.equal(agentDetail("skill", JSON.stringify({ id: "brigade" })), "brigade");
+});
+
 test("the main thread and a worker's thread say the same step the same way", () => {
   const pairs: [ToolStep, ActionItem][] = [
     [call("Read", "completed", "/repo/apps/desktop/src/app/RequestBlock.tsx"),
@@ -112,7 +130,7 @@ test("a run sums up its kinds comma-joined, edits, reading, commands and the web
   assert.equal(summarize([words("Bash", "git status"), words("Read", "a.ts"), words("Bash", "pnpm test")]), "Read files, ran commands");
   // Reading, listing and searching sum up together, each in its rows' own verb (D58).
   assert.equal(summarize([words("Read", "a.ts"), words("Bash", "ls src"), words("Grep", "add"), words("Bash", "sleep 4")]), "Read files, listed files, searched files, ran a command");
-  assert.equal(summarize([words("Bash", "echo alpha"), words("Bash", "ls"), words("Agent", JSON.stringify({ description: "Read README first line" }))]), "Listed files, ran a command, ran an agent");
+  assert.equal(summarize([words("Bash", "echo alpha"), words("Bash", "ls"), words("Agent", JSON.stringify({ description: "Read README first line" }))]), "Listed files, ran a command, ran a subagent");
   assert.equal(summarize([words("Grep", "add"), words("Grep", "sub")]), "Searched files");
   assert.equal(summarize([words("Bash", "node math.js"), words("apply_patch", "math.js")]), "Edited a file, ran a command");
   assert.equal(summarize([words("imagegen"), words("Read", "a.ts")]), "Read files, created an image");
@@ -302,19 +320,19 @@ test("three or more back-to-back calls of a tool with no words of its own fold; 
 /** A finished call's words. */
 const done = (name: string, detail: string) => toolStepWords(call(name, "completed", detail));
 
-test("a subagent's row names its task, a skill's its name, and several sum up as agents (B1)", () => {
+test("a subagent's row names its task once over, a skill's its name, and several sum up as subagents (B1, D96)", () => {
   // Claude's Agent call by its description, Codex's by its prompt's first line.
   const claude = agentDetail("Agent", JSON.stringify({ description: "Find the parser", prompt: "Look in src for…", subagent_type: "Explore" }));
   assert.equal(claude, "Find the parser");
   assert.equal(agentDetail("agents/spawnAgent", "Review the diff\nFocus on the reader."), "Review the diff");
   assert.equal(agentDetail("Skill", JSON.stringify({ skill: "brigade", args: "" })), "brigade");
   assert.equal(agentDetail("Bash", JSON.stringify({ command: "ls", description: "List" })), undefined);
-  assert.equal(lead("Agent", "inProgress", claude), "Running agent: Find the parser");
-  assert.equal(lead("Agent", "completed", claude), "Ran agent: Find the parser");
-  assert.equal(lead("agents/spawnAgent", "completed", "Review the diff"), "Ran agent: Review the diff");
-  assert.equal(lead("Task", "completed"), "Ran an agent");
+  assert.equal(lead("Agent", "inProgress", claude), "Running a subagent");
+  assert.equal(lead("Agent", "completed", claude), "Ran a subagent: Find the parser");
+  assert.equal(lead("agents/spawnAgent", "completed", "Review the diff"), "Ran a subagent: Review the diff");
+  assert.equal(lead("Task", "completed"), "Ran a subagent");
   assert.equal(lead("Skill", "completed", "brigade"), "Used skill brigade");
-  assert.equal(summarize([done("Agent", "Find the parser")]), "Ran an agent");
-  assert.equal(summarize([done("Agent", "Find the parser"), done("agents/spawnAgent", "Review the diff"), done("Read", "a.ts")]), "Read files, ran agents");
+  assert.equal(summarize([done("Agent", "Find the parser")]), "Ran a subagent");
+  assert.equal(summarize([done("Agent", "Find the parser"), done("agents/spawnAgent", "Review the diff"), done("Read", "a.ts")]), "Read files, ran subagents");
   assert.equal(summarize([done("Skill", "brigade"), done("Skill", "grilling")]), "Used skills");
 });

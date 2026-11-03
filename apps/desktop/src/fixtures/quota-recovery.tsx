@@ -65,7 +65,7 @@ const thread: ThreadView = { entries: [{ atMs: now, event: { type: "message", it
     end: params.has("failed") ? "failed" : null, error: params.has("unrelated") ? "The network connection failed" : params.has("failed") ? "You've hit your session limit" : null, requests: ["r1"],
     ...(!params.has("unrelated") && !params.has("old") && { limit: { kind: "usageWindow" as const, resetsAtMs: RESET - 3_600_000, window: "five_hour" } }) }],
   background: [{ id: "native", itemId: null, kind: "agent", label: "Independent native subagent checking the project", status: "running",
-    startedAtMs: now, endedAtMs: null, outputFile: null, summary: null, lastLine: null }] };
+    startedAtMs: now, endedAtMs: null, outputFile: null, summary: null, lastLine: null, provider: "claude" }] };
 if (params.has("later") || confirmation) {
   thread.entries.push({ atMs: now + 20_000, event: { type: "message", itemId: "u2", role: "user", text: confirmation ? "Keep going with the next change." : "Another request." } });
   thread.turns.push({ userMessage: "u2", startedAtMs: now + 20_000, endedAtMs: now + 20_100,
@@ -122,7 +122,7 @@ try {
     const seen: Record<string, unknown> = { initial: text(strip()), strips: document.querySelectorAll("[data-slot=quota-wait-strip]").length,
       oldCards: document.querySelectorAll("[data-slot=schedule-card]").length, pills: document.querySelectorAll("[data-slot=quota-wait-pill]").length,
       initialLive: liveText(), header: text(document.querySelector("[data-slot=request-work-label]")),
-      native: text(document.querySelector("[data-slot=subagents-strip]")),
+      native: text(document.querySelector("[data-slot=workers-strip]")),
       rawEnd: useCliThread.getState().views[ID]?.turns.at(-1)?.end,
       quotaSourceEnd: useCliThread.getState().views[ID]?.turns[0]?.end,
       quotaErrors: document.querySelectorAll("[data-slot=error-state], [data-slot=usage-limit]").length,

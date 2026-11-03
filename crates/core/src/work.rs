@@ -1070,6 +1070,16 @@ pub struct PlainWorker {
     /// session sends it something new: cut off again meanwhile, it waits for a message.
     #[serde(default)]
     pub auto_resumed: bool,
+    /// Its session paused it (`brigadier pause`, D7): it waits for `brigadier resume`, never a
+    /// reset; a quota wait is [`Task::quota_wait`], not this.
+    #[serde(default)]
+    pub paused: bool,
+    /// What reached it while paused, given with its resume.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<String>,
+    /// A requested resume, kept until its CLI took this uniquely marked input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_input: Option<String>,
 }
 
 /// A worker's use of the project's Brain, shown on its row and in the Inspector
@@ -1231,6 +1241,14 @@ pub struct Approval {
     pub state: CardState,
     pub created_at_ms: i64,
     pub resolved_at_ms: Option<i64>,
+}
+
+impl Approval {
+    /// A worker CLI's own permission prompt, its subagents' included (D48, D166): its
+    /// orchestrator answers it, never the user.
+    pub fn for_orchestrator(&self) -> bool {
+        matches!(&self.subject, ApprovalSubject::Cli { .. } if self.task_id.is_some())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1425,7 +1443,7 @@ pub struct QueuedMessage {
     pub queued_at_ms: i64,
     pub edited_at_ms: Option<i64>,
     /// Sent while the session's turn works: the session has it and judges it with `brigadier
-    /// queue` (run2-D40); it waits here, Deciding, until it is judged or joins by itself.
+    /// queue` (run2-D40); it waits here, Deciding, until it is judged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub deciding: bool,
@@ -1444,21 +1462,16 @@ pub struct QueuedMessage {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub offer_session: bool,
-}
-
-/// A queued message the session sent on to one of its workers (`brigadier queue <id> worker
-/// <worker-id>`, run2-D40/D38): the one-line notice the rail keeps until the user dismisses it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SentToWorker {
-    /// The queued message's id.
-    pub id: String,
-    pub text: String,
-    pub worker: TaskId,
-    /// The worker's number and title then.
-    pub worker_number: u32,
-    pub worker_title: String,
-    pub sent_at_ms: i64,
+    /// The user's message to this worker of the session's (the composer's To:), sent while it
+    /// worked: it goes to that worker alone, as its next turn, never to the session (goal 8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worker: Option<TaskId>,
+    /// Another session's message (goal 4): it is that session's, never the user's, and its id
+    /// is the message's own (`sm-…`), so it is queued once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub peer: Option<crate::model::PeerRef>,
 }
 
 /// The thread's command that a message sent into its running turn waits behind: the thread
@@ -1478,17 +1491,15 @@ pub struct MessageQueue {
     pub items: Vec<QueuedMessage>,
     /// The user interrupted the turn; nothing is sent until they resume.
     pub paused: bool,
-    /// What the session sent on to its workers: notices, never sent from here.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[ts(as = "Option<Vec<SentToWorker>>", optional)]
-    pub sent: Vec<SentToWorker>,
 }
 
 impl MessageQueue {
-    /// The next message in queue order, past those waiting for the user's pick on a new
-    /// session offer.
+    /// The session's next message in queue order, past those waiting for the user's pick on a
+    /// new session offer and those for a worker.
     pub fn next_to_send(&self) -> Option<&QueuedMessage> {
-        self.items.iter().find(|item| !item.offer_session)
+        self.items
+            .iter()
+            .find(|item| !item.offer_session && item.worker.is_none())
     }
 
     /// The next message to send now: none while the next one is still Deciding.
@@ -1513,6 +1524,32 @@ pub enum RunState {
     /// Its CLI stopped; the next message resumes it.
     Hibernated,
     Failed,
+}
+
+/// A step of starting a new session's turn before its CLI's first output: a row of the
+/// thread's setup line ("Fetched the latest main", "Created … from main", …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum StartStep {
+    /// Fetching the base's remote.
+    Fetching,
+    /// Making the session's worktree and branch.
+    Worktree,
+    /// Running the repository's setup script.
+    SetupScript,
+    /// Starting the CLI.
+    Cli,
+}
+
+/// A start step reached (or failed, with `error`), as the board keeps it for the thread.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StartStepRecord {
+    pub step: StartStep,
+    pub error: Option<String>,
+    pub request_id: Option<String>,
+    /// Where it happened in the conversation's stream.
+    pub position: i64,
 }
 
 /// What the sidebar shows about a conversation: whether its CLI works, and what waits for the
@@ -1805,6 +1842,10 @@ pub enum OrchestratorStepKind {
     },
     /// "Stopped {worker}": the orchestrator's `stop_worker`, or the user's Stop all.
     Stopped { task_id: TaskId, reason: String },
+    /// "Paused {worker}": its session's `brigadier pause` (D7).
+    Paused { task_id: TaskId },
+    /// "Resumed {worker}": its session's `brigadier resume` (D7).
+    Resumed { task_id: TaskId },
     /// "Reviewed {worker}'s change": an older Brigadier's one-shot code review of the tasks'
     /// work ended with a verdict (clean, or `findings` problems found). Nothing records it now.
     Reviewed {
@@ -1822,7 +1863,19 @@ pub enum OrchestratorStepKind {
     /// "Read {page}" (a Chat).
     ReadPage { url: String },
     /// "Created {worker} with the instructions: …" (the task holds its spec).
-    Created { task_id: TaskId },
+    Created {
+        task_id: TaskId,
+        /// It runs on another agent, model or effort than the user's routing picks now for its
+        /// kind of work (D8, D77): the line that says so. It ran all the same.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        off_routing: Option<String>,
+        /// What its `--work` row picked, as its start's reply says it ("Your row "Plan"
+        /// picked its agent, model and effort."): its start row's detail (goal 12).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        row: Option<String>,
+    },
     /// "Answered {worker}: {answer} — {why}".
     Answered {
         task_id: TaskId,
@@ -2255,7 +2308,7 @@ pub struct UserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub background_jobs: Option<u32>,
-    /// What it changed in its session's checkout (the turn diff card, the files-changed pill):
+    /// What it changed in its session's checkout (the turn diff card, Review and Revert):
     /// the thread's own edits and commands and its workers' landings, never what the user
     /// changed meanwhile. Absent on requests from before it was kept, and while it changed
     /// nothing.
@@ -2308,14 +2361,6 @@ pub struct MergedTurnChanges {
     pub tip: String,
     pub merge_commit: String,
     pub stat: DiffStat,
-}
-
-/// The files named before confirming a turn's start-tree restore.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnRevert {
-    pub expected_tree: String,
-    pub changed_after: Vec<String>,
 }
 
 /// A file Undo or Reapply leaves as it is, with why in plain words.

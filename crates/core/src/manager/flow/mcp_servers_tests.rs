@@ -19,6 +19,8 @@ where
 
 fn server(name: &str, status: McpStatus, tools: &[&str]) -> McpServerState {
     McpServerState {
+        label: None,
+        managed: false,
         name: name.into(),
         status,
         tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),

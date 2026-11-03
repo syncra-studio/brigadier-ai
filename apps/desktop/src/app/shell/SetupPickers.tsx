@@ -1,5 +1,6 @@
-import { type FC, useId, useRef, useState } from "react";
+import { type FC, useId, useMemo, useRef, useState } from "react";
 
+import { leadTransitions, nextShown, type ShownChoice } from "@/app/conversation/providerTransitions";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import { useAction } from "@/app/conversation/useAction";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
@@ -41,6 +42,7 @@ import {
 } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { continueOn, openSettings, updateSetup } from "@/state/actions";
+import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 import { folderTrust } from "@/state/trust";
@@ -312,6 +314,18 @@ export function FullAccessDialog({
  * Model and effort of a started conversation; changing them updates its setup. `groups` are
  * the available models; the one it runs on shows even when it isn't available any more.
  */
+/** The session's model as the composer shows it: a move to another CLI with its switch row (goal 1). */
+function useShownChoice(conversationId: string, current: ModelChoice): ModelChoice {
+  const steps = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.orchestratorSteps : null));
+  const running = useBoard((s) => s.board?.conversationId === conversationId && s.board.run !== "idle" && s.board.run !== "failed");
+  const transitions = useMemo(() => (steps ? leadTransitions(steps) : []), [steps]);
+  const [held, setHeld] = useState<ShownChoice | null>(null);
+  const next = nextShown(held, current, transitions, running);
+  // Derived during render, so the pill and the row change in the same paint.
+  if (next !== held) setHeld(next);
+  return next.shown;
+}
+
 export function ConversationModelPicker({
   conversation,
   groups,
@@ -338,8 +352,11 @@ export function ConversationModelPicker({
         : fallback;
   // A session created before setups existed gets one on first use; until then it can't change.
   const fixed = setup === null && conversation.kind === "session";
+  const held = useShownChoice(conversation.id, current);
+  // Only a started session moves between CLIs (S38c).
+  const shownChoice = setup?.type === "session" ? held : current;
   const all = useModelGroups();
-  const shown = withChoice(groups, all, current);
+  const shown = withChoice(groups, all, shownChoice);
   const refusals = useRuleRefusals(all);
 
   return (
@@ -351,8 +368,9 @@ export function ConversationModelPicker({
       )}
       <ModelSelector
         groups={shown}
-        value={current}
-        defaultChoice={fallback}
+        value={shownChoice}
+        // Default is Settings' default, else the CLI's own, never the project's last pick.
+        defaultChoice={resolveModel(null, conversation.kind, null, settings, groups)}
         disabled={fixed || action.busy}
         open={open}
         onOpenChange={onOpenChange}

@@ -15,8 +15,10 @@ import type {
   ConversationView,
   Decision,
   DiffStat,
+  ErrorKind,
   EventEnvelope,
   MachineStep,
+  StartStepRecord,
   MessageQueue,
   Notice,
   OrchestratorStep,
@@ -45,7 +47,12 @@ export type ShownApproval = Approval & {
 };
 
 export function shownApproval(approval: Approval): approval is ShownApproval {
-  return approval.subject.type !== "finishSession";
+  return approval.subject.type !== "finishSession" && !forOrchestrator(approval);
+}
+
+/** A worker CLI's own permission prompt, its subagents' included (D48, D166): only its orchestrator answers it, the user never sees it. */
+export function forOrchestrator(approval: Approval): boolean {
+  return approval.subject.type === "cli" && approval.taskId !== null;
 }
 
 /** Newest entries kept per open worker transcript; older ones load on demand. */
@@ -85,6 +92,8 @@ export type Board = {
   orchestratorSteps: OrchestratorStep[];
   /** Every row about the machine (waiting for it to cool down, a build paused), in stream order. */
   machineSteps: MachineStep[];
+  /** Every step of starting a new session's turns (fetch, worktree, setup script, CLI), in stream order. */
+  startSteps?: StartStepRecord[];
   /** What was decided on the user's behalf, in stream order. */
   decisions: Decision[];
   /** A Chat's context compactions, by id. */
@@ -96,6 +105,8 @@ export type Board = {
   runError: string | null;
   /** The request the running turn serves. */
   runRequest: string | null;
+  /** Where its CLI last began starting in the stream (a launch, or a relaunch at a switch): a start step from it on is this start's. */
+  runSince?: number;
   /** The last message of the branch the thread shows. */
   head: string | null;
   /** The session branch's tip after the thread's last commit seen since the view was read: it moves with each of its commits. */
@@ -138,8 +149,13 @@ const mainBoard: BoardStore = createStore<BoardState>()(() => ({
 /** Side chats' boards, each shown beside the open conversation in its side panel. */
 const sideBoards = new Set<BoardStore>();
 
-/** Boards kept of conversations shown before: the newest ones the user left. */
-const KEPT_BOARDS = 8;
+/**
+ * Boards kept of conversations shown before or read ahead (`prewarmConversations`: the running
+ * ones and the ten newest), the newest kept.
+ * shortcut: more running conversations than this leaves the oldest read ahead unkept, read again
+ * as the list changes; key the cap to the read-ahead list if that is ever seen.
+ */
+const KEPT_BOARDS = 24;
 
 /**
  * The loaded boards of conversations no view shows now, oldest first, kept current by their
@@ -426,6 +442,7 @@ export function boardFromView(
     workerSteps: view.workerSteps,
     orchestratorSteps: view.orchestratorSteps,
     machineSteps: view.machineSteps ?? [],
+    startSteps: view.startSteps ?? [],
     decisions: view.decisions,
     compactions: byId(view.compactions),
     ratings: view.ratings,
@@ -433,6 +450,7 @@ export function boardFromView(
     run: view.run,
     runError: keep?.runError ?? null,
     runRequest: view.runRequest,
+    runSince: view.runSince,
     head: view.head,
     threadTip: keep?.threadTip ?? null,
     doing: keep?.doing ?? null,
@@ -566,6 +584,10 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
     case "runStateChanged":
       return {
         ...board,
+        ...(event.step && !(board.startSteps ?? []).some((step) => step.position === streamSeq) && {
+          startSteps: [...(board.startSteps ?? []), { step: event.step, error: event.error, requestId: event.requestId, position: streamSeq }],
+        }),
+        ...(event.state === "starting" && board.run !== "starting" && { runSince: streamSeq }),
         doing: event.state === "running" || event.state === "starting" ? board.doing : null,
         run: event.state,
         runError: event.error,
@@ -729,8 +751,20 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   WebFetch: "Reading a web page",
 };
 
+/**
+ * Why its CLI retries, in plain words, by the kind of error its adapter reported (D99): the same
+ * words on every CLI. A kind not listed just reconnects.
+ */
+const RETRY_REASON: Partial<Record<ErrorKind, string>> = {
+  rateLimit: "The model is busy, reconnecting",
+  overloaded: "The model is busy, reconnecting",
+  usageLimit: "The model is busy, reconnecting",
+  network: "The model didn't answer, reconnecting",
+  server: "The model's service failed, reconnecting",
+};
+
 /** What the orchestrator shows while its CLI retries a failed request on its own: "Reconnecting 2/5". */
-const RETRY_WORDS = /^(Reconnecting|The model is busy, reconnecting)( \d+\/\d+)?$/;
+const RETRY_WORDS = /^(Reconnecting|The model is busy, reconnecting|The model didn't answer, reconnecting|The model's service failed, reconnecting)( \d+\/\d+)?$/;
 
 /** Whether the orchestrator's activity is its CLI retrying on its own. */
 export const RETRYING = { has: (doing: string | null): boolean => doing !== null && RETRY_WORDS.test(doing) };
@@ -746,12 +780,11 @@ export function doingOf(event: ProviderEvent, current: string | null): string | 
   switch (event.type) {
     case "error":
       if (!event.error.willRetry) return current;
-      return ["rateLimit", "overloaded", "usageLimit"].includes(event.error.kind)
-        ? `The model is busy, reconnecting${attemptOf(event.error.message)}`
-        : `Reconnecting${attemptOf(event.error.message)}`;
+      return `${RETRY_REASON[event.error.kind] ?? "Reconnecting"}${attemptOf(event.error.message)}`;
     case "toolCall": {
       if (event.status !== "inProgress") return null;
-      return TOOL_DOING[event.name] ?? "Using a tool";
+      // Any other tool's step names itself on its own row; the line has nothing better to say.
+      return TOOL_DOING[event.name] ?? null;
     }
     case "reasoning":
     case "message":

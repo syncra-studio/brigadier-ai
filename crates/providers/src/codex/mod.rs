@@ -4,10 +4,13 @@
 //! server requests that reach the user ([`REVIEWER`]). The session's level passes straight
 //! through as Codex's own approval policy and sandbox ([`approval_policy`], [`sandbox_policy`]):
 //!
-//! - Ask: `untrusted` in the `workspace-write` sandbox: Codex asks before every command it
-//!   doesn't know to be safe.
-//! - Accept edits: `on-request` in the `workspace-write` sandbox: commands run inside the
-//!   sandbox without asking; Codex asks to leave it.
+//! - Ask and Accept edits: `untrusted` in the `workspace-write` sandbox: Codex asks before every
+//!   edit and every command, `ls` too (checked live on 0.166.0). It has no setting that edits
+//!   freely but asks before commands (`on-request` runs every command in the sandbox unasked;
+//!   `granular` runs as `on-request`; exec-policy rules load only from `.rules` files), so what
+//!   the level allows on every CLI is answered by Brigadier (`policy::level_allows`): read-only
+//!   commands at both, edits in the workspace and `brigadier` at Accept edits. In a terminal,
+//!   where the user answers Codex's own prompts, Accept edits stays `on-request`.
 //! - Full access: `never` with `danger-full-access`: Codex never asks.
 //! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox. A side chat's
 //!   and a tab chat's has network on, for `brigadier`'s socket ([`sandbox_policy`]). A Chat runs
@@ -31,13 +34,17 @@
 //! ([`SessionSpec::owned_cwd`]), it is recorded and removed with the session through Codex's
 //! config API, only while it is still exactly `trusted`.
 
+mod children;
 mod context;
 pub(crate) mod files;
+mod items;
 pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
 pub mod protocol;
 pub mod rollout;
+mod simulate;
 mod stop_hook;
+pub(crate) mod trust;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -127,13 +134,263 @@ const NO_SUB_AGENTS: &str = "agents.enabled=false";
 /// own).
 const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use"];
 
-/// Codex's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
-/// memory should grow: a naked worker (D13), a side chat, which leaves nothing, Brigadier's own
-/// one-shots and a control connection.
+/// Where Brigadier's own `CODEX_HOME`s are, in its data folder ([`Codex::own_home`]). The name
+/// predates sessions running there too; threads recorded in one are removed from it.
+const OWN_HOMES: &str = "codex-worker-homes";
+
+/// Codex's own memory, off for every Brigadier session and connection (core-goals D9):
+/// Brigadier's ledger, decisions and transcripts are the memory.
 const MEMORIES: &str = "memories";
 
 /// The user's personal Codex setup, off for a session without it ([`ToolSet::user_setup`]).
 const USER_SETUP_FEATURES: &[&str] = &["plugins", "hooks"];
+
+// What each of Codex's [`Artifact::CliFile`]s is:
+/// The folder where Codex saves a thread's generated images
+/// (`$CODEX_HOME/generated_images/<thread id>`), which deleting the thread leaves behind.
+pub(crate) const GENERATED_IMAGES: &str = "generatedImages";
+/// A project trust entry Codex persisted in the user's `config.toml` when a thread started
+/// there. Removed through Codex's config API, only while it is still just `trusted`.
+pub(crate) const PROJECT_TRUST: &str = "projectTrust";
+
+fn cli_file(kind: &str, path: String) -> Artifact {
+    Artifact::CliFile {
+        provider: ProviderKind::Codex,
+        kind: kind.to_owned(),
+        path,
+        identities: Vec::new(),
+    }
+}
+
+/// Codex's account homes (`accounts`).
+static HOME: crate::accounts::Home = crate::accounts::Home {
+    var: "CODEX_HOME",
+    file: None,
+    default_dir: ".codex",
+    // Its API keys and access token (named in codex-cli 0.161.0's binary).
+    auth_vars: &["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+    unset: &[],
+    shared: &[
+        crate::accounts::Shared::Dir("sessions"),
+        crate::accounts::Shared::Dir("archived_sessions"),
+        crate::accounts::Shared::Dir("generated_images"),
+        crate::accounts::Shared::Optional("config.toml"),
+        crate::accounts::Shared::Optional("AGENTS.md"),
+        crate::accounts::Shared::Optional("skills"),
+        crate::accounts::Shared::Optional("prompts"),
+        crate::accounts::Shared::Optional("rules"),
+        // The installed plugins (`config.toml` enables them) and the user's hooks.
+        crate::accounts::Shared::Optional("plugins"),
+        crate::accounts::Shared::Optional("hooks.json"),
+    ],
+    seed: &[],
+    for_account: |platform, env, home| Arc::new(Codex::for_account(platform, env, home)),
+};
+
+/// Codex's entry in [`crate::adapters::ADAPTERS`].
+pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
+    kind: ProviderKind::Codex,
+    label: "Codex",
+    binary: "codex",
+    install: [
+        "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        "irm https://chatgpt.com/codex/install.ps1 | iex",
+    ],
+    login: "codex login",
+    sign_in: &["login"],
+    sign_out: &["logout"],
+    home: Some(&HOME),
+    tools: &["webSearch", "imageGeneration"],
+    session_files: &[GENERATED_IMAGES],
+    vendor: "Codex",
+    maker: "Codex CLI",
+    cli_name: "Codex CLI",
+    install_guide: "https://github.com/openai/codex",
+    usual_windows: &["primary", "secondary"],
+    // The OpenAI logo, from apps-sdk-ui (MIT), in the current colour.
+    glyph: crate::adapters::Glyph {
+        view_box: "0 0 24 24",
+        path: "M9.20509 8.76514V6.50548C9.20509 6.31517 9.27649 6.17237 9.44293 6.07733L13.9861 3.46091C14.6046 3.10416 15.342 2.93772 16.103 2.93772C18.9573 2.93772 20.7651 5.14986 20.7651 7.50457C20.7651 7.67101 20.7651 7.86132 20.7412 8.05164L16.0316 5.29243C15.7462 5.12599 15.4607 5.12599 15.1753 5.29243L9.20509 8.76514ZM19.8136 17.566V12.1665C19.8136 11.8334 19.6708 11.5955 19.3854 11.4291L13.4152 7.95637L15.3656 6.83836C15.5321 6.74332 15.6749 6.74332 15.8413 6.83836L20.3845 9.45477C21.6928 10.216 22.5728 11.8334 22.5728 13.4032C22.5728 15.2108 21.5025 16.8759 19.8136 17.5657V17.566ZM7.80173 12.8088L5.8513 11.6671C5.68486 11.5721 5.61346 11.4293 5.61346 11.239V6.00616C5.61346 3.46114 7.56389 1.53436 10.2042 1.53436C11.2033 1.53436 12.1307 1.86746 12.9159 2.46205L8.2301 5.17374C7.94475 5.34018 7.80196 5.57801 7.80196 5.91112V12.809L7.80173 12.8088ZM12 15.2349L9.20509 13.6651V10.3352L12 8.76537L14.7947 10.3352V13.6651L12 15.2349ZM13.7958 22.4659C12.7967 22.4659 11.8693 22.1328 11.0841 21.5382L15.7699 18.8265C16.0553 18.6601 16.198 18.4223 16.198 18.0892V11.1912L18.1723 12.3329C18.3388 12.4279 18.4102 12.5707 18.4102 12.7611V17.9939C18.4102 20.5389 16.4359 22.4657 13.7958 22.4657V22.4659ZM8.15848 17.1617L3.61528 14.5453C2.30696 13.784 1.42701 12.1667 1.42701 10.5969C1.42701 8.76537 2.52115 7.12417 4.20987 6.43431V11.8575C4.20987 12.1906 4.35266 12.4284 4.63802 12.5948L10.5846 16.0437L8.63415 17.1617C8.46771 17.2567 8.32492 17.2567 8.15848 17.1617ZM7.897 21.0626C5.20919 21.0626 3.23488 19.0407 3.23488 16.5432C3.23488 16.3529 3.25875 16.1626 3.2824 15.9723L7.96817 18.684C8.25352 18.8504 8.53911 18.8504 8.82447 18.684L14.7947 15.2351V17.4948C14.7947 17.6851 14.7233 17.8279 14.5568 17.9229L10.0136 20.5394C9.39518 20.8961 8.6578 21.0626 7.89677 21.0626H7.897ZM13.7958 23.8929C16.6739 23.8929 19.0762 21.8475 19.6235 19.1358C22.2874 18.4459 24 15.9484 24 13.4034C24 11.7383 23.2865 10.121 22.002 8.95546C22.121 8.45591 22.1924 7.95637 22.1924 7.45705C22.1924 4.05573 19.4331 1.51048 16.2458 1.51048C15.6037 1.51048 14.9852 1.60553 14.3668 1.81971C13.2963 0.773101 11.8215 0.107117 10.2042 0.107117C7.32606 0.107117 4.92383 2.15259 4.37653 4.86428C1.7126 5.55414 0 8.05164 0 10.5967C0 12.2617 0.713506 13.8791 1.99795 15.0446C1.87904 15.5441 1.80764 16.0437 1.80764 16.543C1.80764 19.9443 4.56685 22.4896 7.75421 22.4896C8.39632 22.4896 9.01478 22.3945 9.63324 22.1803C10.7035 23.2269 12.1783 23.8929 13.7958 23.8929Z",
+        class_name: None,
+    },
+    one_skill_per_message: false,
+    reports_cache_writes: false,
+    commands_as_text: false,
+    subagent_tools: &["spawnAgent", "spawn_agent"],
+    // Its protocol's thread/compact/start (ThreadCompactStartParams). Review, rollback,
+    // logout, etc. have no composer execution mapping and must not be sent as model text.
+    builtin_commands: &[(
+        "compact",
+        "Compact this conversation",
+        "thread/compact/start",
+    )],
+    mcp_prompts: false,
+    // A resumed thread's token totals include the turns counted before.
+    cumulative_usage: true,
+    chore_family: "luna",
+    chore_effort: Some("low"),
+    coauthors_in_instructions: true,
+    // `model_auto_compact_token_limit`, only when the user set the point (else Codex's own).
+    compaction: Some(|point, set| crate::NativeCompaction {
+        codex_limit: set.then_some(point),
+        ..crate::NativeCompaction::default()
+    }),
+    brigadier_compacts: false,
+    subagent_transcripts: false,
+    output_hook: false,
+    // Its auto-review (the "guardian") runs in a child thread.
+    child_usage: Some(children::child_usage),
+    // Through its own `thread/delete`, which also takes them off the Codex app's lists.
+    removes_by_id: true,
+    sign_in_code_page: false,
+    installer_off_path: false,
+    space_files: &[GENERATED_IMAGES],
+    temp_dir: None,
+    npm_package: "@openai/codex",
+    update_limits: |_| crate::adapters::UpdateLimits::default(),
+    // Codex takes the overlay as a plugin of skills (`<overlay>/skills`).
+    skills_overlay: |spec, overlay| {
+        crate::accounts::link_to(
+            &overlay.join(".claude/skills"),
+            &overlay.join("skills"),
+            true,
+        )?;
+        spec.skill_plugins.push(overlay);
+        Ok(())
+    },
+    new: |platform, env| Arc::new(Codex::new(platform, env)),
+    // `codex-cli 0.163.0`.
+    names_itself: |first| {
+        first
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| word.starts_with("codex"))
+    },
+    installer_folder,
+    login_mark,
+    mcp_stores,
+    item_sources: crate::items::own_file,
+    items: items::items,
+    read_session: rollout::read,
+    session_context: |path| crate::session_file::newest(path, rollout::context_of),
+    // Its rollout is read whole each time.
+    follow_session: |path| {
+        let path = path.to_owned();
+        Box::new(move || rollout::read(&path))
+    },
+    moved_session_file: archived_rollout,
+    leftovers: |history, _homes, wanted| files::leftovers(history, wanted),
+    delta_location,
+    stream_end,
+    usage_limit: simulate::usage_limit,
+    trust: Some(&trust::TRUST),
+};
+
+/// Where Codex's installer puts its binary: `~/.local/bin`, except on Windows,
+/// `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`; it moves with `CODEX_INSTALL_DIR`. The
+/// installer adds it to a profile (on Windows the user's PATH) read after Brigadier's
+/// environment was captured.
+fn installer_folder(env: &CliEnv) -> Option<PathBuf> {
+    if let Some(dir) = env.var("CODEX_INSTALL_DIR").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    if cfg!(windows) {
+        return env
+            .var("LOCALAPPDATA")
+            .filter(|dir| !dir.is_empty())
+            .map(|dir| Path::new(dir).join(r"Programs\OpenAI\Codex\bin"));
+    }
+    env.local_bin()
+}
+
+/// Where Codex keeps its login: `<CODEX_HOME>/auth.json`, unless `config.toml` keeps it in the
+/// system's keyring instead (`cli_auth_credentials_store`), which isn't watched.
+fn login_mark(env: &CliEnv) -> Option<crate::login_mark::LoginMark> {
+    let home = match env.var("CODEX_HOME").filter(|dir| !dir.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => env.home()?.join(".codex"),
+    };
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    crate::login_mark::codex_stores_in_file(&config)
+        .then(|| crate::login_mark::LoginMark::file(home.join("auth.json")))
+}
+
+/// Codex's MCP sign-ins of the account at `home`: its fallback file, and its encrypted
+/// `secrets/mcp_oauth.age` when it uses that ([`crate::mcp_oauth`]). Its direct Keychain entry
+/// is shared by every account already.
+fn mcp_stores(_env: &CliEnv, home: &Path) -> Vec<crate::mcp_oauth::Store> {
+    use crate::mcp_oauth::{Format, Store};
+    let mut out = vec![Store {
+        home: home.to_owned(),
+        format: Format::CodexFile,
+        keychain: None,
+    }];
+    // The encrypted namespace has its own key and store lock. Never copy the key,
+    // codex_auth.age, or the rest of secrets/. Missing keys are created atomically;
+    // existing keys are never replaced.
+    let config = crate::mcp_oauth::codex_config(home);
+    let encrypted = config.as_ref().is_some_and(|config| {
+        config
+            .get("auth_keyring_backend")
+            .and_then(toml_edit::Item::as_str)
+            == Some("secrets")
+            && config
+                .get("mcp_oauth_credentials_store")
+                .and_then(toml_edit::Item::as_str)
+                != Some("file")
+    });
+    if encrypted || home.join("secrets/mcp_oauth.age").is_file() {
+        out.push(Store {
+            home: home.to_owned(),
+            format: Format::CodexEncrypted,
+            keychain: None,
+        });
+    }
+    out
+}
+
+/// Where a rollout recorded at `path` is once its thread is archived: Codex moves it from
+/// `<home>/sessions/<y>/<m>/<d>/` to `<home>/archived_sessions/` (Brigadier archives a thread
+/// it closes, so the user's own Codex apps don't list it), and back when it is resumed.
+fn archived_rollout(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|dir| dir.file_name().is_some_and(|name| name == "sessions"))
+        .and_then(Path::parent)
+        .zip(path.file_name())
+        .map(|(home, name)| home.join("archived_sessions").join(name))
+}
+
+/// For a streamed delta line: its stream key, its item and where its text is
+/// ([`crate::record`]).
+fn delta_location(line: &Value) -> Option<(String, String, &'static str)> {
+    let method = line.get("method")?.as_str()?;
+    let params = line.get("params")?;
+    params.get("delta")?.as_str()?;
+    let item = params.get("itemId")?.as_str()?;
+    if !method.starts_with("item/") {
+        return None;
+    }
+    let part = ["summaryIndex", "contentIndex"]
+        .iter()
+        .filter_map(|key| params.get(key))
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join(":");
+    Some((
+        format!("{method}|{item}|{part}"),
+        item.to_owned(),
+        "/params/delta",
+    ))
+}
+
+/// The delta streams a line ends: `Some(item)` for one item's, `None` for all of them.
+fn stream_end(line: &Value) -> Option<Option<String>> {
+    match line.get("method")?.as_str()? {
+        "item/completed" => Some(Some(line.pointer("/params/item/id")?.as_str()?.to_owned())),
+        "turn/completed" => Some(None),
+        _ => None,
+    }
+}
 
 pub struct Codex {
     platform: Arc<dyn Platform>,
@@ -170,18 +427,18 @@ impl Codex {
         let Some(hook) = stop_hook_of(Some(spec)) else {
             return false;
         };
-        let Some(file) = crate::trust::TrustCli::Codex.file(&self.env) else {
+        let Some(file) = trust::file(&self.env) else {
             return false;
         };
         let hash = stop_hook::hash(hook);
         let at = file.clone();
         let written = tokio::task::spawn_blocking(move || {
-            crate::trust::trust_codex_hook(&at, stop_hook::KEY, &hash)
+            trust::trust_codex_hook(&at, stop_hook::KEY, &hash)
         })
         .await;
         match written {
-            Ok(Ok(crate::trust::HookTrust::AlreadyTrusted)) => true,
-            Ok(Ok(crate::trust::HookTrust::Trusted)) => {
+            Ok(Ok(trust::HookTrust::AlreadyTrusted)) => true,
+            Ok(Ok(trust::HookTrust::Trusted)) => {
                 tracing::info!(file = %file.display(), "trusted Brigadier's Stop hook in Codex's config");
                 true
             }
@@ -255,6 +512,104 @@ impl Codex {
     fn account_home(&self) -> Option<String> {
         self.main_home.as_ref()?;
         self.codex_home().map(|dir| dir.display().to_string())
+    }
+
+    /// Brigadier's own `CODEX_HOME` for a thread of this account, or `None` to run in the
+    /// account's own home. Two reasons for one:
+    /// - The user's own home (not an extra account's, which is Brigadier's already): its thread
+    ///   records (`state_5.sqlite`) are what the user's own Codex apps list, and the desktop
+    ///   app keeps every thread it once listed until its own app-server tells it the thread was
+    ///   archived or deleted, which Brigadier's app-servers can't. A thread Brigadier later
+    ///   archived or deleted stayed there, dead ("no rollout found"). A home of its own keeps
+    ///   its own records; the app-server sets no thread apart otherwise (every thread it starts
+    ///   is a `vscode` one, checked to 0.166.0). A thread lives in one home all its life: a
+    ///   home whose records still point at a rollout another home moved can't resume it.
+    /// - A naked worker (core-goals D2) when the home holds the user's global instructions
+    ///   (`AGENTS.md`, `AGENTS.override.md`): Codex has no way to leave them out while keeping
+    ///   the repository's (no config key, thread field, feature or variable;
+    ///   `project_doc_max_bytes=0` drops the repository's instead, checked to 0.166.0).
+    ///
+    /// The home links what an extra account's links ([`crate::accounts::shared`]), the
+    /// instructions only when not left out, and the account's login: `auth.json`, which Codex
+    /// rewrites in place, through the link (checked on 0.166.0), `auth.lock`, so a token refresh
+    /// is still one at a time across every session of the account, and the MCP sign-ins file.
+    /// `None` also for a login kept in the keyring, which a home of its own wouldn't have.
+    fn own_home(&self, naked: bool) -> Option<PathBuf> {
+        const OWN: [&str; 2] = ["AGENTS.md", "AGENTS.override.md"];
+        let source = self.codex_home()?;
+        let leave_out = naked && OWN.iter().any(|name| source.join(name).exists());
+        if self.main_home.is_some() && !leave_out {
+            return None;
+        }
+        if !source.join("auth.json").is_file() {
+            tracing::warn!(
+                "a Codex session runs in the user's own Codex home: its login isn't in auth.json"
+            );
+            return None;
+        }
+        let main = self.history_home()?;
+        let key = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(source.as_os_str().as_encoded_bytes());
+            let hex = digest[..8]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            if leave_out {
+                format!("{hex}-naked")
+            } else {
+                hex
+            }
+        };
+        let home = self.platform.paths().data_dir.join(OWN_HOMES).join(key);
+        let made = (|| -> std::io::Result<()> {
+            crate::accounts::create_private_dir(&home)?;
+            let lock = source.join("auth.lock");
+            if std::fs::symlink_metadata(&lock).is_err() {
+                std::fs::File::create(&lock)?;
+            }
+            let shared = crate::accounts::shared(ProviderKind::Codex)
+                .iter()
+                .map(|entry| (main.join(entry.name()), entry.name()));
+            let own = [
+                "auth.json",
+                "auth.lock",
+                ".credentials.json",
+                "AGENTS.override.md",
+            ]
+            .map(|name| (source.join(name), name));
+            for (target, name) in shared.chain(own) {
+                let link = home.join(name);
+                if (leave_out && OWN.contains(&name)) || std::fs::symlink_metadata(&link).is_ok() {
+                    continue;
+                }
+                let Ok(meta) = std::fs::metadata(&target) else {
+                    continue;
+                };
+                crate::accounts::link_to(&target, &link, meta.is_dir())?;
+            }
+            Ok(())
+        })();
+        match made {
+            Ok(()) => Some(home),
+            Err(err) => {
+                tracing::warn!(error = %err, "a Codex session runs in the account's own Codex home: no home of its own");
+                None
+            }
+        }
+    }
+
+    /// This adapter run from another `CODEX_HOME` of the same account (Brigadier's own,
+    /// [`Self::own_home`]), its login and history still the account's.
+    fn in_home(&self, home: &Path) -> Codex {
+        let mut vars = self.env.vars();
+        vars.retain(|(key, _)| key != "CODEX_HOME");
+        vars.push(("CODEX_HOME".into(), home.as_os_str().to_owned()));
+        Codex {
+            platform: self.platform.clone(),
+            env: Arc::new(self.env.with_vars(vars)),
+            main_home: self.history_home(),
+        }
     }
 
     /// `$CODEX_HOME`, by default `~/.codex`.
@@ -392,21 +747,23 @@ impl Codex {
 }
 
 impl Codex {
-    /// Once, removes the copies of `spec`'s installed skills that Brigadier used to write into
-    /// the user's skills folder (`$CODEX_HOME/skills`), where every plain `codex` listed them.
-    /// They now reach each session through its own app-server ([`open_thread`]). A marker in
-    /// the data folder keeps it to one pass, so a copy the user makes later stays.
-    async fn remove_old_skill_copies(&self, spec: &SessionSpec) {
-        let marker = self.platform.paths().data_dir.join(SKILLS_MOVED_MARKER);
-        if spec.installed_skills.is_empty() || marker.exists() {
+    /// Once, removes the copies of Brigadier's old skills it wrote into the user's skills folder
+    /// (`$CODEX_HOME/skills`) on 10-23, where every plain `codex` listed them. Brigadier installs
+    /// no skill now (D58). A marker in the data folder keeps it to one pass, so a copy the user
+    /// makes later stays.
+    async fn remove_old_skill_copies(&self) {
+        let data = self.platform.paths().data_dir.clone();
+        let marker = data.join(OLD_SKILLS_REMOVED_MARKER);
+        if marker.exists() {
             return;
         }
         let Some(home) = self.history_home() else {
             return;
         };
-        let plugins = spec.installed_skills.clone();
         let removed = tokio::task::spawn_blocking(move || {
-            remove_old_skill_copies(&home.join("skills"), &plugins)?;
+            remove_old_skill_copies(&home.join("skills"), SHIPPED_SKILLS)?;
+            // The first pass's marker, which compared against a skill no longer shipped.
+            let _ = std::fs::remove_file(data.join("codex-skills-moved"));
             std::fs::write(marker, "")
         })
         .await;
@@ -417,24 +774,39 @@ impl Codex {
 }
 
 /// The data-folder marker of [`Codex::remove_old_skill_copies`].
-const SKILLS_MOVED_MARKER: &str = "codex-skills-moved";
+const OLD_SKILLS_REMOVED_MARKER: &str = "codex-old-skills-removed";
 
-/// Removes `<skills>/<name>` for each plugin's `skills/<name>` when it holds only a
-/// `SKILL.md` byte-for-byte identical to the plugin's. Anything else there is the user's
-/// and stays, including an edited body with the same name and description.
-fn remove_old_skill_copies(skills: &Path, plugins: &[PathBuf]) -> std::io::Result<()> {
-    for plugin in plugins {
-        for entry in std::fs::read_dir(plugin.join("skills"))? {
-            let entry = entry?;
-            let ours = std::fs::read(entry.path().join("SKILL.md"))?;
-            let dir = skills.join(entry.file_name());
-            let Ok(copy) = std::fs::read(dir.join("SKILL.md")) else {
-                continue;
-            };
-            let only_skill = std::fs::read_dir(&dir)?.count() == 1;
-            if only_skill && copy == ours {
-                std::fs::remove_dir_all(&dir)?;
-            }
+/// The SHA-256 of every `SKILL.md` Brigadier ever copied into Codex's skills folder: each
+/// version of its `brigade` and `fusion` skills from c8f72eea2 to 97b75ca2a.
+const SHIPPED_SKILLS: &[&str] = &[
+    "1807e69d42b43909d7251dd7022a5d720f8e37def1aa3f546a259be34d9834a1",
+    "1d23793c5451c00f2a216af7154b7b15444bb98971aaa624ba7cdc7296c189b2",
+    "5a8a70ddf1afaf8f7428d832ad802f25fb24275f81ac1bd76fa1aafd24ccfdd0",
+    "67761ccf64b95576ba9b507bec7e5fd21301bf1ebe2e2fd3ac2c84e40eaef217",
+    "7845198aea08577148a64b9e7a4ea5576cc5f3d2d340cf3d5f545b037b2eeb4d",
+    "8373a7f4bef44619ffa6511734c29258b218f53bd37410402b33fcd126db3245",
+    "9c48c99c6e9fbf7f9098db128dd1c4b6231c65064e49255b86e4f0333fdd0460",
+    "a136d3cdeab9877a0b5fca608c9f8b2ccfcb0ca2273ec647edd2b4292810026c",
+    "a79ef925edc4cc6e0d2f9a262dcf070c8f01805e9a5a7f3d79ddb10535ab30b0",
+    "cd0016b2f00bba554d31ae337f2a4c43c54a384feb8595b97d18938468407b0c",
+    "ecc8926884ae35550116eafa6b18613e394af70d34af35903769342c2618348d",
+];
+
+/// Removes `<skills>/brigade` and `<skills>/fusion` when one holds only a `SKILL.md` whose
+/// SHA-256 is one of `shipped`. Anything else there is the user's and stays, an edited copy too.
+fn remove_old_skill_copies(skills: &Path, shipped: &[&str]) -> std::io::Result<()> {
+    use sha2::{Digest, Sha256};
+    for name in ["brigade", "fusion"] {
+        let dir = skills.join(name);
+        let Ok(copy) = std::fs::read(dir.join("SKILL.md")) else {
+            continue;
+        };
+        let hash: String = Sha256::digest(&copy)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if std::fs::read_dir(&dir)?.count() == 1 && shipped.contains(&hash.as_str()) {
+            std::fs::remove_dir_all(&dir)?;
         }
     }
     Ok(())
@@ -497,11 +869,8 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         ToolSet::SideChat | ToolSet::TabChat => (CHAT_FEATURES, true),
     };
     // A naked worker (D13, D17) goes without the user's plugins and hooks, as a sealed session
-    // does; its user skills go by file and its servers in its thread's config, below. Codex
-    // 0.164.0 has no way to leave out the user's own `$CODEX_HOME/AGENTS.md` while keeping the
-    // repository's (no config key, thread field, feature or variable; `project_doc_max_bytes=0`
-    // drops the repository's instead): only a home without one would, so a naked Codex worker
-    // still reads it, should the user write one.
+    // does; its user skills go by file and its servers in its thread's config, below. The user's
+    // own `$CODEX_HOME/AGENTS.md` it is kept from by a home of its own ([`Codex::own_home`]).
     let naked = user_setup_naked(session);
     let user_setup = tools.user_setup();
     let sealed: &[&str] = if user_setup && !naked {
@@ -509,14 +878,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     } else {
         USER_SETUP_FEATURES
     };
-    let memory_off = session.is_none_or(|session| {
-        session.naked_worker
-            || matches!(
-                tools,
-                ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat
-            )
-    });
-    let memories: &[&str] = if memory_off { &[MEMORIES] } else { &[] };
+    let memories: &[&str] = &[MEMORIES];
     for feature in DISABLED_FEATURES
         .iter()
         .chain(sealed)
@@ -968,6 +1330,9 @@ impl Provider for Codex {
         ledger: Arc<dyn Ledger>,
     ) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
+            if let Some(home) = self.own_home(user_setup_naked(Some(&spec))) {
+                return self.in_home(&home).start(spec, ledger).await;
+            }
             if stop_hook_of(Some(&spec)).is_some() && !self.trust_stop_hook(&spec).await {
                 spec.stop_hook = None;
             }
@@ -989,7 +1354,7 @@ impl Provider for Codex {
                 )?)),
                 None => None,
             };
-            self.remove_old_skill_copies(&spec).await;
+            self.remove_old_skill_copies().await;
             let spawned = self
                 .app_server(
                     &cwd,
@@ -1011,6 +1376,8 @@ impl Provider for Codex {
             let shared = Arc::new(Shared {
                 approvals: Mutex::new(HashMap::new()),
                 turn_id: Mutex::new(None),
+                commands: Mutex::default(),
+                terminals: Mutex::default(),
                 compact_asked: AtomicBool::new(false),
                 events: Events::new(events_tx, spec.redactor.clone()),
                 thread: Mutex::new(None),
@@ -1106,20 +1473,75 @@ impl Provider for Codex {
         self.remove_with_privacy(artifacts, false)
     }
 
+    fn archive_sessions<'a>(
+        &'a self,
+        ids: Vec<String>,
+        private_logs: bool,
+        open: Box<dyn Fn(&str) -> bool + Send + Sync + 'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            match self.own_home(false) {
+                Some(home) => {
+                    self.in_home(&home)
+                        .archive_threads(ids, private_logs, open)
+                        .await
+                }
+                None => self.archive_threads(ids, private_logs, open).await,
+            }
+        })
+    }
+
     fn remove_with_privacy(
         &self,
         artifacts: Vec<Artifact>,
         private_logs: bool,
     ) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
+            // A thread of Brigadier's own home is removed from the home it ran in.
+            let workers = self.platform.paths().data_dir.join(OWN_HOMES);
+            let own = self.codex_home();
+            let mut elsewhere: HashMap<PathBuf, Vec<Artifact>> = HashMap::new();
+            let mut artifacts = artifacts;
+            artifacts.retain(|artifact| match artifact {
+                Artifact::Session {
+                    provider,
+                    home: Some(home),
+                    ..
+                } if *provider == ProviderKind::Codex
+                    && Path::new(home).starts_with(&workers)
+                    && own.as_deref() != Some(Path::new(home)) =>
+                {
+                    elsewhere
+                        .entry(PathBuf::from(home))
+                        .or_default()
+                        .push(artifact.clone());
+                    false
+                }
+                _ => true,
+            });
+            for (home, group) in elsewhere {
+                self.in_home(&home)
+                    .remove_with_privacy(group, private_logs)
+                    .await?;
+            }
             let mut threads = Vec::new();
             let mut trusts = Vec::new();
             let mut images = Vec::new();
             for artifact in artifacts {
                 match artifact {
-                    Artifact::CodexThread { thread_id, .. } => threads.push(thread_id),
-                    Artifact::CodexProjectTrust { path } => trusts.push(path),
-                    Artifact::CodexGeneratedImages { path } => images.push(PathBuf::from(path)),
+                    Artifact::Session { provider, id, .. } if provider == ProviderKind::Codex => {
+                        threads.push(id)
+                    }
+                    Artifact::CliFile {
+                        provider,
+                        kind,
+                        path,
+                        ..
+                    } if provider == ProviderKind::Codex => match kind.as_str() {
+                        PROJECT_TRUST => trusts.push(path),
+                        GENERATED_IMAGES => images.push(PathBuf::from(path)),
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
@@ -1186,6 +1608,9 @@ impl Provider for Codex {
 
     fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
         Box::pin(async move {
+            if let Some(home) = self.own_home(user_setup_naked(Some(&spec))) {
+                return self.in_home(&home).terminal(spec, cwd).await;
+            }
             let Origin::Resume { native_id } = &spec.origin else {
                 return Err(Error::Invalid(
                     "only a session that exists can open in a terminal".into(),
@@ -1215,6 +1640,7 @@ impl Provider for Codex {
             asked: HashSet::new(),
             terminal_lists: HashSet::new(),
             terminals: HashMap::new(),
+            commands: parse::CommandItems::default(),
             openings: HashSet::new(),
         })
     }
@@ -1339,11 +1765,10 @@ async fn open_thread(
     // `codex` never lists them. A Codex without extra skill roots still runs; the agent's prompt
     // names the tools either way.
     let mut skill_notices = Vec::new();
-    if !spec.skill_plugins.is_empty() || !spec.installed_skills.is_empty() {
+    if !spec.skill_plugins.is_empty() {
         let roots: Vec<String> = spec
             .skill_plugins
             .iter()
-            .chain(&spec.installed_skills)
             .map(|plugin| plugin.join("skills").display().to_string())
             .collect();
         if let Err(error) = rpc
@@ -1396,8 +1821,9 @@ async fn open_thread(
     // An ephemeral thread leaves nothing on disk: nothing to archive or delete later.
     if !thread.ephemeral {
         ledger
-            .record(Artifact::CodexThread {
-                thread_id: thread.id.clone(),
+            .record(Artifact::Session {
+                provider: ProviderKind::Codex,
+                id: thread.id.clone(),
                 home,
                 cwd: Some(cwd.display().to_string()),
             })
@@ -1405,9 +1831,10 @@ async fn open_thread(
     }
     if let Some(root) = images_root {
         ledger
-            .record(Artifact::CodexGeneratedImages {
-                path: root.join(&thread.id).display().to_string(),
-            })
+            .record(cli_file(
+                GENERATED_IMAGES,
+                root.join(&thread.id).display().to_string(),
+            ))
             .await?;
     }
     let mut notices = skill_notices;
@@ -1418,7 +1845,7 @@ async fn open_thread(
                 continue;
             }
             if path == cwd.display().to_string() {
-                ledger.record(Artifact::CodexProjectTrust { path }).await?;
+                ledger.record(cli_file(PROJECT_TRUST, path)).await?;
             } else {
                 notices.push(format!(
                     "Codex marked {path} as trusted in ~/.codex/config.toml. That folder is \
@@ -1483,9 +1910,17 @@ async fn unarchive_thread(rpc: &Rpc, thread_id: &str) -> Result<bool> {
         .await;
     match unarchived {
         Ok(_) => Ok(true),
-        Err(Error::Rejected(message)) if message.contains("no archived rollout found") => Ok(false),
+        Err(Error::Rejected(message)) if not_archived(&message) => Ok(false),
         Err(err) => Err(err),
     }
+}
+
+/// `thread/unarchive`'s refusal of a thread that isn't archived: none is, or it is open in
+/// another app-server right now (0.166.0: "already has an active writer"), as a live session's
+/// thread is while a fork of it starts (D69).
+fn not_archived(message: &str) -> bool {
+    message.contains("no archived rollout found")
+        || message.contains("already has an active writer")
 }
 
 async fn trusted_projects(rpc: &Rpc, cwd: &Path) -> Result<Map<String, Value>> {
@@ -1969,8 +2404,10 @@ fn toml_value(value: &Value) -> String {
 /// When Codex asks, by level (see the module docs).
 fn approval_policy(access: Access) -> p::AskForApproval {
     match access {
-        Access::Ask | Access::ReadOnly => p::AskForApproval::Untrusted,
-        Access::AcceptEdits => p::AskForApproval::OnRequest,
+        // Accept edits asks too: Codex has no "edits go, commands ask", and `on-request` runs
+        // every command in its sandbox unasked. What the level allows is answered by Brigadier
+        // (`policy::level_allows`), as on every CLI.
+        Access::Ask | Access::AcceptEdits | Access::ReadOnly => p::AskForApproval::Untrusted,
         Access::Full => p::AskForApproval::Never,
     }
 }
@@ -2180,6 +2617,7 @@ struct CodexReplayer {
     asked: HashSet<String>,
     terminal_lists: HashSet<String>,
     terminals: HashMap<String, BackgroundTask>,
+    commands: parse::CommandItems,
     openings: HashSet<String>,
 }
 
@@ -2248,7 +2686,7 @@ impl Replayer for CodexReplayer {
                 return Vec::new();
             };
             // The Replayer API takes no clock; replay task times are offsets from zero.
-            return parse::background_terminals(listed, &mut self.terminals, 0)
+            return parse::background_terminals(listed, &mut self.terminals, &self.commands, 0)
                 .into_iter()
                 .map(|task| ProviderEvent::BackgroundTask { task })
                 .collect();
@@ -2262,12 +2700,21 @@ impl Replayer for CodexReplayer {
                 Output::Control(_) => None,
             })
             .collect();
-        for event in &events {
-            if let ProviderEvent::ApprovalRequested { request } = event {
+        let mut said = Vec::with_capacity(events.len());
+        for event in events {
+            self.commands.note(&event, 0);
+            if let ProviderEvent::ApprovalRequested { request } = &event {
                 self.asked.insert(request.id.clone());
             }
+            if let Some(task) = parse::ended_terminal(&event, &mut self.terminals, 0) {
+                said.push(ProviderEvent::BackgroundTask { task });
+            }
+            for task in parse::outliving_turn(&event, &self.commands, &mut self.terminals) {
+                said.push(ProviderEvent::BackgroundTask { task });
+            }
+            said.push(event);
         }
-        events
+        said
     }
 }
 
@@ -2374,6 +2821,10 @@ struct Shared {
     /// Unanswered approvals: approval id → JSON-RPC request id and answer shape.
     approvals: Mutex<HashMap<String, (Value, PendingKind)>>,
     turn_id: Mutex<Option<String>>,
+    /// Its shell commands, which tell its background terminals from the commands its turns run.
+    commands: Mutex<parse::CommandItems>,
+    /// Its background terminals as last listed, by process id.
+    terminals: Mutex<HashMap<String, BackgroundTask>>,
     /// `thread/compact/start` is being sent; the reader tells its parser.
     compact_asked: AtomicBool,
     events: Events,
@@ -2687,6 +3138,9 @@ impl ProviderSession for CodexSession {
                   // model reads "user rejected MCP tool call".
             };
             self.rpc.respond(rpc_id, result).await?;
+            if let (true, PendingKind::Command { item, .. }) = (allow, &kind) {
+                lock(&self.shared.commands).allowed(item, now_ms());
+            }
             // A decline carries no words (the app-server's approval responses, 0.162.1), so
             // the reason reaches the model as a message into its turn, naming the command.
             if let ApprovalDecision::Deny { message } = &decision
@@ -2833,6 +3287,7 @@ fn skill_commands(skills: Vec<Skill>, trusted: bool) -> Vec<CliCommand> {
                 .filter(|text| !text.is_empty()),
             name: skill.name,
             argument_hint: None,
+            action: None,
         })
         .collect()
 }
@@ -2935,6 +3390,11 @@ async fn read_loop(
         let outputs = parser.feed(&line);
         // Before its events go: whoever hears a turn start can interrupt it.
         *lock(&shared.turn_id) = parser.turn_id().map(str::to_owned);
+        for output in &outputs {
+            if let Output::Event(event) = output {
+                lock(&shared.commands).note(event, now_ms());
+            }
+        }
         for output in outputs {
             match output {
                 Output::Event(event) => {
@@ -2950,6 +3410,20 @@ async fn read_loop(
                         ProviderEvent::McpServerChanged { server }
                             if server.status != McpStatus::Connecting
                     );
+                    // A background terminal ends with its command, in the turn that ran it.
+                    let ended =
+                        parse::ended_terminal(&event, &mut lock(&shared.terminals), now_ms());
+                    // And one still running as its turn completes goes on, said before that end.
+                    let outliving = {
+                        let mut terminals = lock(&shared.terminals);
+                        parse::outliving_turn(&event, &lock(&shared.commands), &mut terminals)
+                    };
+                    for task in ended.into_iter().chain(outliving) {
+                        shared
+                            .events
+                            .send(ProviderEvent::BackgroundTask { task })
+                            .await;
+                    }
                     shared.events.send(event).await;
                     if settled {
                         list_mcp_servers(&rpc, &shared);
@@ -3038,13 +3512,12 @@ const TERMINALS_EVERY: Duration = Duration::from_secs(2);
 /// ended. Listed while a turn runs (only a turn starts one), once as it ends, and while any
 /// run; it stops with the app-server, or for good when the app-server won't list them.
 async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: String) {
-    let mut known: HashMap<String, BackgroundTask> = HashMap::new();
     let mut was_active = false;
     while rpc.process.is_running() {
         tokio::time::sleep(TERMINALS_EVERY).await;
         let active = lock(&shared.turn_id).is_some();
         let ended = std::mem::replace(&mut was_active, active) && !active;
-        if !active && !ended && known.is_empty() {
+        if !active && !ended && lock(&shared.terminals).is_empty() {
             continue;
         }
         let listed = match rpc
@@ -3061,7 +3534,13 @@ async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: 
                 return;
             }
         };
-        for task in parse::background_terminals(&listed, &mut known, now_ms()) {
+        let tasks = parse::background_terminals(
+            &listed,
+            &mut lock(&shared.terminals),
+            &lock(&shared.commands),
+            now_ms(),
+        );
+        for task in tasks {
             shared
                 .events
                 .send(ProviderEvent::BackgroundTask { task })
@@ -3073,6 +3552,17 @@ async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A live session's thread can be forked (D69's fork, `fork_session`): `thread/unarchive`
+    /// refuses it as open in another app-server (0.166.0, live), which only means not archived.
+    #[test]
+    fn a_thread_open_elsewhere_counts_as_not_archived() {
+        assert!(not_archived("no archived rollout found for thread t"));
+        assert!(not_archived(
+            "thread 01a193ff-a35f already has an active writer"
+        ));
+        assert!(!not_archived("thread not found"));
+    }
 
     /// The `/` menu lists what `skills/list` reports, each typed as Codex's `$name` mention
     /// (checked live on 0.164: `$skill` in a turn's text runs it), once each and only those
@@ -3120,6 +3610,7 @@ mod tests {
                 text: "$grill-me".into(),
                 description: Some("Grill".into()),
                 argument_hint: None,
+                action: None,
             }
         );
         assert_eq!(trusted[2].text, "$pdf:pdf");
@@ -3142,6 +3633,9 @@ mod tests {
         );
         assert_eq!(plan_name(p::PlanType::Ent26), Some("Enterprise"));
         assert_eq!(plan_name(p::PlanType::Unknown), None);
+        // A plan a newer Codex names that these bindings don't know reads unknown, never an error.
+        let newer: p::PlanType = serde_json::from_str("\"sci_plus\"").unwrap();
+        assert_eq!(plan_name(newer), None);
     }
 
     /// Codex's own browser stays off for every session: agents never get a browser of their
@@ -3253,7 +3747,6 @@ mod tests {
             mcp_servers: Vec::new(),
             tools,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
@@ -3847,44 +4340,34 @@ mod tests {
         assert_eq!(args.iter().filter(|arg| *arg == NO_SUB_AGENTS).count(), 1);
     }
 
-    /// STRIP-DOWN-PLAN S19: Codex's own memory follows the user's setting. Every session reads
-    /// the user's `config.toml`, so a thread, a worker and a Chat are given nothing about memory
-    /// and start with the user's `features.memories`, on or off. Only a naked worker (D13), a side
-    /// chat, Brigadier's own one-shots and a control connection go without it.
+    /// core-goals D9: Codex's own memory is off for every session, naked or not, and for a
+    /// control connection.
     #[test]
-    fn codexs_memory_follows_the_users_setting() {
-        let about_memory = |args: &[String]| -> Vec<String> {
-            args.iter()
-                .filter(|arg| arg.contains("memor"))
-                .cloned()
-                .collect()
-        };
+    fn codexs_memory_is_off_for_every_session() {
         let off = |args: &[String]| {
             args.windows(2)
                 .any(|pair| pair[0] == "--disable" && pair[1] == MEMORIES)
         };
+        assert!(off(&app_server_args(None)), "a control connection");
         for tools in [
             ToolSet::Thread,
             ToolSet::Lean,
             ToolSet::Default,
             ToolSet::SideChat,
-        ] {
-            let args = app_server_args(Some(&spec(tools, None)));
-            assert!(about_memory(&args).is_empty(), "{tools:?}: {args:?}");
-        }
-        let mut lean = spec(ToolSet::Lean, None);
-        lean.naked_worker = true;
-        assert!(off(&app_server_args(Some(&lean))), "a naked worker");
-        for tools in [
             ToolSet::TabChat,
             ToolSet::Review,
             ToolSet::Web,
             ToolSet::None,
         ] {
-            let args = app_server_args(Some(&spec(tools, None)));
-            assert!(off(&args), "{tools:?}: {args:?}");
+            for naked_worker in [false, true] {
+                let mut session = spec(tools, None);
+                session.naked_worker = naked_worker;
+                assert!(
+                    off(&app_server_args(Some(&session))),
+                    "{tools:?}, naked {naked_worker}"
+                );
+            }
         }
-        assert!(off(&app_server_args(None)), "a control connection");
     }
 
     /// A session's or Chat's thread keeps Codex's own goals, sleep tool, shell and sub-agents, as
@@ -3899,8 +4382,13 @@ mod tests {
             .filter(|pair| pair[0] == "--disable")
             .map(|pair| pair[1].as_str())
             .collect();
-        // Only what is off for every session: goals, the sleep tool and the shell are Codex's own.
-        assert_eq!(disabled, DISABLED_FEATURES, "{args:?}");
+        // Only what is off for every session (memory too, D9): goals, the sleep tool and the
+        // shell are Codex's own.
+        assert_eq!(
+            disabled,
+            [DISABLED_FEATURES, &[MEMORIES]].concat(),
+            "{args:?}"
+        );
         assert!(!without_sub_agents(&args), "{args:?}");
         assert!(!without_sub_agents(&app_server_args(Some(&spec(
             ToolSet::Lean,
@@ -3935,9 +4423,10 @@ mod tests {
                     "workspace-write",
                     "-s workspace-write -c approval_policy=\"untrusted\"",
                 ),
+                // The terminal's user answers Codex's own prompts: there it stays on-request.
                 (
                     Access::AcceptEdits,
-                    "on-request",
+                    "untrusted",
                     "workspace-write",
                     "-s workspace-write -a on-request",
                 ),
@@ -4001,66 +4490,210 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The copies of the installed skills Brigadier used to write into the user's skills
-    /// folder go only when byte-identical; the user's own skills stay.
+    /// The copies Brigadier wrote into an unmigrated Codex home go only when they are a shipped
+    /// version, unedited and alone in their folder; the user's own skills and edits stay (D58).
     #[test]
     fn the_old_skill_copies_leave_the_users_skills_folder() {
+        use sha2::{Digest, Sha256};
         let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
-        let plugin = dir.join("brigade");
-        let skill = |name: &str, description: &str, body: &str| {
-            format!("---\nname: {name}\ndescription: {description}\n---\n{body}\n")
-        };
-        for name in ["brigade", "fusion"] {
-            std::fs::create_dir_all(plugin.join("skills").join(name)).unwrap();
-            std::fs::write(
-                plugin.join("skills").join(name).join("SKILL.md"),
-                skill(name, "Brigadier's.", "today"),
-            )
-            .unwrap();
-        }
         let skills = dir.join("codex-home/skills");
-        // An exact copy of Brigadier's skill, and the user's skill of the same name.
-        std::fs::create_dir_all(skills.join("brigade")).unwrap();
-        std::fs::write(
-            skills.join("brigade/SKILL.md"),
-            skill("brigade", "Brigadier's.", "today"),
-        )
-        .unwrap();
-        std::fs::create_dir_all(skills.join("fusion")).unwrap();
-        std::fs::write(
-            skills.join("fusion/SKILL.md"),
-            skill("fusion", "Mine.", "mine"),
-        )
-        .unwrap();
-        std::fs::create_dir_all(skills.join("theirs")).unwrap();
-        remove_old_skill_copies(&skills, std::slice::from_ref(&plugin)).unwrap();
+        let ours = "---\nname: brigade\ndescription: Brigadier's.\n---\nShipped body\n";
+        let hash: String = Sha256::digest(ours.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let write = |name: &str, text: &str| {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(skills.join(name).join("SKILL.md"), text).unwrap();
+        };
+        write("brigade", ours);
+        // The user's edit of the shipped skill, and a skill of their own.
+        write("fusion", &ours.replace("Shipped body", "My edited body"));
+        write("theirs", ours);
+        remove_old_skill_copies(&skills, &[hash.as_str()]).unwrap();
         assert!(!skills.join("brigade").exists());
         assert!(skills.join("fusion/SKILL.md").is_file());
-        assert!(skills.join("theirs").is_dir());
+        assert!(skills.join("theirs/SKILL.md").is_file());
+        // A shipped copy beside a file of the user's stays too.
+        write("brigade", ours);
+        std::fs::write(skills.join("brigade/notes.md"), "mine").unwrap();
+        remove_old_skill_copies(&skills, &[hash.as_str()]).unwrap();
+        assert!(skills.join("brigade/SKILL.md").is_file());
         // A missing folder is nothing to remove.
-        remove_old_skill_copies(&dir.join("none"), std::slice::from_ref(&plugin)).unwrap();
+        remove_old_skill_copies(&dir.join("none"), SHIPPED_SKILLS).unwrap();
+        assert!(SHIPPED_SKILLS.iter().all(|hash| hash.len() == 64));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A thread of the user's own Codex home runs in a home of Brigadier's, with records of its
+    /// own, so the user's Codex apps never list it (and never keep it dead once Brigadier
+    /// archives or deletes it); it links the user's history, config, instructions and login.
+    /// A naked worker's (core-goals D2) leaves out the user's global instructions; an extra
+    /// account's home is Brigadier's already.
+    #[cfg(unix)]
     #[test]
-    fn old_skill_copy_with_an_edited_body_survives() {
-        let dir =
-            std::env::temp_dir().join(format!("brigadier-old-skill-{}", uuid::Uuid::new_v4()));
-        let plugin = dir.join("plugin");
-        let skills = dir.join("skills");
-        let original = "---\nname: review\ndescription: Review\n---\nOriginal body\n";
-        let edited = original.replace("Original body", "My edited body");
-        for base in [plugin.join("skills/review"), skills.join("review")] {
-            std::fs::create_dir_all(base).unwrap();
-        }
-        std::fs::write(plugin.join("skills/review/SKILL.md"), original).unwrap();
-        std::fs::write(skills.join("review/SKILL.md"), &edited).unwrap();
-        remove_old_skill_copies(&skills, &[plugin]).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(skills.join("review/SKILL.md")).unwrap(),
-            edited
+    fn brigadier_threads_never_land_in_the_users_own_codex_records() {
+        let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
+        let user = dir.join(".codex");
+        std::fs::create_dir_all(user.join("sessions")).unwrap();
+        std::fs::write(user.join("config.toml"), "").unwrap();
+        std::fs::write(user.join("state_5.sqlite"), "").unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        let codex = Codex::new(
+            platform,
+            Arc::new(CliEnv::from_vars([(
+                "HOME".into(),
+                dir.as_os_str().to_owned(),
+            )])),
         );
-        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(codex.own_home(false), None, "a login in the keyring");
+        std::fs::write(user.join("auth.json"), "{}").unwrap();
+        let home = codex.own_home(false).unwrap();
+        assert!(home.starts_with(dir.join("data").join(OWN_HOMES)));
+        assert_eq!(
+            codex.own_home(true),
+            Some(home.clone()),
+            "nothing to leave out"
+        );
+        assert!(std::fs::symlink_metadata(home.join("state_5.sqlite")).is_err());
+        let links = ["sessions", "config.toml", "auth.json", "auth.lock"];
+        for name in links {
+            assert_eq!(
+                std::fs::read_link(home.join(name)).unwrap(),
+                user.join(name),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            codex.own_home(false),
+            Some(home.clone()),
+            "made once, then reused"
+        );
+        let session = codex.in_home(&home);
+        assert_eq!(session.codex_home(), Some(home.clone()));
+        assert_eq!(session.history_home(), Some(user.clone()));
+        assert_eq!(session.own_home(false), None, "it is the home");
+
+        std::fs::write(user.join("AGENTS.md"), "user rules").unwrap();
+        let naked = codex.own_home(true).unwrap();
+        assert_ne!(naked, home);
+        assert!(std::fs::symlink_metadata(naked.join("AGENTS.md")).is_err());
+        assert_eq!(
+            std::fs::read_link(naked.join("sessions")).unwrap(),
+            user.join("sessions")
+        );
+        let home = codex.own_home(false).unwrap();
+        assert_eq!(
+            std::fs::read_link(home.join("AGENTS.md")).unwrap(),
+            user.join("AGENTS.md")
+        );
+        assert_eq!(codex.in_home(&naked).own_home(true), None, "it is the home");
+        assert_eq!(codex.in_home(&home).own_home(false), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Live: a session and a naked worker on the user's own Codex login run, close (archived)
+    /// and are removed, and neither ever shows in the user's own Codex records, which the
+    /// user's Codex apps list (`~/.codex/state_5.sqlite`, opened read-only):
+    /// `BRIGADIER_LIVE_CODEX=1 cargo test -p brigadier-providers --lib -- --ignored live_codex_threads --nocapture`
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "runs the real Codex CLI on the user's login"]
+    async fn live_codex_threads_stay_out_of_the_users_codex_records() {
+        use rusqlite::{Connection, OpenFlags, OptionalExtension};
+        struct Made(std::sync::Mutex<Vec<Artifact>>);
+        impl Ledger for Made {
+            fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>> {
+                self.0.lock().unwrap().push(artifact);
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, _: &Artifact) -> bool {
+                false
+            }
+        }
+        if std::env::var_os("BRIGADIER_LIVE_CODEX").is_none() {
+            return;
+        }
+        let root = PathBuf::from(format!("/tmp/core-goals-w46-live-{}", uuid::Uuid::new_v4()));
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let codex = Codex::new(platform.clone(), Arc::new(CliEnv::capture(&platform)));
+        let user = codex.codex_home().unwrap();
+        let archived = |db: &Path, id: &str| -> Option<i64> {
+            let db = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            db.query_row("SELECT archived FROM threads WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .unwrap()
+        };
+        for (tools, naked) in [(ToolSet::Thread, false), (ToolSet::Lean, true)] {
+            let spec = SessionSpec {
+                cwd: work.clone(),
+                effort: Some("low".into()),
+                naked_worker: naked,
+                ..spec(tools, None)
+            };
+            let ledger = Arc::new(Made(Default::default()));
+            let started = codex.start(spec, ledger.clone()).await.expect("started");
+            let mut events = started.events;
+            started
+                .session
+                .send(TurnInput::text("Reply with just: ok"))
+                .await
+                .unwrap();
+            let turn = async {
+                while let Some(event) = events.recv().await {
+                    if matches!(event, ProviderEvent::TurnCompleted { .. }) {
+                        break;
+                    }
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(300), turn)
+                .await
+                .expect("the turn ended");
+            started.session.close().await;
+            let made = ledger.0.lock().unwrap().clone();
+            let Some(Artifact::Session {
+                id,
+                home: Some(home),
+                ..
+            }) = made
+                .iter()
+                .find(|artifact| matches!(artifact, Artifact::Session { .. }))
+                .cloned()
+            else {
+                panic!("a thread recorded with its own home: {made:?}");
+            };
+            let home = PathBuf::from(home);
+            eprintln!("{tools:?} naked={naked}: thread {id} in {}", home.display());
+            assert!(home.starts_with(root.join("data").join(OWN_HOMES)));
+            assert_eq!(
+                archived(&home.join("state_5.sqlite"), &id),
+                Some(1),
+                "archived on close"
+            );
+            assert_eq!(
+                archived(&user.join("state_5.sqlite"), &id),
+                None,
+                "not the user's"
+            );
+            codex.remove(made).await.unwrap();
+            assert_eq!(archived(&home.join("state_5.sqlite"), &id), None, "removed");
+            assert_eq!(
+                archived(&user.join("state_5.sqlite"), &id),
+                None,
+                "not the user's"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// Missing or signed out, the status points at Connect in plain words: no command to run,
@@ -4422,6 +5055,8 @@ for line in sys.stdin:
         let shared = Arc::new(Shared {
             approvals: Mutex::new(HashMap::new()),
             turn_id: Mutex::new(None),
+            commands: Mutex::default(),
+            terminals: Mutex::default(),
             compact_asked: AtomicBool::new(false),
             events: Events::new(events_tx, None),
             thread: Mutex::new(Some("t".into())),
@@ -4537,6 +5172,8 @@ for line in sys.stdin:
         let shared = Arc::new(Shared {
             approvals: Mutex::new(HashMap::new()),
             turn_id: Mutex::new(None),
+            commands: Mutex::default(),
+            terminals: Mutex::default(),
             compact_asked: AtomicBool::new(false),
             events: Events::new(events_tx, None),
             thread: Mutex::new(Some("t".into())),

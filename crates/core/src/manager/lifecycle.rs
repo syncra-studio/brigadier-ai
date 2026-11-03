@@ -88,17 +88,23 @@ impl SessionManager {
                                     .iter()
                                     .any(|w| same(&w.path));
                                 if registered || !path.exists() || same(repo.root()) {
+                                    if registered && path.exists() && !same(repo.root()) {
+                                        super::disk::keep_changes(&git, &path)
+                                            .map_err(|err| err.to_string())?;
+                                    }
+                                    // Forced: its changes are in the kept commit, and git
+                                    // refuses a plain removal of a worktree holding a nested repo.
                                     repo.remove_worktree(&path, true)
                                         .map_err(|err| err.to_string())
                                 } else {
-                                    // Git already let go of it (a removal that failed halfway);
-                                    // what is left is the folder Brigadier created and recorded.
-                                    std::fs::remove_dir_all(&path).map_err(|err| err.to_string())
+                                    Err("the worktree is no longer registered; its files stay"
+                                        .into())
                                 }
                             }
-                            // The repository itself is gone: only the folder is left to remove.
                             Err(_) if !path.exists() => Ok(()),
-                            Err(_) => std::fs::remove_dir_all(&path).map_err(|err| err.to_string()),
+                            Err(err) => Err(format!(
+                                "the repository cannot be opened; its worktree stays: {err}"
+                            )),
                         }
                     })
                     .await
@@ -190,6 +196,16 @@ impl SessionManager {
                 {
                     crate::heap(|| self.recover_worker_seam(&task)).await;
                 }
+                if conversation.lifecycle == Lifecycle::Active {
+                    match self.recover_worker_resume(&task).await {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(err) => {
+                            tracing::warn!(task = %task.id, error = %err, "could not recover a worker resume");
+                            continue;
+                        }
+                    }
+                }
                 match task.state {
                     // Its worktree is intact; the worker resumes when its session sends it more.
                     TaskState::Reported | TaskState::ReadyToLand if task.kind.writes() => continue,
@@ -269,6 +285,12 @@ impl SessionManager {
             }
             // Nothing runs any more: what was working is over or waits for the user.
             self.settle_requests(&conversation.id).await;
+            // The user's messages queued for its workers go on to those not working (goal 8),
+            // in the background: a worker's CLI may take a while to resume.
+            if conversation.lifecycle == Lifecycle::Active {
+                let (manager, id) = (self.arc(), conversation.id.clone());
+                self.spawn(async move { manager.drain_worker_queues(&id).await });
+            }
         }
         // What sessions deleted before Delete took all of them left behind (D3), in the
         // background: on a first launch there may be many.
@@ -750,6 +772,15 @@ impl SessionManager {
                 "This session has no worktree of its own to remove.".into(),
             ));
         };
+        // No session is let into the folder until it is gone (goal 9).
+        let _sharing = self.shared_workspaces.lock().await;
+        if self.joined(&conversation, Path::new(&path))
+            || !self.sharers(Path::new(&path), id).is_empty()
+        {
+            return Err(Error::Invalid(
+                "Another session works in this worktree too, so it stays.".into(),
+            ));
+        }
         self.quiet_for_close(id).await?;
         // No turn starts from here until the folder is gone: a message or a worker's report
         // that comes meanwhile waits for the turn after, in a fresh worktree.
@@ -924,15 +955,62 @@ impl SessionManager {
         // A tab chat's folder, and what runs in it, is its own owner's and goes with it: the
         // shared records never name it.
         let tab_chat = conversation.tab_chat.is_some();
+        // Held until its worktree is let go: no session is let into it meanwhile (goal 9).
+        let sharing = self.shared_workspaces.lock().await;
         if !tab_chat {
-            // Also stop detached commands in the session folder, including retained worktrees.
+            // Also stop detached commands in the session folder, including retained worktrees,
+            // but none in a folder of it another open session works in (goal 9).
             let folder_owner = super::session_dir::folder_owner(id);
-            let process = Artifact::ProcessesIn {
-                dir: self.session_dir(id).root().to_string_lossy().into_owned(),
-            };
+            let root = self.session_dir(id).root().to_path_buf();
+            let keeps: Vec<PathBuf> = self
+                .core
+                .catalog()
+                .conversations
+                .iter()
+                .filter(|other| {
+                    &other.id != id && other.lifecycle != Lifecycle::Archived && !other.deleting
+                })
+                .filter_map(|other| super::shared_workspace::folder_of(other.setup.as_ref()))
+                .filter(|folder| folder.starts_with(&root))
+                .collect();
             let ledger = self.runtime.ledger();
-            if let Err(err) = ledger.record(&folder_owner, process).await {
-                tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
+            let whole = Artifact::ProcessesIn {
+                dir: root.to_string_lossy().into_owned(),
+            };
+            if !keeps.is_empty()
+                && let Err(err) = ledger.unrecord(&folder_owner, whole.clone()).await
+            {
+                tracing::warn!(conversation = %id, error = %err, "could not narrow the session's process cleanup");
+            }
+            let mut sweeps = if keeps.is_empty() {
+                vec![whole]
+            } else {
+                super::shared_workspace::sweep_dirs(&root, &keeps)
+                    .into_iter()
+                    .map(|dir| Artifact::ProcessesIn {
+                        dir: dir.to_string_lossy().into_owned(),
+                    })
+                    .collect()
+            };
+            // A worktree it was let into elsewhere, once no other open session works there.
+            sweeps.extend(
+                ledger
+                    .artifacts(&format!("session:{id}"))
+                    .into_iter()
+                    .filter_map(|artifact| match artifact {
+                        Artifact::Worktree { path, .. }
+                            if !Path::new(&path).starts_with(&root)
+                                && self.sharers(Path::new(&path), id).is_empty() =>
+                        {
+                            Some(Artifact::ProcessesIn { dir: path })
+                        }
+                        _ => None,
+                    }),
+            );
+            for process in sweeps {
+                if let Err(err) = ledger.record(&folder_owner, process).await {
+                    tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
+                }
             }
             let _ = ledger.stop_processes(&folder_owner).await;
         }
@@ -973,7 +1051,42 @@ impl SessionManager {
         if !self.runtime.ledger().artifacts(&previews).is_empty() {
             owners.push(previews);
         }
-        let session_worktree_goes = if deleting {
+        // Another open session works in its folder: what is uncommitted there is that session's
+        // too, so no WIP commit is made, and the folder passes to it, to stay while it works
+        // there (a restored session too). A folder it was let into that no Brigadier session
+        // made is the user's: nothing is committed or removed there (goal 9).
+        let ledger = self.runtime.ledger();
+        let folder = super::shared_workspace::folder_of(conversation.setup.as_ref());
+        let sharers = folder
+            .as_deref()
+            .map(|folder| self.sharers(folder, id))
+            .unwrap_or_default();
+        let held: Vec<Artifact> = ledger
+            .artifacts(&format!("session:{id}"))
+            .into_iter()
+            .filter(|artifact| matches!(artifact, Artifact::Worktree { .. }))
+            .collect();
+        let mut handed = true;
+        if let Some(heir) = sharers.first() {
+            let theirs = format!("session:{}", heir.id);
+            for artifact in &held {
+                if !ledger.artifacts(&theirs).contains(artifact)
+                    && let Err(err) = ledger.record(&theirs, artifact.clone()).await
+                {
+                    tracing::warn!(conversation = %id, error = %err, "could not pass the shared worktree on; it stays");
+                    handed = false;
+                }
+            }
+        }
+        let users_own = held.is_empty()
+            && folder
+                .as_deref()
+                .is_some_and(|folder| self.joined(conversation, folder));
+        let session_worktree_goes = if !sharers.is_empty() {
+            handed
+        } else if users_own {
+            true
+        } else if deleting {
             self.keep_session_changes(conversation).await
         } else {
             match &conversation.setup {
@@ -1012,6 +1125,7 @@ impl SessionManager {
         if session_worktree_goes {
             self.forget_session_worktree(conversation).await;
         }
+        drop(sharing);
     }
 
     /// Archive retains unmerged or dirty worktrees, without making a WIP commit.
@@ -1171,6 +1285,13 @@ impl SessionManager {
         else {
             return false;
         };
+        // A folder it joined, or one another open session works in, isn't its to forget: its
+        // branch and record stay as they are (goal 9).
+        if let Some(folder) = super::shared_workspace::folder_of(conversation.setup.as_ref())
+            && (self.joined(conversation, &folder) || !self.sharers(&folder, id).is_empty())
+        {
+            return false;
+        }
         // The session worktree is gone. The branch stays while it holds work the base does
         // not have; a restored session creates it again from the base otherwise.
         let mut deleted_branch = false;
@@ -1284,24 +1405,10 @@ impl SessionManager {
                 "only an archived conversation can be restored".into(),
             ));
         }
-        let admitting = self.local_checkouts.lock().await;
-        if let Some(Setup::Session {
-            repo,
-            environment: Environment::LocalCheckout { .. },
-            ..
-        }) = &conversation.setup
-            && let Some(holder) = self.checkout_holder(repo, Some(&id))
-        {
-            return Err(Error::Invalid(format!(
-                "“{}” already works in this checkout. Archive it before restoring this session.",
-                holder.title
-            )));
-        }
         let restored = self
             .core
             .set_lifecycle(id.clone(), Lifecycle::Active)
             .await?;
-        drop(admitting);
         self.open_fence(&id);
         Ok(restored)
     }
@@ -1623,11 +1730,18 @@ impl SessionManager {
             }
             for artifact in artifacts {
                 match artifact {
-                    Artifact::ClaudeSession { session_id, .. } => natives.push(session_id),
-                    Artifact::CodexThread { thread_id, .. } => natives.push(thread_id),
-                    Artifact::ClaudeTempDir { path }
-                    | Artifact::Worktree { path, .. }
-                    | Artifact::ScratchDir { path } => {
+                    Artifact::Session { id, .. } => natives.push(id),
+                    Artifact::CliFile {
+                        provider,
+                        kind,
+                        path,
+                        ..
+                    } if brigadier_providers::adapters::adapter(provider)
+                        .is_some_and(|adapter| adapter.temp_dir == Some(kind.as_str())) =>
+                    {
+                        needles.insert(path);
+                    }
+                    Artifact::Worktree { path, .. } | Artifact::ScratchDir { path } => {
                         needles.insert(path);
                     }
                     Artifact::GitBranches { namespace, .. } if with_branches => {
@@ -1674,6 +1788,9 @@ impl SessionManager {
         let id = &conversation.id;
         let ledger = self.runtime.ledger().clone();
         let doomed = delete_owner(id);
+        // Its folder's branch and files are another open session's too while it works there.
+        let shared = super::shared_workspace::folder_of(conversation.setup.as_ref())
+            .is_some_and(|folder| !self.sharers(&folder, id).is_empty());
         let mut spaces: Vec<(String, String)> = ledger
             .artifacts(&super::branch_names::branches_owner(id))
             .into_iter()
@@ -1699,6 +1816,7 @@ impl SessionManager {
                     }
                 }
                 if let Environment::NewWorktree { branch, .. } = environment
+                    && !shared
                     && self
                         .runtime
                         .ledger()
@@ -1803,6 +1921,7 @@ impl SessionManager {
             environment: Environment::LocalCheckout { .. },
             ..
         }) = &conversation.setup
+            && !shared
             && Path::new(repo).exists()
         {
             let (git, at, session) = (self.git.clone(), PathBuf::from(repo), id.0.clone());

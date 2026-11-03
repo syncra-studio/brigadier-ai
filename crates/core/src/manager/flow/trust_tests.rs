@@ -5,7 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::Artifact;
-use brigadier_providers::trust::{TrustCli, plan};
+use brigadier_providers::ProviderKind as TrustCli;
+use brigadier_providers::trust::plan;
 
 use super::{Flow, Options, Reply, Script};
 use crate::model::{PermissionLevel, ProjectId};
@@ -37,7 +38,7 @@ impl Home {
     pub fn file(&self, cli: TrustCli) -> PathBuf {
         match cli {
             TrustCli::Claude => self.0.join(".claude.json"),
-            TrustCli::Codex => self.0.join(".codex/config.toml"),
+            _ => self.0.join(".codex/config.toml"),
         }
     }
 

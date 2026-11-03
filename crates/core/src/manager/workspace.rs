@@ -171,15 +171,28 @@ impl WorkspaceWatch {
         ignored: Vec<String>,
         reread: impl Fn() -> Option<(Vec<String>, Vec<PathBuf>)> + Send + 'static,
     ) -> Self {
-        // One pending change is enough: the reader reads the whole checkout again.
-        let (changes_tx, changes) = mpsc::channel(1);
-        let stop = Arc::new(AtomicBool::new(false));
         let root = resolved(&root);
         let status_files: Vec<PathBuf> = status_files.iter().map(|file| resolved(file)).collect();
         let (events_tx, events) = std_mpsc::channel::<notify::Result<notify::Event>>();
         let watcher = watcher(&root, &status_files, events_tx)
             .inspect_err(|err| tracing::warn!(%err, root = %root.display(), "watching a checkout failed; reading it again every so often"))
             .ok();
+        Self::read(root, status_files, ignored, reread, events, watcher)
+    }
+
+    /// Says a change for what `events` reports; without a `watcher` it also says one every
+    /// [`POLL`].
+    fn read(
+        root: PathBuf,
+        status_files: Vec<PathBuf>,
+        ignored: Vec<String>,
+        reread: impl Fn() -> Option<(Vec<String>, Vec<PathBuf>)> + Send + 'static,
+        events: std_mpsc::Receiver<notify::Result<notify::Event>>,
+        watcher: Option<notify::RecommendedWatcher>,
+    ) -> Self {
+        // One pending change is enough: the reader reads the whole checkout again.
+        let (changes_tx, changes) = mpsc::channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
         let mut watching = watcher.is_some();
         let watcher = Arc::new(Mutex::new(watcher));
         let thread_watcher = watcher.clone();
@@ -251,6 +264,11 @@ impl WorkspaceWatch {
                                     watch_status_dirs(watcher, &filter.root, &status_files);
                                 }
                                 filter.status_files = status_files;
+                                // Adding a watch restarts the stream, which drops events still
+                                // on their way (a switch's own HEAD write): read once more.
+                                if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
+                                    return;
+                                }
                             }
                         }
                         if thread_stop.load(Ordering::SeqCst) {
@@ -437,6 +455,98 @@ mod tests {
         );
     }
 
+    /// A single change is said at once after its first event, not after a burst's settling
+    /// time. The events are sent here, so the OS's own delay in telling a write isn't timed.
+    #[tokio::test]
+    async fn a_change_is_said_at_once() {
+        let (events_tx, events) = std_mpsc::channel();
+        // No watcher, so its poll would also say a change, but only after POLL.
+        let mut watch = WorkspaceWatch::read(
+            "/repo".into(),
+            Vec::new(),
+            Vec::new(),
+            || None,
+            events,
+            None,
+        );
+        let mut quickest = Duration::MAX;
+        for round in 0..3 {
+            let sent = Instant::now();
+            events_tx
+                .send(event(&[format!("/repo/quick-{round}.txt").as_str()]))
+                .unwrap();
+            assert!(
+                tokio::time::timeout(crate::test_patience(), watch.changed())
+                    .await
+                    .is_ok(),
+                "a write"
+            );
+            quickest = quickest.min(sent.elapsed());
+            // The change's settling time ends quietly before the next one.
+            tokio::time::sleep(SETTLE * 2).await;
+        }
+        // The old watch waited 200 ms after a change's first event before saying it.
+        assert!(quickest < Duration::from_millis(150), "{quickest:?}");
+    }
+
+    /// A burst of events (a build's, a checkout's) is said a few times while it goes on, the
+    /// last after its end. The events are sent here, so the OS can't hand them over in one go.
+    #[tokio::test]
+    async fn a_burst_is_said_a_few_times() {
+        let (events_tx, events) = std_mpsc::channel();
+        let mut watch = WorkspaceWatch::read(
+            "/repo".into(),
+            Vec::new(),
+            Vec::new(),
+            || None,
+            events,
+            None,
+        );
+        let (tx, mut said) = tokio::sync::mpsc::unbounded_channel();
+        let listening = tokio::spawn(async move {
+            while watch.changed().await.is_some() {
+                if tx.send(Instant::now()).is_err() {
+                    return;
+                }
+            }
+        });
+        let started = Instant::now();
+        let mut sent = 0;
+        // When the last event was sent: on a loaded machine the sleep after it can outlast its say.
+        let mut last_sent = started;
+        while started.elapsed() < Duration::from_millis(1500) {
+            last_sent = Instant::now();
+            events_tx
+                .send(event(&[format!("/repo/generated/out-{sent}.txt").as_str()]))
+                .unwrap();
+            sent += 1;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // The say after the last event, then whatever still follows it.
+        let mut times = Vec::new();
+        let deadline = tokio::time::Instant::now() + crate::test_patience();
+        while times.last().is_none_or(|last| *last < last_sent) {
+            match tokio::time::timeout_at(deadline, said.recv()).await {
+                Ok(Some(at)) => times.push(at),
+                _ => break,
+            }
+        }
+        while let Ok(Some(at)) = tokio::time::timeout(Duration::from_millis(800), said.recv()).await
+        {
+            times.push(at);
+        }
+        listening.abort();
+        assert!(
+            (2..=10).contains(&times.len()),
+            "{sent} events said {} times",
+            times.len()
+        );
+        assert!(
+            times.last().is_some_and(|last| *last >= last_sent),
+            "said after the burst's last event"
+        );
+    }
+
     #[tokio::test]
     async fn failed_watch_polls_and_drop_stops_its_thread() {
         let path = std::env::temp_dir().join(format!(
@@ -457,5 +567,60 @@ mod tests {
         // The thread's own stop reference goes away within its bounded receive/sleep.
         tokio::time::sleep(SETTLE * 3).await;
         assert_eq!(Arc::strong_count(&stop), 1);
+    }
+
+    /// A switched branch's folders are watched anew, which restarts the stream and drops what
+    /// was still on its way: the change after that is said again, with no further event.
+    #[ignore = "macOS drops FSEvents under the suite's write storm; run serially, see full-checks"]
+    #[tokio::test]
+    async fn new_watches_after_a_switch_say_one_more_change() {
+        let root =
+            std::env::temp_dir().join(format!("workspace-watch-rewatch-{}", uuid::Uuid::new_v4()));
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(root.join("common/refs/heads")).unwrap();
+        let switched = vec![root.join("common/refs/heads/topic")];
+        let switch = Arc::new(AtomicBool::new(false));
+        let switching = switch.clone();
+        let mut watch = WorkspaceWatch::start(work.clone(), Vec::new(), Vec::new(), move || {
+            switching
+                .load(Ordering::SeqCst)
+                .then(|| (Vec::new(), switched.clone()))
+        });
+        assert!(watch._watcher.lock().unwrap().is_some());
+        // A busy machine can take its time to tell a write, and a new watch hears nothing for
+        // its first seconds there: what is written meanwhile is never told, so a file is
+        // written until it is, before the branch switches.
+        let wait = crate::test_patience();
+        let deadline = Instant::now() + wait;
+        for round in 0.. {
+            std::fs::write(work.join("watched"), format!("{round}")).unwrap();
+            if tokio::time::timeout(Duration::from_secs(1), watch.changed())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the watch never heard its folder"
+            );
+        }
+        while tokio::time::timeout(Duration::from_secs(2), watch.changed())
+            .await
+            .is_ok()
+        {}
+        switch.store(true, Ordering::SeqCst);
+        std::fs::write(work.join("file"), "x").unwrap();
+        assert!(
+            tokio::time::timeout(wait, watch.changed()).await.is_ok(),
+            "the write"
+        );
+        assert!(
+            tokio::time::timeout(wait, watch.changed()).await.is_ok(),
+            "the read after the new watches"
+        );
+        drop(watch);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

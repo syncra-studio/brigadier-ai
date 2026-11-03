@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 export const DECIDERS: Record<Decider, string> = {
   policy: "Brigadier",
   user: "you",
+  orchestrator: "orchestrator",
   recorded: "the recording",
 };
 

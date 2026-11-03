@@ -12,7 +12,9 @@ use brigadier_providers::{ErrorKind, ProviderError, ProviderEvent};
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
 use crate::manager::seam::{CARRY_ON, Phase, SeamConfig, SeamFile, read_seam, without_handoff};
+use crate::model::DomainEvent;
 use crate::thread_view::{HANDOFF_MARK, NUDGE_MARK};
+use crate::work::RunState;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -278,7 +280,12 @@ async fn a_message_during_the_note_turn_reaches_the_successor_once() {
     flow.idle().await;
     // It starts the successor, with its hand-off; nothing else is said to carry on.
     let meanwhile = given(&inputs, "Meanwhile.");
-    assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
+    assert_eq!(
+        meanwhile.len(),
+        1,
+        "{meanwhile:#?} successor {}",
+        file.seams[0].successor
+    );
     assert_eq!(meanwhile[0].0, file.seams[0].successor);
     assert!(meanwhile[0].1.starts_with(HANDOFF_MARK));
     // Only the user's words show of it: the hand-off before them is Brigadier's (L12).
@@ -372,6 +379,8 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
     )
     .await;
     seam_on(&mut flow, Duration::from_millis(300));
+    // Its judge says it waits: it stays queued into the seam.
+    *flow.behavior.judge.lock().unwrap() = Some("WAITS");
     flow.say("Grow.").await;
     reached.notified().await;
     // Queued while the turn runs, before the seam.
@@ -387,10 +396,10 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
         )
         .await
         .unwrap();
-    let super::super::conversation::SendOutcome::Queued(item) = outcome else {
-        panic!("not queued")
-    };
-    assert!(item.delivered, "not steered: {item:?}");
+    assert!(
+        matches!(outcome, super::super::conversation::SendOutcome::Queued(_)),
+        "not queued"
+    );
     release.notify_one();
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
     flow.idle().await;
@@ -398,16 +407,12 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
         file.seams[0].end.death.as_deref(),
         Some("it was still working a minute after a message came")
     );
-    // It reached the working thread at once, Deciding (run2-D40), and joined that work; the
-    // successor reads it with `brigadier context` (D13), and nothing sends it again.
+    // It waited in the queue and starts the successor's work on its own turn (D157).
     let meanwhile = given(&inputs, "Meanwhile.");
-    assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
-    assert_ne!(meanwhile[0].0, file.seams[0].successor, "{meanwhile:#?}",);
-    assert!(
-        meanwhile[0].1.starts_with("[queued message "),
-        "{meanwhile:?}"
-    );
-    assert!(!given(&inputs, CARRY_ON).is_empty());
+    assert_eq!(meanwhile.len(), 1, "{meanwhile:#?}");
+    assert_eq!(meanwhile[0].0, file.seams[0].successor, "{meanwhile:#?}");
+    // The message starts the successor's work: no bare carry-on.
+    assert!(given(&inputs, CARRY_ON).is_empty());
     flow.stop().await;
 }
 
@@ -577,6 +582,29 @@ async fn a_nudge_that_cannot_be_steered_is_a_turn_of_its_own() {
     assert_eq!(nudges.len(), 1, "{nudges:?}");
     assert_eq!(file.seams[0].end.predecessor.as_ref(), Some(&nudges[0].0));
     assert!(file.seams[0].end.death.is_none());
+    // The note's turn and the successor's carry-on, for no job of the user's, never show working
+    // (core-goals D193): only the user's own turn does.
+    let working = flow
+        .events_of(&flow.conversation)
+        .await
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                DomainEvent::RunStateChanged {
+                    state: RunState::Starting | RunState::Running,
+                    step: None,
+                    ..
+                }
+            )
+        })
+        .count();
+    // Setup steps (D206) are the same Starting, so only step-less changes count.
+    assert_eq!(
+        working, 2,
+        "the user's turn starting and running, nothing else"
+    );
+    assert!(!flow.manager.cli_turn(&flow.conversation).open);
     flow.stop().await;
 }
 

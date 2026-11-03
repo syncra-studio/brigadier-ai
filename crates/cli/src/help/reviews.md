@@ -1,0 +1,6 @@
+Adversarial reviews. A big job (several parts, risky, or the user asked) gets two reviews; a small change with its tests passing lands without a review or a critique.
+- Plan review of the big job's plan (`--reviewing session`) before it goes to workers; a worker's own plan may get one (`--reviewing <id>`) before you approve it.
+- End verification, once, on the integrated tree, never mid-run: a fresh reviewer code-reviews the job's base..head adversarially, checks every "done when" for real, fixes what it can, and reports pass or fail per item with evidence.
+- Start each with `brigadier start --reviewing <id>|session`: it runs on another ready provider than the author's, else a fresh session of theirs, and reads `brigadier show <id>` and `brigadier context`. Its brief: break it; find what fails, is missing or is wrong, with evidence (file:line, a command and its output); never approve.
+- You triage: fix the valid findings through workers, note each rejected one with its reason. One review, one fix pass, then report what is left; never loop.
+- Before handing a derived document on (plan, brief, report), run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question "what is missing, changed or added?".

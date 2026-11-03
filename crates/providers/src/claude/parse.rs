@@ -121,6 +121,8 @@ pub struct Parser {
     unechoed: u32,
     /// An error was already reported for the running turn.
     turn_error: Option<ErrorKind>,
+    /// The model declined the running turn (`model_refusal_no_fallback`): its error is a refusal.
+    refused: bool,
     turn_started_ms: Option<i64>,
     /// `/compact` was written and Claude has not started compacting yet.
     compact_asked: bool,
@@ -392,13 +394,20 @@ impl Parser {
 
     fn assistant(&mut self, value: &Value, out: &mut Vec<Output>) {
         let message = value.get("message").cloned().unwrap_or(Value::Null);
-        if let Some(code) = str_of(value, "error").or_else(|| {
-            (value
-                .pointer("/api_error_params/rate_limit_info/status")
-                .and_then(Value::as_str)
-                == Some("rejected"))
-            .then_some("rate_limit")
-        }) {
+        if let Some(code) = str_of(value, "error")
+            .or_else(|| {
+                (value
+                    .pointer("/api_error_params/rate_limit_info/status")
+                    .and_then(Value::as_str)
+                    == Some("rejected"))
+                .then_some("rate_limit")
+            })
+            .or_else(|| {
+                (value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+                    && str_of(&message, "stop_reason") == Some("refusal"))
+                .then_some("refusal")
+            })
+        {
             let text = content_text(&message);
             let error = self.api_error(value, code, text, out);
             self.turn_error = Some(error.kind);
@@ -558,10 +567,14 @@ impl Parser {
             // line before its reply, not the user's message.
             if text.starts_with("<task-notification>") {
                 self.begin_turn(out);
-                if let Some(text) = task_notice(&text) {
+                if let Some(summary) = task_notice(&text) {
+                    let command = tag(&text, "task-id")
+                        .and_then(|id| self.tasks.get(id))
+                        .and_then(|(task, _)| task.command.clone());
                     out.push(Output::Event(ProviderEvent::TaskNotice {
                         item_id: str_of(value, "uuid").unwrap_or_default().to_owned(),
-                        text,
+                        wake: wake(&summary, command),
+                        text: summary,
                     }));
                 }
                 return;
@@ -617,7 +630,11 @@ impl Parser {
                     cwd: None,
                     status,
                     exit_code: exit_code(&output, failed),
-                    output: Some(output),
+                    // The exit code is said above; its `Exit code N` line is no output.
+                    output: Some(match exit_header(&output) {
+                        Some((_, rest)) => rest.to_owned(),
+                        None => output,
+                    }),
                     duration_ms: None,
                     kept,
                 },
@@ -781,6 +798,8 @@ impl Parser {
                         })
                         .collect::<String>()
                 );
+                // A claude.ai connector: the user signs in to it on claude.ai.
+                let connector = name.strip_prefix("claude.ai ");
                 Some(McpServerState {
                     name: name.to_owned(),
                     status,
@@ -790,6 +809,8 @@ impl Parser {
                         .map(str::to_owned)
                         .collect(),
                     transport: None,
+                    managed: connector.is_some(),
+                    label: connector.map(str::to_owned),
                 })
             })
             .collect();
@@ -857,6 +878,14 @@ impl Parser {
                 error.will_retry = true;
                 out.push(Output::Event(ProviderEvent::Error { error }));
             }
+            // It took a message and asks its model: the turn starts now, as Codex's does, not
+            // at the message's echo, which comes only with the first streamed token.
+            Some("status")
+                if str_of(value, "status") == Some("requesting")
+                    && str_of(value, "parent_tool_use_id").is_none() =>
+            {
+                self.begin_turn(out);
+            }
             Some("status") if str_of(value, "status") == Some("compacting") => {
                 if self.refuses_compaction && !self.compact_asked {
                     self.refusing = true;
@@ -919,11 +948,11 @@ impl Parser {
                     }));
                 }
             }
+            // The model declined the turn and Claude retries nowhere: the turn's error says it
+            // (a refusal, ErrorKind::Policy), in the thread's own words, not Claude's.
+            Some("model_refusal_no_fallback") => self.refused = true,
             Some(
-                subtype @ ("model_fallback"
-                | "model_refusal_fallback"
-                | "model_consent_fallback"
-                | "model_refusal_no_fallback"),
+                subtype @ ("model_fallback" | "model_refusal_fallback" | "model_consent_fallback"),
             ) => {
                 let detail = ["message", "reason", "fallback_model"]
                     .iter()
@@ -992,19 +1021,36 @@ impl Parser {
         let Some(id) = str_of(value, "task_id") else {
             return;
         };
+        let item_id = str_of(value, "tool_use_id");
+        let kind = task_kind(value);
+        // A subagent Claude takes up again (its own background job ended) is the same one: it
+        // keeps its start, so it stays one row whose time is all of its work.
+        let again = self
+            .tasks
+            .get(id)
+            .filter(|(task, _)| kind == BackgroundTaskKind::Agent && task.kind == kind);
         let task = BackgroundTask {
             id: id.to_owned(),
-            item_id: str_of(value, "tool_use_id").map(str::to_owned),
-            kind: task_kind(value),
+            item_id: item_id
+                .map(str::to_owned)
+                .or_else(|| again.and_then(|(task, _)| task.item_id.clone())),
+            kind,
             label: str_of(value, "description").unwrap_or_default().to_owned(),
             status: BackgroundTaskStatus::Running,
-            started_at_ms: now_ms(),
+            started_at_ms: again.map_or_else(now_ms, |(task, _)| task.started_at_ms),
             ended_at_ms: None,
             output_file: None,
             summary: None,
             last_line: None,
+            // Its label is the call's description; the command is the call's own input.
+            command: item_id
+                .and_then(|item| self.tools.get(item))
+                .and_then(|tool| str_of(&tool.input, "command"))
+                .map(str::to_owned),
+            provider: Some(ProviderKind::Claude),
         };
-        let backgrounded = value.get("is_backgrounded").and_then(Value::as_bool) == Some(true);
+        let backgrounded = value.get("is_backgrounded").and_then(Value::as_bool) == Some(true)
+            || again.is_some_and(|(_, backgrounded)| *backgrounded);
         self.tasks.insert(id.to_owned(), (task, backgrounded));
         self.report_task(id, out);
     }
@@ -1027,6 +1073,8 @@ impl Parser {
                 output_file: None,
                 summary: None,
                 last_line: None,
+                command: None,
+                provider: Some(ProviderKind::Claude),
             };
             (task, false)
         });
@@ -1122,6 +1170,7 @@ impl Parser {
         }
         self.turn_active = true;
         self.turn_error = None;
+        self.refused = false;
         self.interrupting = false;
         self.turn_started_ms = Some(now_ms());
         out.push(Output::Event(ProviderEvent::TurnStarted { turn_id: None }));
@@ -1247,6 +1296,7 @@ impl Parser {
                     .map(|started| now_ms() - started)
             });
         self.turn_error = None;
+        self.refused = false;
         out.push(Output::Event(ProviderEvent::TurnCompleted {
             turn_id: None,
             status,
@@ -1383,13 +1433,10 @@ impl Parser {
             ToolKind::FileChange => ApprovalKind::FileChange,
             ToolKind::Other => ApprovalKind::Tool,
         };
-        let reason = ["decision_reason", "description"]
-            .iter()
-            .find_map(|key| str_of(&request, key))
-            .map(str::to_owned)
-            .or_else(|| {
-                str_of(&request, "blocked_path").map(|path| format!("needs access to {path}"))
-            });
+        // Claude's `decision_reason` is its rule checker's note ("This command requires
+        // approval") and `description` the tool's summary: the card asks its own question,
+        // as on every CLI.
+        let reason = str_of(&request, "blocked_path").map(|path| format!("needs access to {path}"));
         // Brigadier keeps "Allow … for this session" itself, for the whole conversation: the
         // command's first words, or the host Claude's sandbox asks to reach.
         let grant = if tool == policy::NETWORK_TOOL {
@@ -1415,6 +1462,18 @@ impl Parser {
                 escalation,
                 input: Some(clip(&input.to_string(), OUTPUT_CLIP)),
                 grant,
+                network: tool == policy::NETWORK_TOOL
+                    || ["web", "fetch", "search", "network"]
+                        .iter()
+                        .any(|word| tool.to_lowercase().contains(word)),
+                // A subagent's request names its task (`agent_id`), whose Agent call its
+                // entries are under (D69).
+                agent: str_of(&request, "agent_id").map(|agent| {
+                    self.tasks
+                        .get(agent)
+                        .and_then(|(task, _)| task.item_id.clone())
+                        .unwrap_or_else(|| agent.to_owned())
+                }),
             },
         }));
         out.push(Output::Control(Control::Approval { request_id, input }));
@@ -1472,6 +1531,7 @@ impl Parser {
         let lower = message.to_lowercase();
         let gateway_reset = gateway_reset_at_ms(&message, now_ms());
         let (kind, limit) = match code {
+            _ if self.refused || code == "refusal" => (ErrorKind::Policy, None),
             _ if gateway_reset.is_some() => (
                 ErrorKind::UsageLimit,
                 Some(LimitHit {
@@ -1745,11 +1805,17 @@ pub(crate) fn saved_file(text: &str) -> Option<String> {
 
 /// Claude reports a failed command's status as `Exit code N` at the top of its output.
 fn exit_code(output: &str, failed: bool) -> Option<i32> {
-    let first = output.lines().next().unwrap_or_default();
-    first
-        .strip_prefix("Exit code ")
-        .and_then(|code| code.trim().parse().ok())
+    exit_header(output)
+        .map(|(code, _)| code)
         .or((!failed).then_some(0))
+}
+
+/// The `Exit code N` first line Claude puts on a failed command, and the output after it;
+/// a line that only begins with those words is the command's own.
+fn exit_header(output: &str) -> Option<(i32, &str)> {
+    let (first, rest) = output.split_once('\n').unwrap_or((output, ""));
+    let code = first.strip_prefix("Exit code ")?.trim().parse().ok()?;
+    Some((code, rest))
 }
 
 fn token_usage(usage: &Value) -> TokenUsage {
@@ -1811,6 +1877,45 @@ fn task_notice(text: &str) -> Option<String> {
     (!summary.is_empty()).then_some(summary)
 }
 
+/// A notice tag's text (`<task-id>b1</task-id>`).
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let start = text.find(&open)? + open.len();
+    let end = start + text[start..].find(&format!("</{name}>"))?;
+    Some(text[start..end].trim())
+}
+
+/// The job's end a notice's line tells: `Background command "x" completed (exit code 1)`,
+/// `Agent "y" finished`. None for any other line (`Monitor event: …`).
+fn wake(summary: &str, command: Option<String>) -> Option<Wake> {
+    let (job, rest) = summary
+        .strip_prefix("Background command \"")
+        .map(|rest| (WakeJob::Command, rest))
+        .or_else(|| Some((WakeJob::Agent, summary.strip_prefix("Agent \"")?)))?;
+    let (label, how) = rest.rsplit_once("\" ")?;
+    let exit = how
+        .split_once("exit code ")
+        .and_then(|(_, code)| {
+            code.split(|c: char| !(c == '-' || c.is_ascii_digit()))
+                .next()
+        })
+        .and_then(|code| code.parse().ok());
+    let end = match how.split_whitespace().find(|word| *word != "was")? {
+        "completed" | "finished" if exit.is_some_and(|exit| exit != 0) => WakeEnd::Failed,
+        "completed" | "finished" => WakeEnd::Finished,
+        "failed" => WakeEnd::Failed,
+        "stopped" | "killed" => WakeEnd::Stopped,
+        _ => return None,
+    };
+    Some(Wake {
+        job,
+        label: label.to_owned(),
+        command,
+        end,
+        exit,
+    })
+}
+
 /// A slash command as the user typed it (`/fusion Which store?`), from the markup Claude keeps
 /// it as (`<command-name>/brigade:fusion</command-name><command-args>…`). Brigadier's own
 /// skills are typed without their plugin's name.
@@ -1867,6 +1972,7 @@ pub fn commands(answer: &Value, own_servers: &[String]) -> Vec<CliCommand> {
                 text: format!("/{name}"),
                 description: text(command, "description"),
                 argument_hint: text(command, "argumentHint"),
+                action: None,
                 name,
             })
         })
@@ -1904,6 +2010,7 @@ pub fn merge_commands(known: &mut Vec<CliCommand>, names: Vec<String>) {
             name,
             description: None,
             argument_hint: None,
+            action: None,
         });
     }
 }
@@ -2259,6 +2366,35 @@ mod tests {
         );
     }
 
+    /// A model's refusal (D143) is the turn's error, classed a refusal, with no notice in
+    /// Claude's own words: from its system line or from the refusing API error message.
+    #[test]
+    fn a_refusal_is_the_turns_policy_error() {
+        let refusal = json!({"type": "system", "subtype": "model_refusal_no_fallback",
+            "original_model": "claude-opus-5-5", "api_refusal_category": "reasoning_extraction",
+            "content": "declined", "uuid": "u", "session_id": "s"});
+        let result = json!({"type": "result", "subtype": "error_during_execution",
+            "is_error": true, "result": "API Error: flagged", "session_id": "s"});
+        let mut parser = Parser::live();
+        let mut outputs = parser.feed(&refusal.to_string());
+        outputs.extend(parser.feed(&result.to_string()));
+        assert!(
+            !outputs
+                .iter()
+                .any(|output| matches!(output, Output::Event(ProviderEvent::Notice { .. }))),
+            "{outputs:?}"
+        );
+        assert_eq!(errors(outputs).pop().unwrap().kind, ErrorKind::Policy);
+
+        let message = json!({"type": "assistant", "isApiErrorMessage": true,
+            "message": {"id": "m", "role": "assistant", "model": "<synthetic>",
+                "stop_reason": "refusal", "content": [{"type": "text", "text": "API Error: flagged"}]}});
+        assert_eq!(
+            errors(Parser::live().feed(&message.to_string()))[0].kind,
+            ErrorKind::Policy
+        );
+    }
+
     #[test]
     fn api_error_params_allowed_and_missing_resets_are_not_invented() {
         let mut value = fixture_value(API_ERROR_LIMIT);
@@ -2458,6 +2594,66 @@ mod tests {
         }
     }
 
+    /// Claude's rule-checker note isn't the card's title: the card asks its own question, as on
+    /// every CLI.
+    #[test]
+    fn a_command_approval_carries_no_rule_note_as_its_reason() {
+        let request = Parser::live()
+            .feed(
+                &json!({
+                    "type": "control_request", "request_id": "a1",
+                    "request": { "subtype": "can_use_tool", "tool_name": "Bash",
+                        "decision_reason": "This command requires approval", "description": "Sleep",
+                        "input": { "command": "python3 -c 'import time'" } }
+                })
+                .to_string(),
+            )
+            .into_iter()
+            .find_map(|out| match out {
+                Output::Event(ProviderEvent::ApprovalRequested { request }) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(request.reason, None);
+        assert_eq!(request.grant.as_deref(), Some("python3"));
+    }
+
+    /// A subagent's request (2.1.316, w23's live sample) names its task (`agent_id`): the
+    /// request is the subagent's, under its Agent call (D69); the session's own names none.
+    #[test]
+    fn a_subagents_approval_names_the_agent_call_it_runs_in() {
+        let mut parser = Parser::live();
+        parser.feed(
+            &json!({"type": "system", "subtype": "task_started", "task_id": "a9c2d632785443234",
+                "tool_use_id": "toolu_01WA7p", "description": "Compute", "task_type": "local_agent"})
+            .to_string(),
+        );
+        let mut asked = |agent: Option<&str>| {
+            let mut request = json!({ "subtype": "can_use_tool", "tool_name": "Bash",
+                "input": { "command": "sleep 2 && python3 -c 'print(6*7)'" },
+                "tool_use_id": "toolu_01Gf3Y" });
+            if let Some(agent) = agent {
+                request["agent_id"] = json!(agent);
+            }
+            parser
+                .feed(&json!({"type": "control_request", "request_id": "567c3485", "request": request}).to_string())
+                .into_iter()
+                .find_map(|out| match out {
+                    Output::Event(ProviderEvent::ApprovalRequested { request }) => Some(request),
+                    _ => None,
+                })
+                .unwrap()
+                .agent
+        };
+        assert_eq!(
+            asked(Some("a9c2d632785443234")).as_deref(),
+            Some("toolu_01WA7p")
+        );
+        // A task it never said started: its own id still marks it the subagent's.
+        assert_eq!(asked(Some("a_unknown")).as_deref(), Some("a_unknown"));
+        assert_eq!(asked(None), None);
+    }
+
     #[test]
     fn file_and_network_approvals_keep_their_session_scopes() {
         let workspace =
@@ -2529,6 +2725,8 @@ mod tests {
             status,
             tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
             transport: None,
+            managed: false,
+            label: None,
         };
         assert_eq!(
             first,
@@ -3070,6 +3268,7 @@ mod tests {
                 text: "/compact".into(),
                 description: Some("Clear history but keep a summary".into()),
                 argument_hint: Some("<instructions>".into()),
+                action: None,
             }
         );
         assert_eq!(listed[1].argument_hint, None);
@@ -3153,9 +3352,66 @@ mod tests {
                 &events[..],
                 [
                     Output::Event(ProviderEvent::TurnStarted { .. }),
-                    Output::Event(ProviderEvent::TaskNotice { item_id, text }),
+                    Output::Event(ProviderEvent::TaskNotice { item_id, text, .. }),
                 ] if item_id == "n1" && text == r#"Background command "sleep 20 && echo done" completed (exit code 0)"#
             ),
+            "{events:?}"
+        );
+    }
+
+    /// A notice's line says which job ended and how, in the same words for every CLI; a failed
+    /// command's `Exit code N` is its exit code, not a line of its output.
+    #[test]
+    fn a_jobs_end_and_a_failed_commands_exit_are_said_as_fields() {
+        let said =
+            |line: &str| wake(line, None).map(|wake| (wake.job, wake.label, wake.end, wake.exit));
+        assert_eq!(
+            said(r#"Background command "pnpm test" completed (exit code 2)"#),
+            Some((
+                WakeJob::Command,
+                "pnpm test".into(),
+                WakeEnd::Failed,
+                Some(2)
+            ))
+        );
+        assert_eq!(
+            said(r#"Background command "a "quoted" b" was stopped"#),
+            Some((
+                WakeJob::Command,
+                r#"a "quoted" b"#.into(),
+                WakeEnd::Stopped,
+                None
+            ))
+        );
+        assert_eq!(
+            said(r#"Agent "Review" finished"#),
+            Some((WakeJob::Agent, "Review".into(), WakeEnd::Finished, None))
+        );
+        assert_eq!(said(r#"Monitor event: "tick""#), None);
+
+        let mut parser = Parser::live();
+        let call = json!({"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "false"}}]}});
+        let result = json!({"type": "user", "message": {"role": "user", "content": [
+            {"tool_use_id": "t1", "type": "tool_result", "content": "Exit code 1\nboom", "is_error": true}]}});
+        parser.feed(&call.to_string());
+        let events = parser.feed(&result.to_string());
+        assert!(
+            events.iter().any(|output| matches!(output,
+                Output::Event(ProviderEvent::Command { exit_code: Some(1), output: Some(output), .. }) if output == "boom")),
+            "{events:?}"
+        );
+
+        // Ordinary output that only begins with the words keeps its first line.
+        let call = json!({"type": "assistant", "message": {"id": "m2", "content": [
+            {"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "./check"}}]}});
+        let result = json!({"type": "user", "message": {"role": "user", "content": [
+            {"tool_use_id": "t2", "type": "tool_result", "content": "Exit code handling passed\n", "is_error": false}]}});
+        parser.feed(&call.to_string());
+        let events = parser.feed(&result.to_string());
+        assert!(
+            events.iter().any(|output| matches!(output,
+                Output::Event(ProviderEvent::Command { exit_code: Some(0), output: Some(output), .. }) if output == "Exit code handling passed\n")),
             "{events:?}"
         );
     }
@@ -3452,6 +3708,22 @@ mod tests {
                 "Reply with hi"
             )
         );
+        // Claude takes the subagent up again once its own background job ended: the same
+        // task, running again from its first start (one Background row, D97, D98).
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let again = parser.feed(&json!({ "type": "system", "subtype": "task_started", "task_id": "a0c79",
+            "tool_use_id": "toolu_agent", "description": "Reply with hi", "subagent_type": "general-purpose",
+            "is_backgrounded": false, "task_type": "local_agent" }).to_string());
+        let Some(Output::Event(ProviderEvent::BackgroundTask { task: resumed })) = again
+            .into_iter()
+            .find(|output| matches!(output, Output::Event(ProviderEvent::BackgroundTask { .. })))
+        else {
+            panic!("the subagent taken up again is reported");
+        };
+        assert_eq!(
+            (resumed.status, resumed.started_at_ms),
+            (BackgroundTaskStatus::Running, task.started_at_ms)
+        );
         let mut feed = |line: Value| tasks(parser.feed(&line.to_string()));
         // The command is stopped.
         assert_eq!(
@@ -3466,6 +3738,26 @@ mod tests {
                 Some(path.to_owned())
             )]
         );
+    }
+
+    /// A turn starts as Claude asks its model (Claude Code 2.1.314 says `requesting` ~0.1 s after
+    /// it takes a message), not at the message's echo, which comes with the first token; the
+    /// echo is then that turn's message.
+    #[test]
+    fn a_turn_starts_when_claude_asks_its_model() {
+        let mut parser = Parser::live();
+        let requesting = json!({ "type": "system", "subtype": "status", "status": "requesting" });
+        assert!(matches!(
+            parser.feed(&requesting.to_string()).as_slice(),
+            [Output::Event(ProviderEvent::TurnStarted { .. })]
+        ));
+        assert!(parser.feed(&requesting.to_string()).is_empty(), "one turn");
+        let echo = json!({ "type": "user", "isReplay": true, "uuid": "u1",
+                           "message": { "role": "user", "content": "Run ls" } });
+        assert!(matches!(
+            parser.feed(&echo.to_string()).as_slice(),
+            [Output::Event(ProviderEvent::Message { role: Role::User, text, .. })] if text == "Run ls"
+        ));
     }
 
     /// A turn can end while Claude's own background job still runs: Claude says how many run,

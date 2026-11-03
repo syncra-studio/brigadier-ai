@@ -7,4 +7,8 @@ export type BranchInfo = { name: string, commit: string,
 /**
  * The worktree that has it checked out (the user's checkout or another), if any.
  */
-checkedOutAt: string | null, };
+checkedOutAt: string | null, 
+/**
+ * A running worker works on it (its task branch), so no session is started there.
+ */
+worker: boolean, };

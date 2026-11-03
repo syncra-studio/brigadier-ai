@@ -307,8 +307,8 @@ pub struct WriteTabFile {
     pub base_revision: String,
 }
 
-/// `offer_feedback`: the user seems annoyed with Brigadier itself, or asked to report something
-/// to its developers; the thread offers them a report, drafted from the conversation, as a card
+/// `offer_feedback`: the user seems annoyed with Brigadier itself, Brigadier, a CLI or a session
+/// acts abnormally, or the user asked to report something to its developers; the thread offers them a report, drafted from the conversation, as a card
 /// they send or dismiss.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

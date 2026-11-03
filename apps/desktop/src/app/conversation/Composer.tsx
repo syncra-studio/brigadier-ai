@@ -2,7 +2,6 @@ import { ComposerPrimitive, ComposerRail, ComposerRailItem, ComposerAttachments,
 import {
   memo,
   useContext,
-  useEffect,
   useRef,
   useState,
 } from "react";
@@ -51,9 +50,11 @@ import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { type ModelGroup, ModelSelector } from "@/components/shared";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useActivity } from "@/state/activity";
+import { useActivity, works } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { useOpenTurnStart } from "@/state/cliThread";
+import { useTicking } from "@/app/conversation/requestTime";
+import { ViewContext } from "@/app/conversation/viewContext";
 import { useDirectTo } from "@/state/directTo";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { loadModelRules, useModelRulesRead } from "@/state/modelRules";
@@ -70,9 +71,10 @@ const NO_GROUPS: ModelGroup[] = [];
 export const ConversationComposer = memo(function ConversationComposer({ autoFocus, placeholder }: ComposerProps) {
   const target = useContext(ComposerTargetContext);
   const [modelOpen, setModelOpen] = useState(false);
-  // The user's rules file, read as the composer opens and again as the model picker does, so a
-  // hand edit shows: what it keeps out the picker shows but can't pick.
-  useModelRulesRead();
+  // The user's rules file, read once and again as the model picker opens, so a hand edit shows
+  // there and a switch between conversations reads nothing: what it keeps out the picker shows
+  // but can't pick.
+  useModelRulesRead(true);
   const refusals = useRuleRefusals(target?.resolved.groups ?? NO_GROUPS);
   const openModel = (open: boolean) => {
     if (open) void loadModelRules();
@@ -131,7 +133,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
           projectId={!conversation && resolved.kind === "session" ? (resolved.project?.id ?? null) : null}
         />
         {/* Out of the way while a decision waits above the composer (see FullAccessNotice). */}
-        {conversation && !archived && !current && !slot && <FullAccessNotice conversation={conversation} />}
+        {conversation && !archived && <FullAccessNotice conversation={conversation} aside={!!current || !!slot} />}
         <SlashCommands
           conversation={conversation}
           groups={resolved.groups}
@@ -252,35 +254,34 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
 });
 
 /**
- * "Working for 2m 5s" while the conversation's CLI turn is open, from its first second on,
+ * "Working for 2m 5s" while the conversation's CLI turn is open, or its block is held open by
+ * what that turn started (D24), from its first second on,
  * ticking each second; null otherwise, and while it only waits for the user's answer to its
- * question card (#366): nothing works then. The turn's start is its CLI's own timestamp.
+ * question card (#366): nothing works then. It reads what the work block's header reads (D94):
+ * the same start, on the same clock.
  */
 function useWorkingFor(conversationId: string | null): string | null {
-  const startedAtMs = useOpenTurnStart(conversationId);
-  const open = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false));
+  const turnStart = useOpenTurnStart(conversationId);
+  const view = useContext(ViewContext);
+  const own = view.conversation?.id === conversationId;
+  // Held open by what its turn started, the block still works, from the same start (D24, D94).
+  const held = own && !!view.workHeld;
+  // Its CLI started again between two of its turns (a switch) still works: no turn is open then.
+  const live = useActivity((s) => {
+    const activity = conversationId ? s.byConversation[conversationId] : undefined;
+    return !!activity && works(activity);
+  });
+  const startedAtMs = own && (turnStart !== null || held || live) ? (view.workFrom ?? turnStart) : turnStart;
+  const open = live || held;
   const asking = useBoard((s) => {
     const board = s.board;
     if (!conversationId || board?.conversationId !== conversationId) return false;
     return Object.values(board.questions).some((question) => question.answer === null);
   });
   const from = open && !asking ? startedAtMs : null;
-  // The time, read as a turn starts (or the composer opens on one), then on each whole second of
-  // it; none shows until it was read for this turn.
-  const [clock, setClock] = useState<{ from: number | null; now: number }>(() => ({ from, now: Date.now() }));
-  useEffect(() => {
-    if (from === null) return;
-    let timer = 0;
-    const tick = () => {
-      const now = Date.now();
-      setClock({ from, now });
-      timer = window.setTimeout(tick, 1000 - (Math.max(0, now - from) % 1000));
-    };
-    timer = window.setTimeout(tick, 0);
-    return () => window.clearTimeout(timer);
-  }, [from]);
-  if (from === null || clock.from !== from) return null;
-  const elapsed = clock.now - from;
+  const now = useTicking(from !== null);
+  if (from === null) return null;
+  const elapsed = now - from;
   if (elapsed < 1000) return null;
   return `Working for ${formatDuration(elapsed)}`;
 }

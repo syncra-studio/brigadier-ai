@@ -9,6 +9,8 @@
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
+// Closing it is kept across loads; each run starts with it not yet closed.
+localStorage.removeItem("brigadier.fullAccessNoticeClosed");
 const params = new URLSearchParams(location.search);
 const drive = params.has("drive");
 const waiting = params.has("waiting");
@@ -68,7 +70,7 @@ function setQueue(items: { id: string; text: string }[]): void {
   );
 }
 
-/** A message waits in the queue (#448): whether the card is there with it, and back once it left. */
+/** A message waits in the queue (#448): whether the card is there with it, and still gone once it left. */
 async function runQueued() {
   for (let tries = 0; tries < 80 && !notice(); tries += 1) await pause();
   const before = notice() !== null;
@@ -77,7 +79,7 @@ async function runQueued() {
   const rail = document.querySelector('[data-slot="message-queue-item"]') !== null;
   const withQueue = notice() !== null;
   setQueue([]);
-  for (let tries = 0; tries < 30 && !notice(); tries += 1) await pause();
+  for (let tries = 0; tries < 5 && !notice(); tries += 1) await pause();
   report({ before, rail, withQueue, after: notice() !== null });
 }
 
@@ -104,6 +106,7 @@ async function run() {
   const seen: Record<string, unknown> = {
     title: line.querySelector("p")?.textContent ?? null,
     paragraphs: line.querySelectorAll("p").length,
+    warning: line.querySelectorAll("p")[1]?.textContent ?? null,
     fontSize: px(style.fontSize),
     padding: [px(style.paddingTop), px(style.paddingLeft)],
     icon: px(String(icon.width)),

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { TurnBoundary } from "@/components/conversation";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { request } from "@/ipc/client";
 import { loadConversation } from "@/state/actions";
@@ -60,7 +61,7 @@ export function SideChatTab({ conversationId, tab }: { conversationId: string; t
   if (!side) return null;
   return (
     <BoardStoreContext.Provider value={side.store}>
-      <ConversationView selection={{ type: "conversation", id: side.id }} embedded />
+      <TurnBoundary key={side.id} summary="This chat couldn’t render."><ConversationView selection={{ type: "conversation", id: side.id }} embedded /></TurnBoundary>
     </BoardStoreContext.Provider>
   );
 }

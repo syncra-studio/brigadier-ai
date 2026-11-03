@@ -303,8 +303,9 @@ async fn codex_threads_of_an_earlier_cleanup_are_counted_when_they_go() {
     ledger
         .record(
             "sweep:earlier",
-            Artifact::CodexThread {
-                thread_id: "01a1-earlier".into(),
+            Artifact::Session {
+                provider: brigadier_providers::ProviderKind::Codex,
+                id: "01a1-earlier".into(),
                 home: None,
                 cwd: None,
             },
@@ -333,8 +334,9 @@ async fn alike_leftovers_are_one_row() {
         ledger
             .record(
                 &format!("task:gone-{n}"),
-                Artifact::CodexThread {
-                    thread_id: format!("01a1-gone-{n}"),
+                Artifact::Session {
+                    provider: brigadier_providers::ProviderKind::Codex,
+                    id: format!("01a1-gone-{n}"),
                     home: None,
                     cwd: None,
                 },
@@ -644,8 +646,9 @@ async fn agent_files_go_only_with_proof_once_what_they_served_is_gone() {
     let fresh = transcript(&claude, &gone.join("fresh"), &ids(7), "sdk-cli", true);
     // Brigadier recorded starting this one; its record of the session is long gone.
     let ledger = flow.manager.runtime.ledger();
-    let session = Artifact::ClaudeSession {
-        session_id: ids(5),
+    let session = Artifact::Session {
+        provider: brigadier_providers::ProviderKind::Claude,
+        id: ids(5),
         home: None,
         cwd: Some(gone.join("recorded").display().to_string()),
     };
@@ -714,12 +717,12 @@ async fn agent_files_go_only_with_proof_once_what_they_served_is_gone() {
     assert!(removals.iter().any(|(kind, _, artifacts)| {
         *kind == ProviderKind::Codex
             && artifacts.iter().any(|artifact| {
-                matches!(artifact, Artifact::CodexThread { thread_id, .. } if thread_id == "01a1-ours")
+                matches!(artifact, Artifact::Session { id: thread_id, provider: brigadier_providers::ProviderKind::Codex, .. } if thread_id == "01a1-ours")
             })
     }));
     assert!(
         !removals.iter().flat_map(|(_, _, artifacts)| artifacts).any(|artifact| {
-            matches!(artifact, Artifact::CodexThread { thread_id, .. } if thread_id == "01a1-user")
+            matches!(artifact, Artifact::Session { id: thread_id, provider: brigadier_providers::ProviderKind::Codex, .. } if thread_id == "01a1-user")
         })
     );
     // Nothing is left in the ledger for the sweep.

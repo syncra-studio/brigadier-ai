@@ -5,6 +5,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -15,6 +16,7 @@ import { gitCommandsKey, mcpKey, usedMcpServers, webUse } from "@/app/conversati
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { AllLinksPopover } from "@/app/conversation/AllLinksPopover";
 import { BranchRow } from "@/app/conversation/BranchRow";
+import { folderSharers } from "@/app/conversation/forks";
 import { PULL_REQUEST_TONES, pullRequestLook } from "@/app/conversation/pullRequestWords";
 import { activePullRequests, activeWaits, completeWait, useTrackedWork, waitingDue } from "@/app/conversation/trackedWork";
 import type { PullRequestStatus } from "@/app/conversation/usePullRequest";
@@ -22,6 +24,7 @@ import { SourceRow } from "@/app/conversation/SourceRow";
 import { hostOf, linksIn, openLink } from "@/app/conversation/summaryLinks";
 import { useKeptScroll } from "@/app/conversation/summaryScroll";
 import {
+  Folder,
   HandRaised,
   Link,
   Paperclip,
@@ -51,12 +54,12 @@ import type {
   WorkerRow,
   WorkerWait,
 } from "@/ipc/generated";
-import { getSessionDiff } from "@/state/actions";
+import { getSessionDiff, openConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread, useSessionMcp, useThreadFact, useWorkerRows } from "@/state/cliThread";
-import { isNativeWorker } from "@/state/nativeWorkers";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { heldMap } from "@/lib/held";
 import { cn } from "@/lib/utils";
 
 /* What the summary reads from a session's own CLI items, each a string or a flag (see `useThreadFact`). */
@@ -78,22 +81,34 @@ function useSessionDiff(
     return `${all.length}:${all.at(-1)?.end ?? ""}`;
   });
   const git = useThreadFact(conversationId, gitCommandsKey);
-  const [stat, setStat] = useState<{ stat: DiffStat; commits: number } | null>(null);
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     if (!session) return;
     let current = true;
     getSessionDiff(conversationId)
-      .then((next) => current && setStat(next))
-      // The card shows the branch alone when git can't tell.
-      .catch(() => current && setStat(null));
+      .then((next) => {
+        lastDiffs.set(conversationId, next ?? undefined);
+        if (current) redraw();
+      })
+      // The last stat read stays while git can't tell; the card shows the branch alone when none was.
+      .catch(() => {});
     return () => {
       current = false;
     };
     // Each turn's end and each git command may move the branch: read it again.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [conversationId, session, turns, git]);
-  return session ? stat : null;
+  // The last stat read of it shows while it is read again, opened anew too: never a blank between.
+  return session ? (lastDiffs.get(conversationId) ?? null) : null;
 }
+
+/** Each session's last diff stat read, held across restarts so a first open shows it at once. */
+const lastDiffs = heldMap(
+  "brigadier.sessionDiffs",
+  200,
+  (v): v is { stat: DiffStat; commits: number } =>
+    typeof v === "object" && v !== null && "stat" in v && typeof v.stat === "object" && v.stat !== null && Array.isArray((v.stat as DiffStat).files),
+);
 
 /** A Chat's sources: links in the user's messages (as soon as they are sent), first seen first. */
 function useSources(conversationId: string): string[] {
@@ -109,7 +124,10 @@ function useSources(conversationId: string): string[] {
 /** One of what a session used, as its card lists it. */
 export type UsedSource = { key: string; icon: ReactNode; label: string; title: string; meta?: string | undefined; open?: () => void };
 
-/** An MCP server's name as a line reads it: `claude_ai_Linear` reads "Linear". */
+/**
+ * An MCP server's name as a line reads it ("linear" reads "Linear"). A server known only by its
+ * tool calls' names may carry its vendor's prefix there, which goes.
+ */
 export function serverLabel(name: string): string {
   const words = name.replace(/^claude[._ ]ai[._ ]/i, "").replace(/[_-]+/g, " ").trim();
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
@@ -142,7 +160,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
       ...pages.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
       ...used.map((name): UsedSource => {
         const state = statusOf(servers, name);
-        const label = serverLabel(state?.name ?? name);
+        const label = serverLabel(state ? (state.label ?? state.name) : name);
         return { key: `mcp:${name}`, icon: <Plugin />, label, title: label, meta: state?.status === "needs-auth" ? "Needs sign-in" : undefined };
       }),
     ];
@@ -176,11 +194,9 @@ export function fileSource(conversationId: string, file: AttachmentRef): UsedSou
 /** Sources shown before "View all". */
 const SOURCES = 3;
 
-/** A worker's wait in a line: what it asks to run, its question, the server it wants a sign-in for. */
+/** A worker's wait in a line: its question, or the server it wants a sign-in for. */
 function waitLine(wait: WorkerWait): string {
   switch (wait.kind) {
-    case "permission":
-      return `Allow ${wait.what}`;
     case "question":
       return wait.what;
     case "signIn":
@@ -215,7 +231,7 @@ function WaitingRow({ conversationId, row, name, wait }: { conversationId: strin
 }
 
 /**
- * "Waiting on you": the real pending permission prompts, questions and MCP sign-ins of this
+ * "Waiting on you": the real pending questions and MCP sign-ins of this
  * session's workers, from their rows, the oldest worker's first. The section is there only while
  * something waits. The session's own question shows only above its composer.
  */
@@ -448,8 +464,7 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
   const attachments = useApp(useShallow((s) => [...new Map((s.threads[conversation.id]?.items ?? [])
     .flatMap((item) => item.attachments).map((attachment) => [attachment.id, attachment])).values()]));
   const context = useBoard((s) => s.board?.conversationId === conversation.id ? s.board.context : null);
-  // Its CLI's subagents are not workers (`WorkersSummary`).
-  const workers = useWorkerRows(conversation.id).some((row) => !isNativeWorker(row));
+  const workers = useWorkerRows(conversation.id).length > 0;
   const empty = sources.length === 0 && attachments.length === 0 && !context && !workers;
   return <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
     <div className="flex flex-col py-2.5">
@@ -462,6 +477,16 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
       </SummarySection>}
     </div>
   </SummaryCard>;
+}
+
+/** "Shares this folder with ‹session›" for each open fork or source working in this session's folder (D211). */
+function SharedFolderRows({ conversation }: { conversation: Conversation }) {
+  const sharers = useApp(useShallow((s) => folderSharers(conversation, s.conversations)));
+  return sharers.map((other) => (
+    <SummaryRowButton key={other.id} data-row="shared-folder" title={other.title} icon={<Folder />} onClick={() => openConversation(other.id)}>
+      Shares this folder with {other.title}
+    </SummaryRowButton>
+  ));
 }
 
 function SessionSummaryContent({
@@ -502,6 +527,7 @@ function SessionSummaryContent({
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <BranchRow branch={setup.environment.branch} diff={diff} />
+            <SharedFolderRows conversation={conversation} />
 
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />

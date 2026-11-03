@@ -24,7 +24,7 @@ use brigadier_git::{Oid, PatchOutcome, WorktreeSpec};
 use brigadier_providers::policy;
 use brigadier_providers::{
     ApprovalDecision, ApprovalKind, ApprovalRequest, Artifact, Decider, InputFile, InputPart,
-    Origin, ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
+    Origin, ProviderEvent, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -44,8 +44,8 @@ use crate::sessions::McpUpdate;
 use crate::tools::Role;
 use crate::work::{
     ApprovalSubject, ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, CardState,
-    MockupPart, OrchestratorStepKind, PlainWorker, RepoAccess, Route, Task, TaskId, TaskKind,
-    TaskState, TaskWorkspace, WorkerAccess, WorkerStepKind,
+    MockupPart, OrchestratorStepKind, PlainWorker, RepoAccess, Route, StartStep, Task, TaskId,
+    TaskKind, TaskState, TaskWorkspace, WorkerAccess, WorkerStepKind,
 };
 use crate::{Error, Result, now_ms};
 
@@ -118,6 +118,9 @@ struct TaskLiveState {
     seam: Option<seam::SeamLive>,
     /// What its session sent while it hands off: its successor's first input carries it.
     seam_held: Vec<String>,
+    /// Its turn is a compaction of its own (development builds' `debugCompact`): its session
+    /// already heard its last turn end and hears nothing of this one.
+    compacting: bool,
     quota_timer: u64,
     quota_cancelled: bool,
     quota_send_accepted: bool,
@@ -134,6 +137,12 @@ pub(crate) struct TaskLive {
     /// Held while the worker's CLI starts again, so two messages never start two CLIs.
     pub(crate) reroute: tokio::sync::Mutex<()>,
     quota_transition: tokio::sync::Mutex<()>,
+    /// Held by its session's pause, resume and switch, and a message on its way, so each
+    /// sees what the one before left.
+    pub(crate) manage: tokio::sync::Mutex<()>,
+    /// Its turn end is being told: it reads Reported before its event is in, and a
+    /// `brigadier wait` must not end empty in between.
+    pub(crate) reporting: std::sync::atomic::AtomicBool,
 }
 
 impl TaskLive {
@@ -145,6 +154,8 @@ impl TaskLive {
             settle: tokio::sync::Mutex::new(()),
             reroute: tokio::sync::Mutex::new(()),
             quota_transition: tokio::sync::Mutex::new(()),
+            manage: tokio::sync::Mutex::new(()),
+            reporting: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -223,6 +234,14 @@ impl TaskLive {
         let mut state = self.state.lock().await;
         state.stopping = false;
         state.busy = false;
+    }
+
+    /// Stops its quota recovery (a pause or switch takes it over): whether it was stopped
+    /// already.
+    pub(crate) async fn cancel_quota(&self) -> bool {
+        let mut state = self.state.lock().await;
+        state.quota_timer += 1;
+        std::mem::replace(&mut state.quota_cancelled, true)
     }
 
     pub async fn redactor(&self) -> Option<Arc<brigadier_providers::redact::Redactor>> {
@@ -321,20 +340,6 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("the task changed meanwhile".into()))
     }
 
-    /// D44/D47: a plain worker stays available after a failed or interrupted turn, but its
-    /// thread step records the turn's outcome rather than inferring success from Reported.
-    pub(super) async fn update_task_with_step(
-        &self,
-        conversation_id: &ConversationId,
-        id: &TaskId,
-        step: Option<WorkerStepKind>,
-        change: impl FnOnce(&mut Task),
-    ) -> Result<Task> {
-        self.update_task_if_with_step(conversation_id, id, |_| true, step, change)
-            .await?
-            .ok_or_else(|| Error::Invalid("the task changed meanwhile".into()))
-    }
-
     /// [`Self::update_task`] when `still` holds for the task as it is now, checked and changed
     /// in one step (nothing else changes the task in between); `None`, and nothing recorded,
     /// when it no longer holds.
@@ -349,7 +354,7 @@ impl SessionManager {
             .await
     }
 
-    async fn update_task_if_with_step(
+    pub(super) async fn update_task_if_with_step(
         &self,
         conversation_id: &ConversationId,
         id: &TaskId,
@@ -366,15 +371,28 @@ impl SessionManager {
             }
             let was = task.state;
             let reported = task.report.is_some();
+            let was_paused = explicitly_paused(&task);
+            // A plain worker paused but not by its session waits for quota (its wait may be
+            // cancelled already, as a switch does before it moves it).
+            let was_waiting = was == TaskState::Paused && !was_paused && task.plain.is_some();
             change(&mut task);
             task.updated_at_ms = now_ms();
             let mut events = vec![DomainEvent::TaskUpdated {
                 task: Box::new(task.clone()),
             }];
-            events.extend(worker_step(&task, Some(was), reported, step));
-            self.core
-                .record_conversation(conversation_id, events)
-                .await?;
+            // Its session's pause or resume shows as that row ("Paused ‹worker›"), not twice;
+            // so does going on out of a quota wait, as its switch or "Resumed on" row (D126).
+            if was_paused == explicitly_paused(&task) {
+                events.extend(
+                    worker_step(&task, Some(was), reported, step).filter(|event| {
+                        !(was_waiting
+                            && matches!(event, DomainEvent::WorkerStepped { step }
+                                if step.kind == WorkerStepKind::Resumed))
+                    }),
+                );
+            }
+            // Boxed: every worker change goes through here, deep in turn futures (stack).
+            Box::pin(self.core.record_conversation(conversation_id, events)).await?;
             task
         };
         self.workers_changed(conversation_id, false);
@@ -810,7 +828,6 @@ impl SessionManager {
                 .collect(),
             tools: ToolSet::Lean,
             skill_plugins: computer.iter().map(|kit| kit.plugin.clone()).collect(),
-            installed_skills: Vec::new(),
             switched_off,
             add_dirs: vec![record],
             // The project's own setup (its hooks, MCP servers, skills), in a folder the user
@@ -896,9 +913,10 @@ impl SessionManager {
     ) -> Result<()> {
         let conversation_id = task.conversation_id.clone();
         let owner = format!("task:{}", task.id);
-        // A resumed Codex thread's token totals include the turns counted before.
+        // A resumed session's token totals may include the turns counted before.
         let resumed = matches!(origin, Origin::Resume { .. });
-        let continues = task.route.choice.provider == ProviderKind::Codex && resumed;
+        let continues =
+            super::conversation::cumulative_usage(task.route.choice.provider) && resumed;
         let WorkerSession {
             plugins,
             plugin_lease,
@@ -975,6 +993,7 @@ impl SessionManager {
         self.arm_env_fault(&task.id, provider).await;
         let manager = self.arc();
         let pumped = (live.clone(), cli.clone());
+        let events = self.session_events(EventSource::Task(&task.id), &cli, events);
         self.spawn(async move { manager.pump_worker(pumped.0, pumped.1, events).await });
         // A Stop while its CLI started ends it before its first message, and it stays stopped
         // (#457).
@@ -1291,7 +1310,11 @@ impl SessionManager {
                 let branch_name = branch.clone();
                 // A new branch starts from the newest base: its remote is fetched first.
                 let fresh = match &start {
-                    None => Some(self.fresh_tip(repo, base).await?),
+                    None => {
+                        self.start_step(conversation_id, StartStep::Fetching, None)
+                            .await;
+                        Some(self.fresh_tip(repo, base).await?)
+                    }
                     Some(_) => None,
                 };
                 let newer = fresh.as_ref().and_then(|(_, gap)| gap.clone());
@@ -1301,6 +1324,8 @@ impl SessionManager {
                     .and_then(|id| self.core.project(id).ok())
                     .map(|project| project.prefs.secret_files)
                     .unwrap_or_default();
+                self.start_step(conversation_id, StartStep::Worktree, None)
+                    .await;
                 let (made, copied, setup) = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
@@ -1482,16 +1507,23 @@ impl SessionManager {
                 return super::prompts::SETUP_LINE.into();
             }
         };
+        self.start_step(id, StartStep::SetupScript, None).await;
         // The user's Stop ends it.
         let stoppable = self.stoppable(id, "setup");
-        self.run_setup_script(
-            id,
-            &super::setup_script::setup_owner(id),
-            worktree,
-            &worker_env(&tmp),
-            stoppable.cancel.clone(),
-        )
-        .await
+        let (failed, line) = self
+            .run_setup_script(
+                id,
+                &super::setup_script::setup_owner(id),
+                worktree,
+                &worker_env(&tmp),
+                stoppable.cancel.clone(),
+            )
+            .await;
+        // A failed script shows on its row; the session goes on.
+        if failed.is_some() {
+            self.start_step(id, StartStep::SetupScript, failed).await;
+        }
+        line
     }
 
     /// The user's attachments the task was given, written into its scratch folder.
@@ -1589,18 +1621,16 @@ impl SessionManager {
                         // Stored whole before it is recorded cut (BUILD-PLAN D2.1).
                         self.keep_output(&mut event).await;
                         let mut exited = false;
-                        for event in self.session_events(EventSource::Task(&live.id), &cli, event) {
-                            if let ProviderEvent::Exited {
-                                code,
-                                signal,
-                                stderr_tail,
-                            } = &event
-                            {
-                                exited = true;
-                                exit = Some(exit_words(*code, *signal, stderr_tail.as_deref()));
-                            }
-                            self.on_worker_event(&live, &cli, event).await;
+                        if let ProviderEvent::Exited {
+                            code,
+                            signal,
+                            stderr_tail,
+                        } = &event
+                        {
+                            exited = true;
+                            exit = Some(exit_words(*code, *signal, stderr_tail.as_deref()));
                         }
+                        self.on_worker_event(&live, &cli, event).await;
                         if exited {
                             break;
                         }
@@ -1622,6 +1652,8 @@ impl SessionManager {
                 state.cli = None;
             }
             state.busy = false;
+            // A compaction cut off with its CLI never ends: the next turn is a real one.
+            state.compacting = false;
             (state.stopping, state.cli.is_some())
         };
         cli.ended.cancel();
@@ -1780,13 +1812,14 @@ impl SessionManager {
     /// The worker's turn ended: it waits for its session's next message, and its session's
     /// `brigadier wait` hears it.
     async fn worker_turn_completed(&self, live: &Arc<TaskLive>, status: TurnStatus) {
-        let seam = {
+        let (seam, compacted) = {
             let mut state = live.state.lock().await;
             state.busy = false;
+            let compacted = std::mem::take(&mut state.compacting);
             if state.stopping {
                 return;
             }
-            state.seam.clone()
+            (state.seam.clone(), compacted)
         };
         let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
             return;
@@ -1800,17 +1833,18 @@ impl SessionManager {
                 let (manager, live) = (self.arc(), live.clone());
                 self.spawn(async move {
                     manager
-                        .worker_seam_turn_end(&live, &task, seam, status)
+                        .worker_seam_turn_end(&live, &task, seam, status, compacted)
                         .await;
                 });
             }
+            None if compacted => {}
             None => self.plain_turn_ended(live, &task, status).await,
         }
     }
 
     /// B7 for worker approvals: what the user already allowed "for this session" in this
-    /// conversation goes; anything else asks the user (the CLI asks only what its level
-    /// leaves to the user). A worker raised to Full access since its CLI started asks nobody.
+    /// conversation goes; anything else asks its orchestrator (the CLI asks only what its level
+    /// leaves open). A worker raised to Full access since its CLI started asks nobody.
     async fn route_worker_approval(
         &self,
         live: &Arc<TaskLive>,
@@ -1818,10 +1852,23 @@ impl SessionManager {
         mut request: ApprovalRequest,
     ) {
         let raised = self.worker_raised_now(live, cli).await;
-        let worktree = live.state.lock().await.worktree.clone();
+        let (worktree, level) = {
+            let state = live.state.lock().await;
+            (state.worktree.clone(), state.level)
+        };
+        // What its level allows on every CLI goes, where its CLI asks more (Codex).
+        let raised = raised
+            || level.is_some_and(|level| {
+                brigadier_providers::policy::level_allows(
+                    level.access(),
+                    &request,
+                    worktree.as_deref(),
+                )
+            });
         if !raised && !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref())
         {
-            self.ask_user_for_worker(live, cli, request).await;
+            // Its CLI's own subagents' too (D166).
+            self.ask_orchestrator_for_worker(live, cli, request).await;
             // Raised while its card opened, after the waiting cards were looked at: it goes.
             if self.worker_raised_now(live, cli).await {
                 self.allow_workers_waiting_at_full(&live.conversation_id)
@@ -1909,18 +1956,25 @@ impl SessionManager {
         }
     }
 
-    /// The user's card for the worker CLI's request, while that CLI runs; the worker shows it
-    /// waits on it.
-    async fn ask_user_for_worker(&self, live: &TaskLive, cli: &Cli, request: ApprovalRequest) {
+    /// The worker CLI's request, while that CLI runs, for its orchestrator alone to answer
+    /// (D48): it hears it as worker news, the user sees no card; the worker shows it waits.
+    async fn ask_orchestrator_for_worker(
+        &self,
+        live: &TaskLive,
+        cli: &Cli,
+        request: ApprovalRequest,
+    ) {
         let what = request
             .command
             .clone()
+            .or_else(|| (!request.paths.is_empty()).then(|| request.paths.join(", ")))
             .unwrap_or_else(|| request.tool.clone());
+        let asks = format!("permission for {}: {what}", request.tool);
         match self
             .open_cli_card(cli, &live.conversation_id, Some(live.id.clone()), request)
             .await
         {
-            Ok(Some(card)) => self.plain_needs_input(live, &card, &what),
+            Ok(Some(card)) => self.plain_needs_input(live, &card, &asks),
             Ok(None) => return,
             Err(err) => {
                 tracing::warn!(task = %live.id, error = %err, "could not open an approval card");
@@ -1954,13 +2008,14 @@ impl SessionManager {
         false
     }
 
-    /// Passes the user's answer to the worker's CLI; "Allow … for this session" also allows
+    /// Passes the answer (`by` its orchestrator) to the worker's CLI; "Allow … for this session" also allows
     /// similar requests from every worker of the conversation from now on.
     pub(crate) async fn answer_worker_approval(
         &self,
         task_id: &TaskId,
         request: &ApprovalRequest,
         decision: ApprovalDecision,
+        by: Decider,
     ) -> Result<()> {
         let approval_id = request.id.clone();
         let live = self
@@ -1986,7 +2041,7 @@ impl SessionManager {
         if decision == ApprovalDecision::AllowSimilar {
             self.waiters.allow_similar(&live.conversation_id, request);
         }
-        self.record_worker_resolution(task_id, approval_id, decision, Decider::User)
+        self.record_worker_resolution(task_id, approval_id, decision, by)
             .await;
         self.set_task_blocked(task_id, None).await;
         Ok(())
@@ -2113,6 +2168,19 @@ impl SessionManager {
         if task.state.is_final() {
             return Err(Error::Invalid(format!("worker {} has ended", task.number)));
         }
+        // Paused by its session (D7): held for its resume, whoever sent it.
+        let held = held_text(&input);
+        if self
+            .update_task_if(conversation_id, &task.id, explicitly_paused, |task| {
+                if let Some(plain) = &mut task.plain {
+                    plain.held.push(held);
+                }
+            })
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
         let live = self.task_live(task);
         self.retire_outdated_worker(&live, task).await;
         let mut state = live.state.lock().await;
@@ -2182,12 +2250,19 @@ impl SessionManager {
     /// Stops a worker for good (`brigadier close`, or the user's stop button). Unfinished
     /// changes are kept on the task branch as a WIP commit.
     pub async fn stop_task(&self, task_id: TaskId) -> Result<()> {
-        self.stop_if(task_id, unfinished).await.map(drop)
+        self.stop_if(task_id, unfinished, false).await.map(drop)
     }
 
     /// [`Self::stop_task`] if its state still passes `eligible`, saying whether it stopped it.
-    /// Decided under its settle lock, so two stops never both take effect.
-    async fn stop_if(&self, task_id: TaskId, eligible: fn(TaskState) -> bool) -> Result<bool> {
+    /// Decided under its settle lock, so two stops never both take effect. `done`: it finished
+    /// and is closed: its unfinished changes are kept as a stop's are, but it ends done, with
+    /// no "stopped" row (D104).
+    pub(super) async fn stop_if(
+        &self,
+        task_id: TaskId,
+        eligible: fn(TaskState) -> bool,
+        done: bool,
+    ) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let live = self.existing_task_live(&task_id);
         if let Some(live) = &live {
@@ -2212,7 +2287,9 @@ impl SessionManager {
         if let Some(live) = &live {
             live.close_cli().await;
         }
-        self.dispose_task(&task, stopped_state(&task)).await;
+        let kept_as = stopped_state(&task);
+        let state = if done { TaskState::Done } else { kept_as };
+        self.dispose_task_as(&task, kept_as, state).await;
         drop(settled);
         Ok(true)
     }
@@ -2240,7 +2317,7 @@ impl SessionManager {
         eligible: fn(TaskState) -> bool,
     ) -> Result<bool> {
         // It may have moved on since the caller looked: only a real stop is filed.
-        if !self.stop_if(task.id.clone(), eligible).await? {
+        if !self.stop_if(task.id.clone(), eligible, false).await? {
             return Ok(false);
         }
         self.orchestrator_step(
@@ -2401,56 +2478,204 @@ impl SessionManager {
         Ok(outcome)
     }
 
-    /// Pauses a worker: its turn is interrupted, the session stays.
-    pub async fn pause_task(&self, task_id: TaskId) -> Result<()> {
+    /// Pauses a worker (D7, `brigadier pause`): its turn ends at once, as Esc ends it, and its
+    /// CLI session is kept for its resume; whatever reaches it meanwhile is held. Its CLI is
+    /// closed, not only interrupted, so no command of its goes on (Codex finishes one after an
+    /// interrupt) and every CLI pauses alike. False when it was paused already.
+    pub async fn pause_task(&self, task_id: TaskId) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
-        let live = self
-            .existing_task_live(&task_id)
-            .ok_or_else(|| Error::Invalid("the worker has ended".into()))?;
-        {
-            let mut state = live.state.lock().await;
-            state.quota_cancelled = true;
-            state.quota_timer += 1;
-        }
-        let _settled = live.settle.lock().await;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
+        let live = self.task_live(&task);
+        let _managed = live.manage.lock().await;
+        // A message may be reviving its CLI under settle, without taking manage.
+        let _settled = live.settle.try_lock().map_err(|_| {
+            Error::Invalid("the worker is taking a message; try again in a moment".into())
+        })?;
+        let was_cancelled = live.cancel_quota().await;
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
+        if task.state.is_final() || task.plain.is_none() {
+            return Err(Error::Invalid("the worker has ended".into()));
+        }
+        if explicitly_paused(&task) {
+            return Ok(false);
+        }
+        if let Some(why) = unsettled(&live, &task).await {
+            return Err(self.left_as_it_was(&live, &task, was_cancelled, why).await);
+        }
         self.cancel_worker_quota(&live, &task).await?;
-        let cli = live.state.lock().await.cli.clone();
-        if let Some(cli) = cli {
-            cli.session
-                .interrupt()
-                .await
-                .map_err(|err| Error::Provider(err.to_string()))?;
-        }
-        self.set_task_state(&conversation_id, &task_id, TaskState::Paused)
-            .await?;
-        if live
-            .state
-            .lock()
-            .await
-            .cli
-            .as_ref()
-            .is_some_and(|c| c.provider == ProviderKind::Codex)
-        {
-            self.notice(
-                &conversation_id,
-                brigadier_providers::NoticeLevel::Info,
-                "Codex finishes the command it is running before it pauses.",
-            )
-            .await;
-        }
-        Ok(())
+        // Recorded before its CLI goes: the turn end its close brings finds it paused.
+        self.update_task(&conversation_id, &task_id, |task| {
+            task.state = TaskState::Paused;
+            task.blocked_reason = None;
+            if let Some(plain) = &mut task.plain {
+                plain.paused = true;
+            }
+        })
+        .await?;
+        self.note_worker_cut(&task_id);
+        live.close_cli().await;
+        live.allow_revival().await;
+        self.orchestrator_step(
+            &conversation_id,
+            OrchestratorStepKind::Paused {
+                task_id: task_id.clone(),
+            },
+        )
+        .await;
+        // A `brigadier wait` already waiting on it ends: it sends nothing until resumed.
+        self.worker_events.added.notify_waiters();
+        // A queued message no longer waits for it.
+        self.settle_requests(&conversation_id).await;
+        Ok(true)
     }
 
-    /// Resumes a paused worker: its turn continues, in its CLI or in its resumed session.
+    /// Resumes a paused worker (D7, `brigadier resume`): what was held for it, then "Continue
+    /// where you stopped.", as one turn of its kept CLI session (its successor's after a
+    /// switch to another CLI).
     pub async fn resume_task(&self, task_id: TaskId) -> Result<()> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let task = self.task_by_id(&conversation_id, &task_id).await?;
-        if task.state != TaskState::Paused {
-            return Err(Error::Invalid("the worker isn't paused".into()));
+        let live = self.task_live(&task);
+        let _managed = live.manage.lock().await;
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
+        if !explicitly_paused(&task) {
+            return Err(Error::Invalid(
+                if task.quota_wait.is_some() {
+                    "the worker waits for its usage limit and goes on by itself at the reset; \
+                     `brigadier switch` moves it now"
+                } else {
+                    "the worker isn't paused"
+                }
+                .into(),
+            ));
         }
-        self.message_worker(&conversation_id, &task, "Continue the task.".into())
-            .await
+        // The intent and held batch are recorded with the unpause, before anything sends.
+        let marker = format!("{RESUME_MARK}{}]", uuid::Uuid::new_v4());
+        let task = self
+            .update_task(&conversation_id, &task_id, |task| {
+                task.state = TaskState::Running;
+                if let Some(plain) = &mut task.plain {
+                    plain.paused = false;
+                    plain.auto_resumed = false;
+                    plain.resume_input = Some(
+                        std::iter::once(marker.as_str())
+                            .chain(plain.held.iter().map(String::as_str))
+                            .chain([RESUME_WORDS])
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                    );
+                }
+            })
+            .await?;
+        let input = task.plain.as_ref().unwrap().resume_input.clone().unwrap();
+        // Its CLI comes back first; a slow start (a timed-out answer) gets one more try, so the
+        // user's "carry on" is one call, not a failure and a retry (D150).
+        let mut sent = self
+            .message_worker(&conversation_id, &task, input.clone())
+            .await;
+        if let Err(err) = &sent {
+            tracing::warn!(task = %task_id, error = %err, "a worker's resume failed; trying once more");
+            sent = self
+                .message_worker(&conversation_id, &task, input.clone())
+                .await;
+        }
+        if let Err(err) = sent {
+            // Still paused, holding what it held. A later resume makes a new intent.
+            self.update_task_if(
+                &conversation_id,
+                &task_id,
+                |task| !task.state.is_final(),
+                |task| {
+                    task.state = TaskState::Paused;
+                    if let Some(plain) = &mut task.plain {
+                        plain.paused = true;
+                        plain.resume_input = None;
+                    }
+                },
+            )
+            .await?;
+            return Err(err);
+        }
+        self.worker_resume_taken(&task, &input).await?;
+        self.orchestrator_step(&conversation_id, OrchestratorStepKind::Resumed { task_id })
+            .await;
+        Ok(())
+    }
+
+    /// Reconcile a resume the daemon stopped during, before ordinary turn recovery.
+    /// Its CLI's input record closes the send/ack crash window without sending it twice.
+    pub(crate) async fn recover_worker_resume(&self, task: &Task) -> Result<bool> {
+        let Some(input) = task
+            .plain
+            .as_ref()
+            .and_then(|plain| plain.resume_input.as_ref())
+        else {
+            return Ok(false);
+        };
+        let live = self.task_live(task);
+        let _managed = live.manage.lock().await;
+        let _settled = live.settle.lock().await;
+        if let Some(native_id) = self.last_worker_native_id(task).await {
+            // The preferred account may have changed while the daemon was down.
+            for candidate in self.runtime.account_candidates(task.route.choice.provider) {
+                if let Ok(provider) = self.runtime.provider_for(&candidate.account)
+                    && provider
+                        .took_input(&native_id, input.lines().next().unwrap())
+                        .await
+                {
+                    self.worker_resume_taken(task, input).await?;
+                    return Ok(false);
+                }
+            }
+        }
+        let (manager, task, input) = (self.arc(), task.clone(), input.clone());
+        self.spawn(async move {
+            let live = manager.task_live(&task);
+            let _managed = live.manage.lock().await;
+            let _settled = live.settle.lock().await;
+            let task = match manager.task_by_id(&task.conversation_id, &task.id).await {
+                Ok(task) if !task.state.is_final() && !explicitly_paused(&task)
+                    && task.plain.as_ref().and_then(|plain| plain.resume_input.as_ref()) == Some(&input) => task,
+                _ => return,
+            };
+            let sent = manager.send_worker_text(&task.conversation_id, &task, input.clone()).await;
+            let result = match sent {
+                Ok(()) => manager.worker_resume_taken(&task, &input).await,
+                Err(err) => Err(err),
+            };
+            if let Err(err) = result {
+                tracing::warn!(task = %task.id, error = %err, "could not deliver a recovered worker resume");
+            }
+        });
+        Ok(true)
+    }
+
+    async fn worker_resume_taken(&self, task: &Task, input: &str) -> Result<()> {
+        self.update_task(&task.conversation_id, &task.id, |task| {
+            if let Some(plain) = &mut task.plain
+                && plain.resume_input.as_deref() == Some(input)
+            {
+                plain.resume_input = None;
+                plain.held.clear();
+            }
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// A pause or switch that moved nothing: its quota recovery goes on as before it began.
+    pub(crate) async fn left_as_it_was(
+        &self,
+        live: &TaskLive,
+        task: &Task,
+        was_cancelled: bool,
+        why: impl Into<String>,
+    ) -> Error {
+        live.state.lock().await.quota_cancelled = was_cancelled;
+        if !was_cancelled {
+            self.arm_worker_quota_retry(task).await;
+        }
+        Error::Invalid(why.into())
     }
 
     pub(crate) async fn conversation_of_task(&self, task_id: &TaskId) -> Result<ConversationId> {
@@ -2494,6 +2719,11 @@ impl SessionManager {
     /// `task:<id>` is removed. Branches with unlanded work stay; a task branch with nothing to
     /// keep goes with the worktree.
     pub(crate) async fn dispose_task(&self, task: &Task, state: TaskState) {
+        self.dispose_task_as(task, state, state).await;
+    }
+
+    /// [`Self::dispose_task`], its changes kept as a task ending `kept_as` keeps them.
+    async fn dispose_task_as(&self, task: &Task, kept_as: TaskState, state: TaskState) {
         // A yes the user gave it in the browser goes with it.
         self.browser.forget_task(&task.conversation_id, &task.id);
         if let Some(live) = self.existing_task_live(&task.id) {
@@ -2503,10 +2733,11 @@ impl SessionManager {
         // unfinished work is kept, so none writes into the kept commit.
         self.stop_task_previews(&task.conversation_id, &task.id)
             .await;
-        let (kept, drop_branch) = match state {
-            TaskState::Stopped | TaskState::Failed => self.keep_unfinished(task).await,
-            // A write task that ends done changed nothing that could land.
-            TaskState::Done => (None, true),
+        let (kept, drop_branch) = match kept_as {
+            // A finished turn can still leave files it never committed.
+            TaskState::Stopped | TaskState::Failed | TaskState::Done => {
+                self.keep_unfinished(task).await
+            }
             // A landed branch is deleted once the landing checked it is merged.
             _ => (None, false),
         };
@@ -2585,10 +2816,7 @@ impl SessionManager {
         if !path.join(".git").exists() {
             return (None, false);
         }
-        let message = self.commit_message(format!(
-            "WIP: task-{} {} (unfinished, kept by Brigadier)",
-            task.number, task.title
-        ));
+        let message = self.commit_message("Unfinished changes kept when the worker closed".into());
         let base = workspace.base.clone().map(Oid);
         let on_snapshot = workspace.on_snapshot;
         let omit_ai_coauthors = self.core.settings().omit_ai_coauthors;
@@ -2703,12 +2931,22 @@ impl SessionManager {
         let Ok(repo) = self.task_repo(task) else {
             return;
         };
+        let Some(target) = task.workspace.as_ref().and_then(|w| w.target.clone()) else {
+            return;
+        };
         self.forget_branch(&repo, &branch);
         let git = self.git.clone();
         let result = blocking(move || {
             let repo = git.open(&repo).map_err(git_error)?;
             match repo.branch_tip(&branch).map_err(git_error)? {
-                Some(tip) => repo.delete_branch_at(&branch, &tip).map_err(git_error),
+                Some(tip)
+                    if repo
+                        .ancestor(&tip, &repo.branch_commit(&target).map_err(git_error)?)
+                        .map_err(git_error)? =>
+                {
+                    repo.delete_branch_at(&branch, &tip).map_err(git_error)
+                }
+                Some(_) => Ok(()),
                 None => Ok(()),
             }
         })
@@ -2827,7 +3065,7 @@ fn stopped_note(tasks: &[Task], all: bool) -> String {
         (false, _) => ("", "them"),
     };
     format!(
-        "[worker] The user stopped {what}{names}. You didn't stop {them} and nothing failed. \
+        "[worker] The user ended {what}{names} for good. You didn't end {them} and nothing failed. \
          Don't message, steer or approve {them}, and don't start {them} again unless the user \
          asks."
     )
@@ -3007,6 +3245,33 @@ fn worker_step(
             position: 0,
         },
     })
+}
+
+/// What a paused worker hears when it is resumed, or moved on mid-turn (D7).
+pub(crate) const RESUME_WORDS: &str = "Continue where you stopped.";
+
+/// How a resume's input begins: its unique marker, `[Worker resume <uuid>]`.
+pub(crate) const RESUME_MARK: &str = "[Worker resume ";
+
+/// Why its session can't pause or switch the worker this moment: its first launch, or its
+/// hand-off note turn, would go on past the close.
+async fn unsettled(live: &TaskLive, task: &Task) -> Option<&'static str> {
+    if matches!(task.state, TaskState::Queued | TaskState::Starting) {
+        return Some("the worker is still starting; try again once it runs");
+    }
+    let seam = live
+        .state
+        .lock()
+        .await
+        .seam
+        .as_ref()
+        .is_some_and(|seam| seam.holds());
+    seam.then_some("the worker is handing off to a fresh session; try again in a moment")
+}
+
+/// Its session paused it (`brigadier pause`, D7), as a quota wait never does.
+pub(crate) fn explicitly_paused(task: &Task) -> bool {
+    task.state == TaskState::Paused && task.plain.as_ref().is_some_and(|plain| plain.paused)
 }
 
 /// Marks a task as being stopped while it lives (the first of concurrent stops does).

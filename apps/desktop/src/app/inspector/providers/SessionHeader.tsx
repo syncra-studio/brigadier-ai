@@ -1,4 +1,4 @@
-import { PROVIDER_LABELS, QuotaWindows, STATE_VARIANTS } from "@/app/inspector/providers/shared";
+import { QuotaWindows, STATE_VARIANTS } from "@/app/inspector/providers/shared";
 import type { TranscriptStats } from "@/components/conversation";
 import { Badge, Button } from "@/components/controls";
 import { ArrowLeft } from "@/components/icons";
@@ -10,6 +10,7 @@ import {
   selectRawSession,
   stopRawSession,
 } from "@/state/actions";
+import { cliFacts } from "@/lib/providerKinds";
 
 export function SessionHeader({
   session,
@@ -33,7 +34,7 @@ export function SessionHeader({
         >
           <ArrowLeft />
         </Button>
-        <span className="text-sm font-medium">{PROVIDER_LABELS[session.provider]}</span>
+        <span className="text-sm font-medium">{cliFacts(session.provider).label}</span>
         <Badge variant={STATE_VARIANTS[state]}>{state}</Badge>
         {session.source.type !== "live" && (
           <Badge variant="outline">{session.source.type}</Badge>

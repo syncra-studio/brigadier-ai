@@ -16,9 +16,8 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { TextMessagePartProvider, type TextMessagePartProps, useMessagePartText } from "@assistant-ui/react";
+import { TextMessagePartProvider, type TextMessagePartProps } from "@assistant-ui/react";
 
-import { releasedText } from "@/app/conversation/streamRelease";
 import { CodeBlock, CodeHeader } from "@/components/conversation/code-block";
 import {
   InlineImageContext,
@@ -206,11 +205,12 @@ function markOpenFences(node: Positioned, source: string): void {
 const remarkOpenFences = () => (tree: MdNode, file: { toString(): string }) => markOpenFences(tree, String(file));
 
 /**
- * The pace streaming text shows at: it trails what has arrived, steered so whatever waits
- * shows in about a second (never slower than a character a second), and the shown text
- * updates at most every 50ms. Off when the system asks for less motion.
+ * The pace streaming text shows at: what waits shows at its length per 475ms (never slower than
+ * a character a second), so a steady stream trails it by under half a second and a burst of 600
+ * characters shows over about two; the shown text updates at most every 50ms. Off when the
+ * system asks for less motion; a stream's end shows the rest at once.
  */
-const STREAM_PACE = { drainMs: 1000, maxCharIntervalMs: 1000, minCommitMs: 50 };
+const STREAM_PACE = { drainMs: 475, maxCharIntervalMs: 1000, minCommitMs: 50 };
 
 /**
  * Keeps file links like `notes.py:36`, which react-markdown's default would drop as an
@@ -252,14 +252,8 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
   }, [stableComponents]);
   // One per streaming text: it remembers which of its words already faded in.
   const rehypePlugins = useMemo(() => (streaming ? [createWordFade()] : undefined), [streaming]);
-  // The pace reveals a streaming text a character at a time: what it revealed shows in finished
-  // lines only, until it caught up with what came (D9 b).
-  const { text: arrived } = useMessagePartText();
+  // The pace reveals a streaming text a character at a time, a word showing as soon as it does.
   const paces = streaming === true && paced;
-  const preprocess = useMemo(
-    () => (paces ? (revealed: string) => (revealed.length >= arrived.length ? revealed : releasedText(revealed)) : undefined),
-    [paces, arrived],
-  );
 
   return (
     <MarkdownTextPrimitive
@@ -276,7 +270,6 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
       // block folding): revealed from nothing, it would shrink the thread for a moment and
       // pull it off the newest message. The end of a stream shows the rest at once.
       smooth={paces && STREAM_PACE}
-      {...(preprocess && { preprocess })}
       className="aui-md font-prose"
       urlTransform={keepLinks}
       components={markdownComponents}

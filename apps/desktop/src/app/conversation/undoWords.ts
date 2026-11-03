@@ -23,9 +23,3 @@ export function leftWords(left: readonly HeldPath[], reapply = false): string {
   if (left.length === 1) return `. ${only.reason}`;
   return `. Left ${left.length} files as they are (${names.join(", ")}): ${HELD_WHY}`;
 }
-
-/** The toast after an Undo or Reapply: what it did, then what it left. One that put nothing back says so. */
-export function undoToast(left: readonly HeldPath[], restored: number, reapply: boolean): string {
-  const done = restored > 0 ? (reapply ? "Changes reapplied" : "Changes reverted") : reapply ? "Nothing was reapplied" : "Nothing was reverted";
-  return `${done}${leftWords(left, reapply)}`;
-}

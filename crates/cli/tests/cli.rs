@@ -128,7 +128,7 @@ fn worker_row() -> WorkerRow {
         id: "a1b2c3d4".into(),
         number: 2,
         title: "Add JSON output".into(),
-        agent: Agent::Codex,
+        agent: ProviderKind::Codex,
         model: Some("codex-model-1".into()),
         effort: Some("high".into()),
         state: WorkerState::Working,
@@ -211,7 +211,7 @@ fn sample(request: &CliRequest) -> CliReply {
             workers_at_once: 3,
             models: vec![],
             agents: vec![brigadier_cli::models::AgentAccounts {
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 switch_accounts: true,
             }],
             switch_providers: false,
@@ -219,7 +219,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 brigadier_cli::models::Account {
                     id: "own".into(),
                     name: String::new(),
-                    agent: Agent::Claude,
+                    agent: ProviderKind::Claude,
                     current: true,
                     you: false,
                     logged_in: true,
@@ -232,7 +232,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 brigadier_cli::models::Account {
                     id: "acct-b".into(),
                     name: "Work".into(),
-                    agent: Agent::Claude,
+                    agent: ProviderKind::Claude,
                     current: false,
                     you: false,
                     logged_in: true,
@@ -300,7 +300,7 @@ fn sample(request: &CliRequest) -> CliReply {
             id: "a1b2c3d4".into(),
             title: "Add JSON output".into(),
             state: "working".into(),
-            agent: Agent::Codex,
+            agent: ProviderKind::Codex,
             model: None,
             effort: None,
             branch: None,
@@ -334,7 +334,7 @@ fn sample(request: &CliRequest) -> CliReply {
             id: "0000c0de".into(),
             title: "Strip-down".into(),
             state: "needs-you".into(),
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             model: Some("claude-opus-5-5".into()),
             effort: Some("high".into()),
             branch: Some("brigadier/0000c0de/session".into()),
@@ -415,8 +415,11 @@ fn sample(request: &CliRequest) -> CliReply {
             // `--reviewing` answers with whose work and on which CLI (harness D22).
             review: (!start.reviewing.is_empty()).then(|| StartReview {
                 of: start.reviewing.clone(),
-                authors: vec![Agent::Claude],
+                authors: vec![ProviderKind::Claude],
                 other_provider: true,
+            }),
+            off_routing: start.model.as_ref().map(|_| {
+                "Off your routing: its Review row names Codex gpt-6-astra · medium.".into()
             }),
         }),
         CliRequest::Send { id, answer, .. } => CliReply::ok(&SendOutput {
@@ -429,6 +432,7 @@ fn sample(request: &CliRequest) -> CliReply {
             CliReply::ok(&WaitOutput {
                 events: Vec::new(),
                 timed_out: true,
+                message: false,
             })
         }
         CliRequest::Wait { .. } => CliReply::ok(&WaitOutput {
@@ -468,28 +472,42 @@ fn sample(request: &CliRequest) -> CliReply {
                 },
             ],
             timed_out: false,
+            message: false,
         }),
         CliRequest::Close { id } => CliReply::ok(&CloseOutput {
             id: id.clone(),
             closed: true,
+            worker: Some(WorkerRow {
+                state: WorkerState::Stopped,
+                ..worker_row()
+            }),
         }),
-        CliRequest::Queue { id, judgment } => CliReply::ok(&QueueOutput {
+        CliRequest::Pause { id, .. } | CliRequest::Resume { id, .. } => {
+            CliReply::ok(&ManageOutput {
+                id: id.clone(),
+                done: true,
+                to: None,
+                off_routing: None,
+                worker: Some(worker_row()),
+            })
+        }
+        CliRequest::Switch { id, .. } => CliReply::ok(&ManageOutput {
             id: id.clone(),
-            state: match judgment {
-                Judgment::Join => QueueState::Joined,
-                Judgment::Wait => QueueState::Waiting,
-                Judgment::Worker { .. } => QueueState::SentToWorker,
-                Judgment::NewSession => QueueState::Offered,
-            },
-            already: false,
-            worker: match judgment {
-                Judgment::Worker { id } => Some(id.clone()),
-                _ => None,
-            },
+            done: true,
+            to: Some("Codex gpt-6.1-sol · high on Work".into()),
+            off_routing: Some("Off your routing: its Fallback row names Claude opus.".into()),
+            worker: None,
         }),
         CliRequest::ContinueOn { agent, after_turn } => {
             CliReply::ok(&brigadier_cli::protocol::ContinueOnOutput {
                 agent: *agent,
+                // The daemon names the CLI as its adapter does.
+                label: if agent.id() == "claude" {
+                    "Claude Code"
+                } else {
+                    agent.id()
+                }
+                .into(),
                 model: None,
                 effort: Some("high".into()),
                 when: if *after_turn {
@@ -629,14 +647,14 @@ fn sample(request: &CliRequest) -> CliReply {
                 session: (*line != 5).then(|| WhySession {
                     id: "a1b2c3d4".into(),
                     title: "Count".into(),
-                    agent: Agent::Claude,
+                    agent: ProviderKind::Claude,
                 }),
                 turn: (*line != 5).then_some(turn),
                 worker: (*line == 4).then(|| WhyWorker {
                     id: "e5f6a7b8".into(),
                     number: 1,
                     title: "Count the lines".into(),
-                    agent: Agent::Codex,
+                    agent: ProviderKind::Codex,
                     branch: Some("brigadier/count".into()),
                     task: Some("Count the lines in README.".into()),
                     reply: Some("Three.".into()),
@@ -845,10 +863,9 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["wait", "--json"],
         &["wait", "a1b2", "--timeout", "1", "--json"],
         &["close", "a1b2", "--json"],
-        &["queue", "9f8e7d6c", "join", "--json"],
-        &["queue", "9f8e7d6c", "wait", "--json"],
-        &["queue", "9f8e7d6c", "worker", "a1b2", "--json"],
-        &["queue", "9f8e7d6c", "new-session", "--json"],
+        &["pause", "a1b2", "--json"],
+        &["resume", "a1b2", "--json"],
+        &["switch", "a1b2", "--agent", "codex", "--json"],
         &["continue-on", "codex", "--after-turn", "--json"],
         &["preview", "start", "--name", "web", "--json", "pnpm", "dev"],
         &["preview", "log", "preview-1", "--tail", "5", "--json"],
@@ -908,6 +925,7 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["checkpoint", "set", "Goal:", "ship.", "--json"],
         &["checkpoint", "show", "--json"],
         &["context", "--json"],
+        &["state", "--json"],
         &["context", "brief", "--json"],
         &["context", "decisions", "--json"],
         &["context", "open", "--json"],
@@ -963,6 +981,9 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["code", "refs", "cli_call", "--json"],
         &["code", "map", "--json"],
         &["library", "list", "--json"],
+        &["mcp", "list", "--json"],
+        &["mcp", "tools", "fake", "--json"],
+        &["mcp", "call", "fake", "recall", "{\"a\": 1}", "--json"],
         &["library", "list", "--project", ".", "--json"],
         &[
             "library",
@@ -1048,7 +1069,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 18, sample);
+    let daemon = stand_in_daemon(&dir.0, 17, sample);
     let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
     assert!(
         models.contains("Your rules") && models.contains("forbid: fable"),
@@ -1079,13 +1100,9 @@ fn text_output_reads_well() {
     // How full each worker's context is, to weigh reusing it (run2-D42).
     assert!(workers.contains("CONTEXT"), "{workers}");
     assert!(workers.contains("120k of 1M"), "{workers}");
-    // What git and the CLI showed, in a few words, and no wait running while one works.
+    // What git and the CLI showed, in a few words.
     assert!(
         workers.contains("conflicts · 2 commits · 1 uncommitted  3, 1 failed"),
-        "{workers}"
-    );
-    assert!(
-        workers.contains("No `brigadier wait` is running while worker 2 is at work"),
         "{workers}"
     );
     let read = stdout(&brigadier(
@@ -1119,6 +1136,15 @@ fn text_output_reads_well() {
         by_work.contains("\nYour row \"Independent review\" picked its agent and effort.\n"),
         "{by_work}"
     );
+    // A pick off the routing still starts; the receipt says what the routing names (D77).
+    assert!(
+        by_work.contains(
+            "\nOff your routing: its Review row names Codex gpt-6-astra · medium. It runs all \
+             the same.\n"
+        ),
+        "{by_work}"
+    );
+    assert!(!start.contains("Off your routing"), "{start}");
     // `--reviewing` says whose work it reviews and on which CLI (harness D22).
     let review = stdout(&brigadier(
         Some(&dir.0),
@@ -1170,16 +1196,10 @@ fn text_output_reads_well() {
     ));
     assert_eq!(send, "Denied what e5f6 asked.\n");
     let close = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["close", "a1b2"]));
-    assert_eq!(close, "Closed a1b2.\n");
-    let queued = stdout(&brigadier(
-        Some(&dir.0),
-        Some(GRANT),
-        &["queue", "9f8e7d6c", "worker", "a1b2"],
-    ));
-    assert_eq!(
-        queued,
-        "9f8e7d6c went to worker a1b2; the user sees where it went.\n"
-    );
+    // The reply carries the worker as it is now: no `workers` call after it (D156).
+    assert!(close.starts_with("Closed a1b2.\n"), "{close}");
+    assert!(close.contains("stopped"), "{close}");
+    assert!(close.contains("Add JSON output"), "{close}");
     // A screenshot is saved where `--out` says, and the text says where.
     let shot = dir.0.join("shot.png");
     let shown = stdout(&brigadier(
@@ -1504,14 +1524,16 @@ fn context_sends_each_part_and_prints_its_text() {
             grep,
             last,
             item,
+            session,
         } = request
         else {
             panic!("expected a context call: {request:?}");
         };
         let mut output = context_sample(*part, name);
         output.text = format!(
-            "{} name={name:?} grep={grep:?} last={last:?} item={item:?}\n",
-            output.part
+            "{} name={name:?} grep={grep:?} last={last:?} item={item:?}{}\n",
+            output.part,
+            if *session { " session" } else { "" }
         );
         CliReply::ok(&output)
     }
@@ -1539,6 +1561,10 @@ fn context_sends_each_part_and_prints_its_text() {
         (
             &["context", "transcript", "--item", "u-1"],
             "transcript name=None grep=None last=None item=Some(\"u-1\")\n",
+        ),
+        (
+            &["context", "transcript", "--session", "--last", "2"],
+            "transcript name=None grep=None last=Some(2) item=None session\n",
         ),
     ];
     let dir = DataDir::new("context");
@@ -1583,4 +1609,65 @@ fn context_sends_each_part_and_prints_its_text() {
     ] {
         assert!(help.contains(word), "{word} missing from:\n{help}");
     }
+}
+
+/// `brigadier mcp list | tools | call` reach the daemon through the executable, their
+/// arguments checked first; `mcp run` stays the local wrapper the CLIs' configs name.
+#[test]
+fn mcp_calls_reach_the_daemon_and_mcp_run_stays_local() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["mcp", "list"], "Mcp list: {}"),
+        (
+            &["mcp", "tools", "fake"],
+            "Mcp tools: {\"server\":\"fake\"}",
+        ),
+        (
+            &["mcp", "call", "fake", "recall"],
+            "Mcp call: {\"arguments\":{},\"server\":\"fake\",\"tool\":\"recall\"}",
+        ),
+        (
+            &["mcp", "call", "fake", "remember", "{\"value\": \"v1\"}"],
+            "Mcp call: {\"arguments\":{\"value\":\"v1\"},\"server\":\"fake\",\"tool\":\"remember\"}",
+        ),
+    ];
+    let dir = DataDir::new("mcp");
+    let daemon = stand_in_daemon(&dir.0, cases.len(), sample);
+    for (words, printed) in cases {
+        let output = brigadier(Some(&dir.0), Some(GRANT), words);
+        assert!(output.status.success(), "{words:?}: {output:?}");
+        assert!(
+            stdout(&output).contains(printed),
+            "{words:?}: {}",
+            stdout(&output)
+        );
+    }
+    daemon.join().unwrap();
+
+    for (words, says) in [
+        (
+            &["mcp", "call", "fake", "t", "not json"][..],
+            "<json> is not JSON",
+        ),
+        (&["mcp", "call", "fake", "t", "[1]"][..], "a JSON object"),
+        (&["mcp", "tools"][..], "mcp tools <server>"),
+        (&["mcp", "list", "extra"][..], "takes no arguments"),
+    ] {
+        let output = brigadier(Some(&dir.0), Some(GRANT), words);
+        assert_eq!(output.status.code(), Some(2), "{words:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(says),
+            "{words:?}: {output:?}"
+        );
+    }
+    // Local: no session needed, and it never reaches the daemon.
+    let output = brigadier(None, None, &["mcp", "run", "a/b"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("brigadier mcp run <server> --"));
+    // The daemon's: without a session's grant it is refused, not a local usage error.
+    let output = brigadier(None, None, &["mcp", "list"]);
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("brigadier secret set"),
+        "{output:?}"
+    );
+    assert_ne!(output.status.code(), Some(0));
 }

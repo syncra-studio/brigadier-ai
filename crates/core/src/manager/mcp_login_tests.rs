@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use brigadier_providers::ProviderKind as Agent;
 
 #[test]
 fn the_sign_in_page_is_the_link_with_an_oauth_request() {
@@ -112,7 +114,7 @@ esac
                 binary: Arc::new(move |agent| {
                     Some(bin.join(match agent {
                         Agent::Claude => "claude",
-                        Agent::Codex => "codex",
+                        _ => "codex",
                     }))
                 }),
             },
@@ -284,7 +286,7 @@ fn a_list_read_before_a_sign_in_ended_does_not_undo_it() {
     let mut fake = fake::fake("race");
     fake.clis.env.push(("SLOW_LIST".into(), "1".into()));
     let logins = Arc::new(McpLogins::default());
-    let codex = brigadier_registry::adapter::adapter(Agent::Codex);
+    let codex = brigadier_registry::adapter::adapter(Agent::Codex).unwrap();
     let reading = {
         let (logins, clis) = (logins.clone(), fake.clis.clone());
         std::thread::spawn(move || logins.list(&clis, codex, None).unwrap())
@@ -807,7 +809,7 @@ mod live {
             env: env.clone(),
             binary: Arc::new(move |agent| match agent {
                 Agent::Claude => claude.clone(),
-                Agent::Codex => codex.clone(),
+                _ => codex.clone(),
             }),
         };
         // Settings shows the row first: the lists it shows are read while it is open.

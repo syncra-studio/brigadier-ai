@@ -3,8 +3,8 @@ import { test } from "node:test";
 
 import { applyEvents, replaceCatalog, useApp } from "./store";
 
-test("fresh settings start at Accept edits and keep the Full access notice enabled", () => {
-  assert.equal(useApp.getState().settings.defaultPermission, "acceptEdits");
+test("fresh settings start at Full access and keep the Full access notice enabled", () => {
+  assert.equal(useApp.getState().settings.defaultPermission, "full");
   assert.equal(useApp.getState().settings.showFullAccessNotice, true);
 });
 
@@ -21,9 +21,9 @@ test("loading saved settings and later events preserve the saved permission choi
     if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
     else Reflect.deleteProperty(globalThis, "document");
   });
-  const saved = { ...initial.settings, defaultPermission: "full" as const, showFullAccessNotice: false };
+  const saved = { ...initial.settings, defaultPermission: "acceptEdits" as const, showFullAccessNotice: false };
   replaceCatalog([], [], saved);
-  assert.equal(useApp.getState().settings.defaultPermission, "full");
+  assert.equal(useApp.getState().settings.defaultPermission, "acceptEdits");
   assert.equal(useApp.getState().settings.showFullAccessNotice, false);
   applyEvents([{
     seq: 1,
@@ -52,4 +52,13 @@ test("old logs' workspace events change nothing: their sessions stay plain sessi
   const after = useApp.getState();
   assert.equal(after.conversations, before.conversations);
   assert.equal(after.projects, before.projects);
+});
+
+test("an event the app doesn't know changes nothing, and the rest of its batch still applies", () => {
+  const settings = { ...useApp.getState().settings, hibernateAfterMinutes: 41 };
+  let seq = 100;
+  const at = (event: unknown) => ({ seq: ++seq, stream: "catalog", streamSeq: seq, atMs: seq, event }) as Parameters<typeof applyEvents>[0][number];
+  // A turn snapshot's number, as an older daemon let onto the feed: no type of its own.
+  applyEvents([at({ number: 5 }), at({ type: "settingsChanged", settings })]);
+  assert.equal(useApp.getState().settings.hibernateAfterMinutes, 41);
 });

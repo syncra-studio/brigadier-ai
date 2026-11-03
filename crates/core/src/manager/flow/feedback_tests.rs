@@ -283,9 +283,14 @@ async fn with_no_writer_the_write_up_fails() {
         .write_up_feedback("It spins.")
         .await
         .unwrap_err();
+    // Every CLI's model is limited: either none is left to pick, or the tries ran out.
     assert!(
-        err.to_string()
-            .contains("no model can write the report now"),
+        [
+            "no model can write the report now",
+            "every model that could write the report"
+        ]
+        .iter()
+        .any(|why| err.to_string().contains(why)),
         "{err}"
     );
     flow.stop().await;

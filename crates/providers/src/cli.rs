@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use brigadier_sandbox::{Platform, SpawnSpec};
 
-use crate::model::ProviderKind;
+use crate::model::{KindFacts as _, ProviderKind};
 
 /// Set by an agent CLI for the processes it starts; a CLI that sees them changes behavior.
 const NESTED_SESSION_VARS: &[&str] = &[
@@ -112,23 +112,16 @@ impl CliEnv {
         })
     }
 
-    /// Where the agent's own native installer puts its binary: `~/.local/bin` for both, except
-    /// Codex's on Windows, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` (Codex's moves with
-    /// `CODEX_INSTALL_DIR`). The login PATH may not hold it: Claude Code's installer leaves the
-    /// shell profiles alone, and Codex's adds it to a profile (on Windows the user's PATH) read
-    /// after this environment was captured. So a binary there counts as installed, PATH first.
+    /// Where the agent's own native installer puts its binary (the adapter's
+    /// `installer_folder`). The login PATH may not hold it: an installer may leave the shell
+    /// profiles alone, or add it to a profile (on Windows the user's PATH) read after this
+    /// environment was captured. So a binary there counts as installed, PATH first.
     pub fn installer_folder(&self, provider: ProviderKind) -> Option<PathBuf> {
-        if provider == ProviderKind::Codex
-            && let Some(dir) = self.var("CODEX_INSTALL_DIR").filter(|dir| !dir.is_empty())
-        {
-            return Some(PathBuf::from(dir));
-        }
-        if provider == ProviderKind::Codex && cfg!(windows) {
-            return self
-                .var("LOCALAPPDATA")
-                .filter(|dir| !dir.is_empty())
-                .map(|dir| Path::new(dir).join(r"Programs\OpenAI\Codex\bin"));
-        }
+        (crate::adapters::adapter(provider)?.installer_folder)(self)
+    }
+
+    /// `~/.local/bin`, where most native installers put their binary.
+    pub(crate) fn local_bin(&self) -> Option<PathBuf> {
         // Only this environment's own home (USERPROFILE on Windows): one without it (a test's)
         // looks nowhere else.
         let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
@@ -289,6 +282,8 @@ pub fn parse_version(output: &str) -> Option<String> {
         .lines()
         .next()?
         .split_whitespace()
+        // `v2.0.19` too.
+        .map(|word| word.strip_prefix('v').unwrap_or(word))
         .find(|word| word.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .map(str::to_owned)
 }
@@ -325,13 +320,8 @@ pub async fn check_binary(
         .await
         .map_err(|err| format!("{} didn't run: {err}", path.display()))?;
     let first = output.stdout.lines().next().unwrap_or_default();
-    let named = match provider {
-        ProviderKind::Claude => first.contains("Claude Code"),
-        ProviderKind::Codex => first
-            .split_whitespace()
-            .next()
-            .is_some_and(|word| word.starts_with("codex")),
-    };
+    let named =
+        crate::adapters::adapter(provider).is_some_and(|adapter| (adapter.names_itself)(first));
     match parse_version(&output.stdout) {
         Some(version) if named && output.code == Some(0) => Ok(version),
         _ => Err(format!("{} isn't {label}.", path.display())),

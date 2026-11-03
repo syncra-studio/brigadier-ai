@@ -1,15 +1,5 @@
 import type { BackgroundTask } from "@/ipc/generated";
 
-/** Live task placement. Durable history owns all ended records (L37–L40). */
-export const AGENT_STAYS_MS = 0;
-export const COMMAND_STAYS_MS = 0;
-
-/** Finished work leaves live surfaces immediately, without deleting its underlying record. */
-export function taskShown(task: BackgroundTask, now: number): boolean {
-  void now;
-  return task.status === "running";
-}
-
 /** How a task ended, in a word, with its exit code when the CLI said one. */
 export type TaskEnd = { word: "finished" | "failed" | "stopped"; exit: number | null };
 

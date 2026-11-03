@@ -7,7 +7,7 @@ use brigadier_providers::{
 };
 
 use super::SessionManager;
-use super::conversation::{BACKGROUND_TURN_GRACE, ConvLive};
+use super::conversation::{BACKGROUND_TURN_GRACE, ConvLive, WAKE_SETTLE};
 use super::session_dir::read_lineage;
 use crate::model::{ContextUsage, ConversationId, ConversationView};
 use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
@@ -47,16 +47,19 @@ impl SessionManager {
 
     /// Notes `input` before Brigadier sends it to conversation `id`'s CLI (L12): `user`, the
     /// user's own words in it as ranges of its non-whitespace characters, none when all of it
-    /// is Brigadier's. The thread then tells the CLI's message of it for whose it is.
+    /// is Brigadier's; `requests`, those of the user's messages in it. The thread then tells the
+    /// CLI's message of it for whose it is, and for which stored messages.
     pub(super) fn note_sent(
         &self,
         id: &ConversationId,
         input: &brigadier_providers::TurnInput,
         user: &[(usize, usize)],
+        requests: &[String],
     ) {
         let record = self.session_dir(id).record();
         let words = envelope_provenance::input_words(input);
-        if let Err(err) = envelope_provenance::note_sent(&record, &words, user, now_ms()) {
+        if let Err(err) = envelope_provenance::note_sent(&record, &words, user, requests, now_ms())
+        {
             tracing::warn!(conversation = %id, error = %err, "could not note what was sent");
         }
     }
@@ -166,16 +169,16 @@ impl SessionManager {
         proven
     }
 
-    /// Who wrote the CLI's user message `event`, taken at `at`, when it is one Brigadier noted
-    /// sending ([`envelope_provenance::note_sent`]); `native_hint`: the CLI session it is in,
-    /// else the newest.
+    /// Who wrote the CLI's user message `event`, taken at `at`, and the requests it carries,
+    /// when it is one Brigadier noted sending ([`envelope_provenance::note_sent`]);
+    /// `native_hint`: the CLI session it is in, else the newest.
     fn note_said(
         &self,
         id: &ConversationId,
         event: Option<&ProviderEvent>,
         native_hint: Option<&str>,
         at: i64,
-    ) -> Option<brigadier_providers::session_file::Said> {
+    ) -> Option<(brigadier_providers::session_file::Said, Vec<String>)> {
         let Some(ProviderEvent::Message {
             role: Role::User,
             item_id,
@@ -191,11 +194,11 @@ impl SessionManager {
                 .last()
                 .map(|entry| entry.session_id.clone())
         })?;
-        let user =
+        let (user, requests) =
             envelope_provenance::bind_sent(&record, text, &format!("{native}:{item_id}"), at)
                 .ok()
                 .flatten()?;
-        Some(envelope_provenance::said(text, &user))
+        Some((envelope_provenance::said(text, &user), requests))
     }
 
     /// Follows the running turn of `conv`'s CLI through one of its events (`None`: the CLI's
@@ -205,10 +208,13 @@ impl SessionManager {
         let daemon_context = self.note_daemon_context(&conv.id, event, None).await;
         let at = now_ms();
         // Who wrote a user message Brigadier sent, as it noted when it sent it (L12).
-        let said = if daemon_context {
-            None
+        let (said, requests) = if daemon_context {
+            (None, Vec::new())
         } else {
             self.note_said(&conv.id, event, None, at)
+                .map_or((None, Vec::new()), |(said, requests)| {
+                    (Some(said), requests)
+                })
         };
         // Brigadier's requests the turn carries, as the conversation knows them now, and whether
         // it joins the work before it: when the CLI says a user message (a turn's, or a steer's)
@@ -218,11 +224,23 @@ impl SessionManager {
                 ProviderEvent::Message {
                     role: Role::User, ..
                 }
+                | ProviderEvent::TurnStarted { .. }
                 | ProviderEvent::TurnCompleted { .. }
                 | ProviderEvent::Exited { .. },
             )
             | None => Some(conv.carried_turn().await),
             _ => None,
+        };
+        // A hand-off's own turn opens unseen (core-goals D193).
+        let quiet = conv.quiet_turn().await;
+        // A turn a limit cut whose work goes on elsewhere reads handed over, never failed (D180).
+        let handed_over = match event {
+            Some(ProviderEvent::TurnCompleted { status, .. })
+                if *status != TurnStatus::Completed =>
+            {
+                self.limit_goes_on(conv).await
+            }
+            _ => false,
         };
         let mut news = Vec::new();
         let mut ended = None;
@@ -233,19 +251,24 @@ impl SessionManager {
         let mut mcp = None;
         let mut read_output = false;
         let jobs;
+        let seq;
         let mut wake_owed = None;
+        let released;
         {
             let mut threads = self.cli_threads.lock().unwrap();
             let live = threads.entry(conv.id.clone()).or_default();
+            let held = live.subagent_running();
             if let Some(event) = event {
                 live.note_command(event);
+                live.note_subagent(event);
             }
+            // Its last subagent ended with no turn open: what waits for the block goes on now.
+            released = held && !live.subagent_running();
             match event {
                 Some(ProviderEvent::BackgroundTask { task }) => {
-                    // A command that ends while no turn is open starts one of its CLI's: it is
-                    // owed until it starts, or the grace passes (D21).
+                    // A command or a subagent that ends while no turn is open starts one of its
+                    // CLI's: it is owed until it starts, or the grace passes (D21, D24).
                     let ended = task.status != BackgroundTaskStatus::Running
-                        && task.kind != BackgroundTaskKind::Agent
                         && !live.persistent_task(task)
                         && live.background.iter().any(|held| {
                             held.id == task.id && held.status == BackgroundTaskStatus::Running
@@ -257,6 +280,8 @@ impl SessionManager {
                         live.waking_until = Some(until);
                         wake_owed = Some(until);
                     }
+                    live.ended_in_turn |=
+                        ended && live.open && task.kind != BackgroundTaskKind::Agent;
                     read_output = !live.reading_output && reads_output(&live.background);
                     live.reading_output |= read_output;
                 }
@@ -279,10 +304,13 @@ impl SessionManager {
                 }
                 _ => {}
             }
-            // So do its MCP servers.
-            if matches!(event, Some(ProviderEvent::Exited { .. }) | None) && !live.mcp.is_empty() {
-                live.mcp.clear();
-                mcp = Some(Vec::new());
+            // So do its subagents and its MCP servers.
+            if matches!(event, Some(ProviderEvent::Exited { .. }) | None) {
+                live.subagents.clear();
+                if !live.mcp.is_empty() {
+                    live.mcp.clear();
+                    mcp = Some(Vec::new());
+                }
             }
             // A turn the CLI began on its own for a background job's end: its notice, or the
             // first item of its own before any user message (Claude's stream doesn't say the
@@ -290,23 +318,31 @@ impl SessionManager {
             // it ends, and its end is that turn's; a message the user sends meanwhile is a steer
             // of that turn, its request one more of that turn's. A compaction is no such item:
             // Claude says `/compact`'s (or the message it compacted for) only after it, and
-            // that message starts the turn.
+            // that message starts the turn. Nor is a turn Brigadier sent a message for while the
+            // work held (`joins`): its message may come after the CLI's first items (D25, D72).
+            // Brigadier's own hidden word that opens it (a job's end it tells) is no user
+            // message either: the turn goes on with the one before from there, not only once
+            // the CLI shows an item, seconds on (seen live on Codex: the block read over).
             let on_its_own = live.open
                 && live.awaiting_user
+                && !live.joins
                 && event.is_some_and(|event| {
-                    shown_live(event)
-                        && !matches!(
-                            event,
-                            ProviderEvent::Message {
-                                role: Role::User,
-                                ..
-                            } | ProviderEvent::CompactionStarted { .. }
-                                | ProviderEvent::CompactionEnded { .. }
-                        )
+                    daemon_context
+                        || (shown_live(event)
+                            && !matches!(
+                                event,
+                                ProviderEvent::Message {
+                                    role: Role::User,
+                                    ..
+                                } | ProviderEvent::CompactionStarted { .. }
+                                    | ProviderEvent::CompactionEnded { .. }
+                            ))
                 });
             if on_its_own {
                 live.awaiting_user = false;
                 live.continues = true;
+                // It goes on with the turn before, which says whether it joined.
+                live.joins = false;
                 live.waking_until = None;
                 // The thread reads its turns again: that turn is open once more.
                 opened = true;
@@ -325,12 +361,25 @@ impl SessionManager {
                             // The turn before's, until its own user message comes: a turn with
                             // none goes on with that turn, as the thread reads it.
                             user_message: live.user_message.take(),
+                            earlier: [
+                                std::mem::take(&mut live.earlier),
+                                std::mem::take(&mut live.entries),
+                            ]
+                            .concat(),
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
                             commands: std::mem::take(&mut live.commands),
+                            subagents: std::mem::take(&mut live.subagents),
                             jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
                             context_window: live.context_window,
+                            // Still owed until it says whose it is: its first item, or a user message.
+                            waking_until: live.waking_until,
+                            // Whether it goes on with the work before, known as Brigadier sent
+                            // its message: the file may read the turn before the stream says it.
+                            joins: carried.as_ref().is_some_and(|(_, joins, _)| *joins),
+                            own: carried.as_ref().is_some_and(|(_, _, own)| *own),
+                            quiet,
                             ..LiveTurn::default()
                         };
                     }
@@ -345,25 +394,63 @@ impl SessionManager {
                         opened = true;
                         *live = LiveTurn {
                             open: true,
+                            earlier: [
+                                std::mem::take(&mut live.earlier),
+                                std::mem::take(&mut live.entries),
+                            ]
+                            .concat(),
                             background: std::mem::take(&mut live.background),
                             mcp: std::mem::take(&mut live.mcp),
                             commands: std::mem::take(&mut live.commands),
+                            subagents: std::mem::take(&mut live.subagents),
                             jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
+                            quiet,
                             ..LiveTurn::default()
                         };
                     }
                     if !steer {
+                        // Its own message, said after the turn opened (Claude's comes with the
+                        // first token): the thread reads its turns again, the read at the open
+                        // had none of it (demo13: the open turn read as the one before, over).
+                        opened |= live.awaiting_user;
                         live.awaiting_user = false;
+                        live.waking_until = None;
                         live.user_message = Some(item_id.clone());
-                        live.joins = carried.as_ref().is_some_and(|(_, joins)| *joins);
+                        // A message steered into a turn the CLI began on its own, before
+                        // anything of it: that turn is the open block's, and so is it (D25, D74).
+                        live.joins =
+                            live.own || carried.as_ref().is_some_and(|(_, joins, _)| *joins);
                     }
-                    if let Some((carried, _)) = &carried {
+                    // Steered into a turn the CLI began on its own, Claude's file may hold it as
+                    // a turn's opening message: that turn goes on in the open block (D25, D74).
+                    if steer && live.continues {
+                        let joined = TurnRecord {
+                            user_message: Some(item_id.clone()),
+                            end: None,
+                            error: None,
+                            error_kind: None,
+                            provider: None,
+                            ended_at_ms: None,
+                            // Its own request: the turn the file opens with it took it.
+                            requests: requests.clone(),
+                            limit: None,
+                            context_window: None,
+                            joins: true,
+                        };
+                        let dir = self.session_dir(&conv.id).record();
+                        if let Err(err) = thread_view::append_turn(&dir, &joined) {
+                            crate::logging::private_trace!(conv.private_logs, warn, "could not note a turn"; conversation = %conv.id, error = %err);
+                        }
+                    }
+                    if let Some((carried, ..)) = &carried {
                         thread_view::add_requests(&mut live.requests, carried);
                         noted = Some(TurnRecord {
                             user_message: live.user_message.clone(),
                             end: None,
                             error: None,
+                            error_kind: None,
+                            provider: None,
                             ended_at_ms: None,
                             requests: live.requests.clone(),
                             limit: None,
@@ -374,19 +461,26 @@ impl SessionManager {
                     let entry = FileEntry {
                         steer,
                         said: said.clone(),
+                        requests: requests.clone(),
                         ..entry(event.cloned(), at)
                     };
                     news.push(entry);
                 }
                 Some(ProviderEvent::Error { error }) if live.open => {
                     live.error = Some(error.message.clone());
+                    live.error_kind = Some(error.kind);
                     if let Some(limit) = thread_view::limit_of(error) {
                         live.limit = Some(limit);
                     }
                     news.push(entry(event.cloned(), at));
                 }
                 Some(ProviderEvent::TurnCompleted { status, .. }) if live.open => {
+                    // A stopped or failed turn's subagents went with it, said ended or not.
+                    if *status != TurnStatus::Completed {
+                        live.subagents.clear();
+                    }
                     let end = match status {
+                        _ if handed_over => TurnEnd::HandedOver,
                         TurnStatus::Completed if live.error.is_some() => TurnEnd::Failed,
                         TurnStatus::Completed => TurnEnd::Done,
                         TurnStatus::Interrupted => TurnEnd::Stopped,
@@ -419,18 +513,25 @@ impl SessionManager {
             }
             if let Some(end) = ended {
                 live.open = false;
-                if let Some((carried, _)) = &carried {
+                // A command that ended during it may start the next turn at once (D153).
+                live.waking_until = std::mem::take(&mut live.ended_in_turn)
+                    .then(|| at + i64::try_from(WAKE_SETTLE.as_millis()).unwrap_or(i64::MAX));
+                wake_owed = wake_owed.or(live.waking_until);
+                if let Some((carried, ..)) = &carried {
                     thread_view::add_requests(&mut live.requests, carried);
                 }
                 noted = Some(TurnRecord {
                     user_message: live.user_message.clone(),
                     end: Some(end),
                     error: live.error.take(),
+                    error_kind: live.error_kind.take(),
+                    provider: None,
                     ended_at_ms: Some(at),
                     requests: live.requests.clone(),
                     limit: live.limit.take(),
                     context_window: live.context_window,
-                    joins: live.joins,
+                    // Its message never came: it went on with the turn before, joining nothing.
+                    joins: live.joins && !live.awaiting_user,
                 });
             }
             if let Some(record) = &noted
@@ -442,7 +543,10 @@ impl SessionManager {
                 }
             }
             jobs = said_jobs(live, at);
+            seq = self.next_news_seq();
+            opened &= !live.quiet;
         }
+        let block_moves = opened || ended.is_some() || jobs.is_some();
         if !news.is_empty()
             || opened
             || ended.is_some()
@@ -462,10 +566,19 @@ impl SessionManager {
                 mcp,
                 workers: None,
                 jobs,
+                replies: None,
+                block: None,
+                seq,
             });
+        }
+        if block_moves {
+            self.block_soon(&conv.id);
         }
         if let Some(until) = wake_owed {
             self.wake_grace(conv.id.clone(), until);
+        }
+        if released && let Ok(conv) = self.conv(&conv.id) {
+            self.kick(&conv);
         }
         // A command of the session may merge a worker's branch, or move its own.
         if matches!(
@@ -521,9 +634,9 @@ impl SessionManager {
                         changed = true;
                     }
                 }
-                changed.then(|| live.background.clone())
+                changed.then(|| (live.background.clone(), self.next_news_seq()))
             };
-            if let Some(background) = changed {
+            if let Some((background, seq)) = changed {
                 let _ = self.thread_news.send(ThreadNews {
                     conversation_id: id.clone(),
                     entries: Vec::new(),
@@ -535,6 +648,9 @@ impl SessionManager {
                     mcp: None,
                     workers: None,
                     jobs: None,
+                    replies: None,
+                    block: None,
+                    seq,
                 });
             }
         }
@@ -557,23 +673,150 @@ impl SessionManager {
                     return;
                 }
                 live.waking_until = None;
-                said_jobs(live, now_ms())
+                said_jobs(live, now_ms()).map(|jobs| (jobs, manager.next_news_seq()))
             };
-            if let Some(jobs) = jobs {
-                let _ = manager.thread_news.send(ThreadNews {
-                    conversation_id: id,
-                    entries: Vec::new(),
-                    opened: false,
-                    ended: None,
-                    turn_ended_at_ms: None,
-                    context: None,
-                    background: None,
-                    mcp: None,
-                    workers: None,
-                    jobs: Some(jobs),
-                });
+            if let Some((jobs, seq)) = jobs {
+                manager.say_jobs(id, jobs, seq);
             }
         });
+    }
+
+    /// A worker's word came for conversation `id` while no turn of its CLI is open: the turn
+    /// that carries it there is owed (`CliJobs::waking`), as a background command's end's is,
+    /// so the block it ends holds until that turn starts (D24, D94).
+    pub(super) fn owe_cli_turn(&self, id: &ConversationId) {
+        let until = now_ms() + i64::try_from(BACKGROUND_TURN_GRACE.as_millis()).unwrap_or(i64::MAX);
+        let jobs = {
+            let mut threads = self.cli_threads.lock().unwrap();
+            let Some(live) = threads.get_mut(id).filter(|live| !live.open) else {
+                return;
+            };
+            live.waking_until = Some(until);
+            said_jobs(live, now_ms()).map(|jobs| (jobs, self.next_news_seq()))
+        };
+        if let Some((jobs, seq)) = jobs {
+            self.say_jobs(id.clone(), jobs, seq);
+        }
+        self.wake_grace(id.clone(), until);
+    }
+
+    /// Reads conversation `id`'s work block again, soon: after each news of its thread, the
+    /// only times what holds it changes (D163).
+    pub(super) fn block_soon(&self, id: &ConversationId) {
+        let (manager, id) = (self.arc(), id.clone());
+        tokio::spawn(async move {
+            if !manager.refresh_block(&id).await {
+                return;
+            }
+            // Opened, it is read again on a short beat until it closes: a change no news
+            // follows (its CLI's turn going idle) closes it all the same.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                manager.refresh_block(&id).await;
+                let open = manager
+                    .work_blocks
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .is_some_and(|block| block.ended_at_ms.is_none());
+                if !open || manager.conv(&id).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Opens conversation `id`'s work block as its work starts, closes it once nothing holds
+    /// it: its CLI's turn, a message on its way, or what `work_holds` counts (a worker, paused
+    /// too, a background job, a subagent, the turn a job's end owes). Said to the app only
+    /// when it opens or closes, so it never closes and opens again for a gap (D153). Whether
+    /// this opened it.
+    async fn refresh_block(&self, id: &ConversationId) -> bool {
+        let _one = self.block_refresh.lock().await;
+        let Ok(conv) = self.conv(id) else {
+            return false;
+        };
+        let live = conv.is_busy().await || self.work_holds(&conv).await;
+        let said = {
+            let mut blocks = self.work_blocks.lock().unwrap();
+            let now = now_ms();
+            let block = match blocks.get(id) {
+                Some(open) if open.ended_at_ms.is_none() => {
+                    (!live).then(|| thread_view::WorkBlock {
+                        ended_at_ms: Some(now),
+                        ..open.clone()
+                    })
+                }
+                _ => live.then_some(thread_view::WorkBlock {
+                    started_at_ms: now,
+                    ended_at_ms: None,
+                }),
+            };
+            block.map(|block| {
+                blocks.insert(id.clone(), block.clone());
+                (block, self.next_news_seq())
+            })
+        };
+        let opened = said
+            .as_ref()
+            .is_some_and(|(block, _)| block.ended_at_ms.is_none());
+        if let Some((block, seq)) = said {
+            let _ = self.thread_news.send(ThreadNews {
+                conversation_id: id.clone(),
+                entries: Vec::new(),
+                opened: false,
+                ended: None,
+                turn_ended_at_ms: None,
+                context: None,
+                background: None,
+                mcp: None,
+                workers: None,
+                jobs: None,
+                replies: None,
+                block: Some(block),
+                seq,
+            });
+        }
+        opened
+    }
+
+    /// Tells the app what of conversation `id`'s CLI work holds now.
+    fn say_jobs(&self, id: ConversationId, jobs: thread_view::CliJobs, seq: u64) {
+        self.block_soon(&id);
+        let _ = self.thread_news.send(ThreadNews {
+            conversation_id: id,
+            entries: Vec::new(),
+            opened: false,
+            ended: None,
+            turn_ended_at_ms: None,
+            context: None,
+            background: None,
+            mcp: None,
+            workers: None,
+            jobs: Some(jobs),
+            replies: None,
+            block: None,
+            seq,
+        });
+    }
+
+    /// Whether conversation `id`'s CLI thread still holds its work past its turn: a background
+    /// job ended and the turn its end starts hasn't yet (`CliJobs::waking`), or a subagent it
+    /// lists no task for still runs (`LiveTurn::subagent_running`).
+    pub(super) fn cli_holds(&self, id: &ConversationId) -> bool {
+        self.cli_threads
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|live| live.jobs(now_ms()).waking || live.subagent_running())
+    }
+
+    /// The next news number: taken under `cli_threads`' lock, after the change it numbers, so a
+    /// read made under it ([`Self::thread_view`]) holds exactly the news numbered up to then.
+    fn next_news_seq(&self) -> u64 {
+        self.news_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
     }
 
     /// Where conversation `id`'s CLI turn stands: open now, else how its last turn ended.
@@ -583,7 +826,7 @@ impl SessionManager {
             .lock()
             .unwrap()
             .get(id)
-            .is_some_and(|live| live.open);
+            .is_some_and(|live| live.open && !live.quiet);
         let last = thread_view::last_turn(&self.session_dir(id).record());
         CliTurn {
             open,
@@ -623,8 +866,15 @@ impl SessionManager {
     }
 
     async fn backfill_daemon_context(&self, id: &ConversationId) {
-        let mut after = 0;
-        let mut legacy = std::collections::HashSet::new();
+        // Where the last read of its inbox stopped, and what it found: each read reads only what
+        // came since.
+        let (mut after, mut legacy) = self
+            .inbox_read
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
         loop {
             let Ok(events) = self
                 .core
@@ -660,6 +910,10 @@ impl SessionManager {
                 break;
             }
         }
+        self.inbox_read
+            .lock()
+            .unwrap()
+            .insert(id.clone(), (after, legacy.clone()));
         let record = self.session_dir(id).record();
         for lineage in read_lineage(&record) {
             let Some(file) = &lineage.file else {
@@ -717,9 +971,14 @@ impl SessionManager {
 
     /// Conversation `id`'s thread as its CLI keeps it, with its workers' rows.
     pub async fn thread_view_with_workers(&self, id: &ConversationId) -> Result<ThreadView> {
-        self.backfill_daemon_context(id).await;
-        let mut view = self.thread_view(id)?;
-        view.workers = self.worker_rows_of(id, false).await?;
+        // The workers' git, read first after a start, takes longest: the thread is read meanwhile.
+        let thread = async {
+            self.backfill_daemon_context(id).await;
+            self.thread_view(id)
+        };
+        let (view, workers) = tokio::join!(thread, self.worker_rows_of(id, false));
+        let mut view = view?;
+        view.workers = workers?;
         Ok(view)
     }
 
@@ -754,8 +1013,11 @@ impl SessionManager {
         let sent = envelope_provenance::sent_ids(&record);
         // A fork's thread starts with its source's, up to the answer it forks (#648).
         let forked = thread_view::read_forked(&record);
-        let files = std::iter::once(std::sync::Arc::new(forked.entries))
-            .chain(read_lineage(&record).into_iter().filter_map(|session| {
+        let lineage = read_lineage(&record);
+        let current = lineage.last().map(|session| session.provider);
+        let owned: Vec<_> = lineage
+            .into_iter()
+            .filter_map(|session| {
                 let file = session.file?;
                 let scoped_ids = daemon_ids
                     .iter()
@@ -767,20 +1029,42 @@ impl SessionManager {
                 let entries = self
                     .session_files
                     .read(session.provider, std::path::Path::new(&file));
-                Some(std::sync::Arc::new(
-                    entries
-                        .iter()
-                        .filter(|entry| !thread_view::daemon_context(&entry.event, &scoped_ids))
-                        .map(|entry| said_in(entry, &sent, &session.session_id))
-                        .collect(),
+                Some((
+                    session.provider,
+                    std::sync::Arc::new(
+                        entries
+                            .iter()
+                            .filter(|entry| !thread_view::daemon_context(&entry.event, &scoped_ids))
+                            .map(|entry| said_in(entry, &sent, &session.session_id))
+                            .collect::<Vec<_>>(),
+                    ),
                 ))
-            }))
+            })
+            .collect();
+        let files: Vec<_> = std::iter::once(std::sync::Arc::new(forked.entries))
+            .chain(owned.iter().map(|(_, entries)| entries.clone()))
             .collect();
         let mut records = forked.turns;
+        // Under the lock a turn's end is noted and numbered under: the turns read, the live turn
+        // and `seq` all stand at the same moment.
+        let mut threads = self.cli_threads.lock().unwrap();
         records.extend(thread_view::read_turns(&record));
-        let threads = self.cli_threads.lock().unwrap();
+        if let Some(live) = threads.get_mut(id) {
+            thread_view::keep_unheld(&mut live.earlier, &files);
+        }
         let mut view = thread_view::view(files, threads.get(id), &records);
+        view.seq = self.news_seq.load(std::sync::atomic::Ordering::SeqCst);
+        thread_view::name_providers(&mut view, &owned, current);
         view.seams = super::seam::marks(&record, &mut view.entries);
+        view.replies = super::session_messages::replies(&record);
+        view.block = self.work_blocks.lock().unwrap().get(id).cloned();
+        if view
+            .turns
+            .last()
+            .is_some_and(|turn| turn.error_kind == Some(brigadier_providers::ErrorKind::Policy))
+        {
+            view.next_model = self.declined_next(id);
+        }
         Ok(view)
     }
 
@@ -934,11 +1218,11 @@ impl SessionManager {
     }
 }
 
-/// `entry` of CLI session `session`'s file, with who wrote it when it is a user message
-/// Brigadier noted sending (`sent`, by `<session>:<item>`).
+/// `entry` of CLI session `session`'s file, with who wrote it and the requests it carries when
+/// it is a user message Brigadier noted sending (`sent`, by `<session>:<item>`).
 fn said_in(
     entry: &FileEntry,
-    sent: &std::collections::HashMap<String, Vec<(usize, usize)>>,
+    sent: &std::collections::HashMap<String, envelope_provenance::Sent>,
     session: &str,
 ) -> FileEntry {
     let mut entry = entry.clone();
@@ -948,9 +1232,10 @@ fn said_in(
         text,
     } = &entry.event
         && entry.parent.is_none()
-        && let Some(user) = sent.get(&format!("{session}:{item_id}"))
+        && let Some((user, requests)) = sent.get(&format!("{session}:{item_id}"))
     {
         entry.said = Some(envelope_provenance::said(text, user));
+        entry.requests.clone_from(requests);
     }
     entry
 }
@@ -1069,9 +1354,11 @@ fn last_line(path: &std::path::Path) -> Option<String> {
     Some(line.chars().take(LINE_MAX).collect())
 }
 
-fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
+pub(super) fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
+    let event = event.expect("an event");
     FileEntry {
-        event: event.expect("an event"),
+        wake: thread_view::wake_of(&event),
+        event,
         at_ms: Some(at),
         updated_at_ms: None,
         parent: None,
@@ -1079,6 +1366,7 @@ fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
         images: Vec::new(),
         phase: None,
         said: None,
+        requests: Vec::new(),
     }
 }
 
@@ -1108,6 +1396,8 @@ mod tests {
 
     fn task(id: &str, kind: BackgroundTaskKind, status: BackgroundTaskStatus) -> BackgroundTask {
         BackgroundTask {
+            command: None,
+            provider: None,
             id: id.into(),
             item_id: None,
             kind,
@@ -1207,6 +1497,7 @@ mod tests {
     #[test]
     fn a_background_jobs_notice_line_shows_live() {
         assert!(shown_live(&ProviderEvent::TaskNotice {
+            wake: None,
             item_id: "n1".into(),
             text: r#"Background command "sleep 20" completed (exit code 0)"#.into(),
         }));
@@ -1226,6 +1517,8 @@ mod tests {
             .join("replacement.output");
         std::fs::write(&output, "replacement invocation output").unwrap();
         let task = BackgroundTask {
+            command: None,
+            provider: None,
             id: "reused".into(),
             item_id: Some("replacement-call".into()),
             kind: BackgroundTaskKind::Shell,

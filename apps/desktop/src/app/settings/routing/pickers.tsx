@@ -4,9 +4,9 @@ import type { ListedModel } from "@/app/settings/routing/ruleWords";
 import { rowModel } from "@/app/settings/routing/words";
 import { ModelPicker, type ModelPickerProps } from "@/components/shared";
 import type { ModelInfo, OverrideTarget, ProviderKind } from "@/ipc/generated";
-import { VENDOR_LABELS } from "@/lib/routing";
 import { useAvailableModelGroups, useModelGroups } from "@/lib/setup";
 import { loadUsage, useUsage } from "@/state/usage";
+import { cliFacts } from "@/lib/providerKinds";
 
 /*
  * The models a row or a rule may name, in the model picker.
@@ -75,7 +75,7 @@ export function useTargetPanel({
     groups,
     checked: null,
     opensOn,
-    agentDefault: vendors ? (provider) => VENDOR_LABELS[provider] : undefined,
+    agentDefault: vendors ? (provider) => cliFacts(provider).vendor : undefined,
     greyed: (provider, model) => (takes(provider, model) ? IN_THE_ORDER : null),
     onPick: (provider, model) =>
       onPick(model ? { type: "model", provider, id: model.id } : { type: "vendor", provider }),

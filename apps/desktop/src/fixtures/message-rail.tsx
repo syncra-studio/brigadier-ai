@@ -7,6 +7,7 @@
  * - `short`: a chat of 3 turns.
  * - `long-u47` is long enough to be cut until "Show more".
  * - `gaps`: 6 user messages, each followed by 12 turns Brigadier's word began, so the one next to any is never mounted.
+ * - `steered`: one turn's block took the user's next 4 messages, steered in while it worked.
  *
  * `?drive=1` runs the checks the rail test reads and writes them to `<pre id="message-rail-result">`;
  * `window.messageRail` holds the steps for a browser probe.
@@ -19,7 +20,7 @@ import { createRoot } from "react-dom/client";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
-import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, type ShownApproval, useBoard } from "@/state/board";
 import { applyEvents, useApp } from "@/state/store";
@@ -85,12 +86,30 @@ function spaced(id: string, turns: number, notices: number): Message[] {
   return list;
 }
 
+/** One turn's block the user's next messages were steered into, then its answer. */
+function steered(id: string): { messages: Message[]; requests: UserRequest[] } {
+  const words = ["Start a worker that writes the numbers 1 to 40 into marks.txt", "pause it", "resume it", "what's 2+2?", "stop it"];
+  const said = words.map((text, turn): Message => ({
+    id: `${id}-u${turn}`, conversationId: id, seq: turn + 1, role: "user", text, blob: null, createdAtMs: start + turn * 60_000,
+    attachments: [], mentions: [], model: null, requestId: `${id}-r${turn}`, parentId: null,
+  }));
+  said.push({ id: `${id}-a0`, conversationId: id, seq: 6, role: "assistant", text: Array.from({ length: 30 }, (_, line) => `Line ${line + 1}: the worker stopped; 2+2 is 4.`).join("\n\n"), blob: null,
+    createdAtMs: start + 300_000, attachments: [], mentions: [], model: null, requestId: `${id}-r0`, parentId: null });
+  const requests = words.map((_, turn) => ({
+    id: `${id}-r${turn}`, conversationId: id, preview: "", state: { type: "done" }, startedAtMs: start + turn * 60_000, endedAtMs: start + 300_000,
+    steeredInto: turn === 0 ? null : `${id}-r0`, steeredAfter: null, undo: null, worked: [{ fromMs: start, toMs: start + 300_000 }], quotaWait: false,
+  }) as unknown as UserRequest);
+  return { messages: said, requests };
+}
+const steeredChat = steered("steered");
+
 const conversations: Record<string, Conversation> = {
   long: conversation("long", "A long chat"),
   short: conversation("short", "A short chat"),
   gaps: conversation("gaps", "Far apart"),
+  steered: conversation("steered", "Steered in"),
 };
-const stored: Record<string, Message[]> = { long: messages("long", TURNS), short: messages("short", 3), gaps: spaced("gaps", 6, 12) };
+const stored: Record<string, Message[]> = { long: messages("long", TURNS), short: messages("short", 3), gaps: spaced("gaps", 6, 12), steered: steeredChat.messages };
 
 function view(id: string): View {
   const list = stored[id] ?? [];
@@ -99,7 +118,7 @@ function view(id: string): View {
     conversation: conversations[id]!,
     context: null,
     messages: { messages: list.slice(first), hasMore: first > 0 },
-    tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [],
+    tasks: [], approvals: [], questions: [], requests: id === "steered" ? steeredChat.requests : [], workerSteps: [], orchestratorSteps: [],
     machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: list.at(-1)?.id ?? null, ratings: {}, streaming: null,
@@ -503,6 +522,19 @@ const steps = {
     for (const turn of [5, 4, 3]) up.push((await stepTo("ArrowUp", ids[turn]!)).landed);
     const down = await stepTo("ArrowDown", ids[4]!);
     return { markers: ids.length, setsize: Number($("[data-thread-row]")?.getAttribute("aria-setsize")), fourthMounted: mounted.includes(ids[4]!), up, down: down.landed };
+  },
+  /** Messages steered into one turn's block are on the rail too: a click lands the one asked for. */
+  async steered() {
+    await open("steered");
+    const ids = markerIds();
+    const target = ids[3];
+    const steer = () => target ? $(`[data-slot="request-steer"][data-message-id="${target}"]`) : null;
+    const before = Number(steer()?.dataset["railLanded"] ?? 0);
+    if (target) $(`[data-rail-marker="${target}"]`)?.click();
+    await settle(600);
+    const bubble = steer();
+    const offset = bubble ? round(bubble.getBoundingClientRect().top - viewport().getBoundingClientRect().top) : null;
+    return { rail: rail() !== null, markers: ids, steers: document.querySelectorAll('[data-slot="request-steer"]').length, offset, flashed: Number(bubble?.dataset["railLanded"] ?? 0) > before };
   },
   /** Three messages: no rail. */
   async short() {

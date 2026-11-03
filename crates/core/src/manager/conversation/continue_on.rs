@@ -6,6 +6,7 @@
 //! once on the other CLI, on the model the user's rules allow (D25). A model or account change
 //! within one CLI is no move: it still continues the same session (D14).
 
+use brigadier_providers::KindFacts as _;
 use std::sync::Arc;
 
 use brigadier_providers::ProviderKind;
@@ -114,7 +115,7 @@ impl SessionManager {
     }
 
     /// Why `provider` can't take a session now, in plain words; `None` when it can.
-    fn agent_unready(&self, provider: ProviderKind) -> Option<String> {
+    pub(super) fn agent_unready(&self, provider: ProviderKind) -> Option<String> {
         let settings = self.core.settings();
         let label = provider.label();
         if !crate::routing::availability::provider_on(&settings, provider) {
@@ -218,8 +219,5 @@ impl SessionManager {
 
 /// How `brigadier continue-on` names a CLI.
 pub(crate) fn cli_word(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Claude => "claude",
-        ProviderKind::Codex => "codex",
-    }
+    provider.id()
 }

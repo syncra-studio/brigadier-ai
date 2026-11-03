@@ -483,14 +483,20 @@ async fn mcp(State(state): State<Arc<FixtureState>>, request: Request<Body>) -> 
         {
             Response::builder().status(202).body(Body::empty()).unwrap()
         }
-        _ => Response::builder()
-            .header("mcp-session-id", "session42")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                json!({"jsonrpc":"2.0", "id":1, "result":{"tools":[{"name":"fixture-tool"}]}})
-                    .to_string(),
-            ))
-            .unwrap(),
+        _ => {
+            let id = serde_json::from_slice::<Value>(&body)
+                .ok()
+                .and_then(|message| message.get("id").cloned())
+                .unwrap_or(json!(1));
+            Response::builder()
+                .header("mcp-session-id", "session42")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"jsonrpc":"2.0", "id":id, "result":{"tools":[{"name":"fixture-tool"}]}})
+                        .to_string(),
+                ))
+                .unwrap()
+        }
     }
 }
 fn request(
@@ -1393,7 +1399,7 @@ async fn library_only_refusing_server_requires_native_setup_without_running_nati
         flow.manager.start_plugin_sign_in(&row.id).await.unwrap(),
     ] {
         assert!(
-            matches!(state, CatalogSignIn::CliSetupRequired { agents } if agents == brigadier_providers::ProviderKind::ALL)
+            matches!(state, CatalogSignIn::CliSetupRequired { agents } if *agents == brigadier_providers::adapters::kinds().collect::<Vec<_>>())
         );
     }
     flow.stop().await;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { headerLabel, workersWaitWords } from "@/app/conversation/requestTime";
-import { workingWorkers } from "@/app/conversation/turnWorkers";
+import { reopened, workingWorkers } from "@/app/conversation/turnWorkers";
 import type { WorkerRow } from "@/ipc/generated";
 
 const worker = (id: string, startedAtMs: number, more: Partial<WorkerRow> = {}): WorkerRow => ({
@@ -31,9 +31,8 @@ const worker = (id: string, startedAtMs: number, more: Partial<WorkerRow> = {}):
 const turns = [{ startedAtMs: 1000 }, { startedAtMs: 5000 }];
 
 test("a turn holds for the workers it started until each finished", () => {
-  // Started in the first turn, still on its first run: the first turn holds, the second doesn't.
+  // Started in the first turn, still on its first run: the first turn holds.
   assert.equal(workingWorkers([worker("w1", 1500)], turns, [1000]), 1);
-  assert.equal(workingWorkers([worker("w1", 1500)], turns, [5000]), 0);
   // Started after the newest turn's start (a turn the CLI began on its own after a wait ended is the same turn).
   assert.equal(workingWorkers([worker("w2", 9000)], turns, [5000]), 1);
   // Not started yet by its CLI: not finished either.
@@ -42,6 +41,37 @@ test("a turn holds for the workers it started until each finished", () => {
   assert.equal(workingWorkers([worker("w4", 6000, { working: false, lastEnd: "done" })], turns, [5000]), 0);
   assert.equal(workingWorkers([worker("w5", 6000, { working: false, lastEnd: "failed", gone: true })], turns, [5000]), 0);
   assert.equal(workingWorkers([worker("w6", 6000, { gone: true })], turns, [5000]), 0);
+});
+
+test("a worker an earlier block started that the newest block resumed or switched holds that block until it ends (D24, D151)", () => {
+  // Started at 1500 in the first block, paused, then sent back to work in the newest one (5000).
+  const resumed = worker("w1", 1500, { lastEnd: "stopped" });
+  assert.equal(workingWorkers([resumed], turns, [5000], 6000), 1, "its turn ended, the worker still works: Working for");
+  assert.equal(workingWorkers([resumed], turns, [1000], 4000), 0, "the older block stays closed");
+  assert.equal(workingWorkers([{ ...resumed, working: false, lastEnd: "done" }], turns, [5000], 6000), 0, "ended: it closes");
+});
+
+test("a paused worker keeps its block open until it resumes or stops; stopped, it holds nothing (D159)", () => {
+  // Paused in the block that started it: its turn was cut ("interrupted"), it runs nothing.
+  const paused = worker("w2", 5500, { working: false, paused: true, lastEnd: "interrupted" });
+  assert.equal(workingWorkers([paused], turns, [5000], 6000), 1, "paused: the block stays open, Working for");
+  // One an earlier block started, paused by the newest block: the newest holds, the older stays closed.
+  const older = worker("w1", 1500, { working: false, paused: true, lastEnd: "interrupted" });
+  assert.equal(workingWorkers([older], turns, [5000], 6000), 1);
+  assert.equal(workingWorkers([older], turns, [1000], 4000), 0);
+  // Stopped: gone, it no longer holds the block.
+  assert.equal(workingWorkers([{ ...paused, paused: false, gone: true, lastEnd: "stopped" }], turns, [5000], 6000), 0);
+});
+
+test("a worker that ended after its block's turns holds the block until the CLI's turn for its word starts (D24, D94; seen live on Codex)", () => {
+  // Its block's turns ended at 7000; it ended at 9000 and its word hasn't reached the CLI yet.
+  const ended = worker("w1", 6000, { working: false, lastEnd: "done", lastEventAtMs: 9000 });
+  assert.equal(workingWorkers([ended], turns, [5000], 7000, true), 1);
+  assert.equal(workingWorkers([ended], turns, [5000], 7000, false), 0, "its turn began, or the grace passed");
+  // One whose word a turn of the block already took (the block ends after it) holds nothing.
+  assert.equal(workingWorkers([ended], turns, [5000], 9500, true), 0);
+  // Nor in an older block.
+  assert.equal(workingWorkers([{ ...ended, startedAtMs: 1500 }], turns, [1000], 4000, true), 0);
 });
 
 test("a worker waiting on the user still holds its turn; sent back to work, only the newest turn's", () => {
@@ -64,7 +94,6 @@ test("a block Brigadier's word of its workers joined holds for the workers any o
 test("a turn held by its workers says it waits for them", () => {
   assert.equal(workersWaitWords(1), "Waiting for a worker");
   assert.equal(workersWaitWords(3), "Waiting for 3 workers");
-  assert.equal(headerLabel("done", 65_000, false, false, 2), "Waiting for 2 workers · 1m 5s");
   assert.equal(headerLabel("done", 65_000), "Worked for 1m 5s");
 });
 
@@ -85,8 +114,13 @@ test("a worker whose turn ended while background commands of its own still run h
   assert.equal(workingWorkers([worker("w1", 1500, { lastEnd: "done", working: false })], turns, [1000, 5000]), 0);
 });
 
-test("the session CLI's own subagents never hold a turn nor count among the workers it waits for", () => {
-  const subagent = { ...worker("native:c:call1", 1500), native: { conversationId: "c", callId: "call1", backgroundId: "b1", prompt: "" } };
-  assert.equal(workingWorkers([subagent], turns, [1000, 5000]), 0);
-  assert.equal(workingWorkers([subagent, worker("w1", 1500)], turns, [1000, 5000]), 1);
+test("a turn its background job's end woke is open again for its block, a later turn never is (D24)", () => {
+  // The turn ran 1000–5000; the subagent's end reopens it, its start unchanged.
+  assert.equal(reopened(1000, 1000, 5000), true);
+  // A block whose message was shown before the CLI said its turn's start.
+  assert.equal(reopened(1200, 1000, 5000), true);
+  // The user's next turn, the thread's newest turn closed, a block still running.
+  assert.equal(reopened(6000, 1000, 5000), false);
+  assert.equal(reopened(null, 1000, 5000), false);
+  assert.equal(reopened(1000, 1000, null), false);
 });

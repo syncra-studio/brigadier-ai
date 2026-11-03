@@ -3,11 +3,10 @@
 //! server entry of its own; a worker, naked (D13), only when the thread asks (`--with
 //! computer-use`).
 
+use brigadier_providers::ProviderKind as Agent;
 use std::sync::Arc;
 
-use brigadier_cli::protocol::{
-    Agent, Capability, CliRequest, GRANT_ENV, SESSION_ENV, StartRequest,
-};
+use brigadier_cli::protocol::{Capability, CliRequest, GRANT_ENV, SESSION_ENV, StartRequest};
 use brigadier_providers::{ProviderKind, SessionSpec, ToolSet};
 use serde_json::json;
 

@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use brigadier_providers::{
-    BackgroundTask, ItemStatus, LimitHit, McpStatus, ProviderEvent, Role, TurnStatus,
+    ApprovalDecision, BackgroundTask, ItemStatus, LimitHit, McpStatus, ProviderEvent, Role,
+    TurnStatus,
 };
 
 use super::cli_thread::update_background;
@@ -64,6 +65,9 @@ pub(crate) struct WorkerCli {
     pub context: Option<(i64, Option<i64>)>,
     /// The open turn had an error the CLI won't retry.
     errored: bool,
+    /// Brigadier closes its CLI mid-turn (a pause or a switch, D124): that turn ends
+    /// interrupted, not stopped by the user.
+    cut: bool,
     /// The open turn's user message, once its CLI said it.
     user_message: Option<String>,
     /// The line the last event adds to the worker's `record/turns.jsonl`: its turn's start, or
@@ -109,6 +113,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.fresh_context = false;
                 cli.limit = None;
                 cli.errored = false;
+                cli.cut = false;
                 cli.user_message = None;
                 cli.steps.clear();
                 cli.doing = None;
@@ -125,6 +130,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.fresh_context = false;
                 cli.limit = None;
                 cli.errored = false;
+                cli.cut = false;
                 cli.steps.clear();
             }
             cli.user_message = Some(item_id.clone());
@@ -148,6 +154,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
             cli.last_end = Some(match status {
                 TurnStatus::Completed if cli.errored => TurnEnd::Failed,
                 TurnStatus::Completed => TurnEnd::Done,
+                TurnStatus::Interrupted if cli.cut => TurnEnd::Interrupted,
                 TurnStatus::Interrupted => TurnEnd::Stopped,
                 TurnStatus::Failed => TurnEnd::Failed,
             });
@@ -383,6 +390,8 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
         user_message: cli.user_message.clone(),
         end,
         error: None,
+        error_kind: None,
+        provider: None,
         ended_at_ms,
         requests: Vec::new(),
         limit: None,
@@ -395,36 +404,46 @@ fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) ->
 /// is open, or its turn ended while background commands of its own still run (a test run and
 /// a wait on it), whose end it takes up again.
 fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
-    cli.is_some_and(|cli| {
-        cli.open
-            || cli.background.iter().any(|job| {
-                job.status == brigadier_providers::BackgroundTaskStatus::Running
-                    && job.kind != brigadier_providers::BackgroundTaskKind::Agent
-                    && !cli
-                        .commands
-                        .iter()
-                        .find(|(id, _)| job.item_id.as_ref() == Some(id))
-                        .map(|(_, command)| command.as_str())
-                        .or_else(|| {
-                            (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
-                                .then_some(job.label.as_str())
-                        })
-                        .is_some_and(|command| {
-                            (matches!(
-                                job.kind,
-                                brigadier_providers::BackgroundTaskKind::Shell
-                                    | brigadier_providers::BackgroundTaskKind::Terminal
-                            ) && thread_view::persistent_app(command))
-                                || (brigadier_providers::policy::runs_only_brigadier(command)
-                                    && (brigadier_providers::policy::runs_brigadier(
-                                        command, "preview",
-                                    ) || brigadier_providers::policy::runs_brigadier(
-                                        command, "wait",
-                                    )))
-                        })
-            })
-    }) && !task.state.is_final()
+    cli.is_some_and(busy)
+        && !task.state.is_final()
         && !task.plain.as_ref().is_some_and(|plain| plain.closed)
+}
+
+/// Its CLI's turn is open, or background commands of its own still run (see [`working`]).
+fn busy(cli: &WorkerCli) -> bool {
+    cli.open
+        || cli.background.iter().any(|job| {
+            job.status == brigadier_providers::BackgroundTaskStatus::Running
+                && job.kind != brigadier_providers::BackgroundTaskKind::Agent
+                && !cli
+                    .commands
+                    .iter()
+                    .find(|(id, _)| job.item_id.as_ref() == Some(id))
+                    .map(|(_, command)| command.as_str())
+                    .or_else(|| {
+                        (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
+                            .then_some(job.label.as_str())
+                    })
+                    .is_some_and(|command| {
+                        (matches!(
+                            job.kind,
+                            brigadier_providers::BackgroundTaskKind::Shell
+                                | brigadier_providers::BackgroundTaskKind::Terminal
+                        ) && thread_view::persistent_app(command))
+                            || (brigadier_providers::policy::runs_only_brigadier(command)
+                                && (brigadier_providers::policy::runs_brigadier(
+                                    command, "preview",
+                                ) || brigadier_providers::policy::runs_brigadier(
+                                    command, "wait",
+                                )))
+                    })
+        })
+}
+
+/// Its turn ended done and nothing of its own runs on: a turn that ended with a background
+/// command still at work (a loop it left running) has not finished, and a close of it is a stop.
+fn finished(cli: &WorkerCli) -> bool {
+    cli.last_end == Some(TurnEnd::Done) && !busy(cli)
 }
 
 /// A worker's row from its task (its link to the session, its title and model, its branch),
@@ -447,22 +466,38 @@ pub(crate) fn row(
         TaskState::Reported => Some(TurnEnd::Done),
         _ => None,
     });
+    let paused = super::workers::explicitly_paused(task);
+    let closed = task.plain.as_ref().is_some_and(|plain| plain.closed);
+    // A turn its session cut (a pause, a switch or a close, D124) never failed: a closed one
+    // stopped, a switched one goes on.
+    let last_end = match last_end {
+        Some(TurnEnd::Interrupted) if closed => Some(TurnEnd::Stopped),
+        Some(TurnEnd::Interrupted) if cli.cut && !paused => None,
+        end => end,
+    };
     let git = git.cloned().unwrap_or_default();
     let background = if gone {
         Vec::new()
     } else {
         background_of(&cli)
     };
+    // A switch shows with its switch row: until it is confirmed, the model the worker was on.
+    let shown = task
+        .quota_wait
+        .as_ref()
+        .and_then(|wait| wait.model.as_ref())
+        .unwrap_or(&task.route.choice);
     WorkerRow {
         id: task.id.clone(),
         number: task.number,
         title: task.title.clone(),
-        agent: task.route.choice.provider,
-        model: task.route.choice.model.clone(),
+        agent: shown.provider,
+        model: shown.model.clone(),
         started_at_ms: task.created_at_ms,
         working: working(task, Some(&cli)),
         last_end,
         gone,
+        paused,
         last_event_at_ms: cli.last_event_ms,
         limit: cli.limit.filter(|_| !gone),
         fresh_context: cli.fresh_context && cli.open,
@@ -547,6 +582,14 @@ impl SessionManager {
             used_tokens,
             window_tokens: self.model_window(choice.provider, choice.model.as_deref(), reported),
         })
+    }
+
+    /// Brigadier is about to close worker `task`'s CLI itself (a pause or a switch, D124): its
+    /// open turn's end reads interrupted.
+    pub(crate) fn note_worker_cut(&self, task: &TaskId) {
+        if let Some(cli) = self.worker_rows.cli.lock().unwrap().get_mut(task) {
+            cli.cut = cli.open;
+        }
     }
 
     /// Follows an event of worker `task`'s CLI (of session `conversation`) into its row.
@@ -637,6 +680,7 @@ impl SessionManager {
             }
             sent.insert(id.clone(), rows.clone());
         }
+        self.block_soon(id);
         let _ = self.thread_news.send(ThreadNews {
             conversation_id: id.clone(),
             entries: Vec::new(),
@@ -648,11 +692,17 @@ impl SessionManager {
             mcp: None,
             workers: Some(rows),
             jobs: None,
+            replies: None,
+            block: None,
+            seq: 0,
         });
     }
 
     /// Session `id`'s worker rows now, newest first. `git_now`: git is read again whatever
-    /// its last read; else only when that is older than [`GIT_EVERY_MS`].
+    /// its last read. Else (a read of the thread) it is read now only the first time since the
+    /// daemon started, so the rows show whole; after that a read older than [`GIT_EVERY_MS`] is
+    /// read again in the background, the rows sent as news, and the thread never waits for it
+    /// (git takes a few hundred ms per worker).
     pub(crate) async fn worker_rows_of(
         &self,
         id: &ConversationId,
@@ -665,17 +715,18 @@ impl SessionManager {
         let (parent_checkout, parent_branch) = self
             .changes_checkout(id)
             .map_or((None, None), |(path, branch)| (Some(path), branch));
-        let read_git = git_now || {
-            let last = self
-                .worker_rows
-                .git_read_ms
-                .lock()
-                .unwrap()
-                .get(id)
-                .copied();
-            last.is_none_or(|last| now_ms().saturating_sub(last) >= GIT_EVERY_MS)
-        };
-        if read_git {
+        let last = self
+            .worker_rows
+            .git_read_ms
+            .lock()
+            .unwrap()
+            .get(id)
+            .copied();
+        let due = last.is_none_or(|last| now_ms().saturating_sub(last) >= GIT_EVERY_MS);
+        if due && !git_now && last.is_some() {
+            self.workers_changed(id, true);
+        }
+        if git_now || last.is_none() {
             self.worker_rows
                 .git_read_ms
                 .lock()
@@ -684,23 +735,8 @@ impl SessionManager {
             self.read_workers_git(&board.tasks, parent_branch.clone(), parent_checkout)
                 .await;
         }
+        // Its CLI's permission prompts wait on its orchestrator, not the user (D48).
         let mut waiting: HashMap<&TaskId, Vec<WorkerWait>> = HashMap::new();
-        let mut approvals: Vec<_> = board.approvals.values().collect();
-        approvals.sort_by_key(|card| card.position);
-        for card in approvals {
-            if let (Some(task), CardState::Pending, ApprovalSubject::Cli { request }) =
-                (&card.task_id, &card.state, &card.subject)
-            {
-                waiting.entry(task).or_default().push(WorkerWait {
-                    kind: WorkerWaitKind::Permission,
-                    what: request
-                        .command
-                        .clone()
-                        .unwrap_or_else(|| request.tool.clone()),
-                    card: Some(card.id.clone()),
-                });
-            }
-        }
         let mut questions: Vec<_> = board.questions.values().collect();
         questions.sort_by_key(|card| card.position);
         for card in questions {
@@ -742,7 +778,14 @@ impl SessionManager {
                     .as_ref()
                     .and_then(|plain| plain.base.clone())
                     .or_else(|| parent_branch.clone());
-                row(task, cli.get(&task.id), git.get(&task.id), waits, mcp, base)
+                let mut row = row(task, cli.get(&task.id), git.get(&task.id), waits, mcp, base);
+                // None of its CLI's events heard since a restart: its last turn's recorded end.
+                if row.last_event_at_ms.is_none() {
+                    let record = self.session_dir(id).worker(task).join("record");
+                    row.last_event_at_ms =
+                        thread_view::last_turn(&record).and_then(|turn| turn.ended_at_ms);
+                }
+                row
             })
             .collect())
     }
@@ -805,7 +848,13 @@ impl SessionManager {
                             let merged = moved && repo.ancestor(&tip, &into).unwrap_or(false);
                             Some((ahead, merged))
                         })
-                        .unwrap_or_default();
+                        // No branch of its own (`--local`): its work is in the checkout it
+                        // shares with its session, so nothing is left to merge.
+                        .unwrap_or((
+                            0,
+                            branch.is_none()
+                                && diff.as_ref().is_some_and(|diff| !diff.files.is_empty()),
+                        ));
                     (
                         task,
                         Some(WorkerGit {
@@ -835,7 +884,7 @@ impl SessionManager {
             .lock()
             .unwrap()
             .get(task)
-            .is_some_and(|cli| !cli.open && cli.last_end == Some(TurnEnd::Done))
+            .is_some_and(finished)
     }
 
     /// Drops every worker's CLI and git reads held in memory, as a daemon restart does.
@@ -854,16 +903,18 @@ impl SessionManager {
     ) -> Result<crate::thread_view::ThreadView> {
         let task = self.task_by_id(id, task).await?;
         let record = self.session_dir(id).worker(&task).join("record");
-        let files = super::session_dir::read_lineage(&record)
+        let owned: Vec<_> = super::session_dir::read_lineage(&record)
             .into_iter()
             .filter_map(|session| {
                 let file = session.file?;
-                Some(
+                Some((
+                    session.provider,
                     self.session_files
                         .read(session.provider, std::path::Path::new(&file)),
-                )
+                ))
             })
             .collect();
+        let files = owned.iter().map(|(_, entries)| entries.clone()).collect();
         // Its turn that is open reads as running, not cut off.
         let open = self
             .worker_rows
@@ -878,6 +929,27 @@ impl SessionManager {
         });
         let records = thread_view::read_turns(&record);
         let mut view = thread_view::view(files, live.as_ref(), &records);
+        let current = owned.last().map(|(kind, _)| *kind);
+        thread_view::name_providers(&mut view, &owned, current);
+        let board = self.core.board(id).await?;
+        add_prompts(&mut view.entries, &board, &task.id);
+        // A resume's input shows only what was held for it (the user's note), never the
+        // marker or "Continue where you stopped."; with nothing held, no message.
+        view.entries.retain_mut(|entry| match &mut entry.event {
+            ProviderEvent::Message {
+                role: Role::User,
+                text,
+                ..
+            } => match resume_held(text).map(str::to_owned) {
+                Some(held) if held.is_empty() => false,
+                Some(held) => {
+                    *text = held;
+                    true
+                }
+                None => true,
+            },
+            _ => true,
+        });
         // Its hand-offs to fresh CLI sessions (D14): a divider each, the nudge and the
         // hand-off hidden, as a session's.
         view.seams = super::seam::marks(&record, &mut view.entries);
@@ -912,6 +984,84 @@ impl SessionManager {
     }
 }
 
+/// What was held for a worker in its resume's input `text` (empty when nothing was), or `None`
+/// when it is no resume's: `[Worker resume …]`, then what was held, then "Continue where you
+/// stopped." (`resume_task`); the words alone are a limit's reset going on (quota).
+fn resume_held(text: &str) -> Option<&str> {
+    use super::workers::{RESUME_MARK, RESUME_WORDS};
+    let text = text.trim();
+    let rest = match text.strip_prefix(RESUME_MARK) {
+        Some(rest) => rest.split_once(']')?.1,
+        None if text == RESUME_WORDS => "",
+        None => return None,
+    };
+    let rest = rest.trim();
+    Some(rest.strip_suffix(RESUME_WORDS).unwrap_or(rest).trim())
+}
+
+/// The permission prompts its orchestrator answers in the thread of worker `task` (D48), and
+/// their answers, each where it came by time among `entries` (its CLI's files keep neither):
+/// read-only rows. Its CLI's own subagent's are rows of that subagent's call. One whose CLI
+/// ended unanswered leaves none.
+fn add_prompts(
+    entries: &mut Vec<brigadier_providers::session_file::FileEntry>,
+    board: &crate::board::Board,
+    task: &TaskId,
+) {
+    for card in board.approvals.values() {
+        let (true, ApprovalSubject::Cli { request }) =
+            (card.task_id.as_ref() == Some(task), &card.subject)
+        else {
+            continue;
+        };
+        let answer = match (&card.state, card.resolved_at_ms) {
+            (CardState::Pending, _) => None,
+            (CardState::Allowed { by, similar }, Some(at)) => Some((
+                at,
+                if *similar {
+                    ApprovalDecision::AllowSimilar
+                } else {
+                    ApprovalDecision::Allow
+                },
+                *by,
+            )),
+            (CardState::Denied { by, message }, Some(at)) => Some((
+                at,
+                ApprovalDecision::Deny {
+                    message: message.clone().unwrap_or_default(),
+                },
+                *by,
+            )),
+            _ => continue,
+        };
+        let mut events = vec![(
+            card.created_at_ms,
+            ProviderEvent::ApprovalRequested {
+                request: request.clone(),
+            },
+        )];
+        events.extend(answer.map(|(at, decision, decided_by)| {
+            (
+                at,
+                ProviderEvent::ApprovalResolved {
+                    id: request.id.clone(),
+                    decision,
+                    decided_by,
+                },
+            )
+        }));
+        for (at, event) in events {
+            let index = entries
+                .iter()
+                .position(|entry| entry.at_ms.is_some_and(|written| written > at))
+                .unwrap_or(entries.len());
+            let mut entry = super::cli_thread::entry(Some(event), at);
+            entry.parent = request.agent.clone();
+            entries.insert(index, entry);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -939,6 +1089,23 @@ mod tests {
     }
 
     #[test]
+    fn a_resumes_input_shows_only_what_was_held() {
+        let marked = "[Worker resume 5c3eb662-9c41-4ad3-886b-8b41eb526c84]";
+        assert_eq!(
+            resume_held(&format!("{marked}\n\nContinue where you stopped.")),
+            Some("")
+        );
+        assert_eq!(
+            resume_held(&format!(
+                "{marked}\n\nUse tabs.\n\nAnd commit.\n\nContinue where you stopped."
+            )),
+            Some("Use tabs.\n\nAnd commit.")
+        );
+        assert_eq!(resume_held("Continue where you stopped."), Some(""));
+        assert_eq!(resume_held("Please continue where you stopped."), None);
+    }
+
+    #[test]
     fn a_turn_opens_and_ends_as_its_cli_says() {
         let mut cli = WorkerCli::default();
         assert!(follow(
@@ -951,6 +1118,15 @@ mod tests {
         assert_eq!((cli.open, cli.last_end), (false, Some(TurnEnd::Done)));
         follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 3);
         follow(&mut cli, &turn_end(TurnStatus::Interrupted), 4);
+        assert_eq!(cli.last_end, Some(TurnEnd::Stopped));
+        // Brigadier closing it mid-turn (a pause or a switch, D124) is no Stop of the user's;
+        // the next turn's own Stop is again.
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 5);
+        cli.cut = cli.open;
+        follow(&mut cli, &turn_end(TurnStatus::Interrupted), 6);
+        assert_eq!(cli.last_end, Some(TurnEnd::Interrupted));
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 7);
+        follow(&mut cli, &turn_end(TurnStatus::Interrupted), 8);
         assert_eq!(cli.last_end, Some(TurnEnd::Stopped));
         follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 5);
         follow(&mut cli, &error(ErrorKind::Overloaded, None), 6);
@@ -1044,6 +1220,8 @@ mod tests {
         };
         follow(&mut cli, &call, 2);
         let task = |status| BackgroundTask {
+            command: None,
+            provider: None,
             id: "t1".into(),
             item_id: Some("b1".into()),
             kind: BackgroundTaskKind::Shell,
@@ -1165,6 +1343,8 @@ mod tests {
         };
         follow(&mut cli, &bash("toolu_wait", "brigadier wait"), 2);
         let task = BackgroundTask {
+            command: None,
+            provider: None,
             id: "b8ea764yr".into(),
             item_id: Some("toolu_wait".into()),
             kind: BackgroundTaskKind::Shell,
@@ -1185,6 +1365,39 @@ mod tests {
             Some("brigadier wait")
         );
         assert!(cli.commands.len() <= COMMANDS_KEPT + 1);
+    }
+
+    /// A Claude worker that ends its turn done with its loop still running in the background has
+    /// not finished: `brigadier close` stops it and says "Stopped" (D150), as it does any running
+    /// worker; once the loop ended it has (D104).
+    #[test]
+    fn a_turn_that_ended_with_its_loop_still_running_has_not_finished() {
+        use brigadier_providers::{BackgroundTaskKind, BackgroundTaskStatus};
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        let job = |status| ProviderEvent::BackgroundTask {
+            task: BackgroundTask {
+                command: Some(
+                    "for i in $(seq 1 40); do echo $i >> marks.txt; sleep 3; done".into(),
+                ),
+                provider: None,
+                id: "bloop".into(),
+                item_id: None,
+                kind: BackgroundTaskKind::Shell,
+                label: "Write marks".into(),
+                status,
+                started_at_ms: 2,
+                ended_at_ms: None,
+                output_file: None,
+                summary: None,
+                last_line: None,
+            },
+        };
+        follow(&mut cli, &job(BackgroundTaskStatus::Running), 2);
+        follow(&mut cli, &turn_end(TurnStatus::Completed), 3);
+        assert!(!finished(&cli), "its loop still runs");
+        follow(&mut cli, &job(BackgroundTaskStatus::Completed), 4);
+        assert!(finished(&cli));
     }
 
     /// A worker's context size is kept for `brigadier workers` (run2-D42) without sending its

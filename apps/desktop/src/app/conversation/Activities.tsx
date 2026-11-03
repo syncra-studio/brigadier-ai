@@ -1,20 +1,22 @@
-import { useEffect, useState } from "react";
+import { useContext, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, appTaskRows, workerAppTaskRows } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows, rowKey, taskRows, withHistory, workerTaskRows } from "@/app/conversation/backgroundRows";
 import { endWords, taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
 import { rowName } from "@/app/conversation/activity/workerState";
+import { useTicking } from "@/app/conversation/requestTime";
+import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { StateIcon, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import { Clock, Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
 import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
 import { stopBackgroundTask, stopPreview } from "@/state/actions";
-import { useBackgroundHistoryCount } from "@/state/backgroundHistory";
 import { useBoard } from "@/state/board";
 import { useCliThread, useWorkerRows } from "@/state/cliThread";
 import { openLink } from "@/state/links";
+import { backgroundOf, subagentPanel } from "@/state/nativeWorkers";
 import { openPanelTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
@@ -33,7 +35,7 @@ const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
 
 const label = (activity: Activity) =>
   activity.type === "task"
-      ? activity.task.kind === "terminal" ? commandWords(activity.task.label) : activity.task.label
+      ? activity.task.kind === "terminal" ? commandWords(activity.task.label) : activity.task.kind === "agent" ? `Subagent: ${activity.task.label}` : activity.task.label
       : activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name);
 
 /** No background tasks. */
@@ -42,34 +44,26 @@ const NO_ENTRIES: readonly FileEntry[] = [];
 /** No previews. */
 const NO_PREVIEWS: readonly Preview[] = [];
 
-/** Previews and proven live native apps, with their own output/Stop and durable History. */
+/** Previews and background commands and subagents, the session's and its workers', with their own output/Stop and durable History. */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
   const workers = useWorkerRows(conversationId);
-  const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
+  const cliTasks = useCliThread((s) => (s.views[conversationId] ? backgroundOf(s.views[conversationId]) : NO_TASKS));
   const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
   const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
-  // A row that starts reads the clock in the same render, never a stale one that would show 0s
-  // until the next tick.
-  const since = [...rows, ...cliTasks, ...workers.flatMap((worker) => (worker.background ?? []).map(({ task }) => ({ ...task, id: `${worker.id}:${task.id}` })))].map((thing) => `${thing.id}@${thing.startedAtMs}`).join();
-  // eslint-disable-next-line react/purity
-  const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
-  // eslint-disable-next-line react/purity
-  if (clock.since !== since) setClock({ since, now: Date.now() });
-  // Ended app tasks leave immediately; the native records remain in History.
-  const activities = [...rows, ...appTaskRows(cliTasks, entries, clock.now), ...workerAppTaskRows(workers, (taskId) => rowName(workers, taskId), clock.now)]
+  const switchedAtMs = useBoard((s) => s.board?.conversationId === conversationId
+    ? Math.max(0, ...s.board.orchestratorSteps.flatMap((step) => step.kind.type === "providerTransition" && !step.kind.taskId ? [step.kind.startedAtMs] : []))
+    : 0);
+  // Every background command and subagent, the session's and its workers' (D51, D97); ended ones
+  // stay, saying how they ended (D98).
+  const activities = withHistory(conversationId, [...rows, ...taskRows(cliTasks, entries), ...workerTaskRows(workers, (taskId) => rowName(workers, taskId))], switchedAtMs)
     .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
-  const changed = JSON.stringify([previews.map((preview) => [preview.id, preview.startedAtMs, preview.state]), cliTasks.map((task) => [task.id, task.startedAtMs, task.status]), workers.map((row) => [row.id, row.background?.map(({ task }) => [task.id, task.startedAtMs, task.status])])]);
-  const historyCount = useBackgroundHistoryCount(conversationId, changed);
-  const ticking = activities.length > 0;
-  useEffect(() => {
-    if (!ticking) return;
-    const timer = setInterval(() => setClock((shown) => ({ ...shown, now: Date.now() })), 1000);
-    return () => clearInterval(timer);
-  }, [ticking]);
-  if (activities.length === 0 && !historyCount) return null;
+  // Running ones count on the clock every live time shares (D94).
+  const now = useTicking(activities.some((activity) => activity.type === "preview" || activity.task.status === "running"));
+  // No section while it has no row, never an empty heading (D195); ended rows keep it (D98).
+  if (!activities.length) return null;
   return (
-    <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length} collapsible={activities.length > 0}
+    <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length} collapsible
       action={
         <TooltipIconButton data-slot="background-history-link" tooltip="Background history" aria-label="Background history" size="icon-xs"
           onClick={() => openPanelTab(conversationId, { type: "backgroundHistory" }, "Background history")}>
@@ -77,7 +71,7 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
         </TooltipIconButton>
       }>
       {activities.map((activity) => (
-        <BackgroundRow key={`${activity.id}:${activity.startedAtMs}`} conversationId={conversationId} activity={activity} now={clock.now} />
+        <BackgroundRow key={rowKey(activity)} conversationId={conversationId} activity={activity} now={now} />
       ))}
     </SummarySection>
   );
@@ -160,8 +154,11 @@ function TaskRow({ conversationId, task, worker, command, name, meta, state }: {
     meta,
     action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id, worker?.id, task.startedAtMs)} /> : undefined,
   };
+  const { setPanel } = useContext(AgentsPanelContext);
   const end = taskEnd(task);
   const words = <ActivityLabel name={name} state={state} worker={worker?.name} {...(end && { word: endWords(end) })} />;
+  // A background subagent opens its transcript, running or over (D97).
+  if (task.kind === "agent" && task.itemId !== null && !worker) return <SummaryRowButton {...parts} onClick={() => setPanel(subagentPanel(conversationId, task.itemId!))}>{words}</SummaryRowButton>;
   if ((task.kind !== "shell" && task.kind !== "terminal") || !task.outputFile) return <SummaryRow {...parts}>{words}</SummaryRow>;
   return (
     <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id, startedAtMs: task.startedAtMs, ...(worker && { worker: worker.id }) }, name)}>

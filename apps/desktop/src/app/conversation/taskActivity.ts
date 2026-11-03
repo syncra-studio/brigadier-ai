@@ -1,4 +1,5 @@
 import type { DiffStat, Task } from "@/ipc/generated";
+import { CLIS } from "@/ipc/generated/clis";
 import { formatDuration } from "@/lib/format";
 
 const TERMINAL = new Set<Task["state"]>(["landed", "done", "rejected", "stopped", "failed"]);
@@ -9,8 +10,16 @@ function hasTaskActivity(task: Task): boolean {
   return !TERMINAL.has(task.state);
 }
 
-function userPaused(task: Task): boolean {
+/** Its session paused it (D7): nothing of it runs until it is resumed; a quota wait still goes on. */
+export function userPaused(task: Task): boolean {
   return task.state === "paused" && !task.quotaWait && !task.blockedReason?.trim();
+}
+
+const RUNS = new Set<Task["state"]>(["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"]);
+
+/** A worker that keeps its session working, so the composer shows Stop; one its session paused doesn't (D7, D118). */
+export function taskRuns(task: Task): boolean {
+  return RUNS.has(task.state) && !userPaused(task);
 }
 
 /** Settled workers keep their activity visible without subscribing to the live clock. */
@@ -23,7 +32,7 @@ export function taskWaitWords(task: Task): string | null {
   if (!hasTaskActivity(task)) return null;
   if (task.quotaWait) {
     const reason = task.quotaWait.reason;
-    const provider = /claude/i.test(reason) ? "Claude" : /codex/i.test(reason) ? "Codex" : null;
+    const provider = CLIS.find((cli) => reason.toLowerCase().includes(cli.id))?.vendor;
     return `Waiting for ${provider ? `${provider} ` : ""}quota: ${reason}`;
   }
   if (task.state === "takenOver") return "Working in your terminal";

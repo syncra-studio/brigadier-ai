@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { taskState, workerName } from "@/app/conversation/rowWords";
-import { taskActivityLines, taskActivityTicks, taskWaitWords } from "@/app/conversation/taskActivity";
+import { taskActivityLines, taskActivityTicks, taskRuns, taskWaitWords } from "@/app/conversation/taskActivity";
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { Task } from "@/ipc/generated";
@@ -110,4 +110,11 @@ test("a worker whose process ended reads interrupted while its session resumes",
   assert.equal(workerPreview(worker), "Interrupted — resuming");
   assert.equal(workerWorking(worker), true);
   assert.deepEqual(taskState(task({ resuming: false })), { word: "Working", tone: "live" });
+});
+
+test("a paused worker keeps no Stop in the composer; one waiting for quota or running does (D118, every CLI)", () => {
+  assert.equal(taskRuns(task({ state: "paused" })), false);
+  assert.equal(taskRuns(task({ state: "paused", quotaWait: { reason: "resets soon", sinceMs: 0, resetsAtMs: null, rule: null, ranking: null } })), true);
+  assert.equal(taskRuns(task()), true);
+  assert.equal(taskRuns(task({ state: "done" })), false);
 });

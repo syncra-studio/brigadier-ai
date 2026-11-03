@@ -47,21 +47,25 @@ function RunningFor({ startedAtMs }: { startedAtMs: number | undefined }) {
   return <>{ms < 1000 ? "Running command" : `Running command for ${formatDuration(ms)}`}</>;
 }
 
-/** What a step the user's Stop cut short says: "Stopped npm test after 4s", "Stopped reading a.ts". */
-export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, atMs: number | null): string {
+/**
+ * What a step the user's Stop cut short says: "Stopped npm test", "Stopped reading a.ts". No time
+ * of its own: the turn's header says when the stop came, once.
+ */
+export function stoppedLabel(words: StepWords): string {
   const what = words.kind === "run" && words.object
     ? words.object
     : words.doing.charAt(0).toLowerCase() + words.doing.slice(1);
-  const ms = startedAtMs !== undefined && atMs !== null ? atMs - startedAtMs : 0;
-  return ms >= 1000 ? `Stopped ${what} after ${formatDuration(ms)}` : `Stopped ${what}`;
+  return `Stopped ${what}`;
 }
 
 /**
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words: said, status, exit = null, startedAtMs, endedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
+export function StepRow({ words: said, status, exit = null, startedAtMs, stopped: stoppedCall = false, detail, onOpen, suffix, slot, objectNode, trail }: Described & {
   detail?: ReactNode;
+  /** With no detail: what a click on it opens elsewhere (`ThreadActivity`). */
+  onOpen?: (() => void) | undefined;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
   slot?: string;
@@ -93,6 +97,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
       data-kind={words.kind}
       data-step-state={stopped ? "stopped" : paused ? "paused" : running ? "running" : status === "declined" ? "declined" : undefined}
       detail={detail}
+      onOpen={onOpen}
       onOpenChange={setOpen}
       // In a group its detail doesn't scroll on its own: the group's list scrolls it, a diff's header kept in view.
       detailClassName={cn(ROW_DETAIL, "ps-0", inGroup && "max-h-none overflow-visible")}
@@ -100,7 +105,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
       <StepIcon words={words} stopped={stopped} />
       <span className={cn("min-w-0 truncate", running && "shimmer")}>
         {stopped ? (
-          <Words words={words} label={stoppedLabel(words, startedAtMs, stoppedCall ? (endedAtMs ?? null) : (stoppedBy?.atMs ?? null))} />
+          <Words words={words} label={stoppedLabel(words)} />
         ) : paused ? (
           <Words words={words} label={`Paused · ${words.doing}`} />
         ) : ticking ? (
@@ -130,6 +135,8 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
  * in a turn done, a group of one step is that step's own row, unless it sums up work a follow-up
  * cut short.
  */
+const THINKING: StatusHead = { text: "Thinking", tone: "busy" };
+
 export function ActivityGroup<S>({ items, live, working, describe, renderStep, reveal, liveLabel = null, summary: steeredAfter = false }: {
   items: readonly GroupItem<S>[];
   /** It is the live turn's last group: it says what happens now. */
@@ -169,9 +176,17 @@ export function ActivityGroup<S>({ items, live, working, describe, renderStep, r
   // The step running now (the newest of those running together), else the last.
   const current = described.findLast((step) => step.status === "inProgress") ?? described.at(-1);
   const first = described[0];
-  const stepNames = !paused && !summary && live && current?.status === "inProgress";
+  // The newest step names itself for its second even when it ended before it was drawn (a fast
+  // read, a CLI that tells a step only once it is done), so the live row says each action in turn.
+  const [named, setNamed] = useState<string | null>(null);
+  const newest = items.at(-1)?.key ?? null;
+  const fresh = !paused && !summary && live && newest !== named;
+  // A step that hasn't said what it acts on yet leaves the live line be until it does.
+  const stepNames = !paused && !summary && live && !current?.words.pending && (current?.status === "inProgress" || fresh);
   // The live line, unless the step running (or just ended) says it better; waiting on the user always wins.
-  const line = live && liveLabel && (!stepNames || liveLabel.tone === "needsYou") ? liveLabel : null;
+  // A step that hasn't said what it acts on, with no live line given (a lead's call running), thinks.
+  const said = liveLabel ?? (current?.words.pending ? THINKING : null);
+  const line = live && said && (!stepNames || said.tone === "needsYou") ? said : null;
   const oneStep = !summary && (live || described.length === 1);
   // A summary's icon is its first segment's ("Ran commands, read files" → a terminal).
   const head = oneStep ? current?.words : (summaryLead(described.map((step) => step.words)) ?? first?.words);
@@ -189,12 +204,20 @@ export function ActivityGroup<S>({ items, live, working, describe, renderStep, r
   const calm = useCalmLabel(label, live && !summary);
   // The live line shows once the label before it has stood its second.
   const saysLine = !!line && calm.shown === line.text;
+  // Once on screen, the step has had its turn: the live line follows after its second.
+  if (fresh && naming && calm.shown === label) setNamed(newest);
   const [only] = items;
   if (!only) return null;
   // Paused for quota, a lone step keeps its own row, which says it is paused.
   const ownRow = working === undefined || paused ? !line || rowOpen : !working || rowOpen;
+  // Both looks share one root, so a group of one that becomes its step's own row at turn end
+  // never remounts (only what is inside the root changes).
   if (items.length === 1 && ownRow && !summary) {
-    return <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>;
+    return (
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>
+      </Collapsible>
+    );
   }
   const list = <GroupStepList items={items} described={described} renderStep={renderStep} />;
   return (

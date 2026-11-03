@@ -87,13 +87,17 @@ function Fixture() {
       } },
       { ready: () => seen.clicked === true, act: () => {
         seen.keptAfterClick = floating();
+        // The window itself changes size (the summary floats or pins on that, not on a side panel).
+        void fixtureInput({ type: "viewport", width: 1400, height: 900 });
         setWide(true);
       } },
       { ready: () => layout() !== "float", act: () => {
         seen.keptAfterWiden = beside();
+        void fixtureInput({ type: "viewport", width: 1300, height: 900 });
         setWide(false);
       } },
-      { ready: () => layout() === "float", act: () => {
+      // The popover opens a frame or more after the layout floats again; a card that closed never does.
+      { ready: () => layout() === "float" && floating(), act: () => {
         seen.keptAfterNarrow = floating();
         setResult(JSON.stringify(seen));
       } },

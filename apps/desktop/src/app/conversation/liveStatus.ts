@@ -1,6 +1,7 @@
-import { isPlumbing } from "@/app/conversation/activity/words";
+import { setupStarting } from "@/app/conversation/activity/setupWords";
+import { brigadierUnshown, isPlumbing } from "@/app/conversation/activity/words";
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
-import { commandsWaitWords } from "@/app/conversation/requestTime";
+import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
 import { activelyWorking } from "@/app/conversation/taskActivity";
 import type { QuotaWait, Task } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
@@ -26,7 +27,7 @@ export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; wai
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "startSteps" | "runSince">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -35,6 +36,10 @@ export type StatusInput = {
   compacting: boolean;
   /** The conversation's messages wait for quota. */
   quotaWait: QuotaWait | null;
+  /** What its CLI is blocked on right now, named (`liveWait`, D106): said rather than "Thinking". */
+  wait?: StatusHead | null;
+  /** Its own question card waits for the answer, whatever request it is filed under (D161). */
+  cardWait?: boolean;
 };
 
 function quotaWords(resetsAtMs: number | null): string {
@@ -56,25 +61,14 @@ export function commandWords(command: string): string {
   return line.length > 40 ? `${line.slice(0, 39).trimEnd()}…` : line;
 }
 
-/**
- * The line under an answer whose request still waits: what waits on the user first, else what
- * it waits on, or does once a late result reopened it.
- */
-export function answeredHead(head: StatusHead | null, { waiting, reopened }:
-  { waiting: boolean; reopened: boolean }): StatusHead | null {
-  if (head?.tone === "needsYou") return head;
-  // Reopened by a late result: it works again under its answer, so it says so (#107).
-  return waiting || reopened ? head : null;
-}
-
 /** What only the user can do for these requests, in a few words; `null` when nothing. */
-function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, workers: readonly Task[]): StatusHead | null {
+function needsYou({ board, requestIds, cardWait }: StatusInput, leadRunning: boolean, workers: readonly Task[]): StatusHead | null {
   const ours = (id: string | null) => id !== null && requestIds.includes(id);
   // A call the user must allow: the turn's last row says so, quietly, the card itself asks.
   if (Object.values(board.approvals).some((card) => ours(card.requestId) && card.state.type === "pending")) {
     return { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" };
   }
-  if (Object.values(board.questions).some((card) => ours(card.requestId) && card.answer === null && card.answeredAtMs === null)) {
+  if (cardWait || Object.values(board.questions).some((card) => ours(card.requestId) && card.answer === null && card.answeredAtMs === null)) {
     return { text: "Waiting for your answer", tone: "needsYou", waitsOn: "answer" };
   }
   // The user works in a worker's own session: the request waits until they close it.
@@ -88,19 +82,27 @@ function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, work
 }
 
 /** What the lead's own turn shows at the end of the work, or `null` when its rows already do. */
-function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput): StatusHead | null {
+function leadHead({ board, requestIds, thinkingLive, compacting, wait }: StatusInput): StatusHead | null {
   // A retry stalls whatever streamed so far: say so over it.
   if (board.doing && RETRYING.has(board.doing)) return { text: board.doing, tone: "busy" };
   const runRequest = board.runRequest;
-  // A plumbing call (a tool search) has no row of its own: what the lead does shows here.
+  // A plumbing call (a tool search) or the thread's own `brigadier start`/`wait` has no row of
+  // its own: what the lead does shows here.
   const toolRunning = board.orchestratorSteps.some((step) => step.requestId === runRequest
-    && step.kind.type === "tool" && step.kind.status === "inProgress" && !isPlumbing(step.kind.name));
+    && step.kind.type === "tool" && step.kind.status === "inProgress" && !isPlumbing(step.kind.name)
+    && !(step.kind.item === "command" && step.kind.detail !== null && brigadierUnshown(step.kind.detail)));
   const streaming = !!board.streaming?.text && (board.streaming.requestId === null || requestIds.includes(board.streaming.requestId));
   // A message on its way has its own row: "Sending message to API work".
   const sending = Object.values(board.peerMessages).some((message) => message.outgoing
     && message.requestId === runRequest && message.state.type === "pending");
-  if (toolRunning || thinkingLive || compacting || streaming || sending) return null;
+  if (toolRunning) return null;
+  // Its CLI waits on something it started: it doesn't think (D106). Its call written, a thought
+  // or reply the stream left open is over (seen live on Claude, demo12).
+  if (wait) return wait;
+  if (thinkingLive || compacting || streaming || sending) return null;
   if (board.doing) return { text: board.doing, tone: "busy" };
+  // A new session's setup line says how its start goes.
+  if (setupStarting(board)) return null;
   return { text: board.run === "starting" ? "Starting" : "Thinking", tone: "busy" };
 }
 
@@ -151,5 +153,22 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
   // lead's text waits for nothing; the user is asked on cards.
   if (state === "waiting") return none;
   // Between the lead's turns (a message just sent, a change being landed): it still works.
-  return { head: { text: "Thinking", tone: "busy" } };
+  return { head: input.wait ?? { text: "Thinking", tone: "busy" } };
+}
+
+/**
+ * The one line a live turn says what it waits on with: what waits on the user (a question's
+ * answer, an approval) first, then what holds it over: by name when it is one thing (`named`,
+ * D106), else the workers and commands holding it, else `head`.
+ */
+export function liveHead(head: StatusHead | null, workers: number, commands: number, subagents = 0, named: StatusHead | null = null): StatusHead | null {
+  // A question card's own row says it waits for the answer (D161): no line of its own.
+  if (head?.waitsOn === "answer") return null;
+  if (head?.tone === "needsYou") return head;
+  if (named && workers + commands + subagents > 0) return named;
+  if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" };
+  if (commands > 0) return { text: commandsWaitWords(commands), tone: "still" };
+  // Only its subagents hold it: it waits on them, it doesn't think (D24).
+  if (subagents > 0) return { text: subagents === 1 ? "Waiting for a subagent" : `Waiting for ${subagents} subagents`, tone: "still" };
+  return head;
 }

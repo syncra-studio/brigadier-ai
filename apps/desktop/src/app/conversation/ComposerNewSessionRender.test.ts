@@ -21,7 +21,7 @@ function runs(frames: readonly Frame[]): string[] {
 // open of the run and on one after, and from the new chat. A real problem is still told.
 test("a project's new session keeps its composer in place while the repository is read; a checkout on no branch is still told", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "composer-new-session.html", "composer-new-session-result", 90000)) as
-    { error?: string } & Record<"cold" | "repeat" | "fromChat" | "detached", Open>;
+    { error?: string; picked: { before: boolean; after: string } } & Record<"cold" | "repeat" | "fromChat" | "detached", Open>;
   assert.equal(seen.error, undefined, String(seen.error));
   const opens = ["cold", "repeat", "fromChat"] as const;
   for (const name of [...opens, "detached"] as const) {
@@ -35,4 +35,8 @@ test("a project's new session keeps its composer in place while the repository i
   assert.equal(detached.length, 2, detached.join(", "));
   assert.equal(detached[0], `${seen.detached.before}px ×${detached[0]!.split("×")[1]}`);
   assert.match(detached[1]!, /\(Pick the base branch\.\)$/);
+  // Choosing a project in the new chat keeps the model it showed, not the project's last CLI's.
+  assert.ok(seen.picked.before, "the new chat showed Opus 5.5");
+  assert.match(seen.picked.after, /Opus 5\.5/);
+  assert.doesNotMatch(seen.picked.after, /GLM-5\.3/);
 });

@@ -73,7 +73,7 @@ test("team rows name workers without possessives and with their avatars, say who
   }
 });
 
-test("a worker the user stopped reads that they stopped it; one the lead stopped keeps its reason", async () => {
+test("a worker the user stopped reads that they stopped it; one the lead stopped keeps its reason; its pause and resume read plainly", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { TeamStep } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
@@ -83,9 +83,90 @@ test("a worker the user stopped reads that they stopped it; one the lead stopped
     const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task } }, orchestrator: null }));
     const text = (reason: string) => ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
       React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason }, atMs: 9000 }))).replace(/<[^>]+>/g, "");
-    assert.equal(text("Stopped by the user"), "You stopped Add QIF exporter after 4s");
-    assert.equal(text("Enough"), "Stopped Add QIF exporter after 4s");
+    assert.equal(text("Stopped by the user"), "You ended Add QIF exporter after 4s");
+    assert.equal(text("Enough"), "Ended Add QIF exporter after 4s");
+    // The lead's pause and resume (D7): one plain row each, in the same family.
+    const row = (type: "paused" | "resumed") => ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
+      React.createElement(TeamStep, { kind: { type, taskId: "t1" }, atMs: 9000 }))).replace(/<[^>]+>/g, "");
+    assert.equal(row("paused"), "Paused Add QIF exporter");
+    assert.equal(row("resumed"), "Resumed Add QIF exporter");
   } finally {
+    await server.close();
+  }
+});
+
+/** A board step of the lead at `position`. */
+const step = (position: number, kind: object) => ({ position, requestId: null, atMs: 1000 + position, kind });
+
+test("a worker started off the routing shows one row, runs off your routing, with what the routing names; one on it shows none (D77)", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { TeamStep, isTeamStep } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
+    const { boardItems, emptyBoard, BoardStoreContext } = { ...(await server.ssrLoadModule("/src/app/conversation/blocks.ts")), ...(await server.ssrLoadModule("/src/state/board.ts")) };
+    const task = { id: "t1", number: 1, title: "Map the routes", kind: "implement", state: "running", createdAtMs: 1000, updatedAtMs: 1000, attempts: [] } as unknown as Task;
+    const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task } }, orchestrator: null }));
+    const line = "Off your routing: its Mechanical changes and search row names Codex gpt-6-astra · medium.";
+    const off = { type: "created", taskId: "t1", offRouting: line };
+    assert.equal(isTeamStep(off), true);
+    assert.equal(isTeamStep({ type: "created", taskId: "t1" }), false);
+    const html = ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store }, React.createElement(TeamStep, { kind: off })));
+    assert.equal(html.replace(/<[^>]+>/g, "").startsWith("Map the routes runs off your routing"), true, html);
+    // Only the off-routing start reaches the thread's items; an on-routing one stays a team sentence's.
+    const board = { ...emptyBoard("c"), tasks: { t1: task }, orchestratorSteps: [step(1, { type: "created", taskId: "t1" }), step(2, off)] };
+    const created = boardItems(board).filter((item: { kind: string; step?: { kind: { type: string } } }) => item.kind === "orchestrator" && item.step?.kind.type === "created");
+    assert.equal(created.length, 1);
+    assert.equal(created[0].step.kind.offRouting, line);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a start's detail says what its routing row picked, the words its reply says; a start with no row says nothing more (goal 12)", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { Briefs } = await server.ssrLoadModule("/src/app/conversation/activity/Briefs.tsx");
+    const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
+    const task = { id: "t1", number: 1, title: "Count README lines", spec: "Count the lines of README.md.", kind: "implement", state: "running", createdAtMs: 1000, updatedAtMs: 1000, attempts: [] } as unknown as Task;
+    const picked = "Your row \"Mechanical changes and search\" picked its agent, model and effort.";
+    const text = (created: object) => {
+      const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task }, orchestratorSteps: [step(1, created)] }, orchestrator: null }));
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store }, React.createElement(Briefs, { tasks: [task] })))
+        .replace(/<[^>]+>/g, "").replaceAll("&quot;", "\"");
+    };
+    assert.equal(text({ type: "created", taskId: "t1", row: picked }), `Count the lines of README.md.${picked}`);
+    assert.equal(text({ type: "created", taskId: "t1" }), "Count the lines of README.md.");
+  } finally {
+    await server.close();
+  }
+});
+
+test("clicking a start row opens its worker's panel, which says under the brief what its routing row picked (goal 12, seen missing on screen)", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  Object.assign(globalThis, { document: { documentElement: {} }, getComputedStyle: () => ({ getPropertyValue: () => "" }) });
+  try {
+    const { WorkerThread } = await server.ssrLoadModule("/src/app/side-panel/WorkerThread.tsx");
+    const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
+    const { useWorkerThreads } = await server.ssrLoadModule("/src/state/cliThread.ts");
+    const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
+    const picked = "Your row \"Mechanical changes and search\" picked its agent, model and effort.";
+    const brief = "Count the lines of README.md.";
+    Object.assign(useWorkerThreads.getInitialState().views, {
+      t1: { entries: [{ event: { type: "message", itemId: "u1", role: "user", text: brief }, atMs: 1000 }], turns: [] },
+    });
+    const row = { id: "t1", number: 1, title: "Count README lines", agent: "codex", model: null, startedAtMs: 1000, working: false, lastEnd: "done", gone: false,
+      lastEventAtMs: 2000, limit: null, freshContext: false, waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false };
+    const html = (created: object) => {
+      const store = createStore(() => ({ board: { ...emptyBoard("c"), orchestratorSteps: [step(1, created)] }, orchestrator: null }));
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
+        React.createElement(TooltipProvider, null, React.createElement(WorkerThread, { conversationId: "c", row })))).replaceAll("&quot;", "\"");
+    };
+    const shown = html({ type: "created", taskId: "t1", row: picked });
+    assert.ok(shown.indexOf(picked) > shown.indexOf(brief), "the pick follows the brief");
+    assert.equal(shown.split(picked).length, 2, "said once");
+    assert.doesNotMatch(html({ type: "created", taskId: "t1" }), /worker-picked/);
+  } finally {
+    Reflect.deleteProperty(globalThis, "document");
+    Reflect.deleteProperty(globalThis, "getComputedStyle");
     await server.close();
   }
 });

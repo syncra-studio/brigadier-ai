@@ -20,7 +20,6 @@
  * - A Codex find in a page: "Searched the web for 'LTS' in https://nodejs.org/en".
  * - The turn's changed files from the request's own record: one file named in the title; four
  *   files with one Undo leaves as it is; Undo, its toast naming that file, then Reapply.
- * - The files-changed pill of a working request, from its record, opening its first file.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { type ReactNode, useEffect, useState } from "react";
@@ -30,14 +29,10 @@ import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
 import type { LeadStep } from "@/app/conversation/activity/group";
-import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
-import { ComposerTargetContext, type ComposerTarget } from "@/app/conversation/composerTarget";
-import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { OpenFileContext } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
-import type { Conversation, OrchestratorStepKind, ProviderEvent, RawEntry, Request, UserRequest } from "@/ipc/generated";
-import { sessionTabs } from "@/state/sessionTabs";
+import type { Conversation, OrchestratorStepKind, ProviderEvent, RawEntry, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { applyThreadNews, mergeEntries, useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
@@ -109,36 +104,12 @@ useApp.setState((state) => ({
   settings: state.settings,
 }));
 
-const stat = (files: [string, number, number][]) => ({
-  files: files.map(([path, insertions, deletions]) => ({ path, insertions, deletions, binary: false })),
-  insertions: files.reduce((sum, [, added]) => sum + added, 0),
-  deletions: files.reduce((sum, [, , removed]) => sum + removed, 0),
-});
-const request = (id: string, state: UserRequest["state"]["type"], changes: UserRequest["changes"]): UserRequest =>
-  ({
-    id, conversationId: CHAT, preview: id, state: { type: state }, startedAtMs: now - 60_000, endedAtMs: state === "working" ? null : now,
-    steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false, ...(changes && { changes }),
-  }) as UserRequest;
-
 // The thread's view: the request's calls, each merged the way the stream says them.
 useCliThread.setState({
   views: { [CHAT]: { entries: mergeEntries([], threadItems().map(({ atMs, event }) => ({ event, atMs }))), turns: [] } },
 });
 
-useBoard.setState({
-  board: {
-    ...emptyBoard(CHAT), loaded: true,
-    requests: {
-      one: request("one", "done", { stat: stat([["scripts/run.mjs", 4, 1]]), settled: true }),
-      four: request("four", "done", {
-        stat: stat([["src/a.ts", 3, 1], ["src/b.ts", 2, 0], ["src/c.ts", 1, 1], ["src/notes.md", 5, 0]]),
-        held: [{ path: "src/notes.md", reason: "src/notes.md also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is." }],
-        settled: true,
-      }),
-      live: request("live", "working", { stat: stat([["src/math.js", 8, 2], ["src/new.ts", 3, 0]]), settled: false }),
-    },
-  } as unknown as ReturnType<typeof emptyBoard>,
-});
+useBoard.setState({ board: { ...emptyBoard(CHAT), loaded: true } });
 
 const view = { selection: { type: "conversation" as const, id: CHAT }, conversation: { id: CHAT } as Conversation, embedded: false };
 
@@ -215,8 +186,6 @@ function LiveGroup() {
   );
 }
 
-const capsuleTarget = { conversation: { id: CHAT } as Conversation } as unknown as ComposerTarget;
-
 function Case({ id, children }: { id: string; children: ReactNode }) {
   const only = query.get("case");
   if (only && only !== id) return null;
@@ -263,17 +232,6 @@ function Page() {
             </Case>
             <Case id="made-gathered">
               <MadeImages steps={[...views, ...made]} />
-            </Case>
-            <Case id="turn-diff-one">
-              <ChangesCard requestIds={["one"]} />
-            </Case>
-            <Case id="turn-diff-four">
-              <ChangesCard requestIds={["four"]} />
-            </Case>
-            <Case id="pill">
-              <ComposerTargetContext.Provider value={capsuleTarget}>
-                <ComposerCapsule />
-              </ComposerTargetContext.Provider>
             </Case>
           </main>
         </OpenFileContext.Provider>
@@ -374,28 +332,6 @@ async function measure(): Promise<object> {
   await until(() => all("[data-slot=image-generation]", at("later")).length === 1);
   out.later = [shut, later()!.getAttribute("data-state"), text(one("[role=button]", later()!))];
 
-  // The turn's changed files, from the request's own record.
-  const card = (id: string) => ({
-    title: text(one("[data-slot=turn-diff-title]", at(id))),
-    counts: text(one("[data-slot=turn-diff-counts]", at(id))),
-    files: all("[data-slot=turn-diff-file]", at(id)).length,
-    more: text(one("[data-slot=turn-diff-more]", at(id))),
-    undo: all("button", at(id)).find((button) => /Revert/.test(button.textContent ?? "")) ?? null,
-  });
-  const oneCard = card("turn-diff-one");
-  const fourCard = card("turn-diff-four");
-  out.turnDiff = {
-    one: { ...oneCard, undo: text(oneCard.undo) },
-    four: { ...fourCard, undo: text(fourCard.undo), held: fourCard.undo?.getAttribute("title") ?? null },
-  };
-  // The pill of the working request, from its record; a click opens its first file.
-  await until(() => one("[data-slot=composer-capsule]", at("pill")));
-  out.pill = text(one("[data-slot=composer-capsule]", at("pill")));
-  one<HTMLElement>("[data-slot=composer-capsule] button", at("pill"))?.click();
-  await wait(200);
-  const tabs = sessionTabs(CHAT);
-  const opened = tabs.tabs.find((tab) => tab.id === tabs.active);
-  out.pillTab = opened?.kind === "file" ? opened.path : (opened?.kind ?? null);
   return out;
 }
 

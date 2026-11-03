@@ -78,7 +78,7 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         // "no AI co-authors" (Claude's settings hold it to that instead).
         let template = match provider {
             ProviderKind::Claude => STANDING_INSTRUCTIONS.trim_end().to_owned(),
-            ProviderKind::Codex => {
+            _ => {
                 format!("{}\n\n{NO_AI_COAUTHORS}", STANDING_INSTRUCTIONS.trim_end())
             }
         };
@@ -90,7 +90,7 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         // Decision and Open kinds, and derived documents that cite entry ids.
         for line in [
             "`brigadier ledger add` stamps each entry with an id and time (not in chats beside a tab);",
-            "- Decision: the user's words and the option chosen (its text, not \"A\"), or yours marked \"I decided\"; with its defining sentence and reason.",
+            "- Decision: yours, marked \"I decided\", with its defining sentence and reason (an answered question card is written for you).",
             "- Exact identifier (hash, absolute path:line, number with units, id)",
             "- Open: a promise, or a question for the user; `brigadier ledger close <id>` when done.",
             "Plans and briefs cite ledger ids and mark your own lines \"proposed\". Tell the user each \"I decided\" that changes what they asked.",

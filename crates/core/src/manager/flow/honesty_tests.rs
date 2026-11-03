@@ -103,85 +103,11 @@ fn bash(command: &str, status: ItemStatus) -> ProviderEvent {
     }
 }
 
-/// A message the user sends while a turn runs waits in the queue, Deciding, and reaches the
-/// thread once, as the user's words under a line naming its queue id (run2-D40). Left
-/// unjudged, it joins the turn that got through, and nothing sends it again.
-#[tokio::test]
-async fn a_message_sent_while_a_turn_runs_reaches_the_thread_once_deciding() {
-    let gate = Arc::new(tokio::sync::Notify::new());
-    let inputs: Log = Default::default();
-    let steered: Log = Default::default();
-    let (release, log, heard) = (gate.clone(), inputs.clone(), steered.clone());
-    let flow = Flow::start(
-        "honesty-queue-deciding",
-        Options::default(),
-        script(move |turn| {
-            let (gate, log, heard) = (gate.clone(), log.clone(), heard.clone());
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                if !turn.input.contains("Run the tests.") {
-                    return Reply::text("Formatted.");
-                }
-                turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
-                    .await;
-                let read = turn.steered().await.unwrap_or_default();
-                heard.lock().unwrap().push(read);
-                gate.notified().await;
-                turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
-                    .await;
-                Reply::text("The tests pass.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Run the tests.").await;
-    flow.until("the command to run", |board| {
-        board.orchestrator_steps.iter().any(|step| {
-            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
-        })
-    })
-    .await;
-    flow.say("Also check the formatting.").await;
-    let board = flow
-        .until("the message to wait in the queue, Deciding", |board| {
-            board.queue.items.first().is_some_and(|queued| {
-                queued.text == "Also check the formatting." && queued.deciding && queued.delivered
-            })
-        })
-        .await;
-    let item = board.queue.items[0].clone();
-    assert!(
-        item.held_by.is_some(),
-        "it waits behind the command: {item:?}"
-    );
-    super::eventually("the thread to read it", || {
-        !steered.lock().unwrap().is_empty()
-    })
-    .await;
-    let shown = &item.id[item.id.len() - 8..];
-    assert_eq!(
-        steered.lock().unwrap()[0],
-        format!(
-            "[queued message {shown} · judge it: brigadier queue {shown} \
-             join|wait|worker <id>|new-session; unjudged, it joins this work]\n\
-             Also check the formatting."
-        )
-    );
-    release.notify_one();
-    let board = flow
-        .until("the unjudged message to join the turn", |board| {
-            board.queue.items.is_empty() && board.requests.contains_key(&item.id)
-        })
-        .await;
-    flow.settled().await;
-    let inputs = inputs.lock().unwrap().clone();
-    assert_eq!(inputs.len(), 1, "nothing sent it again: {inputs:#?}");
-    assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
-    flow.stop().await;
-}
-
 /// A message the user steers in while the thread's command runs says so until the command
-/// ends, then the thread reads it.
+/// ends, then the thread reads it. Every write of its request names the running turn's, so no
+/// frame ever draws it as a block of its own (D65).
+// Uses the debug-only fault injections, as tab_chat_tests does.
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     let gate = Arc::new(tokio::sync::Notify::new());
@@ -210,7 +136,9 @@ async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
         })
     })
     .await;
-    flow.manager
+    let running = flow.board().await.latest_request().unwrap().id.clone();
+    let sent = flow
+        .manager
         .send_message(
             flow.conversation.clone(),
             "Use banker's rounding instead.".into(),
@@ -241,6 +169,17 @@ async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     })
     .await;
     flow.settled().await;
+    let crate::manager::SendOutcome::Sent(message) = sent else {
+        panic!("a steer is sent, never queued: {sent:?}");
+    };
+    let marks = super::tab_chat_tests::steer_marks(&flow, &message.id).await;
+    assert!(
+        !marks.is_empty()
+            && marks
+                .iter()
+                .all(|into| into.as_deref() == Some(running.as_str())),
+        "every write of its request names the running turn's: {marks:?}"
+    );
     let inputs = inputs.lock().unwrap().clone();
     assert!(
         inputs

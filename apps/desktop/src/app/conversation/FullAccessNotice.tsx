@@ -1,6 +1,5 @@
 import { useState } from "react";
 
-import { openPermissionsHelp } from "@/app/shell/SetupPickers";
 import { Button, TooltipIconButton } from "@/components/controls";
 import { ShieldExclamation, X } from "@/components/icons";
 import type { Conversation } from "@/ipc/generated";
@@ -10,8 +9,10 @@ import { useQueueRows } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
-/** Conversations whose Full access notice was closed, until the app restarts. */
-const closedNotices = new Set<string>();
+/** Set once it was closed, or stepped aside after showing: gone in every session, across restarts (D191, D216). */
+const CLOSED = "brigadier.fullAccessNoticeClosed";
+/** "shown": it showed in this run, so stepping aside counts as closing it. */
+const seen = new Set<"shown">();
 
 /**
  * The "Full access is on" card above the composer, while a session is on Full access: the full
@@ -19,10 +20,12 @@ const closedNotices = new Set<string>();
  * and buttons; heights rounded to whole pixels, so the thread's footer stays on the pixel grid),
  * rounded like the composer. It steps aside while a question, proposal or approval
  * waits above the composer, so it never pushes that card or the thread's last lines out of
- * view, and while messages wait in the queue, so they stay right under the conversation (#448). × closes it for this conversation; "Don't show again" turns it off in Settings, where it
- * can be turned back on.
+ * view, and while messages wait in the queue, so they stay right under the conversation (#448).
+ * Once it has shown and stepped aside it stays gone, as if closed (demo12). × closes it in every
+ * session, new ones too, across restarts (D191, D216); "Don't show again" turns it off in
+ * Settings, where turning it back on shows it again.
  */
-export function FullAccessNotice({ conversation }: { conversation: Conversation }) {
+export function FullAccessNotice({ conversation, aside = false }: { conversation: Conversation; aside?: boolean }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
   const [, setClosed] = useState(0);
   // One that came while nobody could see the window is simply there when it shows again.
@@ -30,9 +33,13 @@ export function FullAccessNotice({ conversation }: { conversation: Conversation 
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
   const { rows } = useQueueRows(conversation.id);
   const queued = rows.length > 0;
-  if (!show || !full || queued || closedNotices.has(conversation.id)) return null;
+  // Off in Settings: turning it back on shows it again.
+  if (!show) localStorage.removeItem(CLOSED);
+  if (show && full && (aside || queued) && seen.has("shown")) localStorage.setItem(CLOSED, "1");
+  if (!show || !full || aside || queued || localStorage.getItem(CLOSED)) return null;
+  seen.add("shown");
   const close = () => {
-    closedNotices.add(conversation.id);
+    localStorage.setItem(CLOSED, "1");
     setClosed((count) => count + 1);
   };
   return (
@@ -50,11 +57,7 @@ export function FullAccessNotice({ conversation }: { conversation: Conversation 
             <p className="text-muted-foreground">
               Brigadier’s workers can edit any file and run commands with internet access without
               your approval. This increases the risk of data loss, exposed information, and
-              unexpected changes.{" "}
-              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={openPermissionsHelp}>
-                Learn more
-              </button>{" "}
-              about elevated risks.
+              unexpected changes.
             </p>
           </div>
         </div>

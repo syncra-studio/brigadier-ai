@@ -8,6 +8,7 @@ import {
   loadConversation,
   openConversation,
   openSettings,
+  prewarmConversations,
   toggleSettings,
 } from "@/state/actions";
 import { applyActivityEvents, applyActivityNews, loadActivity } from "@/state/activity";
@@ -79,6 +80,7 @@ async function resync() {
   void loadSettledTabs().catch(() => {});
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates(), loadConnect()]);
   await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks(), resyncThreadViews(shown)]);
+  prewarmConversations();
 }
 
 /** Whether the daemon has answered yet: startup marks the first time. */

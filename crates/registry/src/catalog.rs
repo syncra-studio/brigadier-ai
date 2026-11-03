@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::{Agent, Catalog, Server, SkillRoot, Source, Transport};
+use crate::{Catalog, ProviderKind, Server, SkillRoot, Source, Transport};
 
 /// Client labels used by Pencil's CLI integrations do not change the server process.
 /// Keep every other argument, including unrecognized --agent values, in its identity.
@@ -32,7 +32,7 @@ pub enum Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     /// None for import offers from Desktop and Cursor.
-    pub agent: Option<Agent>,
+    pub agent: Option<ProviderKind>,
     pub file: PathBuf,
     pub plugin: Option<String>,
     pub project: Option<PathBuf>,
@@ -46,7 +46,7 @@ impl Provenance {
     /// Provider plugins and account-synced skills remain under their CLI's control,
     /// including old saved choices.
     pub fn provider_supplied(&self) -> bool {
-        (self.agent == Some(Agent::Claude)
+        (self.agent == Some(ProviderKind::Claude)
             && self.plugin.is_none()
             && self.native.starts_with("synced-skill:"))
             || self
@@ -80,6 +80,12 @@ pub struct Row {
     pub different_per_agent: bool,
 }
 
+// Test-only count of this thread's user-setup reads and skill-folder hashes.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 pub fn fingerprint(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -90,6 +96,8 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 /// Hash file names and bytes, including supporting files and hidden files. Unreadable or
 /// cyclic trees get no content identity, so they cannot accidentally merge with another tree.
 pub fn skill_fingerprint(path: &Path) -> Option<String> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set((reads.get().0, reads.get().1 + 1)));
     fn visit(path: &Path, hasher: &mut Sha256, ancestors: &mut Vec<PathBuf>) -> Option<()> {
         let canonical = std::fs::canonicalize(path).ok()?;
         if ancestors.contains(&canonical) {
@@ -136,12 +144,14 @@ impl Server {
             Source::ClaudeUser
             | Source::ClaudeLocal
             | Source::ClaudeProject
-            | Source::ClaudePlugin => Some(Agent::Claude),
-            Source::CodexUser | Source::CodexProject | Source::CodexPlugin => Some(Agent::Codex),
+            | Source::ClaudePlugin => Some(ProviderKind::Claude),
+            Source::CodexUser | Source::CodexProject | Source::CodexPlugin => {
+                Some(ProviderKind::Codex)
+            }
             _ => None,
         };
         let native = match &self.plugin {
-            Some(plugin) if plugin.agent == Agent::Claude => {
+            Some(plugin) if plugin.agent == ProviderKind::Claude => {
                 format!("plugin:{}:{}", plugin.name, self.name)
             }
             _ => self.name.clone(),
@@ -222,10 +232,15 @@ impl Catalog {
         projects: &[PathBuf],
         data_dir: Option<&Path>,
     ) -> Vec<Row> {
+        // The user's part is read once; each project adds only its own files.
+        let user = Self::read(roots, None);
         let mut catalogs = Vec::new();
         for project in std::iter::once(None).chain(projects.iter().map(|path| Some(path.as_path())))
         {
-            let mut catalog = Self::read(roots, project);
+            let mut catalog = match project {
+                Some(project) => user.for_project(roots, project),
+                None => user.clone(),
+            };
             let mut plugins = crate::plugins::claude_definitions(roots, project);
             if let Some(project) = project {
                 let layer = crate::servers::read_toml(
@@ -265,6 +280,8 @@ impl Catalog {
     /// Desktop/Cursor rows remain import offers (`agent == None`).
     pub fn rows(catalogs: &[Self]) -> Vec<Row> {
         let mut grouped: BTreeMap<(Kind, String, String), Row> = BTreeMap::new();
+        // Every project's catalog repeats the user's skills: hash each folder once.
+        let mut hashed: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
         let mut add = |kind: Kind, name: &str, endpoint: Option<String>, definition: Definition| {
             let key = (
                 kind,
@@ -322,19 +339,21 @@ impl Catalog {
                         continue;
                     }
                     let (agent, project, plugin, native) = match root {
-                        SkillRoot::ClaudeUser => (Agent::Claude, None, None, skill.name.clone()),
+                        SkillRoot::ClaudeUser => {
+                            (ProviderKind::Claude, None, None, skill.name.clone())
+                        }
                         SkillRoot::ClaudeSynced(_) => continue,
                         SkillRoot::AgentsUser | SkillRoot::CodexUser => {
-                            (Agent::Codex, None, None, skill.name.clone())
+                            (ProviderKind::Codex, None, None, skill.name.clone())
                         }
                         SkillRoot::ClaudeProject(project) => (
-                            Agent::Claude,
+                            ProviderKind::Claude,
                             Some(project.clone()),
                             None,
                             skill.name.clone(),
                         ),
                         SkillRoot::AgentsProject(project) => (
-                            Agent::Codex,
+                            ProviderKind::Codex,
                             Some(project.clone()),
                             None,
                             skill.name.clone(),
@@ -347,7 +366,10 @@ impl Catalog {
                         ),
                     };
                     let file = path.join("SKILL.md");
-                    let fingerprint = skill_fingerprint(path)
+                    let fingerprint = hashed
+                        .entry(path.clone())
+                        .or_insert_with(|| skill_fingerprint(path))
+                        .clone()
                         .unwrap_or_else(|| fingerprint(file.to_string_lossy().as_bytes()));
                     let provenance = Provenance {
                         agent: Some(agent),
@@ -530,7 +552,7 @@ pub fn library(data_dir: &Path) -> Catalog {
                 continue;
             }
             let plugin = crate::Plugin {
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 id: entry.id(),
                 name: entry.name,
                 root: entry.dir,
@@ -560,6 +582,35 @@ pub fn library(data_dir: &Path) -> Catalog {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn many_registered_projects_read_the_users_setup_once() {
+        let home = std::env::temp_dir().join(format!(
+            "catalog-many-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join(".claude/skills/example")).unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        std::fs::write(
+            home.join(".claude/skills/example/SKILL.md"),
+            "---\nname: example\n---\n",
+        )
+        .unwrap();
+        let projects: Vec<PathBuf> = (0..40).map(|i| home.join(format!("project-{i}"))).collect();
+        for project in &projects {
+            std::fs::create_dir_all(project).unwrap();
+        }
+        let roots = crate::Roots::from_vars([("HOME".into(), home.display().to_string())]).unwrap();
+        READS.with(|reads| reads.set((0, 0)));
+        let rows = Catalog::read_rows(&roots, &projects);
+        assert!(rows.iter().any(|row| row.name == "example"));
+        // Neither grows with the number of registered projects.
+        assert_eq!(READS.with(std::cell::Cell::get), (1, 1));
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn client_label_is_cosmetic_but_other_arguments_are_not() {
@@ -624,7 +675,7 @@ mod regression_tests {
         };
         let mut mirror = original.as_ref().clone();
         mirror.plugin = Some(crate::Plugin {
-            agent: Agent::Codex,
+            agent: ProviderKind::Codex,
             id: "pencil@brigadier".into(),
             name: "pencil".into(),
             root: home.join("cache"),

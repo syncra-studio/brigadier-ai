@@ -775,13 +775,13 @@ impl SessionManager {
             ledger
                 .artifacts(owner)
                 .into_iter()
-                .filter(|artifact| matches!(artifact, Artifact::CodexThread { .. }))
+                .filter(|artifact| matches!(artifact, Artifact::Session { .. }))
                 .count()
         };
         let threads_before = threads(self.runtime.ledger());
         let leftovers = self.runtime.ledger().dispose(owner).await;
-        // Codex threads are deleted through Codex's own delete (an earlier Free up space's that
-        // didn't finish too): those no longer held went.
+        // CLI sessions are deleted through their CLI's own delete (Codex's; an earlier Free up
+        // space's that didn't finish too): those no longer held went.
         let codex_threads = threads_before.saturating_sub(threads(self.runtime.ledger())) as u32;
         if !leftovers.is_clean() {
             return Err(Error::Invalid(leftovers.failures.join("; ")));
@@ -932,9 +932,7 @@ pub struct ScanUsage {
 /// with the worktree.
 pub(super) fn keep_changes(git: &brigadier_git::Git, path: &Path) -> Result<()> {
     let worktree = git.open_worktree(path).map_err(git_error)?;
-    match worktree
-        .commit_wip("WIP: uncommitted changes kept by Brigadier before removing its worktree")
-    {
+    match worktree.commit_wip("Unfinished changes kept when the worker closed") {
         Ok(Some(commit)) => {
             tracing::info!(worktree = %path.display(), commit = %commit.0, "kept a worktree's changes as a WIP commit");
             Ok(())
@@ -2482,11 +2480,17 @@ fn artifact_path(artifact: &Artifact) -> Option<String> {
         Artifact::Worktree { path, .. }
         | Artifact::ScratchDir { path }
         | Artifact::PreviewDataDir { path, .. }
-        | Artifact::ClaudeTempDir { path }
-        | Artifact::ClaudeProjectDir { path }
-        | Artifact::ClaudeMemoryDir { path, .. }
-        | Artifact::CodexGeneratedImages { path }
         | Artifact::Adopted { path, .. } => Some(path.clone()),
+        Artifact::CliFile {
+            provider,
+            kind,
+            path,
+            ..
+        } if brigadier_providers::adapters::adapter(*provider)
+            .is_some_and(|adapter| adapter.space_files.contains(&kind.as_str())) =>
+        {
+            Some(path.clone())
+        }
         _ => None,
     }
 }

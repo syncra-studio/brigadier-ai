@@ -11,7 +11,7 @@
 //! - **instructions**: Claude's `/compact` at the compaction point carries what its summary must
 //!   keep, ending on the pointer to `brigadier context` (run2-D7, D71, D13). Codex's summary
 //!   takes none.
-//! - **hand-off after 5 compactions** in one CLI session (D16), and as the rare fallback when
+//! - **hand-off after 3 compactions** in one CLI session (core-goals D9), and as the rare fallback when
 //!   compaction fails or loops (run2-D10): the fresh-session seam.
 //!
 //! The fresh-session seam also stays for moves to another CLI (D46) and quota fallback to
@@ -34,13 +34,10 @@ use crate::{Error, Result};
 /// The test-only opt-out, read once when the daemon starts.
 pub(crate) const SWITCH_ENV: &str = "BRIGADIER_LONG_SESSIONS";
 
-/// How many compactions in a row one CLI session of a session's thread takes before a fresh
-/// one goes on from its hand-off note (D16: each compaction summarises the one before).
-pub(crate) const SESSION_HANDOFF_AFTER: u32 = 5;
-
-/// How many compactions in a row one CLI session of a worker takes before a fresh one goes on
-/// from its hand-off note (D14).
-pub(crate) const WORKER_HANDOFF_AFTER: u32 = 3;
+/// How many compactions in a row one CLI session takes, a session's thread's or a worker's,
+/// before a fresh one goes on from its hand-off note (core-goals D9, replacing the older plan's
+/// 5 for a thread: each compaction summarises the one before).
+pub(crate) const HANDOFF_AFTER: u32 = 3;
 
 /// What a session does at long contexts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,9 +94,7 @@ impl SessionManager {
         provider: ProviderKind,
     ) -> Option<LongSessions> {
         let mode = self.seam_config().long?;
-        (conv.kind == ConversationKind::Session
-            && matches!(provider, ProviderKind::Claude | ProviderKind::Codex))
-        .then_some(mode)
+        (conv.kind == ConversationKind::Session && compaction(provider).is_some()).then_some(mode)
     }
 
     /// How the CLI of `conv` on `provider` compacts in place, for its session spec.
@@ -110,24 +105,13 @@ impl SessionManager {
     ) -> Option<NativeCompaction> {
         self.long_mode(conv, provider)?;
         let config = self.seam_config();
-        Some(match provider {
-            ProviderKind::Claude => NativeCompaction {
-                backstop_window: Some(backstop_window(config.tokens)),
-                ..NativeCompaction::default()
-            },
-            _ => NativeCompaction {
-                codex_limit: config.tokens_set.then_some(config.tokens),
-                ..NativeCompaction::default()
-            },
-        })
+        Some(compaction(provider)?(config.tokens, config.tokens_set))
     }
 }
 
-/// Claude's auto-compact window as a backstop for a turn that runs on past Brigadier's point
-/// `point` (run2-D5): Claude compacts by itself ≈20k below its window, so this one has it
-/// compact ≈30k past the point. Claude takes windows of 100k to 1M.
-fn backstop_window(point: i64) -> i64 {
-    (point + 50_000).clamp(100_000, 1_000_000)
+/// How `provider` compacts in place for a long session ([`brigadier_providers::adapters`]).
+fn compaction(provider: ProviderKind) -> Option<fn(i64, bool) -> NativeCompaction> {
+    brigadier_providers::adapters::adapter(provider)?.compaction
 }
 
 /// What Claude's summary must keep when Brigadier asks it to compact (run2-D7, D71): the

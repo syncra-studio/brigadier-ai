@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react";
+import { TurnBoundary } from "@/components/conversation";
 import { createPortal } from "react-dom";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
@@ -288,7 +289,7 @@ function TabChatThread({ conversationId, tab, chatId }: { conversationId: string
   if (!store) return null;
   return (
     <BoardStoreContext.Provider value={store}>
-      <ConversationView selection={{ type: "conversation", id: chatId }} embedded />
+      <TurnBoundary key={chatId} summary="This chat couldn’t render."><ConversationView selection={{ type: "conversation", id: chatId }} embedded /></TurnBoundary>
     </BoardStoreContext.Provider>
   );
 }

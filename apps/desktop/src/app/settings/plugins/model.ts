@@ -1,4 +1,5 @@
 import type { AgentSignInState, CatalogSignIn } from "@/ipc/generated";
+import { cliFacts } from "@/lib/providerKinds";
 import type { PluginItemView, PluginKind, PluginsView } from "./types";
 
 /*
@@ -85,9 +86,9 @@ export function signInLine(state: CatalogSignIn): string {
     case "signedOut": return "Not signed in";
     case "signingIn": return "Waiting for your browser…";
     case "failed": return state.message;
-    case "cliSetupRequired": return `This server only accepts sign-in from ${state.agents.map((agent) => agent === "claude" ? "Claude Code" : "Codex").join(" or ")}: add it in that CLI`;
-    case "cliFallback": if (state.steps?.length) return state.steps.map((step) => `${step.agent === "claude" ? "Claude Code" : "Codex"}: ${cliSignInState(step.state)}`).join("; ");
-      return `Uses each CLI's sign-in${state.agents.length ? `: ${state.agents.map((agent) => agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent).join(", ")} still need it` : ""}`;
+    case "cliSetupRequired": return `This server only accepts sign-in from ${state.agents.map((agent) => cliFacts(agent).label).join(" or ")}: add it in that CLI`;
+    case "cliFallback": if (state.steps?.length) return state.steps.map((step) => `${cliFacts(step.agent).label}: ${cliSignInState(step.state)}`).join("; ");
+      return `Uses each CLI's sign-in${state.agents.length ? `: ${state.agents.map((agent) => cliFacts(agent).label).join(", ")} still need it` : ""}`;
     case "notRequired": return "";
   }
 }

@@ -56,13 +56,23 @@ impl AccountRef {
 /// (a new default) pins its provider: its accounts no longer switch on their own.
 pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
     let mut accounts = current.accounts.clone();
+    // Development builds only (goal 1 proof, D80): fake accounts (`Runtime::make_account`) have
+    // no home or sign-in, so a settings edit adds them.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("BRIGADIER_FAKE_ACCOUNTS").is_some() {
+        for added in &incoming.accounts {
+            if !accounts.iter().any(|account| account.id == added.id) {
+                accounts.push(added.clone());
+            }
+        }
+    }
     for account in &mut accounts {
         if let Some(edit) = incoming.accounts.iter().find(|edit| edit.id == account.id) {
             account.name = edit.name.trim().to_owned();
             account.default = edit.default;
         }
     }
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let mut seen = false;
         for account in accounts
             .iter_mut()
@@ -71,8 +81,7 @@ pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
             account.default = !std::mem::replace(&mut seen, true);
         }
     }
-    let picked: Vec<ProviderKind> = ProviderKind::ALL
-        .into_iter()
+    let picked: Vec<ProviderKind> = brigadier_providers::adapters::kinds()
         .filter(|provider| {
             let id = |settings: &Settings| {
                 settings

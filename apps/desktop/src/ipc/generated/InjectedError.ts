@@ -3,4 +3,4 @@
 /**
  * An error a development build can make a provider report.
  */
-export type InjectedError = "contextWindow" | "auth" | "billing";
+export type InjectedError = "contextWindow" | "auth" | "billing" | "refusal";

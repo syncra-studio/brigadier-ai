@@ -338,7 +338,21 @@
         "event": {
           "itemId": "e95752b9-f7e8-4f1f-889c-7a376d6b32a9",
           "text": "Background command \"Sleep for 2 seconds in background\" completed (exit code 0)",
-          "type": "taskNotice"
+          "type": "taskNotice",
+          "wake": {
+            "command": null,
+            "end": "finished",
+            "exit": 0,
+            "job": "command",
+            "label": "Sleep for 2 seconds in background"
+          }
+        },
+        "wake": {
+          "command": null,
+          "end": "finished",
+          "exit": 0,
+          "job": "command",
+          "label": "Sleep for 2 seconds in background"
         }
       },
       {
@@ -496,7 +510,21 @@
         "event": {
           "itemId": "e95752b9-f7e8-4f1f-889c-7a376d6b32a9",
           "text": "Background command \"Sleep for 2 seconds in background\" completed (exit code 0)",
-          "type": "taskNotice"
+          "type": "taskNotice",
+          "wake": {
+            "command": null,
+            "end": "finished",
+            "exit": 0,
+            "job": "command",
+            "label": "Sleep for 2 seconds in background"
+          }
+        },
+        "wake": {
+          "command": null,
+          "end": "finished",
+          "exit": 0,
+          "job": "command",
+          "label": "Sleep for 2 seconds in background"
         }
       },
       {

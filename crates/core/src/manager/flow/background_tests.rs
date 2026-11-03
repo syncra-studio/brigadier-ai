@@ -240,6 +240,162 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
     flow.stop().await;
 }
 
+/// A Codex command its turn went on from (a background terminal) that ends while the turn still
+/// runs, with no call of the model's after its end to read it, is told as one ending after the
+/// turn is, in the same request: Codex never says it (D177: a `brigadier ask` answered so).
+#[tokio::test]
+async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
+    use brigadier_providers::{
+        BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
+    };
+    let inputs: Log = Log::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "codex-unread-end",
+        Options {
+            thread: brigadier_providers::ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("finished after your turn") {
+                    return Reply::text("Wrote blue.");
+                }
+                let command = |status, exit_code, output: Option<&str>| ProviderEvent::Command {
+                    item_id: "cmd-1".into(),
+                    command: "brigadier ask \"Which colour?\"".into(),
+                    cwd: None,
+                    status,
+                    exit_code,
+                    output: output.map(str::to_owned),
+                    duration_ms: None,
+                    kept: None,
+                };
+                let terminal = ProviderEvent::BackgroundTask {
+                    task: BackgroundTask {
+                        command: None,
+                        provider: None,
+                        id: "4242".into(),
+                        item_id: Some("cmd-1".into()),
+                        kind: BackgroundTaskKind::Terminal,
+                        label: "brigadier ask".into(),
+                        status: BackgroundTaskStatus::Running,
+                        started_at_ms: 1,
+                        ended_at_ms: None,
+                        output_file: None,
+                        summary: None,
+                        last_line: None,
+                    },
+                };
+                for event in [
+                    command(ItemStatus::InProgress, None, None),
+                    terminal,
+                    command(
+                        ItemStatus::Completed,
+                        Some(0),
+                        Some("Which colour?: blue\n"),
+                    ),
+                ] {
+                    let _ = turn.events.send(event).await;
+                }
+                Reply::text("Waiting for your colour choice.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Ask me the colour, then write it.").await;
+    let board = flow.settled().await;
+    let root = board.requests.keys().next().unwrap().clone();
+    assert_eq!(board.requests[&root].state, RequestState::Done);
+    let inputs = inputs.lock().unwrap().clone();
+    assert!(
+        inputs.iter().any(|input| input.contains(
+            "[your background command `brigadier ask \"Which colour?\"` finished after your turn · exit 0]"
+        ) && input.contains("blue")),
+        "{inputs:#?}"
+    );
+    let answers = answers_with_requests(&flow).await;
+    assert!(
+        answers.contains(&("Wrote blue.".into(), Some(root))),
+        "{answers:?}"
+    );
+    flow.stop().await;
+}
+
+/// A command outliving its turn ends during a later turn, so Brigadier tells the CLI of it in a
+/// turn of its own once that turn ends. Its hidden word opens that turn, which goes on with the
+/// one before: the block reads open from there, not only once the CLI shows an item, seconds
+/// on (seen live on Codex: the block read over in between; the same on every CLI, D24, D94).
+#[tokio::test]
+async fn brigadiers_hidden_word_of_a_jobs_end_keeps_the_block_open() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let (waking, woken) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let (wake, woke) = (waking.clone(), woken.clone());
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let flow = Flow::start(
+        "hidden-wake-open",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (waking, woken, events) = (wake.clone(), woke.clone(), events.clone());
+            async move {
+                let command = |status, exit_code, output: Option<&str>| ProviderEvent::Command {
+                    item_id: "cmd-1".into(),
+                    command: "sleep 20 && echo xyz".into(),
+                    cwd: None,
+                    status,
+                    exit_code,
+                    output: output.map(str::to_owned),
+                    duration_ms: None,
+                    kept: None,
+                };
+                if turn.input.contains("finished after your turn") {
+                    waking.notify_one();
+                    woken.notified().await;
+                    return Reply::text("It printed xyz.");
+                }
+                if turn.input.contains("2+2") {
+                    let sender = events.lock().unwrap().clone().unwrap();
+                    let done = command(ItemStatus::Completed, Some(0), Some("xyz\n"));
+                    sender.send(done).await.unwrap();
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    return Reply::text("4");
+                }
+                let _ = turn
+                    .events
+                    .send(command(ItemStatus::InProgress, None, None))
+                    .await;
+                *events.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started it; it runs in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start the command.").await;
+    rested(&flow).await;
+    flow.say("What is 2+2?").await;
+    waking.notified().await;
+    // Its hidden word may read as a turn of its own for a moment, until noted as Brigadier's.
+    super::eventually("the block to read open in the wake turn", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == 2 && view.turns.last().is_some_and(|turn| turn.end.is_none())
+    })
+    .await;
+    woken.notify_one();
+    flow.settled().await;
+    flow.stop().await;
+}
+
 /// How a lingering Codex command's end reaches Brigadier: its item's end and its terminal
 /// leaving `/ps`, in either order, or the terminal's leaving alone.
 #[derive(Clone, Copy, Debug)]
@@ -286,6 +442,8 @@ async fn a_codex_terminal_ends_once(end: TerminalEnd) {
                 let terminal =
                     |status, ended_at_ms| brigadier_providers::ProviderEvent::BackgroundTask {
                         task: brigadier_providers::BackgroundTask {
+                            command: None,
+                            provider: None,
                             id: "4242".into(),
                             item_id: Some("cmd-1".into()),
                             kind: brigadier_providers::BackgroundTaskKind::Terminal,
@@ -653,6 +811,153 @@ async fn a_job_turn_before_the_jobs_word_is_owed_once() {
     flow.stop().await;
 }
 
+/// A subagent's own command ends while no turn runs, and its end wakes the subagent, never the
+/// session: the CLI starts one turn, for the subagent's end. Once that turn is over nothing runs,
+/// so the work no longer holds, though the command's end still counts as owed its turn: the next
+/// message gets a block of its own, as the thread draws it (demo 6).
+#[tokio::test]
+async fn an_end_no_turn_follows_holds_no_work_once_nothing_runs() {
+    use brigadier_providers::ProviderEvent;
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-job-unwoken",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                let _ = turn
+                    .events
+                    .send(ProviderEvent::BackgroundJobs {
+                        running: vec!["agent".into(), "its-command".into()],
+                    })
+                    .await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started a subagent in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start a subagent.").await;
+    rested(&flow).await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(flow.manager.work_holds(&conv).await, "its jobs run");
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    for event in [
+        ProviderEvent::BackgroundJobs {
+            running: vec!["agent".into()],
+        },
+        ProviderEvent::BackgroundJobs {
+            running: Vec::new(),
+        },
+        ProviderEvent::TurnStarted { turn_id: None },
+        ProviderEvent::Message {
+            item_id: "agent-answer".into(),
+            role: brigadier_providers::Role::Assistant,
+            text: "The subagent printed 42.".into(),
+        },
+        ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: brigadier_providers::TurnStatus::Completed,
+            duration_ms: Some(1),
+            usage: None,
+        },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually_async("the subagent's answer", || async {
+        answers(&flow)
+            .await
+            .iter()
+            .any(|text| text == "The subagent printed 42.")
+    })
+    .await;
+    rested(&flow).await;
+    assert!(
+        !conv.request_activity().await.background.is_empty(),
+        "the command's end is still owed its turn"
+    );
+    assert!(
+        !flow.manager.work_holds(&conv).await,
+        "nothing runs: the block is closed"
+    );
+    flow.stop().await;
+}
+
+/// A subagent its CLI lists no task for (Codex's) still runs after its turn ended: the work
+/// holds, so the next message goes on in its block, as the thread draws it, until the
+/// subagent's end comes (D24, D25; seen live, w58).
+#[tokio::test]
+async fn a_subagent_running_past_its_turn_holds_the_work_until_it_ends() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let spawn = |status| ProviderEvent::ToolCall {
+        item_id: "spawn".into(),
+        name: "agents/spawnAgent".into(),
+        input: Some(r#"{"message":"sleep 40"}"#.into()),
+        status,
+        output: None,
+        kept: None,
+    };
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-subagent-holds",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                let _ = turn.events.send(spawn(ItemStatus::InProgress)).await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started a subagent; not waiting for it.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start a subagent in the background.").await;
+    rested(&flow).await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its subagent runs past its turn"
+    );
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    // A later turn (the session woken to judge a follow-up) ends while it still runs: it still
+    // holds the work, so the next message goes on in the block (O38, seen live on Codex).
+    for event in [
+        ProviderEvent::TurnStarted { turn_id: None },
+        ProviderEvent::Message {
+            item_id: "judged".into(),
+            role: brigadier_providers::Role::Assistant,
+            text: "It waits.".into(),
+        },
+        ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: brigadier_providers::TurnStatus::Completed,
+            duration_ms: None,
+            usage: None,
+        },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually("the later turn's end", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.entries.iter().any(|entry| {
+            matches!(&entry.event, ProviderEvent::Message { item_id, .. } if item_id == "judged")
+        }) && view.turns.iter().all(|turn| turn.end.is_some())
+    })
+    .await;
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "its subagent runs past the later turn too"
+    );
+    sender.send(spawn(ItemStatus::Completed)).await.unwrap();
+    super::eventually_async("the subagent's end", || async {
+        !flow.manager.work_holds(&conv).await
+    })
+    .await;
+    flow.stop().await;
+}
+
 /// A stopped request's job and a later request's job both end; the CLI's turn for the stopped
 /// one's end runs long. The later request still waits for its own job's turn meanwhile, and
 /// that turn answers in it (#3).
@@ -983,6 +1288,8 @@ async fn persistent_app_lifetime(provider: brigadier_providers::ProviderKind, la
                 };
                 let task = |known| ProviderEvent::BackgroundTask {
                     task: BackgroundTask {
+                        command: None,
+                        provider: None,
                         id: "native-app".into(),
                         item_id: Some("app-call".into()),
                         kind: if provider == ProviderKind::Claude {
@@ -1132,6 +1439,8 @@ async fn persistent_app_lifetime(provider: brigadier_providers::ProviderKind, la
     events
         .send(ProviderEvent::BackgroundTask {
             task: BackgroundTask {
+                command: None,
+                provider: None,
                 id: "native-app".into(),
                 item_id: Some("app-call".into()),
                 kind: if provider == ProviderKind::Claude {
@@ -1224,4 +1533,93 @@ async fn persistent_app_late_claude_metadata_releases_only_proven_app_work() {
 #[tokio::test]
 async fn persistent_app_late_codex_metadata_releases_only_proven_app_work() {
     persistent_app_lifetime(brigadier_providers::ProviderKind::Codex, true).await;
+}
+
+/// The user's Stop of a Codex turn while a command of it runs as a background terminal (one the
+/// model went on from): the Stop closes the CLI, which ends the command, so no background task
+/// of it is left running and nothing holds the session.
+#[tokio::test]
+async fn a_stopped_codex_commands_terminal_ends_with_its_turn() {
+    use brigadier_providers::{
+        BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
+    };
+    const COMMAND: &str = "/bin/zsh -lc 'python3 -c \"import time; time.sleep(30)\"'";
+    let flow = Flow::start(
+        "codex-stopped-terminal",
+        Options {
+            thread: brigadier_providers::ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if !turn.input.contains("Run the sleep.") {
+                return Reply::text("Done.");
+            }
+            let command = |status, exit_code| ProviderEvent::Command {
+                item_id: "call_py".into(),
+                command: COMMAND.into(),
+                cwd: None,
+                status,
+                exit_code,
+                output: None,
+                duration_ms: None,
+                kept: None,
+            };
+            turn.emit(command(ItemStatus::InProgress, None)).await;
+            turn.emit(ProviderEvent::BackgroundTask {
+                task: BackgroundTask {
+                    id: "70245".into(),
+                    item_id: Some("call_py".into()),
+                    kind: BackgroundTaskKind::Terminal,
+                    label: "python3 -c \"import time; time.sleep(30)\"".into(),
+                    status: BackgroundTaskStatus::Running,
+                    started_at_ms: 1,
+                    ended_at_ms: None,
+                    output_file: None,
+                    summary: None,
+                    last_line: None,
+                    command: Some("python3 -c \"import time; time.sleep(30)\"".into()),
+                    provider: Some(brigadier_providers::ProviderKind::Codex),
+                },
+            })
+            .await;
+            assert!(turn.stopped().await, "the user stops it");
+            // Codex fails the interrupted command's item; its process is still listed.
+            turn.emit(command(ItemStatus::Failed, Some(-1))).await;
+            Reply::text("")
+        }),
+    )
+    .await;
+    flow.say("Run the sleep.").await;
+    let id = flow.conversation.clone();
+    super::eventually("the terminal to be listed", || {
+        flow.manager
+            .thread_view(&id)
+            .unwrap()
+            .background
+            .iter()
+            .any(|task| task.id == "70245")
+    })
+    .await;
+    flow.manager.interrupt(id.clone()).await.unwrap();
+    flow.settled().await;
+    // Past the close of its CLI, which the Stop ends the command with.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(
+        view.background
+            .iter()
+            .all(|task| task.status != BackgroundTaskStatus::Running),
+        "{:#?}",
+        view.background
+    );
+    assert!(view.jobs.is_empty(), "{:?}", view.jobs);
+    let working = flow
+        .manager
+        .activity()
+        .await
+        .into_iter()
+        .find(|entry| entry.conversation_id == id)
+        .is_some_and(|entry| entry.commands_working);
+    assert!(!working, "the sidebar rests");
+    flow.stop().await;
 }

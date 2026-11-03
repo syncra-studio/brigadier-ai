@@ -1,7 +1,8 @@
 //! Dependencies used only to undo the retired writer's recorded changes.
+use brigadier_providers::ProviderKind;
+use brigadier_registry::Roots;
 use brigadier_registry::adapter::output_within;
 use brigadier_registry::library::Library;
-use brigadier_registry::{Agent, Roots};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -24,7 +25,7 @@ pub(crate) struct Ctx<'a> {
     pub claude_configs: &'a [PathBuf],
     /// Each agent's CLI as sessions run it (the user's choice included); `None`: its name on
     /// PATH.
-    pub binary: &'a (dyn Fn(Agent) -> Option<PathBuf> + Sync),
+    pub binary: &'a (dyn Fn(ProviderKind) -> Option<PathBuf> + Sync),
 }
 
 /// Where values (env, headers) are kept: the Keychain, through `brigadier secret`.
@@ -75,7 +76,7 @@ pub(crate) struct Setup {
     pub projects: Vec<PathBuf>,
     pub claude_configs: Vec<PathBuf>,
     /// Each agent's CLI as sessions run it.
-    pub binary: Arc<dyn Fn(Agent) -> Option<PathBuf> + Send + Sync>,
+    pub binary: Arc<dyn Fn(ProviderKind) -> Option<PathBuf> + Send + Sync>,
 }
 
 /// Runs the one-time cleanup with its effective homes and read-only secret access.

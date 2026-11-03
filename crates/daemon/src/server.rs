@@ -1,5 +1,6 @@
 //! Accepts IPC connections and serves requests and the live event feed.
 
+use brigadier_providers::KindFacts as _;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +27,6 @@ use brigadier_ipc::protocol::{
     Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token};
-use brigadier_providers::ProviderKind;
 use brigadier_providers::login_mark::LoginMark;
 use brigadier_store::{Store, StoredEvent};
 use tokio::sync::broadcast::error::RecvError;
@@ -117,8 +117,7 @@ impl Daemon {
         pages: Arc<Pages>,
         site_icons: Arc<SiteIcons>,
     ) -> Self {
-        let agent_folders = ProviderKind::ALL
-            .into_iter()
+        let agent_folders = brigadier_providers::adapters::kinds()
             .filter_map(|provider| runtime.cli_env().installer_folder(provider))
             .collect();
         let terminals = Arc::new(
@@ -1317,7 +1316,9 @@ fn send_outcome(outcome: brigadier_core::manager::SendOutcome) -> SendOutcome {
         brigadier_core::manager::SendOutcome::Sent(message) => SendOutcome::Sent {
             message: Box::new(message),
         },
-        brigadier_core::manager::SendOutcome::Queued(item) => SendOutcome::Queued { item },
+        brigadier_core::manager::SendOutcome::Queued(item) => SendOutcome::Queued {
+            item: Box::new(item),
+        },
     }
 }
 
@@ -1379,8 +1380,6 @@ fn read_beside(request: &Request) -> bool {
             | Request::GetSessionDiff { .. }
             | Request::GetWorkerDiffs { .. }
             | Request::GetWorkerSource { .. }
-            | Request::PrepareTurnRevert { .. }
-            | Request::RevertTurn { .. }
             | Request::GetPendingChanges { .. }
             | Request::GetReviewDiff { .. }
             | Request::GetWorkspaceTree { .. }
@@ -1531,12 +1530,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             item_id,
         } => Response::RunQueuedHere {
             queue: heap(|| sessions.run_queued_here(&conversation_id, &item_id)).await?,
-        },
-        Request::DismissSent {
-            conversation_id,
-            item_id,
-        } => Response::DismissSent {
-            queue: heap(|| core.dismiss_sent(&conversation_id, &item_id)).await?,
         },
         Request::DismissNotice {
             conversation_id,
@@ -1940,20 +1933,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.switch_branch(conversation_id, head)).await?;
             Response::SwitchBranch
         }
-        Request::PrepareTurnRevert {
-            conversation_id,
-            request_id,
-        } => Response::PrepareTurnRevert {
-            preview: heap(|| sessions.prepare_turn_revert(conversation_id, request_id)).await?,
-        },
-        Request::RevertTurn {
-            conversation_id,
-            request_id,
-            expected_tree,
-        } => Response::RevertTurn {
-            outcome: heap(|| sessions.revert_turn(conversation_id, request_id, expected_tree))
-                .await?,
-        },
         Request::GetPendingChanges {
             conversation_id,
             path,
@@ -2010,33 +1989,19 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 started_at_ms,
             )?,
         },
-        Request::ThreadView { conversation_id } => Response::ThreadView {
-            view: heap(|| sessions.thread_view_with_workers(&conversation_id)).await?,
-        },
+        Request::ThreadView {
+            conversation_id,
+            newest_turns,
+        } => {
+            let mut view = heap(|| sessions.thread_view_with_workers(&conversation_id)).await?;
+            if let Some(turns) = newest_turns {
+                brigadier_core::thread_view::newest_turns(&mut view, turns as usize);
+            }
+            Response::ThreadView { view }
+        }
         Request::ContinueWaiting { conversation_id } => {
             heap(|| sessions.continue_waiting(&conversation_id)).await?;
             Response::ContinueWaiting
-        }
-        Request::GetBrigadeSkill => {
-            let skill = sessions.brigade_skill();
-            Response::GetBrigadeSkill {
-                custom: skill.custom,
-                path: skill.path.display().to_string(),
-            }
-        }
-        Request::ResetBrigadeSkill => {
-            let skill = sessions.reset_brigade_skill()?;
-            Response::ResetBrigadeSkill {
-                custom: skill.custom,
-                path: skill.path.display().to_string(),
-            }
-        }
-        Request::CreateBrigadeSkill => {
-            let skill = sessions.create_brigade_skill()?;
-            Response::CreateBrigadeSkill {
-                custom: skill.custom,
-                path: skill.path.display().to_string(),
-            }
         }
         Request::GetModelRules => Response::GetModelRules {
             rules: sessions.model_rules()?,
@@ -2327,9 +2292,19 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             text,
             attachments,
             mentions,
+            steer,
+            queue_index,
         } => Response::SendToWorker {
             queued: heap(|| {
-                sessions.send_to_worker(conversation_id, task_id, text, attachments, mentions)
+                sessions.send_to_worker(
+                    conversation_id,
+                    task_id,
+                    text,
+                    attachments,
+                    mentions,
+                    steer,
+                    queue_index,
+                )
             })
             .await?,
         },
@@ -2718,9 +2693,23 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 InjectedError::ContextWindow => Error::ContextWindow,
                 InjectedError::Auth => Error::Auth,
                 InjectedError::Billing => Error::Billing,
+                InjectedError::Refusal => Error::Refusal,
             };
             heap(|| sessions.debug_inject_error(key, provider, error, after_tool_calls)).await?;
             Response::DebugInjectError
+        }
+        #[cfg(debug_assertions)]
+        Request::DebugCompact { target } => {
+            use brigadier_core::manager::fault::FaultKey;
+            use brigadier_ipc::protocol::FaultTarget;
+            let key = match target {
+                FaultTarget::Task { task_id } => FaultKey::Task(task_id),
+                FaultTarget::Conversation { conversation_id } => {
+                    FaultKey::Conversation(conversation_id)
+                }
+            };
+            heap(|| sessions.debug_compact(key)).await?;
+            Response::DebugCompact
         }
         #[cfg(debug_assertions)]
         Request::DebugPlantLearned {
@@ -3086,6 +3075,10 @@ mod tests {
             workers: vec![],
             seams: vec![],
             jobs: Default::default(),
+            replies: Vec::new(),
+            seq: 0,
+            next_model: None,
+            block: None,
         };
         let frame = ServerFrame::Response {
             id: 7,

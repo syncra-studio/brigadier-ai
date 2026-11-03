@@ -4,9 +4,9 @@ use base64::Engine as _;
 
 use crate::protocol::{
     Answer, AskOutput, Changes, CloseOutput, CommandFact, CommandStatus, GitFacts, Item, ItemKind,
-    LibraryOutput, MergeWord, QueueOutput, QueueState, ReadOutput, SendOutput, SessionsOutput,
-    ShowOutput, StartOutput, ToolOutput, TurnCommands, WaitOutput, WhyBy, WhyOutput, WorkerRow,
-    WorkerState, WorkersOutput,
+    LibraryOutput, ManageOutput, MergeWord, ReadOutput, SendOutput, SessionsOutput, ShowOutput,
+    StartOutput, StartRow, ToolOutput, TurnCommands, WaitOutput, WhyBy, WhyOutput, WorkerRow,
+    WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
@@ -323,7 +323,7 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
             worker.id.clone(),
             worker.number.to_string(),
             worker.state.word().into(),
-            worker.agent.word().into(),
+            worker.agent.id().into(),
             model,
             changes(worker.changes),
             git_cell(worker.git.as_ref()),
@@ -339,33 +339,7 @@ pub fn workers(output: &WorkersOutput) -> String {
     if output.workers.is_empty() {
         return "This session has no workers.\n".into();
     }
-    let mut out = worker_rows(&output.workers);
-    let working: Vec<String> = output
-        .workers
-        .iter()
-        .filter(|worker| {
-            matches!(
-                worker.state,
-                WorkerState::Starting | WorkerState::Working | WorkerState::Asking
-            )
-        })
-        .map(|worker| worker.number.to_string())
-        .collect();
-    if !output.wait_running && !working.is_empty() {
-        out.push_str(&format!(
-            "\nNo `brigadier wait` is running while {} {} {} at work: start one in the \
-             background to hear {}.\n",
-            if working.len() == 1 {
-                "worker"
-            } else {
-                "workers"
-            },
-            working.join(", "),
-            if working.len() == 1 { "is" } else { "are" },
-            if working.len() == 1 { "it" } else { "them" },
-        ));
-    }
-    out
+    worker_rows(&output.workers)
 }
 
 pub fn show(output: &ShowOutput) -> String {
@@ -381,7 +355,7 @@ pub fn show(output: &ShowOutput) -> String {
     if let Some(number) = output.number {
         rows.push(vec!["number".into(), number.to_string()]);
     }
-    rows.push(vec!["agent".into(), output.agent.word().into()]);
+    rows.push(vec!["agent".into(), output.agent.id().into()]);
     rows.push(vec![
         "model".into(),
         output.model.clone().unwrap_or_else(|| "default".into()),
@@ -461,7 +435,6 @@ fn item(item: &Item) -> String {
             };
             format!("[{who}]\n{}\n", item.text.trim_end())
         }
-        ItemKind::Reasoning => format!("[thinking] {}\n", item.text.trim_end()),
         ItemKind::Command => format!("$ {}\n", item.text.trim_end()),
         ItemKind::Tool => format!("[tool] {}\n", item.text.trim_end()),
         ItemKind::TurnEnd => format!("[turn ended] {}\n", item.text.trim_end()),
@@ -499,6 +472,21 @@ pub fn read(output: &ReadOutput) -> String {
     out
 }
 
+/// What a start's `--work` row picked: "Your row "Plan" picked its agent, model and effort."
+/// Its reply says it, and the thread's start row (goal 12).
+pub fn start_row(row: &StartRow) -> String {
+    let whose = match row.source.as_str() {
+        "user" => "Your row",
+        _ => "The shipped row",
+    };
+    let picked = match row.picked.as_slice() {
+        [] => "nothing; your flags set it all".to_owned(),
+        [one] => format!("its {one}"),
+        [rest @ .., last] => format!("its {} and {last}", rest.join(", ")),
+    };
+    format!("{whose} \"{}\" picked {picked}.", row.work)
+}
+
 pub fn start(output: &StartOutput) -> String {
     let worker = &output.worker;
     let place = match (&worker.branch, &output.base) {
@@ -507,26 +495,18 @@ pub fn start(output: &StartOutput) -> String {
         (None, Some(base)) => format!("in a new worktree from {base}"),
         (None, None) => "in this session's checkout".into(),
     };
-    let row = output.row.as_ref().map_or(String::new(), |row| {
-        let whose = match row.source.as_str() {
-            "user" => "Your row",
-            _ => "The shipped row",
-        };
-        let picked = match row.picked.as_slice() {
-            [] => "nothing; your flags set it all".to_owned(),
-            [one] => format!("its {one}"),
-            [rest @ .., last] => format!("its {} and {last}", rest.join(", ")),
-        };
-        format!("{whose} \"{}\" picked {picked}.\n", row.work)
-    });
+    let row = output
+        .row
+        .as_ref()
+        .map_or(String::new(), |row| format!("{}\n", start_row(row)));
     let review = output.review.as_ref().map_or(String::new(), |review| {
-        let authors: Vec<&str> = review.authors.iter().map(|agent| agent.word()).collect();
+        let authors: Vec<&str> = review.authors.iter().map(|agent| agent.id()).collect();
         let on = if review.other_provider {
-            format!("on {}, another CLI", worker.agent.word())
+            format!("on {}, another CLI", worker.agent.id())
         } else {
             format!(
                 "no other CLI is ready and allowed, so a fresh {} session",
-                worker.agent.word()
+                worker.agent.id()
             )
         };
         format!(
@@ -535,12 +515,15 @@ pub fn start(output: &StartOutput) -> String {
             authors.join(", ")
         )
     });
+    let off = output.off_routing.as_ref().map_or(String::new(), |line| {
+        format!("{line} It runs all the same.\n")
+    });
     format!(
-        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}{review}Keep `brigadier wait` \
-         running in the background: it returns with its events and wakes you.\n",
+        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}{review}{off}Its events reach you \
+         by themselves once your turn ends; `brigadier wait` only to wait for them now.\n",
         worker.id,
         worker.number,
-        worker.agent.word(),
+        worker.agent.id(),
         worker.model.as_deref().unwrap_or("default model"),
         worker
             .effort
@@ -570,7 +553,9 @@ pub fn send(output: &SendOutput) -> String {
 
 pub fn wait(output: &WaitOutput) -> String {
     if output.events.is_empty() {
-        return if output.timed_out {
+        return if output.message {
+            "A message came in for you: read it, then wait again if you still need to.\n".into()
+        } else if output.timed_out {
             "Nothing yet (timed out).\n".into()
         } else {
             "Nothing to wait for.\n".into()
@@ -589,7 +574,7 @@ pub fn wait(output: &WaitOutput) -> String {
         out.push('\n');
         if let Some(asks) = &event.asks {
             out.push_str(&format!(
-                "asks: {}\n`brigadier send {} --allow` or `--deny` answers.\n",
+                "asks: {}\n`brigadier send {} --allow` or `--deny <reason>` answers a permission prompt.\n",
                 asks.trim_end(),
                 event.id
             ));
@@ -614,10 +599,7 @@ pub fn wait(output: &WaitOutput) -> String {
 
 pub fn continue_on(output: &crate::protocol::ContinueOnOutput) -> String {
     use crate::protocol::ContinueWhen;
-    let agent = match output.agent {
-        crate::protocol::Agent::Claude => "Claude Code",
-        crate::protocol::Agent::Codex => "Codex",
-    };
+    let agent = &output.label;
     let on = match (&output.model, &output.effort) {
         (Some(model), Some(effort)) => format!(" ({model}, {effort})"),
         (Some(model), None) => format!(" ({model})"),
@@ -636,38 +618,53 @@ pub fn continue_on(output: &crate::protocol::ContinueOnOutput) -> String {
     }
 }
 
-pub fn queue(output: &QueueOutput) -> String {
-    let id = &output.id;
-    match output.state {
-        QueueState::Joined if output.already => format!(
-            "{id} had already joined this work, unjudged: it is the user's message here; act on \
-             it and answer it with the rest.\n"
-        ),
-        QueueState::Joined => {
-            format!("{id} joined this work: act on it and answer it with the rest.\n")
-        }
-        QueueState::Waiting => {
-            format!(
-                "{id} waits in the queue and comes again on its own turn once this work is done.\n"
-            )
-        }
-        QueueState::SentToWorker => format!(
-            "{id} went to worker {}; the user sees where it went.\n",
-            output.worker.as_deref().unwrap_or("?")
-        ),
-        QueueState::Offered => format!(
-            "{id} waits in the queue offering the user \"Open as a new session\" or \"Run \
-             here\" until they pick.\n"
-        ),
-    }
+/// The worker as the action left it: the reply says all a follow-up check would (D156).
+fn now(worker: Option<&WorkerRow>) -> String {
+    worker.map_or(String::new(), |worker| {
+        format!(
+            "Now (no `brigadier workers` needed):\n{}",
+            worker_rows(std::slice::from_ref(worker))
+        )
+    })
 }
 
 pub fn close(output: &CloseOutput) -> String {
-    if output.closed {
+    let said = if output.closed {
         format!("Closed {}.\n", output.id)
     } else {
         format!("{} had already ended.\n", output.id)
-    }
+    };
+    said + &now(output.worker.as_ref())
+}
+
+pub fn pause(output: &ManageOutput) -> String {
+    let id = &output.id;
+    let said = if output.done {
+        format!(
+            "Paused {id}; the thread shows it. A note for it goes with `brigadier resume {id} \
+             \"<note>\"`.\n"
+        )
+    } else {
+        format!("{id} was paused already.\n")
+    };
+    said + &now(output.worker.as_ref())
+}
+
+pub fn resume(output: &ManageOutput) -> String {
+    format!(
+        "Resumed {}: it continues where it stopped; the thread shows it.\n{}",
+        output.id,
+        now(output.worker.as_ref())
+    )
+}
+
+pub fn switch(output: &ManageOutput) -> String {
+    let to = output.to.as_deref().unwrap_or("its next choice");
+    let said = match &output.off_routing {
+        Some(line) => format!("Moved {} to {to}.\n{line}\n", output.id),
+        None => format!("Moved {} to {to}.\n", output.id),
+    };
+    said + &now(output.worker.as_ref())
 }
 
 /// `preview`, `browser`, `app` and `page`: the tool's answer, and where its screenshots went.
@@ -757,6 +754,11 @@ pub fn saved_images(
         let extension = match head.trim_start_matches("data:") {
             "image/jpeg" => "jpg",
             "image/webp" => "webp",
+            // An MCP tool's audio (`brigadier mcp call`).
+            "audio/mpeg" => "mp3",
+            "audio/wav" | "audio/x-wav" => "wav",
+            "audio/ogg" => "ogg",
+            mime if mime.starts_with("audio/") => "audio",
             _ => "png",
         };
         let bytes = base64::engine::general_purpose::STANDARD
@@ -806,7 +808,7 @@ pub fn why(output: &WhyOutput) -> String {
             "session {} \"{}\" ({})",
             session.id,
             session.title,
-            session.agent.word()
+            session.agent.id()
         )
     });
     let turn_line = |turn: &crate::protocol::WhyTurn| {
@@ -828,7 +830,7 @@ pub fn why(output: &WhyOutput) -> String {
                     "Written by worker {} \"{}\" ({})",
                     worker.id,
                     worker.title,
-                    worker.agent.word()
+                    worker.agent.id()
                 ));
                 if let Some(session) = &session {
                     out.push_str(&format!(" of {session}"));
@@ -975,10 +977,8 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             output.workers_at_once
         ),
     ];
-    for agent in [
-        crate::protocol::Agent::Claude,
-        crate::protocol::Agent::Codex,
-    ] {
+    // Every CLI the daemon drives has its account-switch entry, in its order.
+    for agent in output.agents.iter().map(|a| a.agent) {
         let models: Vec<_> = output
             .models
             .iter()
@@ -994,7 +994,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .collect();
         lines.push(format!(
             "{}: {}",
-            agent.word(),
+            agent.id(),
             if models.is_empty() {
                 "not reported".into()
             } else {
@@ -1009,7 +1009,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .map(|a| {
                 format!(
                     "{} {}",
-                    a.agent.word(),
+                    a.agent.id(),
                     if a.switch_accounts {
                         "automatic"
                     } else {
@@ -1058,7 +1058,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .count();
         lines.push(format!(
             "{} / {}{}{}: {} · {} · {}{}",
-            account.agent.word(),
+            account.agent.id(),
             if account.name.is_empty() {
                 &account.id
             } else {
@@ -1085,7 +1085,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
         lines.push(format!(
             "{}: {} / {} / {} — {} ({})",
             g.work,
-            g.agent.word(),
+            g.agent.id(),
             g.model,
             g.effort.as_deref().unwrap_or("default"),
             g.reason,
@@ -1110,7 +1110,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
 mod tests {
     use super::*;
     use crate::models::{Account, ModelsOutput, Usage};
-    use crate::protocol::Agent;
+    use crate::protocol::ProviderKind;
 
     #[test]
     fn why_names_the_turn_its_message_reply_and_ledger() {
@@ -1123,7 +1123,7 @@ mod tests {
             session: Some(WhySession {
                 id: "a1b2c3d4".into(),
                 title: "Parser".into(),
-                agent: crate::protocol::Agent::Claude,
+                agent: crate::protocol::ProviderKind::Claude,
             }),
             turn: Some(WhyTurn {
                 number: 2,
@@ -1176,7 +1176,7 @@ mod tests {
             accounts: vec![Account {
                 id: "own".into(),
                 name: "own".into(),
-                agent: Agent::Claude,
+                agent: ProviderKind::Claude,
                 current: true,
                 you: true,
                 logged_in: true,

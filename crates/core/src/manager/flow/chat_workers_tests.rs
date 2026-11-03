@@ -291,18 +291,9 @@ async fn a_chats_cli_runs_as_a_sessions_at_its_level() {
             assert_eq!(spec.tools, session.tools, "{label}");
             assert!(spec.keeps_detached && session.keeps_detached, "{label}");
             assert!(spec.tools.user_setup(), "{label}");
-            let mut directories = vec![folder.record()];
-            if provider == ProviderKind::Claude {
-                directories.push(folder.root().join("overlay"));
-            }
-            assert_eq!(spec.add_dirs, directories, "{label}");
-            assert!(
-                folder
-                    .root()
-                    .join("overlay/.claude/skills/brigade/SKILL.md")
-                    .is_file(),
-                "{label}"
-            );
+            // No skill overlay (D58).
+            assert_eq!(spec.add_dirs, vec![folder.record()], "{label}");
+            assert!(!folder.root().join("overlay").exists(), "{label}");
             let tmp = spec
                 .env
                 .iter()
@@ -639,5 +630,38 @@ async fn a_workers_source_lists_its_committed_and_uncommitted_files_against_its_
         )
         .await;
     assert!(matches!(gone, Err(crate::Error::NotFound(_))), "{gone:?}");
+    flow.stop().await;
+}
+
+/// A session's `--local` worker works in the session's own checkout, on no branch of its own:
+/// its changes are already where they would land, so its row reads merged, never "not merged".
+#[tokio::test]
+async fn a_local_workers_changes_read_merged() {
+    let script: Script = Arc::new(move |turn| {
+        Box::pin(async move {
+            if turn.worker().is_some() {
+                turn.write("worker.txt", "one\n");
+                return Reply::text("Written.");
+            }
+            let request = StartRequest {
+                local: true,
+                ..start("Write.")
+            };
+            let answer = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+            wait_for(&turn, &[id_of(&answer).as_str()], 1).await;
+            Reply::text("Done.")
+        })
+    });
+    let flow = Flow::start("local-worker-merged", Options::default(), script).await;
+    flow.say("Start a local worker.").await;
+    flow.settled().await;
+    let rows = flow
+        .manager
+        .worker_rows_of(&flow.conversation, true)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].diff.as_ref().unwrap().insertions, 1, "{rows:?}");
+    assert_eq!(rows[0].ahead, 0);
+    assert!(rows[0].merged);
     flow.stop().await;
 }

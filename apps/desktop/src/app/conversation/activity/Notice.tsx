@@ -6,6 +6,7 @@ import { MergedRow } from "@/app/conversation/activity/MergedRow";
 import { Moment } from "@/app/conversation/activity/Moment";
 import { QuotaResumed } from "@/app/conversation/activity/QuotaResumed";
 import { ProviderTransitionDivider } from "@/app/conversation/activity/ProviderTransition";
+import { SetupRow } from "@/app/conversation/activity/SetupRow";
 import { isTeamStep, TeamStep } from "@/app/conversation/activity/TeamSentence";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
@@ -24,6 +25,7 @@ import { SessionOffer } from "@/app/conversation/SessionOffer";
 export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   const { kind } = step;
   if (kind.type === "machine") return <MachineRow kind={kind} />;
+  if (kind.type === "setup") return <SetupRow kind={kind} />;
   if (kind.type === "quotaResumed") return <QuotaResumed provider={kind.provider} atMs={step.atMs} />;
   if (kind.type === "providerTransition") return <ProviderTransitionDivider transition={kind} />;
   if (kind.type === "moment") return <Moment text={kind.text} />;

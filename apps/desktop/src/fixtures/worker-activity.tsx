@@ -31,7 +31,7 @@ useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, tasks 
 // held by a usage limit, one done and one stopped.
 showRows(conversationId, [
   rowOf(tasks.queued, { working: true, limit: { kind: "usageWindow", resetsAtMs: 3_600_000, window: "five_hour" } }),
-  rowOf(tasks.blocked, { working: true, waiting: [{ kind: "permission", what: "pnpm install", card: null }] }),
+  rowOf(tasks.blocked, { working: true, waiting: [{ kind: "question", what: "pnpm install", card: null }] }),
   rowOf(tasks.active),
   rowOf(tasks.completed, { lastEventAtMs: tasks.completed.updatedAtMs }),
   rowOf(tasks.stopped, { lastEventAtMs: tasks.stopped.updatedAtMs }),
@@ -55,11 +55,11 @@ function Fixture() {
   const [panel, setPanel] = useState<string | null | undefined>();
   useEffect(() => {
     // A waiting worker's Stop on its Workers list row, with nothing opened first (#201).
-    const listStop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="worker-list"] button[aria-label="Stop Check blocked"]')?.click(), 50);
+    const listStop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="worker-list"] button[aria-label="End Check blocked"]')?.click(), 50);
     // Open the strip, as a click on its count does.
     const open = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-expanded]')?.click(), 100);
     // The running worker's own Stop, on its strip row (UI audit M4).
-    const stop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-label="Stop Check active"]')?.click(), 250);
+    const stop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-label="End Check active"]')?.click(), 250);
     let seen: Record<string, unknown> = {};
     const snapshot = setTimeout(() => { seen = {
       thread: Object.fromEntries([...document.querySelectorAll('main > section[data-task]')].map((row) => [row.getAttribute("data-task"), row.textContent])),

@@ -1,7 +1,7 @@
 //! Optional draft-menu enrichment. Reads return immediately; HTTP discovery is isolated
 //! from CLI sessions, shares the gateway's refresh authority, and never initiates OAuth.
 use super::McpGatewayService;
-use brigadier_providers::{CliCommand, CliCommandKind, McpServer, ProviderKind};
+use brigadier_providers::{CliCommand, CliCommandKind, McpServer};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -148,12 +148,14 @@ impl McpGatewayService {
                     .collect::<Vec<_>>()
                     .join(" ");
                 commands.push(CliCommand {
+                    action: None,
                     name: prompt.name,
                     text: format!("/{invocation}"),
                     invocation: Some(invocation),
                     source: Some(server.name.clone()),
                     kind: Some(CliCommandKind::Prompt),
-                    agent_only: Some(ProviderKind::Claude),
+                    // The caller's CLI, whose menu lists MCP prompts.
+                    agent_only: None,
                     description: prompt.description,
                     argument_hint: (!argument_hint.is_empty()).then_some(argument_hint),
                 });
@@ -254,7 +256,7 @@ impl Session<'_> {
         };
         let value = tokio::select! {
             _ = cancelled.cancelled() => return Err(()),
-            value = response_value(response, id) => value?,
+            value = response_value(response, id, MAX_RESPONSE) => value?,
         };
         if !self.valid() || value.get("error").is_some() {
             return Err(());
@@ -330,7 +332,11 @@ impl Session<'_> {
 
 /// Read JSON or SSE until this RPC's response, ignoring notifications and other event IDs.
 /// Incremental line parsing handles CRLF, multiline data, and arbitrary HTTP chunk splits.
-async fn response_value(mut response: reqwest::Response, id: u64) -> Result<Value, ()> {
+pub(in crate::manager) async fn response_value(
+    mut response: reqwest::Response,
+    id: u64,
+    max: usize,
+) -> Result<Value, ()> {
     let sse = response
         .headers()
         .get("content-type")
@@ -346,7 +352,7 @@ async fn response_value(mut response: reqwest::Response, id: u64) -> Result<Valu
     let mut received = 0usize;
     while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
         received = received.checked_add(chunk.len()).ok_or(())?;
-        if received > MAX_RESPONSE {
+        if received > max {
             return Err(());
         }
         bytes.extend_from_slice(&chunk);

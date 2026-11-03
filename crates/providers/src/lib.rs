@@ -8,12 +8,14 @@
 //!   Brigadier never touches its OAuth tokens.
 //! - [`codex`]: `codex app-server` over stdio JSON-RPC, with bindings generated from the
 //!   installed version's schema.
+//! - [`opencode`]: `opencode serve` per session, over its HTTP API and event stream.
 //!
 //! Whatever a session creates on disk or in the process table is reported to a [`Ledger`] the
 //! moment it is known, so it can be removed exactly when the session is disposed of, or by the
 //! crash sweep after the daemon died.
 
 pub mod accounts;
+pub mod adapters;
 #[cfg(all(test, unix))]
 mod chat_shell_live_tests;
 pub mod claude;
@@ -22,15 +24,19 @@ pub mod cli;
 mod cli_config_tests;
 pub mod codex;
 mod events;
+#[cfg(feature = "fake-cli")]
+mod fake_cli;
 pub mod fixtures;
 pub mod history;
 mod history_lines;
+pub mod items;
 pub mod leftovers;
 mod logging;
 pub mod login_mark;
 mod looked;
 pub mod mcp_oauth;
 pub mod model;
+pub mod opencode;
 pub mod policy;
 pub mod process;
 pub mod record;
@@ -124,6 +130,19 @@ pub trait Provider: Send + Sync {
         Box::pin(async { Vec::new() })
     }
 
+    /// After a restart, when nothing of Brigadier's runs: archives these sessions it still
+    /// holds in the CLI's own records, so the user's own apps of the CLI don't list them,
+    /// except those `open` says a session has opened meanwhile. Nothing for a CLI that lists
+    /// no sessions of its own. `private_logs`: a tab chat's, logged without identifying them.
+    fn archive_sessions<'a>(
+        &'a self,
+        _ids: Vec<String>,
+        _private_logs: bool,
+        _open: Box<dyn Fn(&str) -> bool + Send + Sync + 'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// A tab's cleanup must also suppress identifying diagnostics from control processes.
     fn remove_with_privacy(
         &self,
@@ -148,6 +167,20 @@ pub trait Provider: Send + Sync {
     /// CLI's session files (read, never changed).
     fn past_folders(&self) -> BoxFuture<'_, Vec<history::PastFolder>> {
         Box::pin(async { Vec::new() })
+    }
+
+    /// Before this extra account's home is deleted: what only that home holds of its sessions is
+    /// kept where its other accounts still find it, with no login (D111). Nothing for a CLI
+    /// whose accounts share one history.
+    fn keep_sessions(&self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Whether session `native_id` can be resumed on this adapter's account. A CLI whose
+    /// accounts share one history resumes any session on any of them.
+    fn resumes(&self, native_id: &str) -> bool {
+        let _ = native_id;
+        true
     }
 
     /// Whether session `native_id` took `needle` as input, by its transcript: in a message

@@ -196,9 +196,9 @@ impl SessionManager {
 
     /// `offer_feedback`: a card in the thread with a report to Brigadier's developers, which
     /// the user sends or dismisses (the thread judges they are annoyed, or that they asked;
-    /// this only plumbs). One offer per incident: none while a card of the latest request that
-    /// offered any is unanswered or dismissed unless they asked for this one, one in a request
-    /// unless they asked (then up to [`FEEDBACK_OFFERS_MAX`], each title once, #483). An offer
+    /// this only plumbs). One offer per incident: unless they asked for this one, never again a
+    /// report whose card is unanswered or that they dismissed (by its title; a different incident
+    /// still gets its own, D131, even in the same request), up to [`FEEDBACK_OFFERS_MAX`] in a request, each title once (#483). An offer
     /// from an attempt the user asked to redo, or from a message they edited away, counts for nothing.
     pub(crate) async fn offer_feedback(
         &self,
@@ -224,10 +224,8 @@ impl SessionManager {
             .filter(|message| message.role == MessageRole::User)
             .map(|message| message.request_id.unwrap_or(message.id))
             .collect();
-        // The latest earlier request that offered any (`None` before one did), its cards with
-        // their answers; and this request's titles.
-        let mut last = None;
-        let mut cards: Vec<(&str, Option<bool>)> = Vec::new();
+        // Earlier requests' cards (id, title, answer); and this request's titles.
+        let mut cards: Vec<(&str, &str, Option<bool>)> = Vec::new();
         let mut here: Vec<&str> = Vec::new();
         // An offer from a request's earlier attempt (before a Try again) or from a message the
         // user edited away is out of view: it counts for nothing, as the thread shows it.
@@ -248,26 +246,18 @@ impl SessionManager {
                 } => {
                     if step.request_id == request {
                         here.push(offered);
-                        continue;
+                    } else {
+                        cards.push((id, offered, None));
                     }
-                    if last != Some(&step.request_id) {
-                        last = Some(&step.request_id);
-                        cards.clear();
-                    }
-                    cards.push((id, None));
                 }
                 OrchestratorStepKind::FeedbackAnswered { id, sent, .. } => {
-                    if let Some((_, answer)) = cards.iter_mut().find(|(offered, _)| offered == id) {
+                    if let Some((.., answer)) = cards.iter_mut().find(|(offered, ..)| offered == id)
+                    {
                         *answer = Some(*sent);
                     }
                 }
                 _ => {}
             }
-        }
-        if !here.is_empty() && !args.asked {
-            return Err(Error::Invalid(
-                "Feedback was already offered for this request: don't offer it again.".into(),
-            ));
         }
         if here
             .iter()
@@ -282,14 +272,21 @@ impl SessionManager {
                 "At most {FEEDBACK_OFFERS_MAX} reports are offered in one request: tell the user which ones are left, so they can ask for them next."
             )));
         }
-        if !args.asked && cards.iter().any(|(_, answer)| answer.is_none()) {
+        let same = |answer: Option<bool>| {
+            !args.asked
+                && cards
+                    .iter()
+                    .any(|(_, offered, was)| *was == answer && offered.eq_ignore_ascii_case(title))
+        };
+        if same(None) {
             return Err(Error::Invalid(
-                "The user hasn't answered the feedback already offered in this session: don't offer another.".into(),
+                "This report is still on its card, unanswered: don't offer it again.".into(),
             ));
         }
-        if !args.asked && cards.iter().any(|(_, answer)| *answer == Some(false)) {
+        if same(Some(false)) {
             return Err(Error::Invalid(
-                "The user dismissed the feedback offered earlier in this session: don't offer it again.".into(),
+                "The user dismissed this report earlier in this session: don't offer it again."
+                    .into(),
             ));
         }
         self.orchestrator_step_in(

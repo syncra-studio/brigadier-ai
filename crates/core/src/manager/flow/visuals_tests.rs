@@ -8,6 +8,7 @@ use serde_json::json;
 use super::chat_thread_tests::new_chat;
 use super::{Flow, Options, Reply};
 use crate::model::{ConversationId, ConversationKind, TabTarget};
+use crate::thread_view::ThreadView;
 
 #[tokio::test]
 async fn the_visuals_guide_is_only_available_in_top_level_chats() {
@@ -64,7 +65,19 @@ async fn visual_fences_rebuild_from_both_cli_session_files_after_restart() {
     .await;
     let reply = "```brigadier-table\n{\"title\":\"Time\",\"columns\":[\"Route\"],\"rows\":[[\"Train\"]],\"source\":\"Illustrative\"}\n```\n\n```brigadier-chart\n{\"kind\":\"bar\",\"title\":\"Time\",\"description\":\"Minutes\",\"data\":[{\"label\":\"Train\",\"value\":35}]}\n```\n\n```brigadier-html\n<p>Recovered visual</p><script>document.querySelector('p').textContent='Ready';</script>\n```";
     let mut chats = Vec::new();
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
+        let line = match provider {
+            ProviderKind::Claude => {
+                json!({"type":"assistant","uuid":"a1","timestamp":"2026-10-26T10:00:00Z",
+                "message":{"id":"m1","role":"assistant","content":[{"type":"text","text":reply}]}})
+            }
+            ProviderKind::OpenCode => json!({"id":"a1","type":"assistant","time":{"created":1},
+                "content":[{"type":"text","text":reply}]}),
+            ProviderKind::Codex => json!({"type":"event_msg","timestamp":"2026-10-26T10:00:00Z",
+                "payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","phase":"final_answer","content":[{"type":"Text","text":reply}]}}}),
+            // A CLI with no session-file shape written here (the tests' fake) has none to rebuild.
+            _ => continue,
+        };
         let chat = flow
             .manager
             .create_conversation(ConversationKind::Chat, None, None, None)
@@ -74,14 +87,6 @@ async fn visual_fences_rebuild_from_both_cli_session_files_after_restart() {
         let record = flow.manager.session_dir(&chat).record();
         std::fs::create_dir_all(&record).unwrap();
         let file = flow.dir.join(format!("visuals-{provider:?}.jsonl"));
-        let line = match provider {
-            ProviderKind::Claude => {
-                json!({"type":"assistant","uuid":"a1","timestamp":"2026-10-26T10:00:00Z",
-                "message":{"id":"m1","role":"assistant","content":[{"type":"text","text":reply}]}})
-            }
-            ProviderKind::Codex => json!({"type":"event_msg","timestamp":"2026-10-26T10:00:00Z",
-                "payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","phase":"final_answer","content":[{"type":"Text","text":reply}]}}}),
-        };
         std::fs::write(&file, format!("{line}\n")).unwrap();
         std::fs::write(
             record.join("lineage.json"),
@@ -95,7 +100,15 @@ async fn visual_fences_rebuild_from_both_cli_session_files_after_restart() {
     }
     flow.restart().await;
     for (chat, before) in chats {
-        assert_eq!(flow.manager.thread_view(&chat).unwrap(), before);
+        // The same thread; only the news number it was read at moved on.
+        let after = flow.manager.thread_view(&chat).unwrap();
+        assert_eq!(
+            ThreadView {
+                seq: before.seq,
+                ..after
+            },
+            before
+        );
     }
     flow.stop().await;
 }

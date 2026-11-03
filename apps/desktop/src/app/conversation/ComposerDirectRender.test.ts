@@ -35,4 +35,14 @@ test("the composer's To: sends one message straight to a live worker: picked fro
   assert.deepEqual(seen.sent, [`worker task-live Use blue @task-1 ${mention}`, `worker task-live Use blue @task-1 ${mention}`]);
   // Leaving the session takes the To: away.
   assert.equal(seen.chipAfterSwitch, false);
+  // Goal 8: Enter goes the follow-up's way (Queue), ⌥⏎ steers; a worker's queued row names it,
+  // and Steer, Edit (back to its slot) and Undo keep it the worker's.
+  assert.deepEqual(seen.steers, { enter: [false], other: true });
+  assert.equal(seen.workerRow, "To Build the importer");
+  assert.deepEqual(seen.rowSteer, ["q2"]);
+  assert.deepEqual(seen.edited, { chip: "To Build the importer", deleted: ["q2"] });
+  assert.deepEqual(seen.editedBack, { text: "for the importer", chip: "To Build the importer" });
+  assert.deepEqual(seen.editRefused, { steer: false, queueIndex: 1 });
+  assert.deepEqual(seen.editSent, { taskId: "task-live", text: "for the importer", steer: false, queueIndex: 1 });
+  assert.deepEqual(seen.undo, { taskId: "task-live", text: "for the importer", steer: null, queueIndex: 1 });
 });

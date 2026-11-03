@@ -226,6 +226,9 @@ impl SessionManager {
         if tool == Tool::Library {
             return self.cli_library(caller, action, given).await;
         }
+        if tool == Tool::Mcp {
+            return self.cli_mcp(caller, action, given).await;
+        }
         if matches!(tool, Tool::Brain | Tool::Transcript) {
             return crate::heap(|| self.cli_records(caller, role.as_ref(), tool, action, given))
                 .await;
@@ -258,6 +261,15 @@ impl SessionManager {
                     Ok(key) => Some(key),
                     Err(err) => return CliReply::error(ErrorCode::Failed, err.to_string()),
                 }
+            }
+            // Its earlier sessions' transcripts are in its own records (core-goals D121).
+            (Some(Role::Worker { .. }), Some(_), Tool::Brain) => {
+                return CliReply::error(
+                    ErrorCode::Refused,
+                    "This tool is not available to this session: a worker reads its own \
+                     records, its earlier sessions' transcripts included, with `brigadier \
+                     transcript search|read`.",
+                );
             }
             _ => return not_theirs(),
         };

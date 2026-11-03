@@ -22,7 +22,6 @@ mod brains;
 mod branch_names;
 mod branches;
 #[allow(dead_code)]
-mod brigade;
 pub(crate) mod browser_tool;
 mod cards;
 mod cli;
@@ -30,12 +29,12 @@ mod cli_cards;
 mod cli_commands;
 mod cli_context;
 mod cli_ledger;
+mod cli_mcp;
 mod cli_thread;
 mod cli_tools;
 mod cli_why;
 mod close_tab;
 mod closing;
-mod codex_children;
 mod computer_host;
 mod models;
 mod open_in_app;
@@ -96,9 +95,12 @@ mod secrets;
 mod session_dir;
 mod session_messages;
 mod setup_script;
+mod shared_workspace;
 mod side_chat;
 mod sidecars;
 mod source_actions;
+#[cfg(all(test, unix))]
+mod standing_live_tests;
 mod terminal_host;
 mod thread;
 mod thread_images;
@@ -136,7 +138,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::model::{
     Conversation, ConversationId, ConversationKind, DomainEvent, Environment, EnvironmentRequest,
-    Lifecycle, ModelChoice, ProjectId, Rating, RepoInfo, Setup, SetupRequest,
+    ModelChoice, ProjectId, Rating, RepoInfo, Setup, SetupRequest,
 };
 use crate::runtime::{Runtime, Spawner};
 use crate::sessions::Origin;
@@ -202,6 +204,9 @@ pub struct SessionManager {
     session_turns: tokio::sync::Notify,
     /// One writer at a time for the sessions' messages' files (S30).
     session_mail: std::sync::Mutex<()>,
+    /// The `brigadier wait <session>` calls running now: an answer they wait for goes back
+    /// to them, never as a message too (goal 4).
+    session_waits: session_messages::Waits,
     /// Its sessions' worker rows: their CLIs and git (S14).
     worker_rows: worker_rows::WorkerRows,
     /// The cards a `brigadier ask` waits on: their answers go back to it, not into the thread.
@@ -211,9 +216,10 @@ pub struct SessionManager {
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
-    /// Held while a session is let into a project's own checkout (who works there looked for,
-    /// then the session recorded), so two can't both be let in.
-    local_checkouts: tokio::sync::Mutex<()>,
+    /// Held while a session is let into a folder another session may work in too (the folder
+    /// looked for, then the session recorded as using it) and while a closing session lets its
+    /// folder go, so a folder is never removed under a session just let into it (goal 9).
+    shared_workspaces: tokio::sync::Mutex<()>,
     /// Held while an open uncommitted-changes question is looked for and one opened, so two
     /// delegations at once open one card (#179).
     uncommitted_asks: tokio::sync::Mutex<()>,
@@ -257,6 +263,8 @@ pub struct SessionManager {
     /// Tasks being stopped: a landing that fails meanwhile (its worktree going away under
     /// it) is no news for the orchestrator.
     stopping: Mutex<HashSet<TaskId>>,
+    /// `brigadier mcp`'s kept connections.
+    mcp_pool: cli_mcp::McpPool,
     /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
     /// moment the stop starts: the thread may no longer message, steer or approve them.
     user_stops: Mutex<HashSet<TaskId>>,
@@ -291,8 +299,18 @@ pub struct SessionManager {
     checkout_saves: tokio::sync::broadcast::Sender<crate::work::WorkspaceTarget>,
     /// Each conversation's running turn as its CLI streams it ([`cli_thread`]).
     cli_threads: std::sync::Mutex<HashMap<ConversationId, crate::thread_view::LiveTurn>>,
+    /// Each conversation's work block, now or last ([`cli_thread`], D163), and one refresh of
+    /// them at a time, so an older reading never lands after a newer one.
+    work_blocks: std::sync::Mutex<HashMap<ConversationId, crate::thread_view::WorkBlock>>,
+    block_refresh: tokio::sync::Mutex<()>,
+    /// Per conversation, the inbox read so far for Brigadier's own messages its CLI was
+    /// handed ([`cli_thread`]): the last event's sequence, and the texts of those found.
+    inbox_read: std::sync::Mutex<HashMap<ConversationId, (i64, std::collections::HashSet<String>)>>,
     /// What live streams add to threads, for every window.
     thread_news: tokio::sync::broadcast::Sender<crate::thread_view::ThreadNews>,
+    /// The last number given to news (`ThreadNews::seq`), always under `cli_threads`' lock.
+    /// It starts from the clock (in µs), so a daemon started again numbers on past the last.
+    news_seq: std::sync::atomic::AtomicU64,
     /// CLI session files read for threads.
     session_files: crate::thread_view::FileCache,
     /// How sessions go on past a long context ([`seam`]).
@@ -365,6 +383,7 @@ impl SessionManager {
             let data_dir = data_dir.clone();
             let _ = blocking(move || {
                 outputs::clear_opened(&data_dir);
+                remove_old_skill_plugin(&data_dir);
                 Ok(())
             })
             .await;
@@ -389,9 +408,7 @@ impl SessionManager {
                 .await
                 .map_err(|err| Error::Invalid(format!("reading the integrations: {err}")))?;
             #[cfg(not(test))]
-            if let Err(err) = registry.watch() {
-                tracing::warn!(error = %err, "the integrations' configs aren't watched");
-            }
+            registry.watch_in_background();
             registry
         };
         let manager = Arc::new_cyclic(|me| Self {
@@ -416,11 +433,12 @@ impl SessionManager {
             command_logs: Default::default(),
             session_turns: tokio::sync::Notify::new(),
             session_mail: std::sync::Mutex::new(()),
+            session_waits: Default::default(),
             worker_rows: Default::default(),
             cli_asks: Default::default(),
             cli_questions: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
-            local_checkouts: tokio::sync::Mutex::new(()),
+            shared_workspaces: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             turn_snapshots: turn_changes::TurnSnapshots::default(),
@@ -441,6 +459,7 @@ impl SessionManager {
             feedback_sign_in: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
+            mcp_pool: cli_mcp::McpPool::default(),
             user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
@@ -462,7 +481,13 @@ impl SessionManager {
             tab_chats: side_chat::TabChats::default(),
             checkout_saves: tokio::sync::broadcast::channel(16).0,
             cli_threads: std::sync::Mutex::default(),
+            work_blocks: std::sync::Mutex::default(),
+            block_refresh: tokio::sync::Mutex::const_new(()),
+            inbox_read: std::sync::Mutex::default(),
             thread_news: tokio::sync::broadcast::channel(1024).0,
+            news_seq: std::sync::atomic::AtomicU64::new(
+                u64::try_from(crate::now_ms()).unwrap_or_default() * 1000,
+            ),
             session_files: crate::thread_view::FileCache::default(),
             seam: std::sync::Mutex::new(seam_config),
             #[cfg(test)]
@@ -581,6 +606,7 @@ impl SessionManager {
     /// Branches and state of a repository, for the composer's pickers.
     pub async fn repo_info(&self, path: String) -> Result<RepoInfo> {
         let git = self.git.clone();
+        let workers = self.worker_branches(Path::new(&path)).await;
         blocking(move || {
             let repo = git.open(Path::new(&path)).map_err(git_error)?;
             let state = repo.state().map_err(git_error)?;
@@ -597,6 +623,7 @@ impl SessionManager {
                     .branches
                     .into_iter()
                     .map(|branch| crate::model::BranchInfo {
+                        worker: workers.contains(&branch.name),
                         name: branch.name,
                         commit: branch.commit.0,
                         checked_out_at: branch
@@ -729,7 +756,8 @@ impl SessionManager {
 
     /// Creates a session or Chat. A session starts a workspace of its own, as its first tab. A
     /// local-checkout session asked to start on a new branch gets that branch created from
-    /// `create_from` first.
+    /// `create_from` first. One in an existing worktree works there, on its branch, beside any
+    /// session already there (goal 9).
     pub async fn create_conversation(
         &self,
         kind: ConversationKind,
@@ -745,16 +773,15 @@ impl SessionManager {
         if let Some(choice) = orchestrator {
             self.check_choice(choice)?;
         }
-        let _admitting = self.local_checkouts.lock().await;
-        if let Some(SetupRequest::Session {
-            repo,
-            environment: EnvironmentRequest::LocalCheckout { .. },
-            ..
-        }) = &setup
-            && let Some(holder) = self.checkout_holder(repo, None)
-        {
-            return Err(checkout_taken(&holder));
-        }
+        let _admitting = self.shared_workspaces.lock().await;
+        let existing = match &setup {
+            Some(SetupRequest::Session {
+                repo,
+                environment: EnvironmentRequest::Existing { path },
+                ..
+            }) => Some(self.existing_place(repo, path).await?),
+            _ => None,
+        };
         if let Some(SetupRequest::Session {
             repo,
             environment:
@@ -777,27 +804,20 @@ impl SessionManager {
         }
         let id = ConversationId::generate();
         let (prefix, _) = self.branch_prefix_of(project_id.as_ref());
-        let setup = setup.map(|request| Setup::from_request(request, &id, &prefix));
-        self.core
+        let mut setup = setup.map(|request| Setup::from_request(request, &id, &prefix));
+        if let (Some(place), Some(Setup::Session { environment, .. })) = (&existing, &mut setup) {
+            environment.clone_from(&place.environment);
+        }
+        let created = self
+            .core
             .create_conversation(id, kind, project_id, title, setup, Origin::default())
-            .await
-    }
-
-    /// The other session that works in `repo`'s own folder, if one does: an open one, or one
-    /// archived or deleted whose cleanup hasn't stopped it yet. Two sessions there would edit,
-    /// commit and switch branches over each other.
-    fn checkout_holder(&self, repo: &str, except: Option<&ConversationId>) -> Option<Conversation> {
-        self.core.catalog().conversations.into_iter().find(|other| {
-            Some(&other.id) != except
-                && (other.lifecycle != Lifecycle::Archived
-                    || other.cleanup_pending
-                    || other.deleting)
-                && matches!(&other.setup, Some(Setup::Session {
-                        repo: at,
-                        environment: Environment::LocalCheckout { .. },
-                        ..
-                    }) if at == repo)
-        })
+            .await?;
+        let created = match existing {
+            Some(place) => self.let_into(created, place).await?,
+            None => created,
+        };
+        self.tell_if_shared(&created).await?;
+        Ok(created)
     }
 
     fn arc(&self) -> Arc<Self> {
@@ -887,26 +907,38 @@ impl SessionManager {
         }
     }
 
-    /// A CLI session's event as its handlers get it: in development builds, with what an
-    /// armed fault ([`fault`]) adds around it.
+    /// A CLI session's events as its handlers get them: in development builds, with what an
+    /// armed fault ([`fault`]) adds around them, before anything reads them, so every reader
+    /// sees what a real CLI at its limit sends.
     fn session_events(
         &self,
         source: EventSource<'_>,
         cli: &Arc<conversation::Cli>,
-        event: ProviderEvent,
-    ) -> Vec<ProviderEvent> {
+        events: tokio::sync::mpsc::Receiver<ProviderEvent>,
+    ) -> tokio::sync::mpsc::Receiver<ProviderEvent> {
         #[cfg(debug_assertions)]
         {
             let key = match source {
                 EventSource::Task(id) => fault::FaultKey::Task(id.clone()),
                 EventSource::Conversation(id) => fault::FaultKey::Conversation(id.clone()),
             };
-            self.fault_events(key, cli, event)
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            let (manager, cli, mut events) = (self.arc(), cli.clone(), events);
+            self.spawn(async move {
+                while let Some(event) = events.recv().await {
+                    for event in manager.fault_events(key.clone(), &cli, event) {
+                        if tx.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+            rx
         }
         #[cfg(not(debug_assertions))]
         {
             let _ = (source, cli);
-            vec![event]
+            events
         }
     }
 
@@ -933,20 +965,6 @@ impl SessionManager {
         if !same_model {
             self.check_choice(setup.choice())?;
         }
-        // A session given its environment only now is let into the checkout as a new one is.
-        if current.is_none()
-            && let Setup::Session {
-                repo,
-                environment: Environment::LocalCheckout { .. },
-                ..
-            } = &setup
-        {
-            let _admitting = self.local_checkouts.lock().await;
-            if let Some(holder) = self.checkout_holder(repo, Some(&id)) {
-                return Err(checkout_taken(&holder));
-            }
-            return self.core.set_setup(id, setup).await;
-        }
         let before = current.as_ref().map(|setup| setup.choice().clone());
         let selected = setup.choice().clone();
         let conversation = self.core.set_setup(id.clone(), setup).await?;
@@ -971,14 +989,6 @@ impl SessionManager {
                 .current(kind, crate::now_ms())
                 .is_none_or(|quota| quota.limit.is_none())
     }
-}
-
-/// Why a new session can't work in the checkout `holder` works in.
-fn checkout_taken(holder: &Conversation) -> Error {
-    Error::Invalid(format!(
-        "“{}” already works in this checkout. Archive it, or start this session in a new worktree.",
-        holder.title
-    ))
 }
 
 /// Whose CLI session an event comes from (development builds route faults by it).
@@ -1135,5 +1145,46 @@ impl SessionManager {
             Some(crate::model::Setup::Session { repo, .. }) => Ok(std::path::PathBuf::from(repo)),
             _ => Err(Error::Invalid("tasks belong to a session".into())),
         }
+    }
+}
+
+/// Removes the skill plugin Brigadier used to write for every session (`<data>/brigade`): no
+/// skill is installed since D58. Only what it wrote goes (its manifest and skills); the folder
+/// goes only when nothing else is left in it.
+fn remove_old_skill_plugin(data_dir: &std::path::Path) {
+    let plugin = data_dir.join("brigade");
+    for written in [".claude-plugin", "skills"] {
+        match std::fs::remove_dir_all(plugin.join(written)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                tracing::warn!(%error, "couldn't remove Brigadier's old skill plugin");
+            }
+            _ => {}
+        }
+    }
+    let _ = std::fs::remove_dir(plugin);
+}
+
+#[cfg(test)]
+mod old_skill_plugin_tests {
+    #[test]
+    fn the_old_skill_plugin_goes_and_nothing_else() {
+        let data =
+            std::env::temp_dir().join(format!("brigadier-old-plugin-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(data.join("brigade/skills/brigade")).unwrap();
+        std::fs::write(data.join("brigade/skills/brigade/SKILL.md"), "x").unwrap();
+        std::fs::create_dir_all(data.join("brains")).unwrap();
+        std::fs::create_dir_all(data.join("brigade/.claude-plugin")).unwrap();
+        super::remove_old_skill_plugin(&data);
+        assert!(!data.join("brigade").exists());
+        assert!(data.join("brains").is_dir());
+        // A file that isn't the plugin's stays, and so does its folder.
+        std::fs::create_dir_all(data.join("brigade/skills")).unwrap();
+        std::fs::write(data.join("brigade/SKILL.md"), "mine").unwrap();
+        super::remove_old_skill_plugin(&data);
+        assert!(data.join("brigade/SKILL.md").is_file());
+        assert!(!data.join("brigade/skills").exists());
+        // Already gone: nothing to do.
+        super::remove_old_skill_plugin(&data);
+        std::fs::remove_dir_all(&data).unwrap();
     }
 }

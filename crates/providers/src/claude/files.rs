@@ -29,8 +29,38 @@ use std::sync::Mutex;
 
 use brigadier_sandbox::removal;
 
-use crate::model::Artifact;
+use crate::model::{Artifact, ProviderKind};
 use crate::{Error, Result};
+
+/// What each of Claude's [`Artifact::CliFile`]s is.
+pub(crate) mod kinds {
+    /// A project directory (`projects/<encoded cwd>`) that did not exist before.
+    pub(crate) const PROJECT_DIR: &str = "projectDir";
+    /// An empty repository memory folder absent before a linked-worktree CLI started and observed
+    /// to have been created during its life. Its identity, then the enclosing project directory's
+    /// (only when it too was absent before the start), prevent deleting replacements.
+    pub(crate) const MEMORY_DIR: &str = "memoryDir";
+    /// A plan file Claude Code wrote in plan mode (`<config>/plans/<name>.md`, its `ExitPlanMode`
+    /// names it) that was not there when the session started: removed with the session, only while
+    /// it is still that file, by its identity (harness D7).
+    pub(crate) const PLAN_FILE: &str = "planFile";
+    /// Claude Code's write-staging directory in the working directory (`.claude/.cc-writes`, or
+    /// `.claude` itself when that did not exist). Removed only while it holds no files.
+    pub(crate) const STAGING_DIR: &str = "stagingDir";
+    /// A short temp folder of a Claude session's own (`/tmp/brigadier-<id>`), for Claude's temp
+    /// files and its sandboxed commands' TMPDIR.
+    pub(crate) const TEMP_DIR: &str = "tempDir";
+}
+
+/// One of Claude's files, as recorded in the cleanup ledger.
+pub(super) fn artifact(kind: &str, path: &Path, identities: Vec<(u64, u64)>) -> Artifact {
+    Artifact::CliFile {
+        provider: ProviderKind::Claude,
+        kind: kind.to_owned(),
+        path: path.display().to_string(),
+        identities,
+    }
+}
 
 /// Per-session directories and files directly under the config directory, by name.
 const SESSION_DIRS: &[&str] = &["tasks", "session-env", "file-history"];
@@ -580,44 +610,51 @@ impl Drop for CliInFolder {
 
 pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
     let mut failures = Vec::new();
+    let ours = |provider: &ProviderKind| *provider == ProviderKind::Claude;
     // Sessions first: a project directory can only go once the sessions in it are gone.
     let sessions = artifacts.iter().filter_map(|artifact| match artifact {
-        Artifact::ClaudeSession {
-            session_id, home, ..
-        } => Some(
-            remove_session(config, session_id).and_then(|()| match home {
-                // An extra account's own per-session state; its transcript is in `config`.
-                Some(home) if Path::new(home) != config && Path::new(home).is_dir() => {
-                    remove_session(Path::new(home), session_id)
-                }
-                _ => Ok(()),
-            }),
-        ),
+        Artifact::Session {
+            provider, id, home, ..
+        } if ours(provider) => Some(remove_session(config, id).and_then(|()| match home {
+            // An extra account's own per-session state; its transcript is in `config`.
+            Some(home) if Path::new(home) != config && Path::new(home).is_dir() => {
+                remove_session(Path::new(home), id)
+            }
+            _ => Ok(()),
+        })),
         _ => None,
     });
-    let dirs = artifacts.iter().filter_map(|artifact| match artifact {
-        Artifact::ClaudeProjectDir { path } => Some(
-            remove_project_dir(config, Path::new(path))
-                .and_then(|()| remove_temp_project_dir(config, Path::new(path))),
-        ),
-        _ => None,
-    });
-    let staging = artifacts.iter().filter_map(|artifact| match artifact {
-        Artifact::ClaudeMemoryDir {
-            path,
-            identity,
-            project_identity,
-        } => Some(super::memory::remove(
+    let files = || {
+        artifacts.iter().filter_map(|artifact| match artifact {
+            Artifact::CliFile {
+                provider,
+                kind,
+                path,
+                identities,
+            } if ours(provider) => Some((kind.as_str(), Path::new(path), identities.as_slice())),
+            _ => None,
+        })
+    };
+    let dirs = files()
+        .filter(|(kind, ..)| *kind == kinds::PROJECT_DIR)
+        .map(|(_, path, _)| {
+            remove_project_dir(config, path).and_then(|()| remove_temp_project_dir(config, path))
+        });
+    let staging = files().filter_map(|(kind, path, identities)| match (kind, identities) {
+        (kinds::MEMORY_DIR, [identity, project @ ..]) => Some(super::memory::remove(
             config,
-            Path::new(path),
+            path,
             *identity,
-            *project_identity,
+            project.first().copied(),
         )),
-        Artifact::ClaudeStagingDir { path } => Some(remove_staging_dir(Path::new(path))),
-        Artifact::ClaudePlanFile { path, identity } => {
-            Some(remove_plan_file(Path::new(path), *identity))
-        }
-        Artifact::ClaudeTempDir { path } => Some(remove_temp_dir(Path::new(path))),
+        (kinds::STAGING_DIR, _) => Some(remove_staging_dir(path)),
+        (kinds::PLAN_FILE, [identity, ..]) => Some(remove_plan_file(path, *identity)),
+        (kinds::TEMP_DIR, _) => Some(remove_temp_dir(path)),
+        // Never removed without the identity that proves it is still ours.
+        (kinds::MEMORY_DIR | kinds::PLAN_FILE, []) => Some(Err(Error::Invalid(format!(
+            "{} has no identity to remove it by",
+            path.display()
+        )))),
         _ => None,
     });
     for result in sessions
@@ -666,10 +703,11 @@ pub(super) fn owned_plan_file(
     if bound.is_dir() {
         return None;
     }
-    Some(Artifact::ClaudePlanFile {
-        path: path.display().to_string(),
-        identity: bound.identity().parts(),
-    })
+    Some(artifact(
+        kinds::PLAN_FILE,
+        &path,
+        vec![bound.identity().parts()],
+    ))
 }
 
 /// Removes a plan file of a session's own, while it is still the file it wrote.
@@ -710,7 +748,7 @@ pub(super) fn subagent_worktrees(config: &Path, artifacts: &[Artifact]) -> Vec<(
     let projects: Vec<PathBuf> = projects.flatten().map(|entry| entry.path()).collect();
     let mut made = Vec::new();
     for artifact in artifacts {
-        let Artifact::ClaudeSession { session_id, .. } = artifact else {
+        let Some((ProviderKind::Claude, session_id)) = artifact.native_session() else {
             continue;
         };
         if check_session_id(session_id).is_err() {
@@ -1157,6 +1195,7 @@ pub(crate) fn leftovers(
                 root: projects.clone(),
                 path: transcript.clone(),
                 empty_only: false,
+                by_id: false,
             }];
             let own = folder.join(&id);
             if is_entry(&own) {
@@ -1164,6 +1203,7 @@ pub(crate) fn leftovers(
                     root: projects.clone(),
                     path: own,
                     empty_only: false,
+                    by_id: false,
                 });
             }
             for home in &homes {
@@ -1187,6 +1227,7 @@ pub(crate) fn leftovers(
                         root: (*home).clone(),
                         path,
                         empty_only: false,
+                        by_id: false,
                     }
                 }));
             }
@@ -1194,6 +1235,7 @@ pub(crate) fn leftovers(
                 root: projects.clone(),
                 path: folder.clone(),
                 empty_only: true,
+                by_id: false,
             });
             let last_change = entries
                 .iter()

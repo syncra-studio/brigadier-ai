@@ -2,6 +2,8 @@
 import type { AttachmentRef } from "./AttachmentRef";
 import type { HeldBy } from "./HeldBy";
 import type { Mention } from "./Mention";
+import type { PeerRef } from "./PeerRef";
+import type { TaskId } from "./TaskId";
 
 /**
  * A message waiting for the running turn (or a session's working answer) to end.
@@ -9,7 +11,7 @@ import type { Mention } from "./Mention";
 export type QueuedMessage = { id: string, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, queuedAtMs: number, editedAtMs: number | null, 
 /**
  * Sent while the session's turn works: the session has it and judges it with `brigadier
- * queue` (run2-D40); it waits here, Deciding, until it is judged or joins by itself.
+ * queue` (run2-D40); it waits here, Deciding, until it is judged.
  */
 deciding?: boolean, 
 /**
@@ -26,4 +28,14 @@ heldBy?: HeldBy,
  * The session judged it could run apart (`brigadier queue <id> new-session`): it waits for
  * the user's pick, "Open as a new session" or "Run here", and is never sent until then.
  */
-offerSession?: boolean, };
+offerSession?: boolean, 
+/**
+ * The user's message to this worker of the session's (the composer's To:), sent while it
+ * worked: it goes to that worker alone, as its next turn, never to the session (goal 8).
+ */
+worker?: TaskId, 
+/**
+ * Another session's message (goal 4): it is that session's, never the user's, and its id
+ * is the message's own (`sm-…`), so it is queued once.
+ */
+peer?: PeerRef, };

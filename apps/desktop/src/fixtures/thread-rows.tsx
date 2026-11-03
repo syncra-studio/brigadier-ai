@@ -7,7 +7,7 @@
  * - Shell boxes: a long coloured output shown whole with its success footer, a failure's exit
  *   code, a running command (no footer), output the daemon cut short, a command clamped to two
  *   lines until clicked.
- * - A turn the user stopped: a command still running reads "Stopped … after 4s" with a stop mark,
+ * - A turn the user stopped: a command still running reads "Stopped …" with a stop mark,
  *   and its Shell box ends "Stopped".
  * - An open live group: its running command reads "Running command for 3s", a running read is
  *   hidden until done.

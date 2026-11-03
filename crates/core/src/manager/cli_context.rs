@@ -27,6 +27,20 @@ use crate::tools::Role;
 use crate::work::{Approval, ApprovalSubject, CardState, Question, Task};
 use crate::{Error, Result};
 
+/// The parts the overview gives whole when small (D156): what a thread acts on at once.
+const INLINE: [ContextPart; 7] = [
+    ContextPart::Brief,
+    ContextPart::Waiting,
+    ContextPart::Decisions,
+    ContextPart::Open,
+    ContextPart::Checkpoint,
+    ContextPart::Project,
+    ContextPart::Routing,
+];
+
+/// Past this a part is listed with its size instead (a long-lived ledger, a big routing).
+const INLINE_TOKENS: u32 = 4_000;
+
 /// The transcript items `context transcript` gives when not told how many.
 const LAST: u32 = 20;
 
@@ -55,6 +69,11 @@ impl Whose {
     fn worker(&self) -> bool {
         self.task.is_some()
     }
+
+    /// A plain worker's launch: only its `--mcp` grants, no skills.
+    fn plain(&self) -> Option<&crate::work::PlainWorker> {
+        self.task.as_ref().and_then(|task| task.plain.as_ref())
+    }
 }
 
 impl SessionManager {
@@ -64,9 +83,7 @@ impl SessionManager {
         caller: &CliCaller,
         part: Option<ContextPart>,
         name: Option<String>,
-        grep: Option<String>,
-        last: Option<u32>,
-        item: Option<String>,
+        transcript: (Option<String>, Option<u32>, Option<String>, bool),
     ) -> Result<CliReply> {
         if !matches!(
             self.grants.resolve(&caller.grant),
@@ -82,7 +99,9 @@ impl SessionManager {
         let output = match part {
             None => self.context_overview(&whose).await?,
             Some(ContextPart::Transcript) => {
-                self.context_transcript(&whose, grep, last, item).await?
+                let (grep, last, item, session) = transcript;
+                self.context_transcript(&whose, grep, last, item, session)
+                    .await?
             }
             Some(ContextPart::Skills) => self.context_skills(&whose, name.as_deref()).await?,
             Some(part) => self.context_part(&whose, part).await?,
@@ -158,9 +177,11 @@ impl SessionManager {
         Ok(format!("{}/{name}", conversation.short()))
     }
 
-    /// The parts, one line each, with their sizes and the commands that open them.
+    /// Everything in one call (D156, D160): the workers, and each small part whole; the big
+    /// parts one line each, with their sizes and the commands that open them.
     async fn context_overview(&self, whose: &Whose) -> Result<ContextOutput> {
         let mut parts = Vec::new();
+        let mut inline: Vec<(ContextPart, String)> = Vec::new();
         for part in ContextPart::ALL {
             let (entries, lines, tokens) = match part {
                 // Read whole only when asked: its size is its item count.
@@ -186,6 +207,9 @@ impl SessionManager {
                         ContextPart::Project => Some(count(output.files.len())),
                         _ => None,
                     };
+                    if INLINE.contains(&part) && tokens(&output.text) <= INLINE_TOKENS {
+                        inline.push((part, output.text.clone()));
+                    }
                     (entries, lines(&output.text), tokens(&output.text))
                 }
             };
@@ -199,11 +223,40 @@ impl SessionManager {
             });
         }
         let mut text = String::from(
-            "Everything about your job is here, on pull: open what you need. Run \
-             `brigadier context` again after any compaction.\n\n",
+            "Everything about your job, in this one call; run it again after any compaction. \
+             Each worker action's reply carries that worker's state too, so nothing else needs \
+             checking.\n",
         );
+        if !whose.worker() {
+            let caller = CliCaller {
+                conversation_id: whose.conversation.clone(),
+                task_id: None,
+                grant: String::new(),
+            };
+            let workers = self.cli_workers(&caller).await?;
+            text.push_str(&format!(
+                "\n## workers\n{}",
+                brigadier_cli::render::workers(&workers)
+            ));
+        }
+        for (part, body) in &inline {
+            text.push_str(&format!(
+                "\n## {}: {}\n{}",
+                part.word(),
+                summary(*part, whose.worker()),
+                body
+            ));
+            if !body.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        text.push_str("\nThe rest, on pull:\n");
+        let shown: Vec<&str> = inline.iter().map(|(part, _)| part.word()).collect();
         let width = parts.iter().map(|part| part.part.len()).max().unwrap_or(0);
-        for part in &parts {
+        for part in parts
+            .iter()
+            .filter(|part| !shown.contains(&part.part.as_str()))
+        {
             let size = match (part.part.as_str(), part.entries) {
                 ("transcript", Some(items)) => plural(items, "item"),
                 (name, Some(entries)) => {
@@ -399,18 +452,26 @@ impl SessionManager {
         grep: Option<String>,
         last: Option<u32>,
         item: Option<String>,
+        session: bool,
     ) -> Result<ContextOutput> {
+        // A worker's `--session`: its session's thread only, never a sibling worker's.
+        let key = if session {
+            whose.conversation.short().to_owned()
+        } else {
+            whose.key.clone()
+        };
         let text = match (grep, item) {
             (Some(query), _) => {
                 self.records_search(
                     &whose.conversation,
-                    Some(whose.key.clone()),
+                    Some(key.clone()),
                     RecordSearch {
                         query,
-                        session: None,
+                        session: session.then(|| key.clone()),
                         limit: None,
                         role: None,
                         tool: None,
+                        exact: session,
                     },
                 )
                 .await?
@@ -418,9 +479,9 @@ impl SessionManager {
             (None, Some(item)) => {
                 self.records_read(
                     &whose.conversation,
-                    Some(whose.key.clone()),
+                    Some(key.clone()),
                     RecordRead {
-                        session: whose.key.clone(),
+                        session: key.clone(),
                         item: Some(item),
                         ..RecordRead::default()
                     },
@@ -428,7 +489,7 @@ impl SessionManager {
                 .await?
             }
             (None, None) => {
-                self.records_last(&whose.conversation, &whose.key, last.unwrap_or(LAST))
+                self.records_last(&whose.conversation, &key, last.unwrap_or(LAST))
                     .await?
             }
         };
@@ -448,49 +509,51 @@ impl SessionManager {
         })
     }
 
-    /// Resolve exactly as launch does, including grants-only workers and effective homes.
-    async fn context_resolved(&self, whose: &Whose) -> Result<Resolved> {
+    /// The session's whole setup at the caller's own checkout, as its thread's launch resolves
+    /// it: every skill and MCP server the caller can pull, a worker too (D2, D5).
+    async fn context_catalog(&self, whose: &Whose) -> Result<Resolved> {
         let cwd = self.setup_folder(whose);
         let trusted = self.repo_trust(&whose.conversation) == Some(true);
-        let all = self
-            .resolve_plugins(
-                &whose.account,
-                whose.repo.as_deref(),
-                &cwd,
-                trusted,
-                PluginRole::Thread,
-            )
-            .await?;
-        if let Some(plain) = whose.task.as_ref().and_then(|task| task.plain.as_ref()) {
-            let grants: Vec<_> = all
-                .servers
-                .into_iter()
-                .filter(|server| plain.mcps.contains(&server.name))
-                .collect();
-            self.resolve_plugins(
-                &whose.account,
-                whose.repo.as_deref(),
-                &cwd,
-                trusted,
-                PluginRole::Worker { grants: &grants },
-            )
-            .await
-        } else {
-            Ok(all)
-        }
+        self.resolve_plugins(
+            &whose.account,
+            whose.repo.as_deref(),
+            &cwd,
+            trusted,
+            PluginRole::Thread,
+        )
+        .await
+    }
+
+    /// What `brigadier mcp` reaches for `caller`: its session's whole server set at its own
+    /// checkout, the names its launch loaded (`None`: all of them), and the folder its stdio
+    /// servers start in.
+    pub(super) async fn mcp_catalog(
+        &self,
+        caller: &CliCaller,
+    ) -> Result<(
+        Vec<brigadier_providers::McpServer>,
+        Option<Vec<String>>,
+        PathBuf,
+    )> {
+        let whose = self.context_caller(caller).await?;
+        let resolved = self.context_catalog(&whose).await?;
+        let granted = whose.plain().map(|plain| plain.mcps.clone());
+        Ok((resolved.servers, granted, self.setup_folder(&whose)))
     }
 
     /// `context skills [<name>]`: only selected skills; read the selected version by its
     /// display name, row identity, or exact provider invocation.
     async fn context_skills(&self, whose: &Whose, name: Option<&str>) -> Result<ContextOutput> {
-        let resolved = self.context_resolved(whose).await?;
+        let resolved = self.context_catalog(whose).await?;
         let (name, worker) = (name.map(str::to_owned), whose.worker());
-        super::blocking(move || skills_output(&resolved, name.as_deref(), worker)).await
+        // A plain worker's CLI starts naked (D2): it pulls a skill by name.
+        let loaded = whose.plain().is_none();
+        super::blocking(move || skills_output(&resolved, name.as_deref(), worker, loaded)).await
     }
 
     /// Status annotates the resolved set; stale CLI reports never add or remove items.
     async fn context_mcps(&self, whose: &Whose) -> Result<Vec<ContextItem>> {
-        let resolved = self.context_resolved(whose).await?;
+        let resolved = self.context_catalog(whose).await?;
         let reported: Option<HashMap<String, McpStatus>> = self
             .core
             .board(&whose.conversation)
@@ -509,7 +572,8 @@ impl SessionManager {
                             .collect()
                     })
             });
-        Ok(mcp_items(&resolved, reported.as_ref()))
+        let granted = whose.plain().map(|plain| plain.mcps.as_slice());
+        Ok(mcp_items(&resolved, granted, reported.as_ref()))
     }
 
     /// `context project`: the checkout's own instruction files, whole (D17), and the project's
@@ -587,7 +651,12 @@ impl SessionManager {
 }
 
 /// Context is a view of the current resolver result, not a second catalog policy.
-fn skills_output(resolved: &Resolved, name: Option<&str>, worker: bool) -> Result<ContextOutput> {
+fn skills_output(
+    resolved: &Resolved,
+    name: Option<&str>,
+    worker: bool,
+    loaded: bool,
+) -> Result<ContextOutput> {
     let mut output = ContextOutput {
         part: "skills".into(),
         text: String::new(),
@@ -622,7 +691,7 @@ fn skills_output(resolved: &Resolved, name: Option<&str>, worker: bool) -> Resul
         .map(|skill| ContextItem {
             name: skill.display.clone(),
             kind: "skill".into(),
-            has: true,
+            has: loaded,
             status: None,
             detail: if skill.invocation == skill.display {
                 skill.path.display().to_string()
@@ -635,8 +704,10 @@ fn skills_output(resolved: &Resolved, name: Option<&str>, worker: bool) -> Resul
     Ok(output)
 }
 
+/// Every server of the setup; `has`: loaded at launch (a plain worker: only its grants).
 fn mcp_items(
     resolved: &Resolved,
+    granted: Option<&[String]>,
     reported: Option<&HashMap<String, McpStatus>>,
 ) -> Vec<ContextItem> {
     resolved
@@ -645,7 +716,7 @@ fn mcp_items(
         .map(|server| ContextItem {
             name: server.name.clone(),
             kind: "server".into(),
-            has: true,
+            has: granted.is_none_or(|granted| granted.contains(&server.name)),
             detail: match &server.transport {
                 McpTransport::Http { .. } => "HTTP".into(),
                 McpTransport::Stdio { .. } => "stdio".into(),
@@ -761,22 +832,34 @@ fn items_text(items: &[ContextItem], title: &str, none: &str, worker: bool) -> S
             format!("- {}{status}: {}\n", item.name, item.detail)
         }
     };
-    text.push_str(&format!("{title} you have ({}):\n", has.len()));
-    for item in &has {
-        text.push_str(&line(item));
+    if !has.is_empty() {
+        text.push_str(&format!("{title} loaded at your launch ({}):\n", has.len()));
+        for item in &has {
+            text.push_str(&line(item));
+        }
     }
     if !not.is_empty() {
-        text.push_str(&format!("\n{title} you don't have ({}):\n", not.len()));
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&format!(
+            "{title} on hand, not loaded at your launch ({}):\n",
+            not.len()
+        ));
         for item in &not {
             text.push_str(&line(item));
         }
     }
     if title == "Skills" {
-        text.push_str("\n`brigadier context skills <name>` prints one whole.\n");
-    } else if worker {
+        text.push_str(if worker {
+            "\n`brigadier context skills <name>` prints one whole; follow it as written.\n"
+        } else {
+            "\n`brigadier context skills <name>` prints one whole.\n"
+        });
+    } else {
         text.push_str(
-            "\nA worker has the servers it was started with (`brigadier start --mcp`); ask your \
-             session in your last message for one you need.\n",
+            "\nAny of them answers through `brigadier mcp tools <server>` and `brigadier mcp \
+             call <server> <tool> '<json>'`, loaded at launch or not.\n",
         );
     }
     text
@@ -849,7 +932,7 @@ fn summary(part: ContextPart, worker: bool) -> &'static str {
         (ContextPart::Checkpoint, _) => "The session's checkpoint",
         (ContextPart::Transcript, _) => "Your own records: --last N, --grep, --item",
         (ContextPart::Skills, _) => "Skills of your setup; one whole by name",
-        (ContextPart::Mcps, _) => "MCP servers, and which you have",
+        (ContextPart::Mcps, _) => "MCP servers, all callable through `brigadier mcp`",
         (ContextPart::Project, _) => "CLAUDE.md, AGENTS.md and the project's facts",
         (ContextPart::Routing, _) => "Models, usage and routing guidance",
     }
@@ -890,7 +973,8 @@ mod tests {
         choices::Choices,
         resolve::{self, Context},
     };
-    use brigadier_registry::{Agent, Catalog, Roots};
+    use brigadier_providers::ProviderKind as Agent;
+    use brigadier_registry::{Catalog, Roots};
 
     use super::*;
 
@@ -997,7 +1081,7 @@ mod tests {
     fn skills_report_selected_versions_with_plain_names_and_exact_invocations() {
         let home = Home::new("skills");
         let resolved = home.resolved(Agent::Claude, &Choices::default(), PluginRole::Thread);
-        let listed = skills_output(&resolved, None, false).unwrap();
+        let listed = skills_output(&resolved, None, false, true).unwrap();
         assert_eq!(names(&listed.items, true), ["format", "lint", "review"]);
         assert!(listed.items.iter().all(|item| item.has));
         assert!(
@@ -1009,13 +1093,13 @@ mod tests {
                 .detail
                 .contains("tools:lint")
         );
-        let review = skills_output(&resolved, Some("review"), false).unwrap();
+        let review = skills_output(&resolved, Some("review"), false, true).unwrap();
         assert!(review.text.contains("The project's way."));
         assert!(!review.text.contains("Read it twice."));
         for skill in &resolved.skills {
             for name in [&skill.display, &skill.invocation, &skill.row_id] {
                 assert_eq!(
-                    skills_output(&resolved, Some(name), false)
+                    skills_output(&resolved, Some(name), false, true)
                         .unwrap()
                         .text
                         .trim_end(),
@@ -1023,7 +1107,7 @@ mod tests {
                 );
             }
         }
-        assert!(skills_output(&resolved, Some("not-resolved"), false).is_err());
+        assert!(skills_output(&resolved, Some("not-resolved"), false, true).is_err());
         let root = Roots::from_vars([("HOME".into(), home.0.display().to_string())]).unwrap();
         let rows = Catalog::read_rows(&root, &[home.0.join("repo")]);
         let lint = rows.iter().find(|row| row.name == "lint").unwrap();
@@ -1040,10 +1124,10 @@ mod tests {
         );
         let off = home.resolved(Agent::Claude, &choices, PluginRole::Thread);
         assert!(
-            !names(&skills_output(&off, None, false).unwrap().items, true)
+            !names(&skills_output(&off, None, false, true).unwrap().items, true)
                 .contains(&"lint".to_owned())
         );
-        assert!(skills_output(&off, Some("tools:lint"), false).is_err());
+        assert!(skills_output(&off, Some("tools:lint"), false, true).is_err());
     }
 
     #[test]
@@ -1052,12 +1136,12 @@ mod tests {
         for agent in [Agent::Claude, Agent::Codex] {
             let resolved = home.resolved(agent, &Choices::default(), PluginRole::Thread);
             let expected = vec!["calc".to_owned(), "pencil".to_owned(), "railway".to_owned()];
-            assert_eq!(names(&mcp_items(&resolved, None), true), expected);
+            assert_eq!(names(&mcp_items(&resolved, None, None), true), expected);
             let reported = HashMap::from([
                 ("pencil".into(), McpStatus::NeedsAuth),
                 ("stale-native".into(), McpStatus::Connected),
             ]);
-            let listed = mcp_items(&resolved, Some(&reported));
+            let listed = mcp_items(&resolved, None, Some(&reported));
             assert_eq!(names(&listed, true), expected);
             assert_eq!(
                 listed
@@ -1080,27 +1164,46 @@ mod tests {
     }
 
     #[test]
-    fn worker_context_contains_only_grants_and_cannot_read_ungranted_skills() {
+    fn a_workers_launch_resolves_only_its_grants() {
         let home = Home::new("worker");
         let thread = home.resolved(Agent::Claude, &Choices::default(), PluginRole::Thread);
         let grants: Vec<_> = thread
             .servers
-            .into_iter()
+            .iter()
             .filter(|server| server.name == "pencil")
+            .cloned()
             .collect();
         let worker = home.resolved(
             Agent::Claude,
             &Choices::default(),
             PluginRole::Worker { grants: &grants },
         );
-        assert_eq!(names(&mcp_items(&worker, None), true), ["pencil"]);
-        assert!(skills_output(&worker, None, true).unwrap().items.is_empty());
-        assert!(skills_output(&worker, Some("tools:lint"), true).is_err());
+        assert_eq!(names(&mcp_items(&worker, None, None), true), ["pencil"]);
+        assert!(
+            skills_output(&worker, None, true, false)
+                .unwrap()
+                .items
+                .is_empty()
+        );
         let none = home.resolved(
             Agent::Claude,
             &Choices::default(),
             PluginRole::Worker { grants: &[] },
         );
-        assert!(mcp_items(&none, None).is_empty());
+        assert!(mcp_items(&none, None, None).is_empty());
+        // What a worker pulls is the thread's whole set: its grants marked loaded (D2, D5).
+        let granted = ["pencil".to_owned()];
+        let pulled = mcp_items(&thread, Some(&granted), None);
+        assert_eq!(names(&pulled, true), ["pencil"]);
+        assert_eq!(pulled.len(), thread.servers.len());
+        assert!(pulled.len() > 1, "{pulled:?}");
+        let skills = skills_output(&thread, None, true, false).unwrap();
+        assert!(!skills.items.is_empty() && skills.items.iter().all(|item| !item.has));
+        assert!(
+            skills.text.contains("not loaded at your launch"),
+            "{}",
+            skills.text
+        );
+        assert!(skills_output(&thread, Some("tools:lint"), true, false).is_ok());
     }
 }

@@ -3,4 +3,4 @@
 /**
  * Who answered an approval.
  */
-export type Decider = "policy" | "user" | "recorded";
+export type Decider = "policy" | "user" | "orchestrator" | "recorded";

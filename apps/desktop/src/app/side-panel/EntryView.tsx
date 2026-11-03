@@ -1,6 +1,7 @@
-import { shownText } from "@/app/conversation/streamRelease";
 import { receivedMessage } from "@/app/conversation/workerPresentation";
+import { CompactionDivider } from "@/app/conversation/CompactionRow";
 import { ActionRow } from "@/app/side-panel/ActionRow";
+import { REFRESHED } from "@/app/side-panel/workerSeams";
 import { WorkerMarkdown } from "@/app/side-panel/WorkerMarkdown";
 import { ROW, ErrorState, shownCommand, type ThreadEntry } from "@/components/conversation";
 import { ShieldCheck } from "@/components/icons";
@@ -36,31 +37,39 @@ export function EntryView({ entry, sent }: { entry: ThreadEntry; sent: readonly 
       // A settled thought sits in its work group; the live one is the live line.
       return null;
     case "message": {
-      // A reply still streaming shows its finished lines only, none until its first (D9 b).
-      const shown = shownText(item.text, item.streaming);
-      if (item.streaming && !shown) return null;
+      // A reply still streaming shows from its first word.
+      if (item.streaming && !item.text.trim()) return null;
       return item.role === "user" ? (
         <div data-slot="worker-received" className="bg-secondary rounded-thread min-w-0 max-w-full self-end px-3 py-2 text-sm whitespace-pre-wrap">
           {receivedMessage(item.text, sent) ?? item.text}
         </div>
       ) : (
         <div className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
-          <WorkerMarkdown text={shown} streaming={item.streaming} />
+          <WorkerMarkdown text={item.text} streaming={item.streaming} />
         </div>
       );
     }
     case "approval": {
-      // Answered, it leaves no trace: the command's own row tells what came of it.
-      if (item.resolution) return null;
+      // Its orchestrator answers it (D48); answered by anyone else, the command's own row tells what came of it.
+      const { resolution } = item;
+      if (resolution && resolution.decidedBy !== "orchestrator") return null;
       const what = item.request.command ? shownCommand(item.request.command) : item.request.paths.join(", ") || item.request.tool;
+      const reason = resolution?.decision.type === "deny" ? resolution.decision.message.trim() : "";
+      const text = !resolution
+        ? `Waiting for the orchestrator: ${what}`
+        : resolution.decision.type === "deny"
+          ? `Denied by orchestrator${reason ? `: ${reason}` : ""}`
+          : `Allowed by orchestrator: ${what}`;
       return (
-        <div className={cn(row, "text-warning")}>
+        <div data-slot="worker-approval" className={cn(row, resolution ? "text-muted-foreground" : "text-warning")} title={resolution ? `${text}\n${what}` : text}>
           <ShieldCheck aria-hidden className="size-4 shrink-0" />
-          <span className="min-w-0 truncate">Waiting for your approval: {what}</span>
+          <span className="min-w-0 truncate">{text}</span>
         </div>
       );
     }
     case "error":
+      // A usage limit is no error of its turn: it switches on, or its state says the wait (D180).
+      if (item.error.kind === "usageLimit" && !item.error.willRetry) return null;
       return (
         <ErrorState
           summary={item.error.willRetry ? `${ERROR_TITLES[item.error.kind]}: it tries again on its own.` : `${ERROR_TITLES[item.error.kind]}.`}
@@ -68,6 +77,8 @@ export function EntryView({ entry, sent }: { entry: ThreadEntry; sent: readonly 
         />
       );
     case "notice":
+      // Its compactions, as the thread's divider ([`withSeams`]).
+      if (item.text === REFRESHED) return <CompactionDivider compaction={{ id: item.key, inTurn: false, automatic: true, state: "done", error: null, position: 0, startedAtMs: 0, endedAtMs: 0 }} />;
       return (
         <p className={cn("text-sm", item.level === "warning" ? "text-warning" : "text-muted-foreground")}>
           {item.text}

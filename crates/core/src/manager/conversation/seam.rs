@@ -20,6 +20,7 @@
 //!   another agent automatically" on (S38, D23): the generation ends without a note and the
 //!   successor starts on another agent, with the turn's messages.
 
+use brigadier_providers::KindFacts as _;
 use std::sync::Arc;
 
 use brigadier_providers::{Origin, ProviderKind, TurnInput};
@@ -27,8 +28,8 @@ use brigadier_providers::{Origin, ProviderKind, TurnInput};
 use super::{Cli, ConvLive, Envelope};
 use crate::manager::SessionManager;
 use crate::manager::seam::{
-    Boot, Phase, SeamEnd, SeamFile, TailBudget, bootstrap, complete, handoff_line, note_path,
-    nudge, read_seam, start_path, write_seam,
+    Boot, NOTE_FIXES, Phase, SeamEnd, SeamFile, TailBudget, bootstrap, check_note, complete,
+    handoff_line, note_path, nudge, read_seam, start_path, with_workers, write_seam,
 };
 use crate::manager::session_dir::read_lineage;
 use crate::model::{ConversationId, ConversationKind, Message, ModelChoice, Setup};
@@ -46,11 +47,13 @@ pub(super) struct SeamLive {
     /// `seam.json` says `nudged` (or is about to): nothing but the note turn reaches the CLI.
     pub(super) held: bool,
     /// The CLI took the nudge in (its stream said it): the turn it is in ends the generation.
-    seen: bool,
+    pub(super) seen: bool,
     /// The note turn is being stopped: when it ends, the seam closes whatever it wrote.
     force: bool,
     /// Counts the hold timers armed; only the newest acts.
     hold_timer: u64,
+    /// The session was asked to fix its note this many times (goal 13).
+    fixes: u32,
     hold_armed: bool,
     /// The session id the next CLI starts under (a successor's, reserved in `seam.json`).
     pub(super) reserved: Option<String>,
@@ -62,6 +65,9 @@ pub(super) struct SeamLive {
     /// The context a successor's CLI first reported, which its generation grows from before
     /// its seam (none for the first generation); `None` until looked up in `seam.json`.
     pub(super) base: Option<Option<i64>>,
+    /// The running turn is the hand-off's own (the note's ask, a carry-on with no request): the
+    /// tab, the sidebar and the composer keep the user's work idle through it (core-goals D193).
+    pub(super) quiet: bool,
 }
 
 /// A successor about to start: its seam, how its predecessor ended and what it carries.
@@ -71,6 +77,8 @@ pub(super) struct Successor {
     messages: Vec<String>,
 }
 
+/// The label of the envelope asking for the hand-off note or its fix.
+const NOTE_ASK: &str = "hand-off note";
 /// Why a generation ended without its note when the CLI said nothing better.
 const NO_NOTE: &str = "it ended its turn without writing one";
 const HELD_TOO_LONG: &str = "it was still working a minute after a message came";
@@ -175,8 +183,10 @@ impl SessionManager {
         steer: bool,
     ) -> Option<bool> {
         let mut file = self.read_seam_of(&conv.id).await;
+        // A job that ended inside the turn asking for a move owes a turn for a while: it never
+        // holds the move (demo9, every CLI).
         if file.phase != Phase::Live
-            || conv.has_cli_jobs().await
+            || conv.state.lock().await.runs_cli_jobs()
             || self.open_permission(&conv.id).await
         {
             return None;
@@ -231,7 +241,7 @@ impl SessionManager {
         let steered = match cli.filter(|_| steer && running) {
             Some(cli) => {
                 let input = TurnInput::text(text.clone());
-                self.note_sent(&conv.id, &input, &[]);
+                self.note_sent(&conv.id, &input, &[], &[]);
                 cli.session.steer(input).await.is_ok()
             }
             None => false,
@@ -273,13 +283,18 @@ impl SessionManager {
         Some((envelope, state.seam.carried_request.take()))
     }
 
+    /// Whether `envelope` asks for the hand-off note or its fix.
+    pub(super) fn asks_for_note(envelope: &Envelope) -> bool {
+        envelope.kind == InjectionKind::Seam && envelope.label == NOTE_ASK
+    }
+
     /// The nudge due as a turn of its own, taken for the next turn.
     pub(super) fn take_due_nudge(state: &mut super::ConvState) -> Option<Envelope> {
         let text = state.seam.nudge_due.take()?;
         state.seam.seen = true;
         Some(Envelope {
             kind: InjectionKind::Seam,
-            label: "hand-off note".into(),
+            label: NOTE_ASK.into(),
             task_id: None,
             text,
         })
@@ -287,8 +302,21 @@ impl SessionManager {
 
     /// The CLI's stream showed a user message: the nudge, once taken in.
     pub(super) async fn seam_heard(&self, conv: &ConvLive, text: &str) {
-        if text.starts_with(crate::thread_view::NUDGE_MARK) {
-            conv.state.lock().await.seam.seen = true;
+        if !text.starts_with(crate::thread_view::NUDGE_MARK) {
+            return;
+        }
+        // A hold armed while the nudge was on its way ends with its arrival: the note turn runs
+        // to its own end, which checks the note. One for a waiting message stays.
+        let waiting = self
+            .core
+            .conversation_view(conv.id.clone(), 1)
+            .await
+            .is_ok_and(|view| !view.queue.items.is_empty());
+        let mut state = conv.state.lock().await;
+        state.seam.seen = true;
+        if !waiting && state.seam.hold_armed {
+            state.seam.hold_armed = false;
+            state.seam.hold_timer += 1;
         }
     }
 
@@ -320,7 +348,32 @@ impl SessionManager {
                     self.arm_seam_hold(conv).await;
                     return false;
                 }
+                // Goal 13 (core-goals D9): a note that leaves out an open item, or no note, is
+                // fixed by the session itself while it can still act, before its generation ends.
+                // A fix still due (the turn that ended was the CLI's own, a nudge steered in
+                // late) is checked again, never counted twice.
+                let (pending, fixes) = {
+                    let state = conv.state.lock().await;
+                    (state.seam.nudge_due.is_some(), state.seam.fixes)
+                };
+                if !force && why == NO_NOTE && (pending || fixes < NOTE_FIXES) {
+                    let fix = self.note_fix(&conv.id, &note).await;
+                    let mut state = conv.state.lock().await;
+                    if let Some(fix) = fix {
+                        state.seam.fixes += u32::from(!pending);
+                        state.seam.nudge_due = Some(fix);
+                        return false;
+                    }
+                    state.seam.nudge_due = None;
+                }
                 let death = (!written).then(|| if force { HELD_TOO_LONG.into() } else { why });
+                // A job the note was asked in goes on in the successor, working all along (D193).
+                if !stopped {
+                    let mut state = conv.state.lock().await;
+                    if state.seam.carried_request.is_none() {
+                        state.seam.carried_request = state.request.clone();
+                    }
+                }
                 self.close_seam(conv, file, Some(at_ms), death, stopped)
                     .await
             }
@@ -349,6 +402,16 @@ impl SessionManager {
             }
             Phase::Closed { .. } | Phase::Starting { .. } => false,
         }
+    }
+
+    /// What the session is asked so its note `note` passes goal 13's check; `None`: it passes.
+    async fn note_fix(&self, id: &ConversationId, note: &std::path::Path) -> Option<String> {
+        let record = self.session_dir(id).record();
+        let at = note.to_path_buf();
+        crate::manager::blocking(move || Ok(check_note(&record, &at).fix(&at)))
+            .await
+            .ok()
+            .flatten()
     }
 
     /// Ends generation `file.generation`: `closed`, with `death` when it left no note. Its
@@ -407,9 +470,20 @@ impl SessionManager {
         state.seam.held = false;
         state.seam.seen = false;
         state.seam.force = false;
+        state.seam.fixes = 0;
+        // A fix still due belongs to the generation that ended, never to its successor.
+        state.seam.nudge_due = None;
         state.seam.hold_armed = false;
         state.seam.hold_timer += 1;
         state.seam.carry_on = !stopped;
+        // Jobs that ended before the note turn were told by then: their owed turns never hold
+        // the predecessor's retirement (demo9, every CLI).
+        if let Some(jobs) = &mut state.background {
+            jobs.owed.clear();
+            if !jobs.waits() {
+                state.background = None;
+            }
+        }
         true
     }
 
@@ -473,6 +547,26 @@ impl SessionManager {
             None => format!(
                 "no Fallback row in Settings › Routing names {label}; add one to continue there"
             ),
+        })
+    }
+
+    /// The model a session goes on with after its own declined a turn (D143): the first
+    /// `Fallback` row of the user's routing that is another model than the session's, on an
+    /// agent that can take it, that the user's rules allow. `None`: no such row (or no session).
+    pub(crate) fn declined_next(&self, id: &crate::model::ConversationId) -> Option<ModelChoice> {
+        let conversation = self.core.conversation(id).ok()?;
+        let from = super::setup_choice(&conversation)
+            .filter(|_| conversation.kind == crate::model::ConversationKind::Session)?;
+        // `opus`, `claude-opus-5-5` and the CLI's default may be one model.
+        let runs_as = |choice: &ModelChoice| {
+            let (model, _) = self.runs_as(choice.provider, choice.model.as_deref(), None);
+            (choice.provider, model)
+        };
+        self.fallback_rows().into_iter().find(|choice| {
+            runs_as(choice) != runs_as(&from)
+                && (choice.provider == from.provider
+                    || self.agent_unready(choice.provider).is_none())
+                && self.fallback_refusal(choice).is_none()
         })
     }
 
@@ -692,7 +786,7 @@ impl SessionManager {
             .conversation(&conv.id)
             .ok()
             .and_then(|conversation| super::setup_choice(&conversation))
-            .map_or(brigadier_providers::ProviderKind::Claude, |choice| {
+            .map_or_else(brigadier_providers::adapters::default_kind, |choice| {
                 choice.provider
             });
         let messages: Vec<String> = users.iter().map(|message| message.id.clone()).collect();
@@ -800,6 +894,17 @@ impl SessionManager {
             target_window: cli.session.context_window(),
         };
         let own = cli.session.native_id();
+        let caller = crate::manager::cli::CliCaller {
+            conversation_id: id.clone(),
+            task_id: None,
+            grant: String::new(),
+        };
+        let workers = match self.cli_workers(&caller).await {
+            Ok(output) if !output.workers.is_empty() => {
+                Some(brigadier_cli::render::workers(&output))
+            }
+            _ => None,
+        };
         crate::manager::blocking(move || {
             let record = dir.record();
             let lineage: Vec<_> = read_lineage(&record)
@@ -822,6 +927,7 @@ impl SessionManager {
             let entries = crate::manager::records::transcript(&files);
             let note_at = note_path(&record, n);
             let note = std::fs::read_to_string(&note_at).ok();
+            let check = check_note(&record, &note_at).line();
             let start = start_path(&record, n);
             let text = bootstrap(&Boot {
                 n,
@@ -837,9 +943,14 @@ impl SessionManager {
                 } else {
                     Some(death.as_deref().unwrap_or(NO_NOTE))
                 },
+                check: &check,
                 entries: &entries,
                 blobs: &blobs,
             });
+            let text = match &workers {
+                Some(workers) => with_workers(text, workers),
+                None => text,
+            };
             if let Some(parent) = start.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|err| crate::Error::Invalid(err.to_string()))?;

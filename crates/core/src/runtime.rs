@@ -11,6 +11,8 @@
 //!
 //! A stopped session keeps its CLI session so it can be resumed; closing it removes everything.
 
+#[cfg(debug_assertions)]
+use brigadier_providers::KindFacts as _;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -19,9 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use brigadier_providers::claude::Claude;
+use brigadier_providers::adapters;
 use brigadier_providers::cli::CliEnv;
-use brigadier_providers::codex::Codex;
 use brigadier_providers::history::PastFolder;
 use brigadier_providers::record::{self, Recording};
 use brigadier_providers::{
@@ -108,8 +109,8 @@ pub struct Runtime {
     this: Weak<Runtime>,
     core: Arc<Core>,
     platform: Arc<dyn Platform>,
-    claude: Arc<Claude>,
-    codex: Arc<Codex>,
+    /// Each registered CLI's adapter for the user's own login, in [`adapters::ADAPTERS`] order.
+    providers: Vec<Arc<dyn Provider>>,
     spawner: Spawner,
     state: Mutex<State>,
     admitting: AtomicBool,
@@ -130,9 +131,9 @@ pub struct Runtime {
     accounts: Mutex<HashMap<String, accounts::AccountLive>>,
     /// Extra accounts being removed: no work starts on them.
     removing: Mutex<HashSet<String>>,
-    /// Tests: scripted stand-ins for the Claude and Codex CLIs.
+    /// Tests: scripted stand-ins for the CLIs.
     #[cfg(test)]
-    fakes: Option<[Arc<dyn Provider>; 2]>,
+    fakes: Option<Vec<Arc<dyn Provider>>>,
     /// Tests: scripted stand-ins for extra accounts' CLIs.
     #[cfg(test)]
     fake_accounts: Option<accounts::FakeAccounts>,
@@ -157,14 +158,14 @@ impl Runtime {
         .await
     }
 
-    /// [`Runtime::start`] with scripted CLIs (Claude's, then Codex's, and those of extra
-    /// accounts) in place of the real ones. Only the flow tests use it.
+    /// [`Runtime::start`] with scripted CLIs (one per kind, and those of extra accounts) in
+    /// place of the real ones. Only the flow tests use it.
     #[cfg(test)]
     pub(crate) async fn start_faked(
         core: Arc<Core>,
         platform: Arc<dyn Platform>,
         spawner: Spawner,
-        fakes: [Arc<dyn Provider>; 2],
+        fakes: Vec<Arc<dyn Provider>>,
         accounts: accounts::FakeAccounts,
     ) -> Result<Arc<Self>> {
         Self::start_with(core, platform, spawner, Some(fakes), Some(accounts)).await
@@ -174,7 +175,7 @@ impl Runtime {
         core: Arc<Core>,
         platform: Arc<dyn Platform>,
         spawner: Spawner,
-        #[cfg_attr(not(test), allow(unused_variables))] fakes: Option<[Arc<dyn Provider>; 2]>,
+        #[cfg_attr(not(test), allow(unused_variables))] fakes: Option<Vec<Arc<dyn Provider>>>,
         #[cfg(test)] fake_accounts: Option<accounts::FakeAccounts>,
     ) -> Result<Arc<Self>> {
         let env = {
@@ -186,17 +187,12 @@ impl Runtime {
         let env = Arc::new(env);
         choose_agent_paths(&env, &core.settings());
         let data_dir = platform.paths().data_dir.clone();
-        let claude = Arc::new(Claude::new(platform.clone(), env.clone()));
-        let codex = Arc::new(Codex::new(platform.clone(), env.clone()));
-        let ledger = Arc::new(
-            CleanupLedger::load(
-                core.clone(),
-                platform.clone(),
-                claude.clone(),
-                codex.clone(),
-            )
-            .await?,
-        );
+        let providers: Vec<Arc<dyn Provider>> = adapters::ADAPTERS
+            .iter()
+            .map(|adapter| (adapter.new)(platform.clone(), env.clone()))
+            .collect();
+        let ledger =
+            Arc::new(CleanupLedger::load(core.clone(), platform.clone(), providers.clone()).await?);
         #[cfg(test)]
         if let Some(providers) = &fakes {
             ledger.set_test_providers(providers.clone());
@@ -229,8 +225,7 @@ impl Runtime {
             registry,
             quit: CancellationToken::new(),
             checked: tokio::sync::watch::Sender::new(0),
-            claude,
-            codex,
+            providers,
             ledger,
             env,
             core,
@@ -261,7 +256,7 @@ impl Runtime {
         let ledger = runtime.ledger.clone();
         runtime
             .pumps
-            .spawn(async move { ledger.archive_codex_threads().await });
+            .spawn(async move { ledger.archive_sessions().await });
         runtime.refresh_providers(None);
         let poller = runtime.clone();
         runtime.spawn(async move { poller.poll_quota().await });
@@ -383,7 +378,7 @@ impl Runtime {
                 () = self.quit.cancelled() => return,
                 () = tokio::time::sleep(wait) => {}
             }
-            for kind in ProviderKind::ALL {
+            for kind in adapters::kinds() {
                 let ready = {
                     let state = self.state();
                     !state.refreshing.contains(&kind)
@@ -396,7 +391,10 @@ impl Runtime {
                 if !ready {
                     continue;
                 }
-                match self.provider(kind).quota().await {
+                let Some(provider) = self.provider(kind) else {
+                    continue;
+                };
+                match provider.quota().await {
                     Ok(quota) => self.note_read(quota).await,
                     Err(err) => {
                         tracing::debug!(provider = %kind, error = %err, "quota read failed")
@@ -511,28 +509,39 @@ impl Runtime {
 
     /// The folders the user's own sessions of each CLI ran in, the latest used first.
     pub async fn past_folders(&self) -> Vec<(ProviderKind, PastFolder)> {
-        let (claude, codex) = tokio::join!(self.claude.past_folders(), self.codex.past_folders());
-        let claude = claude
+        let mut folders: Vec<_> =
+            futures_util::future::join_all(self.providers.iter().map(|provider| async move {
+                let kind = provider.kind();
+                provider
+                    .past_folders()
+                    .await
+                    .into_iter()
+                    .map(move |folder| (kind, folder))
+            }))
+            .await
             .into_iter()
-            .map(|folder| (ProviderKind::Claude, folder));
-        let codex = codex
-            .into_iter()
-            .map(|folder| (ProviderKind::Codex, folder));
-        let mut folders: Vec<_> = claude.chain(codex).collect();
+            .flatten()
+            .collect();
         folders.sort_by_key(|(_, folder)| std::cmp::Reverse(folder.last_active_ms));
         folders
     }
 
     /// Whether CLI session `native_id` of `kind` took `needle` as input, by its transcript.
     pub async fn took_input(&self, kind: ProviderKind, native_id: &str, needle: &str) -> bool {
-        self.provider(kind).took_input(native_id, needle).await
+        match self.provider(kind) {
+            Some(provider) => provider.took_input(native_id, needle).await,
+            None => false,
+        }
     }
 
     /// What Brigadier last learned about a provider (login, models, quota).
     /// The agent's status as its CLI says now: whether it is found, and signed in. Not recorded
     /// ([`Runtime::refresh_providers`] checks and publishes).
     pub async fn provider_status(&self, kind: ProviderKind) -> ProviderStatus {
-        self.provider(kind).status().await
+        match self.provider(kind) {
+            Some(provider) => provider.status().await,
+            None => unregistered(kind),
+        }
     }
 
     pub fn overview(&self, kind: ProviderKind) -> Option<ProviderOverview> {
@@ -592,18 +601,22 @@ impl Runtime {
         self.fakes.is_some()
     }
 
-    fn provider(&self, kind: ProviderKind) -> Arc<dyn Provider> {
+    /// `kind`'s adapter for the user's own login; none for a CLI that isn't registered.
+    fn provider(&self, kind: ProviderKind) -> Option<Arc<dyn Provider>> {
         #[cfg(test)]
-        if let Some([claude, codex]) = &self.fakes {
-            return match kind {
-                ProviderKind::Claude => claude.clone(),
-                ProviderKind::Codex => codex.clone(),
-            };
+        if let Some(fakes) = &self.fakes {
+            return fakes.iter().find(|fake| fake.kind() == kind).cloned();
         }
-        match kind {
-            ProviderKind::Claude => self.claude.clone(),
-            ProviderKind::Codex => self.codex.clone(),
-        }
+        self.providers
+            .iter()
+            .find(|provider| provider.kind() == kind)
+            .cloned()
+    }
+
+    /// [`Self::provider`], or why there is none.
+    fn registered(&self, kind: ProviderKind) -> Result<Arc<dyn Provider>> {
+        self.provider(kind)
+            .ok_or_else(|| Error::Invalid(format!("{kind} is not a CLI Brigadier drives")))
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -662,7 +675,7 @@ impl Runtime {
         }
         let mut state = self.state();
         state.sessions = sessions;
-        for kind in ProviderKind::ALL {
+        for kind in adapters::kinds() {
             let cached = cached.iter().find(|cached| cached.catalog.provider == kind);
             if let Some(account) = cached.and_then(|cached| cached.account.clone()) {
                 state.models_cached_for.insert(kind, account);
@@ -791,9 +804,8 @@ impl Runtime {
         let mut sessions: Vec<RawSession> = state.sessions.values().cloned().collect();
         sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at_ms));
         ProvidersView {
-            providers: ProviderKind::ALL
-                .iter()
-                .filter_map(|kind| state.overviews.get(kind).cloned())
+            providers: adapters::kinds()
+                .filter_map(|kind| state.overviews.get(&kind).cloned())
                 .collect(),
             sessions,
             fixtures,
@@ -804,7 +816,7 @@ impl Runtime {
     /// disk) and quota. Results arrive as `providerChecked` events, each provider's as soon as
     /// it is known; a provider already being checked is checked once more after that check.
     pub fn refresh_providers(self: &Arc<Self>, only: Option<ProviderKind>) {
-        for kind in ProviderKind::ALL {
+        for kind in adapters::kinds() {
             if only.is_some_and(|only| only != kind) {
                 continue;
             }
@@ -899,10 +911,7 @@ impl Runtime {
     pub async fn providers_checked(&self, generation: u32, within: Duration) -> bool {
         let deadline = tokio::time::Instant::now() + within;
         loop {
-            if ProviderKind::ALL
-                .iter()
-                .all(|kind| self.checked_generation(*kind) >= generation)
-            {
+            if adapters::kinds().all(|kind| self.checked_generation(kind) >= generation) {
                 return true;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -927,7 +936,17 @@ impl Runtime {
     }
 
     async fn check(&self, kind: ProviderKind) -> ProviderOverview {
-        let provider = self.provider(kind);
+        let Some(provider) = self.provider(kind) else {
+            return ProviderOverview {
+                provider: kind,
+                status: Some(unregistered(kind)),
+                models: None,
+                quota: None,
+                usage: None,
+                error: None,
+                checked_at_ms: Some(now_ms()),
+            };
+        };
         let previous = self.state().overviews.get(&kind).cloned();
         let previous_status = previous
             .as_ref()
@@ -1397,7 +1416,7 @@ impl Runtime {
         };
         self.create(session.clone()).await?;
         let (events_tx, events) = mpsc::channel(512);
-        let mut replayer = self.provider(provider).replayer();
+        let mut replayer = self.registered(provider)?.replayer();
         self.spawn(async move {
             let mut last = 0;
             for (t, dir, line) in lines {
@@ -1490,13 +1509,19 @@ impl Runtime {
                 Err(_) => return,
             };
             let keeps_detached = spec.keeps_detached;
-            let started = runtime
-                .provider(kind)
-                .start(
-                    spec,
-                    runtime.ledger.cli_handle(id.0.clone(), keeps_detached),
-                )
-                .await;
+            let started = match runtime.provider(kind) {
+                Some(provider) => {
+                    provider
+                        .start(
+                            spec,
+                            runtime.ledger.cli_handle(id.0.clone(), keeps_detached),
+                        )
+                        .await
+                }
+                None => Err(brigadier_providers::Error::Invalid(format!(
+                    "{kind} is not a CLI Brigadier drives"
+                ))),
+            };
             match started {
                 Ok(Started { session, events }) => {
                     if !runtime.admitting.load(Ordering::Acquire) {
@@ -1733,7 +1758,6 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         mcp_servers: Vec::new(),
         tools: ToolSet::Default,
         skill_plugins: Vec::new(),
-        installed_skills: Vec::new(),
         switched_off: Default::default(),
         add_dirs: Vec::new(),
         project: None,
@@ -1835,8 +1859,7 @@ struct CachedModels {
 }
 
 fn read_model_cache(dir: &Path) -> Vec<CachedModels> {
-    ProviderKind::ALL
-        .iter()
+    adapters::kinds()
         .filter_map(|kind| {
             let text = std::fs::read_to_string(dir.join(format!("models-{kind}.json"))).ok()?;
             serde_json::from_str::<CachedModels>(&text).ok()
@@ -1911,9 +1934,25 @@ async fn load_fixture(recordings: &Path, id: &str) -> Result<String> {
         .map_err(|_| Error::NotFound(format!("fixture {id}")))
 }
 
+/// The status of a CLI no adapter is registered for (an old record's).
+fn unregistered(kind: ProviderKind) -> ProviderStatus {
+    ProviderStatus {
+        provider: kind,
+        path: None,
+        version: None,
+        logged_in: false,
+        auth_method: None,
+        plan: None,
+        email: None,
+        organization: None,
+        guidance: Some(format!("Brigadier doesn't drive {kind}")),
+        compacts: false,
+    }
+}
+
 /// Points `env` at the binaries `settings` chose for the agents, and PATH's for the others.
 fn choose_agent_paths(env: &CliEnv, settings: &Settings) {
-    for kind in ProviderKind::ALL {
+    for kind in adapters::kinds() {
         let chosen = settings
             .agent_paths
             .iter()

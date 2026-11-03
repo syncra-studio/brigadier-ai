@@ -4,9 +4,10 @@ import { ErrorState } from "@/components/conversation/elements/error-state";
 
 /**
  * One message of the thread that fails to render shows "This turn couldn't render" with Try
- * again, in its place: the rest of the thread stays. Try again renders it afresh.
+ * again, in its place: the rest of the thread stays. Try again renders it afresh. Around a whole
+ * view (`summary`), its error never blanks the window: the sidebar and the rest stay.
  */
-export class TurnBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+export class TurnBoundary extends Component<{ children: ReactNode; summary?: string }, { error: Error | null }> {
   override state: { error: Error | null } = { error: null };
 
   static getDerivedStateFromError(error: Error): { error: Error } {
@@ -22,7 +23,7 @@ export class TurnBoundary extends Component<{ children: ReactNode }, { error: Er
     if (!error) return this.props.children;
     return (
       <div data-slot="turn-render-error" className="border-border rounded-control mx-2 border p-3">
-        <ErrorState summary="This turn couldn’t render." details={error.message} onRetry={() => this.setState({ error: null })} />
+        <ErrorState summary={this.props.summary ?? "This turn couldn’t render."} details={error.message} onRetry={() => this.setState({ error: null })} />
       </div>
     );
   }

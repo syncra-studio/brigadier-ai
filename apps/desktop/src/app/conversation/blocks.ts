@@ -7,6 +7,7 @@ import type {
   CompactionState,
   Decision,
   MachineStep,
+  StartStepRecord,
   MachineStepKind,
   Message,
   ItemStatus,
@@ -21,6 +22,7 @@ import type {
   Task,
   ThinkingSegment,
   WorkerStep,
+  WaitReply,
   WorkerStepKind,
   WorkSpan,
 } from "@/ipc/generated";
@@ -62,6 +64,8 @@ export type BlockText = {
   commentary?: boolean;
   /** When it was written (a reply still streaming: when it started). */
   atMs?: number;
+  /** It still streams. */
+  live?: boolean;
 };
 
 /**
@@ -94,15 +98,12 @@ export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?
  */
 export type DecidedStep = { type: "decided"; what: string; why: string };
 
-/** A wait of the thread for the replies to its messages, as its call stands. */
-export type PeerWaitCall = { itemId: string; status: ItemStatus; requestId: string | null };
-
 /**
  * Messages this session sent others, and its waits for their replies, as one row of the work
  * (SESSION-MESSAGING-PLAN.md §6.1): "Sent message to Docs, waited for its reply". The records
  * say where each went and how it stands; adjacent sends and waits share the row.
  */
-export type PeerSentStep = { type: "peerSent"; messageIds: readonly string[]; waits: readonly PeerWaitCall[] };
+export type PeerSentStep = { type: "peerSent"; messageIds: readonly string[] };
 
 /**
  * A message the thread's own `brigadier send` gave another session (S30), as one row of the work:
@@ -120,10 +121,26 @@ export type SessionSentStep = {
   refused: string | null;
 };
 
+/**
+ * The thread's own `brigadier wait` on other sessions (D138), one row: "Waiting for Docs to
+ * reply" while it runs, then "Received a reply from Docs", opening to the reply. `to` holds the
+ * ids as the call named them; `sent` the message the same call sent first, once it said so;
+ * `replies` what Brigadier kept of the replies it took.
+ */
+export type SessionWaitStep = {
+  type: "sessionWait";
+  itemId: string;
+  to: readonly string[];
+  sent: string | null;
+  status: ItemStatus;
+  replies: WaitReply[];
+};
+
 /** The messages to other sessions a step's row sent: a jump to one opens the work holding it. */
 export function sentMessageIds(kind: BlockOrchestratorStep["kind"]): readonly string[] {
   if (kind.type === "peerSent") return kind.messageIds;
   if (kind.type === "sessionSent" && kind.messageId !== null) return [kind.messageId];
+  if (kind.type === "sessionWait" && kind.sent !== null) return [kind.sent];
   return [];
 }
 
@@ -136,12 +153,15 @@ export type MachineWords = {
   taskId: string | null;
 };
 
+/** A new session's setup line: the steps its turn reached before its CLI's first output. */
+export type SetupSteps = { type: "setup"; steps: readonly StartStepRecord[] };
+
 /**
  * Something the orchestrator did ("Sent message to …"), or Brigadier decided for the user, in
  * the order it happened.
  */
 export type BlockOrchestratorStep = {
-  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep | SessionSentStep;
+  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep | SessionSentStep | SessionWaitStep | SetupSteps;
   position: number;
   /** When the step began (a tool call: when it was first seen). */
   atMs?: number;
@@ -179,8 +199,8 @@ export type BlockSeam = {
 };
 
 /**
- * What of a seam the thread shows: a hand-off is under the hood (run2-D44), its note and a
- * missing one alike; only the other CLI the thread went on in, which now answers.
+ * The other CLI a seam's thread went on in, which now answers; none for a hand-off on the same
+ * CLI, with its note or without (its divider says a fresh session took over, core-goals D120).
  */
 export function seamMove(seam: BlockSeam): ProviderKind | null {
   return seam.death ? null : seam.movedTo;
@@ -288,12 +308,15 @@ export type BoardDigest = {
   questions: Readonly<Record<string, Question>>;
   orchestratorSteps: readonly OrchestratorStep[];
   machineSteps: readonly MachineStep[];
+  startSteps?: readonly StartStepRecord[] | undefined;
   decisions: readonly Decision[];
   compactions: Readonly<Record<string, Compaction>>;
   /** Messages to and from other sessions, by message id. */
   peerMessages?: Readonly<Record<string, PeerMessage>>;
   /** The queue rail's messages: one the CLI already has shows there, not in the thread. */
   queueItems?: readonly QueuedMessage[];
+  /** The user's requests, by id: a follow-up handed to a worker never becomes one here. */
+  requests?: Readonly<Record<string, unknown>>;
 };
 
 const WORKING: ReadonlySet<Task["state"]> = new Set([
@@ -341,31 +364,26 @@ export function stoppedAtMs(spans: readonly WorkSpan[]): number | null {
   return stops.length ? Math.max(...stops) : null;
 }
 
-/** Whether a waiting turn waits only for the answer to its question card: it still reads as working. */
+/**
+ * Whether a live turn waits for the answer to its question card: its clock still counts it as
+ * worked, its header reads "Waiting for …" (D161). Its CLI's turn may run meanwhile (a blocking
+ * `brigadier ask`) or not: the same on every CLI.
+ */
 export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boolean {
-  return meta.state === "waiting" && meta.cardWait;
+  return (meta.state === "waiting" || meta.state === "working") && meta.cardWait;
 }
 
 /**
  * The time a turn shows: while it works, waits for quota or for the answer to its question
  * card, how long it has worked so far; while it waits for the user otherwise, how long it has
  * waited; once over, how long it worked. Worked time is on the clock, from its first turn's
- * start to its last one's end (or to where its final answer started), the waits for its
+ * start to its last one's end, the waits for its
  * workers between its turns counted.
  */
 export function turnTime(
   meta: { state: BlockState; worked: readonly WorkSpan[]; cardWait: boolean; endedAtMs: number | null },
   now: number,
-  /** When its final answer started: it worked until then, whatever came after. */
-  answerAtMs?: number,
 ): number {
-  if (answerAtMs !== undefined) {
-    const until = (at: number) => Math.min(at, answerAtMs);
-    const spans = meta.worked
-      .filter((span) => span.fromMs < answerAtMs)
-      .map((span) => ({ ...span, toMs: until(span.toMs ?? answerAtMs) }));
-    return wallMs(spans, until(now));
-  }
   if (meta.state === "waiting" && !waitsOnCard(meta)) {
     return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
   }
@@ -473,7 +491,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
     if (OLD_RECORDS.has(step.kind.type)) continue;
     // A run's own steps show as its phases, but a refused message, a usage limit's reset or
     // switch and a proof the thread attached have no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "providerTransition" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
+    if ((ON_TASK_ROW.has(step.kind.type) && !(step.kind.type === "created" && step.kind.offRouting)) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "providerTransition" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
     items.push({
       kind: "orchestrator",
       position: step.position,
@@ -490,7 +508,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       kind: "orchestrator",
       position: peer.position,
       requestId: peer.requestId,
-      step: { kind: { type: "peerSent", messageIds: [peer.messageId], waits: [] }, position: peer.position, atMs: peer.sentAtMs },
+      step: { kind: { type: "peerSent", messageIds: [peer.messageId] }, position: peer.position, atMs: peer.sentAtMs },
       atMs: peer.sentAtMs,
     });
   }
@@ -506,6 +524,18 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       },
       atMs: step.atMs,
     });
+  }
+  // A turn's start steps are one setup line, before all of its CLI's items (`atMs` 0).
+  const setups = new Map<string, StartStepRecord[]>();
+  for (const record of board.startSteps ?? []) {
+    if (record.requestId === null) continue;
+    const steps = setups.get(record.requestId);
+    if (steps) steps.push(record);
+    else setups.set(record.requestId, [record]);
+  }
+  for (const [requestId, steps] of setups) {
+    const position = steps[0]!.position;
+    items.push({ kind: "orchestrator", position, requestId, step: { kind: { type: "setup", steps }, position }, atMs: 0 });
   }
   for (const decision of board.decisions) {
     if (!judgementCall(decision)) continue;
@@ -555,7 +585,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
 
 /** What a block's work is made of, as its message metadata carries it. */
 export type SequenceSource = {
-  texts: readonly { position: number; anchors?: readonly string[]; answerAtMs?: number; atMs?: number }[];
+  texts: readonly { messageId: string; position: number; anchors?: readonly string[]; answerAtMs?: number; atMs?: number }[];
   cards: readonly BlockCard[];
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
@@ -570,7 +600,7 @@ export type SequenceSource = {
 /** One line or card of a block's work. */
 export type SequenceEntry =
   | { kind: "thinking"; segment: ThinkingSegment; live: boolean; position: number }
-  | { kind: "text"; index: number; position: number; anchors?: readonly string[] }
+  | { kind: "text"; index: number; messageId: string; position: number; anchors?: readonly string[] }
   | { kind: "card"; card: BlockCard; position: number }
   | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; requestId?: string; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
@@ -611,6 +641,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     ...source.texts.map((text, index) => ({
       kind: "text" as const,
       index,
+      messageId: text.messageId,
       position: text.position,
       ...(text.anchors && { anchors: text.anchors }),
     })),
@@ -754,36 +785,14 @@ export function foldsWork(done: boolean, answer: number | null, hasWork: boolean
   return done && answer !== null && hasWork;
 }
 
-/** Whether its CLI said a reply is the turn's final answer. */
-const said = (text: { answerAtMs?: number }) => text.answerAtMs !== undefined;
-
 /**
- * The reply a block still at work answers with: the one its CLI said is the turn's final answer.
- * Its work folds the moment it starts and the answer goes under "Worked for …", though the
- * request may still wait (for another session's reply, say); what comes after it while the turn
- * still runs (a step, a notice, a card) shows under it, never opening the work again. A follow-up
- * steered in or a compaction after it starts new work: no answer yet. `null` otherwise, always
- * with a CLI that doesn't say: its work folds once it is done.
+ * The reply a block still at work is writing at its end: its last entry, a thought aside, when
+ * that is a reply and not an update line. It shows where the answer will stand, so nothing moves
+ * when the block ends; a step after it puts it back among the steps. `null` otherwise.
  */
-export function answeringIndex(texts: readonly { answerAtMs?: number; update?: boolean }[], sequence: readonly SequenceEntry[]): number | null {
-  // A late event's "Update: …" line goes under the answer it follows, which stays the answer;
-  // a block of update lines alone answers with its newest.
-  const answer = texts.findLastIndex((text) => said(text) && !text.update);
-  const at = answer >= 0 ? answer : texts.findLastIndex(said);
-  if (at < 0) return null;
-  const position = sequence.find((entry) => entry.kind === "text" && entry.index === at)?.position;
-  if (position === undefined) return null;
-  const cut = sequence.some((entry) => entry.position > position && (entry.kind === "steer" || entry.kind === "compaction"));
-  return cut ? null : at;
-}
-
-/**
- * Whether a request works again since its answer started at `answerAtMs`: a late result (a
- * failed full check, say) reopened it, so its answer is no longer what it is doing (#107).
- */
-export function reopenedSince(worked: readonly WorkSpan[], answerAtMs: number | undefined): boolean {
-  const last = worked.at(-1);
-  return answerAtMs !== undefined && last !== undefined && last.toMs === null && last.fromMs > answerAtMs;
+export function liveAnswer(texts: readonly { update?: boolean }[], sequence: readonly SequenceEntry[]): number | null {
+  const last = sequence.findLast((entry) => entry.kind !== "thinking");
+  return last?.kind === "text" && !texts[last.index]?.update ? last.index : null;
 }
 
 /**
@@ -804,15 +813,19 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
   return answer === null ? [] : texts.map((_, index) => index).filter((index) => index > answer);
 }
 
+/** The lead's steps a finished block keeps in view. */
+const IN_VIEW: ReadonlySet<string> = new Set(["feedbackOffered", "sessionOffered", "fusionOffered", "moment", "providerTransition", "paused", "resumed", "stopped"]);
+
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
  * and the cards, feedback and session offers that stay in view (decisions, failures, what
- * needs the user), and the dividers of its limits and switches (#506).
+ * needs the user), the dividers of its limits and switches (#506), and its one line per worker
+ * paused, resumed or ended (D150, D195).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "fusionOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => IN_VIEW.has(step.kind.type))) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

@@ -132,10 +132,14 @@
   height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-composer-gap));
 }
 
-/* Behind the floating footer the background is solid; right above it the text fades out, and
-   the scroll button floats over it there. */
+/* Behind the floating footer the background is solid; right above it the text fades out. While
+   the scroll button shows, the solid part reaches its top (24px gap, 32px button) and the text
+   fades out above it, so none runs under the button. */
 @utility thread-bottom-fade {
   height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-fade-bottom));
+  &[data-raised] {
+    height: calc(var(--thread-footer-height, 0px) + var(--spacing) * 14 + var(--spacing-thread-fade-bottom));
+  }
   background-image: linear-gradient(
     to top,
     var(--color-background) 0%,
@@ -444,11 +448,6 @@
   outline-offset: 2px;
 }
 
-/* A changed-file row reaches its card's clipped edges: keep Find's ring inside it. */
-[data-slot="turn-diff-file"] > [data-thread-find-active] {
-  outline-offset: -2px;
-}
-
 /* A wait on the user's approval: the same sweep over fainter words. */
 @utility shimmer-quiet {
   --shimmer-base: var(--live-text-quiet);
@@ -490,10 +489,10 @@
   .aui-fade,
   .aui-fade-block {
     opacity: 0;
-    animation: word-fade-in 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
+    animation: word-fade-in 150ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
   }
   .aui-fade-marker::marker {
-    animation: marker-fade-in 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
+    animation: marker-fade-in 150ms cubic-bezier(0.37, 0.55, 0.86, 0.88) forwards;
   }
   @media (prefers-reduced-motion: reduce) {
     .aui-fade,

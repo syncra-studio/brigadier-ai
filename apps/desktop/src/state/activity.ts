@@ -9,6 +9,7 @@ import type {
   TaskState,
   ThreadNews,
 } from "@/ipc/generated";
+import { forOrchestrator } from "@/state/board";
 import { type Stop, stopsOf, useStopping } from "@/state/stopping";
 
 /** A conversation's live state as the sidebar shows it, from the daemon's snapshot and events. */
@@ -62,11 +63,11 @@ const WORKING: ReadonlySet<TaskState> = new Set([
 
 /**
  * The names of `servers` that want the user to sign in, as the engine's `sign_ins` reads them:
- * a claude.ai connector is left out, the user manages those on claude.ai and many stay unsigned.
+ * one whose sign-in the user manages outside the CLI is left out, many stay unsigned.
  */
 export function signInsOf(servers: readonly McpServerState[]): string[] {
   return servers
-    .filter((server) => server.status === "needs-auth" && !server.name.startsWith("claude.ai "))
+    .filter((server) => server.status === "needs-auth" && !server.managed)
     .map((server) => server.name);
 }
 
@@ -82,10 +83,14 @@ export function workHolds(activity: Activity | undefined): boolean {
 }
 
 /** Its CLI works: its turn is open, or Brigadier hands it a message. */
-const works = (activity: Activity) => activity.turnOpen || activity.run === "starting";
+export const works = (activity: Activity) => activity.turnOpen || activity.run === "starting";
 
-/** Nothing works, and its CLI did not take the turn or its last turn failed or was cut off. */
-const failedOf = (activity: Activity) => !works(activity) && (activity.run === "failed" || activity.ended === "failed");
+/**
+ * Nothing works, and its CLI did not take the turn or its last turn failed or was cut off. A turn
+ * a limit cut ends failed while Brigadier still runs it on, switching account or CLI: not yet.
+ */
+const failedOf = (activity: Activity) =>
+  !works(activity) && (activity.run === "failed" || (activity.ended === "failed" && activity.run !== "running"));
 
 /** Nothing works, and the user stopped its CLI's last turn. */
 export const stoppedOf = (activity: Activity | undefined): boolean =>
@@ -232,7 +237,7 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
         approvals: toggled(
           current.approvals,
           event.approval.id,
-          event.approval.state.type === "pending",
+          event.approval.state.type === "pending" && !forOrchestrator(event.approval),
         ),
       };
     case "questionUpdated":
@@ -283,19 +288,21 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
  * into activity, even when its thread has never opened.
  */
 export function applyActivityNews(news: ThreadNews): void {
-  if (!news.opened && !news.ended && news.workers === undefined && news.jobs === undefined) return;
+  // A turn handed over to another account or CLI goes on there: it never ended for the row (D180).
+  const ended = news.ended === "handedOver" ? undefined : news.ended;
+  if (!news.opened && !ended && news.workers === undefined && news.jobs === undefined) return;
   const { byConversation } = activityStore.getState();
   const current = byConversation[news.conversationId] ?? IDLE;
-  const turn: Activity = news.ended
+  const turn: Activity = ended
     ? {
         ...current,
         turnOpen: false,
         turnEndedAtMs: news.turnEndedAtMs ?? Date.now(),
-        ended: news.ended === "failed" || news.ended === "interrupted" ? "failed" : news.ended === "stopped" ? "stopped" : null,
+        ended: ended === "failed" || ended === "interrupted" ? "failed" : ended === "stopped" ? "stopped" : null,
       }
     : news.opened ? { ...current, turnOpen: true, ended: null } : current;
   const workers = news.workers === undefined ? turn : { ...turn, workersWorking: news.workers.some((worker) => worker.working) };
-  const next = news.jobs === undefined ? workers : { ...workers, commandsWorking: !!news.jobs.holding?.length || !!news.jobs.waking };
+  const next = news.jobs === undefined ? workers : { ...workers, commandsWorking: !!news.jobs.holding?.length || !!news.jobs.waking || !!news.jobs.subagents };
   if (next.turnOpen === current.turnOpen && next.ended === current.ended && next.workersWorking === current.workersWorking
     && next.commandsWorking === current.commandsWorking && next.turnEndedAtMs === current.turnEndedAtMs) return;
   activityStore.setState({ byConversation: { ...byConversation, [news.conversationId]: next } });

@@ -4,6 +4,8 @@ mod manager;
 mod oauth;
 mod prompts;
 pub mod store;
+/// One JSON-RPC answer read from a streamable-HTTP response, JSON or SSE (`brigadier mcp`).
+pub(in crate::manager) use prompts::response_value;
 #[cfg(test)]
 pub(super) mod tests;
 
@@ -358,10 +360,7 @@ impl McpGatewayService {
                     entry.fallback.store(true, Ordering::Release);
                     CatalogSignIn::CliFallback {
                         steps: Vec::new(),
-                        agents: vec![
-                            brigadier_providers::ProviderKind::Claude,
-                            brigadier_providers::ProviderKind::Codex,
-                        ],
+                        agents: brigadier_providers::adapters::kinds().collect(),
                     }
                 }
                 Err(message) => {
@@ -481,7 +480,7 @@ impl McpGatewayService {
             CatalogSignIn::SignedIn
         } else if entry.fallback.load(Ordering::Acquire) {
             CatalogSignIn::CliFallback {
-                agents: brigadier_providers::ProviderKind::ALL.to_vec(),
+                agents: brigadier_providers::adapters::kinds().collect(),
                 steps: Vec::new(),
             }
         } else {

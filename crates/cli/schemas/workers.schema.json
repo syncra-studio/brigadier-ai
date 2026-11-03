@@ -76,10 +76,7 @@
           "type": "string"
         },
         "agent": {
-          "enum": [
-            "claude",
-            "codex"
-          ]
+          "type": "string"
         },
         "model": {
           "type": [

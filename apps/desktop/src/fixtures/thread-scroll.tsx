@@ -26,7 +26,7 @@ import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
 import { select, send } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
-import { applyEvents, emptyThread, useApp } from "@/state/store";
+import { applyEvents, useApp } from "@/state/store";
 
 const LOAD_MS = 250;
 /** How far the window shrinks in the resize checks. */
@@ -125,6 +125,8 @@ function requests(id: string): UserRequest[] {
 let sentWorking = false;
 /** A sent message's CLI hasn't said it yet: the fixture says when (`cliSays`). */
 let sentUnsaid = false;
+/** A sent message waits in the queue, as one sent while the turn works does. */
+let sentQueued = false;
 /** The id of the message sent last. */
 let lastSent: string | null = null;
 
@@ -208,6 +210,10 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
     }
     case "sendMessage": {
       await wait(100);
+      if (sentQueued) {
+        const item = { id: `queued-${sequence++}`, text: req.text, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null };
+        return { method: req.method, outcome: { type: "queued", item } };
+      }
       const list = (stored[req.conversationId] ??= []);
       const message: Message = {
         id: `sent-${sequence++}`, conversationId: req.conversationId, seq: list.length + 1, role: "user",
@@ -265,6 +271,11 @@ const rows = () =>
 const max = () => viewport().scrollHeight - viewport().clientHeight;
 const distance = () => Math.round(max() - viewport().scrollTop);
 const viewTop = () => viewport().getBoundingClientRect().top;
+/** The newest user message's top in the view. */
+const newestUserTop = () => round(rows().findLast((row) => row.dataset["role"] === "user")!.getBoundingClientRect().top - viewTop());
+/** The sent turn's room. */
+const roomHeight = () => round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height);
+
 /** The floating footer's top: the composer, and whatever sits above it. */
 const stackTop = () => $('[data-slot="aui_thread-footer-column"]')!.getBoundingClientRect().top;
 const button = () => $<HTMLButtonElement>(".aui-thread-scroll-to-bottom")!;
@@ -420,12 +431,14 @@ async function toggleStays(toggle: HTMLElement): Promise<{ before: number; after
  * its own timers, so a reading between frames can see text the thread hasn't laid out yet: this
  * observer, made after the thread's own, reads each frame right after the thread handled it.
  */
-async function stream(messageId: string, requestId: string, words: number): Promise<{ tops: number[]; distances: number[] }> {
+async function stream(messageId: string, requestId: string, words: number): Promise<{ tops: number[]; distances: number[]; rooms: number[] }> {
   const tops: number[] = [];
   const distances: number[] = [];
+  const rooms: number[] = [];
   const laidOut = new ResizeObserver(() => {
     tops.push(Math.round(viewport().scrollTop));
     distances.push(distance());
+    rooms.push(round($('[data-slot="aui_thread-spacer"]')?.getBoundingClientRect().height ?? 0));
   });
   laidOut.observe($('[data-slot="aui_message-group"]')!);
   const streaming = useBoard.getState().board?.streaming;
@@ -440,7 +453,7 @@ async function stream(messageId: string, requestId: string, words: number): Prom
   }
   await settle(0);
   laidOut.disconnect();
-  return { tops, distances };
+  return { tops, distances, rooms };
 }
 
 function stopStreaming(conversationId: string, messageId: string, text: string, requestId: string): void {
@@ -483,7 +496,9 @@ const steps = {
     await userScroll(max() - 26);
     await settle(250);
     const past = buttonState();
-    return { within, past };
+    // Shown, the fade is raised: its top above the button's, so no text runs under it.
+    const overText = round($(".thread-bottom-fade")!.getBoundingClientRect().top - button().getBoundingClientRect().top);
+    return { within, past, overText };
   },
   /**
    * Mid-scroll, a session switch and back: the same distance from the bottom, with history and
@@ -497,11 +512,12 @@ const steps = {
     const offset = round(anchor.getBoundingClientRect().top - viewTop());
     const left = distance();
     await open("other");
-    // Gone from memory: it loads again, its long replies' full text after it.
-    useApp.setState((state) => ({ threads: { ...state.threads, long: emptyThread } }));
-    // While its history loads the column is empty: a screen reader's "Loading conversation", no
-    // placeholder lines. Read at every change the page makes, from before the switch: on a slow
-    // machine the switch's own render can outlast the load, so a timer could miss it.
+    // Gone from memory (as a resync drops it): it loads again, its long replies' full text after it.
+    useApp.setState((state) => ({ threads: Object.fromEntries(Object.entries(state.threads).filter(([key]) => key !== "long")) }));
+    // While its history loads the conversation shown before stays: never an empty column, a
+    // "Loading conversation" or placeholder lines. Read at every change the page makes, from
+    // before the switch: on a slow machine the switch's own render can outlast the load, so a
+    // timer could miss it.
     let loading = false;
     let placeholders = 0;
     const read = () => {
@@ -613,7 +629,8 @@ const steps = {
   },
   /**
    * A send from the bottom of a conversation: the spring to its place, its answer filling the
-   * room and then running on below the view, not followed; back at the bottom, it is.
+   * room with the view still, then followed; scrolled up, it runs on below; back at the bottom,
+   * it is followed again.
    */
   async send() {
     await open("other");
@@ -639,10 +656,10 @@ const steps = {
     const requestId = stored["other"]!.at(-1)!.requestId!;
     const top = Math.round(viewport().scrollTop);
     const streamed = await stream("other-streaming", requestId, 260);
-    // It filled the room and ran on below without the view moving.
+    // It filled the room without the view moving, then was followed.
     const filled = {
       top,
-      tops: [...new Set(streamed.tops)],
+      tops: [...new Set(streamed.tops.filter((_, index) => streamed.rooms[index]! > 0))],
       distance: distance(),
       button: buttonState(),
       room: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),
@@ -685,6 +702,97 @@ const steps = {
     await settle(200);
     return { placed, shrunk, grown: distance() };
   },
+  /** A card coming above the composer right after a send (an approval): the room takes it, nothing shown moves. */
+  async cardAtSend() {
+    await send({ text: "A question that asks first.", attachments: [], mentions: [] });
+    await settle(600);
+    const placed = { userTop: newestUserTop(), room: roomHeight() };
+    const notice = { level: "warning", text: "A card above the composer, two lines long.\nIts second line.", atMs: Date.now() };
+    const tops: number[] = [];
+    useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [notice as never] } } : {}));
+    for (const end = performance.now() + 300; performance.now() < end; await new Promise(requestAnimationFrame)) tops.push(newestUserTop());
+    const shown = { tops: [...new Set(tops)], room: roomHeight() };
+    useBoard.setState(({ board }) => (board ? { board: { ...board, notices: [] } } : {}));
+    await settle(300);
+    return { placed, shown };
+  },
+  /**
+   * A working turn's approval card coming in the same update as its rows change (its words
+   * gone as it asks), the browser moving the view on its own as it comes, and the card going
+   * again: the user's message stays where it was placed throughout.
+   */
+  async approvalAtWork() {
+    await open("other");
+    await userScroll(max());
+    sentWorking = true;
+    await send({ text: "A question whose turn asks first.", attachments: [], mentions: [] });
+    await settle(300);
+    const request = stored["other"]!.find((message) => message.id === lastSent)!.requestId!;
+    const now = Date.now();
+    const thinking = [0, 1, 2].map((index) => ({
+      itemId: `think-${index}`, requestId: request, text: `Step ${index + 1} of what it thinks through.`, position: 1_000 + index,
+      startedAtMs: now + index, updatedAtMs: now + index, throughPosition: 0, complete: index < 2,
+    }));
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "running", runRequest: request, thinking, streaming: { messageId: "said", text: "It says what it does first.\n\nThen a second paragraph.", requestId: request, startedAtMs: now, phase: "commentary" } as never } } : {}));
+    await settle(400);
+    const placed = { userTop: newestUserTop(), room: roomHeight() };
+    const tops: number[] = [];
+    const sample = async (ms: number) => {
+      // Read once each frame's resize observers ran: what the frame paints.
+      for (const end = performance.now() + ms; performance.now() < end; ) {
+        await frame();
+        tops.push(newestUserTop());
+      }
+    };
+    const approval = {
+      id: "ask", conversationId: "other", taskId: null, requestId: request, position: 2_000, state: { type: "pending" }, createdAtMs: now, resolvedAtMs: null,
+      subject: { type: "cli", request: { id: "ask", kind: "command", tool: "Bash", command: "sleep 25 && echo done", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: null } },
+    };
+    useBoard.setState(({ board }) => (board ? { board: { ...board, thinking: thinking.slice(0, 1), streaming: null, approvals: { ask: approval as never } } } : {}));
+    // The browser moves the view itself as the card takes the focused composer's place (WebKit
+    // does): no input of the user's, no clamp.
+    await frame();
+    viewport().scrollTop -= 58;
+    await sample(400);
+    const shown = { tops: [...new Set(tops)], room: roomHeight() };
+    tops.length = 0;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, approvals: {} } } : {}));
+    await sample(400);
+    const gone = { tops: [...new Set(tops)], room: roomHeight() };
+    sentWorking = false;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "idle", runRequest: null, thinking: [], streaming: null } } : {}));
+    return { placed, shown, gone };
+  },
+  /**
+   * A placed turn's rows shrinking (its work folding as it ends) while the browser moves the
+   * view on its own in the same frame, before the resize is heard: the message stays put.
+   */
+  async shrinkWithBrowserMove() {
+    await open("other");
+    await userScroll(max());
+    sentWorking = true;
+    await send({ text: "A question whose work folds as it ends.", attachments: [], mentions: [] });
+    await settle(300);
+    const request = stored["other"]!.find((message) => message.id === lastSent)!.requestId!;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "running", runRequest: request, streaming: { messageId: "said", text: "It says what it does first.\n\nThen a second paragraph.", requestId: request, startedAtMs: Date.now(), phase: "commentary" } as never } } : {}));
+    await settle(400);
+    const placed = newestUserTop();
+    const last = rows().at(-1)!;
+    last.style.height = `${last.getBoundingClientRect().height - 4}px`;
+    last.style.overflow = "hidden";
+    viewport().scrollTop -= 35;
+    const tops: number[] = [];
+    for (const end = performance.now() + 300; performance.now() < end; ) {
+      await frame();
+      tops.push(newestUserTop());
+    }
+    last.style.height = "";
+    last.style.overflow = "";
+    sentWorking = false;
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "idle", runRequest: null, streaming: null } } : {}));
+    await settle(300);
+    return { placed, tops: [...new Set(tops)] };
+  },
   /** A send, then away to another conversation while it answers and back: at the bottom, without the room. */
   async returnAfterSend() {
     await open("other");
@@ -702,7 +810,7 @@ const steps = {
       button: buttonState().shown,
     };
   },
-  /** Scrolled up, a send leaves the view where it is: the turn is added below. */
+  /** Scrolled up, a send brings its message into view, placed near the top with room below. */
   async sendScrolledUp() {
     await open("other");
     await userScroll(Math.round(max() / 2));
@@ -710,7 +818,9 @@ const steps = {
     const top = Math.round(viewport().scrollTop);
     await send({ text: "A question sent while reading above.", attachments: [], mentions: [] });
     await settle(600);
-    return { top, after: Math.round(viewport().scrollTop), button: buttonState().shown };
+    const sent = rows().findLast((row) => row.dataset["role"] === "user")!.getBoundingClientRect();
+    const box = viewport().getBoundingClientRect();
+    return { moved: Math.round(viewport().scrollTop) !== top, distance: distance(), inView: sent.top >= box.top && sent.bottom <= box.bottom, button: buttonState().shown };
   },
   /** The first message of a new chat, sent from the new-chat view. */
   async newChat() {
@@ -739,32 +849,31 @@ const steps = {
     }
     return { shown: shownIs("other"), empty, placeholders, rows: rows().length };
   },
-  /** With the capsule above the composer: the gaps are to the capsule's top. */
-  async capsule() {
-    // A shorter window, so its bottom is a real one.
-    $("#thread-scroll-main")!.style.paddingBottom = `${SHRINK_PX}px`;
-    await open("long");
-    // Its last request works on, with what it changed so far: the capsule shows.
-    const before = useBoard.getState().board!;
-    const last = Object.values(before.requests).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1)!;
-    useBoard.setState({ board: { ...before, requests: { ...before.requests, [last.id]: { ...last, state: { type: "working" }, endedAtMs: null } } } });
-    await settle(400);
-    await userScroll(max());
-    await settle(250);
-    const capsule = $('[data-slot="composer-capsule"]');
-    const atBottom = { capsule: capsule !== null, capsuleInStack: capsule ? round(capsule.getBoundingClientRect().top - stackTop()) : null, lastGap: lastGap(), distance: distance() };
-    await userScroll(max() - 200);
-    await settle(250);
-    const above = buttonState();
-    useBoard.setState({ board: before });
-    $("#thread-scroll-main")!.style.paddingBottom = "";
-    await settle(200);
-    return { atBottom, button: above };
-  },
   /** An existing conversation never opened, whose one turn still runs: the bottom. */
   async working() {
     await open("working");
     return { distance: distance(), rows: rows().length };
+  },
+  /**
+   * Rows of fractional height: the content's height is the same whichever rows are mounted, as a
+   * row not mounted keeps its exact height. Rounded, it moved a pixel as rows mounted and went,
+   * and a placement spring chasing that bottom never settled.
+   */
+  async fractionalRows() {
+    await open("long");
+    const style = document.createElement("style");
+    style.textContent = "[data-thread-row] { padding-bottom: 0.5px; }";
+    document.head.append(style);
+    // Every row measured at its new height.
+    await scrollTo(() => (distance() === 0 ? true : undefined));
+    const heights: number[] = [];
+    for (const top of [0, max(), 0, max()]) {
+      await userScroll(top);
+      heights.push(viewport().scrollHeight);
+    }
+    style.remove();
+    await settle(100);
+    return heights;
   },
   /**
    * A send whose message its CLI says before the view reads its turns again, as over a busy
@@ -812,6 +921,41 @@ const steps = {
     cliLag.ownIds = false;
     return frames;
   },
+  /**
+   * At the bottom of a long thread, a send while its turn works waits in the queue; once its own
+   * turn shows (the message keeps the queued item's id), it is placed in view with no scroll by hand.
+   */
+  async sendWhileWorking() {
+    await open("long");
+    await userScroll(max());
+    await settle(300);
+    const before = useBoard.getState().board!;
+    useBoard.setState({ board: { ...before, run: "running" } });
+    sentQueued = true;
+    const text = "A question sent while it works.";
+    await send({ text, attachments: [], mentions: [] });
+    sentQueued = false;
+    await settle(300);
+    const item = useBoard.getState().board!.queue.items.find((each) => each.text === text);
+    // Its turn: the work ended, the message goes on as its own turn.
+    useBoard.setState(({ board }) => (board ? { board: { ...board, run: "idle", queue: { ...board.queue, items: [] } } } : {}));
+    const list = stored["long"]!;
+    appended({
+      id: item!.id, conversationId: "long", seq: list.length + 1, role: "user", text, blob: null, createdAtMs: Date.now(),
+      attachments: [], mentions: [], model: null, requestId: `queued-request-${sequence++}`, parentId: list.at(-1)?.id ?? null,
+    } as Message);
+    await settle(600);
+    const sent = [...document.querySelectorAll<HTMLElement>('[data-role="user"]')].find((each) => each.textContent?.includes(text));
+    const box = viewport().getBoundingClientRect();
+    const at = sent?.getBoundingClientRect();
+    return {
+      queued: !!item,
+      inView: !!at && at.top >= box.top && at.bottom <= stackTop(),
+      userTop: at ? round(at.top - viewTop()) : null,
+      room: roomHeight(),
+      distance: distance(),
+    };
+  },
 };
 
 async function drive(): Promise<void> {
@@ -825,8 +969,9 @@ async function drive(): Promise<void> {
     const only = new URLSearchParams(location.search).get("only");
     for (const [name, step] of Object.entries(steps)) {
       if (only !== null && name !== only) continue;
-      // A cold open needs a page that opened nothing yet: it runs on its own.
-      if (only === null && name === "coldOpen") continue;
+      // A cold open needs a page that opened nothing yet, and a send while working one that sent
+      // nothing yet: each runs on its own.
+      if (only === null && (name === "coldOpen" || name === "sendWhileWorking")) continue;
       // Where a run that ran out of time stopped.
       document.body.dataset["scrollStep"] = name;
       result[name] = await step();

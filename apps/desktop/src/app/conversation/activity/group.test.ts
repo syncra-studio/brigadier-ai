@@ -103,20 +103,20 @@ test("T1's unfolded turn: one row per run of work, and no thought rows", () => {
   }
 });
 
-test("the live line says the newest heading, else the last whole line, never half a line", () => {
-  // The last whole line, a lone bold heading by its words.
+test("the live line says the newest whole heading, never the plain reasoning, never half a line", () => {
+  // A lone bold line or a markdown heading, by its words, however much text follows it.
   assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first."), "Checking the tests");
-  assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first.\n"), "I should run them first.");
+  assert.equal(thinkingLabel("**Checking the tests**\n\nI should run them first.\n"), "Checking the tests");
+  assert.equal(thinkingLabel("## Reading `blocks.ts`\nThen the fold code.\n"), "Reading blocks.ts");
   const streamed = "**Reading the code**\n\nSome text.\n\n**Planning the fix**\n\nMore.";
   assert.equal(thinkingLabel(streamed), "Planning the fix");
-  assert.equal(thinkingLabel(streamed, true), "More.");
-  // No heading: the last line a newline closed, markdown left out.
-  assert.equal(thinkingLabel("Reading `blocks.ts` and the *fold* code.\nThen the te"), "Reading blocks.ts and the fold code.");
-  // A line still streaming is never shown: "Thinking" says it meanwhile.
-  assert.equal(thinkingLabel("I want to analyze the panel, so I'm th"), "");
+  assert.equal(thinkingLabel(streamed, true), "Planning the fix");
+  // No heading (OpenCode's raw reasoning): no label, the line says "Thinking", as on every CLI.
+  assert.equal(thinkingLabel("Actually, let me reconsider. The grilling section says:\n- brigadier models\n"), "");
+  assert.equal(thinkingLabel("Reading `blocks.ts` and the *fold* code.\nThen the te"), "");
+  // A heading still streaming is never shown: "Thinking" says it meanwhile.
   assert.equal(thinkingLabel("**Checking the te"), "");
-  // Complete, its last line is whole.
-  assert.equal(thinkingLabel("One line only.", true), "One line only.");
+  assert.equal(thinkingLabel("One line only.", true), "");
   assert.equal(thinkingLabel(""), "");
   for (const text of ["", "line one\nline two\nline three", "**A**\n\nbody\n\n**B**\nmore", "x".repeat(500)]) {
     assert.doesNotMatch(thinkingLabel(text) || "Thinking", /\n/);
@@ -220,7 +220,7 @@ test("an interview is one block: two answered rounds and a steer, each round a r
 
 test("a question card's row says what it asks, what it asked, and the recommended answer", () => {
   const open = roundCard("q1", "r", 1, 2, null);
-  assert.equal(questionRowWords(open), "Asking questions");
+  assert.equal(questionRowWords(open), "Asking questions · waiting");
   const withdrawn = { ...open, answeredAtMs: 2 };
   assert.equal(questionRowWords(withdrawn), "Asked 2 questions · withdrawn");
   const single = { ...roundCard("q2", "r", 1, 1, ["No"]), items: [], text: "Ship it?", options: ["Yes", "No"], recommended: 0, answers: [], answer: "No" };
@@ -237,26 +237,24 @@ test("a question card's row says what it asks, what it asked, and the recommende
   assert.equal(answerWords(item, "1\\. Cover: USM.  2\\. Format: A4 \\*bold\\*"), "1. Cover: USM.  2. Format: A4 *bold*");
   assert.equal(answerWords(item, "C:\\Users\\me"), "C:\\Users\\me");
   const merge = { ...single, kind: { type: "merge" as const, branch: "b", base: "main", conflicted: false, conflicts: [] }, answer: null, answeredAtMs: null };
-  assert.equal(questionRowWords(merge), "Asking whether to merge into main");
+  assert.equal(questionRowWords(merge), "Asking whether to merge into main · waiting");
 });
 
 const stepAt = (position: number, kind: BlockOrchestratorStep["kind"]): SequenceEntry => ({ kind: "orchestrator", steps: [{ kind, position }], position });
-const waitCall = (itemId: string) => ({ itemId, status: "completed" as const, requestId: "a1" });
 
-test("messages to other sessions and the waits for their replies, next to each other, are one row of the work", () => {
+test("messages to other sessions, next to each other, are one row of the work", () => {
   const sequence: SequenceEntry[] = [
-    stepAt(1, { type: "peerSent", messageIds: ["m1"], waits: [] }),
-    stepAt(2, { type: "peerSent", messageIds: ["m2"], waits: [] }),
-    stepAt(3, { type: "peerSent", messageIds: [], waits: [waitCall("w1")] }),
+    stepAt(1, { type: "peerSent", messageIds: ["m1"] }),
+    stepAt(2, { type: "peerSent", messageIds: ["m2"] }),
     stepAt(4, { type: "tool", itemId: "t1", name: "Read", detail: null, status: "completed", throughPosition: 4 }),
-    stepAt(5, { type: "peerSent", messageIds: [], waits: [waitCall("w2")] }),
+    stepAt(5, { type: "peerSent", messageIds: ["m3"] }),
   ];
   const [group] = turnActivity(sequence);
   assert.ok(group?.type === "group");
   assert.deepEqual(group.items.map((item) => item.type === "step" ? item.step.kind : item.type), [
-    { type: "peerSent", messageIds: ["m1", "m2"], waits: [waitCall("w1")] },
+    { type: "peerSent", messageIds: ["m1", "m2"] },
     { type: "tool", itemId: "t1", name: "Read", detail: null, status: "completed", throughPosition: 4 },
-    { type: "peerSent", messageIds: [], waits: [waitCall("w2")] },
+    { type: "peerSent", messageIds: ["m3"] },
   ]);
 });
 

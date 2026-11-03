@@ -72,7 +72,6 @@
         "kind": {
           "enum": [
             "message",
-            "reasoning",
             "tool",
             "command",
             "turn-end",

@@ -39,8 +39,8 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   // switch writes the setting.
   assert.deepEqual(seen.fallback, { row: true, on: false });
   assert.equal(seen.fallbackAfter, true);
-  // Both are installed: nothing under Not set up, and Add another agent is there.
-  assert.equal(seen.notSetUp, 0);
+  // Both are installed; only OpenCode, not on this computer, is under Not set up, and Add another agent is there.
+  assert.equal(seen.notSetUp, 1);
   assert.equal(seen.addAgent, true);
   assert.deepEqual(seen.afterSwitch, { page: false, disabled: ["codex"] });
   // A screen reader's press on a row opens its page and leaves its switch alone (#564).
@@ -259,18 +259,22 @@ test("Providers sets up a missing agent with Connect", { timeout: 60000 }, async
   const dump = await renderFixtureLive(t, "providers.html?drive=missing", "providers-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.deepEqual(seen.agents, ["Claude"]);
-  assert.deepEqual(seen.before, [{ text: "CodexCodex CLI · not installed", status: "", buttons: ["Set up"] }]);
+  // OpenCode, also missing, stays below Codex untouched.
+  const opencode = { text: "OpenCodeOpenCode CLI · not installed", status: "", buttons: ["Set up"] };
+  assert.deepEqual(seen.before, [{ text: "CodexCodex CLI · not installed", status: "", buttons: ["Set up"] }, opencode]);
   assert.deepEqual(seen.installing, [
     { text: "CodexCodex CLI · not installed", status: "Installing Codex… This takes a minute or two.", buttons: ["Set up (off)", "Cancel"] },
+    opencode,
   ]);
   assert.deepEqual(seen.failed, [
     { text: "CodexCodex CLI · not installed", status: "Codex couldn't be installed. Try again.", buttons: ["Set up", "Try again"] },
+    opencode,
   ]);
   assert.deepEqual(seen.signingIn, [
     { name: "Claude", state: "Ready · 3 accounts · v2.1.0" },
     { name: "Codex", state: "Not signed in" },
   ]);
-  assert.equal(seen.notSetUpAfter, 0);
+  assert.equal(seen.notSetUpAfter, 1);
   assert.equal(seen.terminals, 0);
   assert.deepEqual(seen.asked, ["connectAgent codex", "connectAgent codex"]);
 });
@@ -287,6 +291,7 @@ test("Providers names a missing curl or wget and links the install guide", { tim
         "Installing Codex needs curl or wget, and neither is installed. Install one (for example `sudo apt install curl`) and try again, or install Codex yourself.",
       buttons: ["Set up", "Try again", "Codex's install guide"],
     },
+    { text: "OpenCodeOpenCode CLI · not installed", status: "", buttons: ["Set up"] },
   ]);
   assert.deepEqual(seen.asked, ["connectAgent codex", "openUrl https://github.com/openai/codex", "connectAgent codex"]);
 });

@@ -3,4 +3,4 @@
 /**
  * A CLI Brigadier can drive.
  */
-export type ProviderKind = "claude" | "codex";
+export type ProviderKind = string;

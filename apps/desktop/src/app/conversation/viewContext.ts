@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-import type { Conversation } from "@/ipc/generated";
+import type { Conversation, ModelChoice } from "@/ipc/generated";
 import type { Selection } from "@/state/store";
 
 /**
@@ -12,6 +12,12 @@ export const ViewContext = createContext<{
   conversation: Conversation | null;
   /** The view sits inside another one's side panel (a side chat). */
   embedded: boolean;
+  /** A draft's model as its composer shows it: choosing another project keeps it. */
+  draftModel?: ModelChoice;
+  /** When the thread's newest work block began while it works, as its header counts: the composer's "Working for" counts from it too (D94). */
+  workFrom?: number | undefined;
+  /** Its newest block's turn is over, but what it started still holds it open (D24): the composer still says it works. */
+  workHeld?: boolean;
 }>({
   selection: { type: "none" },
   conversation: null,

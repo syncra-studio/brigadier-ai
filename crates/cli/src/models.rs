@@ -1,5 +1,5 @@
 //! The model advice view; none of its guidance is an enforcement list.
-use crate::protocol::Agent;
+use crate::protocol::ProviderKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,7 +21,7 @@ pub struct ModelsOutput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Model {
-    pub agent: Agent,
+    pub agent: ProviderKind,
     pub model: String,
     pub available: bool,
     pub efforts: Vec<String>,
@@ -30,7 +30,7 @@ pub struct Model {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentAccounts {
-    pub agent: Agent,
+    pub agent: ProviderKind,
     /// On: Brigadier orders the accounts (`place`, `why`); off: the account picked with Use first.
     pub switch_accounts: bool,
 }
@@ -39,7 +39,7 @@ pub struct AgentAccounts {
 pub struct Account {
     pub id: String,
     pub name: String,
-    pub agent: Agent,
+    pub agent: ProviderKind,
     pub current: bool,
     pub you: bool,
     pub logged_in: bool,
@@ -68,7 +68,7 @@ pub struct Usage {
 #[serde(rename_all = "camelCase")]
 pub struct Guidance {
     pub work: String,
-    pub agent: Agent,
+    pub agent: ProviderKind,
     pub model: String,
     pub effort: Option<String>,
     pub reason: String,

@@ -5,8 +5,8 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("the context card reads in the reference order, one row-height line per row, a line per worker while a few work, the branch row (Q91: no Changes row), and its clicks open things instead of growing it", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "context-rows.html?drive=1", "context-rows-result", 60000)) as Record<string, unknown>;
   assert.deepEqual(seen.sections, ["todo-app", "Workers", "Background", "Sources"]);
-  assert.equal(seen.backgroundClock, true);
-  assert.equal(seen.backgroundRows, 0);
+  // A worker's command runs in the background (npm run dev): Background lists it (D51).
+  assert.equal(seen.backgroundRows, 1);
   assert.equal(seen.projectMenu, false, "the project row is plain: no ⋯");
   assert.deepEqual(seen.rowHeights, [28], JSON.stringify(seen.odd));
   assert.deepEqual(seen.workers, ["API routes working+48 −0", "Web page working+120 −4", "1 done"]);
@@ -30,11 +30,11 @@ test("the context card reads in the reference order, one row-height line per row
   ]);
 });
 
-test("Waiting on you lists each worker's permission prompt, question and sign-in under its name, and a click opens that worker", { timeout: 90000 }, async (t) => {
+test("Waiting on you lists each worker's questions and sign-in under its name, never a permission prompt (its orchestrator's), and a click opens that worker", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "context-rows.html?drive=1&waiting=1", "context-rows-result", 60000)) as Record<string, unknown>;
   assert.deepEqual(seen.sections, ["todo-app", "Waiting on you", "Workers", "Background", "Sources"]);
   assert.deepEqual(seen.waiting, [
-    ["permission", "Web page Allow npm install express"],
+    ["question", "Web page Which template engine?"],
     ["question", "API routes Which port should the server use?"],
     ["signIn", "API routes Sign in to figma"],
   ]);

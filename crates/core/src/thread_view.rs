@@ -54,6 +54,58 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "CliJobs::is_empty")]
     #[ts(as = "Option<CliJobs>", optional)]
     pub jobs: CliJobs,
+    /// The replies its `brigadier wait`s on other sessions took, oldest first (goal 4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<WaitReply>>", optional)]
+    pub replies: Vec<WaitReply>,
+    /// The last [`ThreadNews::seq`] it holds: news up to it is in it, news after it isn't,
+    /// whichever reaches the app first.
+    #[serde(default, skip_serializing_if = "unnumbered")]
+    #[ts(as = "Option<u64>", optional)]
+    pub seq: u64,
+    /// Its newest turn's model declined it (a refusal): the model "Continue on" moves the
+    /// session to, the next in the routing (D143); none when no row can take it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub next_model: Option<crate::model::ModelChoice>,
+    /// Its work block now, or its last (`WorkBlock`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub block: Option<WorkBlock>,
+}
+
+/// A conversation's job as the core alone says it (D153, D163): its block opens with the work
+/// and stays open while its CLI's turn runs or anything it started holds (a worker, paused ones
+/// too, a background job, a subagent, the turn a job's end owes), and closes once, when none does.
+/// The app only draws it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkBlock {
+    pub started_at_ms: i64,
+    /// None while it is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ended_at_ms: Option<i64>,
+}
+
+/// A reply a session's `brigadier wait` on another session took, as Brigadier kept it: the
+/// thread shows it under that wait's row, never as a message of its own (goal 4, D138).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitReply {
+    /// The session that replied.
+    pub from: ConversationId,
+    /// Its message (`brigadier send`), when it sent one; none for its turn's last words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message_id: Option<String>,
+    pub text: String,
+    /// When the wait took it.
+    pub at_ms: i64,
+}
+
+fn unnumbered(seq: &u64) -> bool {
+    *seq == 0
 }
 
 /// What of a session CLI's background work keeps the turn that started it going (D21): the
@@ -72,11 +124,16 @@ pub struct CliJobs {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub waking: bool,
+    /// A subagent its CLI started still runs while no turn of its CLI's is open: it holds the
+    /// work as its block's header reads it, so a message sent meanwhile goes on in that block (D113).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub subagents: bool,
 }
 
 impl CliJobs {
     pub fn is_empty(&self) -> bool {
-        self.holding.is_empty() && !self.waking
+        self.holding.is_empty() && !self.waking && !self.subagents
     }
 }
 
@@ -94,6 +151,41 @@ pub(crate) const NUDGE_MARK: &str = "[Brigadier] A fresh session will continue t
 /// first message of the successor follows it.
 pub(crate) const HANDOFF_MARK: &str = "[Brigadier hand-off ";
 pub(crate) const HANDOFF_END: &str = "[End of the hand-off]";
+
+/// How Brigadier's word to a CLI that a command it left running ended after its turn begins
+/// (`conversation.rs`): ``[your background command `<command>` finished after your turn · <how>]``.
+pub(crate) const WAKE_MARK: &str = "[your background command `";
+
+/// The job's end an item tells: the CLI's notice of it, or Brigadier's own word ([`WAKE_MARK`]).
+pub(crate) fn wake_of(event: &ProviderEvent) -> Option<brigadier_providers::Wake> {
+    use brigadier_providers::{Wake, WakeEnd, WakeJob};
+    let text = match event {
+        ProviderEvent::TaskNotice { wake, .. } => return wake.clone(),
+        ProviderEvent::Message {
+            role: Role::User,
+            text,
+            ..
+        } => text,
+        _ => return None,
+    };
+    let (command, rest) = text
+        .strip_prefix(WAKE_MARK)?
+        .split_once("` finished after your turn · ")?;
+    let how = rest.split(']').next()?.trim();
+    let exit = how.strip_prefix("exit ").and_then(|code| code.parse().ok());
+    let end = match (exit, how) {
+        (Some(0), _) | (None, "completed") => WakeEnd::Finished,
+        (Some(_), _) | (None, "failed") => WakeEnd::Failed,
+        _ => WakeEnd::Stopped,
+    };
+    Some(Wake {
+        job: WakeJob::Command,
+        label: command.to_owned(),
+        command: Some(command.to_owned()),
+        end,
+        exit,
+    })
+}
 
 /// A seam of the thread: the divider "Fresh context · hand-off note" (G12).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -138,6 +230,10 @@ pub struct WorkerRow {
     pub last_end: Option<TurnEnd>,
     /// Its CLI ended, or its session closed it.
     pub gone: bool,
+    /// Its session paused it (D7), until it resumes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub paused: bool,
     /// When its CLI last said anything.
     pub last_event_at_ms: Option<i64>,
     /// The usage limit its model hit, while it holds.
@@ -221,8 +317,6 @@ pub struct WorkerWait {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkerWaitKind {
-    /// A permission prompt of its CLI.
-    Permission,
     /// A question its CLI asks the user.
     Question,
     /// One of its MCP servers wants the user to sign in.
@@ -241,6 +335,15 @@ pub struct ThreadTurn {
     /// How it ended; none while it runs.
     pub end: Option<TurnEnd>,
     pub error: Option<String>,
+    /// What kind of error `error` is, as its CLI's adapter classed it; none for an error of
+    /// Brigadier's own (a quit) or one recorded before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error_kind: Option<ErrorKind>,
+    /// The CLI that ran it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<ProviderKind>,
     /// Brigadier's requests it carried: its user message's, then those steered into it. Their
     /// cards, workers and changes show in the turn.
     pub requests: Vec<String>,
@@ -264,6 +367,8 @@ pub enum TurnEnd {
     Failed,
     /// The CLI ended mid-turn (it was killed, or Brigadier quit under it).
     Interrupted,
+    /// A limit cut it and its work goes on on another account or CLI: never a failure (D180).
+    HandedOver,
 }
 
 /// A line of `record/turns.jsonl`: a turn's requests once its user message came, and its end.
@@ -276,6 +381,11 @@ pub(crate) struct TurnRecord {
     pub end: Option<TurnEnd>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<ErrorKind>,
+    /// The CLI that ran it, when its session file isn't the thread's own (a fork's source's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -329,6 +439,19 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub jobs: Option<CliJobs>,
+    /// Its waits' replies, all of them, when one came.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub replies: Option<Vec<WaitReply>>,
+    /// Its work block, when it opened or closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub block: Option<WorkBlock>,
+    /// Its number, rising, given as it changed what a read of the thread holds
+    /// ([`ThreadView::seq`]); none (0) for news no read holds the same way (workers' rows).
+    #[serde(default, skip_serializing_if = "unnumbered")]
+    #[ts(as = "Option<u64>", optional)]
+    pub seq: u64,
 }
 
 /// Where a conversation's CLI turn stands, as the sidebar reads it: open now, or how its last
@@ -353,6 +476,9 @@ pub(crate) use persistent_apps::persistent_app;
 #[derive(Debug, Default)]
 pub(crate) struct LiveTurn {
     pub entries: Vec<FileEntry>,
+    /// Earlier turns' stream items their files may lack (a stopped turn's streamed text,
+    /// which Codex never writes): kept past those turns, each with the item before it.
+    pub earlier: Vec<FileEntry>,
     /// The user message that started it, once the stream said it.
     pub user_message: Option<String>,
     /// Its CLI's turn started and its user message is still to come (Codex says it after).
@@ -363,12 +489,15 @@ pub(crate) struct LiveTurn {
     pub continues: bool,
     pub open: bool,
     pub error: Option<String>,
+    pub error_kind: Option<ErrorKind>,
     /// The limit its CLI hit in it.
     pub limit: Option<LimitHit>,
     /// Brigadier's requests it carries.
     pub requests: Vec<String>,
     /// Its user message came while the work before it still held ([`ThreadTurn::joins`]).
     pub joins: bool,
+    /// Its CLI began it on its own (no turn of Brigadier's ran): it is the open block's.
+    pub own: bool,
     /// The CLI's background tasks: they outlast the turn that started them, so a turn that
     /// opens keeps them.
     pub background: Vec<BackgroundTask>,
@@ -380,13 +509,20 @@ pub(crate) struct LiveTurn {
     /// background (Claude moves a running command there): a background task is named by its
     /// call. Those of its background tasks are kept while the tasks are.
     pub commands: Vec<(String, String)>,
+    /// Its CLI's subagent calls still running, by item id: they outlast the turn too.
+    pub subagents: Vec<String>,
     /// A background command ended while no turn was open: until when the turn its end starts
-    /// is owed (`CliJobs::waking`).
+    /// is owed (`CliJobs::waking`), a turn begun meanwhile included until it says whose it is.
     pub waking_until: Option<i64>,
+    /// A background command ended while this turn ran: its CLI may start a turn for that end
+    /// right after this one (Codex does), so its end owes that turn a short while (D153).
+    pub ended_in_turn: bool,
     /// What of its background work was last said to hold its turn.
     pub jobs_said: CliJobs,
     /// The model's context window its CLI last said: it outlasts the turn.
     pub context_window: Option<i64>,
+    /// A hand-off's own turn (core-goals D193): no turn of the user's work, never shown open.
+    pub quiet: bool,
 }
 
 /// How many commands of calls not (yet) a background task's are kept.
@@ -467,6 +603,33 @@ impl LiveTurn {
             .collect()
     }
 
+    /// A subagent its CLI started that still runs after the turn that started it ended, its
+    /// CLI listing no task for it (Codex): it holds the turn's work as a background task does,
+    /// as the thread draws it (D24, D97), past later turns too.
+    pub(crate) fn subagent_running(&self) -> bool {
+        !self.open && !self.subagents.is_empty()
+    }
+
+    /// Notes a subagent call's start or end ([`Self::subagents`]).
+    pub(crate) fn note_subagent(&mut self, event: &ProviderEvent) {
+        if let ProviderEvent::ToolCall {
+            item_id,
+            name,
+            status,
+            ..
+        } = event
+            && brigadier_providers::adapters::ADAPTERS.iter().any(|cli| {
+                cli.subagent_tools
+                    .contains(&crate::digest::bare_tool_name(name))
+            })
+        {
+            self.subagents.retain(|id| id != item_id);
+            if *status == brigadier_providers::ItemStatus::InProgress {
+                self.subagents.push(item_id.clone());
+            }
+        }
+    }
+
     /// What of its CLI's background work holds its turn now (`CliJobs`).
     pub(crate) fn jobs(&self, now: i64) -> CliJobs {
         let holding = self
@@ -486,7 +649,14 @@ impl LiveTurn {
             .collect();
         CliJobs {
             holding,
-            waking: !self.open && self.waking_until.is_some_and(|until| now < until),
+            waking: (!self.open || self.awaiting_user)
+                && self.waking_until.is_some_and(|until| now < until),
+            subagents: self.subagent_running()
+                || !self.open
+                    && self.background.iter().any(|task| {
+                        task.kind == BackgroundTaskKind::Agent
+                            && task.status == BackgroundTaskStatus::Running
+                    }),
         }
     }
 }
@@ -510,7 +680,8 @@ fn file_stamp(kind: ProviderKind, path: &Path) -> Option<FileStamp> {
     // The session's own file must be there; a subagent's that went or can't be read is left
     // out, not the whole thread.
     let mut stamps = vec![stamp(path.to_owned())?];
-    if kind == ProviderKind::Claude
+    if brigadier_providers::adapters::adapter(kind)
+        .is_some_and(|adapter| adapter.subagent_transcripts)
         && let Ok(children) = std::fs::read_dir(path.with_extension("").join("subagents"))
     {
         let mut children: Vec<PathBuf> = children
@@ -571,13 +742,18 @@ pub(crate) fn view(
     }
     let running = live.is_some_and(|live| live.open);
     if let Some(live) = live {
+        entries = add_unheld(entries, &live.earlier);
         if running {
             entries = session_file::merge(entries, live.entries.clone());
         } else {
             entries = add_unheld(entries, &live.entries);
         }
     }
-    let mut turns = turns(&entries, records, running);
+    for entry in entries.iter_mut().filter(|entry| entry.parent.is_none()) {
+        entry.wake = wake_of(&entry.event);
+    }
+    let awaiting = live.is_some_and(|live| live.awaiting_user);
+    let mut turns = turns(&entries, records, running, awaiting);
     if running
         && let Some(live) = live
         && let Some(turn) = turns.last_mut()
@@ -587,15 +763,30 @@ pub(crate) fn view(
             turn.end = None;
             turn.ended_at_ms = None;
             turn.error = None;
+            turn.error_kind = None;
         }
         if turn.error.is_none() {
             turn.error.clone_from(&live.error);
+            turn.error_kind = live.error_kind;
         }
         if turn.limit.is_none() {
             turn.limit.clone_from(&live.limit);
         }
         add_requests(&mut turn.requests, &live.requests);
-        turn.joins |= live.joins;
+        // Still awaiting its own message, the live turn is the one read after the turn before.
+        if !live.awaiting_user || live.user_message.as_deref() != Some(turn.user_message.as_str()) {
+            turn.joins |= live.joins;
+        }
+        // A turn its file opened that the live turn, the CLI's own, hasn't said yet: a message
+        // steered into that turn, which is the open block's (D25, D74).
+        if (live.continues || live.own)
+            && live
+                .user_message
+                .as_deref()
+                .is_some_and(|own| own != turn.user_message)
+        {
+            turn.joins = true;
+        }
     }
     ThreadView {
         entries,
@@ -607,6 +798,10 @@ pub(crate) fn view(
         jobs: live
             .map(|live| live.jobs(crate::now_ms()))
             .unwrap_or_default(),
+        replies: Vec::new(),
+        seq: 0,
+        next_model: None,
+        block: None,
     }
 }
 
@@ -640,6 +835,27 @@ fn add_unheld(mut entries: Vec<FileEntry>, live: &[FileEntry]) -> Vec<FileEntry>
     entries
 }
 
+/// Drops from `earlier` what `files` now hold, but the item before each they lack: it says
+/// where that one goes ([`add_unheld`]).
+pub(crate) fn keep_unheld(earlier: &mut Vec<FileEntry>, files: &[Arc<Vec<FileEntry>>]) {
+    let held: std::collections::HashSet<&str> = files
+        .iter()
+        .flat_map(|file| file.iter())
+        .filter_map(|entry| session_file::item_id(&entry.event))
+        .collect();
+    earlier.retain(|entry| session_file::item_id(&entry.event).is_some());
+    let lacked: Vec<bool> = earlier
+        .iter()
+        .map(|entry| session_file::item_id(&entry.event).is_some_and(|id| !held.contains(id)))
+        .collect();
+    let mut index = 0;
+    earlier.retain(|_| {
+        let keep = lacked[index] || lacked.get(index + 1) == Some(&true);
+        index += 1;
+        keep
+    });
+}
+
 /// Where each turn of `entries` starts: at each user message that isn't a steer.
 fn turn_starts(entries: &[FileEntry]) -> Vec<usize> {
     entries
@@ -653,7 +869,12 @@ fn turn_starts(entries: &[FileEntry]) -> Vec<usize> {
 }
 
 /// The turns `entries` hold: each user message that isn't a steer starts one.
-fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<ThreadTurn> {
+fn turns(
+    entries: &[FileEntry],
+    records: &[TurnRecord],
+    running: bool,
+    awaiting: bool,
+) -> Vec<ThreadTurn> {
     let starts = turn_starts(entries);
     // A turn's lines, added up: its requests, and its end. A turn with lines but no end never
     // ended: the CLI or Brigadier went under it (#557).
@@ -690,6 +911,8 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 ended_at_ms: inside.iter().rev().find_map(|entry| entry.at_ms),
                 end: None,
                 error: None,
+                error_kind: None,
+                provider: None,
                 requests: Vec::new(),
                 limit: None,
                 joins: false,
@@ -705,11 +928,13 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 _ => None,
             });
             let noted = recorded.remove(id.as_str());
-            // A turn no record names that began before the turn before it ended ran inside that
-            // one, as the stream said it: Claude writes Brigadier's `/compact` after the
-            // compaction, which the stream said in the turn before. It ended as that one did.
+            // A turn no record names (or names no end of) that began before the turn before it
+            // ended ran inside that one, as the stream said it: Claude writes Brigadier's
+            // `/compact` after the compaction, which the stream said in the turn before, and a
+            // message steered into the CLI's own turn as a turn's opening one. It ended as that
+            // one did.
             let within = before.filter(|record| {
-                noted.is_none()
+                noted.as_ref().is_none_or(|(_, end, _)| end.is_none())
                     && record
                         .ended_at_ms
                         .zip(turn.started_at_ms)
@@ -720,7 +945,10 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             // Internal inputs and background notifications continue the same visible turn.
             // A prior attempt's error stays in the native file after an account switch;
             // only errors since the preceding end can describe this continuation.
-            let running = last && running;
+            // A turn its record ended isn't the one running while the live turn awaits its own
+            // message: that turn comes after it (a limit's carry-on keeps the cut turn's error).
+            let running =
+                last && running && !(awaiting && record.is_some_and(|record| record.end.is_some()));
             let completed = record.is_some_and(|record| record.end == Some(TurnEnd::Done));
             let since = ends.get(id.as_str()).and_then(|ends| {
                 ends.iter()
@@ -742,13 +970,15 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                         _ => None,
                     })
             };
-            let error = current_errors().next().map(|error| error.message.clone());
+            let first = current_errors().next();
+            let error = first.map(|error| error.message.clone());
             let limit = current_errors().rev().find_map(limit_of);
             if within.is_none() {
                 before = record;
             }
             turn.requests = requests;
             turn.joins = joins;
+            turn.provider = record.and_then(|record| record.provider);
             turn.limit = record
                 .filter(|_| !running)
                 .and_then(|record| record.limit.clone())
@@ -778,6 +1008,16 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             } else {
                 turn.end = Some(TurnEnd::Done);
             }
+            // The error's kind: the CLI's error's, or its record's when the record said it.
+            turn.error_kind = if turn.error.is_some()
+                && turn.error.as_deref() == first.map(|error| error.message.as_str())
+            {
+                first.map(|error| error.kind)
+            } else {
+                record
+                    .filter(|record| record.error == turn.error)
+                    .and_then(|record| record.error_kind)
+            };
             (turn, within.is_some())
         })
         .collect();
@@ -788,7 +1028,12 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             continue;
         }
         let started = turns[n].0.started_at_ms;
-        let previous = &mut turns[n - 1].0;
+        let (head, tail) = turns.split_at_mut(n);
+        let previous = &mut head[n - 1].0;
+        // What it names (a steered message's request) it took, not the turn before.
+        previous
+            .requests
+            .retain(|request| !tail[0].0.requests.contains(request));
         let own = ends.get(previous.user_message.as_str()).and_then(|ends| {
             ends.iter().rev().find(|record| {
                 record
@@ -809,6 +1054,31 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
 }
 
 /// The limit an error of the CLI says it hit: a usage window, a spend control or credits.
+/// Only `view`'s newest `turns` turns, from the first one's user message on: what a thread shows
+/// at once when it opens, its older turns coming after with the whole view (D46). A seam whose
+/// message is cut goes with it; a view whose first kept turn's message isn't found stays whole.
+pub fn newest_turns(view: &mut ThreadView, turns: usize) {
+    let Some(first) = view.turns.len().checked_sub(turns).filter(|&cut| cut > 0) else {
+        return;
+    };
+    let message = view.turns[first].user_message.as_str();
+    let Some(at) = view.entries.iter().position(|entry| {
+        entry.parent.is_none()
+            && matches!(&entry.event, ProviderEvent::Message { item_id, role: Role::User, .. } if item_id == message)
+    }) else {
+        return;
+    };
+    view.entries.drain(..at);
+    view.turns.drain(..first);
+    let kept: std::collections::HashSet<&str> = view
+        .entries
+        .iter()
+        .filter_map(|entry| session_file::item_id(&entry.event))
+        .collect();
+    view.seams
+        .retain(|seam| seam.at.as_deref().is_none_or(|at| kept.contains(at)));
+}
+
 pub(crate) fn limit_of(error: &brigadier_providers::ProviderError) -> Option<LimitHit> {
     match (&error.limit, error.kind) {
         (Some(limit), _) => Some(limit.clone()),
@@ -831,6 +1101,28 @@ pub(crate) fn add_requests(requests: &mut Vec<String>, more: &[String]) {
 }
 
 /// The id of a user message.
+/// Names each turn's CLI: the one whose session file (`files`) holds its user message, else its
+/// record's (a fork's source's), else `current` (the live stream's turn).
+pub(crate) fn name_providers(
+    view: &mut ThreadView,
+    files: &[(ProviderKind, Arc<Vec<FileEntry>>)],
+    current: Option<ProviderKind>,
+) {
+    let mut by_message: HashMap<&str, ProviderKind> = HashMap::new();
+    for (kind, entries) in files {
+        for id in entries.iter().filter_map(user_message) {
+            by_message.insert(id, *kind);
+        }
+    }
+    for turn in &mut view.turns {
+        turn.provider = by_message
+            .get(turn.user_message.as_str())
+            .copied()
+            .or(turn.provider)
+            .or(current);
+    }
+}
+
 fn user_message(entry: &FileEntry) -> Option<&str> {
     match &entry.event {
         ProviderEvent::Message {
@@ -870,6 +1162,8 @@ pub(crate) fn forked_at(view: &ThreadView, request: &str) -> Option<Forked> {
                 user_message: Some(turn.user_message.clone()),
                 end: turn.end,
                 error: turn.error.clone(),
+                error_kind: turn.error_kind,
+                provider: turn.provider,
                 ended_at_ms: turn.ended_at_ms,
                 requests: turn.requests.clone(),
                 limit: turn.limit.clone(),
@@ -930,8 +1224,156 @@ mod tests {
 
     use super::*;
 
+    /// A background subagent holds its work once its turn ended, as a background command does:
+    /// a task the CLI lists (Claude) or a call still running (Codex), every CLI alike (demo8
+    /// item 2: what was sent meanwhile drew a second block).
+    #[test]
+    fn a_background_subagent_holds_its_work() {
+        let agent = BackgroundTask {
+            command: None,
+            provider: None,
+            id: "agent".into(),
+            item_id: Some("call".into()),
+            kind: BackgroundTaskKind::Agent,
+            label: "background calculation".into(),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: 1,
+            ended_at_ms: None,
+            output_file: None,
+            summary: None,
+            last_line: None,
+        };
+        let mut listed = LiveTurn {
+            background: vec![agent.clone()],
+            ..Default::default()
+        };
+        assert!(listed.jobs(2).subagents && !listed.jobs(2).is_empty());
+        assert!(
+            listed.jobs(2).holding.is_empty(),
+            "a subagent is no command"
+        );
+        listed.open = true;
+        assert!(listed.jobs(2).is_empty(), "its open turn holds it");
+        listed.open = false;
+        listed.background[0].status = BackgroundTaskStatus::Completed;
+        assert!(listed.jobs(2).is_empty());
+        let called = LiveTurn {
+            subagents: vec!["call".into()],
+            ..Default::default()
+        };
+        assert!(called.jobs(2).subagents);
+    }
+
+    /// Brigadier's own word that a command ended after its turn says the job's end, as a CLI's
+    /// notice does; a message of the user's says none.
+    #[test]
+    fn a_view_cut_to_its_newest_turns_starts_at_the_first_kept_turns_message() {
+        let turn = |id: &str| ThreadTurn {
+            user_message: id.into(),
+            started_at_ms: None,
+            ended_at_ms: None,
+            end: Some(TurnEnd::Done),
+            error: None,
+            error_kind: None,
+            provider: None,
+            requests: Vec::new(),
+            limit: None,
+            joins: false,
+        };
+        let seam = |at: &str| SeamMark {
+            n: 1,
+            open: false,
+            at: Some(at.into()),
+            carried: false,
+            nudge: None,
+            note: None,
+            start: None,
+            death: None,
+            moved_to: None,
+        };
+        let whole = ThreadView {
+            entries: vec![
+                message("u1", Role::User),
+                message("a1", Role::Assistant),
+                message("u2", Role::User),
+                message("a2", Role::Assistant),
+                message("u3", Role::User),
+                message("a3", Role::Assistant),
+            ],
+            turns: vec![turn("u1"), turn("u2"), turn("u3")],
+            background: vec![],
+            mcp: vec![],
+            workers: vec![],
+            seams: vec![seam("u2"), seam("u3")],
+            jobs: CliJobs::default(),
+            replies: Vec::new(),
+            seq: 7,
+            next_model: None,
+            block: None,
+        };
+        let ids = |view: &ThreadView| -> Vec<String> {
+            view.entries
+                .iter()
+                .filter_map(|entry| session_file::item_id(&entry.event).map(str::to_owned))
+                .collect()
+        };
+        let mut cut = whole.clone();
+        newest_turns(&mut cut, 2);
+        assert_eq!(ids(&cut), ["u2", "a2", "u3", "a3"]);
+        assert_eq!(cut.turns, vec![turn("u2"), turn("u3")]);
+        assert_eq!(cut.seams.len(), 2);
+        assert_eq!(cut.seq, 7);
+        let mut one = whole.clone();
+        newest_turns(&mut one, 1);
+        assert_eq!(ids(&one), ["u3", "a3"]);
+        assert_eq!(one.seams, vec![seam("u3")]);
+        // As many turns as it has or more, or a first kept message not found: whole.
+        let mut all = whole.clone();
+        newest_turns(&mut all, 3);
+        assert_eq!(all, whole);
+        let mut lost = whole.clone();
+        lost.turns[1].user_message = "gone".into();
+        newest_turns(&mut lost, 2);
+        assert_eq!(lost.entries.len(), 6);
+    }
+
+    #[test]
+    fn brigadiers_word_of_a_commands_end_is_its_wake() {
+        use brigadier_providers::{WakeEnd, WakeJob};
+        let said = |text: &str| {
+            wake_of(&ProviderEvent::Message {
+                item_id: "m".into(),
+                role: Role::User,
+                text: text.into(),
+            })
+            .map(|wake| (wake.job, wake.command, wake.end, wake.exit))
+        };
+        let words =
+            |how: &str| format!("{WAKE_MARK}pnpm test` finished after your turn · {how}]\nFAIL");
+        assert_eq!(
+            said(&words("exit 1")),
+            Some((
+                WakeJob::Command,
+                Some("pnpm test".into()),
+                WakeEnd::Failed,
+                Some(1)
+            ))
+        );
+        assert_eq!(
+            said(&words("completed")),
+            Some((
+                WakeJob::Command,
+                Some("pnpm test".into()),
+                WakeEnd::Finished,
+                None
+            ))
+        );
+        assert_eq!(said("Run pnpm test."), None);
+    }
+
     fn entry(event: ProviderEvent) -> FileEntry {
         FileEntry {
+            wake: None,
             event,
             at_ms: Some(1),
             updated_at_ms: None,
@@ -940,6 +1382,7 @@ mod tests {
             images: Vec::new(),
             phase: None,
             said: None,
+            requests: Vec::new(),
         }
     }
 
@@ -1049,6 +1492,8 @@ mod tests {
             end: Some(end),
             ended_at_ms: Some(at),
             error: None,
+            error_kind: None,
+            provider: None,
             limit: None,
             requests: Vec::new(),
             context_window: None,
@@ -1108,6 +1553,46 @@ mod tests {
         assert_eq!(failed.turns[0].limit, None);
     }
 
+    /// The CLI's next turn started and hasn't said its message yet (a limit's carry-on on the
+    /// account or CLI switched to): the cut turn still reads as the limit ended it, never as
+    /// failed with no word of why (demo8 item 4, seen on Codex for a second).
+    #[test]
+    fn a_cut_turn_keeps_its_limit_while_the_next_awaits_its_message() {
+        let limit = LimitHit {
+            window: Some("primary".into()),
+            resets_at_ms: Some(1793100600000),
+            kind: Default::default(),
+        };
+        let entries = Arc::new(vec![message("user", Role::User)]);
+        let cut = TurnRecord {
+            user_message: Some("user".into()),
+            end: Some(TurnEnd::Failed),
+            ended_at_ms: Some(2),
+            error: Some("Codex's primary usage limit was reached".into()),
+            error_kind: Some(ErrorKind::UsageLimit),
+            provider: None,
+            limit: Some(limit.clone()),
+            requests: vec!["r1".into()],
+            context_window: None,
+            joins: false,
+        };
+        let live = LiveTurn {
+            open: true,
+            awaiting_user: true,
+            user_message: Some("user".into()),
+            ..Default::default()
+        };
+        let view = view(vec![entries], Some(&live), std::slice::from_ref(&cut));
+        assert_eq!(view.turns.len(), 1);
+        assert_eq!(view.turns[0].end, Some(TurnEnd::Failed));
+        assert_eq!(
+            view.turns[0].error_kind,
+            Some(ErrorKind::UsageLimit),
+            "{view:#?}"
+        );
+        assert_eq!(view.turns[0].limit, Some(limit));
+    }
+
     fn command(id: &str, status: ItemStatus) -> FileEntry {
         entry(ProviderEvent::Command {
             item_id: id.into(),
@@ -1162,11 +1647,56 @@ mod tests {
         assert_eq!(view.turns.len(), 1);
     }
 
+    /// A stopped turn's streamed answer, which Codex never writes to its file, still reads in
+    /// that turn while later turns run and after they end; what the file holds isn't kept.
+    #[test]
+    fn a_stopped_turns_streamed_text_stays_after_later_turns() {
+        let end = || {
+            entry(ProviderEvent::TurnCompleted {
+                turn_id: None,
+                status: TurnStatus::Interrupted,
+                duration_ms: None,
+                usage: None,
+            })
+        };
+        let file = Arc::new(vec![
+            message("u0", Role::User),
+            message("a0", Role::Assistant),
+            end(),
+            message("u1", Role::User),
+            end(),
+            message("u2", Role::User),
+        ]);
+        let mut live = LiveTurn {
+            earlier: vec![
+                message("u0", Role::User),
+                message("a0", Role::Assistant),
+                message("u1", Role::User),
+                message("a1", Role::Assistant),
+            ],
+            entries: vec![message("u2", Role::User), message("a2", Role::Assistant)],
+            open: true,
+            ..LiveTurn::default()
+        };
+        keep_unheld(&mut live.earlier, std::slice::from_ref(&file));
+        assert_eq!(live.earlier.len(), 2, "only a1 and the item before it");
+        let running = view(vec![file.clone()], Some(&live), &[]);
+        assert_eq!(
+            ids(&running),
+            ["u0", "a0", "end", "u1", "a1", "end", "u2", "a2"]
+        );
+        live.open = false;
+        let ended = view(vec![file], Some(&live), &[]);
+        assert_eq!(ids(&ended), ids(&running));
+        assert_eq!(ended.turns.len(), 3);
+    }
+
     /// A turn the CLI began on its own for a background job's end goes on with the turn before
     /// it: that turn reads as open while it runs, and ends when it does.
     #[test]
     fn a_turn_the_cli_began_for_a_background_jobs_end_keeps_the_turn_before_it_open() {
         let notice = entry(ProviderEvent::TaskNotice {
+            wake: None,
             item_id: "n1".into(),
             text: r#"Background command "brigadier wait" completed (exit code 0)"#.into(),
         });
@@ -1175,6 +1705,8 @@ mod tests {
             user_message: Some("u1".into()),
             end: Some(TurnEnd::Done),
             error: None,
+            error_kind: None,
+            provider: None,
             ended_at_ms: Some(at),
             requests: Vec::new(),
             limit: None,
@@ -1213,6 +1745,28 @@ mod tests {
             &[ended(10)],
         );
         assert_eq!(next.turns[0].end, Some(TurnEnd::Done));
+        // Sent while the work before held, it joins that work from its start (goal 8): the turn
+        // the file reads before the stream gives its message, never the one before it.
+        let joining = LiveTurn {
+            joins: true,
+            ..starting
+        };
+        let before = view(
+            vec![Arc::new(vec![message("u1", Role::User)])],
+            Some(&joining),
+            &[ended(10)],
+        );
+        assert!(!before.turns[0].joins);
+        let read = view(
+            vec![Arc::new(vec![
+                message("u1", Role::User),
+                message("u2", Role::User),
+            ])],
+            Some(&joining),
+            &[ended(10)],
+        );
+        assert!(!read.turns[0].joins);
+        assert!(read.turns[1].joins);
     }
 
     /// Brigadier's `/compact` after a turn: the stream said the compaction in that turn, so its
@@ -1229,6 +1783,8 @@ mod tests {
             user_message: Some("u1".into()),
             end: Some(TurnEnd::Done),
             error: None,
+            error_kind: None,
+            provider: None,
             ended_at_ms: Some(at),
             requests: vec!["r1".into()],
             limit: None,
@@ -1262,5 +1818,84 @@ mod tests {
         later.push(at(20, message("u3", Role::User)));
         let cut = super::view(vec![Arc::new(later)], None, &records);
         assert_eq!(cut.turns[2].end, Some(TurnEnd::Interrupted));
+    }
+
+    /// O38: while the CLI's own turn runs on with the turn before, its file opens a turn at a
+    /// message steered into it before the stream says that message. That turn is the open
+    /// block's from the first frame: it joins, never reads as a block of its own.
+    #[test]
+    fn a_turn_the_file_opens_inside_the_clis_own_running_turn_joins_it() {
+        let file = vec![
+            message("u1", Role::User),
+            message("a1", Role::Assistant),
+            message("a2", Role::Assistant),
+            message("u2", Role::User),
+        ];
+        let records = [TurnRecord {
+            user_message: Some("u1".into()),
+            end: Some(TurnEnd::Done),
+            error: None,
+            error_kind: None,
+            provider: None,
+            ended_at_ms: Some(2),
+            requests: vec!["r1".into()],
+            limit: None,
+            context_window: None,
+            joins: false,
+        }];
+        for (continues, own) in [(true, false), (false, true)] {
+            let live = LiveTurn {
+                open: true,
+                continues,
+                own,
+                awaiting_user: own,
+                user_message: Some("u1".into()),
+                ..LiveTurn::default()
+            };
+            let view = view(vec![Arc::new(file.clone())], Some(&live), &records);
+            assert_eq!(view.turns.len(), 2, "{view:#?}");
+            assert!(view.turns[1].joins, "{view:#?}");
+        }
+    }
+
+    /// A message steered into the CLI's own turn that the file opens a turn with (D113): its
+    /// request is that turn's, not the one before's, so the thread shows it where the CLI read
+    /// it, once (seen live on Claude: a second, never-ending block).
+    #[test]
+    fn a_turn_the_file_opens_inside_the_one_before_takes_its_own_request() {
+        let at = |mut entry: FileEntry, at| {
+            entry.at_ms = Some(at);
+            entry
+        };
+        let file = vec![
+            at(message("u1", Role::User), 1),
+            at(message("a1", Role::Assistant), 2),
+            at(message("wake", Role::Assistant), 4),
+            at(message("u2", Role::User), 5),
+            at(message("a2", Role::Assistant), 6),
+        ];
+        let record = |user: &str, end, ended_at_ms, requests: &[&str], joins| TurnRecord {
+            user_message: Some(user.into()),
+            end,
+            error: None,
+            error_kind: None,
+            provider: None,
+            ended_at_ms,
+            requests: requests.iter().map(|&request| request.into()).collect(),
+            limit: None,
+            context_window: None,
+            joins,
+        };
+        let records = [
+            record("u1", Some(TurnEnd::Done), Some(2), &["r1"], false),
+            record("u2", None, None, &["r2"], true),
+            record("u1", Some(TurnEnd::Done), Some(7), &["r1", "r2"], false),
+        ];
+        let view = view(vec![Arc::new(file)], None, &records);
+        assert_eq!(view.turns.len(), 2, "{view:#?}");
+        assert_eq!(view.turns[0].requests, ["r1"], "{view:#?}");
+        assert_eq!(view.turns[0].ended_at_ms, Some(2), "{view:#?}");
+        assert_eq!(view.turns[1].requests, ["r2"], "{view:#?}");
+        assert!(view.turns[1].joins, "{view:#?}");
     }
 }

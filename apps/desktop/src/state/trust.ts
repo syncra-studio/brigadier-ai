@@ -1,5 +1,6 @@
 import { request } from "@/ipc/client";
-import type { Project } from "@/ipc/generated";
+import type { Project, TrustFailure } from "@/ipc/generated";
+import { cliFacts } from "@/lib/providerKinds";
 import { type AppState, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -41,16 +42,15 @@ export function toAsk(state: Pick<AppState, "selection" | "projects" | "conversa
 }
 
 /**
- * The toast for one thing the daemon couldn't write in an agent's own settings ("Codex: why").
+ * The toast for one thing the daemon couldn't write in an agent's own settings, and why.
  * The answer itself is saved either way.
  */
-export function trustFailureText(failure: string, trusted: boolean): string {
+export function trustFailureText({ provider, reason }: TrustFailure, trusted: boolean): string {
+  const agent = provider ? cliFacts(provider).vendor : null;
   if (!trusted) {
-    return `Saved. Brigadier couldn't take back the folder's earlier trust in an agent's own settings: ${failure}`;
+    return `Saved. Brigadier couldn't take back the folder's earlier trust in an agent's own settings: ${agent ? `${agent}: ` : ""}${reason}`;
   }
-  const match = /^(Claude|Codex): ([\s\S]*)$/.exec(failure);
-  if (!match) return `Saved. Brigadier couldn't record it everywhere: ${failure}`;
-  const [, agent, reason] = match;
+  if (!agent) return `Saved. Brigadier couldn't record it everywhere: ${reason}`;
   return `Saved. Brigadier couldn't record it for ${agent}, so ${agent} may ask again in its terminal: ${reason}`;
 }
 

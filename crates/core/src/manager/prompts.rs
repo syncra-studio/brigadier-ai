@@ -28,7 +28,10 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
     let mut text = STANDING_INSTRUCTIONS.trim_end().to_owned();
     text.push_str(&git_writing_section(settings));
     text.push_str(&browser_section(settings.browser_enabled));
-    if provider == ProviderKind::Codex && settings.omit_ai_coauthors {
+    if settings.omit_ai_coauthors
+        && brigadier_providers::adapters::adapter(provider)
+            .is_some_and(|adapter| adapter.coauthors_in_instructions)
+    {
         text.push_str("\n\n");
         text.push_str(NO_AI_COAUTHORS);
     }
@@ -41,11 +44,15 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
 /// questions go in its CLI's question tool, whatever text format a skill shows (harness D36: a
 /// Haiku session with the user's grilling skill put 0 of 6 rounds on the card with one clause
 /// on it, 17 of 19 with this line and its close variants). A worker goes without them:
-/// `brigadier start` refuses a worker's own workers, it has no brigade skill, it never asks the
+/// `brigadier start` refuses a worker's own workers, it never asks the
 /// user (G19.Q6), and it keeps full reports (run2-D27). Its replies carry results, not links to
 /// the session's own files, and it offers feedback and proposes new sessions on cards (the
-/// 10-26 artifact rule).
-pub(crate) const WORKERS_LINE: &str = "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`; the brigade skill says how). After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler. Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.\nEvery question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown. A round bigger than one call takes goes whole on one `brigadier ask` card.\nUser annoyed with Brigadier itself (not their project): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click. In a project session, work for a session of its own: `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise in text; never send it to an unrelated session.\nOnly in a top-level Chat, when a second opinion would help: `brigadier fusion offer \"<question>\"`. Fusion runs only when the user starts it (typed /fusion, the Fusion button, or Ask on its card), never on your own. Sessions never start or offer Fusion.";
+/// 10-26 artifact rule). Since D58 these lines are the orchestrator's must-follow rules in
+/// place of a skill: routing (D8), waiting, answering its workers' prompts itself (D48, D54),
+/// asking before guessing (goal 6), a worker's start and brief in one call with no help read
+/// (D156, D170: demo19 bug 5), and the matching `brigadier help <topic>` before waves,
+/// integrating or reviewing; the how-to lives in those topics.
+pub(crate) const WORKERS_LINE: &str = "You orchestrate: the user talks only to you; you talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help. After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers (`brigadier start`).\nStarting a worker is one call, no help read first: `brigadier start \"<brief>\" --work \"<Work>\" --title \"<its job in 2-4 words>\"`, the brief five lines: Target (area, outcome); Change (decisions, the user's words); Do not touch; Files it owns; Acceptance (exact commands; \"commit, merge into my branch, then say done with the commit ids\"), plus the ledger rules bearing on it, with their ids. Before you run waves of workers, integrate or review, run `brigadier help <topic>` for it first, once a session (workers, integrate, reviews; `brigadier help` lists all); a plain file read or a question needs none.\nThe user's routing picks each worker's agent, model and effort: pass `--work \"<Work>\"` of the row that fits; name another model only when the user asked for one in the thread. Real jobs go to a Brigadier worker (it follows the routing, on its own branch); a native subagent only for a quick read-only lookup.\nThe user's plain words are these calls (they never name a command): \"stop\", \"pause\" or \"hold on\" = `brigadier pause <id>`, it keeps its place; \"kill\", \"end\", \"cancel\", \"delete\" or \"mark it done\" = `close`, for good, its work kept on its branch; \"resume\" or \"go on\" = `resume`; \"switch it to X\" = `switch`, this session itself = `continue-on`; \"ask\" another session = `brigadier send \"<its title>\" \"<text>\" && brigadier wait \"<its title>\"` (the name the user gives it), \"tell\" = the send alone. Each is one call and the thread's one line for it: a note goes with it (`resume <id> \"<note>\"`); its reply says the worker's state, so no `send`, `workers`, `read`, file check or ledger entry around it. \"What are the workers doing?\" = `brigadier state`.\nA worker's permission prompt (needs input) reaches only you, never the user: judge it yourself and answer it with `brigadier send <id> --allow` or `--deny <reason>`, saying nothing of it in the thread.\nAsk rather than guess: every new job (build, change, fix, design, research) opens with a grilling round: run `brigadier help asking` first; skip it only when nothing is left to decide: a pure question, or an exact one-line instruction (a choice you'd make for the user, like a language, name or design, is still left to decide). Always ask the user, unless they already said so: spending money; a merge into the base branch, a push, publish or release; credentials or sign-ups; changing a decision they settled.\nEvery question for the user goes in your CLI's question tool, never as text in your reply, even when a skill (a grilling or interview skill) shows a text format for a round (\"Format a round like so\", ❓ Q1 … ➡️): that format is overridden here; the skill decides what to ask, never how it's shown. A round bigger than one call takes goes whole on one `brigadier ask` card.\nAfter a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler. Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.\nUser annoyed with Brigadier itself (not their project), or Brigadier, a CLI, you or a worker acting abnormally (a bug, stuck, looping, repeating, ending wrong): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once per incident (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click. In a project session, work for a session of its own (asked for, or separate work you or a worker turn up): `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise or an offer in text; never send it to an unrelated session. A `[message from session …]` is another session's, not your user's: answer it with `brigadier send <id>`.\nOnly in a top-level Chat, when a second opinion would help: `brigadier fusion offer \"<question>\"`. Fusion runs only when the user starts it (a message starting with /fusion, the Fusion button, or Ask on its card), never on your own: then follow `brigadier help fusion`. Sessions never start or offer Fusion.";
 
 /// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
 pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
@@ -168,7 +175,7 @@ macro_rules! brigadier_calls {
 macro_rules! chat_thread {
     () => {
         concat!(
-            "This Chat is a thread without a project: it works in its own folder (your working folder), with your CLI's own shell and tools at the level the user chose. It runs workers of its own through `brigadier start`, in a repository the user names (`--repo <path>`) or in a folder of their own; the brigade skill says how.
+            "This Chat is a thread without a project: it works in its own folder (your working folder), with your CLI's own shell and tools at the level the user chose. It runs workers of its own through `brigadier start`, in a repository the user names (`--repo <path>`) or in a folder of their own; `brigadier help workers` says how.
 - ",
             clarify_rule!(),
             " ",
@@ -216,6 +223,16 @@ pub(crate) const CONTINUE_ON_ACCOUNT: &str = "[Your last turn stopped early: its
 /// the turn the limit stopped: it already holds the user's message and what the turn did.
 pub(crate) const CONTINUE_AFTER_LIMIT: &str = "[Your last turn stopped early at a usage limit, which has reset. Carry on from where you stopped. Don't redo anything you already did.]";
 
+/// More `brigadier` look-ups than this in one block get the drift note (D167).
+pub(crate) const MAX_LOOK_UPS: u32 = 3;
+
+/// The drift note (D167): what to do next time, never a rule or a refusal.
+pub(crate) fn drift_note(look_ups: u32) -> String {
+    format!(
+        "[Brigadier note: your last request took {look_ups} separate `brigadier` look-ups. Next time one `brigadier state` call gives them all, and a pause, resume, close or switch reply already carries the worker's state.]"
+    )
+}
+
 /// Today's date (UTC). Development builds take `BRIGADIER_FAKE_TODAY` instead when it is set,
 /// so a check can start a session on another day.
 pub(crate) fn today() -> String {
@@ -249,10 +266,10 @@ pub(crate) fn date_of(at_ms: i64) -> String {
 /// still carries it counts as the thread's.
 pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
 
-/// A Chat's interview (Q78), the brigade skill's grilling (run2-D32): look-ups first, then all
+/// A Chat's interview (Q78), the orchestrator's grilling (run2-D32, `brigadier help asking`): look-ups first, then all
 /// it can ask at once with the CLI's own question tool, the shared understanding said back
 /// before it acts. Every new job opens with it (harness D7, D28).
-const CHAT_GRILLING: &str = "Every new job the user gives you (build, change, fix, design, research) opens with a grilling round, as does an invitation to question a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"). Grill them as the brigade skill says: first look up all you can, then ask all you can at once in one call of your CLI's own question tool (without one, or for more questions or options than one call takes, on one `brigadier ask` card), each with your recommended option first, labelled \"… (Recommended)\", and its why; a next round only for questions that hang on those answers, never one call per question. Questions go there, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown. Skip the round only when nothing is left to decide: a pure question, or an exact one-line instruction. Say the shared understanding back in a few lines before you act on it.";
+const CHAT_GRILLING: &str = "Every new job the user gives you (build, change, fix, design, research) opens with a grilling round, as does an invitation to question a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"). Grill them (`brigadier help asking`): first look up all you can, then ask all you can at once in one call of your CLI's own question tool (without one, or for more questions or options than one call takes, on one `brigadier ask` card), each with your recommended option first, labelled \"… (Recommended)\", and its why; a next round only for questions that hang on those answers, never one call per question. Questions go there, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown. Skip the round only when nothing is left to decide: a pure question, or an exact one-line instruction. Say the shared understanding back in a few lines before you act on it.";
 
 /// What a Chat can do as a thread (Q76, S28).
 const CHAT_THREAD: &str = chat_thread!();
@@ -446,24 +463,36 @@ mod tests {
     /// Disposable output in $TMPDIR, results inline instead of links to the session's files, and
     /// the feedback and new-session cards took 800 more and a line: 3,300 (the 10-26 artifact
     /// rule; proposed). Chat-only, user-started Fusion adds 253 bytes and one line (L7, L9).
+    /// The old orchestrator skill's must-follow rules moved in (D58): routing, waiting, workers'
+    /// prompts, asking, and the help topics to read first. The fully expanded text (Codex,
+    /// default settings) measured 4,926 bytes. Goal 11's pointer to `brigadier mcp` (D5): 4,978.
+    /// Goal 4's line on answering another session's message: 5,114. Goal 7's feedback trigger
+    /// (abnormal behaviour too, once per incident): 5,232. Goal 5's separate work you or a worker
+    /// turn up: 5,286. Goal 6's open choice asked, never guessed, for workers too, and no offer
+    /// in text: 5,434. D141's plain words mapped to their calls (\"stop it\" closes, never pauses):
+    /// 5,731. Worker approvals answered with no word in the thread (D54, O57 item 10): 5,767.
+    /// \"switch this to X\" for the session itself (O57 item 15): 5,804. One call per job and the
+    /// CLI as the one source (D150, D156, D160: `brigadier state`, replies carry the state): 6,179. A worker for real jobs, a native
+    /// subagent only for a quick lookup (D167): 6,314. A worker's start and its five-line brief
+    /// with no help read first (D156, D170): 6,638, the cap.
     #[test]
-    fn the_standing_instructions_stay_under_3600_bytes_and_eighteen_lines() {
-        assert!(
-            STANDING_INSTRUCTIONS.len() < 3_600,
-            "{}",
-            STANDING_INSTRUCTIONS.len()
-        );
-        assert!(STANDING_INSTRUCTIONS.lines().count() < 18);
+    fn the_standing_instructions_stay_short() {
+        let full = standing_text(&session_instructions(
+            &Settings::default(),
+            ProviderKind::Codex,
+        ));
+        assert!(full.len() <= 6_638, "{}", full.len());
+        assert!(STANDING_INSTRUCTIONS.lines().count() <= 23);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [
             "$BRIGADIER_SESSION_DIR",
             "$BRIGADIER_LEDGER",
             "$TMPDIR",
             "`brigadier --help`",
-            "the brigade skill says how",
+            "run `brigadier help <topic>` for it first",
             // D13: everything about the job is pulled, never put in.
-            "skills, MCP servers, project and routing are in `brigadier context`.",
-            "Run it when you start and after any compaction.",
+            "`brigadier state` gives workers, brief, decisions, open questions and routing, and lists the rest (ledger, transcript, skills, MCP servers, project); call any of those MCP servers with `brigadier mcp`.",
+            "Run it after any compaction.",
             // Disposable output goes in the session's $TMPDIR, never its record, which is for
             // resuming; a file the user asks for goes where they say.
             "its record/ keeps only what a resume needs",
@@ -473,17 +502,34 @@ mod tests {
         }
         // The user reads results, never the session's record or skill files: research findings
         // too stay inline, and a report, plan or page is only for a user who asks for that
-        // document or to save it. Feedback is offered once on a card that sends nothing until
+        // document or to save it. Feedback is offered once per incident (the user annoyed with
+        // Brigadier, or anything acting abnormally: goal 7) on a card that sends nothing until
         // the user clicks, with --asked only when they asked to report; in a project session (a
         // Chat can't), separate work is proposed as a session by a call, never promised in text
         // or sent to another session.
         for words in [
             "Results go in the reply, research findings too: never link a record or skill file; a report, plan or page only when the user asks for that document or to save it.",
-            "User annoyed with Brigadier itself (not their project): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click.",
-            "In a project session, work for a session of its own: `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise in text; never send it to an unrelated session.",
+            "User annoyed with Brigadier itself (not their project), or Brigadier, a CLI, you or a worker acting abnormally (a bug, stuck, looping, repeating, ending wrong): `brigadier feedback offer --kind bug|idea --title \"<one line>\" \"<what happened>\"` once per incident (`--help` says more); `--asked` only when they ask you to report it; nothing goes without their click.",
+            "In a project session, work for a session of its own (asked for, or separate work you or a worker turn up): `brigadier session propose --title \"<2–4 words>\" \"<self-contained brief>\"`, a call, never a promise or an offer in text; never send it to an unrelated session.",
         ] {
             assert!(WORKERS_LINE.contains(words), "{words}");
         }
+        // D141, D199: the user's plain words are the calls; \"stop\" pauses, \"end\" ends for good.
+        assert!(WORKERS_LINE.contains("The user's plain words are these calls (they never name a command): \"stop\", \"pause\" or \"hold on\" = `brigadier pause <id>`, it keeps its place; \"kill\", \"end\", \"cancel\", \"delete\" or \"mark it done\" = `close`, for good, its work kept on its branch;"));
+        // O57 item 15: switching the session itself is a move to another CLI, never `switch`.
+        assert!(
+            WORKERS_LINE
+                .contains("\"switch it to X\" = `switch`, this session itself = `continue-on`;")
+        );
+        // Another session's message is answered by a send (goal 4); asking one is one call by
+        // the name the user gives it, no help read or session list first (D201).
+        assert!(WORKERS_LINE.contains("answer it with `brigadier send <id>`"));
+        assert!(WORKERS_LINE.contains(
+            "`brigadier send \"<its title>\" \"<text>\" && brigadier wait \"<its title>\"`"
+        ));
+        assert!(!WORKERS_LINE.contains("`brigadier help sessions`"));
+        // D156, D170: a worker's start needs no help read; the brief's shape is right here.
+        assert!(WORKERS_LINE.contains("Starting a worker is one call, no help read first"));
         for words in [
             "brigadier fusion offer",
             "Sessions never start or offer Fusion",
@@ -503,6 +549,8 @@ mod tests {
             assert!(WORKERS_LINE.contains(words), "{words}");
         }
         let worker = worker_instructions(&Settings::default(), ProviderKind::Claude);
+        // Goal 6 for workers too: an open choice is asked of the parent, never guessed.
+        assert!(worker.contains("Never guess a choice your brief, the code and the decisions leave open: ask (a worker ends its turn with the question, for its parent)."));
         assert!(!worker.contains("question tool"));
         assert!(!worker.contains("brigadier ask"));
         assert!(!STANDING_INSTRUCTIONS.contains("hand-off note"));
@@ -511,7 +559,7 @@ mod tests {
         // suites, builds and live runs go to workers (harness D8, amending run2-D24). The line
         // goes to sessions and Chats only ([`WORKERS_LINE`]).
         for words in [
-            "You orchestrate: talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help.",
+            "You orchestrate: the user talks only to you; you talk, ask in your CLI's question tool, plan, look things up, make small edits (a few lines), run git and CI, check workers' evidence; your own subagents may help.",
             "After a small edit, one quick check (a test file, a type check); full suites, builds, live runs, bigger work and research go to workers",
             "After a block of work reply in 3-5 short lines (what changed, what's next, what needs the user): no recap, headings or filler.",
         ] {
@@ -526,10 +574,131 @@ mod tests {
         // entries per small task under "the moment something is settled").
         for words in [
             "Write one entry per thing settled (a rule or decision, an open item opened or closed) when it happens, batched with your other tool calls.",
-            "Never a progress log: not the request restated, a passing check or your own change; a task that settled nothing needs no entry.",
+            "Never a progress log: not the request restated, a passing check, your own change or a worker action; a task that settled nothing needs no entry.",
         ] {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
         }
+    }
+
+    /// D58: every rule of the old orchestrator skill (and the Fusion skill) has a home, the
+    /// standing instructions or a `brigadier help` topic, word for word but for "skill" words and
+    /// D48/D54's "judge it yourself".
+    #[test]
+    fn every_rule_of_the_old_skills_has_a_home() {
+        let mut homes = session_instructions(&Settings::default(), ProviderKind::Claude);
+        for topic in brigadier_cli::commands::TOPICS {
+            homes.push('\n');
+            homes.push_str(topic.text);
+        }
+        for rule in [
+            // Who does what.
+            "The user talks only to you; you plan, ask, delegate, check and land.",
+            "talk with the user, ask and plan; quick look-ups; small edits (a few lines in a file or two); git, merges, pushes and CI; checking workers' evidence (`git log`, their output, CI).",
+            "Your subagents may do look-ups, cross-file reads and small edits (the routing's models, effort at most high); after such an edit, one quick check (a test file, a type check).",
+            "Full suites, app builds and live runs go to workers or CI.",
+            "To start or show an app, run `brigadier preview start --purpose user <command>` yourself (shows in the user's Background); a worker only when code must change first.",
+            "start the worker with `--mockup`; then the real build.",
+            "anything bigger, anything that needs a build or tests (the checks on your integrated tree too), and research beyond a quick look-up: a worker on the routing's search row, or the user's own research row.",
+            "on disjoint parts: N is the \"Workers at once\" line of `brigadier models`.",
+            "Overnight or on a deadline: end 20 min early with a report.",
+            // Which worker.
+            "Give each part to the worker that owns its files or knows its area; track who owns what (`brigadier workers --json`).",
+            "A follow-up from the user on a worker's area goes to that worker with `brigadier send`, not to a new one.",
+            "A message `steered in by the user` mid-work is this work's: do it, and if it doesn't belong to this work, start a worker for it.",
+            "A finished, unclosed worker takes related next work by `brigadier send`, cheaper while its context is useful, not near full; else start fresh. Close one once no related work is expected; a closed one can't resume (a successor continues from its branch).",
+            // Asking.
+            "Every new job (build, change, fix, design, research) opens with a grilling round.",
+            "First answer all you can yourself (the code, the ledger, a web search, a research worker).",
+            "Map the decisions the job needs, each after those it depends on.",
+            "Ask all you can in one call of your CLI's own question tool, in plain words: recommended option first, labelled \"… (Recommended)\", why in its description; a next round only for what hangs on those answers, never one call per question. More questions or options than one call takes: one `brigadier ask` card instead.",
+            "Stop when nothing is assumed silently. Say the shared understanding back in a few lines, then start.",
+            "A choice that turns up mid-job (the code and a test disagree) is asked the same way, before you change anything, even when a skill says to make the smallest fix: it decides how, never what.",
+            "Questions go in the question tool or on a card, never as text in your reply, even when another skill (a grilling or interview skill) shows a text format: it decides what to ask, never how it's shown.",
+            "Skip it only when nothing is left to decide: a pure question, or an exact one-line instruction.",
+            "The user unsure which way: a top-level Chat may offer Fusion with `brigadier fusion offer \"<question>\"`; a session never starts or offers Fusion.",
+            "only when the user starts it in a top-level Chat.",
+            "Always ask the user, unless they already said so: spending money; a merge into the base branch, a push, publish or release; credentials or sign-ups; changing a decision they settled.",
+            // Commands.
+            "| `brigadier models` | Workers at once, routing rows and rules, models, quota left. |",
+            "[--work KIND]",
+            "[--base B] [--local] [--repo PATH] [--permission P] [--mcp NAME]… [--with computer-use] [--reviewing ID\\|session] [--mockup]` | Start a worker in its own worktree off yours (or `--base`), at your permission level; prints its id. |",
+            "| `brigadier wait [<id>…] [--timeout S]` | Wait for a worker's next event. |",
+            "| `brigadier read <id> [--last N]` | Its last message or N items. |",
+            "| `brigadier send <id> \"<text>\"` / `--allow` / `--deny <reason>` | Message a worker (queued mid-turn), or answer its permission prompt. |",
+            "| `brigadier workers` / `brigadier close <id>` | List yours; close one. |",
+            "| `brigadier sessions [--all]` | Other sessions; message one if asked. |",
+            "| `brigadier fusion offer \"<question>\"` | In a top-level Chat only, offer a second opinion from every installed CLI; nothing starts until the user clicks Ask. |",
+            "| `brigadier session propose --title \"2-4 words\" \"<self-contained brief>\"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise. |",
+            "| `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |",
+            "| `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |",
+            "A worker is naked: its CLI loads none of your setup but the project's instruction file, MCP servers only by `--mcp` (for heavy use), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`, and calls any MCP server of the setup with `brigadier mcp`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.",
+            // Pick the model.
+            "The user's routing decides each worker's agent, model and effort. The rows are in `brigadier state` (routing), read once: no `brigadier models` before each start. Pass `--work \"<Work>\"` of the row that fits; that row (the user's, else the shipped) picks all three. `brigadier start` skips a row whose account is out of quota by itself; never name a model or effort the rows don't.",
+            // Brief.
+            "Target:** the repo area and the outcome.",
+            "Change:** what to build or fix, and decisions made (quote the user's words when they matter).",
+            "Do not touch:** files, areas or behaviour that must stay.",
+            "Files:** the exact files or names it owns. Two workers never share a file; two that need one run in order or get exact names up front.",
+            "Acceptance:** the exact commands that must pass; \"commit, merge into my branch (below), then say done with the commit ids and each command's last lines\".",
+            "Add \"Ask me (your parent) if something blocks you; don't guess on scope.\"",
+            // O57 item 2: the orchestrator names its worker's job.
+            "Start it with `--title \"<its job in 2-4 words>\"`",
+            "The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`).",
+            "Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.",
+            "A plan or brief built from decisions cites their ids. Lines of your own say \"proposed\", and a gap the decisions don't cover goes to the user, never a silent fill.",
+            // One short job.
+            "Look at the files; `brigadier state` already gave the routing and the rules.",
+            "`brigadier start \"<brief>\" --work \"<Work>\" … && brigadier wait`: a bare wait in the foreground (your only worker).",
+            "check its evidence (`git log`, the output it reported). Other events: Waves.",
+            "Your answer. Close it unless related work is coming.",
+            // Waves.
+            "Start the wave: up to N workers on own files.",
+            "Each event reaches you by itself once your turn ends: end your turn. One short job (minutes) and nothing else to do: `brigadier wait <id>` in the foreground returns with it. Handle each event until all in:",
+            "A question: answer it yourself when the plan, the user's words, the code or a web search settle it; otherwise ask the user once and relay with `brigadier send`.",
+            "needs input** (a permission prompt; only you see it, the worker waits): judge it yourself, then `brigadier send <id> --allow` or `--deny <reason>`",
+            // Goal 3 (D118): a worker is moved, not closed and restarted.
+            "usage limit:** let it wait for the reset, or move it now with `brigadier switch <id>`",
+            "fresh context** (compacted): check it still knows the brief, or resend.",
+            "failed** or **interrupted:** `brigadier read <id> --last 10`; send it on or close it.",
+            "gone:** read its branch; start a successor with \"continue from branch X; `git log` first\".",
+            "quiet** (20 min silent): read its last 10; nudge or close it.",
+            "Next wave when this one is integrated.",
+            // Integrate.
+            "A worker merges each finished step into your branch itself: \"When your checks pass, merge your branch into mine: `git -C <my workspace> merge --no-edit <your branch>` (if mine moved and it conflicts, rebase on it first). Report the merge commit.\" Don't edit your workspace while a worker may merge.",
+            "You choose merge or rebase and resolve conflicts, helped by the worker who knows the change. In a Local checkout, commit your edits before integrating.",
+            "A worker or CI checks the integrated tree. All work stays on your branch; at the end ask the user whether to push, and in a New worktree whether to merge it into its base branch.",
+            // Reviews.
+            "A big job (several parts, risky, or the user asked) gets two reviews; a small change with its tests passing lands without a review or a critique.",
+            "Plan review** of the big job's plan (`--reviewing session`) before it goes to workers; a worker's own plan may get one (`--reviewing <id>`) before you approve it.",
+            "End verification**, once, on the integrated tree, never mid-run: a fresh reviewer code-reviews the job's base..head adversarially, checks every \"done when\" for real, fixes what it can, and reports pass or fail per item with evidence.",
+            "Start each with `brigadier start --reviewing <id>|session`: it runs on another ready provider than the author's, else a fresh session of theirs, and reads `brigadier show <id>` and `brigadier context`. Its brief: break it; find what fails, is missing or is wrong, with evidence (file:line, a command and its output); never approve.",
+            "You triage: fix the valid findings through workers, note each rejected one with its reason. One review, one fix pass, then report what is left; never loop.",
+            "Before handing a derived document on (plan, brief, report), run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question \"what is missing, changed or added?\".",
+            // Things that end later, gotchas.
+            "Keep a watcher on it in the background (`gh run watch <id> --exit-status`, or Monitor) so its end wakes you; never end on \"in progress\" with nothing running.",
+            "Tests needing gitignored files (fixtures, credentials) skip silently in a fresh worktree; the worker links them and says which.",
+            // Report to the user.
+            "After a block of work, at most 3 to 5 short lines with the results themselves, research findings too;",
+            "a report, plan or page only when the user asks for that document or to save it.",
+            // The Fusion skill.
+            "a `/fusion <question>` message, the Fusion button, or a click on its offer card. Never on your own.",
+            "`fusion-claude`, `fusion-codex`",
+            "brigadier start \"<brief>\" --work fusion-claude",
+            "with nothing piped after it",
+            "Answer only; change no file.",
+            "One cross round.",
+            "You judge; never count votes.",
+            "With only one CLI ready, run one consult and no cross round",
+            "together while \"Workers at once\" (in `brigadier models`) allows, else one after another",
+            "take the same Work's next row the rules allow; with none, skip that CLI and say so",
+            "in 3 to 5 short lines with no headings",
+        ] {
+            // The old file's bold labels are plain words in the topics.
+            let rule = rule.replace("**", "");
+            assert!(homes.contains(&rule), "{rule}");
+        }
+        // Nothing the model reads names a skill of Brigadier's.
+        assert!(!homes.contains("brigade"), "a skill name is left");
     }
 
     #[test]
@@ -611,13 +780,13 @@ mod tests {
         assert!(side.starts_with(&head));
         assert!(side.contains("Your shell runs only `brigadier` commands"));
         assert!(side.contains("starts no workers"));
-        // One way to grill, the brigade skill's (run2-D32): all it can ask at once in one call
+        // One way to grill, the orchestrator's (run2-D32): all it can ask at once in one call
         // of the CLI's own question tool, `brigadier ask` without one, the recommended option
         // marked as the adapters read it; a next round only for what hangs on those answers;
         // never one question at a time, nor numbered rounds. Every new job opens with it,
         // skipped only when nothing is left to decide (harness D7, D28).
         for text in [&chat, &side] {
-            assert!(text.contains("Grill them as the brigade skill says"));
+            assert!(text.contains("Grill them (`brigadier help asking`)"));
             assert!(text.contains("Every new job the user gives you (build, change, fix, design, research) opens with a grilling round"));
             assert!(text.contains("ask all you can at once in one call of your CLI's own question tool (without one, or for more questions or options than one call takes, on one `brigadier ask` card)"));
             // Another skill's text format for questions never wins over the card (harness D36).

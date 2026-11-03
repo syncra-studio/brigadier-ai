@@ -61,6 +61,7 @@ fn spec(
             match kind {
                 ProviderKind::Claude => "haiku",
                 ProviderKind::Codex => "gpt-6-luna",
+                other => unreachable!("no fixtures are recorded for {other}"),
             }
             .into(),
         ),
@@ -77,7 +78,6 @@ fn spec(
         add_dirs: vec![],
         project: None,
         skill_plugins: vec![],
-        installed_skills: vec![],
         switched_off: Default::default(),
         env: vec![],
         unset_env: vec![],
@@ -402,10 +402,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             },
         )?;
         let env = Arc::new(CliEnv::capture(&platform));
-        let provider: Box<dyn Provider> = match kind {
-            ProviderKind::Claude => Box::new(claude::Claude::new(platform, env)),
-            ProviderKind::Codex => Box::new(codex::Codex::new(platform, env)),
-        };
+        let provider = (adapters::adapter(kind).ok_or("no such CLI")?.new)(platform, env);
         let artifacts =
             serde_json::from_str(&std::fs::read_to_string(scratch.join("cleanup.json"))?)?;
         provider.remove(artifacts).await?;
@@ -488,10 +485,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if let Some(binary) = env.resolve(kind) {
         env.choose(kind, Some(binary.canonicalize()?));
     }
-    let provider: Box<dyn Provider> = match kind {
-        ProviderKind::Claude => Box::new(claude::Claude::new(platform, env)),
-        ProviderKind::Codex => Box::new(codex::Codex::new(platform, env)),
-    };
+    let provider = (adapters::adapter(kind).ok_or("no such CLI")?.new)(platform, env);
     let ledger = Arc::new(Kept::default());
     let mut result = Ok(());
     for group in groups {

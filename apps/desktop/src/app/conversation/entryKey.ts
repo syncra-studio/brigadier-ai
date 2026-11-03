@@ -11,7 +11,7 @@ export function entryKey(entry: Entry): string {
     case "thinking":
       return `thinking:${entry.segment.itemId}`;
     case "text":
-      return `text:${entry.index}`;
+      return `text:${entry.messageId}`;
     case "card":
       return `${entry.card.type}:${entry.card.id}`;
     case "steer":

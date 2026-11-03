@@ -9,10 +9,10 @@ import { ChevronRight, ProviderGlyph } from "@/components/icons";
 import { StateDot } from "@/components/shared";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
 import { used, windowTitle } from "@/lib/quota";
-import { VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { oneRowPerAccount } from "@/state/accounts";
 import { setProviderOn } from "@/state/providers";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** The window of the account in use that is nearest its limit, for the agent's row. */
 export function busiestWindow(views: readonly AccountView[]): QuotaWindow | null {
@@ -44,7 +44,7 @@ export function ProviderAgentRow({
   const signedIn = oneRowPerAccount(accounts).filter(({ view }) => view.status?.loggedIn).length;
   const count = `${signedIn} ${signedIn === 1 ? "account" : "accounts"}`;
   const busiest = on && state === "ready" ? busiestWindow(accounts) : null;
-  const label = VENDOR_LABELS[provider];
+  const label = cliFacts(provider).vendor;
 
   let tone: "ready" | "needs" | "off" = "ready";
   let line: string;

@@ -13,6 +13,7 @@
  *   clear of the group's own row above it.
  * - A live group of one running command, opened to its Shell box: the box stays open when the
  *   command ends and the group's row says "Thinking", and when the live line moves on.
+ * - A live group whose steps are told only once done: its row names each newest step, then "Thinking".
  *
  * `drive=motion` instead opens and closes the first group and a row in it, reading each body's
  * state and the animation it runs as it starts ("none" with reduced motion).
@@ -104,6 +105,53 @@ function LoneLive() {
   );
 }
 
+/** The live turn's last group, its steps told only once done (as some CLIs do); the test adds them. */
+const addDone = () => window.dispatchEvent(new Event("add-done"));
+
+function DoneSteps() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const add = () => setCount((n) => n + 1);
+    window.addEventListener("add-done", add);
+    return () => window.removeEventListener("add-done", add);
+  }, []);
+  const steps = Array.from({ length: count }, (_, index) => `wc -l part${index + 1}.js`);
+  if (steps.length === 0) return null;
+  return (
+    <ActivityGroup<string>
+      items={steps.map((step) => ({ type: "step", key: step, step }))}
+      live
+      working
+      liveLabel={{ text: "Thinking", tone: "busy" }}
+      describe={(step) => ({ words: stepWords({ name: "shell", detail: step, status: "completed" }), status: "completed", exit: 0 })}
+      renderStep={(step, key) => <StepRow key={key} words={stepWords({ name: "shell", detail: step, status: "completed" })} status="completed" exit={0} />}
+    />
+  );
+}
+
+/**
+ * A read whose path streams in after its call shows, as Claude's does (`late-detail` sets it).
+ * `lead`: as a lead's group, with no live line of its own while a call runs.
+ */
+function LateDetail({ lead = false }: { lead?: boolean }) {
+  const [detail, setDetail] = useState<string | null>(null);
+  useEffect(() => {
+    const said = () => setDetail("src/index.js");
+    window.addEventListener("late-detail", said);
+    return () => window.removeEventListener("late-detail", said);
+  }, []);
+  const words = stepWords({ name: "Read", detail, status: "inProgress" });
+  return (
+    <ActivityGroup<string>
+      items={[{ type: "step", key: "read-1", step: "read-1" }]}
+      live
+      {...(!lead && { working: true, liveLabel: { text: "Thinking", tone: "busy" } as const })}
+      describe={() => ({ words, status: "inProgress", exit: null })}
+      renderStep={(_, key) => <StepRow key={key} words={words} status="inProgress" exit={null} />}
+    />
+  );
+}
+
 function Page() {
   return (
     <TooltipProvider>
@@ -133,6 +181,15 @@ function Page() {
         </section>
         <section data-case="lone-live">
           <LoneLive />
+        </section>
+        <section data-case="done-steps">
+          <DoneSteps />
+        </section>
+        <section data-case="late-detail">
+          <LateDetail />
+        </section>
+        <section data-case="late-detail-lead">
+          <LateDetail lead />
         </section>
         <section data-case="worker-lone" className="flex h-96 flex-col">
           <WorkerThread conversationId={CHAT} row={workerRow} />
@@ -232,6 +289,39 @@ async function measure(): Promise<object> {
   moveLone({ status: "completed", endedAtMs: Date.now() - 4000, line: false });
   await wait(500);
   out.loneLive = { opened, ended, movedOn: boxOpen() };
+
+  // Steps told only once done, two at once then one more: the live row names the newest of each
+  // batch for its second, then says the live line.
+  const labels: string[] = [];
+  const sample = async (ms: number) => {
+    for (const end = performance.now() + ms; performance.now() < end; await new Promise(requestAnimationFrame)) {
+      const text = one("[data-slot=work-group] > button", at("done-steps"))?.textContent ?? "";
+      if (labels.at(-1) !== text) labels.push(text);
+    }
+  };
+  addDone();
+  addDone();
+  await sample(1600);
+  addDone();
+  await sample(1600);
+  out.doneSteps = labels;
+
+  // A read shown before its path came: the live line stands until the path names it.
+  const late: string[] = [];
+  const leadLate: string[] = [];
+  const sampleLate = async (ms: number) => {
+    for (const end = performance.now() + ms; performance.now() < end; await new Promise(requestAnimationFrame)) {
+      const text = one("[data-slot=work-group] > button", at("late-detail"))?.textContent ?? "";
+      if (late.at(-1) !== text) late.push(text);
+      const lead = at("late-detail-lead")?.textContent ?? "";
+      if (leadLate.at(-1) !== lead) leadLate.push(lead);
+    }
+  };
+  await sampleLate(300);
+  window.dispatchEvent(new Event("late-detail"));
+  await sampleLate(600);
+  out.lateDetail = late;
+  out.lateDetailLead = leadLate;
   return out;
 }
 

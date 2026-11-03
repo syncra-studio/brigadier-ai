@@ -3,7 +3,7 @@
 import "@/fixtures/flow";
 import { mockIPC } from "@tauri-apps/api/mocks";
 
-import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome, SentToWorker } from "@/ipc/generated";
+import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";
 import { applyActivityNews, useActivity } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
@@ -40,8 +40,8 @@ function apply(events: EventEnvelope["event"][]) {
   applyEvents(batch);
   applyBoardEvents(batch);
 }
-function queued(items: QueuedMessage[], sent: SentToWorker[] = []): EventEnvelope["event"] {
-  return { type: "queueChanged", conversationId: id, queue: { items, paused: false, sent } };
+function queued(items: QueuedMessage[]): EventEnvelope["event"] {
+  return { type: "queueChanged", conversationId: id, queue: { items, paused: false } };
 }
 const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
 /** The row's state as the rail shows it (run2-D40). */
@@ -92,7 +92,8 @@ async function drive() {
   apply([queued([{ ...item, delivered: true, offerSession: true }])]);
   await pause();
   const offered = railState();
-  apply([queued([], [{ id: item.id, text, worker: "task-2", workerNumber: 2, workerTitle: "Docs", sentAtMs: Date.now() }])]);
+  // Sent on to a worker, it just leaves the rail: no notice of it (D90).
+  apply([queued([])]);
   await pause();
   const sentToWorker = { ...railState(), ...view() };
   apply([queued([])]);
@@ -127,9 +128,17 @@ async function drive() {
   };
   respond({ type: "queued", item: { ...item, id: "chat-while-held", text: chatWhileHeld, deciding: true } });
   await chatHolding;
+  // Another session's message in the rail (goal 4): its words and who sent it, never its header.
+  const from = "c-api-work";
+  useApp.setState((state) => ({ conversations: { ...state.conversations, [from]: { ...state.conversations[id]!, id: from, title: "API work" } } }));
+  const peerId = "sm-0123feedbeef";
+  apply([queued([{ ...item, id: peerId, text: `[message from session "API work" (${from}) · ${peerId}]\nCan you check the schema?`, deciding: true, delivered: true, peer: { messageId: peerId, from } }])]);
+  await pause();
+  const peerRow = document.querySelector('[data-slot="message-queue-item"]')?.textContent ?? "";
+  const fromPeer = { from: peerRow.includes("From API work"), words: peerRow.includes("Can you check the schema?"), header: peerRow.includes("[message from session"), deciding: railState().deciding };
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork });
+  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork, fromPeer });
   document.body.append(result);
 }
 void drive();

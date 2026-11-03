@@ -20,7 +20,7 @@ type Seen = {
 const see = async (t: Parameters<typeof renderFixturePage>[0], query: string) =>
   JSON.parse(await renderFixturePage(t, `compaction-divider.html?${query}`, "compaction-divider-result", 15000)) as Seen;
 
-const REFRESHED = "Context refreshed · everything important kept";
+const REFRESHED = "Context refreshed · nothing was lost";
 
 test("Brigadier's /compact between two answers is one divider: no turn, no bubble, no time of its own", { timeout: 120000 }, async (t) => {
   const seen = await see(t, "case=between");
@@ -79,4 +79,21 @@ test("Brigadier's compaction as the app hears it moves nothing at the thread's b
   }
   seen.steps.slice(1).forEach((step, index) => assert.ok(step.top >= seen.steps[index]!.top, `the view went back up at "${step.step}": ${JSON.stringify(seen.steps)}`));
   assert.deepEqual(seen.dividers, [REFRESHED]);
+});
+
+test("a rebirth shows nothing: no divider, the note turn and its fix never show (core-goals D193)", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "compaction-divider.html?case=rebirth", "compaction-divider-result", 90000)) as {
+    failed: string | null;
+    steps: { step: string; seams: (string | null)[]; asked: boolean; texts: string; order: string[] }[];
+  };
+  assert.equal(seen.failed, null);
+  for (const step of seen.steps) {
+    assert.equal(step.asked, false, `a note bubble at "${step.step}"`);
+    assert.doesNotMatch(step.texts, /Handed off|Fixed\.|Hand-off check/, `the note turn showed at "${step.step}"`);
+  }
+  const at = (name: string) => seen.steps.filter((step) => step.step === name);
+  for (const step of seen.steps) assert.deepEqual(step.seams, [], `a seam mark at "${step.step}"`);
+  // The successor's answer carries on with no bubble of its own.
+  for (const step of at("successor")) assert.equal(step.order.at(-1), "answer");
+  assert.match(at("successor").at(-1)!.texts, /Carrying on with step 6\./);
 });

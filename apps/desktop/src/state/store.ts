@@ -22,6 +22,7 @@ import type {
   Settings,
 } from "@/ipc/generated";
 import { cachedSummaryShown } from "@/lib/pinnedSummary";
+import { PROVIDERS } from "@/lib/providerKinds";
 import { confirmPending } from "@/state/shownIds";
 
 /** A page of Settings. */
@@ -66,13 +67,18 @@ export type Selection =
  * The composer's choices for a conversation that does not exist yet. `null` fields follow
  * the resolution order: the project's remembered choice, then the global default.
  */
+/** Where a draft session works: a new worktree of its own (the default), the local checkout, or
+    an existing worktree, on the branch it has checked out (goal 9, D130). */
+export type DraftEnvironment = EnvironmentKind | "existingWorktree";
+
 export type DraftSetup = {
   /** The project these choices were made for; they reset when the project changes. */
   projectId: string | null;
-  /** Where the session works: a new worktree of its own (the default) or the local checkout. */
-  environment: EnvironmentKind;
+  environment: DraftEnvironment;
   /** New worktree: the branch it starts from and merges into. Absent: the checked-out branch. */
   base: string | null;
+  /** Existing worktree: the folder picked to work in. */
+  worktree: string | null;
   /** New worktree: the session branch's name. Empty: Brigadier names it. */
   sessionBranch: string;
   permission: PermissionLevel | null;
@@ -86,6 +92,7 @@ export function emptyDraft(projectId: string | null): DraftSetup {
     projectId,
     environment: "newWorktree",
     base: null,
+    worktree: null,
     sessionBranch: "",
     permission: null,
     model: null,
@@ -206,7 +213,7 @@ export const useApp = create<AppState>()(() => ({
   projects: {},
   conversations: {},
   settings: {
-    defaultPermission: "acceptEdits",
+    defaultPermission: "full",
     defaultOrchestrator: null,
     defaultChatModel: null,
     hibernateAfterMinutes: 30,
@@ -434,9 +441,8 @@ function applyProviderEvent(
       const others = view.providers.filter(
         (overview) => overview.provider !== event.overview.provider,
       );
-      const order = ["claude", "codex"];
       const overviews = [...others, event.overview].toSorted(
-        (a, b) => order.indexOf(a.provider) - order.indexOf(b.provider),
+        (a, b) => PROVIDERS.indexOf(a.provider) - PROVIDERS.indexOf(b.provider),
       );
       return { ...providers, view: { ...view, providers: overviews } };
     }
@@ -709,6 +715,9 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "reviewUpdated":
     case "mergeRefusalSet":
     case "unreviewedChanged":
+      return slice;
+    // One this app doesn't know (a newer daemon's) changes nothing here, and the rest of its batch still applies.
+    default:
       return slice;
   }
 }

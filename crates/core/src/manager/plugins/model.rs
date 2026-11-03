@@ -83,7 +83,7 @@ impl CatalogView {
                     },
                     Content::Skill { .. } => (None, None),
                 };
-                CatalogDefinition { agent: origin.agent.map(super::provider), file: origin.file.to_string_lossy().into_owned(), plugin: origin.plugin.clone(), project: origin.project.as_ref().map(|path| path.to_string_lossy().into_owned()), native: origin.native.clone(), aliases: origin.aliases.clone(), fingerprint: origin.fingerprint.clone(), transport, endpoint }
+                CatalogDefinition { agent: origin.agent, file: origin.file.to_string_lossy().into_owned(), plugin: origin.plugin.clone(), project: origin.project.as_ref().map(|path| path.to_string_lossy().into_owned()), native: origin.native.clone(), aliases: origin.aliases.clone(), fingerprint: origin.fingerprint.clone(), transport, endpoint }
             }).collect(),
         }).collect();
         let bytes = serde_json::to_vec(&rows).expect("catalog rows are serializable");

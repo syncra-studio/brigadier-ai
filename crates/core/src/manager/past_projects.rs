@@ -85,9 +85,8 @@ impl SessionManager {
 }
 
 fn provider_order(kind: ProviderKind) -> usize {
-    ProviderKind::ALL
-        .iter()
-        .position(|known| *known == kind)
+    brigadier_providers::adapters::kinds()
+        .position(|known| known == kind)
         .unwrap_or(usize::MAX)
 }
 

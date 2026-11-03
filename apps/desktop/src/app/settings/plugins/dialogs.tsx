@@ -1,11 +1,11 @@
 import { useEffect, type ReactNode } from "react";
 
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { useAction } from "@/app/conversation/useAction";
 import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
 import { Button, ErrorLine } from "@/components/controls";
 import { X } from "@/components/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
+import { cliFacts } from "@/lib/providerKinds";
 import { cn } from "@/lib/utils";
 import type { PluginAgentResult, PluginsAdapter } from "./adapter";
 import { type PluginAgent } from "./parts";
@@ -45,7 +45,7 @@ export function PluginDialog({ open = true, onClose, title, description, slot, c
 }
 
 /** An agent as the dialogs name it: "Claude Code", or its id for one the app has no name for. */
-export const agentOf = (agent: string): PluginAgent => ({ agent, label: (PROVIDER_LABELS as Record<string, string>)[agent] ?? agent });
+export const agentOf = (agent: string): PluginAgent => ({ agent, label: cliFacts(agent).label });
 
 /** The agents that didn't take a change, with why: "Codex: …". */
 export function failures(results: PluginAgentResult[]): string | null {
@@ -98,7 +98,7 @@ export function RemoveDialog({ item, adapter, onClose, onRemoved }: {
       title={`Remove ${item.name}?`}
       description={item.removal === "everything"
         ? "Removes it from Brigadier's library. Sessions already running keep it until they end."
-        : "Removes it from Brigadier and its sessions for all agents. Its files stay where Claude Code or Codex keep them."}
+        : "Removes it from Brigadier and its sessions for all agents. Its files stay in each agent's own settings."}
     >
       <ErrorLine error={action.error} />
       <div className="flex justify-end gap-2">

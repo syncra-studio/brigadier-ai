@@ -11,7 +11,7 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { rightSidebarFolds, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";
 import { useBoard } from "@/state/board";
-import { useWorkerRows } from "@/state/cliThread";
+import { useSubagentRow, useWorkerRows } from "@/state/cliThread";
 
 const TABS = [{ id: "workers", title: WORKERS_LABEL }] as const;
 
@@ -64,7 +64,8 @@ export const RightSidebarContext = createContext<ReturnType<typeof useRightSideb
 export function RightSidebar({ conversationId }: { conversationId: string }) {
   const panel = useContext(RightSidebarContext);
   const { panel: workerId } = useContext(AgentsPanelContext);
-  const selectedWorker = useWorkerRows(conversationId).some((row) => row.id === workerId);
+  const subagent = useSubagentRow(conversationId, workerId);
+  const selectedWorker = useWorkerRows(conversationId).some((row) => row.id === workerId) || !!subagent;
   const workerHeader = panel?.active === "workers" && !!selectedWorker;
   const content = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);

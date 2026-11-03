@@ -5,7 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { turnCommands } from "@/app/conversation/turnCommands";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
-import { applyThreadNews, loadThreadView, mergeEntries, resyncThreadViews, unreadSince, useCliThread, useUnreadThreads } from "@/state/cliThread";
+import { applyThreadNews, loadThreadView, mergeEntries, NEWEST_TURNS, resyncThreadViews, unreadSince, useCliThread, useUnreadThreads } from "@/state/cliThread";
 
 const at = (event: ProviderEvent, atMs: number): FileEntry => ({ event, atMs });
 const command = (status: "inProgress" | "completed", output: string | null = null): ProviderEvent => ({
@@ -42,6 +42,9 @@ test("the stream extends the file item by item, as the engine merges them", () =
   const ended = mergeEntries(merged, [{ event: end.type === "command" ? { ...end, command: "" } : end, atMs: 7 }]);
   assert.deepEqual(ended[1], { event: command("completed", "one\ntwo\n"), atMs: 2, updatedAtMs: 7 });
   assert.equal(ended.length, 4);
+  // A background job's notice is an item of its own, said once however often it comes.
+  const notice = at({ type: "taskNotice", itemId: "n", text: "Background command finished" }, 8);
+  assert.equal(mergeEntries(mergeEntries(ended, [notice]), [notice]).length, 5);
 });
 
 test("a thread is read once, follows the stream, and is read again when its turn ends", async () => {
@@ -104,6 +107,73 @@ test("a thread is read once, follows the stream, and is read again when its turn
   }
 });
 
+const turnOf = (index: number) => ({ userMessage: `u${index}`, startedAtMs: index, endedAtMs: index, end: "done" as const, error: null, requests: [] });
+
+const entriesOf = (from: number) =>
+  Array.from({ length: NEWEST_TURNS + 1 - from }, (_, index) => at({ type: "message", itemId: `u${from + index}`, role: "user", text: `Q${from + index}` }, from + index));
+
+test("a thread not held opens on its newest turns, then the whole of it fills in with what streamed meanwhile; one held is read whole", async () => {
+  const whole: ThreadView = { entries: entriesOf(0), turns: Array.from({ length: NEWEST_TURNS + 1 }, (_, index) => turnOf(index)) };
+  const newest: ThreadView = { entries: entriesOf(1), turns: whole.turns.slice(1) };
+  const asked: (number | undefined)[] = [];
+  let landWhole: (() => void) | null = null;
+  mockIPC((cmd, payload) => {
+    if (cmd !== "ipc_request") return null;
+    const { request } = payload as { request: { newestTurns?: number } };
+    asked.push(request.newestTurns);
+    if (request.newestTurns !== undefined) return { method: "threadView", view: newest };
+    return new Promise((resolve) => (landWhole = () => resolve({ method: "threadView", view: whole })));
+  });
+  try {
+    // It opens once the newest turns are there, before the whole thread is.
+    await loadThreadView("long");
+    assert.deepEqual(asked, [NEWEST_TURNS, undefined]);
+    assert.deepEqual(useCliThread.getState().views["long"], newest);
+    // What streams meanwhile shows on them and is kept when the whole thread lands.
+    const said = at({ type: "message", itemId: "m", role: "assistant", text: "More" }, 9);
+    applyThreadNews({ conversationId: "long", entries: [said] });
+    await settle();
+    (landWhole as (() => void) | null)?.();
+    await settle();
+    const view = useCliThread.getState().views["long"];
+    assert.deepEqual(view?.turns, whole.turns);
+    assert.deepEqual(view?.entries, [...whole.entries, said]);
+    // Held, it is read whole, once.
+    asked.length = 0;
+    const again = loadThreadView("long");
+    await settle();
+    (landWhole as (() => void) | null)?.();
+    await again;
+    assert.deepEqual(asked, [undefined]);
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+test("a thread asked for twice while it is read is read once, and both asks resolve when it lands", async () => {
+  const view: ThreadView = { entries: [at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1)], turns: [] };
+  let asked = 0;
+  let land: (() => void) | null = null;
+  mockIPC((cmd) => {
+    if (cmd !== "ipc_request") return null;
+    asked += 1;
+    return new Promise((resolve) => (land = () => resolve({ method: "threadView", view })));
+  });
+  try {
+    const first = loadThreadView("twice");
+    const second = loadThreadView("twice");
+    await settle();
+    (land as (() => void) | null)?.();
+    await Promise.all([first, second]);
+    assert.equal(asked, 1);
+    assert.deepEqual(useCliThread.getState().views["twice"], view);
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
+  }
+});
+
 test("in a page, what streamed between two frames is drawn once, at the frame", async () => {
   const page = globalThis as unknown as { document?: unknown; requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
   const frames: (() => void)[] = [];
@@ -130,6 +200,105 @@ test("in a page, what streamed between two frames is drawn once, at the frame", 
     delete page.document;
     delete page.requestAnimationFrame;
     delete page.cancelAnimationFrame;
+  }
+});
+
+/** The pages' clock: it only goes forward, as a page's does. */
+let clock = 10_000;
+
+/** A page whose frames the test runs, each at its own time; `hidden` hides the window. */
+function fakePage(hidden = false) {
+  const page = globalThis as unknown as { document?: unknown; requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
+  const frames: ((at: number) => void)[] = [];
+  page.document = { hidden };
+  page.requestAnimationFrame = (draw: (at: number) => void) => frames.push(draw);
+  page.cancelAnimationFrame = () => {};
+  clock += 1000;
+  return {
+    /** Runs the frame waiting, 1/60 s after the last. */
+    frame() {
+      clock += 1000 / 60;
+      frames.splice(0).forEach((draw) => draw(clock));
+    },
+    restore() {
+      delete page.document;
+      delete page.requestAnimationFrame;
+      delete page.cancelAnimationFrame;
+    },
+  };
+}
+
+const words = (conversationId: string, itemId: string) => {
+  const entry = useCliThread.getState().views[conversationId]?.entries.find((each) => "itemId" in each.event && each.event.itemId === itemId);
+  return entry?.event.type === "messageDelta" ? entry.event.text : entry?.event.type === "command" ? (entry.event.output ?? "") : undefined;
+};
+
+test("an answer's words come out 24 a frame, and what follows them waits until they're out, within 8 frames", async () => {
+  const page = fakePage();
+  const user = at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1);
+  useCliThread.setState({ views: { paced: { entries: [user], turns: [] } } });
+  try {
+    applyThreadNews({ conversationId: "paced", entries: [at({ type: "messageDelta", itemId: "m", text: "a".repeat(60) }, 2)], seq: 1 });
+    page.frame();
+    assert.equal(words("paced", "m")?.length, 24);
+    page.frame();
+    assert.equal(words("paced", "m")?.length, 48);
+    // 412 words to come out, then a call begins: within 8 frames, the call after the words.
+    applyThreadNews({ conversationId: "paced", entries: [at({ type: "messageDelta", itemId: "m", text: "b".repeat(400) }, 3)], seq: 2 });
+    applyThreadNews({ conversationId: "paced", entries: [at(command("inProgress"), 4)], seq: 3 });
+    const shown: number[] = [];
+    for (let frame = 0; frame < 8; frame++) {
+      page.frame();
+      shown.push(words("paced", "m")!.length);
+      if (frame < 7) assert.equal(words("paced", "c"), undefined, `the call waits for the words (frame ${frame + 1})`);
+    }
+    assert.equal(shown.at(-1), 460);
+    assert.ok(shown.every((count, index) => index === 0 || count > shown[index - 1]!), `${shown}`);
+    assert.deepEqual(useCliThread.getState().views["paced"]?.entries.map((entry) => "itemId" in entry.event && entry.event.itemId), ["u", "m", "c"]);
+    // A few words before what follows come out at once with it.
+    applyThreadNews({ conversationId: "paced", entries: [at({ type: "messageDelta", itemId: "m", text: "end" }, 5)], seq: 4 });
+    applyThreadNews({ conversationId: "paced", entries: [], ended: "done", seq: 5 });
+    page.frame();
+    assert.ok(words("paced", "m")!.endsWith("end"));
+  } finally {
+    page.restore();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+test("a command's output comes out every 50 ms, its last 20,000 characters, and before what follows it", async () => {
+  const page = fakePage();
+  useCliThread.setState({ views: { output: { entries: [at(command("inProgress", ""), 1)], turns: [] } } });
+  try {
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "x".repeat(15_000) }, 2)], seq: 1 });
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "y".repeat(15_000) }, 3)], seq: 2 });
+    // The first frame is 50 ms after none: out it comes, cut to its last 20,000.
+    page.frame();
+    assert.equal(words("output", "c"), "x".repeat(5_000) + "y".repeat(15_000));
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "z" }, 4)], seq: 3 });
+    page.frame();
+    assert.ok(!words("output", "c")!.endsWith("z"), "not yet 50 ms");
+    // The command's end waits for no timer: its output comes out first.
+    applyThreadNews({ conversationId: "output", entries: [at({ type: "commandOutputDelta", itemId: "c", text: "!" }, 5)], seq: 4 });
+    applyThreadNews({ conversationId: "output", entries: [], ended: "done", seq: 5 });
+    page.frame();
+    assert.ok(words("output", "c")!.endsWith("z!"));
+  } finally {
+    page.restore();
+    useCliThread.setState({ views: {} });
+  }
+});
+
+test("a hidden window draws no frames: what came comes out at once", async () => {
+  const page = fakePage(true);
+  useCliThread.setState({ views: { hidden: { entries: [], turns: [] } } });
+  try {
+    applyThreadNews({ conversationId: "hidden", entries: [at({ type: "messageDelta", itemId: "m", text: "z".repeat(500) }, 1)], seq: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(words("hidden", "m")?.length, 500);
+  } finally {
+    page.restore();
+    useCliThread.setState({ views: {} });
   }
 });
 
@@ -162,6 +331,55 @@ test("a delta waiting for the frame when a read of its thread lands shows once",
     delete page.document;
     delete page.requestAnimationFrame;
     delete page.cancelAnimationFrame;
+  }
+});
+
+/** The text of the last item of conversation "meet". */
+function meetText(): string | null {
+  const last = useCliThread.getState().views["meet"]?.entries.at(-1)?.event;
+  return last?.type === "messageDelta" ? last.text : null;
+}
+
+test("a read and the live stream meet with no word lost or shown twice, in whatever order they come", async () => {
+  const user = at({ type: "message", itemId: "u", role: "user", text: "Go" }, 1);
+  const said = (text: string) => at({ type: "messageDelta", itemId: "m", text }, 2);
+  const news = (seq: number, text: string) => ({ conversationId: "meet", entries: [said(text)], seq });
+  useCliThread.setState({ views: { meet: { entries: [user, said("He")], turns: [], seq: 1 } } });
+  // The read holds the engine's news up to 4: "llo", " world" and " again".
+  const read: ThreadView = { entries: [user, said("Hello world again")], turns: [], seq: 4 };
+  let land: (() => void) | null = null;
+  mockIPC((cmd) => (cmd === "ipc_request" ? new Promise((resolve) => (land = () => resolve({ method: "threadView", view: read }))) : null));
+  try {
+    const reading = loadThreadView("meet");
+    await settle();
+    // While it is read, the stream keeps drawing.
+    applyThreadNews(news(2, "llo"));
+    await settle();
+    assert.equal(meetText(), "Hello");
+    applyThreadNews(news(3, " world"));
+    await settle();
+    assert.equal(meetText(), "Hello world");
+    (land as (() => void) | null)?.();
+    await reading;
+    assert.equal(meetText(), "Hello world again", "the read's own words, none twice");
+    // News the read held, reaching the page after it, adds nothing; the next does.
+    applyThreadNews(news(4, " again"));
+    applyThreadNews(news(5, "!"));
+    await settle();
+    assert.equal(meetText(), "Hello world again!");
+    // News heard while a read is under way that the read doesn't hold is added to it.
+    const second = loadThreadView("meet");
+    await settle();
+    applyThreadNews(news(6, "?"));
+    await settle();
+    read.entries = [user, said("Hello world again!")];
+    read.seq = 5;
+    (land as (() => void) | null)?.();
+    await second;
+    assert.equal(meetText(), "Hello world again!?");
+  } finally {
+    clearMocks();
+    useCliThread.setState({ views: {} });
   }
 });
 

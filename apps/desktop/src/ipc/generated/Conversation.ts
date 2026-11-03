@@ -29,7 +29,7 @@ updatedAtMs: number,
  */
 setup: Setup | null, lifecycle: Lifecycle, 
 /**
- * Set for a fork: where it continues from ("Continued from chat").
+ * Set for a fork: where it continues from ("Forked from ‹source›").
  */
 forkedFrom: ForkOrigin | null, 
 /**

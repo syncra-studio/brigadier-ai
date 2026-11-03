@@ -1,10 +1,11 @@
 //! The launch/menu decision in one place. All filesystem access is read-only.
+use brigadier_providers::ProviderKind;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::{McpGateway, McpServer, McpTransport, SwitchedOff};
 use brigadier_registry::catalog::{Content, Definition, Kind, Row};
-use brigadier_registry::{Agent, Catalog, Roots, Transport};
+use brigadier_registry::{Catalog, Roots, Transport};
 
 use super::choices::Choices;
 
@@ -24,7 +25,7 @@ pub trait Gateway {
 }
 
 pub struct Context<'a> {
-    pub agent: Agent,
+    pub agent: ProviderKind,
     /// Effective account roots, including any divergent CLAUDE_CONFIG_DIR/CODEX_HOME.
     pub account_home: &'a Roots,
     /// Registered identity used for choices, even when cwd belongs to a linked worktree.
@@ -77,12 +78,17 @@ fn relevant(definition: &Definition, ctx: &Context<'_>) -> bool {
 fn rank(
     definition: &Definition,
     ctx: &Context<'_>,
-) -> (bool, bool, bool, std::cmp::Reverse<PathBuf>) {
+) -> (bool, bool, bool, bool, std::cmp::Reverse<PathBuf>) {
     let origin = &definition.provenance;
     (
         origin.project.as_deref().is_some_and(|project| {
             Some(project) == ctx.project_root || project == checkout(ctx.cwd)
         }),
+        // The caller's own checkout (its branch) beats the registered root's copy.
+        // (Never another registered project's copy that merely lies inside this checkout.)
+        origin.project.is_some()
+            && origin.project.as_deref() == ctx.project_root
+            && origin.file.starts_with(checkout(ctx.cwd)),
         origin.project.is_none(),
         origin.agent == Some(ctx.agent),
         std::cmp::Reverse(origin.file.clone()),
@@ -155,6 +161,8 @@ fn server(server: &brigadier_registry::Server, name: &str) -> McpServer {
 }
 
 pub fn resolve(ctx: Context<'_>) -> Resolved {
+    // The agent's own setup, as its adapter reads it; none for a CLI it doesn't read.
+    let cli = brigadier_registry::adapter::adapter(ctx.agent);
     let cwd_root = checkout(ctx.cwd);
     let catalog = Catalog::read(ctx.account_home, ctx.trusted.then_some(cwd_root));
     let native_rows = Catalog::rows(std::slice::from_ref(&catalog));
@@ -186,7 +194,7 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
                 .skills
                 .iter()
                 .any(|skill| skill.entries.iter().any(|(_, entry)| entry == path))
-                && !(ctx.agent == Agent::Codex
+                && !(cli.is_some_and(|cli| cli.disables_skills_in_config())
                     && catalog.codex_skill_config.iter().any(|entry| {
                         entry.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
                             && entry
@@ -290,10 +298,9 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
                     let collision = native
                         .iter()
                         .any(|(own, _)| own.kind == Kind::Skill && own.name == *name);
-                    let invocation = if collision && ctx.agent == Agent::Claude {
-                        format!("overlay:{name}")
-                    } else {
-                        name.to_string()
+                    let invocation = match cli.and_then(|cli| cli.overlay_namespace()) {
+                        Some(namespace) if collision => format!("{namespace}:{name}"),
+                        _ => name.to_string(),
                     };
                     (invocation, definition.provenance.file.clone(), false)
                 };
@@ -317,7 +324,7 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
             suppress(&mut resolved.off, definition);
         }
     }
-    if ctx.agent == Agent::Codex {
+    if cli.is_some_and(|cli| cli.renames_colliding_servers()) {
         let mut names: std::collections::BTreeSet<_> =
             resolved.servers.iter().map(|s| s.name.clone()).collect();
         for selected in &mut resolved.servers {
@@ -326,7 +333,7 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
                 .flat_map(|row| &row.definitions)
                 .any(|definition| {
                     matches!(&definition.content, Content::Server(own)
-                    if definition.provenance.agent == Some(Agent::Codex)
+                    if definition.provenance.agent == Some(ctx.agent)
                         && own.plugin.is_none() && own.name == selected.name
                         && matches!((&own.transport, &selected.transport),
                             (Transport::Http { .. }, McpTransport::Stdio { .. }) |
@@ -396,7 +403,7 @@ mod tests {
         fn rows(&self) -> Vec<Row> {
             Catalog::rows(&[Catalog::read(&self.roots, Some(&self.project))])
         }
-        fn resolve(&self, agent: Agent, rows: &[Row], choices: &Choices) -> Resolved {
+        fn resolve(&self, agent: ProviderKind, rows: &[Row], choices: &Choices) -> Resolved {
             resolve(Context {
                 agent,
                 account_home: &self.roots,
@@ -431,7 +438,7 @@ mod tests {
         let fixture = Fixture::new();
         skill(&fixture.project.join(".claude/skills/example"), "project");
         let rows = fixture.rows();
-        let resolved = fixture.resolve(Agent::Claude, &rows, &Choices::default());
+        let resolved = fixture.resolve(ProviderKind::Claude, &rows, &Choices::default());
         assert_eq!(resolved.skills.len(), 1);
         assert!(!resolved.skills[0].native);
         assert_eq!(
@@ -439,7 +446,7 @@ mod tests {
             fixture.project.join(".claude/skills/example/SKILL.md")
         );
         skill(&fixture.worktree.join(".claude/skills/example"), "project");
-        let resolved = fixture.resolve(Agent::Claude, &rows, &Choices::default());
+        let resolved = fixture.resolve(ProviderKind::Claude, &rows, &Choices::default());
         assert!(resolved.skills[0].native);
         assert_eq!(
             resolved.skills[0].path,
@@ -455,7 +462,7 @@ mod tests {
         )]));
         assert!(
             fixture
-                .resolve(Agent::Claude, &rows, &choices)
+                .resolve(ProviderKind::Claude, &rows, &choices)
                 .skills
                 .is_empty()
         );
@@ -474,7 +481,7 @@ mod tests {
         );
         let rows = fixture.rows();
         assert_eq!(rows.len(), 2);
-        let resolved = fixture.resolve(Agent::Codex, &rows, &Choices::default());
+        let resolved = fixture.resolve(ProviderKind::Codex, &rows, &Choices::default());
         assert_eq!(resolved.servers.len(), 1);
         assert_eq!(
             resolved.servers[0].transport,
@@ -482,7 +489,7 @@ mod tests {
                 url: "https://project.test/mcp".into()
             }
         );
-        let resolved = fixture.resolve(Agent::Claude, &rows, &Choices::default());
+        let resolved = fixture.resolve(ProviderKind::Claude, &rows, &Choices::default());
         assert!(!resolved.off.servers.contains(&"db".to_owned()));
     }
 
@@ -522,7 +529,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let resolved = fixture.resolve(Agent::Claude, &rows, &choices);
+        let resolved = fixture.resolve(ProviderKind::Claude, &rows, &choices);
         assert!(resolved.off.servers.contains(&"plugin:tools:db".to_owned()));
         assert!(resolved.off.servers.contains(&"plugin_tools_db".to_owned()));
         assert!(
@@ -541,7 +548,7 @@ mod tests {
         let rows = fixture.rows();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].different_per_agent);
-        for agent in [Agent::Claude, Agent::Codex] {
+        for agent in [ProviderKind::Claude, ProviderKind::Codex] {
             let result = fixture.resolve(agent, &rows, &Choices::default());
             assert_eq!(result.skills.len(), 1);
             assert!(result.skills[0].native);
@@ -549,7 +556,7 @@ mod tests {
         let other = Fixture::new();
         assert!(
             other
-                .resolve(Agent::Codex, &rows, &Choices::default())
+                .resolve(ProviderKind::Codex, &rows, &Choices::default())
                 .skills
                 .is_empty()
         );
@@ -557,7 +564,7 @@ mod tests {
             &other.roots.codex_home.join("skills/example"),
             "alternate account version",
         );
-        let resolved = other.resolve(Agent::Codex, &rows, &Choices::default());
+        let resolved = other.resolve(ProviderKind::Codex, &rows, &Choices::default());
         assert_eq!(resolved.skills.len(), 1);
         assert!(resolved.skills[0].native);
         assert_eq!(
@@ -589,7 +596,7 @@ mod tests {
             "explicit",
         )];
         let resolved = resolve(Context {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             account_home: &fixture.roots,
             project_root: Some(&fixture.project),
             cwd: &fixture.worktree,
@@ -621,12 +628,12 @@ mod tests {
                 .any(|d| d.provenance.project.is_some())
         });
         rows[0].different_per_agent = false;
-        let resolved = fixture.resolve(Agent::Claude, &rows, &Choices::default());
+        let resolved = fixture.resolve(ProviderKind::Claude, &rows, &Choices::default());
         assert_eq!(resolved.skills[0].invocation, "overlay:example");
         assert!(!resolved.skills[0].native);
         let alternate = Fixture::new();
         let resolved = resolve(Context {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             account_home: &alternate.roots,
             project_root: Some(&fixture.project),
             cwd: &fixture.worktree,
@@ -708,7 +715,7 @@ mod tests {
         );
         let rows = fixture.rows();
         let resolved = resolve(Context {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             account_home: &fixture.roots,
             project_root: Some(&fixture.project),
             cwd: &fixture.worktree,
@@ -751,7 +758,7 @@ mod tests {
                 .collect(),
         );
         let resolved = resolve(Context {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             account_home: &fixture.roots,
             project_root: Some(&fixture.project),
             cwd: &fixture.worktree,
@@ -810,14 +817,14 @@ mod tests {
                 if row
                     .definitions
                     .iter()
-                    .any(|d| d.provenance.agent == Some(Agent::Codex))
+                    .any(|d| d.provenance.agent == Some(ProviderKind::Codex))
                 {
                     let mut choice = choices.choice(row);
                     choice.on = false;
                     choices.0.insert(row.id.clone(), choice);
                 }
             }
-            let resolved = fixture.resolve(Agent::Codex, &rows, &choices);
+            let resolved = fixture.resolve(ProviderKind::Codex, &rows, &choices);
             assert_eq!(resolved.servers.len(), 1);
             assert_eq!(resolved.servers[0].name, "db-brigadier");
             assert!(resolved.off.servers.iter().any(|name| name == "db"));

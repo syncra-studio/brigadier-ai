@@ -1,6 +1,7 @@
 import { namedTasks, workerName } from "@/app/conversation/rowWords";
 import type { TranscriptItem } from "@/components/conversation/transcript/transcript";
 import type { Approval, ItemStatus, OrchestratorStepKind, Task } from "@/ipc/generated";
+import { CLIS } from "@/ipc/generated/clis";
 
 /**
  * The one vocabulary of the thread's work (THREAD-UX-PLAN.md §3.2): what a step of the lead or
@@ -25,12 +26,14 @@ export type StepWords = {
   object?: string;
   /** For `other`: the summary's words for it ("Asked for a review"). */
   phrase?: string;
-  /** For `other`: the summary's words for several of it ("Ran agents"), where they differ. */
+  /** For `other`: the summary's words for several of it ("Ran subagents"), where they differ. */
   many?: string;
   /** It reads the web (a search, a page, a plain GET of a public page): drawn with a globe. */
   web?: boolean;
   /** It waits for other sessions to reply. */
   waiting?: boolean;
+  /** Its call hasn't said what it acts on yet (its input still streams): too vague to name the live row. */
+  pending?: boolean;
   /** It lists a folder's files (drawn with a folder, where a search has a magnifier). */
   list?: boolean;
   /** The files an edit changed, when known: a summary counts files, not calls ("Edited files"). */
@@ -70,10 +73,10 @@ export function isPlumbing(name: string): boolean {
   return PLUMBING.has(toolName(name)) || name === "agents/wait";
 }
 
-/** A subagent's start: Claude's `Agent` (once `Task`), Codex's `spawnAgent`. */
-const AGENTS = new Set(["Agent", "Task", "spawnAgent", "spawn_agent"]);
+/** A subagent's start: each CLI's own tool for it. */
+const AGENTS = new Set(CLIS.flatMap((cli) => cli.subagentTools));
 
-/** A subagent's lifecycle is shown in its composer strip and History, outside the main work. */
+/** A subagent's start: one row of its parent's work, which opens its transcript (D96). */
 export function isSubagentStart(name: string): boolean {
   return AGENTS.has(toolName(name));
 }
@@ -84,9 +87,9 @@ export function isSubagentStart(name: string): boolean {
  */
 export function agentDetail(name: string, input: string | null): string | null | undefined {
   const short = toolName(name);
-  if (!AGENTS.has(short) && short !== "Skill") return undefined;
+  if (!AGENTS.has(short) && !SKILLS.has(short)) return undefined;
   const args = parsedInput(input);
-  const given = args ? (short === "Skill" ? args["skill"] : (args["description"] ?? args["prompt"])) : input;
+  const given = args ? (SKILLS.has(short) ? (args["skill"] ?? args["id"]) : (args["description"] ?? args["prompt"])) : input;
   if (typeof given !== "string") return null;
   const line = given.trim().split("\n")[0]?.trim() ?? "";
   return line ? [...line].slice(0, 240).join("") : null;
@@ -103,10 +106,11 @@ const OTHER: Record<string, [doing: string, done: string]> = {
 const READS = new Set(["Read", "read", "read_file"]);
 const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]);
 const COMMANDS = new Set(["Bash", "exec_command", "shell"]);
-const CODE_SEARCH = new Set(["Grep"]);
-const LISTINGS = new Set(["Glob", "LS"]);
-const WEB_SEARCH = new Set(["WebSearch", "web_search"]);
-const WEB_FETCH = new Set(["WebFetch", "web_fetch"]);
+const CODE_SEARCH = new Set(["Grep", "grep"]);
+const LISTINGS = new Set(["Glob", "LS", "glob", "list"]);
+const WEB_SEARCH = new Set(["WebSearch", "web_search", "websearch"]);
+const WEB_FETCH = new Set(["WebFetch", "web_fetch", "webfetch"]);
+const SKILLS = new Set(["Skill", "skill"]);
 
 const READERS = new Set(["cat", "head", "tail", "nl", "less", "more", "bat", "wc", "sed"]);
 const LISTERS = new Set(["ls", "find", "tree", "fd"]);
@@ -117,8 +121,11 @@ const SEARCHERS = new Set(["rg", "grep", "ag", "ack"]);
  * `/bin/zsh -c 'wc -l notes.py'` and `cd /tmp/wt && wc -l notes.py` → `wc -l notes.py`.
  */
 export function unwrapCommand(command: string): string {
-  const wrapped = /^(?:\/\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(command.trim());
-  return (wrapped?.[2] ?? command).trim().replace(/^(?:cd\s+(?:'[^']*'|"[^"]*"|\S+)\s*&&\s*)+/, "");
+  const trimmed = command.trim();
+  const wrapped = /^(?:\/\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(trimmed)?.[2]
+    // A wrapper whose quotes close and reopen inside (`'… "$(cat <<'"'EOF' …"`): what follows its first quote.
+    ?? /^(?:\/\S*\/)?(?:ba|z)?sh\s+-l?c\s+['"]([\s\S]*)$/.exec(trimmed)?.[1];
+  return (wrapped ?? command).trim().replace(/^(?:cd\s+(?:'[^']*'|"[^"]*"|\S+)\s*&&\s*)+/, "");
 }
 
 export function basename(path: string): string {
@@ -214,8 +221,8 @@ const BRIGADIER: Record<string, [doing: string, done: string]> = {
   why: ["Checking why a line changed", "Checked why a line changed"],
   send: ["Messaging workers", "Messaged workers"],
   close: ["Closing a worker", "Closed a worker"],
-  queue: ["Queueing a message", "Queued a message"],
   context: ["Reading the brigadier context", "Read the brigadier context"],
+  state: ["Reading the brigadier state", "Read the brigadier state"],
   ask: ["Asking questions", "Asked questions"],
   preview: ["Working on the preview", "Worked on the preview"],
   checkpoint: ["Writing the checkpoint", "Wrote the checkpoint"],
@@ -225,21 +232,33 @@ const BRIGADIER: Record<string, [doing: string, done: string]> = {
 function brigadierWords(sub: string, command: string): StepWords {
   const words = wordsOf(command);
   const ledger = words[words.indexOf("ledger") + 1];
+  // Its manual, by topic: `brigadier help workers`, `brigadier send --help`, `brigadier --help` (D58).
+  const after = words.slice(words.indexOf(sub) + 1);
+  const help = sub === "help" || sub === "--help" || sub === "-h" || after[0] === "--help" || after[0] === "-h";
+  const topic = [sub === "help" ? after[0] : help ? sub : undefined].find((word) => !!word && /^[a-z][\w-]*$/i.test(word));
+  const asked = `brigadier help${topic ? ` ${topic}` : ""}`;
   const [doing, done] =
-    sub === "ledger"
+    help
+      ? [`Running ${asked}`, `Ran ${asked}`]
+      : sub === "ledger"
       ? ledger === "add" || ledger === "close"
         ? ["Updating the ledger", "Updated the ledger"]
         : ledger === "check"
           ? ["Checking against the ledger", "Checked against the ledger"]
           : ["Reading the ledger", "Read the ledger"]
-      : (BRIGADIER[sub] ?? ["Using Brigadier", "Used Brigadier"]);
+      : (BRIGADIER[sub] ?? [`Running brigadier ${sub}`, `Ran brigadier ${sub}`]);
   return { kind: "other", doing, done, phrase: done };
 }
 
-/** A call that is no row of its own: the thread's `brigadier wait` and `brigadier start` (D47). */
+/**
+ * A call that is no row of its own: the thread's `brigadier wait` and `brigadier start` (D47),
+ * its `brigadier queue` judging, which the queue rail shows (D68), and its answer to a worker's
+ * permission prompt (`send <id> --allow|--deny`), which never reaches the user (D48, D54).
+ */
 export function brigadierUnshown(command: string): boolean {
   const [sub] = brigadierCalls(command);
-  return sub === "wait" || sub === "start";
+  return sub === "wait" || sub === "start" || sub === "queue"
+    || (sub === "send" && /\s--(?:allow|deny)(?:\s|=|$)/.test(unwrapCommand(command)));
 }
 
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */
@@ -328,26 +347,26 @@ function otherWords(short: string, detail: string | null = null, connector: stri
 export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> = {}): StepWords {
   const short = toolName(call.name);
   const detail = call.detail?.trim() ? namedTasks(call.detail.trim(), tasks) : null;
-  if (READS.has(short)) return detail ? read(basename(detail)) : { kind: "read", doing: "Reading a file", done: "Read a file" };
+  if (READS.has(short)) return detail ? read(basename(detail)) : { kind: "read", doing: "Reading a file", done: "Read a file", pending: true };
   if (EDITS.has(short)) {
-    if (!detail) return { kind: "edit", doing: "Editing a file", done: "Edited a file" };
+    if (!detail) return { kind: "edit", doing: "Editing a file", done: "Edited a file", pending: true };
     const [path, more] = detail.split(/ (and \d+ more)$/);
     const what = `${basename(path ?? detail)}${more ? ` ${more}` : ""}`;
     return { kind: "edit", doing: `Editing ${what}`, done: `Edited ${what}`, object: what };
   }
   if (COMMANDS.has(short)) {
-    return detail ? commandWords(detail) : { kind: "run", doing: "Running a command", done: "Ran a command" };
+    return detail ? commandWords(detail) : { kind: "run", doing: "Running a command", done: "Ran a command", pending: true };
   }
   if (CODE_SEARCH.has(short)) return searchedCode(detail);
   if (LISTINGS.has(short)) return listed(detail ? basename(detail) : null);
   if (WEB_SEARCH.has(short)) return webSearchWords(detail);
-  // "Ran agent: Find the parser", "Used skill brigade" (B1).
+  // "Running a subagent", then "Ran a subagent: Find the parser" (D96); "Used skill brigade" (B1).
   if (AGENTS.has(short)) {
     return detail
-      ? { kind: "other", doing: `Running agent: ${detail}`, done: `Ran agent: ${detail}`, object: detail, phrase: "Ran an agent", many: "Ran agents" }
-      : { kind: "other", doing: "Running an agent", done: "Ran an agent", phrase: "Ran an agent", many: "Ran agents" };
+      ? { kind: "other", doing: "Running a subagent", done: `Ran a subagent: ${detail}`, object: detail, phrase: "Ran a subagent", many: "Ran subagents" }
+      : { kind: "other", doing: "Running a subagent", done: "Ran a subagent", phrase: "Ran a subagent", many: "Ran subagents" };
   }
-  if (short === "Skill") {
+  if (SKILLS.has(short)) {
     return detail
       ? { kind: "other", doing: `Using skill ${detail}`, done: `Used skill ${detail}`, object: detail, phrase: "Used a skill", many: "Used skills" }
       : { kind: "other", doing: "Using a skill", done: "Used a skill", phrase: "Used a skill", many: "Used skills" };

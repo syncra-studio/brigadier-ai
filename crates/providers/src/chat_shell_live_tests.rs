@@ -135,7 +135,6 @@ impl Fake {
             mcp_servers: Vec::new(),
             tools,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,

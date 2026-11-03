@@ -55,6 +55,10 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             let _ = write!(stdout, "{}", commands::command_help(command));
             return 0;
         }
+        Ok(Invocation::Topic(topic)) => {
+            let _ = write!(stdout, "{}", commands::topic_help(topic));
+            return 0;
+        }
         Ok(Invocation::Version) => {
             let _ = writeln!(stdout, "brigadier {}", env!("CARGO_PKG_VERSION"));
             return 0;
@@ -157,7 +161,9 @@ fn print(
         "send" => present(output, json, render::send),
         "wait" => present(output, json, render::wait),
         "close" => present(output, json, render::close),
-        "queue" => present(output, json, render::queue),
+        "pause" => present(output, json, render::pause),
+        "resume" => present(output, json, render::resume),
+        "switch" => present(output, json, render::switch),
         "continue-on" => present(output, json, render::continue_on),
         "ask" => present(output, json, render::ask),
         "why" => present(output, json, render::why),
@@ -165,7 +171,7 @@ fn print(
             output.text.clone()
         }),
         "library" => present(output, json, render::library),
-        "context" => present(output, json, |output: &protocol::ContextOutput| {
+        "context" | "state" => present(output, json, |output: &protocol::ContextOutput| {
             output.text.clone()
         }),
         name if json && protocol::Tool::of_command(name).is_some() => {

@@ -168,7 +168,7 @@ async fn a_limit_uses_the_fourth_account_before_falling_back_to_codex() {
     let exhausted = Arc::new(tokio::sync::Notify::new());
     let answer = logging(&log, |turn| match turn.provider {
         ProviderKind::Claude => Reply::limited(),
-        ProviderKind::Codex => Reply::text("Done on Codex."),
+        _ => Reply::text("Done on Codex."),
     });
     let script: Script = {
         let (started, limited, fourth, exhausted) = (
@@ -303,6 +303,24 @@ async fn a_limit_uses_the_fourth_account_before_falling_back_to_codex() {
     flow.stop().await;
 }
 
+/// A CLI that takes no extra accounts (the test-only one) refuses one before anything is saved.
+#[tokio::test]
+async fn an_account_its_cli_cannot_take_is_refused_unsaved() {
+    let flow = Flow::start(
+        "accounts-unsupported",
+        Options::default(),
+        logging(&Log::default(), |_| Reply::text("Done.")),
+    )
+    .await;
+    let refused = flow.manager.add_account(ProviderKind::new("fakecli")).await;
+    assert!(
+        matches!(refused, Err(crate::Error::Invalid(_))),
+        "{refused:?}"
+    );
+    assert!(flow.core.settings().accounts.is_empty());
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_switch_notice_masks_an_account_named_by_its_email() {
     let log = Log::default();
@@ -373,7 +391,7 @@ async fn with_switching_off_a_limit_moves_the_session_to_the_picked_account() {
             match (turn.provider, turn.account.as_deref()) {
                 (ProviderKind::Claude, Some("acct-b")) => Reply::limited(),
                 (ProviderKind::Claude, _) => Reply::text("Done."),
-                (ProviderKind::Codex, _) => Reply::text("Done on Codex."),
+                _ => Reply::text("Done on Codex."),
             }
         }),
     )
@@ -761,7 +779,7 @@ async fn a_model_window_used_up_on_one_account_sends_that_models_work_to_another
     );
     assert_eq!(
         runtime
-            .switch_target(&own, None)
+            .switch_target(&own, None, None)
             .and_then(|next| next.account),
         Some("acct-b".into())
     );
@@ -769,8 +787,38 @@ async fn a_model_window_used_up_on_one_account_sends_that_models_work_to_another
     // Used up on both: no account takes it, so neither hands it to the other.
     note(Some("acct-b"), 100.0);
     assert_eq!(opus_left(runtime), 100.0);
-    assert_eq!(runtime.switch_target(&own, None), None);
-    assert_eq!(runtime.switch_target(&own, Some("opus")), None);
+    assert_eq!(runtime.switch_target(&own, None, None), None);
+    assert_eq!(runtime.switch_target(&own, Some("opus"), None), None);
+    flow.stop().await;
+}
+
+/// A session the user's own login can't resume (its CLI says so) never moves back there; any
+/// other session may.
+#[tokio::test]
+async fn a_limit_moves_no_session_to_an_account_that_cant_resume_it() {
+    use crate::accounts::AccountRef;
+    let flow = Flow::start(
+        "accounts-resumes",
+        Options::default(),
+        logging(&Log::default(), |_| Reply::text("Noted.")),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.behavior
+        .own_refuses
+        .lock()
+        .unwrap()
+        .push("moved-on".into());
+    let runtime = &flow.manager.runtime;
+    let extra = AccountRef::new(ProviderKind::Claude, Some("acct-b".into()));
+    let own = AccountRef::own(ProviderKind::Claude);
+    assert_eq!(runtime.switch_target(&extra, None, Some("moved-on")), None);
+    assert_eq!(
+        runtime.switch_target(&extra, None, Some("other")),
+        Some(own.clone())
+    );
+    assert_eq!(runtime.switch_target(&extra, None, None), Some(own));
     flow.stop().await;
 }
 
@@ -1044,7 +1092,7 @@ async fn a_limit_waits_on_its_own_agent() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -1133,7 +1181,7 @@ async fn say_to(flow: &Flow, chat: &ConversationId, text: &str) {
 /// at the new account. Unrelated accounts may hold files with the same native id.
 #[tokio::test]
 async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         for switched in [false, true] {
             for delete in [false, true] {
                 let log = Log::default();
@@ -1172,11 +1220,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 let native: Vec<_> = artifacts
                     .iter()
                     .filter(|artifact| {
-                        matches!(
-                            artifact,
-                            brigadier_providers::Artifact::ClaudeSession { .. }
-                                | brigadier_providers::Artifact::CodexThread { .. }
-                        )
+                        matches!(artifact, brigadier_providers::Artifact::Session { .. })
                     })
                     .cloned()
                     .collect();
@@ -1199,8 +1243,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 }
                 for artifact in &native {
                     let home = match artifact {
-                        brigadier_providers::Artifact::ClaudeSession { home, .. }
-                        | brigadier_providers::Artifact::CodexThread { home, .. } => home,
+                        brigadier_providers::Artifact::Session { home, .. } => home,
                         _ => unreachable!(),
                     };
                     assert!(
@@ -1238,8 +1281,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 assert!(ledger.artifacts(&lineage).is_empty(), "Delete removes them");
                 for artifact in &native {
                     let home = match artifact {
-                        brigadier_providers::Artifact::ClaudeSession { home, .. }
-                        | brigadier_providers::Artifact::CodexThread { home, .. } => home,
+                        brigadier_providers::Artifact::Session { home, .. } => home,
                         _ => unreachable!(),
                     };
                     let account = home.as_ref().map(|_| "acct-b".to_owned());
@@ -1274,7 +1316,7 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
 /// adapters before attempting cleanup, rather than send the extra artifact to the own CLI.
 #[tokio::test]
 async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let log = Log::default();
         let mut flow = Flow::start(
             "accounts-cleanup-restart",
@@ -1304,13 +1346,7 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
             .ledger()
             .artifacts(&owner)
             .into_iter()
-            .filter(|artifact| {
-                matches!(
-                    artifact,
-                    brigadier_providers::Artifact::ClaudeSession { .. }
-                        | brigadier_providers::Artifact::CodexThread { .. }
-                )
-            })
+            .filter(|artifact| matches!(artifact, brigadier_providers::Artifact::Session { .. }))
             .collect();
         assert_eq!(native.len(), 2, "both runs recorded: {native:?}");
         flow.behavior
@@ -1339,12 +1375,7 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
         let removals = flow.behavior.removals.lock().unwrap().clone();
         for artifact in native {
             let (id, home) = match &artifact {
-                brigadier_providers::Artifact::ClaudeSession {
-                    session_id, home, ..
-                } => (session_id, home),
-                brigadier_providers::Artifact::CodexThread {
-                    thread_id, home, ..
-                } => (thread_id, home),
+                brigadier_providers::Artifact::Session { id, home, .. } => (id, home),
                 other => panic!("unexpected artifact: {other:?}"),
             };
             let account = home.as_ref().map(|_| "acct-b".to_owned());
@@ -1371,7 +1402,7 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
 
 #[tokio::test]
 async fn an_extra_login_makes_a_signed_out_provider_ready_and_starts_its_chat() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let log = Log::default();
         let flow = Flow::start(
             "accounts-signed-out-own",
@@ -1450,7 +1481,7 @@ async fn a_status_from_a_sign_in_shows_at_once() {
 
 #[tokio::test]
 async fn an_unsent_steer_survives_an_account_switch_without_repeating_landed_messages() {
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let log = Log::default();
         let release = Arc::new(tokio::sync::Notify::new());
         let script: Script = {
@@ -1786,7 +1817,10 @@ fn native_artifacts(flow: &Flow, chat: &ConversationId) -> Vec<brigadier_provide
         .filter(|artifact| {
             matches!(
                 artifact,
-                brigadier_providers::Artifact::ClaudeSession { .. }
+                brigadier_providers::Artifact::Session {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    ..
+                }
             )
         })
         .collect()
@@ -1861,8 +1895,9 @@ async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
     assert_eq!(after.native_id, turns[0].native_id, "Restore resumes it");
     assert_eq!(
         native_artifacts(&flow, &chat),
-        vec![brigadier_providers::Artifact::ClaudeSession {
-            session_id: after.native_id.clone(),
+        vec![brigadier_providers::Artifact::Session {
+            provider: brigadier_providers::ProviderKind::Claude,
+            id: after.native_id.clone(),
             home: None,
             cwd: None,
         }]
@@ -2309,7 +2344,7 @@ async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_a
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2387,6 +2422,88 @@ async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_a
         file.seams[0].end.death.as_deref(),
         Some("usage limit on Claude Code · continued on Codex")
     );
+    flow.stop().await;
+}
+
+/// Goal 1 (D25, D68): a follow-up sent while a limited turn still runs waits in the queue
+/// through the account switch and the move to another agent, and reaches the CLI exactly once,
+/// after the switch, under the id it was sent with.
+#[tokio::test]
+async fn a_queued_follow_up_goes_once_through_an_account_switch_and_an_agent_move() {
+    let log = Log::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let script: Script = {
+        let (log, release) = (log.clone(), release.clone());
+        Arc::new(move |turn: Turn| {
+            let (log, release) = (log.clone(), release.clone());
+            Box::pin(async move {
+                let first = log.lock().unwrap().is_empty();
+                log.lock().unwrap().push(Seen {
+                    provider: turn.provider,
+                    account: turn.account.clone(),
+                    native_id: turn.native_id.clone(),
+                    input: turn.input.clone(),
+                });
+                match turn.provider {
+                    ProviderKind::Claude => {
+                        if first {
+                            release.notified().await;
+                        }
+                        Reply::limited()
+                    }
+                    _ => Reply::text("Done on Codex."),
+                }
+            })
+        })
+    };
+    let flow = Flow::start("accounts-queued-follow-up", Options::default(), script).await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Do the thing.").await;
+    flow.until("the first CLI takes the message", |_| seen(&log).len() == 1)
+        .await;
+    send(&flow, &flow.conversation, "And the follow-up.").await;
+    release.notify_one();
+    flow.until("the follow-up reaches Codex", |_| {
+        seen(&log).iter().any(|turn| {
+            turn.provider == ProviderKind::Codex && turn.input.contains("And the follow-up.")
+        })
+    })
+    .await;
+    flow.settled().await;
+    let turns = seen(&log);
+    let carrying: Vec<_> = turns
+        .iter()
+        .filter(|turn| turn.input.contains("And the follow-up."))
+        .map(|turn| (turn.provider, turn.account.clone()))
+        .collect();
+    assert!(
+        !turns[0].input.contains("And the follow-up."),
+        "it waited for its turn: {turns:?}"
+    );
+    // It reaches each CLI that takes the work once; the one that answers it is Codex.
+    assert_eq!(
+        carrying.last().map(|turn| turn.0),
+        Some(ProviderKind::Codex)
+    );
+    let codex_turns = turns
+        .iter()
+        .filter(|turn| {
+            turn.provider == ProviderKind::Codex && turn.input.contains("And the follow-up.")
+        })
+        .count();
+    assert_eq!(codex_turns, 1, "{turns:?}");
+    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+    let sent: Vec<_> = messages
+        .iter()
+        .filter(|message| message.text == "And the follow-up.")
+        .map(|message| message.id.clone())
+        .collect();
+    assert_eq!(sent.len(), 1, "one message, one id: {messages:?}");
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
     flow.stop().await;
 }
 
@@ -2503,7 +2620,7 @@ async fn the_users_rules_bind_the_agent_fallback() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2548,7 +2665,7 @@ async fn the_agent_fallback_takes_the_next_fallback_row_the_rules_allow() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2592,7 +2709,7 @@ async fn with_no_fallback_row_the_rules_allow_a_session_waits_for_the_reset() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2638,7 +2755,7 @@ async fn turning_the_switch_on_moves_a_waiting_session_to_another_agent() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2689,7 +2806,7 @@ async fn a_message_moved_to_another_agent_is_shown_already() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -2723,7 +2840,7 @@ async fn a_waiting_message_moved_to_another_agent_is_shown_already() {
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Done on Codex."),
+            _ => Reply::text("Done on Codex."),
         }),
     )
     .await;
@@ -3041,5 +3158,132 @@ async fn at_startup_the_models_listed_are_the_account_in_uses_from_the_first() {
     flow.manager.runtime.sync_accounts().await;
     until_models(&flow, &["claude-opus-5-5"]).await;
     release.notify_one();
+    flow.stop().await;
+}
+
+/// Goal 1 (D25): a command the CLI started just before an account switch retired it never
+/// gets its end from that CLI. The turn goes on on the other account and finishes; that
+/// dead command holds no work after it, so a follow-up queued meanwhile gets its own turn,
+/// once, and no request is left working.
+#[tokio::test]
+async fn a_command_cut_by_an_account_switch_holds_no_work_after_it() {
+    use crate::work::OrchestratorStepKind;
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    type Sender = tokio::sync::mpsc::Sender<ProviderEvent>;
+    let log = Log::default();
+    let behavior = Arc::new(super::FakeBehavior::default());
+    // The follow-up waits for its own turn (D157).
+    *behavior.judge.lock().unwrap() = Some("WAITS");
+    let late: Arc<Mutex<Option<Sender>>> = Arc::default();
+    let (closing, close) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let script: Script = {
+        let (log, behavior, late) = (log.clone(), behavior.clone(), late.clone());
+        let (closing, close) = (closing.clone(), close.clone());
+        Arc::new(move |turn: Turn| {
+            let (log, behavior, late) = (log.clone(), behavior.clone(), late.clone());
+            let (closing, close) = (closing.clone(), close.clone());
+            Box::pin(async move {
+                log.lock().unwrap().push(Seen {
+                    provider: turn.provider,
+                    account: turn.account.clone(),
+                    native_id: turn.native_id.clone(),
+                    input: turn.input.clone(),
+                });
+                if turn.account.is_none() {
+                    // Its CLI starts one more command as the switch closes it.
+                    *late.lock().unwrap() = Some(turn.events.clone());
+                    *behavior.hold_close.lock().unwrap() = Some((closing, close));
+                    return Reply::limited();
+                }
+                if turn.input.contains(CONTINUE_ON_ACCOUNT) {
+                    turn.host
+                        .send_message(
+                            turn.conversation().unwrap(),
+                            "Follow-up.".into(),
+                            vec![],
+                            vec![],
+                            false,
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                    return Reply::text("Marks done.");
+                }
+                Reply::text("Answered.")
+            })
+        })
+    };
+    let flow = Flow::start(
+        "accounts-cut-command",
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.say("Run the marks.").await;
+    closing.notified().await;
+    let sender = late.lock().unwrap().clone().unwrap();
+    sender
+        .send(ProviderEvent::Command {
+            item_id: "late-cmd".into(),
+            command: "brigadier queue 1a2b3c4d join".into(),
+            cwd: None,
+            status: ItemStatus::InProgress,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        })
+        .await
+        .unwrap();
+    let late_row = |board: &super::Board| {
+        board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Tool {
+                    item_id, status, ..
+                } if item_id == "late-cmd" => Some(*status),
+                _ => None,
+            })
+    };
+    flow.until("the late command runs", |board| late_row(board).is_some())
+        .await;
+    close.notify_one();
+    let own_turn = |turn: &Seen| turn.input.contains("Follow-up.");
+    flow.until("the follow-up gets its own turn", |_| {
+        seen(&log).iter().any(own_turn)
+    })
+    .await;
+    let board = flow.settled().await;
+    let turns = seen(&log);
+    assert_eq!(
+        turns.iter().filter(|turn| own_turn(turn)).count(),
+        1,
+        "{turns:?}"
+    );
+    assert!(board.queue.items.is_empty(), "{:?}", board.queue.items);
+    let states = request_states(&flow, &flow.conversation).await;
+    assert!(
+        states
+            .iter()
+            .all(|(_, state)| *state != RequestState::Working),
+        "{states:?}"
+    );
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(!flow.manager.work_holds(&conv).await);
+    assert_ne!(
+        late_row(&board),
+        Some(ItemStatus::InProgress),
+        "{:?}",
+        late_row(&board)
+    );
     flow.stop().await;
 }

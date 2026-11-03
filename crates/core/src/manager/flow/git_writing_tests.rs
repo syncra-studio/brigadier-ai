@@ -134,7 +134,7 @@ async fn a_writer_at_its_limit_hands_the_message_to_the_other_provider() {
         Options::default(),
         writing(&writes, |provider| match provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Add the notes"),
+            _ => Reply::text("Add the notes"),
         }),
     )
     .await;
@@ -390,7 +390,7 @@ async fn a_chosen_writer_at_its_limit_notes_the_model_that_wrote_it() {
         Options::default(),
         writing_on(&log, |provider, _| match provider {
             ProviderKind::Claude => Reply::limited(),
-            ProviderKind::Codex => Reply::text("Add the notes"),
+            _ => Reply::text("Add the notes"),
         }),
     )
     .await;

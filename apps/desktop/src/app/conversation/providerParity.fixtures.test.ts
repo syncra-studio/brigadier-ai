@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { turnActivity } from "@/app/conversation/activity/group";
 import { stepLabel, toolStepWords, type ToolStep } from "@/app/conversation/activity/words";
-import { answerIndex, answeringIndex, blockFinished, blockSequence, foldsWork, isLive } from "@/app/conversation/blocks";
+import { answerIndex, liveAnswer, blockFinished, blockSequence, foldsWork, isLive } from "@/app/conversation/blocks";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
 import { turnParts } from "@/app/conversation/workParts";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
@@ -70,7 +70,10 @@ function withCodexWake(view: ThreadView): ThreadView {
   assert.ok(at > 0);
   const atMs = (view.entries[at - 1]?.atMs ?? 0) + 1;
   const said = (event: ProviderEvent): FileEntry => ({ event, atMs, updatedAtMs: null, parent: null, steer: false, images: [], phase: null }) as unknown as FileEntry;
-  const wake = said({ type: "message", itemId: "derived-wake", role: "user", text: `[your background command \`sleep 2\` finished after your turn · exit ${exit}]\n` } as ProviderEvent);
+  const wake = {
+    ...said({ type: "message", itemId: "derived-wake", role: "user", text: `[your background command \`sleep 2\` finished after your turn · exit ${exit}]\n` } as ProviderEvent),
+    wake: { job: "command", label: "sleep 2", command: "sleep 2", end: exit === 0 ? "finished" : "failed", exit },
+  } as FileEntry;
   const reply = said({ type: "message", itemId: "derived-wake-reply", role: "assistant", text: "OK" } as ProviderEvent);
   const entries = [...view.entries.slice(0, at), wake, reply, ...view.entries.slice(at)];
   // The turn it starts carries the request of the turn that started the command.
@@ -98,10 +101,10 @@ function seen(view: ThreadView, prompts: RegExp) {
       const sequence = blockSequence({ ...block, steers });
       const finished = blockFinished(block.state);
       const live = isLive(block.state);
-      const answering = !finished && live ? answeringIndex(block.texts, sequence) : null;
-      const done = finished || answering !== null;
-      const answer = answering ?? answerIndex(block.texts, finished);
-      const parts = turnParts(turnActivity(sequence, false), answer, done, live, (index) => {
+      const done = finished;
+      const answer = done ? answerIndex(block.texts, true) : liveAnswer(block.texts, sequence);
+      const shownSequence = done ? sequence : sequence.filter((entry) => entry.kind !== "text" || entry.index !== answer);
+      const parts = turnParts(turnActivity(shownSequence, false), answer, done, live, (index) => {
         const text = block.texts[index];
         return !!text && !text.commentary && !text.update;
       });
@@ -148,12 +151,10 @@ const SCENARIOS: Record<string, RegExp> = {
  *   phase (D55). The end views compared here don't see it.
  * - (c) Claude's model ends its turn while its background subagent runs, and a second CLI
  *   turn answers when it is done, joined to the same block; Codex waits in one turn (D27, D57).
- *   With lifecycle rows hidden (L1), only Claude has commentary to fold before its answer.
  */
 const EXEMPT = {
   /** (c): Claude's subagent block holds two replies, Codex's one. */
   subagentReplies: { claude: 2, codex: 1 },
-  subagentFold: { claude: true, codex: false },
 };
 function compare(scenario: string, source: "live" | "persisted") {
   const prompts = SCENARIOS[scenario]!;
@@ -164,10 +165,10 @@ function compare(scenario: string, source: "live" | "persisted") {
   const right = seen(withCodexTerminalEnd(withBackground(codexView, codex.events)), prompts);
   assert.ok(right.length > 0, `${scenario}: no turn compared`);
   if (scenario === "subagent") {
-    assert.deepEqual(left.map((block) => block.folded), [EXEMPT.subagentFold.claude], source);
-    assert.deepEqual(right.map((block) => block.folded), [EXEMPT.subagentFold.codex], source);
-    assert.deepEqual(left.map((block) => block.shown), [[]], "subagent lifecycle rows stay out of the main thread");
-    assert.deepEqual(left.map((block) => ({ ...block, folded: false })), right.map((block) => ({ ...block, folded: false })), `${scenario} (${source}) differs beyond its recorded commentary`);
+    // (a): the row's task is the model's own words.
+    const unnamed = (blocks: typeof left) => blocks.map((block) => ({ ...block, shown: block.shown.map((each) => each.replace(/^(Ran a subagent):.*/, "$1")) }));
+    assert.deepEqual(unnamed(left).map((block) => block.shown), [["Ran a subagent"]], "the subagent is one row of its parent's work (D96)");
+    assert.deepEqual(unnamed(left), unnamed(right), `${scenario} (${source}) differs beyond its recorded commentary`);
     return;
   }
   assert.deepEqual(left, right, `${scenario} (${source}) reads differently on Claude and Codex`);

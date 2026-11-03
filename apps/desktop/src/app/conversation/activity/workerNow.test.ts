@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { doingOf, nowInLine, stepAtWork, workerNow } from "@/app/conversation/activity/workerNow";
+import { doingOf, nowInLine, workerNow } from "@/app/conversation/activity/workerNow";
 import type { WorkerRow } from "@/ipc/generated";
 
 const NOW = 1_000_000;
@@ -31,15 +31,11 @@ test("between its calls, and whenever it isn't working, a worker says its state"
 test("after a worker's name the line reads lowercase, but for a name it starts with", () => {
   const now = (detail: string, name = "shell") => nowInLine(workerNow(row({ steps: [{ name, detail }] }), NOW));
   assert.equal(now("pnpm build"), "running pnpm build");
+  // Plain words, no shell or markdown bits (D195).
+  assert.equal(now(": > marks.txt; for i in 1 2; do echo $i >> marks.txt; done"), "running a command");
+  assert.equal(nowInLine(workerNow(row({ doing: { type: "said", line: "`marks.txt` has **11** lines" } }), NOW)), "marks.txt has 11 lines");
   assert.equal(now("", "mcp__pencil__batch_design"), "Pencil: batch design");
-  assert.equal(nowInLine(workerNow(row({ waiting: [{ kind: "permission", what: "rm", card: null }] }), NOW)), "needs you");
-});
-
-test("a thread's item is a call at work while it runs, named as the engine names a worker's", () => {
-  assert.deepEqual(stepAtWork({ type: "command", itemId: "c", command: "pnpm build", cwd: null, status: "inProgress", exitCode: null, output: null, durationMs: null }), { name: "shell", detail: "pnpm build" });
-  assert.deepEqual(stepAtWork({ type: "toolCall", itemId: "t", name: "Read", input: '{"file_path":"/w/a.ts"}', status: "inProgress", output: null }), { name: "Read", detail: "/w/a.ts" });
-  assert.equal(stepAtWork({ type: "toolCall", itemId: "t", name: "Read", input: null, status: "completed", output: "…" }), null);
-  assert.equal(stepAtWork({ type: "message", itemId: "m", role: "assistant", text: "hi" }), null);
+  assert.equal(nowInLine(workerNow(row({ waiting: [{ kind: "question", what: "rm", card: null }] }), NOW)), "needs you");
 });
 
 test("between its calls a worker says what it last did, its call at work first (D39)", () => {

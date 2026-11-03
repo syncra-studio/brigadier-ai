@@ -2,8 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use brigadier_providers::ProviderKind;
-
 use super::SessionManager;
 use crate::accounts::AccountRef;
 use crate::model::{
@@ -60,7 +58,7 @@ impl SessionManager {
         let now = now_ms();
         let since_ms = now - i64::from(days.clamp(1, ACTIVITY_DAYS_MAX)) * DAY_MS;
         let mut accounts = Vec::new();
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             let turns = match self.runtime.routing_store() {
                 Some(store) => store
                     .turns_since(provider, since_ms)

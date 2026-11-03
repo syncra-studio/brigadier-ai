@@ -297,6 +297,8 @@ impl Turn {
         grant: Option<&str>,
     ) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
+            network: false,
+            agent: None,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::Command,
             tool: tool.into(),
@@ -315,6 +317,8 @@ impl Turn {
     /// Asks to change `paths` outside the sandbox, as Codex does, and waits for the answer.
     pub async fn ask_file_approval(&self, paths: &[&Path]) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
+            network: false,
+            agent: None,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::FileChange,
             tool: "fileChange".into(),
@@ -335,6 +339,8 @@ impl Turn {
     /// Asks to reach `host` from a sandbox without network, as Claude does.
     pub async fn ask_network_approval(&self, host: &str) -> Option<ApprovalDecision> {
         self.ask(brigadier_providers::ApprovalRequest {
+            network: true,
+            agent: None,
             id: String::new(),
             kind: brigadier_providers::model::ApprovalKind::Tool,
             tool: brigadier_providers::policy::NETWORK_TOOL.into(),
@@ -605,6 +611,8 @@ pub(crate) struct FakeBehavior {
     /// Claude's startup window; unset keeps the fake's usual 1M window.
     pub claude_window: Option<Option<i64>>,
     pub signed_out: Mutex<Vec<ProviderKind>>,
+    /// Sessions the user's own login can't resume (`Provider::resumes`).
+    pub own_refuses: Mutex<Vec<String>>,
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
     /// Title-routing tests offer both small families, including an operate-only Haiku.
@@ -620,6 +628,12 @@ pub(crate) struct FakeBehavior {
     /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
     /// Off, it is dropped.
     pub take_in_steers: bool,
+    /// What the one-shot judging a follow-up answers (D157), instead of the script; `FITS`
+    /// when unset.
+    pub judge: Mutex<Option<&'static str>>,
+    /// Closed mid-turn, it says that turn was interrupted before it ends, as the Codex and
+    /// OpenCode CLIs do; off, its process just ends, as Claude Code's does.
+    pub interrupt_on_close: bool,
     pub cleanup: bool,
     /// Claude keeps each session's thread in a session file of its own shape, as Claude Code
     /// does ([`session_line`]), and names it at its start.
@@ -644,6 +658,8 @@ pub(crate) struct FakeBehavior {
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// What each compaction asked of its CLI was told to keep (its `/compact` words), in order.
     pub compactions: Mutex<Vec<Option<String>>>,
+    /// A compaction's end waits for this, once set.
+    pub hold_compaction: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Each thread turn's plan mode, as Brigadier set it on its CLI before the turn.
     pub plan_modes: Mutex<Vec<bool>>,
     /// CLI starts fail while this is set.
@@ -738,7 +754,7 @@ impl FakeCli {
             }
             // Each vendor's frontier model, as the registry rates them: the roles that write,
             // check or merge code run on a vendor's best.
-            ProviderKind::Codex => &[("gpt-6-astra", "GPT-6-Astra")],
+            _ => &[("gpt-6-astra", "GPT-6-Astra")],
         };
         let own = self
             .account
@@ -760,7 +776,7 @@ impl FakeCli {
             // Claude's takes images, so operate work has a model.
             input_modalities: match self.kind {
                 ProviderKind::Claude => vec!["text".into(), "image".into()],
-                ProviderKind::Codex => vec!["text".into()],
+                _ => vec!["text".into()],
             },
             fast: None,
             legacy: false,
@@ -886,17 +902,11 @@ impl Provider for FakeCli {
                     .account
                     .as_ref()
                     .map(|_| self.home.display().to_string());
-                let artifact = match self.kind {
-                    ProviderKind::Claude => Artifact::ClaudeSession {
-                        session_id: native_id.clone(),
-                        home,
-                        cwd: None,
-                    },
-                    ProviderKind::Codex => Artifact::CodexThread {
-                        thread_id: native_id.clone(),
-                        home,
-                        cwd: None,
-                    },
+                let artifact = Artifact::Session {
+                    provider: self.kind,
+                    id: native_id.clone(),
+                    home,
+                    cwd: None,
                 };
                 ledger.record(artifact).await?;
                 for path in fake_files(&self.home, &native_id) {
@@ -987,6 +997,17 @@ impl Provider for FakeCli {
         })
     }
 
+    fn resumes(&self, native_id: &str) -> bool {
+        self.account.is_some()
+            || !self
+                .behavior
+                .own_refuses
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == native_id)
+    }
+
     fn took_input(&self, native_id: &str, needle: &str) -> BoxFuture<'_, bool> {
         let text = std::fs::read_to_string(self.transcripts.join(native_id)).unwrap_or_default();
         let took = text.lines().any(|line| {
@@ -1002,7 +1023,11 @@ impl Provider for FakeCli {
         let found = artifacts
             .iter()
             .filter_map(|artifact| match artifact {
-                Artifact::ClaudeSession { session_id, .. } => made.get(session_id),
+                Artifact::Session {
+                    provider: ProviderKind::Claude,
+                    id,
+                    ..
+                } => made.get(id),
                 _ => None,
             })
             .flatten()
@@ -1033,14 +1058,8 @@ impl Provider for FakeCli {
                 ));
             }
             for artifact in artifacts {
-                let (id, home) = match artifact {
-                    Artifact::ClaudeSession {
-                        session_id, home, ..
-                    } => (session_id, home),
-                    Artifact::CodexThread {
-                        thread_id, home, ..
-                    } => (thread_id, home),
-                    _ => continue,
+                let Artifact::Session { id, home, .. } = artifact else {
+                    continue;
                 };
                 let expected = self
                     .account
@@ -1268,6 +1287,10 @@ impl ProviderSession for FakeSession {
             *running.lock().unwrap() = true;
             let steers = self.steers.clone();
             let take_in_steers = self.behavior.take_in_steers;
+            let judged = turn
+                .prompt
+                .contains("fits the work in progress")
+                .then(|| self.behavior.judge.lock().unwrap().unwrap_or("FITS"));
             let stops = self.stops.clone();
             stops.0.store(false, std::sync::atomic::Ordering::SeqCst);
             let session_file = self.session_file.clone();
@@ -1293,7 +1316,10 @@ impl ProviderSession for FakeSession {
                 let mut turn = turn;
                 let reply = loop {
                     let again = turn.clone();
-                    let mut reply = script(turn).await;
+                    let mut reply = match judged {
+                        Some(word) => Reply::text(word),
+                        None => script(turn).await,
+                    };
                     if let Some(used) = reply.context_tokens {
                         let _ = tx
                             .send(ProviderEvent::ContextSize {
@@ -1490,6 +1516,7 @@ impl ProviderSession for FakeSession {
         self.behavior.compactions.lock().unwrap().push(instructions);
         let compaction = uuid::Uuid::new_v4().to_string();
         let tx = self.sender();
+        let hold = self.behavior.hold_compaction.lock().unwrap().clone();
         Box::pin(async move {
             let Some(tx) = tx else {
                 return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
@@ -1499,6 +1526,9 @@ impl ProviderSession for FakeSession {
                 let _ = tx
                     .send(ProviderEvent::CompactionStarted { automatic: false })
                     .await;
+                if let Some(hold) = hold {
+                    hold.notified().await;
+                }
                 let _ = tx
                     .send(ProviderEvent::CompactionEnded {
                         automatic: false,
@@ -1577,8 +1607,19 @@ impl ProviderSession for FakeSession {
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 self.stops.1.notify_waiters();
             }
+            let running = *self.running.lock().unwrap();
             let tx = self.events.lock().unwrap().take();
             if let Some(tx) = tx {
+                if running && self.behavior.interrupt_on_close {
+                    let _ = tx
+                        .send(ProviderEvent::TurnCompleted {
+                            turn_id: None,
+                            status: TurnStatus::Interrupted,
+                            duration_ms: Some(1),
+                            usage: None,
+                        })
+                        .await;
+                }
                 let _ = tx
                     .send(ProviderEvent::Exited {
                         code: Some(0),
@@ -1663,10 +1704,9 @@ async fn boot(
         core.clone(),
         platform,
         spawner.clone(),
-        [
-            fake(ProviderKind::Claude, None),
-            fake(ProviderKind::Codex, None),
-        ],
+        brigadier_providers::adapters::kinds()
+            .map(|kind| fake(kind, None))
+            .collect(),
         accounts,
     )
     .await
@@ -1690,9 +1730,9 @@ async fn boot(
     // The router picks only among models it has seen.
     let mut checked = runtime.provider_checks();
     tokio::time::timeout(*PATIENCE, async {
-        while ProviderKind::ALL.iter().any(|kind| {
+        while brigadier_providers::adapters::kinds().any(|kind| {
             runtime
-                .overview(*kind)
+                .overview(kind)
                 .is_none_or(|overview| overview.models.is_none())
         }) {
             checked.changed().await.unwrap();
@@ -2006,7 +2046,7 @@ impl Flow {
                         model: Some(
                             match options.thread {
                                 ProviderKind::Claude => "claude-opus-5-5",
-                                ProviderKind::Codex => "gpt-6-astra",
+                                _ => "gpt-6-astra",
                             }
                             .into(),
                         ),
@@ -2136,7 +2176,7 @@ impl Flow {
                         model: Some(
                             match thread {
                                 ProviderKind::Claude => "claude-opus-5-5",
-                                ProviderKind::Codex => "gpt-6-astra",
+                                _ => "gpt-6-astra",
                             }
                             .into(),
                         ),
@@ -2214,7 +2254,7 @@ impl Flow {
         settings.manual_accounts = if switch {
             Vec::new()
         } else {
-            ProviderKind::ALL.to_vec()
+            brigadier_providers::adapters::kinds().collect::<Vec<_>>()
         };
         self.core.update_settings(settings).await.unwrap();
         self.manager.runtime.sync_accounts().await;
@@ -2359,7 +2399,9 @@ impl Flow {
     /// request shows as ended.
     pub async fn settled_in(&self, id: &ConversationId) -> Board {
         self.until_in(id, "the requests to settle", |board| {
+            // A message still Deciding is judged in a moment: not settled yet.
             !board.requests.is_empty()
+                && !board.queue.items.iter().any(|item| item.deciding)
                 && board.requests.values().all(|request| match request.state {
                     RequestState::Working => false,
                     RequestState::Waiting => true,
@@ -2463,8 +2505,6 @@ mod auto_merge_tests;
 mod background_tests;
 #[cfg(unix)]
 mod branch_prefix_tests;
-#[cfg(unix)]
-mod brigade_tests;
 mod browser_switch_tests;
 mod browser_tool_tests;
 #[cfg(unix)]
@@ -2494,21 +2534,32 @@ mod context_tests;
 #[cfg(unix)]
 mod continue_on_tests;
 #[cfg(unix)]
+mod drift_note_tests;
+#[cfg(unix)]
 mod engine_tests;
 #[cfg(unix)]
 mod ledger_tests;
+#[cfg(unix)]
+mod mcp_proxy_tests;
+#[cfg(unix)]
+mod no_skill_tests;
 #[cfg(unix)]
 mod open_in_app_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod records_tests;
 #[cfg(unix)]
+mod scope_tests;
+#[cfg(unix)]
 mod standing_tests;
+#[cfg(unix)]
 #[cfg(unix)]
 mod terminal_run_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(unix)]
 mod auto_resume_routing_tests;
+#[cfg(unix)]
+mod fake_cli_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod fault_tests;
@@ -2526,6 +2577,8 @@ mod honesty_tests;
 #[cfg(unix)]
 mod interrupted_turn_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
+#[cfg(unix)]
+mod block_queue_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod litter_tests;
@@ -2572,12 +2625,18 @@ mod source_branch_tests;
 mod turn_changes_tests;
 #[cfg(unix)]
 mod why_tests;
+#[cfg(unix)]
+mod worker_manage_tests;
+#[cfg(unix)]
+mod worker_queue_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod same_session_tests;
 #[cfg(unix)]
 mod search_tests;
+#[cfg(unix)]
+mod shared_worktree_tests;
 #[cfg(unix)]
 mod spare_worktree_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
@@ -2601,6 +2660,8 @@ mod session_dir_tests;
 mod session_messages_tests;
 #[cfg(unix)]
 mod session_states_tests;
+#[cfg(unix)]
+mod start_steps_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod thread_scratch_tests;

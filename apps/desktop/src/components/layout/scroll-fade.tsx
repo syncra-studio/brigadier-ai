@@ -7,12 +7,13 @@ import { cn } from "@/lib/utils";
  * padding at each end is deeper than the fade, so an edge shows only while there is more to
  * scroll to that way. The conversation's edges and a Settings page's.
  */
-function ScrollFade({ edge, className }: { edge: "top" | "bottom"; className?: string }) {
+function ScrollFade({ edge, className, raised }: { edge: "top" | "bottom"; className?: string; raised?: boolean }) {
   return (
     <div
       aria-hidden
       data-slot="scroll-fade"
       data-edge={edge}
+      data-raised={raised || undefined}
       className={cn(
         "pointer-events-none absolute inset-x-0 z-10",
         edge === "top" ? "thread-top-fade top-0" : "thread-bottom-fade bottom-0",

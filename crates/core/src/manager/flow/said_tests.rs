@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 type Inputs = Arc<Mutex<Vec<String>>>;
 
 /// A session whose CLI keeps a session file, as Claude Code does. "Hold." takes two steers in
-/// its turn; "Work a while." takes two as well, the user's queued message and its withdrawal.
+/// its turn; "Work a while." takes two as well.
 async fn flow(name: &str) -> (Flow, Inputs) {
     let inputs: Inputs = Arc::default();
     let seen = inputs.clone();
@@ -203,10 +203,10 @@ async fn brigadiers_steers_are_brigadiers_and_the_users_steer_is_theirs() {
     flow.say("Hold.").await;
     until_given(&flow, &inputs, "Hold.").await;
     // The user stopped a worker: Brigadier tells the running turn.
-    let stopped = "[worker] The user stopped task-3 \"Fix the flaky test\". You didn't stop it and nothing failed.";
+    let stopped = "[worker] The user ended task-3 \"Fix the flaky test\" for good. You didn't end it and nothing failed.";
     let conv = flow.manager.conv(&flow.conversation).unwrap();
     flow.manager.tell_thread_now(&conv, stopped.into()).await;
-    until_given(&flow, &inputs, "The user stopped task-3").await;
+    until_given(&flow, &inputs, "The user ended task-3").await;
     assert_eq!(flow.noted_said(stopped), Some(Said::Brigadier));
     // The user's own steer, with a note that waited for their next message after it: only
     // their words show.
@@ -266,28 +266,23 @@ async fn brigadiers_steers_are_brigadiers_and_the_users_steer_is_theirs() {
 }
 
 #[tokio::test]
-async fn a_queued_messages_frame_and_its_withdrawal_are_brigadiers() {
+async fn a_follow_up_the_judge_steers_in_is_the_users_under_its_frame() {
     let (flow, inputs) = flow("said-queued").await;
     flow.say("Work a while.").await;
     until_given(&flow, &inputs, "Work a while.").await;
-    // Sent while the turn works: steered in under its frame to judge.
+    // Sent while the turn works: judged to fit, steered in under its frame (D157).
     flow.say("Also the docs.").await;
     let framed = until_given(&flow, &inputs, "Also the docs.").await;
-    assert!(framed.starts_with("[queued message "), "{framed}");
+    assert!(
+        framed.starts_with(crate::manager::conversation::queue_judging::STEERED),
+        "{framed}"
+    );
     assert_eq!(
         flow.noted_said(&framed),
         Some(Said::Both {
             user: "Also the docs.".into()
         })
     );
-    // Deleted once the thread has it: Brigadier tells the thread to leave it.
-    let item = flow.board().await.queue.items[0].id.clone();
-    flow.manager
-        .delete_queued(&flow.conversation, &item)
-        .await
-        .unwrap();
-    let withdrawn = until_given(&flow, &inputs, "withdrawn").await;
-    assert_eq!(flow.noted_said(&withdrawn), Some(Said::Brigadier));
     flow.stop().await;
 }
 
@@ -320,5 +315,52 @@ async fn a_chats_compact_the_user_asked_for_is_theirs() {
     flow.settled_in(&chat).await;
     flow.manager.compact(chat.clone()).await.unwrap();
     assert_eq!(flow.manager.noted_said(&chat, "/compact"), Some(Said::User));
+    flow.stop().await;
+}
+
+/// The CLI's message of a send carries the requests of the user's messages in it, as Brigadier
+/// noted them when it sent it: live, before the turns are read again, and on a whole read.
+#[tokio::test]
+async fn the_clis_message_of_a_send_carries_its_request_live_and_read() {
+    let (flow, _) = flow("said-requests").await;
+    let mut news = flow.manager.subscribe_thread_news();
+    flow.say("Fix the test.").await;
+    flow.settled().await;
+    let request = flow
+        .core
+        .all_messages(&flow.conversation)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|message| message.text == "Fix the test.")
+        .and_then(|message| message.request_id)
+        .unwrap();
+    let said = |entry: &brigadier_providers::session_file::FileEntry| {
+        matches!(&entry.event, brigadier_providers::ProviderEvent::Message {
+            role: brigadier_providers::Role::User,
+            text,
+            ..
+        } if text.contains("Fix the test."))
+    };
+    let mut live = Vec::new();
+    while let Ok(item) = news.try_recv() {
+        live.extend(
+            item.entries
+                .into_iter()
+                .filter(said)
+                .map(|entry| entry.requests),
+        );
+    }
+    assert_eq!(live, [vec![request.clone()]]);
+    let read: Vec<_> = flow
+        .manager
+        .thread_view(&flow.conversation)
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(said)
+        .map(|entry| entry.requests)
+        .collect();
+    assert_eq!(read, [vec![request]]);
     flow.stop().await;
 }

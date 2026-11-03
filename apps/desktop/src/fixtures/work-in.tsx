@@ -1,8 +1,8 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a new session's
  * utility bar (project, Work in, branch) on a project whose folder has `feature-x` checked out,
- * IPC mocked. It opens Work in, picks Local checkout and then New worktree again, and writes the
- * menu's rows, the pills and the setup each asks for as JSON into `<pre id="work-in-result">`;
+ * IPC mocked. It opens Work in, picks Local checkout, New worktree again, then Existing worktree
+ * and the worktree another session works in (goal 9), and writes the menu's rows, the pills and the setup each asks for as JSON into `<pre id="work-in-result">`;
  * `stop=1` holds the page with the menu open for a screenshot, `stop=local` once Local checkout
  * is picked.
  */
@@ -15,14 +15,20 @@ import type { ComposerTarget } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { UtilityBar } from "@/app/conversation/UtilityBar";
 import { TooltipProvider } from "@/components/overlays";
-import type { Project, RepoInfo, Request } from "@/ipc/generated";
+import type { Conversation, Project, RepoInfo, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
 const project = { id: "p1", name: "todo-app", createdAtMs: 0, repos: [{ path: "/work/todo-app", name: "todo-app" }], prefs: {}, trust: [] } as unknown as Project;
 const repo: RepoInfo = {
   path: "/work/todo-app", name: "todo-app", currentBranch: "feature-x", dirty: true,
-  branches: [{ name: "main", commit: "a1", checkedOutAt: null }, { name: "feature-x", commit: "b2", checkedOutAt: "/work/todo-app" }],
+  branches: [
+    { name: "main", commit: "a1", checkedOutAt: null, worker: false },
+    { name: "feature-x", commit: "b2", checkedOutAt: "/work/todo-app", worker: false },
+    { name: "fix-login", commit: "c3", checkedOutAt: "/Users/me/.brigadier/s/ab12cd34/work", worker: false },
+    { name: "hotfix", commit: "e5", checkedOutAt: "/work/todo-app-hotfix", worker: false },
+    { name: "brigadier/ab12cd34/task-1", commit: "d4", checkedOutAt: "/Users/me/.brigadier/s/ab12cd34/workers/1/work", worker: true },
+  ],
 };
 
 mockIPC((command, payload) => {
@@ -31,8 +37,14 @@ mockIPC((command, payload) => {
   if (req.method === "getRepoInfo") return { method: req.method, repo };
   return { method: req.method };
 });
+// The session that works in fix-login's folder: its row reads by its title (D184).
+const fixLogin = {
+  id: "s1", title: "Fix the login", createdAtMs: 0, lifecycle: "active",
+  setup: { type: "session", repo: "/work/todo-app", environment: { type: "newWorktree", base: "main", branch: "fix-login", path: "/Users/me/.brigadier/s/ab12cd34/work", start: null } },
+} as unknown as Conversation;
 useApp.setState({
   projects: { p1: project },
+  conversations: { s1: fixLogin },
   selection: { type: "draft", kind: "session", projectId: "p1" },
   connection: { status: "connected", daemon: null, reason: null },
 });
@@ -51,6 +63,7 @@ async function until<T>(what: string, find: () => T | null | undefined, ms = 10_
 const pill = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const rows = () => [...document.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
 const row = (label: string) => rows().find((each) => each.textContent === label);
+const options = () => [...document.querySelectorAll<HTMLElement>("[role=option]")];
 const setup = () => JSON.parse(document.querySelector("#work-in-setup")?.textContent ?? "null") as unknown;
 const hint = () => document.querySelector("#work-in-hint")?.textContent ?? "";
 const press = (element: HTMLElement) => {
@@ -82,6 +95,21 @@ async function drive(): Promise<Record<string, unknown>> {
   press(row("New worktree")!);
   await until("the base branch pill again", () => pill("Base branch"));
   seen.backSetup = setup();
+  // Existing worktree: nothing picked yet, then the worktrees with their branches.
+  press(pill("Work in")!);
+  await until("the Work in menu a third time", () => rows().length > 0);
+  press(row("Existing worktree")!);
+  await until("the worktree pill", () => pill("Worktree"));
+  seen.existingPills = [pill("Work in")?.textContent, pill("Worktree")?.textContent];
+  seen.existingProblem = setup();
+  press(pill("Worktree")!);
+  await until("the worktree list", () => options().length > 0);
+  seen.worktreeRows = options().map((each) => each.textContent);
+  if (query.get("stop") === "existing") return seen;
+  press(options().find((each) => each.textContent?.endsWith("fix-login"))!);
+  await until("the picked worktree", () => pill("Worktree")?.textContent === "Fix the login");
+  seen.pickedPill = pill("Worktree")?.textContent;
+  seen.existingSetup = setup();
   return seen;
 }
 

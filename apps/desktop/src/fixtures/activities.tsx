@@ -19,7 +19,6 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { checkLines } from "@/app/conversation/activity/sessionTasks";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { OutputTab } from "@/app/side-panel/OutputTab";
 import { SidebarProvider } from "@/components/layout";
@@ -255,7 +254,7 @@ async function driveEnded(): Promise<Record<string, unknown>> {
 const sleep: BackgroundTask = { id: "bdza4j3ng", itemId: "toolu_bash", kind: "shell", label: "Sleep 20 seconds then echo marker", status: "running",
   startedAtMs: now - 8_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/bdza4j3ng.output", summary: null, lastLine: "sleeping" };
 const helper: BackgroundTask = { id: "a0c79", itemId: "toolu_agent", kind: "agent", label: "Reply with hi", status: "running",
-  startedAtMs: now - 5_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null };
+  startedAtMs: now - 5_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null, provider: "claude" };
 const tasksSaid = (...background: BackgroundTask[]) => { background.filter((task) => task.status !== "running").forEach((task) => durableHistory.add(task.id)); applyThreadNews({ conversationId: id, entries: [], opened: false, background }); };
 /** Frames until `done` holds, up to `ms`; how long it took. */
 async function until(done: () => boolean, ms: number): Promise<number> {
@@ -305,11 +304,9 @@ async function driveApps(): Promise<Record<string, unknown>> {
   ], opened: false });
   const workerApp = { ...devApp, itemId: "call-worker-app", label: "Run the worker website" };
   workerTasksSaid({ task: workerApp, command: "next dev" }, { task: { ...tests, id: "worker-test" }, command: "pnpm test" });
-  await until(() => ids().length === 3, 5000);
+  await until(() => ids().length === 5, 5000);
   const running = ids();
   const workerName = row("task:task-2:b7dev")?.querySelector("[data-activity-worker]")?.textContent;
-  const live = useCliThread.getState().views[id]!;
-  const checks = checkLines(live.background ?? [], live.entries, Date.now()).lines.map((line) => line.id);
   row("task:raw-browser")?.click();
   await frame();
   const output = sessionTabs(id).active;
@@ -317,15 +314,15 @@ async function driveApps(): Promise<Record<string, unknown>> {
   await until(() => appStops.length === 1, 3000);
   stop("task:task-2:b7dev")?.click();
   await until(() => appStops.length === 2, 3000);
-  tasksSaid({ ...appTask, status: "completed", endedAtMs: Date.now() }, { ...browser, status: "failed", endedAtMs: Date.now() }, tests);
+  tasksSaid({ ...appTask, status: "completed", endedAtMs: Date.now() }, { ...browser, status: "failed", endedAtMs: Date.now() }, { ...tests, status: "completed", endedAtMs: Date.now() });
   workerTasksSaid({ task: { ...workerApp, status: "stopped", endedAtMs: Date.now() }, command: "next dev" });
   await until(() => ids().length === 0, 3000);
   const ended = ids();
-  tasksSaid({ ...appTask, startedAtMs: now + 10 }, tests);
+  tasksSaid({ ...appTask, startedAtMs: now + 10 });
   await until(() => ids().length === 1, 3000);
   stop("task:raw-dev")?.click();
   await until(() => appStops.length === 3, 3000);
-  return { running, checks, workerName, output, ended, stops: appStops, expectedStarts: [appTask.startedAtMs, workerApp.startedAtMs, now + 10], history: !!document.querySelector('[data-slot="background-history-link"]') };
+  return { running, workerName, output, ended, stops: appStops, expectedStarts: [appTask.startedAtMs, workerApp.startedAtMs, now + 10], history: !!document.querySelector('[data-slot="background-history-link"]') };
 }
 
 /** Long names use the available room; state words stay whole, directly beside short names. */

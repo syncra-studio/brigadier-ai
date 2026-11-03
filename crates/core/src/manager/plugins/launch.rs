@@ -50,13 +50,8 @@ impl SessionManager {
                 brigadier_providers::accounts::home_var(account.provider).to_owned(),
                 home.to_string_lossy().into_owned(),
             );
-            match account.provider {
-                brigadier_providers::ProviderKind::Claude => {
-                    effective.claude_json =
-                        brigadier_registry::claude_config::config_file(&roots.home, Some(&home));
-                    effective.claude_dir = home;
-                }
-                brigadier_providers::ProviderKind::Codex => effective.codex_home = home,
+            if let Some(adapter) = brigadier_registry::adapter::adapter(account.provider) {
+                adapter.at_home(&mut effective, &home);
             }
         }
         let registered: Vec<_> = self
@@ -72,20 +67,40 @@ impl SessionManager {
             })
             .collect();
         let project = registered_root(&registered, project, cwd);
+        // A linked worktree's own project setup (its branch's files) is read beside the
+        // registered root's and wins per name; settings stay keyed by the registered root.
+        let own_checkout = cwd
+            .ancestors()
+            .find(|path| path.join(".git").exists())
+            .map(Path::to_owned)
+            .filter(|checkout| trusted && project.as_ref().is_some_and(|root| root != checkout));
         let (cwd, data_dir) = (cwd.to_owned(), self.data_dir.clone());
         let secrets = CliSecretStore {
             cli: self.brigadier_cli(),
             env: roots.vars.clone(),
         };
         let gateway = self.mcp_gateway().clone();
-        let agent = super::super::integrations::agent(account.provider);
+        let agent = account.provider;
         let grants = match role {
             Role::Thread => None,
             Role::Worker { grants } => Some(grants.to_vec()),
         };
         blocking(move || {
-            let mut rows = Catalog::read_rows_with_library(&roots, &registered, &data_dir);
-            let choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
+            let sources: Vec<PathBuf> = registered
+                .iter()
+                .cloned()
+                .chain(own_checkout.clone())
+                .collect();
+            let mut rows = Catalog::read_rows_with_library(&roots, &sources, &data_dir);
+            if let (Some(checkout), Some(root)) = (&own_checkout, &project) {
+                adopt_checkout(&mut rows, checkout, root);
+            }
+            let mut choices = Choices::load(&data_dir).map_err(Error::Invalid)?;
+            if let Some(checkout) = &own_checkout {
+                keep_root_choices(&rows, &mut choices, checkout, || {
+                    Catalog::read_rows_with_library(&roots, &registered, &data_dir)
+                });
+            }
             let warnings = if grants.is_none() {
                 fill_library_values(&mut rows, &data_dir, &choices, project.as_deref(), &secrets)
             } else {
@@ -122,8 +137,10 @@ impl SessionManager {
 fn suppress_native_plugin_servers(
     resolved: &mut Resolved,
     native: &Catalog,
-    agent: brigadier_registry::Agent,
+    agent: brigadier_providers::ProviderKind,
 ) {
+    let by_name = brigadier_registry::adapter::adapter(agent)
+        .is_some_and(|adapter| adapter.plugin_servers_by_name());
     for server in native.servers.iter().filter(|server| {
         server
             .plugin
@@ -131,20 +148,98 @@ fn suppress_native_plugin_servers(
             .is_some_and(|plugin| plugin.agent == agent && !plugin.provider_supplied())
     }) {
         let plugin = server.plugin.as_ref().expect("filtered plugin");
-        match agent {
-            brigadier_registry::Agent::Claude => {
-                for alias in server.provenance().aliases {
-                    if !resolved.off.servers.contains(&alias) {
-                        resolved.off.servers.push(alias);
-                    }
+        if by_name {
+            for alias in server.provenance().aliases {
+                if !resolved.off.servers.contains(&alias) {
+                    resolved.off.servers.push(alias);
                 }
             }
-            brigadier_registry::Agent::Codex => {
-                let entry = (plugin.id.clone(), server.name.clone());
-                if !resolved.off.plugin_servers.contains(&entry) {
-                    resolved.off.plugin_servers.push(entry);
-                }
+        } else {
+            let entry = (plugin.id.clone(), server.name.clone());
+            if !resolved.off.plugin_servers.contains(&entry) {
+                resolved.off.plugin_servers.push(entry);
             }
+        }
+    }
+}
+
+/// A linked checkout's definitions count as the registered root's. One the root has too (the
+/// same file and agent) joins the root's row, so the root's saved choice still applies even
+/// when its content (a stdio server's working folder) differs on the branch.
+fn adopt_checkout(rows: &mut Vec<brigadier_registry::catalog::Row>, checkout: &Path, root: &Path) {
+    let mut moves = Vec::new();
+    for (from, row) in rows.iter().enumerate() {
+        for (index, definition) in row.definitions.iter().enumerate() {
+            let origin = &definition.provenance;
+            let Ok(file) = origin.file.strip_prefix(checkout) else {
+                continue;
+            };
+            if origin.project.as_deref() != Some(checkout) {
+                continue;
+            }
+            let home = rows.iter().position(|other| {
+                other.kind == row.kind
+                    && other.name == row.name
+                    && other.definitions.iter().any(|known| {
+                        known.provenance.project.as_deref() == Some(root)
+                            && known.provenance.agent == origin.agent
+                            && known.provenance.file.strip_prefix(root).ok() == Some(file)
+                    })
+            });
+            if let Some(to) = home.filter(|to| *to != from) {
+                moves.push((from, index, to));
+            }
+        }
+    }
+    // Last first, so each index still points where it did.
+    for (from, index, to) in moves.into_iter().rev() {
+        let definition = rows[from].definitions.remove(index);
+        rows[to].definitions.push(definition);
+    }
+    rows.retain(|row| !row.definitions.is_empty());
+    for definition in rows.iter_mut().flat_map(|row| &mut row.definitions) {
+        if definition.provenance.project.as_deref() == Some(checkout) {
+            definition.provenance.project = Some(root.to_owned());
+        }
+    }
+}
+
+/// A branch edit to one CLI's copy of a skill regroups it as different per agent, a row id
+/// with no saved choice; the root's saved choice for that skill still applies there.
+fn keep_root_choices(
+    rows: &[brigadier_registry::catalog::Row],
+    choices: &mut Choices,
+    checkout: &Path,
+    root_rows: impl FnOnce() -> Vec<brigadier_registry::catalog::Row>,
+) {
+    let regrouped: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.different_per_agent
+                && row
+                    .definitions
+                    .iter()
+                    .any(|definition| definition.provenance.file.starts_with(checkout))
+        })
+        .collect();
+    if regrouped.is_empty() {
+        return;
+    }
+    let root_rows = root_rows();
+    for row in regrouped {
+        let saved = root_rows
+            .iter()
+            .filter(|old| {
+                old.kind == row.kind
+                    && old.name == row.name
+                    && old
+                        .definitions
+                        .iter()
+                        .any(|known| row.definitions.contains(known))
+            })
+            .find_map(|old| choices.0.get(&old.id).cloned());
+        if let Some(saved) = saved {
+            choices.0.insert(row.id.clone(), saved);
         }
     }
 }
@@ -152,6 +247,101 @@ fn suppress_native_plugin_servers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worktree_edit_to_one_clis_skill_copy_keeps_the_roots_saved_choice() {
+        let dir = std::env::temp_dir().join(format!("plugins-keep-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let home = dir.join("home");
+        let roots = brigadier_registry::Roots::from_vars([
+            ("HOME".into(), home.display().to_string()),
+            ("USERPROFILE".into(), home.display().to_string()),
+        ])
+        .unwrap();
+        let (root, work) = (dir.join("repo"), dir.join("work"));
+        let skill = "---\nname: tidy\ndescription: Tidies.\n---\nTidy up.\n";
+        for checkout in [&root, &work] {
+            for folder in [".claude/skills/tidy", ".agents/skills/tidy"] {
+                std::fs::create_dir_all(checkout.join(folder)).unwrap();
+                std::fs::write(checkout.join(folder).join("SKILL.md"), skill).unwrap();
+            }
+        }
+        std::fs::write(
+            work.join(".claude/skills/tidy/SKILL.md"),
+            format!("{skill}Edited on the branch.\n"),
+        )
+        .unwrap();
+        let root_rows = || Catalog::read_rows(&roots, std::slice::from_ref(&root));
+        let before = root_rows();
+        let saved = before.iter().find(|row| row.name == "tidy").unwrap();
+        assert!(!saved.different_per_agent);
+        let mut choices = Choices::default();
+        let mut off = super::super::choices::Choice::default_for(saved);
+        off.on = false;
+        choices.0.insert(saved.id.clone(), off);
+        let mut rows = Catalog::read_rows(&roots, &[root.clone(), work.clone()]);
+        adopt_checkout(&mut rows, &work, &root);
+        let tidy = rows.iter().find(|row| row.name == "tidy").unwrap();
+        assert!(tidy.different_per_agent, "{rows:?}");
+        assert!(
+            choices.choice(tidy).on,
+            "no saved choice under the regrouped id yet"
+        );
+        keep_root_choices(&rows, &mut choices, &work, root_rows);
+        assert!(!choices.choice(tidy).on);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_worktrees_copy_of_a_root_server_keeps_the_roots_row_and_choice() {
+        let dir = std::env::temp_dir().join(format!("plugins-adopt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let home = dir.join("home");
+        let roots = brigadier_registry::Roots::from_vars([
+            ("HOME".into(), home.display().to_string()),
+            ("USERPROFILE".into(), home.display().to_string()),
+        ])
+        .unwrap();
+        let (root, work) = (dir.join("repo"), dir.join("work"));
+        for (checkout, text) in [
+            (&root, r#"{"mcpServers":{"db":{"command":"db-server"}}}"#),
+            (
+                &work,
+                r#"{"mcpServers":{"db":{"command":"db-server"},"only":{"command":"x"}}}"#,
+            ),
+        ] {
+            std::fs::create_dir_all(checkout).unwrap();
+            std::fs::write(checkout.join(".mcp.json"), text).unwrap();
+        }
+        let before = Catalog::read_rows(&roots, std::slice::from_ref(&root));
+        let db = |rows: &[brigadier_registry::catalog::Row]| {
+            rows.iter()
+                .filter(|row| row.name == "db")
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut rows = Catalog::read_rows(&roots, &[root.clone(), work.clone()]);
+        assert_eq!(db(&rows).len(), 2, "the copies differ by working folder");
+        adopt_checkout(&mut rows, &work, &root);
+        assert_eq!(db(&rows), db(&before));
+        let row = rows.iter().find(|row| row.name == "db").unwrap();
+        assert_eq!(row.definitions.len(), 2);
+        assert!(
+            row.definitions
+                .iter()
+                .all(|known| known.provenance.project.as_deref() == Some(root.as_path()))
+        );
+        // A server only the branch has keeps a row of its own.
+        let only = rows.iter().find(|row| row.name == "only").unwrap();
+        assert_eq!(
+            only.definitions[0].provenance.project.as_deref(),
+            Some(root.as_path())
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn linked_worktree_uses_registered_root_without_reading_its_project_files() {
         let dir = std::env::temp_dir().join(format!("plugins-launch-{}", uuid::Uuid::new_v4()));
@@ -223,9 +413,12 @@ pub fn apply_resolved(
     spec.switched_off = resolved.off.clone();
     // Native configs used helpers before injection. Protect newly materialized values in
     // adapter stdio recordings and events too, including inline Codex thread configuration.
+    // Brigadier's own server (computer use) gave its one secret, its token, to the redactor
+    // already; its other values (paths, `brigadier`) are no secrets and must stay readable.
     let values: Vec<_> = spec
         .mcp_servers
         .iter()
+        .filter(|server| !server.trusted)
         .flat_map(|server| server.env.iter().map(|(_, value)| value.clone()))
         .collect();
     spec.redactor = Some(std::sync::Arc::new(match &spec.redactor {
@@ -242,25 +435,10 @@ pub fn apply_resolved(
         .iter()
         .filter(|skill| !skill.native)
         .collect();
-    if injected.is_empty() && spec.installed_skills.is_empty() {
+    if injected.is_empty() {
         return Ok(());
     }
     std::fs::create_dir_all(&skills).map_err(|error| Error::Invalid(error.to_string()))?;
-    for plugin in std::mem::take(&mut spec.installed_skills) {
-        if let Ok(entries) = std::fs::read_dir(plugin.join("skills")) {
-            for entry in entries.flatten() {
-                if entry.path().join("SKILL.md").is_file()
-                    && let Err(error) = brigadier_providers::accounts::link_to(
-                        &entry.path(),
-                        &skills.join(entry.file_name()),
-                        true,
-                    )
-                {
-                    tracing::warn!(path = %entry.path().display(), %error, "Skipping skill that couldn't be staged");
-                }
-            }
-        }
-    }
     for skill in injected {
         if Path::new(&skill.display).components().count() != 1
             || !matches!(
@@ -281,13 +459,9 @@ pub fn apply_resolved(
             tracing::warn!(name = %skill.display, %error, "Skipping skill that couldn't be staged");
         }
     }
-    match provider {
-        brigadier_providers::ProviderKind::Claude => spec.add_dirs.push(overlay),
-        brigadier_providers::ProviderKind::Codex => {
-            brigadier_providers::accounts::link_to(&skills, &overlay.join("skills"), true)
-                .map_err(|error| Error::Invalid(error.to_string()))?;
-            spec.skill_plugins.push(overlay);
-        }
+    if let Some(adapter) = brigadier_providers::adapters::adapter(provider) {
+        (adapter.skills_overlay)(spec, overlay)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
     }
     Ok(())
 }
@@ -296,7 +470,7 @@ pub fn apply_resolved(
 mod overlay_tests {
     use super::*;
     use brigadier_providers::{Access, Origin, ProviderKind, SessionSpec, ToolSet};
-    use brigadier_registry::{Agent, Roots};
+    use brigadier_registry::Roots;
 
     pub(super) fn test_spec(cwd: &Path) -> SessionSpec {
         SessionSpec {
@@ -313,7 +487,6 @@ mod overlay_tests {
             add_dirs: Vec::new(),
             project: None,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             env: Vec::new(),
             unset_env: Vec::new(),
@@ -398,8 +571,8 @@ mod overlay_tests {
             .unwrap();
             let choices = Choices::load(&dir.join("data")).unwrap();
             for (agent, provider) in [
-                (Agent::Claude, ProviderKind::Claude),
-                (Agent::Codex, ProviderKind::Codex),
+                (ProviderKind::Claude, ProviderKind::Claude),
+                (ProviderKind::Codex, ProviderKind::Codex),
             ] {
                 for role in [Role::Thread, Role::Worker { grants: &[] }] {
                     let resolved = resolve::resolve(Context {
@@ -510,8 +683,8 @@ mod overlay_tests {
                     .collect(),
             );
             for (agent, provider) in [
-                (Agent::Codex, ProviderKind::Codex),
-                (Agent::Claude, ProviderKind::Claude),
+                (ProviderKind::Codex, ProviderKind::Codex),
+                (ProviderKind::Claude, ProviderKind::Claude),
             ] {
                 let mut resolved = resolve::resolve(Context {
                     agent,
@@ -577,7 +750,7 @@ mod overlay_tests {
             assert!(!session.join("overlay/.claude/skills/skills").exists());
             match provider {
                 ProviderKind::Claude => assert_eq!(spec.add_dirs.len(), 1),
-                ProviderKind::Codex => assert_eq!(spec.skill_plugins.len(), 1),
+                _ => assert_eq!(spec.skill_plugins.len(), 1),
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -610,10 +783,10 @@ mod overlay_tests {
             "---\nname: collision\n---\nPROJECT",
         );
         let rows = Catalog::read_rows(&roots, std::slice::from_ref(&project));
-        for agent in [Agent::Claude, Agent::Codex] {
+        for agent in [ProviderKind::Claude, ProviderKind::Codex] {
             let provider = match agent {
-                Agent::Claude => ProviderKind::Claude,
-                Agent::Codex => ProviderKind::Codex,
+                ProviderKind::Claude => ProviderKind::Claude,
+                _ => ProviderKind::Codex,
             };
             for alternate in [false, true] {
                 let mut effective = roots.clone();
@@ -641,7 +814,7 @@ mod overlay_tests {
                     ["db"]
                 );
                 assert_eq!(resolved.skills.len(), 1);
-                let invocation = if agent == Agent::Claude && !alternate {
+                let invocation = if agent == ProviderKind::Claude && !alternate {
                     "overlay:collision"
                 } else {
                     "collision"
@@ -659,7 +832,7 @@ mod overlay_tests {
                     "---\nname: collision\n---\nPROJECT"
                 );
                 assert!(!work.join(".mcp.json").exists());
-                if agent == Agent::Claude {
+                if agent == ProviderKind::Claude {
                     assert_eq!(spec.add_dirs, [session.join("overlay")]);
                 } else {
                     assert!(session.join("overlay/skills/collision/SKILL.md").is_file());
@@ -927,7 +1100,8 @@ fn hydrate_library_definition(
 mod secret_tests {
     use super::*;
     use brigadier_cli::secrets::{Store, Values};
-    use brigadier_registry::{Agent, Roots};
+    use brigadier_providers::ProviderKind;
+    use brigadier_registry::Roots;
     use std::cell::RefCell;
 
     struct Memory {
@@ -1025,7 +1199,7 @@ mod secret_tests {
         let mut rows = Catalog::read_rows_with_library(&roots, &[], &dir);
         assert_eq!(rows.len(), 1);
         assert!(fill_library_values(&mut rows, &dir, &Choices::default(), None, &store).is_empty());
-        for agent in [Agent::Claude, Agent::Codex] {
+        for agent in [ProviderKind::Claude, ProviderKind::Codex] {
             let resolved = resolve::resolve(Context {
                 agent,
                 account_home: &roots,
@@ -1049,7 +1223,7 @@ mod secret_tests {
         assert_eq!(warnings[0].server, "api");
         assert!(!warnings[0].message.contains("in-memory-only-token"));
         let resolved = resolve::resolve(Context {
-            agent: Agent::Claude,
+            agent: ProviderKind::Claude,
             account_home: &roots,
             project_root: None,
             cwd: &dir,
@@ -1104,6 +1278,21 @@ mod lease_grant_tests {
             always_load: false,
         };
         let mut spec = super::overlay_tests::test_spec(Path::new("/unused"));
+        // Brigadier's own computer-use server: its values are no secrets.
+        let own = McpServer {
+            name: "computer".into(),
+            gateway: None,
+            transport: McpTransport::Stdio {
+                command: "/helper".into(),
+                args: Vec::new(),
+                cwd: None,
+            },
+            env: vec![("BRIGADIER_CU_AUDIENCE".into(), "brigadier".into())],
+            tool_timeout_secs: None,
+            trusted: true,
+            always_load: false,
+        };
+        spec.mcp_servers.push(own.clone());
         spec.mcp_servers.push(server.clone());
         let mut bound = server;
         bound.gateway.as_mut().unwrap().url = "http://127.0.0.1:1234/mcp/row".into();
@@ -1122,6 +1311,11 @@ mod lease_grant_tests {
             ProviderKind::Codex,
         )
         .unwrap();
-        assert_eq!(spec.mcp_servers, [bound]);
+        assert_eq!(spec.mcp_servers, [own, bound]);
+        let redactor = spec.redactor.unwrap();
+        assert_eq!(
+            redactor.redact("brigadier wait fixture-capability"),
+            "brigadier wait [redacted]"
+        );
     }
 }

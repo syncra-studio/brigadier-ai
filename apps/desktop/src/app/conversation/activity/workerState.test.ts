@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { finishedCounts, finishedWords, QUIET_MS, rowNames, workerStateOf } from "@/app/conversation/activity/workerState";
+import { endedWord, finishedCounts, finishedWords, QUIET_MS, rowNames, rowOnHand, workerStateOf } from "@/app/conversation/activity/workerState";
 import type { WorkerRow } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 
@@ -42,8 +42,13 @@ test("how its last turn ended: failed (or cut off, or gone without a done end), 
   assert.equal(word({ working: false, lastEnd: "failed" }), "Failed");
   assert.equal(word({ working: false, lastEnd: "interrupted" }), "Failed");
   assert.equal(word({ working: false, lastEnd: null, gone: true }), "Failed");
-  assert.equal(word({ working: false, lastEnd: "stopped" }), "Stopped");
-  assert.equal(word({ working: false, lastEnd: "stopped", gone: true, merged: true }), "Stopped");
+  assert.equal(word({ working: false, lastEnd: "stopped" }), "Ended");
+  assert.equal(word({ working: false, lastEnd: "stopped", gone: true, merged: true }), "Ended");
+});
+
+test("a worker its session paused reads Paused, never Failed, its cut turn whatever it was (O57 item 3)", () => {
+  assert.equal(word({ working: false, lastEnd: "interrupted", paused: true }), "Paused");
+  assert.equal(word({ working: false, lastEnd: null, paused: true }), "Paused");
 });
 
 test("git says the rest: Merged, Done · not merged (commits ahead or changes), Done", () => {
@@ -54,7 +59,7 @@ test("git says the rest: Merged, Done · not merged (commits ahead or changes), 
   assert.equal(word({ working: false, lastEnd: "done", gone: true }), "Done");
 });
 
-test("the finished ones count as N done · M stopped, failed among the stopped", () => {
+test("the finished ones count as N done · M ended, failed among the ended, merged among the done; a paused one is on hand (D198, D199)", () => {
   const rows = [
     row({ working: false, lastEnd: "done" }),
     row({ working: false, lastEnd: "done", merged: true }),
@@ -63,8 +68,13 @@ test("the finished ones count as N done · M stopped, failed among the stopped",
     row({ working: false, lastEnd: "failed" }),
     row(),
   ];
-  assert.deepEqual(finishedCounts(rows, NOW), { done: 3, stopped: 2 });
-  assert.equal(finishedWords(rows, NOW), "3 done · 2 stopped");
+  assert.deepEqual(finishedCounts(rows, NOW), { done: 3, ended: 2 });
+  assert.equal(finishedWords(rows, NOW), "3 done · 2 ended");
+  const paused = row({ working: false, lastEnd: "interrupted", paused: true });
+  assert.equal(finishedWords([...rows, paused], NOW), "3 done · 2 ended");
+  assert.equal(rowOnHand(paused, NOW), true);
+  assert.equal(rowOnHand(rows[3]!, NOW), false);
+  assert.equal(endedWord(workerStateOf(rows[1]!, NOW).kind), "Done");
   assert.equal(finishedWords([row()], NOW), "");
 });
 

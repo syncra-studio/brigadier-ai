@@ -7,7 +7,6 @@ import { agentState } from "@/app/setup/onboarding/SetupTerminal";
 
 import { footMenuPlacement } from "@/app/shell/sidebar/nav";
 import { ProviderUsage } from "@/app/shell/ProviderUsage";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 
 import { BarChart, ChevronRight, Lightbulb } from "@/components/icons";
 
@@ -45,6 +44,7 @@ import {
 import { type Availability, providerOn } from "@/state/providers";
 
 import { useApp } from "@/state/store";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** Usage is checked again this often while Brigadier is in front… */
 const USAGE_EVERY_MS = 15 * 60_000;
@@ -164,7 +164,7 @@ function barStatus(entries: readonly UsageEntry[]): {
   const most = used(first.top);
   const level = usageLevel(most);
   const alert = level === "danger" ? "text-destructive" : level === "warning" ? "text-warning" : null;
-  return { label: `Usage · ${PROVIDER_LABELS[first.provider]} ${most}% used`, alert };
+  return { label: `Usage · ${cliFacts(first.provider).label} ${most}% used`, alert };
 }
 
 /** Who `provider`'s account in use is, masked, for its row's tip; `null` with only one account. */

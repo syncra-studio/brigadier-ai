@@ -190,6 +190,8 @@ impl SessionManager {
             "Type this in your terminal? It runs outside the sandbox."
         };
         let request = ApprovalRequest {
+            network: false,
+            agent: None,
             id: format!("{OWN_APPROVAL}{}", uuid::Uuid::now_v7()),
             kind: ApprovalKind::Command,
             tool: "terminal_run".into(),

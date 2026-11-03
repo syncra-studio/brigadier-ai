@@ -14,7 +14,6 @@ import {
 } from "@assistant-ui/react";
 import {
   defaultRangeExtractor,
-  measureElement as measuredSize,
   observeElementOffset,
   observeElementRect,
   type Range as VirtualRange,
@@ -38,6 +37,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import { useFileDrops } from "@/app/conversation/fileDrops";
@@ -81,8 +81,6 @@ export type ThreadComponents = {
   PeerMessage?: ComponentType | undefined;
   /** A user message's text, where the app shows what it mentions. */
   UserText?: ComponentType<TextMessagePartProps> | undefined;
-  /** Floats centred just above the composer, over the thread (the capsule). */
-  Capsule?: ComponentType | undefined;
   Composer: ComponentType<ComposerProps>;
   /** Over the thread's top end: the app's find bar (⌘F). */
   Find?: ComponentType<ThreadOverlayProps> | undefined;
@@ -152,6 +150,8 @@ export const Thread = memo<ThreadProps>(function Thread({
 });
 
 const ThreadScrollContext = createContext<ThreadScroller | null>(null);
+/** Whether this thread's own CLI turn runs, for its scrolling (not its workers'); none given: the thread's running state. */
+export const ThreadTurnRuns = createContext<boolean | null>(null);
 /** The key the thread keeps its place and its messages' parts under (the conversation). */
 const ThreadKeyContext = createContext<string | null>(null);
 
@@ -167,6 +167,19 @@ export function useThreadAnswerStarted(requestIds: readonly string[], started: b
   useLayoutEffect(() => {
     if (started && ids) scroller?.answerStarted(ids.split(" "));
   }, [scroller, started, ids]);
+}
+
+/**
+ * Once `folds` turns true (a turn's work folding by itself), `target` keeps its place on screen
+ * while the fold closes above it (see `ThreadScroller.foldsBySelf`).
+ */
+export function useThreadHoldsOnFold(target: RefObject<HTMLElement | null>, folds: boolean): void {
+  const scroller = useContext(ThreadScrollContext);
+  const was = useRef(folds);
+  useLayoutEffect(() => {
+    if (folds && !was.current && target.current) scroller?.foldsBySelf(target.current);
+    was.current = folds;
+  }, [scroller, folds, target]);
 }
 
 export function useThreadKey(): string | null {
@@ -199,7 +212,8 @@ function useThreadScroll(
 
   // A sent turn's room lasts while the thread works on it. Told before attaching, so a
   // conversation shown again knows whether its kept room's turn still runs.
-  const running = useAuiState((s) => s.thread.isRunning);
+  const threadRuns = useAuiState((s) => s.thread.isRunning);
+  const running = useContext(ThreadTurnRuns) ?? threadRuns;
   useLayoutEffect(() => {
     scroller.setRunning(running);
   }, [scroller, running]);
@@ -338,7 +352,7 @@ const ThreadRoot: FC<{
   placeholder: string;
   scrollKey: string | null;
 }> = ({ isEmpty, autoFocus, placeholder, scrollKey }) => {
-  const { Welcome, BeforeMessages, AboveComposer, Capsule, Composer, Find } = useThreadComponents();
+  const { Welcome, BeforeMessages, AboveComposer, Composer, Find } = useThreadComponents();
   const [scroller] = useState(() => new ThreadScroller());
   const { viewport, group, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
     scroller,
@@ -355,7 +369,7 @@ const ThreadRoot: FC<{
       aria-hidden
       className="thread-bottom-pad pointer-events-none sticky bottom-0 z-10 mt-auto w-full shrink-0"
     >
-      <ScrollFade edge="bottom" />
+      <BottomFade scroller={scroller} />
     </div>
   );
 
@@ -429,7 +443,6 @@ const ThreadRoot: FC<{
               className="group/footer max-w-thread relative mx-auto flex w-full flex-col px-4"
             >
               <ThreadScrollToBottom />
-              {Capsule && <Capsule />}
               <div className="pointer-events-auto flex flex-col gap-4">
                 {/* A new chat has no response to go to (#564). */}
                 {!isEmpty && <LatestResponse />}
@@ -627,7 +640,9 @@ const ThreadMessages: FC<{
       const index = instance.indexFromElement(element);
       const id = ids[index];
       if (hidden()) return (id !== undefined ? heights.get(id) : undefined) ?? estimate(index);
-      const size = measuredSize(element, entry, instance);
+      // Exact, not rounded as the library's own: a row not mounted keeps this height in its
+      // spacer, so mounting and unmounting never moves the content's height by a pixel.
+      const size = entry?.borderBoxSize[0]?.blockSize ?? element.getBoundingClientRect().height;
       if (id !== undefined && size > 0) heights.set(id, size);
       return size;
     },
@@ -763,7 +778,7 @@ function useFeedKeys(ids: readonly string[], scroller: ThreadScroller) {
         const element = group.querySelector<HTMLElement>(`:scope > [data-thread-row][data-index="${next}"]`);
         if (element) {
           element.focus({ preventScroll: true });
-          element.scrollIntoView({ block: "nearest" });
+          scroller.reveal(element, "nearest");
           return;
         }
         if (tries > 0) requestAnimationFrame(() => focus(tries - 1));
@@ -851,6 +866,11 @@ const ThreadScrollToBottom: FC = () => {
 const noSubscribe = () => () => {};
 const notShown = () => false;
 
+/** The thread's bottom fade, raised over the scroll button while it shows. */
+const BottomFade: FC<{ scroller: ThreadScroller }> = ({ scroller }) => (
+  <ScrollFade edge="bottom" raised={useSyncExternalStore(scroller.subscribe, scroller.contentBelow)} />
+);
+
 // The markdown stack (remark, micromark, mdast) loads off the cold start (`markdownText`).
 const MarkdownText = markdownText.View;
 
@@ -868,13 +888,22 @@ const MessageTime: FC<{ children: ReactNode }> = ({ children }) => {
   return <LinkTimeContext.Provider value={sentAt}>{children}</LinkTimeContext.Provider>;
 };
 
-export const MessageText: FC<TextMessagePartProps> = (props) => (
-  <MessageTime>
-    <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} plainLeads />
-    </Suspense>
-  </MessageTime>
-);
+/**
+ * Whether the text in it still streams: its newest words are paced and fade in. One component
+ * either way, so a reply's end changes how it shows, never what is mounted.
+ */
+export const TextStreams = createContext(false);
+
+export const MessageText: FC<TextMessagePartProps> = (props) => {
+  const streaming = useContext(TextStreams);
+  return (
+    <MessageTime>
+      <Suspense fallback={<ReplyLoading />}>
+        <MarkdownText {...props} streaming={streaming || undefined} plainLeads />
+      </Suspense>
+    </MessageTime>
+  );
+};
 
 /**
  * Markdown outside a thread message, such as a worker's replies in its panel. `plainLeads`: an
@@ -893,24 +922,6 @@ export const MarkdownBlock: FC<{
       <MarkdownText streaming={streaming} paced={paced} breaks={breaks} plainLeads={plainLeads} />
     </Suspense>
   </TextMessagePartProvider>
-);
-
-/** Text that is still streaming: its newest words fade in. */
-export const StreamingMessageText: FC<TextMessagePartProps> = (props) => (
-  <MessageTime>
-    <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} streaming plainLeads />
-    </Suspense>
-  </MessageTime>
-);
-
-/** A line between a turn's steps while it streams: its words fade in as they arrive, unpaced. */
-export const CommentaryMessageText: FC<TextMessagePartProps> = (props) => (
-  <MessageTime>
-    <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} streaming paced={false} plainLeads />
-    </Suspense>
-  </MessageTime>
 );
 
 const UserAttachments: FC = () => {

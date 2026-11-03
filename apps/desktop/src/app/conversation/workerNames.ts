@@ -2,7 +2,6 @@ import { useCallback, useMemo } from "react";
 
 import { rowName } from "@/app/conversation/activity/workerState";
 import { namedMentions, workerName } from "@/app/conversation/rowWords";
-import { workersOf } from "@/state/nativeWorkers";
 import { useBoard } from "@/state/board";
 import { useCliThread, workerRowIn } from "@/state/cliThread";
 
@@ -30,7 +29,7 @@ export function useWorkerName(taskId: string): string | null {
 /** A worker's name among its session's rows, if a thread read lists it (see `useWorkerName`). */
 function rowNameIn(views: Parameters<typeof workerRowIn>[0], taskId: string): string | null {
   const found = workerRowIn(views, taskId);
-  return found ? rowName(workersOf(found.conversationId, views[found.conversationId]!), taskId) : null;
+  return found ? rowName(views[found.conversationId]!.workers ?? [], taskId) : null;
 }
 
 /**
@@ -44,7 +43,7 @@ function useNamesByNumber(): ReadonlyMap<number, string> {
   const lines = useCliThread((s) => {
     if (!conversationId || !tasks) return "";
     const view = s.views[conversationId];
-    const rows = view ? workersOf(conversationId, view) : null;
+    const rows = view?.workers ?? null;
     return Object.values(tasks)
       .map((task) => `${task.number}\t${(rows && rowName(rows, task.id)) ?? workerName(tasks, task)}`)
       .join("\n");

@@ -2,15 +2,14 @@ import { useEffect, useState } from "react";
 
 import { TooltipIconButton } from "@/components/controls";
 import { BarItem, ITEM_MS } from "@/app/shell/BarItem";
-import { UPDATE_NAMES, UpdateRow } from "@/app/shell/UpdateRow";
+import { updateName, UpdateRow } from "@/app/shell/UpdateRow";
 import { footMenuPlacement } from "@/app/shell/sidebar/nav";
 import { BrigadierGlyph, Check, DownloadSimple, ProviderGlyph, Spinner } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { useSidebar } from "@/components/layout";
 import type { UpdateItem } from "@/ipc/generated";
+import { PROVIDERS } from "@/lib/providerKinds";
 import { pillClick, shownUpdates, startUpdate, useUpdates } from "@/state/updates";
-
-const CLIS = ["claude", "codex"] as const;
 
 /** The updates pill in the expanded row: outlined, round-ended, filled only on hover. */
 export const FOOT_CHIP = "border-border rounded-full border px-2";
@@ -57,7 +56,7 @@ export function UpdatesRow() {
           <TooltipIconButton
             look="strip"
             side={expanded ? "top" : "right"}
-            tooltip={direct === "menu" ? rowLabel(shown) : `Update ${UPDATE_NAMES[direct.target]} to ${direct.latest}`}
+            tooltip={direct === "menu" ? rowLabel(shown) : `Update ${updateName(direct.target)} to ${direct.latest}`}
             dot={expanded || busy || finished ? null : "bg-foreground"}
             className={expanded ? FOOT_CHIP : undefined}
             onClick={(event) => {
@@ -81,7 +80,7 @@ export function UpdatesRow() {
                 <BarItem show={outdated.has("app")}>
                   <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />
                 </BarItem>
-                {CLIS.map((cli) => (
+                {PROVIDERS.map((cli) => (
                   <BarItem key={cli} show={outdated.has(cli)}>
                     <ProviderGlyph provider={cli} className="size-icon-sm mx-0.5 shrink-0" />
                   </BarItem>
@@ -123,7 +122,7 @@ export function UpdatesRow() {
  * and Codex updates available", "Updating Codex".
  */
 function rowLabel(items: readonly UpdateItem[]): string {
-  const all = items.map((item) => UPDATE_NAMES[item.target]);
+  const all = items.map((item) => updateName(item.target));
   const names =
     all.length > 1 ? `${all.slice(0, -1).join(", ")} and ${all.at(-1)}` : (all[0] ?? "");
   if (items.some((item) => item.progress.type === "updating")) return `Updating ${names}`;

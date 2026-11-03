@@ -7,7 +7,7 @@ mod process;
 use std::path::{Path, PathBuf};
 
 use crate::item::{ServerSpec, TransportSpec};
-use crate::{Agent, Catalog, Roots, Source};
+use crate::{Catalog, ProviderKind, Roots, Source};
 
 pub use migration::{Applied, ApplyError, apply};
 pub use process::{output_within, wait_within};
@@ -143,11 +143,26 @@ pub struct Unsupported(pub String);
 
 /// One agent CLI's skills, MCP servers and plugins.
 pub trait AgentAdapter: Send + Sync {
-    fn agent(&self) -> Agent;
+    fn agent(&self) -> ProviderKind;
     fn label(&self) -> &'static str;
     fn program(&self) -> &'static str;
     fn owns(&self, source: Source) -> bool;
     fn home_env(&self, roots: &Roots) -> Vec<(String, String)>;
+    /// Its home folder in `roots` (`~/.claude`, `~/.codex`).
+    fn home<'a>(&self, roots: &'a Roots) -> &'a Path;
+    /// Moves its home in `roots` to `home` (an extra account's).
+    fn at_home(&self, roots: &mut Roots, home: &Path);
+    /// It switches its plugins' servers off by their names (aliases); otherwise by plugin and
+    /// server name.
+    fn plugin_servers_by_name(&self) -> bool;
+    /// It turns skills off in its own config (`[[skills.config]] enabled = false`).
+    fn disables_skills_in_config(&self) -> bool;
+    /// What a skill Brigadier gives is invoked by when the user's own skill of that name is
+    /// there too: its overlay's namespace (`overlay:<name>`), where it has one.
+    fn overlay_namespace(&self) -> Option<&'static str>;
+    /// A server Brigadier gives that has the name of one of its own on another transport is
+    /// renamed (`<name>-brigadier`).
+    fn renames_colliding_servers(&self) -> bool;
     fn trusts(&self, catalog: &Catalog, project: &Path) -> bool;
     /// Used only to restore originals during the one-time migration.
     fn add_server(
@@ -184,12 +199,11 @@ pub fn adapters() -> [&'static dyn AgentAdapter; 2] {
     [&CLAUDE, &CODEX]
 }
 
-/// The adapter of `agent`.
-pub fn adapter(agent: Agent) -> &'static dyn AgentAdapter {
-    match agent {
-        Agent::Claude => &CLAUDE,
-        Agent::Codex => &CODEX,
-    }
+/// The adapter of `agent`; none for a CLI whose settings Brigadier doesn't read.
+pub fn adapter(agent: ProviderKind) -> Option<&'static dyn AgentAdapter> {
+    adapters()
+        .into_iter()
+        .find(|adapter| adapter.agent() == agent)
 }
 
 /// `spec` as the JSON both CLIs' server entries take: `{"type": "stdio", "command": …}`,
@@ -231,7 +245,7 @@ pub(crate) fn server_json(spec: &ServerSpec, headers_key: &str) -> serde_json::V
 }
 
 /// The agent whose own configuration `source` is.
-pub fn owner(source: Source) -> Option<Agent> {
+pub fn owner(source: Source) -> Option<ProviderKind> {
     adapters()
         .into_iter()
         .find(|adapter| adapter.owns(source))

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { appCommand, backgroundRows } from "@/app/conversation/backgroundRows";
+import { appCommand, backgroundRows, withHistory } from "@/app/conversation/backgroundRows";
 import type { Preview, PreviewState, BackgroundTask, FileEntry, WorkerRow } from "@/ipc/generated";
 
 const preview = (id: string, name: string, command: string, startedAtMs: number, state: PreviewState = { type: "running" }, extra: Partial<Preview> = {}): Preview =>
@@ -57,22 +57,45 @@ test("rows sort newest first", () => {
 
 const nativeApp = (id: string, label: string, status: BackgroundTask["status"] = "running"): BackgroundTask => ({ id, itemId: `call-${id}`, kind: "shell", label, status, startedAtMs: 10, endedAtMs: null, outputFile: null, summary: null, lastLine: null });
 
-test("proven native apps use Background once, while unknown commands and waits remain Checks", async () => {
-  const { appTaskRows, workerAppTaskRows } = await import("./backgroundRows");
-  const { checkLines } = await import("./activity/sessionTasks");
+test("every command is a Background row, the session's and its workers' (D51), ended ones too (D98); the session's background subagents are (D97), a worker's and waits and asks are not", async () => {
+  const { taskRows, workerTaskRows } = await import("./backgroundRows");
 
-  const app = nativeApp("app", "Show the website"), tests = nativeApp("tests", "pnpm dev"), unknown = nativeApp("unknown", "pnpm dev");
+  const sleep = nativeApp("sleep", "sleep 25 && echo done"), app = nativeApp("app", "Show the website"), wait = nativeApp("wait", "brigadier wait");
+  // An ask its CLI went on from: its card is its row (D177).
+  const ask = { ...nativeApp("ask", 'brigadier ask "Which colour?"'), kind: "terminal" as const };
+  const agent: BackgroundTask = { ...nativeApp("agent", "Count lines"), kind: "agent" };
   const entries: FileEntry[] = [
-    { event: { type: "command", itemId: "call-app", command: "cd '/work/site app' && PORT=5173 pnpm dev", cwd: "/work", status: "completed", exitCode: null, output: null, durationMs: null } },
-    { event: { type: "command", itemId: "call-tests", command: "pnpm test", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
+    { event: { type: "command", itemId: "call-wait", command: "brigadier wait --all", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
   ];
-  const source = [app, tests, unknown];
+  const source = [sleep, app, wait, ask, agent];
   const before = structuredClone(source);
-  assert.deepEqual(appTaskRows(source, entries, 20).map((row) => row.id), ["task:app"]);
-  assert.deepEqual(checkLines(source, entries, 20).lines.map((line) => line.id), ["tests", "unknown"]);
-  const worker = { id: "worker", background: [{ task: app, command: "next dev" }, { task: tests, command: "pnpm test" }] } as WorkerRow;
-  assert.deepEqual(workerAppTaskRows([worker], () => "Site worker", 20).map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:app", { id: "worker", name: "Site worker" }]]);
-  assert.deepEqual(appTaskRows([{ ...app, status: "completed" }], entries, 20), []);
-  assert.deepEqual(workerAppTaskRows([{ ...worker, background: [{ task: { ...app, status: "stopped" }, command: "next dev" }] }], () => "Site worker", 20), []);
+  assert.deepEqual(taskRows(source, entries).map((row) => row.id), ["task:sleep", "task:app", "task:agent"]);
+  const worker = { id: "worker", background: [{ task: sleep, command: "sleep 25" }, { task: agent, command: null }] } as WorkerRow;
+  assert.deepEqual(workerTaskRows([worker], () => "Site worker").map((row) => [row.id, row.type === "task" && row.worker]), [["task:worker:sleep", { id: "worker", name: "Site worker" }]]);
+  assert.deepEqual(taskRows([{ ...sleep, status: "completed" }], entries).map((row) => row.state), ["finished"]);
+  assert.deepEqual(workerTaskRows([{ ...worker, background: [{ task: { ...sleep, status: "stopped" }, command: "sleep 25" }] }], () => "Site worker").map((row) => row.state), ["stopped"]);
   assert.deepEqual(source, before, "native records/history stay intact");
+
+  // A job the subagent started itself is its work: one row, the subagent's (running while the
+  // job does: backgroundOf, nativeWorkers.test.ts).
+  const own = nativeApp("own", "Wait 40 seconds then print 6*7");
+  const inside: FileEntry[] = [
+    { event: { type: "command", itemId: "call-own", command: "sleep 40 && python3 -c 'print(6*7)'", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null }, parent: "call-agent" },
+  ];
+  assert.deepEqual(taskRows([agent, own], inside).map((row) => [row.id, row.state]), [["task:agent", "running"]]);
+});
+
+const shownIds = (shown: ReturnType<typeof withHistory>) => shown.map((row) => row.id);
+
+const sessionTask = (id: string, startedAtMs: number, status: BackgroundTask["status"]): ReturnType<typeof withHistory>[number] => {
+  const task = { id, itemId: id, kind: "shell", label: "Sleep 4 seconds (1 of 6)", status, startedAtMs, endedAtMs: status === "running" ? null : startedAtMs + 300, outputFile: null, summary: null, lastLine: null } as BackgroundTask;
+  return { type: "task", id: `task:${id}`, startedAtMs, task, state: status === "running" ? "running" : "stopped", worker: null };
+};
+
+test("D181: a switch to another account or CLI takes the gone CLI's ended commands off the card; its new ones stay", () => {
+  const cut = [sessionTask("a", 10, "stopped"), sessionTask("b", 20, "stopped")];
+  assert.deepEqual(shownIds(withHistory("d181", cut)), ["task:a", "task:b"], "ended rows stay (D98)");
+  // The switch landed at 30: listed or only kept, the old CLI's rows leave; one started after stays.
+  assert.deepEqual(shownIds(withHistory("d181", [...cut, sessionTask("c", 40, "completed")], 30)), ["task:c"]);
+  assert.deepEqual(shownIds(withHistory("d181", [], 30)), ["task:c"]);
 });

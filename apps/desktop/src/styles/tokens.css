@@ -661,7 +661,7 @@
   --brand-claude: oklch(0.672 0.131 38.8);
   --success: oklch(0.765 0.15 155);
   --success-foreground: oklch(0.215 0.003 var(--tint));
-  /* Blue: links inside the thread ("Continued from chat"). */
+  /* Blue: links inside the thread. */
   --link: oklch(0.618 0.127 259.6);
   /* File-type icons, by kind (the icon set's own palette). */
   --file-blue: #519aba;

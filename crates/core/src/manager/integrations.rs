@@ -9,9 +9,9 @@ use std::sync::Arc;
 #[cfg(test)]
 use brigadier_providers::McpTransport;
 use brigadier_providers::{McpServer, ProviderKind, SwitchedOff};
-use brigadier_registry::{Agent, Registry, Roots};
 #[cfg(test)]
 use brigadier_registry::{Catalog, Session, SkillRoot, Source, Transport};
+use brigadier_registry::{Registry, Roots};
 
 use super::SessionManager;
 use super::mcp_login::Clis;
@@ -21,17 +21,6 @@ use crate::{Error, Result};
 /// Brigadier's own servers' names, which a worker keeps.
 #[cfg(test)]
 pub(crate) const RESERVED: &[&str] = &[super::computer_use::SERVER_NAME];
-
-fn provider(agent: Agent) -> ProviderKind {
-    super::mcp_login::provider(agent)
-}
-
-pub(crate) fn agent(provider: ProviderKind) -> Agent {
-    match provider {
-        ProviderKind::Claude => Agent::Claude,
-        ProviderKind::Codex => Agent::Codex,
-    }
-}
 
 /// The registry for the CLIs' environment `vars`.
 pub(super) fn registry(vars: impl IntoIterator<Item = (String, String)>) -> Arc<Registry> {
@@ -87,7 +76,7 @@ pub(crate) fn naked_switched_off(
         }
         match session.agent {
             // Claude's own skills go by name, its plugins' by `<plugin>:<name>`.
-            Agent::Claude => {
+            ProviderKind::Claude => {
                 for root in skill.roots.iter().filter(|root| root.native(session)) {
                     let (list, name) = match root {
                         SkillRoot::Plugin(plugin) => {
@@ -102,7 +91,7 @@ pub(crate) fn naked_switched_off(
             }
             // Codex knows a skill by the path it found it at; both forms are given. In a
             // checkout it finds the project's skills there, not in the project's own folder.
-            Agent::Codex => {
+            _ => {
                 let in_checkout = session.project.filter(|_| session.in_checkout);
                 for dir in skill.entries.iter().map(|(_, dir)| dir).chain([&skill.dir]) {
                     let moved = in_checkout
@@ -118,7 +107,7 @@ pub(crate) fn naked_switched_off(
             }
         }
     }
-    if session.agent == Agent::Codex && !off.skill_files.is_empty() {
+    if session.agent == ProviderKind::Codex && !off.skill_files.is_empty() {
         off.codex_skill_config = catalog.codex_skill_config.clone();
     }
     off
@@ -222,7 +211,7 @@ impl SessionManager {
                     Some((name.into_string().ok()?, value.into_string().ok()?))
                 })
                 .collect(),
-            binary: Arc::new(move |agent| env.resolve(provider(agent))),
+            binary: Arc::new(move |agent| env.resolve(agent)),
         }
     }
 
@@ -410,16 +399,16 @@ mod tests {
             project: None,
             in_checkout: false,
         };
-        let lean = naked_switched_off(&catalog, &session(Agent::Claude), &[]);
+        let lean = naked_switched_off(&catalog, &session(ProviderKind::Claude), &[]);
         assert_eq!(lean.plugin_skills, ["docs:write"]);
         assert!(lean.skill_names.is_empty());
         assert_eq!(lean.servers, ["plugin_docs_server"]);
         // A server granted (D18) is given, not switched off; its plugin's skill still goes.
         let granted = vec!["plugin_docs_server".to_owned()];
-        let lean = naked_switched_off(&catalog, &session(Agent::Claude), &granted);
+        let lean = naked_switched_off(&catalog, &session(ProviderKind::Claude), &granted);
         assert_eq!(lean.plugin_skills, ["docs:write"]);
         assert!(lean.servers.is_empty(), "{lean:?}");
-        let given = granted_servers(&catalog, &session(Agent::Claude), &granted).unwrap();
+        let given = granted_servers(&catalog, &session(ProviderKind::Claude), &granted).unwrap();
         assert_eq!(given.len(), 1);
         assert_eq!(given[0].name, "plugin_docs_server");
         assert!(matches!(
@@ -427,11 +416,11 @@ mod tests {
             McpTransport::Stdio { command, .. } if command == &PathBuf::from("s")
         ));
         // By its own name too; another agent's server, or none, is refused.
-        let by_name = granted_servers(&catalog, &session(Agent::Claude), &["server".into()]);
+        let by_name = granted_servers(&catalog, &session(ProviderKind::Claude), &["server".into()]);
         assert_eq!(by_name.unwrap()[0].name, "plugin_docs_server");
-        let other = granted_servers(&catalog, &session(Agent::Claude), &["calc".into()]);
+        let other = granted_servers(&catalog, &session(ProviderKind::Claude), &["calc".into()]);
         assert!(other.unwrap_err().contains("`brigadier context mcps`"));
-        let lean = naked_switched_off(&catalog, &session(Agent::Codex), &[]);
+        let lean = naked_switched_off(&catalog, &session(ProviderKind::Codex), &[]);
         assert_eq!(
             lean.plugin_servers,
             [("sheets@openai".to_owned(), "calc".to_owned())]

@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use brigadier_providers::claude::Claude;
-use brigadier_providers::codex::Codex;
-use brigadier_providers::{Provider, ProviderKind, ProviderStatus, QuotaSnapshot};
+use brigadier_providers::adapters;
+use brigadier_providers::{KindFacts as _, Provider, ProviderKind, ProviderStatus, QuotaSnapshot};
 use brigadier_store::Retention;
 
 use super::{Runtime, new_event};
@@ -48,7 +47,7 @@ impl Runtime {
     /// The adapter `account` runs on. A removed account has none.
     pub fn provider_for(&self, account: &AccountRef) -> Result<Arc<dyn Provider>> {
         match &account.account {
-            None => Ok(self.provider(account.provider)),
+            None => self.registered(account.provider),
             Some(id) if self.is_removing(id) => Err(Error::Invalid(
                 "that account is being removed in Settings → Providers".into(),
             )),
@@ -74,8 +73,7 @@ impl Runtime {
     /// Where each CLI keeps its files: its main home, which holds the history every account
     /// shares, and each home with state of its own (the main home and every extra account's).
     pub fn agent_homes(&self) -> Vec<crate::manager::disk::AgentHome> {
-        ProviderKind::ALL
-            .into_iter()
+        adapters::kinds()
             .filter_map(|kind| {
                 let main = brigadier_providers::accounts::main_home(kind, &self.env)?;
                 let mut homes = vec![main.clone()];
@@ -157,7 +155,24 @@ impl Runtime {
                 Some(entry.id.clone()),
             )));
         }
+        // Development builds only (goal 1 proof, D80): with `BRIGADIER_FAKE_ACCOUNTS` set, an
+        // extra account is the computer's own login under another id, so a switch between two
+        // accounts is shown with no second sign-in and no login copied. It makes no home of its
+        // own, so removing it signs nothing out.
+        #[cfg(debug_assertions)]
+        if std::env::var_os("BRIGADIER_FAKE_ACCOUNTS").is_some() {
+            return self.registered(entry.provider);
+        }
         let home = self.account_home(&entry.id);
+        let for_account = adapters::adapter(entry.provider)
+            .and_then(|adapter| adapter.home)
+            .map(|facts| facts.for_account)
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "{} takes no extra accounts",
+                    entry.provider.label()
+                ))
+            })?;
         let main = brigadier_providers::accounts::main_home(entry.provider, &self.env)
             .ok_or_else(|| Error::Invalid("no home folder for the CLI's own files".into()))?;
         let (kind, made) = (entry.provider, home.clone());
@@ -167,14 +182,7 @@ impl Runtime {
         .await
         .map_err(|err| Error::Invalid(err.to_string()))?
         .map_err(|err| Error::Invalid(format!("setting up the account's folder: {err}")))?;
-        Ok(match entry.provider {
-            ProviderKind::Claude => {
-                Arc::new(Claude::for_account(self.platform.clone(), &self.env, &home))
-            }
-            ProviderKind::Codex => {
-                Arc::new(Codex::for_account(self.platform.clone(), &self.env, &home))
-            }
-        })
+        Ok(for_account(self.platform.clone(), &self.env, &home))
     }
 
     /// Checks an extra account in the background: its login, then its quota (a read that
@@ -225,6 +233,12 @@ impl Runtime {
             return false;
         };
         let status = provider.status().await;
+        #[cfg(debug_assertions)]
+        let status = if std::env::var_os("BRIGADIER_FAKE_ACCOUNTS").is_some() {
+            fake_login(status, id)
+        } else {
+            status
+        };
         let mut error = None;
         if status.logged_in {
             match provider.quota().await {
@@ -387,12 +401,35 @@ impl Runtime {
         }
     }
 
-    /// Where work on `from` goes on when `from` hit its limit: another account of the same
-    /// provider that can take it (with switching off, the one picked with Use first), so it
-    /// stays on its provider while one of its accounts has room (#505).
-    pub fn switch_target(&self, from: &AccountRef, model: Option<&str>) -> Option<AccountRef> {
+    /// [`Self::account_candidates`] that can resume session `native_id` there, as their CLI
+    /// says ([`brigadier_providers::Provider::resumes`]).
+    pub fn resume_candidates(
+        &self,
+        provider: ProviderKind,
+        native_id: Option<&str>,
+    ) -> Vec<Candidate> {
+        let mut candidates = self.account_candidates(provider);
+        if let Some(id) = native_id {
+            candidates.retain(|candidate| {
+                self.provider_for(&candidate.account)
+                    .map_or(true, |provider| provider.resumes(id))
+            });
+        }
+        candidates
+    }
+
+    /// Where work on `from` (in session `native_id`, when it goes on in it) goes on when `from`
+    /// hit its limit: another account of the same provider that can take it (with switching
+    /// off, the one picked with Use first), so it stays on its provider while one of its
+    /// accounts has room (#505).
+    pub fn switch_target(
+        &self,
+        from: &AccountRef,
+        model: Option<&str>,
+        native_id: Option<&str>,
+    ) -> Option<AccountRef> {
         let settings = self.core.settings();
-        let mut candidates = self.account_candidates(from.provider);
+        let mut candidates = self.resume_candidates(from.provider, native_id);
         if model.is_none() {
             // The CLI's own default model, unnamed here: a model's window that is used up on
             // `from` may be what stopped it, so an account with that window used up as well
@@ -454,7 +491,7 @@ impl Runtime {
     /// (Settings → Accounts then marks another account in use).
     pub(super) async fn update_leads(&self) -> bool {
         let mut moved = false;
-        for kind in ProviderKind::ALL {
+        for kind in adapters::kinds() {
             let lead = self.launch_account(kind, None);
             let changed = self.monitor.set_lead(lead.clone());
             moved |= changed;
@@ -493,7 +530,7 @@ impl Runtime {
         let now = now_ms();
         let settings = self.core.settings();
         let mut accounts = Vec::new();
-        for kind in ProviderKind::ALL {
+        for kind in adapters::kinds() {
             let own = AccountRef::own(kind);
             let lead = self.monitor.lead(kind);
             let order =
@@ -684,7 +721,8 @@ impl Runtime {
             return Ok(());
         }
         let home = self.account_home(&entry.id);
-        if !home.is_dir() {
+        let args = sign_out_args(entry.provider);
+        if !home.is_dir() || args.is_empty() {
             return Ok(());
         }
         let program = self.env.resolve(entry.provider).ok_or_else(|| {
@@ -693,7 +731,7 @@ impl Runtime {
         let env = self.env.for_account(entry.provider, &home);
         let mut command = tokio::process::Command::new(program);
         command
-            .args(sign_out_args(entry.provider))
+            .args(args)
             .env_clear()
             .envs(env.vars())
             .current_dir(&home)
@@ -712,6 +750,19 @@ impl Runtime {
                 "signing out failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )))
+        }
+    }
+
+    /// Before extra account `id`'s home goes: its CLI keeps what only that home holds of its
+    /// sessions (D111).
+    pub async fn keep_account_sessions(&self, id: &str) -> Result<()> {
+        let provider = self.accounts().get(id).map(|live| live.provider.clone());
+        match provider {
+            Some(provider) => provider
+                .keep_sessions()
+                .await
+                .map_err(|err| Error::Invalid(format!("couldn't keep the account's chats: {err}"))),
+            None => Ok(()),
         }
     }
 
@@ -762,18 +813,21 @@ impl Drop for RemovingAccount {
 /// The CLI's own sign-out (`claude auth logout`, `codex logout`; both in the installed CLIs'
 /// `--help`).
 fn sign_out_args(kind: ProviderKind) -> &'static [&'static str] {
-    match kind {
-        ProviderKind::Claude => &["auth", "logout"],
-        ProviderKind::Codex => &["logout"],
-    }
+    adapters::adapter(kind).map_or(&[], |adapter| adapter.sign_out)
 }
 
 /// The CLI's own sign-in (`claude auth login`, `codex login`).
 pub fn sign_in_args(kind: ProviderKind) -> &'static [&'static str] {
-    match kind {
-        ProviderKind::Claude => &["auth", "login"],
-        ProviderKind::Codex => &["login"],
-    }
+    adapters::adapter(kind).map_or(&[], |adapter| adapter.sign_in)
+}
+
+/// Development builds only (D80): a fake account is the computer's own login under another
+/// id, so its status is told apart from the own login's; else Settings shows the two as one
+/// account (the same login added again is one row there) and the own login goes missing.
+#[cfg(debug_assertions)]
+fn fake_login(mut status: ProviderStatus, id: &str) -> ProviderStatus {
+    status.organization = Some(format!("fake account {id}"));
+    status
 }
 
 // Use only the provider identity already observed by the runtime. No credential/profile read.
@@ -800,5 +854,25 @@ mod label_tests {
     fn an_unknown_own_identity_stays_generic() {
         assert_eq!(own_login_label(None), "this computer's login");
         assert_eq!(own_login_label(Some("  ")), "this computer's login");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_fake_account_is_not_the_own_login() {
+        let own = brigadier_providers::ProviderStatus {
+            provider: brigadier_providers::ProviderKind::Claude,
+            path: None,
+            version: None,
+            logged_in: true,
+            auth_method: None,
+            plan: None,
+            email: Some("me@example.com".into()),
+            organization: Some("Mine".into()),
+            guidance: None,
+            compacts: false,
+        };
+        let fake = super::fake_login(own.clone(), "second");
+        assert_eq!(fake.email, own.email);
+        assert_ne!(fake.organization, own.organization);
     }
 }

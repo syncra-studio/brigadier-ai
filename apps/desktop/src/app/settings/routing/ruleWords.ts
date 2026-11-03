@@ -1,7 +1,8 @@
 import { shortPlaceName, workName, type WorkRow } from "@/app/settings/routing/words";
 import { effortLabel, findModel, type ModelGroup } from "@/components/shared/model-selector";
 import type { GuidanceRow, ModelChoice, ModelInfo, ModelRule, OverrideTarget, ProviderKind } from "@/ipc/generated";
-import { joinWords, VENDOR_LABELS } from "@/lib/routing";
+import { joinWords } from "@/lib/routing";
+import { cliFacts } from "@/lib/providerKinds";
 
 /*
  * The Rules card's words and sums: a rule's title and line, the rules a draft makes, what a
@@ -96,7 +97,7 @@ export function ruleTitle(rule: ModelRule, names: Names): string {
     }
     case "allow": {
       const models = joinWords(rule.names.map((name) => names.pattern(rule.agent, name)), "or");
-      return `Only use ${models}${rule.agent ? ` on ${VENDOR_LABELS[rule.agent]}` : ""}${scope}`;
+      return `Only use ${models}${rule.agent ? ` on ${cliFacts(rule.agent).vendor}` : ""}${scope}`;
     }
     case "effortCeiling":
       return `Never go above ${effortLabel(rule.effort)} effort${scope}`;
@@ -109,7 +110,7 @@ export function ruleTitle(rule: ModelRule, names: Names): string {
  */
 export function ruleLine(rule: ModelRule): string {
   const scope = rule.work ? `${workName(rule.work)} only` : "Everywhere";
-  const vendor = rule.type === "allow" && rule.agent ? `${VENDOR_LABELS[rule.agent]} ` : "";
+  const vendor = rule.type === "allow" && rule.agent ? `${cliFacts(rule.agent).vendor} ` : "";
   const who = rule.work ? `Its ${vendor}workers` : vendor ? `${vendor}chats, sessions and workers` : "Chats, sessions and workers";
   switch (rule.type) {
     case "forbid":
@@ -314,7 +315,7 @@ export function previewDraft(
   if (!target) return null;
   const name = draftName(target);
   const model = names.target(target);
-  const vendor = VENDOR_LABELS[target.provider];
+  const vendor = cliFacts(target.provider).vendor;
   if (draft.effect === "only") {
     // Never rules win: Only of a model a Never rule keeps out leaves no model of the agent.
     const never = rules.find((rule) => rule.type === "forbid" && holdsFor(rule, draft.work) && named(rule.names, [name]));

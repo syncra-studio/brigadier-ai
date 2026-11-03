@@ -1,16 +1,33 @@
 import { useEffect, useState } from "react";
 
 import type { BlockState } from "@/app/conversation/blocks";
+import type { Question } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 
-/** Now, ticking each second while `live`. */
+/** One clock for every live time on screen, so two of the same work read the same (D94). */
+const ticks = new Set<(now: number) => void>();
+let latest = Date.now();
+let timer = 0;
+function onTick(tick: (now: number) => void): () => void {
+  if (ticks.size === 0) {
+    latest = Date.now();
+    timer = window.setInterval(() => {
+      latest = Date.now();
+      for (const each of ticks) each(latest);
+    }, 1000);
+  }
+  ticks.add(tick);
+  tick(latest);
+  return () => {
+    ticks.delete(tick);
+    if (ticks.size === 0) window.clearInterval(timer);
+  };
+}
+
+/** Now, ticking each second while `live`, on the clock all live times share. */
 export function useTicking(live: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!live) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [live]);
+  const [now, setNow] = useState(() => (ticks.size > 0 ? latest : Date.now()));
+  useEffect(() => (live ? onTick(setNow) : undefined), [live]);
   return now;
 }
 
@@ -30,15 +47,28 @@ export function commandsWaitWords(commands: number): string {
   return commands === 1 ? "Waiting for a command" : `Waiting for ${commands} commands`;
 }
 
+/** How long a block's question cards waited for the user's answers: in all, and the open one so far (0 when none is open). */
+export type CardWait = { total: number; open: number };
+
+export function cardWait(questions: readonly Pick<Question, "createdAtMs" | "answer" | "answeredAtMs">[], now: number): CardWait {
+  let total = 0;
+  let open = 0;
+  for (const question of questions) {
+    // Answered with no time kept (older records): its wait is unknown, left out.
+    const until = question.answeredAtMs ?? (question.answer === null ? now : null);
+    if (until === null) continue;
+    total += Math.max(0, until - question.createdAtMs);
+    if (question.answer === null && question.answeredAtMs === null) open = Math.max(open, now - question.createdAtMs);
+  }
+  return { total, open };
+}
+
 /**
- * A turn's header: how long it worked, and how it ended. `workers`, `commands`: a turn over
- * whose workers still work, or whose background commands still run, says it waits for them,
- * and for how long; its workers first.
+ * A turn's header: how long it worked, and how it ended. What a live turn waits on is its live
+ * line's to say, once (`useThreadStatusHead`); the header only keeps the time.
  */
-export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false, workers = 0, commands = 0): string {
+export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false, waited: CardWait | null = null): string {
   const time = formatDuration(elapsed);
-  if (workers > 0) return `${workersWaitWords(workers)} · ${time}`;
-  if (commands > 0) return `${commandsWaitWords(commands)} · ${time}`;
   switch (state) {
     case "working": {
       if (quota) return `Waiting for quota · ${time}`;
@@ -46,8 +76,12 @@ export function headerLabel(state: BlockState, elapsed: number, quota = false, i
     }
     case "waiting":
       if (quota) return `Waiting for quota · ${time}`;
+      // Its own question card waits for the user's answer (D161).
+      if (waited?.open) return `Waiting for ${formatDuration(waited.open)}`;
       return `Waiting for you · ${time}`;
     case "done":
+      // The time it waited on its question cards isn't work (D155, D161).
+      if (waited && waited.total >= 1000) return `Worked for ${formatDuration(Math.max(0, elapsed - waited.total))} · waited for ${formatDuration(waited.total)}`;
       return `Worked for ${time}`;
     case "stopped":
       return `You stopped after ${time}`;

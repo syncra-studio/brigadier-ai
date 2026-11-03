@@ -1,4 +1,3 @@
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { type ProviderTransition, transitionAccountLabel } from "@/app/conversation/providerTransitions";
 import { LabeledDivider } from "@/components/shared";
 import { Info } from "@/components/icons";
@@ -6,18 +5,19 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { formatDateTime } from "@/lib/format";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { useBoard } from "@/state/board";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** Completed recovery, from provider acceptance; never a speculative picker selection. */
-export function ProviderTransitionDivider({ transition }: { transition: ProviderTransition }) {
+export function ProviderTransitionDivider({ transition, own = false }: { transition: ProviderTransition; /** In the worker's own panel: no name before it. */ own?: boolean }) {
   const groups = useModelGroups();
-  const worker = useBoard((s) => transition.taskId ? s.board?.tasks[transition.taskId]?.title ?? "Worker" : null);
+  const worker = useBoard((s) => transition.taskId && !own ? s.board?.tasks[transition.taskId]?.title ?? "Worker" : null);
   const action = transition.cause === "automaticFallback" ? "Switched automatically to"
     : transition.cause === "manualSwitch" ? "Switched to" : "Usage available · Resumed on";
   const label = transitionAccountLabel(transition);
   return (
     <LabeledDivider data-slot="provider-transition" data-transition-id={transition.id} role="status">
       <span className="min-w-0 max-w-full text-center wrap-break-word">
-        {worker && `${worker} · `}{action} {PROVIDER_LABELS[transition.to.provider]}
+        {worker && `${worker} · `}{action} {cliFacts(transition.to.provider).label}
         {` · ${modelName(groups, transition.to)}`}
         {label && ` · ${label}`}
       </span>
@@ -28,7 +28,7 @@ export function ProviderTransitionDivider({ transition }: { transition: Provider
           </button>
         </TooltipTrigger>
         <TooltipContent className="flex-col items-start gap-0.5">
-          <span>Provider: {PROVIDER_LABELS[transition.account.provider]}</span>
+          <span>Provider: {cliFacts(transition.account.provider).label}</span>
           <span>Account: {transition.account.account ?? "Own account"}</span>
           {label && <span>Name: {label}</span>}
           <span>Started: {formatDateTime(transition.startedAtMs)}</span>

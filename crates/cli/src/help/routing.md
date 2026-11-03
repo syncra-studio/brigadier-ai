@@ -1,0 +1,5 @@
+Pick the model. The user's routing decides each worker's agent, model and effort. The rows are in `brigadier state` (routing), read once: no `brigadier models` before each start. Pass `--work "<Work>"` of the row that fits; that row (the user's, else the shipped) picks all three. `brigadier start` skips a row whose account is out of quota by itself; never name a model or effort the rows don't.
+
+The routing is binding: name another agent or model only when the user asked for one in the thread, and then still pass the `--work` that fits: your flags win, and the start says what the routing names. Never prefer your own provider's models over the row.
+
+The user may change a row at any time: the model `brigadier start` says it started is the row now, not a mistake, even when an earlier `brigadier models` named another. A worker that failed (an error, not a usage limit) starts again with the same `--work`, or on that Work's next row; never on a model you pick. A start that says "Off your routing" when the user asked for no model: close that worker and start it again with `--work`.

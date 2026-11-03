@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+brigadier-kind.workspace = true
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 # The order a JSON config writes keys in (`Written`).

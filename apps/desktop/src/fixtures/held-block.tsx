@@ -55,6 +55,8 @@ let view: ThreadView = {
   entries,
   turns,
   workers: [worker("aa11bb22", "First bug", 1_000, false), worker("cc33dd44", "Second bug", 61_000, false)],
+  // The core's work block: open from the first turn while the workers work (D163).
+  block: { startedAtMs: at(100) },
 };
 
 const conversation = {
@@ -103,7 +105,17 @@ function seen() {
   return {
     blocks: blocks.length,
     headers: blocks.map((block) => block.querySelector('[data-slot="request-work-label"]')?.textContent ?? null),
+    // Every line of the block that says what it waits for: the header's, the live line's.
+    waits: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-work-label"], [data-slot="thread-status"], [data-slot="group-live-line"]')]
+      .map((line) => line.textContent ?? "").filter((text) => text.startsWith("Waiting"))),
     steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*(?:Yesterday|\d).*$/, "").trim() ?? "")),
+    // The gap over each block's live line, from what shows above it (demo12: one gap everywhere).
+    gaps: blocks.flatMap((block) => {
+      const line = block.querySelector('[data-slot="thread-status"]');
+      let above = line?.closest('[data-slot="trailing-line"]')?.previousElementSibling ?? null;
+      while (above && above.getBoundingClientRect().height === 0) above = above.previousElementSibling;
+      return line && above ? [Math.round(line.getBoundingClientRect().top - above.getBoundingClientRect().bottom)] : [];
+    }),
   };
 }
 
@@ -140,6 +152,7 @@ async function drive() {
     entries: [...view.entries, news("n2", "cc33dd44", 300_000), said("a5", "assistant", "Both bugs are fixed.", 301_000)],
     turns: [...view.turns, turn("n2", 300_000, 302_000, [])],
     workers: [worker("aa11bb22", "First bug", 1_000, true), worker("cc33dd44", "Second bug", 61_000, true)],
+    block: { startedAtMs: at(100), endedAtMs: at(302_000) },
   });
   await pause();
   const done = seen();

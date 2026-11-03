@@ -28,6 +28,10 @@ lastEnd: TurnEnd | null,
  */
 gone: boolean, 
 /**
+ * Its session paused it (D7), until it resumes it.
+ */
+paused?: boolean, 
+/**
  * When its CLI last said anything.
  */
 lastEventAtMs: number | null, 

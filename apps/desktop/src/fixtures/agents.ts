@@ -62,6 +62,13 @@ export const OVERVIEWS: ProviderOverview[] = [
   ]),
 ];
 
+/** OpenCode not on this computer, for the pages that list every CLI (Providers, onboarding). */
+export const OPENCODE_MISSING: ProviderOverview = {
+  ...overview("opencode", []),
+  status: status("opencode", { path: null, version: null, loggedIn: false, authMethod: null, plan: null }),
+  models: null,
+};
+
 export function window(id: string, label: string, usedPercent: number, fields: Partial<QuotaWindow> = {}): QuotaWindow {
   return { id, label, usedPercent, resetsAtMs: null, windowMinutes: null, bucket: null, model: null, ...fields };
 }

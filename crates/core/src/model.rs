@@ -130,7 +130,25 @@ impl Project {
 #[serde(rename_all = "camelCase")]
 pub struct FolderTrustReport {
     pub project: Project,
-    pub failures: Vec<String>,
+    pub failures: Vec<TrustFailure>,
+}
+
+/// Something answering "Do you trust this folder?" couldn't write: in one CLI's settings
+/// (`provider`), or with none to name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustFailure {
+    pub provider: Option<ProviderKind>,
+    pub reason: String,
+}
+
+impl TrustFailure {
+    pub(crate) fn of(reason: String) -> Self {
+        Self {
+            provider: None,
+            reason,
+        }
+    }
 }
 
 /// The user's answer for one folder. Trusted: agents work there as the session's permission
@@ -272,6 +290,9 @@ pub enum EnvironmentRequest {
         /// The session branch's name. Absent: Brigadier names it (`brigadier/<session>/session`).
         branch: Option<String>,
     },
+    /// Work in an existing worktree of the repository, on the branch it has checked out (goal 9,
+    /// D130), beside any session already there. `path` is checked against `git worktree list`.
+    Existing { path: String },
 }
 
 /// A session's environment once set up.
@@ -300,8 +321,8 @@ pub enum Environment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ForkPlace {
-    /// In the user's checkout, on a new branch from the fork's point: only for a session
-    /// working there; one in its own worktree forks into a new worktree (#648).
+    /// In the source's folder: in the user's checkout, on a new branch from the fork's point;
+    /// in a session's worktree, on that worktree's branch beside it (D188).
     Workspace,
     /// In a worktree of its own, on a new branch from the fork's point.
     NewWorktree,
@@ -436,6 +457,14 @@ impl Setup {
                         path: None,
                         start: None,
                     },
+                    // Its branch and merge target are filled in when it is created
+                    // (`SessionManager::existing_place`).
+                    EnvironmentRequest::Existing { path } => Environment::NewWorktree {
+                        base: String::new(),
+                        branch: String::new(),
+                        path: Some(path),
+                        start: None,
+                    },
                 },
                 permission,
                 orchestrator,
@@ -506,7 +535,7 @@ pub struct Conversation {
     pub setup: Option<Setup>,
     #[serde(default)]
     pub lifecycle: Lifecycle,
-    /// Set for a fork: where it continues from ("Continued from chat").
+    /// Set for a fork: where it continues from ("Forked from ‹source›").
     #[serde(default)]
     pub forked_from: Option<ForkOrigin>,
     /// Set for a side chat: the conversation it sits beside, whose latest messages go along
@@ -877,7 +906,7 @@ pub enum LinkTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    /// Permission level for new sessions without an explicit choice.
+    /// Permission level for new sessions without an explicit choice: Full access (D144).
     pub default_permission: PermissionLevel,
     /// Orchestrator model for projects that have not remembered one. Absent: the first
     /// logged-in provider's default model.
@@ -894,7 +923,7 @@ pub struct Settings {
     /// A notice above the composer while a conversation is in Full access.
     pub show_full_access_notice: bool,
     /// How many workers one session may run at the same time (Settings › Configuration ›
-    /// Workers). Advice the brigade skill reads through `brigadier models`; `brigadier start`
+    /// Workers). Advice the orchestrator reads through `brigadier models`; `brigadier start`
     /// refuses no further worker (G18).
     pub workers_at_once: u32,
     /// "Plan before building" (Settings › Configuration › Workers). Experiment (harness D42),
@@ -1165,7 +1194,7 @@ impl Settings {
 
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
-pub const SETTINGS_VERSION: u32 = 7;
+pub const SETTINGS_VERSION: u32 = 8;
 
 /// A model named by its CLI's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -1178,7 +1207,7 @@ pub struct ModelRef {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            default_permission: PermissionLevel::AcceptEdits,
+            default_permission: PermissionLevel::Full,
             default_orchestrator: None,
             default_chat_model: None,
             hibernate_after_minutes: 30,
@@ -1394,6 +1423,10 @@ pub struct ConversationView {
     /// in the order they happened.
     #[serde(default)]
     pub machine_steps: Vec<MachineStep>,
+    /// Every step of starting a new session's turns (its worktree, its setup script, its CLI),
+    /// in the order they happened.
+    #[serde(default)]
+    pub start_steps: Vec<crate::work::StartStepRecord>,
     #[serde(default)]
     pub thinking: Vec<ThinkingSegment>,
     /// Every compaction of a Chat's context, in the order they happened.
@@ -1404,6 +1437,10 @@ pub struct ConversationView {
     pub run: RunState,
     /// The request the running turn serves.
     pub run_request: Option<String>,
+    /// Where its CLI last began starting in the stream (a launch, or a relaunch at a switch):
+    /// a start step from it on is this start's.
+    #[serde(default)]
+    pub run_since: i64,
     /// The last message of the branch the thread shows (the newest message until the user
     /// edits, regenerates or switches branches).
     pub head: Option<String>,
@@ -1448,6 +1485,9 @@ pub struct BranchInfo {
     pub commit: String,
     /// The worktree that has it checked out (the user's checkout or another), if any.
     pub checked_out_at: Option<String>,
+    /// A running worker works on it (its task branch), so no session is started there.
+    #[serde(default)]
+    pub worker: bool,
 }
 
 /// A repository's state, for the composer.
@@ -1636,13 +1676,39 @@ pub struct ProviderOverview {
     pub checked_at_ms: Option<i64>,
 }
 
-/// What can be updated: Brigadier itself or an agent CLI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
+/// What can be updated: Brigadier itself or an agent CLI. On the wire `"app"` or the CLI's id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TS)]
+#[ts(untagged)]
 pub enum UpdateTarget {
+    #[ts(type = "\"app\"")]
     App,
-    Claude,
-    Codex,
+    Provider(ProviderKind),
+}
+
+impl Serialize for UpdateTarget {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::App => serializer.serialize_str("app"),
+            Self::Provider(kind) => kind.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for UpdateTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let id = std::borrow::Cow::<str>::deserialize(deserializer)?;
+        if id == "app" {
+            return Ok(Self::App);
+        }
+        id.parse()
+            .map(Self::Provider)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// What the Update button does.
@@ -2276,6 +2342,10 @@ pub enum DomainEvent {
         /// The request the turn serves.
         #[serde(default)]
         request_id: Option<String>,
+        /// The start step reached (`Starting` only); with `error`, the step that failed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        step: Option<crate::work::StartStep>,
     },
     /// A user request started, or its state changed (full snapshot).
     RequestUpdated {
@@ -2743,9 +2813,9 @@ pub mod streams {
 
     /// Whether the clients' live feed carries `stream`'s events: not the engine's own records,
     /// which are no domain events (a request's change records and pending changes, the
-    /// thread's inbox), #189.
+    /// thread's inbox, its turn snapshots' numbers), #189.
     pub fn on_live_feed(stream: &str) -> bool {
-        !["changes:", "pending:", "inbox:"]
+        !["changes:", "pending:", "inbox:", "snapshot:", "snapshots:"]
             .iter()
             .any(|internal| stream.starts_with(internal))
     }
@@ -2896,9 +2966,9 @@ mod tests {
     }
 
     #[test]
-    fn levels_start_at_accept_edits_and_old_saved_levels_are_dropped() {
+    fn new_sessions_start_at_full_access_and_old_saved_levels_are_dropped() {
         let fresh = Settings::default();
-        assert_eq!(fresh.default_permission, PermissionLevel::AcceptEdits);
+        assert_eq!(fresh.default_permission, PermissionLevel::Full);
         for permission in [
             PermissionLevel::Ask,
             PermissionLevel::AcceptEdits,
@@ -2939,7 +3009,7 @@ mod tests {
             assert_eq!(permission, PermissionLevel::AcceptEdits, "{old}");
         }
         let legacy: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(legacy.default_permission, PermissionLevel::AcceptEdits);
+        assert_eq!(legacy.default_permission, PermissionLevel::Full);
     }
 
     #[test]
@@ -3035,5 +3105,14 @@ mod skill_mention_tests {
             serde_json::json!({"type":"skill","rowId":"skill:review:hash"})
         );
         assert_eq!(serde_json::from_value::<Mention>(value).unwrap(), mention);
+    }
+
+    /// A turn snapshot's number is the engine's own record: a client that took it for a domain
+    /// event dropped the rest of its batch, a turn's end among it.
+    #[test]
+    fn turn_snapshot_numbers_stay_off_the_live_feed() {
+        assert!(!crate::model::streams::on_live_feed("snapshots:c1"));
+        assert!(!crate::model::streams::on_live_feed("snapshot:c1:r1"));
+        assert!(crate::model::streams::on_live_feed("conversation:c1"));
     }
 }

@@ -10,7 +10,6 @@ mod model;
 pub mod ops;
 pub mod resolve;
 use brigadier_providers::ProviderKind;
-use brigadier_registry::Agent;
 use brigadier_registry::library::Library;
 pub use model::{CatalogDefinition, CatalogRow, CatalogSignIn, CatalogView};
 use serde::{Deserialize, Serialize};
@@ -79,13 +78,6 @@ pub enum PluginSkillSave {
     /// The file changed since it was opened (`expected` no longer matches): nothing was
     /// written. `current` is its text now.
     ChangedSinceOpened { current: String },
-}
-
-pub(crate) fn provider(agent: Agent) -> ProviderKind {
-    match agent {
-        Agent::Claude => ProviderKind::Claude,
-        Agent::Codex => ProviderKind::Codex,
-    }
 }
 
 pub(crate) fn trusted_repos(projects: &[crate::model::Project]) -> Vec<(String, String, PathBuf)> {

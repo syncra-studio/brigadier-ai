@@ -28,8 +28,14 @@ import { cn } from "@/lib/utils";
  * it first, and ⌥↑ past the oldest one loaded loads older pages until there is one.
  */
 
-/** A user message the rail marks: its row's id and its text. */
-export type RailEntry = { id: string; text: string };
+/**
+ * A user message the rail marks: its id, its text, and the thread row that holds it (its own, or
+ * the block's it was steered into).
+ */
+export type RailEntry = { id: string; text: string; row: string };
+
+/** The messages the user steered into a turn's block, as the block's message carries them. */
+type Steers = readonly { text: string; requestId?: string; peer?: unknown }[];
 
 /**
  * The thread's history, as the conversation tells it: the message it is asked to show, and the
@@ -115,16 +121,29 @@ function useUserEntries(): readonly RailEntry[] {
   return useThreadList((s) => {
     const next: RailEntry[] = [];
     for (const message of s.messages) {
-      if (message.role !== "user") continue;
-      let entry = entryOf.get(message);
-      if (!entry) {
-        entry = { id: message.id, text: plain(textOf(message)).slice(0, 200) };
-        entryOf.set(message, entry);
+      if (message.role === "user") {
+        let entry = entryOf.get(message);
+        if (!entry) {
+          entry = { id: message.id, text: plain(textOf(message)).slice(0, 200), row: message.id };
+          entryOf.set(message, entry);
+        }
+        next.push(entry);
+        continue;
       }
-      next.push(entry);
+      // The user's follow-ups a block took in are theirs too (another session's are not).
+      const steers = (message.metadata?.custom as { block?: { steers?: Steers } } | undefined)?.block?.steers ?? [];
+      for (const steer of steers) {
+        if (!steer.requestId || steer.peer) continue;
+        let entry = entryOf.get(steer);
+        if (!entry) {
+          entry = { id: steer.requestId, text: plain(steer.text).slice(0, 200), row: message.id };
+          entryOf.set(steer, entry);
+        }
+        next.push(entry);
+      }
     }
     const before = last.current;
-    if (before.length === next.length && before.every((entry, index) => entry.id === next[index]?.id && entry.text === next[index]?.text)) return before;
+    if (before.length === next.length && before.every((entry, index) => entry.id === next[index]?.id && entry.text === next[index]?.text && entry.row === next[index]?.row)) return before;
     last.current = next;
     return next;
   });
@@ -143,8 +162,13 @@ function answerAfter(s: ThreadListState, id: string): string {
   return plain(parts.join(" "));
 }
 
+/** The user's messages mounted, in the thread's order: their own rows and those steered into blocks. */
 function userRows(viewport: HTMLElement): HTMLElement[] {
-  return [...viewport.querySelectorAll<HTMLElement>('[data-slot="aui_message-group"] > [data-thread-row] > [data-role="user"][data-message-id]')];
+  return [
+    ...viewport.querySelectorAll<HTMLElement>(
+      '[data-slot="aui_message-group"] > [data-thread-row] > [data-role="user"][data-message-id], [data-slot="aui_message-group"] > [data-thread-row] [data-slot="request-steer"][data-message-id]',
+    ),
+  ];
 }
 
 /**
@@ -278,7 +302,8 @@ export const MessageRail: FC<{ viewport: HTMLDivElement | null; scroller: Thread
       let row = rowOf(viewport, id);
       if (!row) {
         // Drawn now, so a scrub lands at once: in its place among what isn't mounted around it.
-        flushSync(() => scroller.mount("jump", id));
+        const holder = entriesRef.current.find((entry) => entry.id === id)?.row ?? id;
+        flushSync(() => scroller.mount("jump", holder));
         row = rowOf(viewport, id) ?? (await stillRow(viewport, id, live));
         if (!row || !live()) return;
         scroller.release();

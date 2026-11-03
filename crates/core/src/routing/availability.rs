@@ -11,7 +11,7 @@
 use brigadier_providers::ProviderKind;
 use brigadier_router::{OverrideEffect, OverrideTarget};
 
-use crate::model::{ModelChoice, ModelRef, SETTINGS_VERSION, Settings};
+use crate::model::{ModelChoice, ModelRef, PermissionLevel, SETTINGS_VERSION, Settings};
 
 /// The agent isn't switched off.
 pub fn provider_on(settings: &Settings, provider: ProviderKind) -> bool {
@@ -129,6 +129,10 @@ pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
 /// every agent: off, every agent's work stays on its default account.
 ///
 /// Version 7: remove the skill switches saved by the reverted version 6 catalog.
+///
+/// Version 8: new sessions start at Full access (D144). Settings save every field, so a saved
+/// Accept edits (the old default) can't tell a choice from the untouched default: it moves to
+/// Full access once; Ask stays, and any level picked after this version is kept.
 pub fn migrate(settings: &Settings) -> Option<Settings> {
     if settings.settings_version >= SETTINGS_VERSION {
         return None;
@@ -149,11 +153,15 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
         }
     }
     if settings.settings_version < 4 && !settings.legacy_switch_accounts {
-        for provider in ProviderKind::ALL {
+        for provider in brigadier_providers::adapters::kinds() {
             if !next.manual_accounts.contains(&provider) {
                 next.manual_accounts.push(provider);
             }
         }
+    }
+    if settings.settings_version < 8 && settings.default_permission == PermissionLevel::AcceptEdits
+    {
+        next.default_permission = PermissionLevel::Full;
     }
     next.legacy_routing_overrides.clear();
     next.settings_version = SETTINGS_VERSION;
@@ -254,11 +262,31 @@ mod tests {
     }
 
     #[test]
+    fn the_old_default_accept_edits_moves_to_full_access_once() {
+        let saved = |json: &str| -> Settings { serde_json::from_str(json).unwrap() };
+        let old = migrate(&saved(
+            r#"{"settingsVersion":7,"defaultPermission":"acceptEdits"}"#,
+        ))
+        .expect("version 7 converts");
+        assert_eq!(old.default_permission, PermissionLevel::Full);
+        let ask = migrate(&saved(r#"{"settingsVersion":7,"defaultPermission":"ask"}"#))
+            .expect("version 7 converts");
+        assert_eq!(ask.default_permission, PermissionLevel::Ask);
+        // Accept edits picked after the change stays.
+        let picked = saved(r#"{"settingsVersion":8,"defaultPermission":"acceptEdits"}"#);
+        assert!(migrate(&picked).is_none());
+        assert_eq!(picked.default_permission, PermissionLevel::AcceptEdits);
+    }
+
+    #[test]
     fn the_one_account_switch_saved_before_becomes_each_agents_own() {
         let saved = |json: &str| -> Settings { serde_json::from_str(json).unwrap() };
         let off = migrate(&saved(r#"{"switchAccounts":false,"settingsVersion":3}"#))
             .expect("version 3 converts");
-        assert_eq!(off.manual_accounts, ProviderKind::ALL.to_vec());
+        assert_eq!(
+            off.manual_accounts,
+            brigadier_providers::adapters::kinds().collect::<Vec<_>>()
+        );
         let on = migrate(&saved(r#"{"switchAccounts":true,"settingsVersion":3}"#))
             .expect("version 3 converts");
         assert!(on.manual_accounts.is_empty());

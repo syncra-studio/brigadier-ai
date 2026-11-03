@@ -17,7 +17,7 @@ import type { ProviderKind } from "./ProviderKind";
  */
 export type Settings = { 
 /**
- * Permission level for new sessions without an explicit choice.
+ * Permission level for new sessions without an explicit choice: Full access (D144).
  */
 defaultPermission: PermissionLevel, 
 /**
@@ -48,7 +48,7 @@ plainTextComposer: boolean,
 showFullAccessNotice: boolean, 
 /**
  * How many workers one session may run at the same time (Settings › Configuration ›
- * Workers). Advice the brigade skill reads through `brigadier models`; `brigadier start`
+ * Workers). Advice the orchestrator reads through `brigadier models`; `brigadier start`
  * refuses no further worker (G18).
  */
 workersAtOnce: number, 

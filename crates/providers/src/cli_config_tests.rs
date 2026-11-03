@@ -101,6 +101,7 @@ for line in sys.stdin:
         match kind {
             ProviderKind::Claude => Box::new(claude::Claude::new(platform, env)),
             ProviderKind::Codex => Box::new(codex::Codex::new(platform, env)),
+            other => unreachable!("{other} isn't driven here"),
         }
     }
 
@@ -134,7 +135,6 @@ for line in sys.stdin:
             },
             tools: ToolSet::Thread,
             skill_plugins: vec![],
-            installed_skills: vec![],
             switched_off: Default::default(),
             add_dirs: vec![self.0.join("record")],
             project: None,
@@ -192,7 +192,7 @@ async fn chat_config(kind: ProviderKind) {
         (
             Access::AcceptEdits,
             "acceptEdits",
-            "on-request",
+            "untrusted",
             "workspaceWrite",
         ),
         (
@@ -279,6 +279,7 @@ async fn chat_config(kind: ProviderKind) {
                         );
                     }
                 }
+                other => unreachable!("{other} isn't driven here"),
             }
         }
     }

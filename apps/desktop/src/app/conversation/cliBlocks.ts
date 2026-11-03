@@ -1,7 +1,9 @@
-import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, isSubagentStart, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { agentDetail, brigadierCalls, brigadierUnshown, isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { backgroundOf } from "@/state/nativeWorkers";
 import {
   type Block,
   type BlockCompaction,
+  type BlockOrchestratorStep,
   type BoardDigest,
   type BlockState,
   blockShows,
@@ -11,9 +13,9 @@ import {
   type ThreadNode,
   type ThreadTree,
 } from "@/app/conversation/blocks";
-import { sessionSent } from "@/app/conversation/sessionSend";
-import { shownText } from "@/app/conversation/streamRelease";
+import { attachReplies, sessionSent, sessionWait } from "@/app/conversation/sessionSend";
 import { INTERRUPTED } from "@/app/conversation/turnError";
+import { coreHolds } from "@/app/conversation/turnWorkers";
 import type {
   BackgroundTask,
   FileChange,
@@ -25,6 +27,7 @@ import type {
   RunState,
   ThreadTurn,
   ThreadView,
+  Wake,
 } from "@/ipc/generated";
 import { sessionImageRef } from "@/state/cliThread";
 import { shownIdOf } from "@/state/shownIds";
@@ -48,12 +51,6 @@ const CARRY_ON = "Carry on from the hand-off note.";
  */
 const BRIGADIER_SAYS =
   /^\[(?:decision\] |answer\] |not finished\] |merge\] |merge cards retired\]|preview ended: |your background command |The user stopped you, then asked you to resume\.|Brigadier quit |Brigadier restarted |Brigadier: this conversation continues |Your last turn stopped early|worker\] The user stopped )/;
-
-/** How Brigadier's word that a Codex command ended after its turn starts (`conversation.rs`). */
-const CODEX_WAKE = /^\[your background command /;
-
-/** A notice the CLI starts a turn of its own with, not the user's: a background job's end. */
-const CLI_NOTICE = /^(?:<task-notification>|\[your background command )/;
 
 /** Whether a call is the hand-off's upkeep the nudge asks for: the ledger, or the note's file. */
 function upkeep(event: FileEntry["event"]): boolean {
@@ -135,8 +132,9 @@ export function stepDetail(input: string | null): string | null {
 }
 
 /**
- * A result's text: a JSON content array's text blocks (a Codex MCP call's), one per line, else
- * the result as it is (`digest::content_text`).
+ * A result's text: a JSON content array's text blocks, one per line, else the result as it is
+ * (`digest::content_text`). Adapters send an MCP result as its text; only records written before
+ * they did hold the array.
  */
 function contentText(output: string): string {
   const trimmed = output.trimStart();
@@ -282,18 +280,8 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
 /** Claude's own plan file, which its plan mode writes the plan to. */
 const PLAN_FILE = /(?:^|\/)\.claude\/plans\/[^/]+\.md$/;
 
-/**
- * A CLI's subagent completion notice belongs to its strip and History, like its start call.
- */
-function subagentNotice(text: string): boolean {
-  return /^Agent "[\s\S]*" (?:finished|completed|failed|was stopped|stopped|was killed|killed)\b/.test(text.trim());
-}
-
 export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" | "endedAtMs"> | null, task: BackgroundTask | undefined): ToolStep | null {
   if (!step) return null;
-  // The thread's own `brigadier wait` and `start` are no rows (D47): the block's "Waiting for a
-  // worker" line and the worker's own row say them.
-  if (step.item === "command" && step.detail !== null && brigadierUnshown(step.detail)) return null;
   // Claude's plan, written to its own plan file in plan mode, is the plan card's, as Codex's
   // plan is: no "Edited …" row (harness D7, D57).
   if (step.item === "files" && (step.files?.length ?? 0) > 0 && step.files?.every((file) => PLAN_FILE.test(file.path))) return null;
@@ -313,24 +301,31 @@ export function stepInTurn(step: ToolStep | null, turn: Pick<ThreadTurn, "end" |
 /** How far a "Messaged …" row, or a card's row, can be from the run of the `brigadier` call that made it. */
 const SEND_SLACK_MS = 2000;
 
+/** The worker actions whose own line says the `brigadier` call that made it (D150). */
+const ACTION_LINE: Record<string, BlockOrchestratorStep["kind"]["type"]> = { pause: "paused", resume: "resumed", close: "stopped", switch: "providerTransition" };
+
 /**
- * A `brigadier send` whose message has its own "Messaged …" row (a worker's, a session's), and a
- * `brigadier ask` whose card has its own "Asking questions" row, is no row of its own: the two
- * said the same (D47, D58).
+ * A `brigadier send` whose message has its own "Messaged …" row (a worker's, a session's), a
+ * `brigadier ask` whose card has its own "Asking questions" row, and a `brigadier pause`,
+ * `resume`, `close` or `switch` whose worker has its own "Paused …", "Resumed …", "Stopped …"
+ * or switch line, is no row of its own: the two said the same (D47, D58, D150).
  */
 function dropShownCalls(blocks: readonly Block[], board: BoardDigest): void {
+  const held = heldMessages(blocks);
   for (const block of blocks) {
     const sent = block.orchestratorSteps.flatMap((step) => ((step.kind.type === "messaged" || step.kind.type === "peerSent") && step.atMs !== undefined ? [step.atMs] : []));
     const asked = block.cards.flatMap((card) => {
       const question = card.type === "question" ? board.questions[card.id] : undefined;
       return question?.kind.type === "orchestrator" ? [question.createdAtMs] : [];
     });
-    if (sent.length === 0 && asked.length === 0) continue;
+    const lines = (type: string) => block.orchestratorSteps.flatMap((step) => (step.kind.type === type && step.atMs !== undefined ? [step.atMs] : []));
     block.orchestratorSteps = block.orchestratorSteps.filter((step) => {
       const { kind, atMs } = step;
+      if (held.has(step)) return false;
       if (kind.type !== "tool" || kind.item !== "command" || kind.detail === null || atMs === undefined) return true;
-      const sub = brigadierCalls(kind.detail)[0];
-      const shown = sub === "send" ? sent : sub === "ask" ? asked : [];
+      const sub = brigadierCalls(kind.detail)[0] ?? "";
+      const line = ACTION_LINE[sub];
+      const shown = sub === "send" ? sent : sub === "ask" ? asked : line ? lines(line) : [];
       const [from, to] = [atMs - SEND_SLACK_MS, (kind.endedAtMs ?? atMs) + SEND_SLACK_MS];
       return !shown.some((at) => at >= from && at <= to);
     });
@@ -338,23 +333,35 @@ function dropShownCalls(blocks: readonly Block[], board: BoardDigest): void {
 }
 
 /**
- * Whether a background job's end is that of the thread's own `brigadier wait` (Claude's notice
- * names the task by its description, Brigadier's Codex word by its command): no line, as the
- * wait had no row (D38, D47); the worker rows after it say what happened.
+ * The thread's messages to a worker it paused: each is held for, and goes with, its resume, which
+ * the "Resumed …" line says; no "Messaged …" row of its own (D7, D150). The user's own keep theirs.
  */
-function waitEnded(text: string, view: ThreadView): boolean {
-  const codex = /^\[your background command `([\s\S]*?)` finished after your turn/.exec(text);
-  if (codex) return brigadierCalls(codex[1] ?? "")[0] === "wait";
-  const name = /^Background command "([\s\S]*)" (?:completed|failed|was stopped|was killed|stopped|killed)\b/.exec(text.trim())?.[1];
-  if (name === undefined) return false;
-  if (brigadierCalls(name)[0] === "wait") return true;
-  const task = view.background?.find((each) => each.label === name && each.itemId !== null);
-  const call = task && view.entries.find((entry) => "itemId" in entry.event && entry.event.itemId === task.itemId)?.event;
-  const command = call?.type === "command" ? call.command : call?.type === "toolCall" ? stepDetail(call.input) : null;
-  return command != null && brigadierCalls(command)[0] === "wait";
+function heldMessages(blocks: readonly Block[]): Set<BlockOrchestratorStep> {
+  const paused = new Map<string, boolean>();
+  const held = new Set<BlockOrchestratorStep>();
+  const steps = blocks.flatMap((block) => block.orchestratorSteps).filter((step) => step.atMs !== undefined).toSorted((a, b) => a.atMs! - b.atMs!);
+  for (const step of steps) {
+    const { kind } = step;
+    if (kind.type === "paused" || kind.type === "resumed" || kind.type === "stopped") paused.set(kind.taskId, kind.type === "paused");
+    else if (kind.type === "messaged" && !kind.byUser && paused.get(kind.taskId)) held.add(step);
+  }
+  return held;
 }
 
-/** Where Claude writes a background command's output, as its call's result says. */
+/**
+ * Whether a background job's end is that of the thread's own `brigadier wait` (its notice may
+ * name the task by its description, not its command): no line, as the wait had no row (D38,
+ * D47); the worker rows after it say what happened.
+ */
+function waitEnded(wake: Wake, view: ThreadView): boolean {
+  const task = view.background?.find((each) => each.label === wake.label);
+  return [wake.command, wake.label, task?.command].some((words) => words != null && brigadierCalls(words)[0] === "wait");
+}
+
+/**
+ * Where Claude writes a background command's output, as its call's result says: after a reload
+ * the result is all that names it (`BackgroundTask.outputFile` is live only).
+ */
 const OUTPUT_FILE = /Output is being written to: (\S+?\.output)\b/;
 
 /** A path as one file whichever name macOS gives `/tmp` (`/private/tmp`). */
@@ -395,7 +402,6 @@ const madeSteps = new WeakMap<FileEntry, { made: string; step: ToolStep | null }
 
 /** `toolStep`, made once per entry and what it depends on: the thread is made again with each streamed word. */
 function keptToolStep(entry: FileEntry, turn: ThreadTurn | null, background: readonly BackgroundTask[] | undefined): ToolStep | null {
-  if (entry.event.type === "toolCall" && isSubagentStart(entry.event.name)) return null;
   const itemId = "itemId" in entry.event ? entry.event.itemId : undefined;
   const task = itemId === undefined ? undefined : background?.find((each) => each.itemId === itemId);
   const made = `${turn?.end ?? ""}|${turn?.endedAtMs ?? ""}|${task?.status ?? ""}|${task?.endedAtMs ?? ""}`;
@@ -410,6 +416,8 @@ function keptToolStep(entry: FileEntry, turn: ThreadTurn | null, background: rea
 export function turnState(turn: Pick<ThreadTurn, "end" | "error">): { state: BlockState; error: string | null } {
   switch (turn.end) {
     case null:
+    // A limit cut it and its work goes on on another account or CLI: never a failure (D180).
+    case "handedOver":
       return { state: "working", error: null };
     case "done":
       return { state: "done", error: null };
@@ -473,16 +481,33 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
  */
 const FROM_SESSION = /^\[message from session "[^"]*" \(([^)]+)\) · (sm-[0-9a-f]+)\]\n?/;
 
+/** Another session's message as its words, without the header naming who sent it (goal 4). */
+export function peerWords(text: string): string {
+  return text.replace(FROM_SESSION, "");
+}
+
 /**
  * A message the user sent while the session worked (run2-D40): Brigadier gives it to the CLI
  * under a line naming its queue id, `[queued message ‹id› · judge it: …]`, or, when it waited
- * for its own turn, `[queued message ‹id›, now on its own turn]`. The thread hides that line
- * (run2-D44).
+ * for its own turn, `[queued message ‹id›, now on its own turn]`, or, steered in by the user,
+ * `[queued message ‹id›, steered in by the user: …]`. The thread hides that line (run2-D44).
  */
-const QUEUED = /^\[queued message (\S{8})(?: · [^\]\n]*|, now on its own turn)\]\n?/;
+const QUEUED = /^\[queued message (\S{8})(?: · |, )[^\]\n]*\]\n?/;
 
-/** What the session hears of a queued message the user deleted once it had it: never drawn. */
-const WITHDRAWN = /\n*\[queued message \S{8} withdrawn: [^\]\n]*\]\n*/g;
+/** The line a message the user steered in while the session worked goes under (D25): hidden. */
+const STEERED = /^\[steered in by the user: [^\]\n]*\]\n?/;
+
+/**
+ * What the session hears of a queued message it already had that the user deleted, or steered
+ * in while it judged it: never drawn.
+ */
+const WITHDRAWN = /\n*\[queued message \S{8} (?:withdrawn|steered in by the user): [^\]\n]*\]\n*/g;
+
+/** A successor's first message without its hand-off: the user's words after it, if any. */
+function afterHandoff(text: string): string {
+  const end = text.trimStart().startsWith(HANDOFF_MARK) ? text.indexOf(HANDOFF_END) : -1;
+  return end >= 0 ? text.slice(end + HANDOFF_END.length).trimStart() : text;
+}
 
 /** The queue id a user message's frame names, if it has one. */
 function queuedId(text: string): string | null {
@@ -497,7 +522,7 @@ function onlyWithdrawn(text: string): boolean {
 /** A user message as the thread shows it: another session's when its header says so, its body without the header. */
 function fromSession(message: Message, authored = false): { message: Message; text: string } {
   if (authored) return { message, text: message.text };
-  const queued = QUEUED.exec(message.text);
+  const queued = QUEUED.exec(message.text) ?? STEERED.exec(message.text);
   const body = message.text.slice(queued?.[0].length ?? 0).replace(WITHDRAWN, "\n").trim();
   if (queued || body !== message.text.trim()) message = { ...message, text: body };
   const header = FROM_SESSION.exec(message.text);
@@ -518,25 +543,10 @@ export function workerNotices(text: string): string[] | null {
   return body.split(/; (?=Worker ")/).map((line) => line.replace(/^Worker "(.*?)" \([^)]*\): /, (_, title: string) => (title ? `Worker "${title}" ` : "A worker ")));
 }
 
-/**
- * The CLI's words of a background job's end in a few plain ones: Claude's `Background command
- * "pnpm test" completed (exit code 0)` and Brigadier's `[your background command `…` finished
- * after your turn · exit 0]` read "Background command finished · exit 0" (D21). Words it doesn't
- * know stand as they are.
- */
-export function wakeWords(text: string): string {
-  const codex = /^\[your background command `[\s\S]*` finished after your turn · ([^\]\n]+)\]/.exec(text);
-  if (codex) {
-    const how = codex[1]!.trim();
-    const exit = /^exit (-?\d+)$/.exec(how)?.[1];
-    if (exit !== undefined) return `Background command ${exit === "0" ? "finished" : "failed"} · exit ${exit}`;
-    return `Background command ${how === "completed" ? "finished" : how}`;
-  }
-  const said = /^(.+?) "[\s\S]*" (completed|failed|was stopped|was killed|stopped|killed)\b(?:[^\n]*?exit code (-?\d+))?/.exec(text.trim());
-  if (!said) return text;
-  const [, what, how, exit] = said;
-  const word = how === "completed" ? (exit !== undefined && exit !== "0" ? "failed" : "finished") : how === "failed" ? "failed" : "stopped";
-  return exit === undefined ? `${what} ${word}` : `${what} ${word} · exit ${exit}`;
+/** A background job's end in a few plain words: "Background command finished · exit 0" (D21). */
+export function wakeWords({ job, end, exit }: Wake): string {
+  const what = job === "agent" ? "Agent" : "Background command";
+  return exit === null ? `${what} ${end}` : `${what} ${end} · exit ${exit}`;
 }
 
 /** Whether an entry starts a turn: the user's own message in the session's thread. */
@@ -596,7 +606,17 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
   const taken = new Map<string, number>();
   for (const item of boardItems(board)) {
     const named = item.requestId === null ? undefined : byRequest.get(item.requestId);
-    const index = named ?? blocks.findLastIndex((block) => block.startedAtMs <= item.atMs);
+    const byTime = blocks.findLastIndex((block) => block.startedAtMs <= item.atMs);
+    // The thread's own question asked in a turn that carries no request (a successor's carry-on
+    // after a seam) is filed under the latest request, whose turn was over: it is the turn that
+    // asked it that waits on it (D161).
+    const askedLater =
+      named !== undefined &&
+      byTime > named &&
+      item.kind === "card" &&
+      board.questions[item.card.id]?.kind.type === "orchestrator" &&
+      (blocks[named]?.endedAtMs ?? Number.POSITIVE_INFINITY) <= item.atMs;
+    const index = named === undefined || askedLater ? byTime : named;
     const block = blocks[index];
     const known = times[index];
     if (!block || !known) continue;
@@ -632,12 +652,19 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
 
 /**
  * A thread's turns as blocks, oldest first, with Brigadier's own items placed in them
- * (`board`). Subagent lifecycle calls and their child items stay in their strip and History;
- * their source entries are retained for those views. `session`: the thread is a session's, where
+ * (`board`). A subagent is its call's row; its own items (`parent`) are not drawn: that row opens
+ * them (D96). `session`: the thread is a session's, where
  * Brigadier compacts a long one itself. `typed`: the words of the user's own messages that no
  * turn read names yet.
  */
-export function cliBlocks(view: ThreadView, conversationId: string, board?: BoardDigest, session = false, typed: readonly string[] = []): Block[] {
+export function cliBlocks(
+  view: ThreadView,
+  conversationId: string,
+  board?: BoardDigest,
+  session = false,
+  typed: readonly string[] = [],
+  kept: readonly string[] = [],
+): Block[] {
   const blocks: Block[] = [];
   // Each block's CLI items, by position and time.
   const times: [number, number][][] = [];
@@ -649,9 +676,19 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // A block's turns before its last: Brigadier's word of what its workers did joins the block
   // that started them, as one more turn of it.
   const joined = new Map<Block, ThreadTurn[]>();
-  const close = (each: Block) => settle(each, turnOf.get(each), joined.get(each));
+  // A turn a usage limit ended while its request still works is switching (goal 1): it reads
+  // working, not stopped with an error, until its carry-on goes on in the block.
+  const switching = (read: ThreadTurn | undefined): ThreadTurn | undefined =>
+    read && (read.errorKind === "usageLimit" || read.limit) && read.requests.some((request) => (board?.requests?.[request] as { state?: { type?: string } } | undefined)?.state?.type === "working")
+      ? { ...read, end: null, endedAtMs: null, error: null }
+      : read;
+  const close = (each: Block) => settle(each, switching(turnOf.get(each)), joined.get(each));
   // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
+  // The block each message that joined one went on in (a seam's successor may start in one).
+  const joinedBy = new Map<string, Block>();
   const join = (each: Block, position: number, atMs: number | undefined) => {
+    const item = view.entries[position]?.event;
+    if (item?.type === "message") joinedBy.set(item.itemId, each);
     const last = turnOf.get(each);
     joined.set(each, [...(joined.get(each) ?? []), ...(last ? [last] : [])]);
     turnOf.set(each, view.turns[turn]);
@@ -660,12 +697,40 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   };
   // A turn the user's message started while the block before still held (its workers or its
   // CLI's background commands still ran) goes on in that block, as the daemon says.
-  const goesOn = (each: Block | null): each is Block => !!each && !internal.has(each) && !!view.turns[turn]?.joins;
+  // So does a turn begun while the turn before still ran (a CLI's input queued mid-turn, D74).
+  // Not read yet while the turn before still runs, it is one the CLI began inside that turn: a
+  // turn of the user's starts only once the one before ended (seen live: two headers for 2 s).
+  const overlaps = () => {
+    const [previous, now] = [view.turns[turn - 1], view.turns[turn]];
+    if (!previous) return false;
+    if (!now) return previous.end == null;
+    return now.startedAtMs != null && now.startedAtMs < (previous.endedAtMs ?? (previous.end == null ? Number.POSITIVE_INFINITY : 0));
+  };
+  // A turn begun while the core's work block of the block before is open goes on in it (D163):
+  // one job, one block, as the core alone says.
+  const holds = (each: Block) => coreHolds(view.block, turnOf.get(each)?.endedAtMs ?? null);
+  // A turn that carries on the request a usage limit cut (an account or CLI switch) goes on in
+  // its block: one block, one switch row, no stopped turn (goal 1), with what the user steered
+  // into it meanwhile (D25; seen live). Its requests, else the ones the engine noted it sent: one
+  // naming none of the cut turn's, a message the user sent anew, opens its own.
+  const carriesOn = (requests: readonly string[] = []) => {
+    const before = view.turns[turn - 1];
+    if (before?.errorKind !== "usageLimit" && !before?.limit) return false;
+    const named = view.turns[turn]?.requests.length ? view.turns[turn]!.requests : requests;
+    return named.length === 0 || named.some((request) => before.requests.includes(request));
+  };
+  // While its turn runs, a turn begun while the block before held goes on in it (D24, D113):
+  // the daemon's `joins` may come only once the turn is judged or over.
+  const goesOn = (each: Block | null, requests?: readonly string[]): each is Block =>
+    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || carriesOn(requests) || (view.turns[turn]?.end == null && holds(each)));
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
     const named = [...text.matchAll(/Worker ".*?" \(([^)\s]+)\): /g)].map((match) => match[1]!);
-    return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && row.startedAtMs >= from));
+    // Or one an earlier block started that its requests resumed or messaged back to work (D151).
+    const sentBack = (task: string) =>
+      (board?.orchestratorSteps ?? []).some((step) => step.requestId !== null && each.requestIds.includes(step.requestId) && (step.kind.type === "resumed" || step.kind.type === "messaged") && step.kind.taskId === task);
+    return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && (row.startedAtMs >= from || sentBack(row.id))));
   };
   const internal = new Set<Block>();
   const waited = waitOutputs(view);
@@ -683,25 +748,52 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // A successor that started by itself: its first message is Brigadier's word to carry on.
   const carried = new Set(seams.flatMap((seam) => (seam.carried && seam.at ? [seam.at] : [])));
   // A queued message shows once (run2-D44): in the rail while the CLI has it there, else
-  // where the CLI last took it (a message that waited for its own turn was read before).
+  // where the CLI first read it in the turn that took it (a message that waited for its own
+  // turn, or was steered in after it waited, was read before; until the CLI reads it again it is
+  // on its way, so it never shows where it was judged and then moves). With no turn naming it
+  // yet: where the CLI last read it in the turn running now (it joins that turn), else on its way.
   const inRail = new Set((board?.queueItems ?? []).flatMap((item) => (item.delivered ? [item.id.slice(-8)] : [])));
+  // The queued messages the session took in (a turn names them, or Brigadier keeps them as the
+  // user's): one handed to a worker, or still judged, never shows in this thread (D68). A turn
+  // woken to judge one names it from the start; it took it in only once it is a request here.
+  const isRequest = (request: string) => !board?.requests || request in board.requests;
+  const tookIn = new Set([...view.turns.flatMap((each) => each.requests.filter(isRequest)), ...kept].map((request) => request.slice(-8)));
+  const takenIn = new Map<string, number>();
+  // The first turn naming it took it: a later turn may carry it on as its first request.
+  view.turns.forEach((each, index) => each.requests.forEach((request) => !takenIn.has(request.slice(-8)) && takenIn.set(request.slice(-8), index)));
   const lastTaken = new Map<string, number>();
+  const readIds = new Set<string>();
+  const running = view.turns.length - 1;
+  const runs = view.turns[running]?.end == null;
+  const inTaking = new Set<string>();
+  let readIn = -1;
   view.entries.forEach((entry, position) => {
-    const id = !entry.parent && entry.said?.by !== "user" && entry.event.type === "message" && entry.event.role === "user" ? queuedId(entry.event.text) : null;
-    if (id) lastTaken.set(id, position);
+    if (!entry.parent && startsTurn(entry)) readIn += 1;
+    const id = !entry.parent && entry.said?.by !== "user" && entry.event.type === "message" && entry.event.role === "user" ? queuedId(afterHandoff(entry.event.text)) : null;
+    if (!id) return;
+    readIds.add(id);
+    const takingTurn = takenIn.get(id);
+    // A turn begun while the taking one still ran (a CLI's queued input) is a read in it.
+    const taking = takingTurn !== undefined && (readIn === takingTurn || (readIn > takingTurn && (view.turns[readIn]?.startedAtMs ?? 0) <= (view.turns[takingTurn]?.endedAtMs ?? Number.POSITIVE_INFINITY)));
+    if (takingTurn === undefined) {
+      if (runs && readIn === running) lastTaken.set(id, position);
+      else lastTaken.delete(id);
+    } else if (readIn < takingTurn || (taking && !inTaking.has(id))) {
+      // Its last read before the turn that names it stands until that turn reads it: the live
+      // turn's requests can name it a turn late.
+      lastTaken.set(id, position);
+      if (taking) inTaking.add(id);
+    }
   });
   // The steers that name no queued message answer the turn's other requests, in order.
-  const framed = (request: string) => lastTaken.has(request.slice(-8));
+  const framed = (request: string) => readIds.has(request.slice(-8));
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
     if (startsTurn(entry)) turn += 1;
     let { event } = entry;
     // A successor's first message: the hand-off, then the user's words, if any.
     const handoff = entry.said?.by !== "user" && event.type === "message" && event.role === "user" && event.text.trimStart().startsWith(HANDOFF_MARK);
-    if (handoff && event.type === "message") {
-      const end = event.text.indexOf(HANDOFF_END);
-      if (end >= 0) event = { ...event, text: event.text.slice(end + HANDOFF_END.length).trimStart() };
-    }
+    if (handoff && event.type === "message") event = { ...event, text: afterHandoff(event.text) };
     const asked = event.type === "message" && event.role === "user" ? event : null;
     // Who wrote it, as Brigadier noted when it sent it to the CLI (L12): its own words (a note,
     // a nudge, a frame, its `/compact`) are never a bubble, and of the user's words with its
@@ -719,7 +811,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     if (asked) {
       const text = asked.text.trimStart();
       const nudge = nudges.has(asked.itemId) || (!theirs && text.startsWith(NUDGE_MARK));
-      if (startsTurn(entry) && !(maintenance === "turn" && brigadiers && CLI_NOTICE.test(text))) maintenance = null;
+      if (startsTurn(entry) && !(maintenance === "turn" && brigadiers && entry.wake)) maintenance = null;
       if (nudge) {
         if (startsTurn(entry)) {
           maintenance = "turn";
@@ -741,7 +833,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const news = asked && !theirs && workerNotices(asked.text);
     const queued = asked && said?.by !== "user" && queuedId(asked.text);
     const unshown =
-      !!asked && ((!!queued && (inRail.has(queued) || lastTaken.get(queued) !== position)) || (!said && onlyWithdrawn(asked.text)));
+      !!asked && ((!!queued && (inRail.has(queued) || !tookIn.has(queued) || lastTaken.get(queued) !== position)) || (!said && onlyWithdrawn(asked.text)));
     // A long session's `/compact` is Brigadier's (run2-D5): the thread shows the compaction's
     // divider, never the command or what its summary must keep, from the stream's first word of
     // it on. Its checkpoint request before Codex compacts is Brigadier's too (run2-D9). Its turn
@@ -764,14 +856,16 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const carries = view.turns[turn]?.requests ?? [];
     const shownBefore = carries.length > 0 && carries.every((request) => blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === request));
     // Peer messages retain their authored content and sender; only automatic engine notices hide.
-    const peer = !!asked && FROM_SESSION.test(asked.text);
+    // Also judged from the queue, or steered in, under its frame (goal 4).
+    const peer = !!asked && FROM_SESSION.test(asked.text.replace(QUEUED, "").replace(STEERED, ""));
     const says =
       !!asked && (said && !peer ? ours : !theirs && BRIGADIER_SAYS.test(asked.text) && (!startsTurn(entry) || brigadiers || shownBefore));
     // A successor that carried on by itself: its first message is Brigadier's, the hand-off and
     // its word to carry on, no bubble; the successor's work shows.
     const own = !!asked && (carried.has(asked.itemId) || (!said && brigadiers && (handoff || asked.text.trim() === CARRY_ON)));
-    // Brigadier's word that a Codex command ended after its turn: its one plain line (D21).
-    const woke = !!asked && says && CODEX_WAKE.test(asked.text);
+    // Brigadier's word that a command ended after its turn: its one plain line (D21).
+    const wake = asked && says ? entry.wake : undefined;
+    const woke = !!wake;
     const before = block;
     if (asked && (own || compacting || news || unshown || says)) {
       // Brigadier's word of what workers did that the block before started, or that a command
@@ -788,7 +882,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           (compacting && noticed.has(turn)) ||
           // A queued message still in the rail that woke the session to judge it while the
           // block before held: that block's, no bubble until it joins.
-          goesOn(before));
+          goesOn(before, entry.requests ?? []));
       if (joins && block) {
         join(block, position, entry.atMs);
       } else if (startsTurn(entry)) {
@@ -803,11 +897,13 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, id: `${asked.itemId}:${nth}`, text, ...(joins && { inWork: true }) }));
-      if (woke && !waitEnded(asked.text, view)) block?.taskNotices.push({ position, id: asked.itemId, text: wakeWords(asked.text), detail: asked.text, inWork: true });
+      if (wake && !waitEnded(wake, view)) block?.taskNotices.push({ position, id: asked.itemId, text: wakeWords(wake), detail: asked.text, inWork: true });
       return;
     }
     if (startsTurn(entry) && event.type === "message") {
-      const requests = view.turns[turn]?.requests ?? [];
+      // Before the turns are read again, the requests the engine noted it sent in the message;
+      // a turn read before the engine noted them names none, so they join its own.
+      const requests = [...new Set([...(view.turns[turn]?.requests ?? []), ...(entry.requests ?? [])])];
       const atMs = entry.atMs ?? 0;
       // A turn of a request an earlier turn carried (a background command's end, told after its
       // turn) starts with the CLI's message, not the user's: it keeps its own id. A queued message
@@ -815,17 +911,22 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // the request before it may still lead the turn's list.
       const first = requests[0];
       const named = said?.by === "user" ? null : queuedId(event.text);
-      const id = named
-        ? (requests.find((request) => request.endsWith(named)) ?? `queued-${named}`)
-        : first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first)
-          ? first
-          : event.itemId;
+      // The request the engine noted it sent in the message says which it is, whenever it came.
+      const id =
+        entry.requests?.[0] ??
+        (named
+          ? (requests.find((request) => request.endsWith(named)) ?? `queued-${named}`)
+          : first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first)
+            ? first
+            : event.itemId);
       const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs);
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
-      if (goesOn(block)) {
+      if (goesOn(block, entry.requests ?? [])) {
         join(block, position, entry.atMs);
-        block.steers.push({ ...shown, position });
+        // One the block already shows (a switch's carry-on sends it again) shows once.
+        const ids = [block.user?.kind === "message" ? block.user.message.id : null, ...block.steers.map((steer) => steer.message.id)];
+        if (!ids.includes(shown.message.id)) block.steers.push({ ...shown, position });
         return;
       }
       if (block) close(block);
@@ -848,16 +949,19 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           // its own id (the request it joined as).
           const named = said?.by === "user" ? null : queuedId(event.text);
           const taken = new Set(current.steers.map((steer) => steer.message.id));
-          const id = named
-            ? (current.requestIds.find((request) => request.endsWith(named)) ?? `queued-${named}`)
-            : (current.requestIds.slice(1).find((request) => !taken.has(request) && !framed(request)) ?? event.itemId);
+          for (const request of entry.requests ?? []) if (!current.requestIds.includes(request)) current.requestIds.push(request);
+          const id =
+            entry.requests?.[0] ??
+            (named
+              ? (current.requestIds.find((request) => request.endsWith(named)) ?? `queued-${named}`)
+              : (current.requestIds.slice(1).find((request) => !taken.has(request) && !framed(request)) ?? event.itemId));
           current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs), position });
           return;
         }
         if (event.type === "message" && event.role !== "assistant") return;
-        // A reply still streaming shows its finished lines only, none until its first (D9 b).
+        // A reply still streaming shows from its first word.
         const streaming = event.type === "messageDelta";
-        const text = shownText(event.text, streaming);
+        const text = event.text;
         // A reply with no words is none: assistant-ui drops a blank part, and the turn's parts
         // then count fewer than its texts (Codex's empty last reply after a send-back, D58).
         if (!text.trim()) return;
@@ -869,6 +973,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
           text,
           model: null,
           update: isUpdate(text),
+          ...(streaming && { live: true }),
           ...(phase === "answer" && entry.atMs !== undefined && { answerAtMs: entry.atMs }),
           ...(phase === "commentary" && { commentary: true }),
           ...(entry.atMs !== undefined && { atMs: entry.atMs }),
@@ -893,10 +998,13 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       // The CLI's line for a background job's end: one plain line in the work the turn it starts
       // goes on with ("Background command finished · exit 0"), its own words on hover (D21).
-      case "taskNotice":
-        if (waitEnded(event.text, view) || subagentNotice(event.text)) return;
-        current.taskNotices.push({ position, id: event.itemId, text: wakeWords(event.text), detail: event.text, inWork: true });
+      case "taskNotice": {
+        // An agent's end is its row's to say, as Codex's is none (D57, D96).
+        const ended = entry.wake;
+        if (ended && (ended.job === "agent" || waitEnded(ended, view))) return;
+        current.taskNotices.push({ position, id: event.itemId, text: ended ? wakeWords(ended) : event.text, detail: event.text, inWork: true });
         return;
+      }
       // A compaction is one divider: the stream's word that it runs (no file keeps it) is the
       // divider its end then takes over, in place. Said again with nothing between (the file's
       // word and the stream's while the turn is open), it is the same one.
@@ -919,14 +1027,19 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       }
       default: {
         if (readsOnly(event, waited)) return;
-        const tool = keptToolStep(entry, turnOf.get(current) ?? null, view.background);
-        // Its `brigadier send` to another session is the row of the message it sent (S30).
-        const kind = sessionSent(tool, event, board) ?? tool;
+        const tool = keptToolStep(entry, turnOf.get(current) ?? null, backgroundOf(view));
+        // Its `brigadier send` to another session is the row of the message it sent (S30), its
+        // `brigadier wait` on one the row of the reply (D138). Its other `wait`s and `start`s are
+        // no rows (D47): the block's "Waiting for a worker" line and the worker's own row say them.
+        // One call that sends and then waits (as the CLIs do) is the wait's row.
+        const kind = sessionWait(tool, event, view) ?? sessionSent(tool, event, board)
+          ?? (tool?.item === "command" && tool.detail !== null && brigadierUnshown(tool.detail) ? null : tool);
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }
     }
   });
   if (block) close(block);
+  attachReplies(blocks.flatMap((each) => each.orchestratorSteps), view.replies ?? []);
   // A compaction its turn ended with (Brigadier's at a turn's end, or the CLI's after its last
   // reply) is between that turn and the next: after the block, not in its work.
   for (const each of blocks) {
@@ -943,9 +1056,12 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // turn while the successor is still to come.
   for (const seam of seams) {
     if (seam.open) continue;
-    const next = seam.at === null ? blocks.length : blocks.findIndex((each) => each.key === seam.at);
-    const before = blocks[next < 0 ? -1 : next - 1];
-    if (next < 0 || !before) continue;
+    // A successor whose first message joined a block that still held: after that block.
+    const into = seam.at === null ? undefined : joinedBy.get(seam.at);
+    const next = seam.at === null ? blocks.length : into ? blocks.indexOf(into) + 1 : blocks.findIndex((each) => each.key === seam.at);
+    // Never the note turn's own block, which the thread doesn't show.
+    const before = next < 0 ? undefined : blocks.slice(0, next).findLast((each) => !internal.has(each));
+    if (!before) continue;
     before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death, movedTo: seam.movedTo });
   }
   return blocks.filter((each) => !internal.has(each));
@@ -977,6 +1093,18 @@ export function keptThread(messages: readonly Message[], fullText: Readonly<Reco
 
 /** How a message on its way reads: working while its turn starts, failed when the CLI never took it. */
 type RunNow = { state: RunState; error: string | null };
+
+/**
+ * A turn of a message sent from here starts no later than its message did: the block shown while
+ * it was on its way counted from then, so its clock goes on rather than starting again once the
+ * CLI says it.
+ */
+function startBy(block: Block, atMs: number): void {
+  const [first, ...rest] = block.worked;
+  if (!first || atMs >= first.fromMs) return;
+  block.startedAtMs = Math.min(block.startedAtMs, atMs);
+  block.worked = [{ ...first, fromMs: atMs }, ...rest];
+}
 
 /** A block of a message sent but not in the CLI's file yet: the bubble, and a block that works on it. */
 function onItsWay(key: string, user: Block["user"], startedAtMs: number, run: RunNow): Block {
@@ -1015,10 +1143,13 @@ export function cliThreadTree(
   const stored = thread ? messages : messages.filter((message) => message.createdAtMs >= unreadSince);
   const named = new Set(view.turns.flatMap((turn) => turn.requests));
   const typed = stored.flatMap((message) => (message.role === "user" && !named.has(message.requestId ?? message.id) ? [(fullText[message.id] ?? message.text).trim()] : []));
-  const blocks = cliBlocks(view, conversationId, board, session, typed);
+  // Another session's message the session took from its queue is kept as that session's (goal 4).
+  const keptIds = stored.flatMap((message) => (message.role === "user" || message.role === "peer" ? [message.requestId ?? message.id] : []));
+  const blocks = cliBlocks(view, conversationId, board, session, typed, keptIds);
   // The user's own messages as Brigadier keeps them, by their request: a turn that names one
-  // shows it as it was sent, its pasted chips, mentions and attachments with it.
-  const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])));
+  // shows it as it was sent, its pasted chips, mentions and attachments with it. The first under
+  // a request is the user's; Brigadier's words kept after it under the same request are not.
+  const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])).toReversed());
   // A queued message no turn names yet (`queued-‹id›`) is kept under its queue id.
   const keptOf = (id: string): Message | undefined =>
     own.get(id) ?? (id.startsWith("queued-") ? [...own.entries()].find(([request]) => request.endsWith(id.slice("queued-".length)))?.[1] : undefined);
@@ -1029,55 +1160,83 @@ export function cliThreadTree(
   // The user's messages a turn already shows: none of them is on its way as well.
   const drawn = new Set<string>();
   for (const block of blocks) {
-    if (block.user?.kind === "message") block.user = { kind: "message", ...asSent(block.user.message, block.user.text) };
+    if (block.user?.kind === "message") {
+      const kept = keptOf(block.user.message.id);
+      block.user = { kind: "message", ...asSent(block.user.message, block.user.text) };
+      if (kept) startBy(block, kept.createdAtMs);
+    }
     block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
     for (const said of [...(block.user?.kind === "message" ? [block.user] : []), ...block.steers]) drawn.add(said.message.requestId ?? said.message.id);
+    // Another session's goes by its own id, the one it is kept under (goal 4).
+    for (const said of [...(block.user?.kind === "peer" ? [block.user] : []), ...block.steers]) if (said.message.role === "peer") drawn.add(said.message.id);
   }
-  // A turn whose message the stream said before the turns were read again names no request yet:
-  // its message is the CLI's, under the CLI's id. It is the one Brigadier kept since the turn
-  // before began that no turn carries, so its bubble stays the one shown while it was on its way,
-  // not mounted afresh under another id (the view thrown off the sent turn's place) and again
-  // once the turns are read.
-  const read = new Set(view.turns.map((turn) => turn.userMessage));
-  blocks.forEach((block, index) => {
-    const said = block.user;
-    if (said?.kind !== "message" || said.message.id !== block.key || read.has(block.key)) return;
-    const after = blocks[index - 1]?.startedAtMs ?? Number.NEGATIVE_INFINITY;
-    const sent = stored.find((message) => {
-      const request = message.requestId ?? message.id;
-      return message.role === "user" && message.createdAtMs > after && message.createdAtMs <= block.startedAtMs && !named.has(request) && !drawn.has(request);
-    });
-    if (!sent) return;
-    block.user = { kind: "message", message: sent, text: fullText[sent.id] ?? sent.text };
-    block.requestIds = [sent.requestId ?? sent.id];
-    drawn.add(sent.requestId ?? sent.id);
-  });
+  // A turn's message the CLI said under a request whose message isn't stored here yet (its word
+  // beat the daemon's answer to sending it) is the one still being sent: its bubble stays that
+  // one, not a second bubble under the request. Only turns after the newest one of a message
+  // held here: one before it is older than the messages loaded.
+  const sent = new Map(view.entries.flatMap((entry) => (entry.event.type === "message" && entry.requests?.[0] ? [[entry.event.itemId, entry.requests[0]] as const] : [])));
+  const said = new Set(view.entries.flatMap((entry) => entry.requests ?? []));
+  const newest = blocks.findLastIndex((block) => block.user?.kind === "message" && own.has(block.user.message.id));
+  const sending = [...pending];
+  for (const block of blocks.slice(newest + 1)) {
+    if (block.user?.kind !== "message" || !said.has(block.user.message.id)) continue;
+    const entry = sending.shift();
+    if (!entry) continue;
+    block.user = { kind: "pending", pending: entry };
+    startBy(block, entry.createdAtMs);
+  }
   // A queued message joins the turn that read it after the CLI had it (the turn names it only
   // once it ends): it is drawn there, not on its way too.
-  const carried = new Set([...named, ...drawn]);
+  const carried = drawn;
   const heard = Math.max(
     0,
     ...view.entries.flatMap((entry) => (entry.event.type === "message" && entry.event.role === "user" && !entry.parent ? [entry.atMs ?? 0] : [])),
   );
+  // A queued message keeps its id when it is sent; until the rail lets it go it shows there only.
+  const queued = new Set((board.queueItems ?? []).map((item) => item.id));
   for (const message of stored) {
-    if (message.role !== "user" || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id)) continue;
+    const peer = message.role === "peer";
+    if ((message.role !== "user" && !peer) || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id) || queued.has(message.id)) continue;
     const text = fullText[message.id] ?? message.text;
-    blocks.push(onItsWay(message.id, { kind: "message", message, text }, message.createdAtMs, run));
+    // One the user steered into a request a block shows is that block's (D25), after its items,
+    // until the CLI says where it read it: never a block of its own (seen live at a switch).
+    const into = (board.requests?.[message.requestId ?? message.id] as { steeredInto?: string | null } | undefined)?.steeredInto;
+    const open = into ? blocks.findLast((block) => block.requestIds.includes(into)) : undefined;
+    if (open && !peer) {
+      open.steers.push({ message, text, position: view.entries.length });
+      continue;
+    }
+    // Another session's, taken from the queue, is on its way as that session's (goal 4).
+    const block = onItsWay(message.id, peer ? { kind: "peer", message, text: peerWords(text), earlier: false } : { kind: "message", message, text }, message.createdAtMs, run);
+    // Its new worktree's setup line, while its turn starts or after its start failed.
+    const setup = (board.startSteps ?? []).filter((record) => record.requestId === (message.requestId ?? message.id));
+    if (setup.length > 0) block.orchestratorSteps.push({ kind: { type: "setup", steps: setup }, position: 0 });
+    blocks.push(block);
   }
-  for (const entry of pending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs, { state: "running", error: null }));
+  for (const entry of sending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs, { state: "running", error: null }));
 
   const nodes: ThreadNode[] = [];
   let parent: string | null = null;
+  // A follow-up woken to be judged, judged wait, then sent on its own turn leads two turns: the
+  // one that shows it keeps its request's id (a repeated id makes assistant-ui throw and blanks the app).
+  const showing = new Set(blocks.flatMap((block) => (block.user?.kind === "message" ? [shownIdOf(block.user.message.id)] : [])));
   for (const block of blocks) {
-    if (block.user) {
-      // A message sent from here keeps the id it showed under while pending (`shownIdOf`), so
-      // its bubble isn't mounted afresh when it is stored and its turn is placed once it shows.
-      const id = block.user.kind === "pending" ? block.user.pending.localId : shownIdOf(block.user.message.id);
-      nodes.push({ id, parentId: parent, kind: "user", block, head: null });
-      parent = id;
+    // A message sent from here keeps the id it showed under while pending (`shownIdOf`), so
+    // its bubble isn't mounted afresh when it is stored and its turn is placed once it shows.
+    let shown = block.user && (block.user.kind === "pending" ? block.user.pending.localId : shownIdOf(block.user.message.id));
+    // A repeated id makes assistant-ui throw, which blanked the whole window (seen live at a switch).
+    if (shown && nodes.some((node) => node.id === shown)) shown = `${shown}:${block.key}`;
+    if (shown) {
+      nodes.push({ id: shown, parentId: parent, kind: "user", block, head: null });
+      parent = shown;
     }
     if (!blockShows(block)) continue;
-    const id = `request:${block.key}`;
+    // Its turn by its message too, else by the request the CLI's message it began with carries
+    // (one not shown yet): the same from sending it to the CLI saying it to its turn read.
+    const lead = sent.get(block.key);
+    const wanted = `request:${shown || (lead && !showing.has(shownIdOf(lead)) ? shownIdOf(lead) : block.key)}`;
+    // Two turns leading with it before either shows it: the later goes by its own key.
+    const id = nodes.some((node) => node.id === wanted) ? `request:${block.key}` : wanted;
     nodes.push({ id, parentId: parent, kind: "block", block, head: null });
     parent = id;
   }

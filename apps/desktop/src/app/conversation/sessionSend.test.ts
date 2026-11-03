@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ToolStep } from "@/app/conversation/activity/words";
-import { namesId, sendArgs, sessionSent } from "@/app/conversation/sessionSend";
-import type { ProviderEvent, Task } from "@/ipc/generated";
+import { attachReplies, namesId, sendArgs, sessionSent, sessionWait, titled, waitArgs } from "@/app/conversation/sessionSend";
+import type { ProviderEvent, Task, WorkerRow } from "@/ipc/generated";
 
 test("a `brigadier send` command gives whom it messages and the text, however the shell quotes it", () => {
   assert.deepEqual(sendArgs(`brigadier send 4f2a9c1e "Can you check the schema?"`), { to: "4f2a9c1e", text: "Can you check the schema?" });
@@ -76,4 +76,46 @@ test("a send to one of the session's workers keeps its own row", () => {
   assert.equal(sessionSent(other.step, other.event), null);
   const allow = call(`brigadier send 0011aa22 --allow`, "completed", "Allowed what 0011aa22 asked.\n");
   assert.equal(sessionSent(allow.step, allow.event), null);
+});
+
+test("a session named by its title is one `send && wait`, its row the wait's, taking that session's reply (D201)", () => {
+  assert.deepEqual(waitArgs(`brigadier send "Remember for this session" "What is your codename?" && brigadier wait "Remember for this session" 2>/dev/null`), ["Remember for this session"]);
+  assert.deepEqual(waitArgs(`brigadier wait 'Docs' --timeout 600 > /tmp/out`), ["Docs"]);
+  const sessions = [{ id: "a1", title: "Remember for this session" }, { id: "b2", title: "Docs" }, { id: "c3", title: "Docs notes" }];
+  assert.equal(titled(sessions, "remember for THIS session"), "a1");
+  assert.equal(titled(sessions, "remember"), "a1");
+  assert.equal(titled(sessions, "docs"), "b2", "a whole title wins");
+  assert.equal(titled(sessions, "doc"), null, "several hold it");
+  assert.equal(titled(sessions, "nobody"), null);
+  const twins = [{ id: "x1", title: "Docs", projectId: "p1" }, { id: "x2", title: "Docs", projectId: "p2" }];
+  assert.equal(titled(twins, "docs", "p2"), "x2", "a title two projects share: this project's");
+  assert.equal(titled(twins, "docs"), null);
+  const waiting = call(`brigadier wait "Remember for this session"`, "inProgress", null);
+  const wait = { kind: sessionWait(waiting.step, waiting.event, {})!, atMs: 1000 };
+  assert.deepEqual(wait.kind.to, ["Remember for this session"]);
+  attachReplies([wait], [{ from: "0192aaaa-bbbb-7ccc-8ddd-00004f2a9c1e", text: "Saffron.", atMs: 2000 }]);
+  assert.deepEqual(wait.kind.replies.map((reply) => reply.text), ["Saffron."]);
+});
+
+test("a `brigadier wait` on another session is its reply's row, under the newest wait on it that began before it (D138)", () => {
+  assert.deepEqual(waitArgs(`brigadier wait 4f2a9c1e --timeout 600 2>&1`), ["4f2a9c1e"]);
+  assert.deepEqual(waitArgs(`brigadier wait 93572595 --timeout 600`), ["93572595"], "a short id of digits only");
+  assert.deepEqual(waitArgs(`brigadier wait`), [], "no ids: it waits on the workers");
+  const waiting = call(`brigadier wait 4f2a9c1e`, "inProgress", null);
+  const kind = sessionWait(waiting.step, waiting.event, {});
+  assert.deepEqual(kind, { type: "sessionWait", itemId: waiting.step.itemId, to: ["4f2a9c1e"], sent: null, status: "inProgress", replies: [] });
+  // As the CLIs run it: the message, then the wait, in one call, its row the wait's, holding the message's id.
+  const both = call(`brigadier send 4f2a9c1e "Is it done?" 2>&1; brigadier wait 4f2a9c1e --timeout 600 2>&1 | tail -40`, "completed", "Sent sm-0123456789ab to session 4f2a9c1e: queued into its turn.\n");
+  assert.equal(sessionWait(both.step, both.event, {})?.sent, "sm-0123456789ab");
+  // A wait on one of its workers, or on all of them, keeps no row (D47).
+  assert.equal(sessionWait(waiting.step, waiting.event, { workers: [{ id: "task-9f-4f2a9c1e" } as WorkerRow] }), null);
+  const workers = call(`brigadier wait`, "inProgress", null);
+  assert.equal(sessionWait(workers.step, workers.event, {}), null);
+  // Each reply goes to the newest wait on its session begun before it came.
+  const first = { kind: sessionWait(waiting.step, waiting.event, {})!, atMs: 1000 };
+  const second = { kind: sessionWait(waiting.step, waiting.event, {})!, atMs: 3000 };
+  const from = "0192aaaa-bbbb-7ccc-8ddd-00004f2a9c1e";
+  attachReplies([first, second], [{ from, text: "One.", atMs: 2000 }, { from, messageId: "sm-1", text: "Two.", atMs: 4000 }, { from: "other", text: "No.", atMs: 4000 }]);
+  assert.deepEqual(first.kind.replies.map((reply) => reply.text), ["One."]);
+  assert.deepEqual(second.kind.replies.map((reply) => reply.text), ["Two."]);
 });

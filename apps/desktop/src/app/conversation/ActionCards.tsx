@@ -29,6 +29,7 @@ import type {
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
+import { inFolders } from "@/lib/format";
 import { pageShown } from "@/lib/pageHidden";
 import { cn } from "@/lib/utils";
 import { answerCard } from "@/state/actions";
@@ -204,7 +205,7 @@ function describe(
     case "cli": {
       const { request } = subject;
       const edits = request.kind === "fileChange" || request.paths.length > 0;
-      const web = request.tool === "SandboxNetworkAccess" || /web|fetch|search|network/i.test(request.tool);
+      const web = !!request.network;
       const [icon, kind] = request.command
         ? [<Dock key="icon" />, "Terminal"]
         : edits
@@ -322,10 +323,13 @@ function describe(
 
 /** Whether a folder is the session's own: its repository, or a worker's worktree or scratch folder. */
 function useInSession(conversationId: string | undefined): (path: string) => boolean {
-  const repo = useApp((s) => {
-    const setup = conversationId ? s.conversations[conversationId]?.setup : undefined;
-    return setup?.type === "session" ? setup.repo : null;
-  });
+  const [repo, worktree] = useApp(
+    useShallow((s) => {
+      const setup = conversationId ? s.conversations[conversationId]?.setup : undefined;
+      if (setup?.type !== "session") return [null, null];
+      return [setup.repo, setup.environment.type === "newWorktree" ? setup.environment.path : null];
+    }),
+  );
   const roots = useBoard(
     useShallow((s) =>
       Object.values(s.board?.tasks ?? {}).flatMap((task) =>
@@ -333,7 +337,7 @@ function useInSession(conversationId: string | undefined): (path: string) => boo
       ),
     ),
   );
-  return (path) => [repo, ...roots].some((root) => !!root && (path === root || path.startsWith(`${root}/`)));
+  return (path) => inFolders(path, [repo, worktree, ...roots]);
 }
 
 /** Where a card stands among the approvals waiting: "1 of 3", with ‹ › to step between them. */
@@ -528,10 +532,10 @@ export function ApprovalSlot({ ids, onReply }: { ids: readonly string[]; onReply
 
 /** The scope supplied by approval routing; generic permission requests have no session grant. */
 function sessionGrant(request: ApprovalRequest): { scope: string; explanation: string } | null {
-  const { grant, kind, tool, escalation } = request;
+  const { grant, kind, network, escalation } = request;
   if (!grant || kind === "permissions") return null;
   const outside = escalation ? " outside the sandbox" : "";
-  if (tool === "SandboxNetworkAccess") {
+  if (network) {
     return {
       scope: grant,
       explanation: `Allow connections to ${grant}${outside} from any worker in this conversation. Not saved across sessions.`,

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { cutOff, describeTurnError, interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
 import type { Notice, UserRequest } from "@/ipc/generated";
 
-const summary = (raw: string, provider?: string) => describeTurnError(raw, provider).summary;
+const summary = (raw: string, provider = "Claude") => describeTurnError(raw, provider).summary;
 
 test("a failed turn reads as one plain line, chosen from the raw error", () => {
   assert.equal(summary("Claude's 5-hour usage limit was reached. It resets at 4pm."), "Claude's usage limit was reached.");
@@ -29,6 +29,14 @@ test("a failed turn reads as one plain line, chosen from the raw error", () => {
   assert.equal(summary("Not logged in · Please run /login"), "Claude needs you to sign in again.");
   assert.equal(summary("The reply failed."), "This turn stopped because of an error.");
   assert.equal(summary(""), "This turn stopped because of an error.");
+});
+
+test("a turn's error kind and own CLI decide the line; with neither known, no CLI is named", () => {
+  assert.equal(describeTurnError("boom", "OpenCode", "usageLimit").summary, "OpenCode's usage limit was reached.");
+  assert.equal(describeTurnError("boom", "OpenCode", "usageLimit").limit, true);
+  assert.equal(describeTurnError("You've hit your usage limit", "Codex", "network").summary, "Lost the connection to Codex.");
+  assert.equal(describeTurnError("API Error: Connection error.").summary, "Lost the connection to the agent.");
+  assert.equal(describeTurnError("overloaded").summary, "The agent is overloaded right now.");
 });
 
 test("the line never repeats the raw error", () => {
@@ -66,6 +74,12 @@ test("a usage limit is said as such, for the thread's divider", () => {
   assert.equal(describeTurnError("ECONNRESET", "Claude").limit, undefined);
 });
 
+test("a turn its model declined is said in one quiet line, never in the provider's own words (D143)", () => {
+  const declined = describeTurnError("API Error: Opus 5.5's safeguards flagged this message", "Claude", "policy");
+  assert.deepEqual(declined, { summary: "Claude declined this turn", declined: true });
+  assert.equal(describeTurnError("refused", "Codex", "policy").summary, "Codex declined this turn");
+});
+
 test("a turn Brigadier quit during reads interrupted, also one still starting, which Continue sends again", () => {
   assert.equal(summary("Brigadier quit while this was running."), "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands.");
   assert.equal(summary("Brigadier quit before this started."), "Interrupted: Brigadier quit before this started. Continue sends it again.");
@@ -88,11 +102,14 @@ test("a turn the thread says was cut reads by its requests: a quit, with Continu
   const ended = request("r1", { type: "failed", error: "The CLI session ended unexpectedly." });
   assert.deepEqual(cutOff(quit, [ended], ended), { error: "The CLI session ended unexpectedly.", resumable: false });
   assert.equal(summary(cutOff(quit, [ended], ended).error), "Claude stopped unexpectedly.");
-  // A turn of Brigadier's own (its `/compact`, the freelogo thread at 11:08), or one whose request
-  // was answered: no quit, and nothing for Continue to pick up.
+  // A turn of Brigadier's own (its `/compact`, the freelogo thread at 11:08): no quit, and nothing
+  // for Continue to pick up.
   const done = request("r1", { type: "done" });
   assert.deepEqual(cutOff(quit, [], done), { error: "The CLI session ended unexpectedly.", resumable: false });
-  assert.deepEqual(cutOff(quit, [done], done), { error: "The CLI session ended unexpectedly.", resumable: false });
+  // A quit cut it and its request went on in a block of its own (it went on by itself): the cut
+  // turn still reads interrupted by the quit, never "stopped unexpectedly", and has no Continue.
+  assert.deepEqual(cutOff(quit, [done], done), { error: quit, resumable: false, wentOn: true });
+  assert.deepEqual(cutOff(quit, [request("r1", { type: "working" })], null), { error: quit, resumable: false, wentOn: true });
   // Any other error is the turn's own.
   assert.deepEqual(cutOff("The API refused it.", [cut], cut), { error: "The API refused it.", resumable: false });
 });

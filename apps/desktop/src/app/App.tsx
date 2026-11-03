@@ -10,6 +10,7 @@ import { UninstallDialog } from "@/app/shell/dialogs/UninstallDialog";
 import { FeedbackDialog } from "@/app/shell/feedback/FeedbackDialog";
 import { FolderDropZone } from "@/app/shell/FolderDropZone";
 import { ConversationView } from "@/app/conversation/ConversationView";
+import { TurnBoundary } from "@/components/conversation";
 import { OnboardingDialog } from "@/app/setup/onboarding/OnboardingDialog";
 import { GlobalSearch } from "@/app/shell/SearchDialog";
 import { TerminalPane } from "@/app/side-panel/TerminalTab";
@@ -176,7 +177,9 @@ export function App() {
                   <TerminalPane place={HOME_PLACE} />
                 </>
               ) : (
-                <ConversationView key={viewKey(selection)} selection={selection} />
+                <TurnBoundary key={viewKey(selection)} summary="This conversation couldn’t render.">
+                  <ConversationView selection={selection} />
+                </TurnBoundary>
               )}
               <Toaster className="top-titlebar pt-2" />
             </div>

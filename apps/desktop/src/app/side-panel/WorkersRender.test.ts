@@ -55,3 +55,11 @@ test("the worker view's header gives the title its room first in a 1280-wide win
     assert.ok(seen.pill.shown > 0, `the model pill is gone: ${JSON.stringify(seen)}`);
   }
 });
+
+test("a worker header short of room cuts its model name, never its state, on any CLI", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "workers-ux.html?header-test=1&short-title=1&approvals=0", "workers-header-result"));
+  assert.equal(seen.error, undefined);
+  assert.ok(seen.model.shown > 0 && seen.model.shown < seen.model.full, `the model isn't the one cut: ${JSON.stringify(seen)}`);
+  assert.equal(seen.state.text, "\u00a0· Working");
+  assert.ok(seen.state.shown >= seen.state.full, `the state is cut short: ${JSON.stringify(seen)}`);
+});

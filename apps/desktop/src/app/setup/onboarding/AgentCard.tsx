@@ -1,4 +1,3 @@
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ConnectCode, ConnectGuide, useNeedsGuide } from "@/app/setup/onboarding/ConnectStatus";
 import { PILL_BUTTON, RAISED_BUTTON } from "@/app/setup/onboarding/parts";
 import type { AgentState } from "@/app/setup/onboarding/SetupTerminal";
@@ -7,6 +6,7 @@ import { Badge, Button } from "@/components/controls";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { cancelConnect, connectAgent, connecting, useConnect, useConnectProgress } from "@/state/connect";
+import { cliFacts } from "@/lib/providerKinds";
 
 /** "Max plan" from the plan the agent reports. */
 function planLine(plan: string | null | undefined): string {
@@ -27,7 +27,7 @@ export function AgentCard({
   state: AgentState;
   mac: boolean;
 }) {
-  const label = PROVIDER_LABELS[provider];
+  const label = cliFacts(provider).label;
   const progress = useConnectProgress(provider);
   // Asking to connect failed (the daemon was away): said like a failed Connect.
   const askError = useConnect((s) => s.errors[provider]);

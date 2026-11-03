@@ -47,12 +47,7 @@ pub use plugins::Plugin;
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Agent {
-    Claude,
-    Codex,
-}
+pub use brigadier_kind::ProviderKind;
 
 /// A value from a config (an env value, a header) that must not leave Brigadier: its `Debug`
 /// shows nothing of it.
@@ -318,7 +313,7 @@ pub struct Problem {
 /// A session, as far as what it finds by itself goes.
 #[derive(Debug, Clone, Copy)]
 pub struct Session<'a> {
-    pub agent: Agent,
+    pub agent: ProviderKind,
     /// Its working folder.
     pub cwd: &'a Path,
     /// The project whose setup it loads (a trusted one): Claude's `.mcp.json` and `.claude`
@@ -409,7 +404,7 @@ impl Catalog {
         // As `add_project`: the project's settings switch Claude's, its installs count there.
         let here = plugins::claude(roots, Some(project));
         plugins.retain(|plugin| {
-            plugin.agent != Agent::Claude
+            plugin.agent != ProviderKind::Claude
                 || here
                     .iter()
                     .any(|other| other.id == plugin.id && other.root == plugin.root)
@@ -434,7 +429,7 @@ impl Catalog {
         for (plugin, on) in plugins::codex_switched(roots, Some(&layer), Some(project)) {
             let known = plugins
                 .iter()
-                .position(|known| known.agent == Agent::Codex && known.id == plugin.id);
+                .position(|known| known.agent == ProviderKind::Codex && known.id == plugin.id);
             match (known, on) {
                 (Some(at), false) => {
                     plugins.remove(at);
@@ -447,6 +442,8 @@ impl Catalog {
     }
 
     fn user(roots: &Roots) -> Self {
+        #[cfg(test)]
+        catalog::READS.with(|reads| reads.set((reads.get().0 + 1, reads.get().1)));
         let mut problems = Vec::new();
         let codex = servers::codex_config(roots, &mut problems);
         let (servers, disabled): (Vec<Server>, Vec<Server>) =
@@ -521,7 +518,7 @@ impl Catalog {
             .plugins
             .iter()
             .filter(|plugin| {
-                plugin.agent == Agent::Claude
+                plugin.agent == ProviderKind::Claude
                     && !here
                         .iter()
                         .any(|other| other.id == plugin.id && other.root == plugin.root)
@@ -615,7 +612,7 @@ impl Catalog {
             let known = self
                 .plugins
                 .iter()
-                .find(|known| known.agent == Agent::Codex && known.id == plugin.id)
+                .find(|known| known.agent == ProviderKind::Codex && known.id == plugin.id)
                 .cloned();
             match (known, on) {
                 (Some(known), false) => {
@@ -662,13 +659,13 @@ impl Catalog {
             session.project.is_some() && self.claude_off_here.iter().any(|off| off == name)
         };
         match (server.source, session.agent) {
-            (Source::ClaudeUser, Agent::Claude) => !claude_off(&server.name),
-            (Source::CodexUser, Agent::Codex) => {
+            (Source::ClaudeUser, ProviderKind::Claude) => !claude_off(&server.name),
+            (Source::CodexUser, ProviderKind::Codex) => {
                 !(session.project.is_some() && self.codex_off_here.contains(&server.name))
             }
             // Claude keys its local scope on the repository's main folder: a session in a
             // subfolder or a linked worktree of it loads it too.
-            (Source::ClaudeLocal, Agent::Claude) => {
+            (Source::ClaudeLocal, ProviderKind::Claude) => {
                 !claude_off(&server.name)
                     && project.is_some_and(|project| {
                         claude_config::project_key(project)
@@ -676,22 +673,24 @@ impl Catalog {
                     })
             }
             // Team approval is separate from /mcp off flags: never bypass the approval gate.
-            (Source::ClaudeProject, Agent::Claude) => {
+            (Source::ClaudeProject, ProviderKind::Claude) => {
                 project == session.project
                     && !claude_off(&server.name)
                     && self.claude_approval(&server.name) == Some(claude_config::Approval::Approved)
             }
             // Codex loads a project's layers only where the user trusts it in Codex.
-            (Source::CodexProject, Agent::Codex) => {
+            (Source::CodexProject, ProviderKind::Codex) => {
                 project == session.project
                     && project
                         .is_some_and(|project| self.codex_trusted.iter().any(|p| p == project))
             }
-            (Source::ClaudePlugin, Agent::Claude) => server.plugin.as_ref().is_some_and(|plugin| {
-                plugin.counts_in(session.project)
-                    && !claude_off(&format!("plugin:{}:{}", plugin.name, server.name))
-            }),
-            (Source::CodexPlugin, Agent::Codex) => server
+            (Source::ClaudePlugin, ProviderKind::Claude) => {
+                server.plugin.as_ref().is_some_and(|plugin| {
+                    plugin.counts_in(session.project)
+                        && !claude_off(&format!("plugin:{}:{}", plugin.name, server.name))
+                })
+            }
+            (Source::CodexPlugin, ProviderKind::Codex) => server
                 .plugin
                 .as_ref()
                 .is_some_and(|plugin| plugin.counts_in(session.project)),
@@ -912,6 +911,24 @@ impl Registry {
         Ok(())
     }
 
+    /// [`Self::watch`] on a thread of its own, so nothing waits for it: under load macOS's
+    /// file-event service takes seconds for each folder watched. Once it watches, the configs
+    /// are read again for what changed meanwhile.
+    pub fn watch_in_background(self: &Arc<Self>) {
+        let registry = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("registry-watch".into())
+            .spawn(move || match registry.watch() {
+                Ok(()) => registry.changed(),
+                Err(error) => {
+                    tracing::warn!(%error, "the integrations' configs aren't watched");
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "the integrations' configs aren't watched");
+        }
+    }
+
     /// What the watcher looks at.
     fn watched(&self) -> watch::Watched {
         let roots = &self.roots;
@@ -941,7 +958,7 @@ impl Registry {
             }
             files.push(plugin.root.join(".mcp.json"));
             trees.push(plugin.root.join("skills"));
-            if plugin.agent == Agent::Codex {
+            if plugin.agent == ProviderKind::Codex {
                 dirs.extend(plugin.root.parent().map(Path::to_owned));
             }
         }

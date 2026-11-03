@@ -2,8 +2,8 @@
  * A standalone Vite entry, excluded from the app entry and production build: a session's workers
  * @-mentioned (`@task-N`) wherever the user reads them, each by its name, in the app's own
  * conversation view, IPC mocked: the kept draft's chip, the `@` menu, the queued
- * messages above the composer and one pulled back into it, a notice of one the session sent on to
- * a worker, the sent bubble and the rail's preview of it. What it saw goes as JSON into
+ * messages above the composer and one pulled back into it, the sent bubble and the rail's
+ * preview of it. What it saw goes as JSON into
  * `<pre id="worker-names-result">`; `WorkerNamesRender.test.ts` checks it.
  */
 import "@/fixtures/cliView";
@@ -14,7 +14,7 @@ import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureInput } from "@/fixtures/input";
-import type { Conversation, ConversationView as View, Message, Project, QueuedMessage, Request, SentToWorker, Task } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, Message, Project, QueuedMessage, Request, Task } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { useApp } from "@/state/store";
 
@@ -46,7 +46,6 @@ for (let turn = 0; turn < 4; turn++) {
   });
 }
 const queued: QueuedMessage = { id: "q1", text: "then @task-3 checks it", attachments: [], mentions: [{ type: "task", id: "task-b" }], queuedAtMs: start, editedAtMs: null };
-const sent: SentToWorker = { id: "s1", text: "@task-1 rebase first", worker: "task-a", workerNumber: 1, workerTitle: "Build the importer", sentAtMs: start };
 
 localStorage.setItem("brigadier.drafts", JSON.stringify({
   [id]: { text: "ask @task-1 now", attachments: [], atMs: Date.now(), mentions: [{ type: "task", id: "task-a" }] },
@@ -62,14 +61,14 @@ mockIPC((command, payload) => {
         view: {
           conversation, context: null, messages: { messages, hasMore: false }, tasks, approvals: [], questions: [],
           requests: [], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [],
-          compactions: [], decisions: [], queue: { items: [queued], paused: true, sent: [sent] }, run: "idle",
+          compactions: [], decisions: [], queue: { items: [queued], paused: true }, run: "idle",
           runRequest: null, head: "a3", ratings: {}, streaming: null, notices: [], previews: [],
         } as unknown as View,
       };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
     case "deleteQueued":
-      return { method: req.method, queue: { items: [], paused: true, sent: [sent] } };
+      return { method: req.method, queue: { items: [], paused: true } };
     default:
       return { method: req.method };
   }
@@ -115,7 +114,6 @@ async function drive() {
 
     const row = document.querySelector<HTMLElement>("[data-slot=queue-item-text]");
     seen.queued = { text: row?.textContent ?? null, title: row?.getAttribute("title") ?? null };
-    seen.sentNotice = document.querySelector("[data-slot=message-queue-sent] span")?.textContent ?? null;
 
     const bubble = document.querySelector<HTMLElement>("[data-message-id=u0]")!;
     seen.bubble = bubble.querySelector("[data-slot=worker-chip]")?.textContent ?? bubble.innerText;

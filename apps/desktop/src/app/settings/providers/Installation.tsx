@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { CLI_NAMES } from "@/app/settings/providers/AgentsOverview";
 import { ROW_LINE, ROW_TITLE } from "@/app/settings/providers/parts";
 import { ConnectStatus } from "@/app/setup/onboarding/ConnectStatus";
 import { agentState } from "@/app/setup/onboarding/SetupTerminal";
@@ -9,6 +8,7 @@ import { Button, ErrorLine } from "@/components/controls";
 import { SettingsCard } from "@/components/shared";
 import { pickFile, request } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
+import { cliFacts } from "@/lib/providerKinds";
 import { cn } from "@/lib/utils";
 import { connectAgent, connecting, useConnectProgress } from "@/state/connect";
 import { useAgentPageAsk } from "@/state/agentPage";
@@ -80,7 +80,7 @@ export function Installation({
               ? `Update it with ${update.action.command}`
               : update?.action.type === "run"
                 ? update.action.command
-                : `${CLI_NAMES[provider]} is up to date`
+                : `${cliFacts(provider).cliName} is up to date`
           }
           onClick={() => update && void startUpdate(update)}
         >
@@ -94,7 +94,7 @@ export function Installation({
   const change = () =>
     location.run(async () => {
       const folder = (status?.path ?? chosen)?.replace(/\/[^/]*$/, "");
-      const picked = await pickFile(`Choose the ${CLI_NAMES[provider]}`, folder);
+      const picked = await pickFile(`Choose the ${cliFacts(provider).cliName}`, folder);
       if (!picked) return;
       // Fails with what is wrong with it; only a real one is kept.
       await request({ method: "checkAgentPath", provider, path: picked });
@@ -106,7 +106,7 @@ export function Installation({
       <div data-slot="agent-cli" className="flex flex-col px-4 py-3">
         <div className="flex items-center gap-6">
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className={ROW_TITLE}>{CLI_NAMES[provider]}</span>
+            <span className={ROW_TITLE}>{cliFacts(provider).cliName}</span>
             <span className={ROW_LINE}>{version}</span>
             <ErrorLine error={failed ?? null} />
           </div>

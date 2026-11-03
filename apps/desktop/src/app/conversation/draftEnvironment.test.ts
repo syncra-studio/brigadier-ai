@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { checkoutHolder, environmentRequest } from "@/app/conversation/draftEnvironment";
-import type { Conversation, Environment, Lifecycle } from "@/ipc/generated";
+import { environmentRequest, worktreeLabel } from "@/app/conversation/draftEnvironment";
+import type { Conversation } from "@/ipc/generated";
 
 const place = { base: null, sessionBranch: "", current: "feature-x", loading: false };
 
-const session = (title: string, environment: Environment, lifecycle: Lifecycle = "active", repo = "/repo") =>
-  ({ title, kind: "session", lifecycle, setup: { type: "session", repo, environment } }) as unknown as Conversation;
 
 test("a new worktree starts from the picked base, else the checked-out branch, under the name given", () => {
   assert.deepEqual(environmentRequest({ ...place, environment: "newWorktree" }), {
@@ -31,15 +29,22 @@ test("the local checkout works on the branch the project's folder has checked ou
   );
 });
 
-test("the local checkout can't start while another session works there; an archived one or a worktree doesn't hold it", () => {
-  assert.deepEqual(environmentRequest({ ...place, environment: "localCheckout", holder: "Fix login" }), {
-    problem: "“Fix login” already works in this checkout. Archive it, or start this session in a new worktree.",
+test("an existing worktree is worked in, the folder picked (goal 9, D130)", () => {
+  assert.deepEqual(environmentRequest({ ...place, environment: "existingWorktree", worktree: "/w/fix", base: "main" }), {
+    request: { type: "existing", path: "/w/fix" },
   });
-  assert.deepEqual(environmentRequest({ ...place, environment: "newWorktree", holder: "Fix login" }), {
-    request: { type: "newWorktree", base: "feature-x", branch: null },
-  });
-  const local: Environment = { type: "localCheckout", branch: "main" };
-  const worktree: Environment = { type: "newWorktree", base: "main", branch: "s", path: null, start: null };
-  assert.equal(checkoutHolder([session("Gone", local, "archived"), session("Away", worktree), session("Other repo", local, "active", "/other")], "/repo"), null);
-  assert.equal(checkoutHolder([session("Gone", local, "archived"), session("Resting", local, "hibernated")], "/repo")?.title, "Resting");
+  assert.deepEqual(environmentRequest({ ...place, environment: "existingWorktree" }), { problem: "Pick the worktree to work in." });
+  assert.deepEqual(environmentRequest({ ...place, environment: "existingWorktree", loading: true }), { problem: "Reading the repository…", waiting: true });
+});
+
+const session = (id: string, title: string, path: string, createdAtMs: number) =>
+  ({ id, title, createdAtMs, setup: { type: "session", environment: { type: "newWorktree", base: "main", branch: "b", path, start: null } } }) as unknown as Conversation;
+
+test("a worktree reads as the sessions working there by title, else its folder's name (D184)", () => {
+  const conversations = {
+    b: session("b", "Second", "/tmp/data/dc81/work", 2),
+    a: session("a", "Write greet CLI", "/tmp/data/dc81/work", 1),
+  };
+  assert.equal(worktreeLabel("/private/tmp/data/dc81/work", conversations), "Write greet CLI, Second");
+  assert.equal(worktreeLabel("/Users/me/code/app-feature/", conversations), "app-feature");
 });

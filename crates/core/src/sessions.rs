@@ -14,14 +14,14 @@ use crate::board::{self, Board};
 use crate::model::{
     Catalog, Conversation, ConversationId, ConversationKind, ConversationView, DomainEvent,
     EnvironmentKind, ForkOrigin, Lifecycle, Message, MessageMatch, MessageMatches, MessagePage,
-    MessageRole, ModelChoice, Project, ProjectId, ProjectPatch, ProjectRepo, RawEntry, Settings,
-    Setup, WorkerPage, streams,
+    MessageRole, ModelChoice, PeerRef, Project, ProjectId, ProjectPatch, ProjectRepo, RawEntry,
+    Settings, Setup, WorkerPage, streams,
 };
 use crate::projection::Projection;
 
 use crate::work::{
     AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, QueuedMessage,
-    RequestState, RequestUndo, SentToWorker, Task, TaskId, UserRequest,
+    RequestState, Task, TaskId, UserRequest,
 };
 use crate::{Error, Result, now_ms};
 
@@ -734,11 +734,18 @@ impl Core {
             .await
     }
 
-    /// Sends queued message `item` as the user's message. A merge card answered in the words
-    /// it carries points at the message from now on. One the session already has (given to it
-    /// to judge, run2-D40) keeps the queued message's id, so its thread names it once.
-    pub async fn append_queued(&self, id: ConversationId, item: QueuedMessage) -> Result<Message> {
-        let message_id = item.delivered.then(|| item.id.clone());
+    /// Sends queued message `item` as the user's message, taking it out of the queue in the
+    /// same write: never in both, never in neither, after a crash or on screen (D73). The
+    /// message keeps the queued message's id, so the thread knows it while the rail still has
+    /// it, and one the session already has (given to it to judge, run2-D40) is named once. A
+    /// merge card answered in the words it carries points at the message from now on.
+    /// Another session's message stays that session's: a peer message, never the user's (goal 4).
+    pub async fn append_queued(
+        &self,
+        id: ConversationId,
+        item: QueuedMessage,
+        into: Option<String>,
+    ) -> Result<Message> {
         let message = self
             .append_user_message_as(
                 id.clone(),
@@ -746,7 +753,8 @@ impl Core {
                 item.attachments,
                 item.mentions,
                 None,
-                message_id,
+                Some((item.id.clone(), item.peer)),
+                into,
             )
             .await?;
         let board = self.board(&id).await?;
@@ -778,12 +786,27 @@ impl Core {
         mentions: Vec<Mention>,
         parent: Option<String>,
     ) -> Result<Message> {
-        self.append_user_message_as(id, text, attachments, mentions, parent, None)
+        self.append_user_message_as(id, text, attachments, mentions, parent, None, None)
             .await
     }
 
-    /// [`Self::append_user_message_under`], with the message's id given (`message_id`) rather
-    /// than a new one.
+    /// [`Self::append_user_message`], its request steered into request `into` in the same
+    /// write, so no frame ever shows it as a block of its own.
+    pub(crate) async fn append_steered_message(
+        &self,
+        id: ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+        into: Option<String>,
+    ) -> Result<Message> {
+        self.append_user_message_as(id, text, attachments, mentions, None, None, into)
+            .await
+    }
+
+    /// [`Self::append_user_message_under`], for queued message `queued`: the message takes its
+    /// id, and it leaves the queue in the same write; another session's is that session's.
+    #[allow(clippy::too_many_arguments)]
     async fn append_user_message_as(
         &self,
         id: ConversationId,
@@ -791,8 +814,13 @@ impl Core {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
         parent: Option<String>,
-        message_id: Option<String>,
+        queued: Option<(String, Option<PeerRef>)>,
+        steered_into: Option<String>,
     ) -> Result<Message> {
+        let (queued, peer) = match queued {
+            Some((item, peer)) => (Some(item), peer),
+            None => (None, None),
+        };
         let mut titles = self.titles.lock().await;
         let conversation = self.conversation(&id)?;
         let trimmed = text.trim().to_owned();
@@ -803,11 +831,19 @@ impl Core {
         let mut message = self
             .new_message(
                 &id,
-                MessageRole::User,
-                message_id.unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+                if peer.is_some() {
+                    MessageRole::Peer
+                } else {
+                    MessageRole::User
+                },
+                queued
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
                 text,
             )
             .await?;
+        let from_peer = peer.as_ref().map(|peer| peer.from.clone());
+        message.peer = peer.map(Box::new);
         message.attachments = attachments;
         message.mentions = mentions;
         if parent.is_some() {
@@ -843,7 +879,7 @@ impl Core {
                         state: RequestState::Working,
                         started_at_ms: message.created_at_ms,
                         ended_at_ms: None,
-                        steered_into: None,
+                        steered_into,
                         steered_after: None,
                         undo: None,
                         waited: Vec::new(),
@@ -851,7 +887,7 @@ impl Core {
                         worked: Vec::new(),
                         quota_wait: false,
                         waiting_for: Vec::new(),
-                        from_peer: None,
+                        from_peer: from_peer.clone(),
                         held_by: None,
                         background_jobs: None,
                         changes: None,
@@ -860,7 +896,9 @@ impl Core {
                 },
             ),
         ];
-        let mut untitled = !titles.claimed.contains(&id)
+        // Another session's message never names this one.
+        let mut untitled = from_peer.is_none()
+            && !titles.claimed.contains(&id)
             && matches!(
                 conversation.title.as_str(),
                 NEW_SESSION_TITLE | NEW_CHAT_TITLE
@@ -904,8 +942,10 @@ impl Core {
                 },
             ));
         }
-        let stored = self.record_with_board(&id, events).await?;
-        titles.claimed.insert(id.clone());
+        let stored = self.record_taking(&id, events, queued.as_deref()).await?;
+        if from_peer.is_none() {
+            titles.claimed.insert(id.clone());
+        }
         if let Some(request) = &title_request {
             titles.pending.insert(id.clone(), request.nonce.clone());
         }
@@ -1389,10 +1429,12 @@ impl Core {
             queue: board.queue.clone(),
             run: board.run,
             run_request: board.run_request.clone(),
+            run_since: board.run_since,
             head: board.head.as_ref().map(|(head, _)| head.clone()),
             worker_steps: board.worker_steps.clone(),
             orchestrator_steps: board.orchestrator_steps.clone(),
             machine_steps: board.machine_steps.clone(),
+            start_steps: board.start_steps.clone(),
             thinking: board.thinking.clone(),
             compactions: board.sorted_compactions(),
             decisions: board.decisions.clone(),
@@ -1431,11 +1473,41 @@ impl Core {
         id: &ConversationId,
         events: Vec<(String, DomainEvent)>,
     ) -> Result<Vec<i64>> {
+        self.record_taking(id, events, None).await
+    }
+
+    /// [`Self::record_with_board`], with queued message `take` taken out of the queue in the
+    /// same write, after the events: the thread has it before the rail lets it go.
+    async fn record_taking(
+        &self,
+        id: &ConversationId,
+        mut events: Vec<(String, DomainEvent)>,
+        take: Option<&str>,
+    ) -> Result<Vec<i64>> {
         let stream = streams::conversation(id);
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
             let board = self.load_board(id).await?;
             boards.insert(id.clone(), board);
+        }
+        if let Some(item_id) = take {
+            let mut queue = boards
+                .get(id)
+                .map(|board| board.queue.clone())
+                .unwrap_or_default();
+            let index = queue
+                .items
+                .iter()
+                .position(|item| item.id == item_id)
+                .ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))?;
+            queue.items.remove(index);
+            events.push((
+                stream.clone(),
+                DomainEvent::QueueChanged {
+                    conversation_id: id.clone(),
+                    queue,
+                },
+            ));
         }
         let stored = self.record(events.clone()).await?;
         if let Some(board) = boards.get_mut(id) {
@@ -1753,35 +1825,6 @@ impl Core {
         Ok(())
     }
 
-    pub(crate) async fn set_request_undo(
-        &self,
-        id: &ConversationId,
-        request_id: &str,
-        undo: RequestUndo,
-    ) -> Result<()> {
-        let mut boards = self.boards.lock().await;
-        if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
-            boards.insert(id.clone(), board);
-        }
-        let Some(mut request) = boards
-            .get(id)
-            .and_then(|board| board.requests.get(request_id))
-            .cloned()
-        else {
-            return Err(Error::NotFound(format!("request {request_id}")));
-        };
-        request.undo = Some(undo);
-        let event = DomainEvent::RequestUpdated { request };
-        let stored = self
-            .record(vec![(streams::conversation(id), event.clone())])
-            .await?;
-        if let Some(board) = boards.get_mut(id) {
-            board.apply(&event, stored[0]);
-        }
-        Ok(())
-    }
-
     /// Records that a request's message was steered into `into`'s running turn, while
     /// `after` was streaming.
     pub(crate) async fn mark_steered(
@@ -1881,11 +1924,13 @@ impl Core {
         mentions: Vec<Mention>,
         index: Option<u32>,
     ) -> Result<QueuedMessage> {
-        self.enqueue_as(id, text, attachments, mentions, index, false)
+        self.enqueue_as(id, text, attachments, mentions, index, false, None)
             .await
     }
 
-    /// [`Self::enqueue`]; `deciding` while the session judges it (run2-D40).
+    /// [`Self::enqueue`]; `deciding` while the session judges it (run2-D40); for `worker`, the
+    /// user's message to that worker of the session's (goal 8).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn enqueue_as(
         &self,
         id: &ConversationId,
@@ -1894,6 +1939,7 @@ impl Core {
         mentions: Vec<Mention>,
         index: Option<u32>,
         deciding: bool,
+        worker: Option<TaskId>,
     ) -> Result<QueuedMessage> {
         if text.trim().is_empty() && attachments.is_empty() {
             return Err(Error::Invalid("message is empty".into()));
@@ -1910,6 +1956,8 @@ impl Core {
             delivered: false,
             held_by: None,
             offer_session: false,
+            worker,
+            peer: None,
         };
         let queued = item.clone();
         self.change_queue(id, move |queue| {
@@ -1928,6 +1976,42 @@ impl Core {
         Ok(item)
     }
 
+    /// Queues another session's message `text` under its own id (`peer.message_id`), last:
+    /// once, so a message queued before a crash is never queued again (goal 4). `None` when
+    /// it is queued already.
+    pub(crate) async fn enqueue_peer(
+        &self,
+        id: &ConversationId,
+        peer: PeerRef,
+        text: String,
+        deciding: bool,
+    ) -> Result<Option<QueuedMessage>> {
+        let item = QueuedMessage {
+            id: peer.message_id.clone(),
+            text,
+            attachments: Vec::new(),
+            mentions: Vec::new(),
+            queued_at_ms: now_ms(),
+            edited_at_ms: None,
+            deciding,
+            delivered: false,
+            held_by: None,
+            offer_session: false,
+            worker: None,
+            peer: Some(peer),
+        };
+        let mut added = None;
+        self.change_queue(id, |queue| {
+            if queue.items.iter().all(|queued| queued.id != item.id) {
+                queue.items.push(item.clone());
+                added = Some(item);
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(added)
+    }
+
     pub async fn edit_queued(
         &self,
         id: &ConversationId,
@@ -1943,6 +2027,12 @@ impl Core {
         self.change_queue(id, |queue| {
             let item = find_queued(queue, item_id)?;
             // Being given to the session (Deciding) counts as had: the words it reads are fixed.
+            // Another session's words are never the user's to change.
+            if item.peer.is_some() {
+                return Err(Error::Invalid(
+                    "another session sent this message; delete it if it shouldn't go".into(),
+                ));
+            }
             if item.delivered || item.deciding {
                 return Err(Error::Invalid(
                     "the session already has this message; delete it and send it again".into(),
@@ -1994,41 +2084,6 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
-    /// The session took queued message `item_id` to judge (run2-D40): its words can't change
-    /// any more, and it says which command of the thread's it waits behind, if one. False if
-    /// it is no longer queued.
-    pub(crate) async fn mark_delivered(
-        &self,
-        id: &ConversationId,
-        item_id: &str,
-        held: Option<HeldBy>,
-    ) -> Result<bool> {
-        let mut found = false;
-        self.change_queue(id, |queue| {
-            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
-                item.delivered = true;
-                item.held_by = held;
-                found = true;
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(found)
-    }
-
-    /// Reserves an existing queued message for a worker hand-off. Unlike settling, a missing
-    /// item is an error: a stale snapshot must never authorize sending it (#630).
-    pub(crate) async fn claim_queued(&self, id: &ConversationId, item_id: &str) -> Result<()> {
-        self.change_queue(id, |queue| {
-            let item = find_queued(queue, item_id)?;
-            item.deciding = true;
-            item.held_by = None;
-            Ok(())
-        })
-        .await?;
-        Ok(())
-    }
-
     /// Ends the judging of queued messages `item_ids` (`deciding`: claims them again, for a
     /// hand-off under way): those still queued wait there for their turn. Returns those whose
     /// mark changed.
@@ -2063,27 +2118,6 @@ impl Core {
         Ok(changed)
     }
 
-    /// Ends the judging of queued message `item_id` with the session's offer to open it as a
-    /// new session: it waits, showing the offer. False if it is no longer queued.
-    pub(crate) async fn offer_queued_as_session(
-        &self,
-        id: &ConversationId,
-        item_id: &str,
-    ) -> Result<bool> {
-        let mut found = false;
-        self.change_queue(id, |queue| {
-            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
-                item.deciding = false;
-                item.held_by = None;
-                item.offer_session = true;
-                found = true;
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(found)
-    }
-
     /// The user's "Run here" on a message the session offered as a new session: the offer goes
     /// and it waits like any other. Fails if it is no longer queued.
     pub async fn run_queued_here(
@@ -2096,49 +2130,6 @@ impl Core {
             Ok(())
         })
         .await
-    }
-
-    /// Says which of the thread's commands the Deciding messages `item_ids` wait behind
-    /// (`None`: none any more). Those already saying so, or gone, are left as they are.
-    pub(crate) async fn mark_queued_held(
-        &self,
-        id: &ConversationId,
-        item_ids: &[String],
-        held: Option<HeldBy>,
-    ) -> Result<()> {
-        if item_ids.is_empty() {
-            return Ok(());
-        }
-        let board = self.board(id).await?;
-        let changes = board
-            .queue
-            .items
-            .iter()
-            .any(|item| item_ids.contains(&item.id) && item.held_by != held);
-        if !changes {
-            return Ok(());
-        }
-        self.change_queue(id, |queue| {
-            for item in &mut queue.items {
-                if item_ids.contains(&item.id) {
-                    item.held_by = held.clone();
-                }
-            }
-            Ok(())
-        })
-        .await
-        .map(|_| ())
-    }
-
-    /// Keeps the notice of a queued message the session sent on to one of its workers.
-    pub(crate) async fn keep_sent(&self, id: &ConversationId, sent: SentToWorker) -> Result<()> {
-        self.change_queue(id, |queue| {
-            queue.sent.retain(|kept| kept.id != sent.id);
-            queue.sent.push(sent);
-            Ok(())
-        })
-        .await
-        .map(|_| ())
     }
 
     /// The user dismissed the notice made at `at_ms` (D51): no read or redraw shows it again.
@@ -2159,31 +2150,25 @@ impl Core {
         self.record_conversation(id, vec![event]).await.map(|_| ())
     }
 
-    /// The user dismissed the notice of sent message `item_id`.
-    pub async fn dismiss_sent(&self, id: &ConversationId, item_id: &str) -> Result<MessageQueue> {
-        self.change_queue(id, |queue| {
-            let before = queue.sent.len();
-            queue.sent.retain(|sent| sent.id != item_id);
-            if queue.sent.len() == before {
-                return Err(Error::NotFound(format!("sent message {item_id}")));
-            }
-            Ok(())
-        })
-        .await
-    }
-
-    /// Takes the next message to send, unless the queue is paused or holds none ready (the
-    /// next one is still Deciding).
-    pub async fn pop_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
+    /// The next message to send, unless the queue is paused or holds none ready (the next one
+    /// is still Deciding). [`Self::append_queued`] takes it out.
+    pub async fn next_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
         let board = self.board(id).await?;
         if board.queue.paused {
             return Ok(None);
         }
-        let Some(next) = board.queue.ready_to_send() else {
-            return Ok(None);
-        };
-        let next = next.id.clone();
-        self.take_queued(id, &next).await.map(Some)
+        Ok(board.queue.ready_to_send().cloned())
+    }
+
+    /// Queued message `item_id` as it stands; [`Self::append_queued`] takes it out.
+    pub(crate) async fn queued(&self, id: &ConversationId, item_id: &str) -> Result<QueuedMessage> {
+        self.board(id)
+            .await?
+            .queue
+            .items
+            .into_iter()
+            .find(|item| item.id == item_id)
+            .ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
     pub async fn set_queue_paused(
@@ -3358,6 +3343,60 @@ mod tests {
             "前[image][image][image:unknown][image:row][image:svg][Image:a][image:broken[image]後[image:unclosed"
         );
         assert_eq!(display_text(text, &[]), text);
+    }
+
+    /// A queued message sent leaves the queue in the same write, after its message, under the
+    /// item's id (D73): never in both or in neither, and never sent twice.
+    #[tokio::test]
+    async fn a_queued_message_sent_leaves_the_queue_in_the_same_write() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-queued-{}", uuid::Uuid::now_v7())));
+        let store = Store::open(brigadier_store::StoreConfig {
+            db_path: dir.join("test.db"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        let core = Core::load(store).await.unwrap();
+        let id = core
+            .create_conversation(
+                ConversationId::generate(),
+                ConversationKind::Chat,
+                None,
+                None,
+                None,
+                Origin::default(),
+            )
+            .await
+            .unwrap()
+            .id;
+        let item = core
+            .enqueue(&id, "Also the docs.".into(), vec![], vec![], None)
+            .await
+            .unwrap();
+        let mut feed = core.store.subscribe();
+        let message = core
+            .append_queued(id.clone(), item.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(message.id, item.id);
+        assert!(core.board(&id).await.unwrap().queue.items.is_empty());
+        let mut written = Vec::new();
+        while let Ok(event) = feed.try_recv() {
+            written.push((event.seq, event.kind.clone()));
+        }
+        let at = |kind: &str| written.iter().find(|(_, each)| each == kind).unwrap().0;
+        assert!(at("message.appended") < at("queue.changed"), "{written:?}");
+        let seqs: Vec<_> = written.iter().map(|(seq, _)| *seq).collect();
+        assert!(
+            seqs.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "{written:?}"
+        );
+        // A stale caller sending it again finds it gone: no second message.
+        assert!(matches!(
+            core.append_queued(id.clone(), item, None).await,
+            Err(Error::NotFound(_))
+        ));
     }
 
     /// Find in pages the thread hasn't loaded: the messages before the oldest one shown, on

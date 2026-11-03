@@ -44,22 +44,24 @@ export function groupActivity<S, E>(entries: readonly E[], sort: (entry: E) => S
   return out;
 }
 
-/** A heading line a model writes over a part of its thinking: `**Checking the tests**`. */
-const HEADING = /^\s*\*\*(.+?)\*\*\s*$/;
+/** A heading a model writes over a part of its thinking: `**Checking the tests**` or `# Checking the tests`. */
+const HEADING = /^\s*(?:\*\*(.+?)\*\*|#{1,6}\s+(.+?))\s*$/;
 
 /**
- * What the thread thinks about now, for its live line: the last whole line of its thinking (a
- * lone bold heading gives its words), without markdown; "" when no line is whole yet, and the
- * line says "Thinking". A line still streaming is never shown, so the label never reads half a
- * sentence.
+ * What the thread thinks about now, for its live line (spec §1.1): the newest whole heading of
+ * its thinking, a markdown `#` heading or a lone bold line, without markdown; "" when it has
+ * none, and the line says "Thinking". Its plain reasoning is never shown, on any CLI, nor a
+ * heading still streaming.
  */
 export function thinkingLabel(text: string, complete = false): string {
   const lines = text.split("\n");
-  // The last line is whole once a newline follows it, or the thought is complete.
-  const last = (complete ? lines : lines.slice(0, -1)).filter((line) => line.trim()).at(-1) ?? "";
-  const heading = HEADING.exec(last)?.[1]?.trim();
-  if (heading) return heading;
-  return last.replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim();
+  // A line is whole once a newline follows it, or the thought is complete.
+  for (const line of (complete ? lines : lines.slice(0, -1)).toReversed()) {
+    const match = HEADING.exec(line);
+    const heading = (match?.[1] ?? match?.[2])?.replace(/[*_`]+/g, "").trim();
+    if (heading) return heading;
+  }
+  return "";
 }
 
 /** Whether the lead's step is work it did itself (a group's step), rather than news of its team. */
@@ -80,6 +82,7 @@ function leadWork(step: BlockOrchestratorStep): "work" | "hidden" | "apart" {
     // refusal too.
     case "peerSent":
     case "sessionSent":
+    case "sessionWait":
     case "messageRefused":
       return "work";
     default:
@@ -114,7 +117,7 @@ export function joinExchanges(items: GroupItem<LeadStep>[], sending: LeadStep | 
       const next = item.step.kind;
       out[out.length - 1] = {
         ...last,
-        step: { ...last.step, kind: { ...kind, messageIds: [...kind.messageIds, ...next.messageIds], waits: [...kind.waits, ...next.waits] } },
+        step: { ...last.step, kind: { ...kind, messageIds: [...kind.messageIds, ...next.messageIds] } },
       };
       continue;
     }
@@ -131,7 +134,7 @@ export function joinExchanges(items: GroupItem<LeadStep>[], sending: LeadStep | 
 export function stepKey(step: LeadStep): string {
   const { kind } = step;
   // A session's message is its `brigadier send` call: the same row as the call ran.
-  if (kind.type === "tool" || kind.type === "sessionSent") return `step:${kind.itemId}`;
+  if (kind.type === "tool" || kind.type === "sessionSent" || kind.type === "sessionWait") return `step:${kind.itemId}`;
   if (kind.type === "providerTransition") return `step:transition:${kind.id}`;
   if (kind.type === "peerSent" && kind.messageIds[0] !== undefined) return `step:peer:${kind.messageIds[0]}`;
   const of = "taskId" in kind ? `:${kind.taskId}` : "";
@@ -184,8 +187,8 @@ export function workerActivity(entries: readonly ThreadEntry[]): Activity<Action
     if (entry.kind === "action") {
       return workerPlumbing(entry.item) ? { type: "skip" } : { type: "step", key: entry.item.key, step: entry.item };
     }
-    // An answered approval leaves no trace: the action's own row tells what came of it.
-    if (entry.kind === "item" && entry.item.kind === "approval" && entry.item.resolution) return { type: "skip" };
+    // An answered approval leaves no trace, the action's own row tells what came of it, but the orchestrator's answer (D48).
+    if (entry.kind === "item" && entry.item.kind === "approval" && entry.item.resolution && entry.item.resolution.decidedBy !== "orchestrator") return { type: "skip" };
     // Thinking is never a row: the live one feeds the live line.
     if (entry.kind === "item" && entry.item.kind === "reasoning") return { type: "skip" };
     return { type: "break" };

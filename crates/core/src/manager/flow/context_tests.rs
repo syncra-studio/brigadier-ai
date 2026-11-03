@@ -23,13 +23,14 @@ const CHECKPOINT: &str = "Goal: move to the new store.\nNext: count the call sit
 const HIT: &str = "quokkacompass";
 const TAIL: &str = "lemurtrellis";
 
-fn context(part: Option<ContextPart>) -> CliRequest {
+pub(super) fn context(part: Option<ContextPart>) -> CliRequest {
     CliRequest::Context {
         part,
         name: None,
         grep: None,
         last: None,
         item: None,
+        session: false,
     }
 }
 
@@ -40,6 +41,7 @@ fn transcript(grep: Option<&str>, last: Option<u32>, item: Option<&str>) -> CliR
         grep: grep.map(Into::into),
         last,
         item: item.map(Into::into),
+        session: false,
     }
 }
 
@@ -53,16 +55,21 @@ fn ids(output: &Value, source: &str) -> Vec<String> {
         .collect()
 }
 
-fn write(path: &Path, text: &str) {
+pub(super) fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
 
 /// A Claude session file of one user message and one long reply, listed in `record`'s lineage.
 fn plant_transcript(record: &Path) {
+    plant_transcript_of(record, HIT);
+}
+
+/// [`plant_transcript`], its reply starting with `hit`.
+pub(super) fn plant_transcript_of(record: &Path, hit: &str) {
     let file = record.join("cli").join("w.jsonl");
     let at = "2026-10-25T10:00:00.000Z";
-    let reply = format!("{HIT} {} {TAIL}", "filler ".repeat(1200));
+    let reply = format!("{hit} {} {TAIL}", "filler ".repeat(1200));
     let lines = [
         json!({"type": "user", "timestamp": at, "uuid": "u-1",
                "message": {"role": "user", "content": SPEC}}),
@@ -119,7 +126,9 @@ async fn a_thread_and_its_worker_pull_their_context() {
                     let overview = brigadier(&turn, context(None)).await;
                     assert_eq!(overview["part"], "overview");
                     let text = overview["text"].as_str().unwrap();
-                    assert!(text.lines().count() < 40, "{text}");
+                    // One call carries what a thread acts on (D156): the small parts whole.
+                    assert!(text.contains(CHECKPOINT.trim()), "{text}");
+                    assert!(text.contains("## workers"), "{text}");
                     let parts: Vec<&str> = overview["parts"]
                         .as_array()
                         .unwrap()
@@ -129,7 +138,8 @@ async fn a_thread_and_its_worker_pull_their_context() {
                     assert_eq!(parts, ContextPart::ALL.map(ContextPart::word));
                     for part in ContextPart::ALL {
                         assert!(
-                            text.contains(&format!("  {}", part.word())),
+                            text.contains(&format!("  {}", part.word()))
+                                || text.contains(&format!("## {}:", part.word())),
                             "{part:?}: {text}"
                         );
                     }
@@ -298,8 +308,7 @@ async fn a_thread_and_its_worker_pull_their_context() {
 
 #[tokio::test]
 async fn context_reports_the_same_worktree_and_cross_agent_set_as_launch() {
-    use brigadier_providers::ProviderKind;
-    for provider in ProviderKind::ALL {
+    for provider in brigadier_providers::adapters::kinds() {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let script: Script = {
             let captured = captured.clone();
@@ -421,8 +430,11 @@ async fn context_reports_the_same_worktree_and_cross_agent_set_as_launch() {
 
 #[tokio::test]
 async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versions() {
-    use brigadier_providers::ProviderKind;
-    for provider in ProviderKind::ALL {
+    // Only a CLI whose skills folder moves with its account home (OpenCode's home is just its
+    // database, its skills are shared).
+    for provider in brigadier_providers::adapters::kinds()
+        .filter(|kind| brigadier_registry::adapter::adapter(*kind).is_some())
+    {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let script: Script = {
             let captured = captured.clone();
@@ -438,6 +450,7 @@ async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versio
                                 grep: None,
                                 last: None,
                                 item: None,
+                                session: false,
                             },
                         )
                         .await;

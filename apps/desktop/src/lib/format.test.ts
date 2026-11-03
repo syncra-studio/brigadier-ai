@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { fileName, formatDaySeparator, formatLastUsed, formatSentAt, formatTime, separatesTurn } from "@/lib/format";
+import { fileName, formatDaySeparator, inFolders, formatLastUsed, formatSentAt, formatTime, separatesTurn } from "@/lib/format";
 
 test("a message from yesterday says Yesterday under it, as its day's separator does", () => {
   // Sunday 10:00 local; the message was sent Saturday 2:37 local.
@@ -55,4 +55,13 @@ test("a file name saved from a web address shows decoded; any other stays as it 
   assert.equal(fileName("50% off.pdf"), "50% off.pdf");
   assert.equal(fileName("bad%E0%A4%A.txt"), "bad%E0%A4%A.txt");
   assert.equal(fileName("plain.txt"), "plain.txt");
+});
+
+test("a folder is the session's whether a CLI reports it resolved or not", () => {
+  const roots = [null, "/tmp/proj", "/Users/me/data/worktrees/s1"];
+  assert.ok(inFolders("/private/tmp/proj", roots));
+  assert.ok(inFolders("/Users/me/data/worktrees/s1/src", roots));
+  assert.ok(inFolders("/tmp/proj", ["/private/tmp/proj"]));
+  assert.ok(!inFolders("/tmp/project", roots));
+  assert.ok(!inFolders("/Users/me/elsewhere", roots));
 });

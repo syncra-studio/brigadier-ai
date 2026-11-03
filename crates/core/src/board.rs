@@ -131,13 +131,16 @@ pub(crate) struct Board {
     pub(crate) orchestrator_steps: Vec<OrchestratorStep>,
     /// Every row about the machine, in stream order.
     pub(crate) machine_steps: Vec<crate::model::MachineStep>,
+    /// Every start step of its turns, in stream order.
+    pub(crate) start_steps: Vec<crate::work::StartStepRecord>,
     pub(crate) compactions: HashMap<String, Compaction>,
     pub(crate) ratings: HashMap<String, Rating>,
     pub(crate) queue: MessageQueue,
     pub(crate) run: RunState,
     /// The request the running turn serves.
     pub(crate) run_request: Option<String>,
-    /// Where the active (or last) turn started in the stream: its own steps come after it.
+    /// Where its CLI last began starting in the stream (a turn's launch, or a relaunch mid-turn
+    /// at a switch): this start's steps are from it on.
     pub(crate) run_since: i64,
     /// The requests that settled with their branch ahead of base: the head then, and where
     /// it was recorded.
@@ -208,7 +211,7 @@ impl Board {
         let approvals: Vec<_> = self
             .approvals
             .values()
-            .filter(|approval| approval.state == CardState::Pending)
+            .filter(|approval| approval.state == CardState::Pending && !approval.for_orchestrator())
             .map(|approval| approval.id.clone())
             .collect();
         let questions: Vec<_> = self
@@ -454,11 +457,23 @@ impl Board {
             }
             DomainEvent::QueueChanged { queue, .. } => self.queue = queue.clone(),
             DomainEvent::RunStateChanged {
-                state, request_id, ..
+                state,
+                request_id,
+                step,
+                error,
+                ..
             } => {
-                let live =
-                    |state: RunState| matches!(state, RunState::Starting | RunState::Running);
-                if live(*state) && !live(self.run) {
+                if let Some(step) = step {
+                    self.start_steps.push(crate::work::StartStepRecord {
+                        step: *step,
+                        error: error.clone(),
+                        request_id: request_id.clone(),
+                        position: stream_seq,
+                    });
+                }
+                // A relaunch mid-turn (a switch) starts again too: the first start's steps
+                // stay before it.
+                if *state == RunState::Starting && self.run != RunState::Starting {
                     self.run_since = stream_seq;
                 }
                 self.run = *state;
@@ -1151,15 +1166,12 @@ pub(crate) fn activity_of(
     .then_some(activity)
 }
 
-/// The names of the CLI's MCP servers in `servers` that want the user to sign in. A claude.ai
-/// connector is left out: the user manages those on claude.ai, and many stay unsigned on
-/// purpose.
+/// The names of the CLI's MCP servers in `servers` that want the user to sign in. One whose
+/// sign-in the user manages outside the CLI is left out: many stay unsigned on purpose.
 pub(crate) fn sign_ins(servers: &[McpServerState]) -> Vec<String> {
     servers
         .iter()
-        .filter(|server| {
-            server.status == McpStatus::NeedsAuth && !server.name.starts_with("claude.ai ")
-        })
+        .filter(|server| server.status == McpStatus::NeedsAuth && !server.managed)
         .map(|server| server.name.clone())
         .collect()
 }
@@ -1174,6 +1186,8 @@ mod shared_states_tests {
     struct Server {
         name: String,
         status: McpStatus,
+        #[serde(default)]
+        managed: bool,
     }
 
     #[derive(serde::Deserialize)]
@@ -1210,6 +1224,8 @@ mod shared_states_tests {
                     status: server.status,
                     tools: Vec::new(),
                     transport: None,
+                    managed: server.managed,
+                    label: None,
                 })
                 .collect();
             let activity = activity_of(

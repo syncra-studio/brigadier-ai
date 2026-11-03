@@ -21,6 +21,7 @@ test("the summary card starts closed, opens by itself once on a new session's fi
   assert.equal(typeof seen.cardLeft, "number");
   assert.ok((seen.messageRight as number) <= (seen.cardLeft as number),
     `the user's message ends before the card: message right ${String(seen.messageRight)}, card left ${String(seen.cardLeft)}`);
+  assert.equal(seen.panelNoFloat, true, "a side panel narrowing the pane leaves the card pinned, not floating over the thread");
   assert.equal(seen.closedAfterPreview, true, "closed by the user, a new preview leaves it closed");
   assert.equal(seen.closedOnReturn, true, "and coming back to the session too");
   assert.equal(seen.narrowClosed, true, "where it would cover the thread, it doesn't open by itself");

@@ -50,13 +50,16 @@ function worker(taskId: string, number: number, title: string): Task {
     quotaWait: null, report: done || diffTest ? { ...report, artifacts: diffTest ? [{ id: "worker-diff", title: `Diff of task-${number}`, kind: "diff", mime: "text/x-diff", bytes: workerPatch.length, fileName: `task-${number}.diff` }] : [] } : null, outputs: done ? [{ id: "summary-file", title: "Project file summary", kind: "file", mime: "text/markdown", bytes: 2048, fileName: "summary.md" }] : [],
   };
 }
-const tasks = { t1: worker("t1", 1, headerTest ? "Add the project file summary" : "File summary"), t2: worker("t2", 2, "Readme draft") };
+// A short title beside a long model name: only the model gives way.
+const shortTitle = query.has("short-title");
+const headerTitle = shortTitle ? "ls check" : "Add the project file summary";
+const tasks = { t1: worker("t1", 1, headerTest ? headerTitle : "File summary"), t2: worker("t2", 2, "Readme draft") };
 if (stress) {
   tasks.t1.spec = `Brigadier desktop app (Tauri + React, apps/desktop/src). Fix the worker panel and verify it in the running app. Read ${longPath}. ${"Keep the brief readable at every width. ".repeat(8)}`;
 }
 if (query.get("waiting") === "1") { tasks.t2.state = "blocked"; tasks.t2.blockedReason = "Waiting for plan review"; }
 useApp.setState((s) => ({ providers: { ...s.providers, view: { providers: [{ provider: "codex", status: null, quota: null, usage: null, error: null, checkedAtMs: now,
-  models: { provider: "codex", fetchedAtMs: now, cliVersion: "fixture", models: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", description: "", resolved: null, efforts: ["high"], defaultEffort: "high", isDefault: true, inputModalities: ["text"], fast: null, legacy: false }] } }], sessions: [], fixtures: [] } } }));
+  models: { provider: "codex", fetchedAtMs: now, cliVersion: "fixture", models: [{ id: "gpt-6.1-sol", displayName: shortTitle ? "GPT-6.1 Sol (codex)" : "GPT-6.1 Sol", description: "", resolved: null, efforts: ["high"], defaultEffort: "high", isDefault: true, inputModalities: ["text"], fast: null, legacy: false }] } }], sessions: [], fixtures: [] } } }));
 const events: ProviderEvent[] = done ? [
   ...["I’ll inspect the project files and its Git metadata.", "I’ll read the Python functions first.", "Next I’ll inspect the JavaScript and text files.", "I’ll include the Git metadata in the inventory.", "The inspection remains read only."].map((text, index) => ({ type: "message" as const, itemId: `early-${index}`, role: "assistant" as const, text })),
   ...["ls -la", "cat m1.py", "cat m2.py", "git status", "git log --oneline"].map((command, index) => ({ type: "command" as const, itemId: `cmd-${index}`, command, cwd: null, status: "completed" as const, exitCode: 0, output: "Clean", durationMs: null })),
@@ -262,14 +265,15 @@ if (headerTest) {
   const result = document.body.appendChild(document.createElement("pre"));
   result.id = "workers-header-result";
   void (async () => {
-    for (let i = 0; i < 100 && !find('button[title^="Open Add the project"]'); i++) await wait(50);
-    find('button[title^="Open Add the project"]')!.click();
+    for (let i = 0; i < 100 && !find(`button[title^="Open ${headerTitle.slice(0, 15)}"]`); i++) await wait(50);
+    find(`button[title^="Open ${headerTitle.slice(0, 15)}"]`)!.click();
     for (let i = 0; i < 100 && !find('[data-slot="worker-header"] h2'); i++) await wait(50);
     await wait(500);
     const header = find('[data-slot="worker-header"]')!;
     const title = header.querySelector("h2")!;
-    const pill = header.querySelector<HTMLElement>('button[aria-label^="Worker details:"] span')!;
-    result.textContent = JSON.stringify({ window: innerWidth, panel: header.clientWidth, title: size(title), pill: size(pill) });
+    const pill = header.querySelector<HTMLElement>('button[aria-label^="Worker details:"]')!;
+    const [model, state] = pill.querySelectorAll<HTMLElement>("span");
+    result.textContent = JSON.stringify({ window: innerWidth, panel: header.clientWidth, title: size(title), pill: size(pill), model: size(model!), state: { ...size(state!), text: state!.textContent } });
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
 }
 

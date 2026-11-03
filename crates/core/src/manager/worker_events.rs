@@ -682,6 +682,9 @@ fn net_word(kind: EventKind) -> &'static str {
         EventKind::UsageLimit => "hit a usage limit",
         EventKind::FreshContext => "compacted its context",
         EventKind::Quiet => "is quiet",
+        // A session's events only; never a worker's.
+        EventKind::Answered => "answered",
+        EventKind::Removed => "had a message removed",
     }
 }
 
@@ -706,8 +709,17 @@ fn net_text(message: &str, held: &[Kept], titles: &HashMap<TaskId, String>) -> S
                     }
                 })
                 .unwrap_or_default();
+            // As `brigadier wait` says it: only the session answers its worker's prompt (D48).
+            let answer = if kept.event.event == EventKind::NeedsInput {
+                format!(
+                    " (`brigadier send {} --allow` or `--deny <reason>` answers a permission prompt)",
+                    kept.event.id
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "Worker \"{title}\" ({}): {}{what}{}",
+                "Worker \"{title}\" ({}): {}{what}{answer}{}",
                 kept.event.id,
                 net_word(kept.event.event),
                 super::work_facts::net_facts(&kept.event)
@@ -757,11 +769,16 @@ impl SessionManager {
         event: WaitEvent,
     ) {
         let record = self.events_record(conversation);
+        // A card's word holds as its waiting row does, and may be answered before the net goes.
+        let owes = card.is_none();
         if self
             .worker_events
             .push(conversation, &record, task, card, event)
             .is_some()
         {
+            if owes {
+                self.owe_cli_turn(conversation);
+            }
             self.net_soon(conversation);
         }
     }
@@ -830,6 +847,8 @@ impl SessionManager {
     pub(super) fn forget_worker_events(&self, conversation: &ConversationId, task: &TaskId) {
         let record = self.events_record(conversation);
         self.worker_events.forget(conversation, &record, task);
+        // A bare `brigadier wait` looks again: with no worker left that can send, it ends.
+        self.worker_events.added.notify_waiters();
         self.worker_quiet.forget(task);
         self.forget_worker_commands(task);
     }

@@ -1,13 +1,14 @@
 import { usePlugins, type PluginDraft, type PluginsAdapter } from "./adapter";
 import { pickFolder, request } from "@/ipc/client";
 import type { CatalogSignIn, CatalogView } from "@/ipc/generated";
+import { cliFacts, PROVIDERS } from "@/lib/providerKinds";
 import { useApp } from "@/state/store";
 import type { PluginProjectView, PluginsView } from "./types";
 import { signingIn } from "./model";
 
 const agentName = (row: CatalogView["rows"][number]) => {
   const agents = new Set(row.definitions.map((definition) => definition.agent));
-  return agents.has("claude") && agents.has("codex") ? "Claude Code + Codex" : agents.has("claude") ? "Claude Code" : "Codex";
+  return PROVIDERS.filter((agent) => agents.has(agent)).map((agent) => cliFacts(agent).label).join(" + ");
 };
 
 /** The catalog's durable choices, rendered with the shared Settings grid. */

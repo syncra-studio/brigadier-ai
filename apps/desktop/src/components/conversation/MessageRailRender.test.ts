@@ -36,8 +36,18 @@ test("the rail beside the thread marks the user's messages and jumps to them", {
     feed: { feed: string | null; label: string | null; articles: boolean; setsize: (string | null)[]; placed: boolean; total: number; first: number; mountedBefore: boolean; up: boolean; down: boolean };
     farNeighbours: { markers: number; setsize: number; fourthMounted: boolean; up: boolean[]; down: boolean };
     short: { rail: boolean; rows: number };
+    steered: { rail: boolean; markers: string[]; steers: number; offset: number | null; flashed: boolean };
   };
   assert.equal(seen.error, undefined);
+
+  // One turn's block took the next 4 messages, steered in: all 5 are on the rail, in order, and a
+  // click on a steered one lands its bubble at the top and flashes it.
+  const { steered } = seen;
+  assert.equal(steered.steers, 4);
+  assert.equal(steered.rail, true);
+  assert.deepEqual(steered.markers, ["steered-u0", "steered-r1", "steered-r2", "steered-r3", "steered-r4"]);
+  near(steered.offset, 24, "the steered message under the view's top");
+  assert.equal(steered.flashed, true);
 
   // 40 turns loaded, only those near the view mounted: a marker for each user message, oldest
   // first, mounted or not, on a rail 16px from the view's start, centred on it.

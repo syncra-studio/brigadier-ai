@@ -1,4 +1,4 @@
-import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext, keptPlace, ThreadListContext, ThreadListSource, type ThreadHolding } from "@/components/conversation";
+import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext, keptPlace, ThreadListContext, ThreadListSource, type ThreadHolding, ThreadTurnRuns } from "@/components/conversation";
 import {
   type FC,
   memo,
@@ -37,13 +37,14 @@ import {
   sentMessageIds,
   type ThreadNode,
 } from "@/app/conversation/blocks";
+import { useBlockHold } from "@/app/conversation/blockHold";
 import { cliThreadTree, keptThread } from "@/app/conversation/cliBlocks";
 import { heldRows, keepDrawnBlocks } from "@/app/conversation/heldThread";
 import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
 import {
   type ComposerTarget,
   ComposerTargetContext,
-  PulledSlot,
+  pulledSlots,
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
@@ -55,8 +56,8 @@ import { workerName } from "@/app/conversation/rowWords";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { ThreadFind } from "@/app/conversation/ThreadFind";
+import { taskRuns } from "@/app/conversation/taskActivity";
 import { AboveComposer } from "@/app/conversation/AboveComposer";
-import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
 import { LoadEarlier } from "@/app/conversation/LoadEarlier";
 import { UserAttachments } from "@/app/conversation/UserAttachments";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -106,7 +107,6 @@ import { holdDirect } from "@/state/heldDirect";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { loadWorkerThread, readSessionImageBlob, sessionImageOf, unreadSince, useThreadUnreadable, useThreadView, useWorkerRows } from "@/state/cliThread";
-import { isNativeWorker } from "@/state/nativeWorkers";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
@@ -226,13 +226,15 @@ function signature(
     block.endedAtMs,
     block.worked,
     block.cardWait,
-    block.texts.map((text) => [text.messageId, text.position, text.model, text.anchors, text.answerAtMs, text.commentary]),
+    block.texts.map((text) => [text.messageId, text.position, text.model, text.anchors, text.answerAtMs, text.commentary, text.live]),
     block.cards,
     block.tasks,
     block.rows,
     block.orchestratorSteps,
     block.thinking,
     block.compactions,
+    // A seam's divider comes to a block drawn before, when its generation closes (core-goals D120).
+    block.seams,
     block.steers.map((steer) => [steer.message.id, steer.text]),
     block.requestIds,
     picked,
@@ -320,6 +322,7 @@ function useItems(
             ...(text.anchors && { anchors: text.anchors }),
             ...(text.answerAtMs !== undefined && { answerAtMs: text.answerAtMs }),
             ...(text.commentary && { commentary: true }),
+            ...(text.live && { live: true }),
           })),
           cards: block.cards,
           rows: block.rows,
@@ -480,12 +483,12 @@ const EMPTY_DIGEST: BoardDigest = {
 
 /**
  * Those of `targets` the composer's next message can go to directly: the session's own
- * workers whose CLI still runs (not the CLI's own agents, not one gone or closed).
+ * workers whose CLI still runs (not one gone or closed).
  */
 function useDirectTargets(conversationId: string | null, targets: readonly MentionTarget[]): MentionTarget[] {
   const rows = useWorkerRows(conversationId);
   return useMemo(() => {
-    const live = new Set(rows.filter((row) => !isNativeWorker(row) && !row.gone).map((row) => row.id));
+    const live = new Set(rows.filter((row) => !row.gone).map((row) => row.id));
     return targets.filter((target) => live.has(target.id));
   }, [rows, targets]);
 }
@@ -567,10 +570,12 @@ export function ConversationView({
             questions: s.board.questions,
             orchestratorSteps: s.board.orchestratorSteps,
             machineSteps: s.board.machineSteps,
+            startSteps: s.board.startSteps,
             decisions: s.board.decisions,
             compactions: s.board.compactions,
             peerMessages: s.board.peerMessages,
             queueItems: s.board.queue.items,
+            requests: s.board.requests,
           }
         : null,
     ),
@@ -735,18 +740,21 @@ export function ConversationView({
     composerRef: (id) => attachments.refOf(id),
   }), [attachments, conversationId]);
   const [mentions] = useState(() => new MentionMemory());
-  const [pulled] = useState(() => new PulledSlot());
+  const pulled = pulledSlots;
   // This view's visit of the conversation: a direct send's end acts here only while it lasts.
   const visit = useRef<object>({});
   useEffect(() => {
     const here = {};
     visit.current = here;
+    // A worker's queued message still being edited is that worker's again on return.
+    const worker = pulled.worker(conversationId);
+    if (conversationId && worker !== null) setDirectTo(conversationId, worker);
     return () => {
       visit.current = {};
       // The To: is for one message in this visit: leaving takes it away.
       if (conversationId) setDirectTo(conversationId, null);
     };
-  }, [conversationId]);
+  }, [conversationId, pulled]);
   const draftTarget = resolved.target;
   // The conversation whose `/status` card shows (none once another one opens).
   const [statusFor, setStatusFor] = useState<string | null>(null);
@@ -772,7 +780,7 @@ export function ConversationView({
    * the send.
    */
   const sendDirect = useCallback(
-    (message: AppendMessage, from: string, taskId: string) => {
+    (message: AppendMessage, from: string, taskId: string, lane: SendLane | "followUp") => {
       const text = textOf(message);
       const refs = attachments.messageRefs(text, message.attachments ?? []);
       if (!text && refs.length === 0) return;
@@ -781,13 +789,17 @@ export function ConversationView({
       const generation = directGenerationOf(from);
       // This visit, and the To: it was sent with, still showing.
       const unchanged = () => visit.current === here && directGenerationOf(from) === generation;
+      let slot: ReturnType<typeof pulled.take> = null;
       const keep = (cause: unknown) => {
-        if (!(unchanged() && restoreDraft(from, draft))) holdDirect(from, taskId, draft);
+        // Back in the composer, a pulled message keeps its slot: Enter puts it back there again.
+        if (unchanged() && restoreDraft(from, draft)) {
+          if (slot) pulled.set(from, slot.index, slot.mentions, slot.worker);
+        } else holdDirect(from, taskId, draft);
         if (visit.current === here) fail(cause);
         else toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
       };
-      // A queued message being edited is the session's; it never goes to a worker.
-      if (pulled.holds(from)) {
+      // A queued message being edited goes back to its slot, only to the worker it was for.
+      if (pulled.holds(from) && pulled.worker(from) !== taskId) {
         keep(new Error("Send the queued message you're editing first"));
         return;
       }
@@ -795,8 +807,11 @@ export function ConversationView({
         keep(new Error("Your message to the worker is still on its way"));
         return;
       }
+      slot = pulled.take(from);
+      // Busy, the worker gets it the follow-up's way (Queue or Steer, goal 8), as sendLane picks.
+      const steer = sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp }) === "steer";
       setError(null);
-      sendToWorker(from, taskId, draft).then(
+      sendToWorker(from, taskId, draft, slot ? { steer, queueIndex: slot.index } : { steer }).then(
         () => {
           endDirectSend(from);
           try {
@@ -827,7 +842,7 @@ export function ConversationView({
         // This send's marks are void: it goes to neither a new session nor the paused queue.
         takeBackgroundSend(conversationId);
         takeQueueSend(conversationId);
-        sendDirect(message, conversationId, directTo);
+        sendDirect(message, conversationId, directTo, lane);
         return;
       }
       const text = textOf(message);
@@ -1001,7 +1016,7 @@ export function ConversationView({
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
     isLoading: conversationId !== null && cliView === null && !unreadable,
-    isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
+    isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some(taskRuns),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,
     queue,
@@ -1043,7 +1058,12 @@ export function ConversationView({
   );
 
   // The same value while these stay: each change draws every message of the thread again.
-  const view = useMemo(() => ({ selection, conversation, embedded }), [selection, conversation, embedded]);
+  const draftModel = resolved.model;
+  const newest = tree.nodes.findLast((node) => node.kind === "block")?.block;
+  // Its turn over, what it started still holds it open: the composer says it works too (D94).
+  const workHeld = useBlockHold(conversation?.id ?? null, newest).held && newest?.state === "done";
+  const workFrom = (newest?.endedAtMs === null || workHeld) && newest?.worked.length ? Math.min(...newest.worked.map((span) => span.fromMs)) : undefined;
+  const view = useMemo(() => ({ selection, conversation, embedded, draftModel, workFrom, workHeld }), [selection, conversation, embedded, draftModel, workFrom, workHeld]);
   // Every standalone conversation and draft can show its context card.
   const summary = !embedded;
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
@@ -1137,12 +1157,15 @@ export function ConversationView({
                               <SummaryPane summary={summary}>
                                 {summary && <SessionSummary conversation={conversation} />}
                                 <VisualsContext.Provider value={visuals}>
+                                {/* Its scrolling follows its own CLI's turn, not its workers' (spec D16). */}
+                                <ThreadTurnRuns.Provider value={running || waitingForQuota || answerWorking}>
                                 <Thread
                                   components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
                                   placeholder="Do anything"
                                   scrollKey={conversation?.id}
                                 />
+                                </ThreadTurnRuns.Provider>
                                 </VisualsContext.Provider>
                               </SummaryPane>
                             </div>
@@ -1242,7 +1265,6 @@ const THREAD_COMPONENTS: ThreadComponents = {
   BeforeMessages: LoadEarlier,
   UserAttachments,
   AboveComposer,
-  Capsule: ComposerCapsule,
   Composer: ConversationComposer,
   UserText: UserMessageText,
   PeerMessage: PeerUserMessage,

@@ -11,7 +11,7 @@ import { emptyBoard, type ShownApproval, useBoard } from "@/state/board";
 const conversationId = "approval-fixture";
 const variants: [string, Partial<ApprovalRequest>][] = [
   ["command", { command: "git push origin main", grant: "git push", escalation: true }],
-  ["network", { kind: "tool", tool: "SandboxNetworkAccess", command: null, grant: "example.com", input: '{"host":"example.com"}' }],
+  ["network", { kind: "tool", tool: "SandboxNetworkAccess", network: true, command: null, grant: "example.com", input: '{"host":"example.com"}' }],
   ["files", { kind: "fileChange", tool: "Edit", command: null, paths: ["/work/session/src/main.rs"], grant: "/work/session" }],
   ["outside", { kind: "fileChange", tool: "Edit", command: null, paths: ["/elsewhere/file.txt"], grant: null }],
   ["permissions", { kind: "permissions", tool: "permissions", command: null, grant: null }],

@@ -186,7 +186,7 @@ couldn't be removed is retried at the next launch.
 
 ### Permission levels
 
-A session's permission level is picked in the composer. New sessions start in **Accept edits**;
+A session's permission level is picked in the composer. New sessions start in **Full access**;
 Settings › Configuration changes the default. The level goes straight to the CLI as its own
 setting: Brigadier adds no sandbox, no reviewer and no permission rules of its own, and the CLI's
 own permission prompts reach you as cards.

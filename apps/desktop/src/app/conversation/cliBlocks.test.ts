@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cliBlocks, cliThreadTree, exitOf, keptThread, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
+import { cliBlocks, cliThreadTree, exitOf, keptThread, peerWords, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove } from "@/app/conversation/blocks";
+import { confirmPending } from "@/state/shownIds";
+import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove, type SequenceEntry, turnTime } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
-import { turnParts } from "@/app/conversation/workParts";
-import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
+import { belowAnswer, turnParts } from "@/app/conversation/workParts";
+import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, Wake } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
+/** A background command's end, as the engine says it on the entry that tells it. */
+const wake = (label: string, end: Wake["end"] = "finished", exit: number | null = 0, command: string | null = null): { wake: Wake } =>
+  ({ wake: { job: "command", label, command, end, exit } });
 const user = (itemId: string, text: string, atMs: number, more: Partial<FileEntry> = {}) =>
   at({ type: "message", itemId, role: "user", text }, atMs, more);
 const tool = (itemId: string, name: string, input: string | null, status: "inProgress" | "completed" | "failed", output: string | null = null): ProviderEvent => ({
@@ -38,7 +42,7 @@ const view: ThreadView = {
     // Brigadier's plumbing: no row.
     at(tool("t2", "ToolSearch", '{"query":"select:Read"}', "completed"), 1350),
     at(tool("agent", "Agent", '{"description":"Look around","prompt":"…"}', "completed", "Found it."), 1400),
-    // The subagent's lifecycle and child work stay out of the main thread.
+    // The subagent's own work: under its Agent row, not drawn (D96).
     at({ type: "command", itemId: "sub-c", command: "ls", cwd: null, status: "completed", exitCode: 0, output: "a", durationMs: 5 }, 1450, { parent: "agent" }),
     user("s1", "Also check the docs", 1500, { steer: true }),
     at({ type: "fileChanges", itemId: "f1", changes: [{ path: "src/a.ts", kind: "update", diff: "-old\n+new\n+more" }], status: "completed" }, 1600),
@@ -117,6 +121,12 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
       requestId: "u1",
     },
     {
+      kind: { type: "tool", itemId: "agent", name: "Agent", detail: "Look around", status: "completed", throughPosition: 0, endedAtMs: 1400, item: "tool" },
+      position: 5,
+      atMs: 1400,
+      requestId: "u1",
+    },
+    {
       kind: {
         type: "tool",
         itemId: "f1",
@@ -150,7 +160,8 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
   // The running turn works on, its time open, its reasoning still coming and its line between steps streaming.
   assert.deepEqual([running.endedAtMs, running.worked], [null, [{ fromMs: 9000, toMs: null }]]);
   assert.deepEqual(running.thinking.map((segment) => [segment.text, segment.complete, segment.updatedAtMs]), [["Weighing it", false, 9150]]);
-  assert.deepEqual(running.texts, [{ messageId: "m5", position: 18, text: "Checking the plan\n", model: null, update: false, commentary: true, atMs: 9200 }]);
+  // It shows from its first word, not a line at a time.
+  assert.deepEqual(running.texts, [{ messageId: "m5", position: 18, text: "Checking the plan\nand th", model: null, update: false, live: true, commentary: true, atMs: 9200 }]);
 });
 
 test("a turn the stream started, not read again yet, works", () => {
@@ -312,7 +323,7 @@ test("a background job's end Claude took up is one plain line in the same work, 
     entries: [
       user("u1", "Start it in the background", 1000),
       at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
-      at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)' }, 21000),
+      at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)' }, 21000, wake("sleep 20 && echo bg-finished")),
       at({ type: "message", itemId: "a2", role: "assistant", text: "It finished: bg-finished." }, 21100),
     ],
     turns: [turn("u1", 1000, 21200, "done")],
@@ -349,7 +360,7 @@ test("a background job's end Claude took up mid-work keeps the work one run, its
         user("u1", "Run sleep 20 in the background, tell me when it's done", 1000),
         at({ type: "command", itemId: "c1", command: "sleep 20; echo bg-done", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 5 }, 1100),
         at({ type: "message", itemId: "a1", role: "assistant", text: "It's running in the background now." }, 1200),
-        at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20; echo bg-done" completed (exit code 0)' }, 21000),
+        at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20; echo bg-done" completed (exit code 0)' }, 21000, wake("sleep 20; echo bg-done")),
         at({ type: "message", itemId: "a2", role: "assistant", text: "It finished and printed bg-done." }, 21100),
       ],
       turns: [turn("u1", 1000, 21200, "done")],
@@ -366,19 +377,15 @@ test("a background job's end Claude took up mid-work keeps the work one run, its
   assert.equal(parts[0]?.type === "work" && parts[0].answer, undefined);
 });
 
-test("the CLI's words of a background job's end read in a few plain ones (D21)", () => {
-  for (const [said, words] of [
-    ['Background command "pnpm test" completed (exit code 0)', "Background command finished · exit 0"],
-    ['Background command "pnpm test" completed (exit code 2)', "Background command failed · exit 2"],
-    ['Background command "pnpm test" failed with exit code 1', "Background command failed · exit 1"],
-    ['Background command "gh run watch 12 --exit-status" was stopped', "Background command stopped"],
-    ['Background command "sleep 5" was killed', "Background command stopped"],
-    ['Monitor "CI run 12" completed', "Monitor finished"],
-    ["[your background command `gh run watch 12` finished after your turn · exit 0]\nok", "Background command finished · exit 0"],
-    ["[your background command `pnpm test` finished after your turn · exit 1]\nFAIL", "Background command failed · exit 1"],
-    ["[your background command `pnpm test` finished after your turn · completed]\n", "Background command finished"],
-    ["Something new the CLI says", "Something new the CLI says"],
-  ] as const) assert.equal(wakeWords(said), words, said);
+test("a background job's end reads in a few plain words (D21)", () => {
+  assert.equal(wakeWords(wake("pnpm test").wake), "Background command finished · exit 0");
+  assert.equal(wakeWords(wake("pnpm test", "failed", 2).wake), "Background command failed · exit 2");
+  assert.equal(wakeWords(wake("gh run watch 12", "stopped", null).wake), "Background command stopped");
+  assert.equal(wakeWords(wake("pnpm test", "finished", null).wake), "Background command finished");
+  assert.equal(wakeWords({ ...wake("Review").wake, job: "agent", exit: null }), "Agent finished");
+  // A notice that tells no job's end keeps the CLI's own words.
+  const [block] = cliBlocks({ entries: [user("u1", "Go", 1000), at({ type: "taskNotice", itemId: "n1", text: "Something new the CLI says" }, 1100)], turns: [turn("u1", 1000, 1200, "done")] }, "conv");
+  assert.deepEqual(block?.taskNotices.map((notice) => notice.text), ["Something new the CLI says"]);
 });
 
 test("Brigadier's message of what the workers did is a quiet line per worker in plain words, never a user's bubble, as a turn's start and in a turn", () => {
@@ -483,8 +490,8 @@ test("the tree chains the turns, then the messages on their way", () => {
   const tree = cliThreadTree(first, "conv", storedNow, {}, pending, NO_BOARD, { state: "running", error: null });
   assert.deepEqual(tree.nodes.map((node) => [node.id, node.parentId, node.kind, node.block.state]), [
     ["m0", null, "user", "done"],
-    ["request:u1", "m0", "block", "done"],
-    ["m2", "request:u1", "user", "working"],
+    ["request:m0", "m0", "block", "done"],
+    ["m2", "request:m0", "user", "working"],
     ["request:m2", "m2", "block", "working"],
     ["local-1", "request:m2", "user", "working"],
     ["request:local-1", "local-1", "block", "working"],
@@ -564,21 +571,55 @@ test("a thread whose view can't be read shows the messages kept, its ended turns
 const bubbles = (tree: ReturnType<typeof cliThreadTree>) =>
   tree.nodes.map((node) => [node.id, node.kind, node.kind === "user" && node.block.user?.kind === "message" ? node.block.user.text : node.block.requestIds]);
 
-test("a sent message keeps its bubble when the CLI says it before the view reads its turns again", () => {
+test("a sent message keeps its bubble and its turn's id when the CLI says it before the view reads its turns again, by its request, not its time", () => {
   const before = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0"] }] };
   const sent = { ...stored("m1", 5000), text: "Next" };
   const kept = [stored("m0", 900), sent];
-  const said = user("cli-m1", "Next", 5100);
+  // The CLI's clock stamps it before Brigadier stored it: no time says which message it is.
+  const said = user("cli-m1", "Next", 4500, { requests: ["m1"] });
   const run = { state: "running", error: null } as const;
   // On its way, then said by the CLI with its turn not read yet, then read: one bubble, one id.
   const onItsWay = bubbles(cliThreadTree(before, "conv", kept, {}, [], NO_BOARD, run));
   const unread = bubbles(cliThreadTree({ ...before, entries: [...before.entries, said] }, "conv", kept, {}, [], NO_BOARD, run));
   const read = bubbles(
-    cliThreadTree({ entries: [...before.entries, said], turns: [...before.turns, { ...turn("cli-m1", 5100, null, null), requests: ["m1"] }] }, "conv", kept, {}, [], NO_BOARD, run),
+    cliThreadTree({ entries: [...before.entries, said], turns: [...before.turns, { ...turn("cli-m1", 4500, null, null), requests: ["m1"] }] }, "conv", kept, {}, [], NO_BOARD, run),
   );
   assert.deepEqual(onItsWay.slice(2), [["m1", "user", "Next"], ["request:m1", "block", ["m1"]]]);
-  assert.deepEqual(unread.slice(2), [["m1", "user", "Next"], ["request:cli-m1", "block", ["m1"]]]);
-  assert.deepEqual(read.slice(2), unread.slice(2));
+  assert.deepEqual(unread.slice(2), onItsWay.slice(2));
+  assert.deepEqual(read.slice(2), onItsWay.slice(2));
+  // Sent from here: shown under the id it had while pending (`shownIdOf`), throughout.
+  confirmPending("m8", "local-m8");
+  const pending = [{ localId: "local-m8", conversationId: "conv", text: "Then", createdAtMs: 4900, attachments: [] }];
+  const told = user("cli-m8", "Then", 4500, { requests: ["m8"] });
+  const ids = (thread: ThreadView, messages: Message[], sending: typeof pending) =>
+    cliThreadTree(thread, "conv", messages, {}, sending, NO_BOARD, run).nodes.slice(2).map((node) => [node.id, node.kind]);
+  const sending = ids(before, [stored("m0", 900)], pending);
+  assert.deepEqual(sending, [["local-m8", "user"], ["request:local-m8", "block"]]);
+  // The CLI said it before the daemon's answer to sending it came: the bubble being sent heads its turn, once.
+  assert.deepEqual(ids({ ...before, entries: [...before.entries, told] }, [stored("m0", 900)], pending), sending);
+  assert.deepEqual(ids({ ...before, entries: [...before.entries, told] }, [stored("m0", 900), stored("m8", 5000)], []), sending);
+  // A message older than those loaded here is no message being sent: it keeps the CLI's bubble.
+  const older = { entries: [user("cli-m9", "Old", 500, { requests: ["m9"] }), user("cli-m0", "stored m0", 900, { requests: ["m0"] })], turns: [] };
+  const oldTree = cliThreadTree(older, "conv", [stored("m0", 900)], {}, pending, NO_BOARD, run);
+  assert.deepEqual(oldTree.nodes.map((node) => [node.id, node.block.user?.kind]), [
+    ["m9", "message"],
+    ["request:m9", "message"],
+    ["m0", "message"],
+    ["request:m0", "message"],
+    ["local-m8", "pending"],
+    ["request:local-m8", "pending"],
+  ]);
+});
+
+test("a steer the CLI says before the turns are read again is the stored message it carries", () => {
+  const steer = user("cli-s1", "Also the docs", 1500, { steer: true, requests: ["m3"] });
+  const thread = { entries: [user("cli-m2", "Fix it", 1000, { requests: ["m2"] }), steer], turns: [] };
+  const kept = [stored("m2", 2000), { ...stored("m3", 3000), text: "Also the docs, as typed" }];
+  const tree = cliThreadTree(thread, "conv", kept, {}, [], NO_BOARD, { state: "running", error: null });
+  const [block] = cliBlocks(thread, "conv");
+  assert.deepEqual(block?.requestIds, ["m2", "m3"]);
+  assert.deepEqual(tree.nodes.map((node) => node.id), ["m2", "request:m2"]);
+  assert.deepEqual(tree.nodes[1]?.block.steers.map((each) => [each.message.id, each.text]), [["m3", "Also the docs, as typed"]]);
 });
 
 test("a turn's user message and its steers take the Brigadier requests the turn names", () => {
@@ -598,7 +639,7 @@ test("a Codex command's end after its turn is one plain line, a turn more of the
     entries: [
       user("u1", "Start it in the background", 1000),
       at({ type: "message", itemId: "a1", role: "assistant", text: "started" }, 1100),
-      user("u2", woke, 61_000),
+      user("u2", woke, 61_000, wake("sleep 60", "finished", 0, "sleep 60")),
       at({ type: "message", itemId: "a2", role: "assistant", text: "It finished." }, 61_100),
     ],
     turns: [
@@ -610,7 +651,7 @@ test("a Codex command's end after its turn is one plain line, a turn more of the
   // Brigadier's note of the end is no bubble (run2-D44), nor a block of its own; the CLI's reply to it shows.
   assert.deepEqual(tree.nodes.map((node) => [node.id, node.parentId]), [
     ["r1", null],
-    ["request:u1", "r1"],
+    ["request:r1", "r1"],
   ]);
   const blocks = cliBlocks(noted, "conv");
   assert.equal(blocks.length, 1);
@@ -634,7 +675,7 @@ test("a Codex command's end after a later message of the user's stays a turn of 
       at({ type: "message", itemId: "a1", role: "assistant", text: "started" }, 1100),
       user("u2", "And the docs", 5000),
       at({ type: "message", itemId: "a2", role: "assistant", text: "Done." }, 5100),
-      user("u3", woke, 61_000),
+      user("u3", woke, 61_000, wake("sleep 60", "failed", 1, "sleep 60")),
       at({ type: "message", itemId: "a3", role: "assistant", text: "It failed." }, 61_100),
     ],
     turns: [
@@ -754,10 +795,10 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   };
   const blocks = cliBlocks(own, "conv");
   // A background job's notice the CLI starts a turn with in it keeps the hand-off's turn hidden.
-  const noticed = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350), at({ type: "message", itemId: "a3", role: "assistant", text: "Note written." }, 1360)], turns: [...own.turns, turn("tn", 1350, 1400, "done")] }, "conv");
+  const noticed = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350, wake("done")), at({ type: "message", itemId: "a3", role: "assistant", text: "Note written." }, 1360)], turns: [...own.turns, turn("tn", 1350, 1400, "done")] }, "conv");
   assert.deepEqual(noticed.map((block) => block.key), ["u1"]);
   // The user's next turn after it reads its own turn, not the one before: running, its request shown.
-  const next = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350), user("u5", "Next", 1500)], turns: [...own.turns, turn("tn", 1350, 1400, "done"), { ...turn("u5", 1500, null, null), requests: ["r5"] }] }, "conv");
+  const next = cliBlocks({ ...own, entries: [...own.entries, user("tn", "<task-notification>done</task-notification>", 1350, wake("done")), user("u5", "Next", 1500)], turns: [...own.turns, turn("tn", 1350, 1400, "done"), { ...turn("u5", 1500, null, null), requests: ["r5"] }] }, "conv");
   assert.deepEqual(
     next.map((block) => [block.key, block.user?.kind === "message" ? block.user.message.id : null, block.state]),
     [
@@ -767,8 +808,10 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
   );
   assert.deepEqual(
     blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.map((each) => each.death)]),
+    // Its divider ends the thread under the last shown turn, never with the hidden note turn
+    // (core-goals D120).
     [
-      ["u1", "message", [], []],
+      ["u1", "message", [], ["it ended its turn without writing one"]],
     ],
   );
   // A successor that carried on by itself: its first turn has no user bubble, under the divider.
@@ -786,6 +829,20 @@ test("hand-off maintenance prompts and replies stay out of the conversation, wit
       ["u1", "message", [], 1],
       ["u3", null, [], 0],
     ],
+  );
+  // A successor whose first message joined the block that still held: the divider stays, once,
+  // after that block.
+  const joinedSeam = cliBlocks(
+    {
+      ...steered,
+      entries: [...steered.entries.slice(0, 7), user("u3", "[Brigadier hand-off 2 · conv]\nthe note\n[End of the hand-off]\n\nAfter", 2000)],
+      turns: [turn("u1", 1000, 1300, "done"), { ...turn("u3", 2000, null, null), joins: true }],
+    },
+    "conv",
+  );
+  assert.deepEqual(
+    joinedSeam.map((block) => [block.key, block.seams.length]),
+    [["u1", 1]],
   );
   const withoutMetadata = cliBlocks({ ...own, seams: [] }, "conv");
   assert.deepEqual(withoutMetadata.map((block) => block.key), ["u1"]);
@@ -918,6 +975,136 @@ test("a queued message shows once, as the user's, its frame gone: in the rail wh
   assert.equal(second!.user?.kind === "message" && second!.user.message.id, id);
 });
 
+test("D72: a follow-up asked again after its turn left it unjudged shows once, both frames gone", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const first = "[queued message feedbeef · before acting on it, judge it: brigadier queue feedbeef join|wait|worker <id>|new-session (join, or worker, when it is part of the work in progress, yours or a running worker's: a change to it, a fix in it, a question about it; wait when it is other work, even a quick question or a one-line reply: it comes back once the work in progress is done); unjudged, it stays queued]\nAlso the docs.";
+  const again = "[queued message feedbeef · you didn't judge it before your turn ended: judge it now with brigadier queue feedbeef join|wait|worker <id>|new-session; join if you already did it]\nAlso the docs.";
+  const asked: ThreadView = {
+    entries: [
+      user("u1", "Fix the test", 1000),
+      user("s1", first, 1100, { steer: true }),
+      user("s2", again, 1600, { steer: true }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Fixed." }, 1700),
+    ],
+    turns: [{ ...turn("u1", 1000, 2000, "done"), requests: ["r1", id] }],
+  };
+  const [block] = cliBlocks(asked, "c1", NO_BOARD);
+  assert.deepEqual(block!.steers.map((steer) => [steer.message.id, steer.text]), [[id, "Also the docs."]]);
+});
+
+test("goal 8: follow-ups woken to be judged, judged wait, then taken in after the work: each bubble once, where it went in, no block inside an open block, and every node its own id", () => {
+  // Seen live on Claude: both turns of the first lead with its request (one id twice made
+  // assistant-ui throw at the next message and blanked the app); the second, judged again in a
+  // turn begun while the first's own turn still ran, showed back where it waited.
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const id2 = "0192aaaa-bbbb-7ccc-8ddd-0000cafebabe";
+  const judge2 = "[queued message cafebabe · judge it: brigadier queue cafebabe join|wait|worker <id>|new-session; unjudged, it joins this work]\nReply with V1.";
+  const thread: ThreadView = {
+    entries: [
+      user("u1", "Start a worker", 1000, { requests: ["r1"] }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
+      user("q1", toJudge("Reply with U1."), 2000, { requests: [id] }),
+      user("p1", judge2, 2100, { requests: [id2] }),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "Both wait." }, 2200),
+      user("q2", "[queued message feedbeef, now on its own turn]\nReply with U1.", 5000, { requests: [id] }),
+      at({ type: "message", itemId: "a3", role: "assistant", text: "U1" }, 5100),
+      user("p2", judge2, 5200, { requests: [id2] }),
+      at({ type: "message", itemId: "a4", role: "assistant", text: "V1" }, 5300),
+      user("u2", "Next", 6000, { requests: ["r2"] }),
+    ],
+    turns: [
+      { ...turn("u1", 1000, 2500, "done"), requests: ["r1"] },
+      turn("q1", 2000, 2500, "done"),
+      turn("p1", 2100, 2500, "done"),
+      { ...turn("q2", 5000, 5400, "done"), requests: [id, id2] },
+      turn("p2", 5200, 5400, "done"),
+      { ...turn("u2", 6000, null, null), requests: ["r2"] },
+    ],
+  };
+  const stores = [stored("r1", 900), stored(id, 1900), stored(id2, 1950), stored("r2", 5900)];
+  const tree = cliThreadTree(thread, "conv", stores, {}, [], { ...NO_BOARD, requests: { r1: {}, [id]: {}, [id2]: {}, r2: {} } }, { state: "running", error: null });
+  const ids = tree.nodes.map((node) => node.id);
+  assert.deepEqual(ids.filter((each, index) => ids.indexOf(each) !== index), []);
+  // Each bubble once, just before its answer, after the work that made them wait; the turns begun
+  // while the one before still ran go on in its block (D74): no block inside an open block.
+  assert.deepEqual(
+    tree.nodes.map((node) => (node.kind === "user" ? ["user", node.id] : ["block", node.block.steers.map((steer) => steer.message.id), node.block.texts.map((text) => text.messageId)])),
+    [["user", "r1"], ["block", [], ["a1", "a2"]], ["user", id], ["block", [id2], ["a3", "a4"]], ["user", "r2"], ["block", [], []]],
+  );
+});
+
+test("goal 8: a turn woken to judge a follow-up while the block's worker works goes on in that block before any read has its turn, and starts its own once the work is done", () => {
+  // Seen live: the stream gives the turn's message a second or two before the read that brings
+  // its turn, and meanwhile a second "Working" block showed inside the open one.
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const thread = (working: boolean): ThreadView => ({
+    entries: [
+      user("u1", "Start a worker", 1000, { requests: ["r1"] }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
+      user("q1", toJudge("Reply with U1."), 2000, { requests: [id] }),
+    ],
+    turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }],
+    workers: [{ ...row("aa11bb22", 1050), ...(working && { working: true, lastEnd: null }) }],
+    // The core's work block: open while the worker works, closed once it is done (D163).
+    block: { startedAtMs: 1010, ...(!working && { endedAtMs: 1600 }) },
+  });
+  const queued = { id, text: "Reply with U1.", attachments: [], mentions: [], queuedAtMs: 1900, editedAtMs: null, deciding: true, delivered: true };
+  const board = { ...NO_BOARD, queueItems: [queued], requests: { r1: {} } };
+  const blocks = (working: boolean) =>
+    cliThreadTree(thread(working), "conv", [stored("r1", 900)], {}, [], board, { state: "running", error: null }).nodes.filter((node) => node.kind === "block").length;
+  assert.equal(blocks(true), 1);
+  assert.equal(blocks(false), 2);
+});
+
+test("goal 3: a follow-up the CLI read inside its still running turn goes on in that block before any read has its turn, its worker already done (screen pass on Claude)", () => {
+  // Seen live: "pause it" read as the wait on the worker ended; for 2 s two "Working for" headers.
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const thread = (end: ThreadTurn["end"]): ThreadView => ({
+    entries: [
+      user("u1", "Start a worker", 1000, { requests: ["r1"] }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
+      user("q1", toJudge("pause it"), 2000, { requests: [id] }),
+    ],
+    turns: [{ ...turn("u1", 1000, end ? 1500 : null, end), requests: ["r1"] }],
+    workers: [row("aa11bb22", 1050)],
+  });
+  const queued = { id, text: "pause it", attachments: [], mentions: [], queuedAtMs: 1900, editedAtMs: null, deciding: true, delivered: true };
+  const board = { ...NO_BOARD, queueItems: [queued], requests: { r1: {} } };
+  const blocks = (end: ThreadTurn["end"]) =>
+    cliThreadTree(thread(end), "conv", [stored("r1", 900)], {}, [], board, { state: "running", error: null }).nodes.filter((node) => node.kind === "block").length;
+  assert.equal(blocks(null), 1);
+  // Its turn ended before: a turn of its own.
+  assert.equal(blocks("done"), 2);
+});
+
+/** A queued message's words under the line giving them to the session to judge. */
+const toJudge = (words: string) => `[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`;
+
+test("goal 8: a follow-up shows nowhere in the thread while it waits or is judged again, then once where it went in; a steer's line never shows", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const fresh = "[steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]\nAnd the logo.";
+  const followUps: ThreadView = {
+    entries: [
+      user("u1", "Fix the test", 1000),
+      // Judged wait in this block, then given to judge again in the next one.
+      user("s1", toJudge("Also the docs."), 1100, { steer: true }),
+      user("s2", fresh, 1200, { steer: true }),
+      user("s3", "[queued message cafebabe steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]", 1300, { steer: true }),
+      user("u2", "[queued message 0badf00d, now on its own turn]\nThe release notes.", 2000),
+      user("s4", toJudge("Also the docs."), 2100, { steer: true }),
+    ],
+    turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }, { ...turn("u2", 2000, null, null), requests: ["0192aaaa-0badf00d"] }],
+  };
+  const queued = { id, text: "Also the docs.", attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, deciding: true, delivered: true };
+  // Still in the rail (judged again): no bubble anywhere, the steer once, no line of Brigadier's.
+  const inRail = cliBlocks(followUps, "c1", { ...NO_BOARD, queueItems: [queued] });
+  assert.deepEqual(inRail.map((block) => block.steers.map((steer) => steer.text)), [["And the logo."], []]);
+  assert.equal(inRail[1]!.user?.kind === "message" && inRail[1]!.user.text, "The release notes.");
+  // Joined in the new block: one bubble, where the CLI read it last.
+  const joined = cliBlocks({ ...followUps, turns: [followUps.turns[0]!, { ...followUps.turns[1]!, requests: ["0192aaaa-0badf00d", id] }] }, "c1", NO_BOARD);
+  assert.deepEqual(joined.map((block) => block.steers.map((steer) => [steer.message.id, steer.text])), [[["r2", "And the logo."]], [[id, "Also the docs."]]]);
+});
+
 const message = (requestId: string, text: string, createdAtMs: number): Message => ({ ...stored(requestId, createdAtMs), text });
 /** A tree's nodes as drawn: each user bubble's text, each block's steers. */
 const shown = (tree: ReturnType<typeof cliThreadTree>) =>
@@ -935,8 +1122,10 @@ test("a queued message the CLI began its own turn with shows once, heading that 
     user("07de44de", "Another issue is that in another session, i asked it to start the dev app", 10_000),
     user("65ae8f04", "[queued message 2f334bc5 · judge it: brigadier queue 2f334bc5 join|wait|worker <id>|new-session; unjudged, it joins this work]\nsure, do", 69_000, { steer: true }),
     at({ type: "message", itemId: "a1", role: "assistant", text: "Pushed." }, 412_000),
-    user("5cf7b32d", `[queued message d9f90994 · judge it: brigadier queue d9f90994 join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`, 412_300),
+    // The engine noted the request it was sent for: its turn keeps one id while judged, joined and over.
+    user("5cf7b32d", `[queued message d9f90994 · judge it: brigadier queue d9f90994 join|wait|worker <id>|new-session; unjudged, it joins this work]\n${words}`, 412_300, { requests: [id] }),
     at({ type: "command", itemId: "c1", command: "brigadier queue d9f90994 join", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 40 }, 417_900),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "One card per round from now on." }, 418_000),
   ];
   const live: ThreadView = {
     entries,
@@ -950,8 +1139,8 @@ test("a queued message the CLI began its own turn with shows once, heading that 
   const judging = cliThreadTree(live, "conv", keptBefore, {}, [], { ...NO_BOARD, queueItems: [queued] }, running);
   assert.deepEqual(shown(judging), [
     ["01a171d1-959b-72d2-8538-5e80be977c2b", "user", "Another issue is that in another session, i asked it to start the dev app"],
-    ["request:07de44de", "block", ["sure, do"]],
-    ["request:5cf7b32d", "block", []],
+    ["request:01a171d1-959b-72d2-8538-5e80be977c2b", "block", ["sure, do"]],
+    [`request:${id}`, "block", []],
   ]);
 
   // Joined, the turn still running: once, heading the turn it began, never on its way as well.
@@ -959,12 +1148,12 @@ test("a queued message the CLI began its own turn with shows once, heading that 
   const joined = cliThreadTree(live, "conv", kept, {}, [], NO_BOARD, running);
   const once = [
     ["01a171d1-959b-72d2-8538-5e80be977c2b", "user", "Another issue is that in another session, i asked it to start the dev app"],
-    ["request:07de44de", "block", ["sure, do"]],
+    ["request:01a171d1-959b-72d2-8538-5e80be977c2b", "block", ["sure, do"]],
     [id, "user", words],
-    ["request:5cf7b32d", "block", []],
+    [`request:${id}`, "block", []],
   ];
   assert.deepEqual(shown(joined), once);
-  assert.equal(joined.headId, "request:5cf7b32d");
+  assert.equal(joined.headId, `request:${id}`);
 
   // Over, its record naming the request before first (and after a restart, read back so): the same.
   const over: ThreadView = { entries, turns: [live.turns[0]!, { ...turn("5cf7b32d", 412_300, 479_000, "done"), requests: [before, id] }] };
@@ -1091,7 +1280,7 @@ test("Brigadier's /compact is no bubble from the stream's first word of it to th
     entries: [...before.entries, compactionEnded(false, 3500), user("c1", asked, 3001)],
     turns: [...before.turns, turn("c1", 3001, 3600, "done")],
   };
-  const rows = [["user", "m1", "Grow"], ["block", "request:u1", ["compaction:2"]]];
+  const rows = [["user", "m1", "Grow"], ["block", "request:m1", ["compaction:2"]]];
   for (const [name, thread] of [["running", running], ["said", said], ["read", read]] as const) assert.deepEqual(tree(thread), rows, name);
 });
 
@@ -1104,7 +1293,7 @@ test("Brigadier's /compact stays hidden once a background command's end goes on 
         at({ type: "message", itemId: "a1", role: "assistant", text: "Watching." }, 2000),
         compactionEnded(false, 3500),
         user("c1", asked, 3001),
-        at({ type: "taskNotice", itemId: "n1", text: "Background command \"gh run watch 12\" completed (exit code 0)" }, 5000),
+        at({ type: "taskNotice", itemId: "n1", text: "Background command \"gh run watch 12\" completed (exit code 0)" }, 5000, wake("gh run watch 12")),
         at({ type: "message", itemId: "a2", role: "assistant", text: "CI passed." }, 5100),
       ],
       // The turns the command's end started go on under the `/compact`'s, with the request of the block that started it.
@@ -1182,7 +1371,7 @@ test("of the user's words with Brigadier's around them only theirs show: a note 
         // A turn that carries a request already shown with a new one: its first id is reused.
         sent("u2", "[Your last turn stopped early, on another account.]\n\nAnd the tests.", 2000, { by: "both", user: "And the tests." }),
       ],
-      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "r2"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1", "r3"] }],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1", "0192aaaa-abcd1234"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1", "r3"] }],
     },
     "conv",
     NO_BOARD,
@@ -1205,7 +1394,8 @@ test("authored message frames stay literal in user bubbles, also inside a queued
       const wire = by === "user" ? words : `[queued message 12345678 · judge it]\n${words}`;
       const blocks = cliBlocks({
         entries: [sent("u1", wire, 1000, said), reply1],
-        turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }],
+        // A queued message on its own turn: that turn's request is the queued message's id.
+        turns: [{ ...turn("u1", 1000, 1500, "done"), requests: [by === "user" ? "r1" : "0192aaaa-12345678"] }],
       }, "conv", NO_BOARD, true);
       assert.deepEqual(blocks.map((block) => [block.user?.kind, block.user?.kind === "message" ? block.user.text : null]), [["message", words]], `${by}: ${words}`);
     }
@@ -1241,6 +1431,23 @@ test("Brigadier's carry-on, hand-off and /compact are no bubble by the engine's 
   assert.deepEqual(blocks[1]?.compactions.map((each) => each.state), ["done"]);
 });
 
+test("a question a successor asked carrying on by itself waits in its own live turn, not in the request's turn before the seam (D161)", () => {
+  const question = { id: "q1", requestId: "r1", position: 0, createdAtMs: 2500, answer: null, answeredAtMs: null, kind: { type: "orchestrator" } };
+  const blocks = cliBlocks(
+    {
+      entries: [user("u1", "Step 3", 1000), reply1, sent("c1", "Carry on from the hand-off note.", 2000, { by: "brigadier" })],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }, turn("c1", 2000, null, null)],
+    },
+    "conv",
+    { ...NO_BOARD, questions: { q1: question } } as unknown as BoardDigest,
+    true,
+  );
+  assert.deepEqual(
+    blocks.map((block) => [block.key, block.cards.map((card) => card.id), block.cardWait]),
+    [["u1", [], false], ["c1", ["q1"], true]],
+  );
+});
+
 test("a /compact the user typed is their bubble by the engine's note, in a session too", () => {
   const blocks = cliBlocks(
     { entries: [user("u1", "Grow", 1000), reply1, sent("k1", "/compact", 2000, { by: "user" })], turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }] },
@@ -1262,4 +1469,274 @@ test("an authored peer message keeps its bubble even when its delivery is marked
     true,
   );
   assert.deepEqual(blocks.map((block) => [block.user?.kind ?? null, block.user && "text" in block.user ? block.user.text : null]), [["peer", "The docs are done."]]);
+});
+
+test("a sent message's turn keeps one start from sending it to the CLI saying it to its turn read, so its clock never starts again", () => {
+  const before = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0"] }] };
+  const kept = [stored("m0", 900), stored("m1", 5000)];
+  const run = { state: "running", error: null } as const;
+  const said = user("cli-m1", "stored m1", 6200, { requests: ["m1"] });
+  const start = (thread: ThreadView) => {
+    const node = cliThreadTree(thread, "conv", kept, {}, [], NO_BOARD, run).nodes.at(-1)!;
+    return [node.block.startedAtMs, turnTime(node.block, 9000)];
+  };
+  const onItsWay = start(before);
+  assert.deepEqual(onItsWay, [5000, 4000]);
+  assert.deepEqual(start({ ...before, entries: [...before.entries, said] }), onItsWay);
+  // Its turn read: the CLI started it later than it was sent.
+  assert.deepEqual(start({ entries: [...before.entries, said], turns: [...before.turns, { ...turn("cli-m1", 6500, null, null), requests: ["m1"] }] }), onItsWay);
+});
+
+test("D68: a follow-up is in the rail or in the thread, exactly once, at every step of its join, steer, own turn and hand-off, and never moves once shown (D73: sent, it is kept before the rail lets it go)", () => {
+  const id = "0192aaaa-bbbb-7ccc-8ddd-0000feedbeef";
+  const words = "Also the docs.";
+  const running = { state: "running", error: null } as const;
+  const item = { id, text: words, attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, delivered: true };
+  const judged = [user("u1", "Fix the test", 1000), user("j1", toJudge(words), 1100, { steer: true }), at({ type: "message", itemId: "a1", role: "assistant", text: "Noted." }, 1200)];
+  const steered = user("s2", `[queued message feedbeef, steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]\n${words}`, 3000, { steer: true });
+  const ownTurn = user("u2", `[queued message feedbeef, now on its own turn]\n${words}`, 3000);
+  const open = (requests: string[]) => [{ ...turn("u1", 1000, null, null), requests }];
+  const done = (requests: string[]) => [{ ...turn("u1", 1000, 1500, "done"), requests }];
+  const kept = (...more: Message[]) => [message("r1", "Fix the test", 990), ...more];
+  const taken = message(id, words, 2900);
+  // Each step as the app may read it: the CLI's entries, its turns, Brigadier's kept messages
+  // and whether the rail still has it.
+  type Step = [FileEntry[], ThreadTurn[], Message[], boolean, ThreadView["seams"]?];
+  // Reborn (core-goals goals 2+13, D24): it waits in the rail through the hidden note turn, then
+  // heads the successor's first turn after the hand-off.
+  const seam = { n: 1, open: true, at: null, carried: false, nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null, movedTo: null };
+  const noted = [user("u1", "Fix the test", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Fixed." }, 1200), user("n1", "[Brigadier] A fresh session will continue this work.", 1300), at({ type: "message", itemId: "a2", role: "assistant", text: "Handed off." }, 1400)];
+  const noteTurns = (end: number | null) => [...done(["r1"]), turn("n1", 1300, end, end ? "done" : null)];
+  const reborn = user("s1", `[Brigadier hand-off 2 · conv]\nthe note\n[End of the hand-off]\n\n[queued message feedbeef, now on its own turn]\n${words}`, 3000);
+  const paths: Record<string, Step[]> = {
+    // Judged join: out of the rail, kept, then named by the running turn.
+    join: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
+    // Steered in after it waited, in the turn that read it: named, then read again.
+    steer: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false], [[...judged, steered], open(["r1", id]), kept(taken), false]],
+    // Waited, then on its own turn once the block closed: on its way, then heading that turn.
+    ownTurn: [[judged, done(["r1"]), kept(), true], [judged, done(["r1"]), kept(taken), true], [judged, done(["r1"]), kept(taken), false], [[...judged, ownTurn], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false]],
+    // Queued while the turn ran, never given to the CLI, then sent on its own turn: on its way,
+    // then heading that turn.
+    plain: [
+      [[user("u1", "Fix the test", 1000)], done(["r1"]), kept(), true],
+      [[user("u1", "Fix the test", 1000)], done(["r1"]), kept(taken), true],
+      [[user("u1", "Fix the test", 1000)], done(["r1"]), kept(taken), false],
+      [[user("u1", "Fix the test", 1000), user("u2", words, 3000)], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false],
+    ],
+    rebirth: [
+      [noted, noteTurns(null), kept(), true, [seam]],
+      [noted, noteTurns(1500), kept(taken), true, [seam]],
+      [noted, noteTurns(1500), kept(taken), false, [seam]],
+      [[...noted, reborn], [...noteTurns(1500), { ...turn("s1", 3000, null, null), requests: [id] }], kept(taken), false, [{ ...seam, open: false, at: "s1" }]],
+    ],
+    // Handed to a worker: out of the rail, never kept here, never a bubble in this thread.
+    handOff: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(), false]],
+  };
+  for (const [name, steps] of Object.entries(paths)) {
+    let shownAs: string | null = null;
+    steps.forEach(([entries, turns, messages, inRail, seams], step) => {
+      const tree = cliThreadTree({ entries, turns, ...(seams && { seams }) }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [{ ...item, delivered: name !== "plain" }] : [] }, running);
+      const nodes = shown(tree).filter(([, , said]) => JSON.stringify(said).includes(words));
+      const count = nodes.reduce((sum, [, , said]) => sum + JSON.stringify(said).split(words).length - 1, 0);
+      assert.equal(count + (inRail ? 1 : 0), name === "handOff" && !inRail ? 0 : 1, `${name} step ${step}: ${JSON.stringify(shown(tree))}`);
+      if (count === 0) return;
+      const where = String(nodes[0]![0]);
+      assert.ok(shownAs === null || shownAs === where, `${name} step ${step} moved from ${shownAs} to ${where}`);
+      shownAs = where;
+    });
+  }
+  // A turn woken to judge it names it from the start: handed to a worker from there, it never
+  // became a request here, so no bubble (seen live after a reload); joined there, one.
+  const woken = (messages: Message[], requests: Record<string, unknown>) =>
+    shown(cliThreadTree({ entries: judged, turns: open(["r1", id]) }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: [], requests }, running));
+  assert.ok(!JSON.stringify(woken(kept(), { r1: {} })).includes(words), JSON.stringify(woken(kept(), { r1: {} })));
+  assert.equal(JSON.stringify(woken(kept(taken), { r1: {}, [id]: {} })).split(words).length - 1, 1);
+});
+
+/** What each node shows: a turn's head (the user's or a session's message) or its steers. */
+const shownWithPeers = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.map((node) => [node.id, node.kind, node.kind === "user" && node.block.user && "text" in node.block.user ? node.block.user.text : node.block.steers.map((steer) => steer.text)]);
+
+test("goal 4: another session's message judged from the queue is in the rail or in the thread, once, as that session's, at every step of its join, own turn and hand-off", () => {
+  const id = "sm-0123feedbeef";
+  const from = "c-0123456789abcdef";
+  const words = "Can you check the schema?";
+  const header = `[message from session "API work" (${from}) · ${id}]\n${words}`;
+  const running = { state: "running", error: null } as const;
+  const item = { id, text: header, attachments: [], mentions: [], queuedAtMs: 1100, editedAtMs: null, delivered: true, peer: { messageId: id, from } };
+  // Brigadier gives it to the CLI as its own words (no user's): the thread reads it by its header.
+  const judged = [user("u1", "Fix the test", 1000), user("j1", toJudge(header), 1100, { steer: true, said: { by: "brigadier" } }), at({ type: "message", itemId: "a1", role: "assistant", text: "Noted." }, 1200)];
+  const ownTurn = user("u2", `[queued message feedbeef, now on its own turn]\n${header}`, 3000, { said: { by: "brigadier" } });
+  const open = (requests: string[]) => [{ ...turn("u1", 1000, null, null), requests }];
+  const done = (requests: string[]) => [{ ...turn("u1", 1000, 1500, "done"), requests }];
+  const kept = (...more: Message[]) => [message("r1", "Fix the test", 990), ...more];
+  const taken: Message = { ...message(id, header, 2900), role: "peer", peer: { messageId: id, from } };
+  type Step = [FileEntry[], ThreadTurn[], Message[], boolean];
+  const paths: Record<string, Step[]> = {
+    join: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
+    ownTurn: [[judged, done(["r1"]), kept(), true], [judged, done(["r1"]), kept(taken), true], [judged, done(["r1"]), kept(taken), false], [[...judged, ownTurn], [...done(["r1"]), { ...turn("u2", 3000, null, null), requests: [id] }], kept(taken), false]],
+    // Handed to a worker: the turn took it and gave it on, so it stays in this thread, once.
+    handOff: [[judged, open(["r1"]), kept(), true], [judged, open(["r1"]), kept(taken), true], [judged, open(["r1"]), kept(taken), false], [judged, open(["r1", id]), kept(taken), false]],
+  };
+  for (const [name, steps] of Object.entries(paths)) {
+    let shownAs: string | null = null;
+    steps.forEach(([entries, turns, messages, inRail], step) => {
+      const tree = cliThreadTree({ entries, turns }, "conv", messages, {}, [], { ...NO_BOARD, queueItems: inRail ? [item] : [] }, running, true);
+      const nodes = shownWithPeers(tree).filter(([, , said]) => JSON.stringify(said).includes(words));
+      const count = nodes.reduce((sum, [, , said]) => sum + JSON.stringify(said).split(words).length - 1, 0);
+      assert.equal(count + (inRail ? 1 : 0), 1, `${name} step ${step}: ${JSON.stringify(shownWithPeers(tree))}`);
+      // Never its header, never as the user's.
+      assert.ok(!JSON.stringify(shownWithPeers(tree)).includes("[message from session"), `${name} step ${step}`);
+      if (count === 0) return;
+      const where = String(nodes[0]![0]);
+      assert.ok(shownAs === null || shownAs === where, `${name} step ${step} moved from ${shownAs} to ${where}`);
+      shownAs = where;
+    });
+  }
+  // As that session's: a peer message naming its sender, inside the open block.
+  const [block] = cliBlocks({ entries: judged, turns: open(["r1", id]) }, "conv", NO_BOARD, true, [], ["r1", id]);
+  const steer = block!.steers.find((each) => each.text === words);
+  assert.equal(steer?.message.role, "peer");
+  assert.deepEqual(steer?.message.peer, { messageId: id, from });
+  // Steered in by the user from a paused queue: still that session's, never hidden.
+  const steeredIn = user("s1", `[steered in by the user: it is part of the work you're doing; if it doesn't belong to it, start a worker for it]\n${header}`, 1100, { steer: true, said: { by: "brigadier" } });
+  const [withSteer] = cliBlocks({ entries: [judged[0]!, steeredIn, judged[2]!], turns: open(["r1", id]) }, "conv", NO_BOARD, true, [], ["r1", id]);
+  assert.equal(withSteer!.steers.find((each) => each.text === words)?.message.role, "peer", JSON.stringify(withSteer!.steers));
+  // The rail row shows its words alone.
+  assert.equal(peerWords(header), words);
+});
+
+/** demo8: a turn a usage limit cut, carried on after an account switch, then after a move to another CLI. */
+const limitTurns = (read: boolean): ThreadTurn[] => [
+  { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit", requests: ["r1"] },
+  { ...turn("k1", 1500, 2000, "done"), requests: ["r1"] },
+  { ...turn("u2", 3000, 3300, "failed", "seven_day usage limit"), errorKind: "usageLimit", requests: ["r2"] },
+  ...(read ? [{ ...turn("k2", 3500, null, null), requests: ["r2"] }] : []),
+];
+const limitEntries: FileEntry[] = [
+  user("u1", "Run six commands", 1000, { said: { by: "user" }, requests: ["r1"] }),
+  at({ type: "command", itemId: "c1", command: "echo mark 1", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 5 }, 1200),
+  at({ type: "turnCompleted" } as ProviderEvent, 1400),
+  user("k1", "[Your last turn stopped early: its account hit a usage limit. You now run on another account, in the same session. Carry on from where you stopped.]", 1500, { said: { by: "brigadier" } }),
+  at({ type: "message", itemId: "a1", role: "assistant", text: "DONE" }, 1900),
+  user("u2", "Run four more", 3000, { said: { by: "user" }, requests: ["r2"] }),
+  at({ type: "turnCompleted" } as ProviderEvent, 3300),
+  // The next CLI's first message: the hand-off with the user's words again, under the same request.
+  user("k2", "Run four more", 3500, { said: { by: "both", user: "Run four more" }, requests: ["r2"] }),
+  at({ type: "message", itemId: "a2", role: "assistant", text: "MOVED" }, 3700),
+];
+
+test("a turn carried on after a usage limit's switch goes on in its block: no stopped turn, no second bubble, never a repeated id (demo8, every CLI)", () => {
+  for (const read of [true, false]) {
+    const blocks = cliBlocks({ entries: limitEntries, turns: limitTurns(read) }, "conv");
+    assert.deepEqual(blocks.map((block) => block.key), ["u1", "u2"], `read ${read}`);
+    assert.equal(blocks[0]!.state, "done");
+    assert.equal(blocks[0]!.error, null);
+    assert.deepEqual(blocks[1]!.steers, [], `read ${read}`);
+    assert.deepEqual(blocks[1]!.texts.map((text) => text.text), ["MOVED"]);
+    const { nodes } = cliThreadTree({ entries: limitEntries, turns: limitTurns(read) }, "conv", [], {}, [], NO_BOARD, { state: "running", error: null });
+    assert.equal(new Set(nodes.map((node) => node.id)).size, nodes.length, `read ${read}: ${nodes.map((node) => node.id)}`);
+  }
+  // Between the limit and its carry-on, a request that still works is switching: no stopped turn, no error.
+  const gap = { entries: limitEntries.slice(0, 7), turns: limitTurns(false) };
+  const switching = cliBlocks(gap, "conv", { ...NO_BOARD, requests: { r2: { state: { type: "working" } } } });
+  assert.deepEqual([switching[1]!.state, switching[1]!.error, switching[1]!.endedAtMs], ["working", null, null]);
+  // One the limit ended for good (nothing to switch to) reads as it ended.
+  assert.equal(cliBlocks(gap, "conv", { ...NO_BOARD, requests: { r2: { state: { type: "failed", error: "limit" } } } })[1]!.state, "failed");
+  // A message the user sends anew after the limit opens its own block.
+  const fresh = [...limitEntries.slice(0, 7), user("n1", "Something else", 3500, { said: { by: "user" }, requests: ["r3"] })];
+  assert.deepEqual(cliBlocks({ entries: fresh, turns: limitTurns(false) }, "conv").map((block) => block.key), ["u1", "u2", "n1"]);
+});
+
+test("a follow-up the user steers during a usage limit's switch goes on in the cut turn's block: one block, the switch's carry-on with it, never stopped (screen pass, every CLI)", () => {
+  const FOLLOW = "Also, at the very end reply FOLLOW too.";
+  const cut = { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit" as const, requests: ["r1"] };
+  // The daemon hands the steered follow-up's request to the carry-on: the cut request is done, the follow-up works.
+  const requests = { r1: { state: { type: "done" } }, r9: { state: { type: "working" }, steeredInto: "r1" } };
+  const board = { ...NO_BOARD, requests };
+  const entries = limitEntries.slice(0, 4);
+  // Steered, before the CLI says it: in the open block, never a block of its own.
+  for (const carry of [{ ...turn("k1", 1500, null, null), requests: ["r1"] }, { ...turn("k1", 1500, null, null), requests: ["r1", "r9"] }]) {
+    const tree = cliThreadTree({ entries, turns: [cut, carry] }, "conv", [message("r1", "Run six commands", 1000), message("r9", FOLLOW, 1700)], {}, [], board, { state: "running", error: null });
+    const blocks = tree.nodes.flatMap((node) => (node.kind === "block" ? [node.block] : []));
+    assert.deepEqual(blocks.map((block) => [block.key, block.state, block.error]), [["u1", "working", null]], JSON.stringify(carry.requests));
+    assert.deepEqual(blocks[0]!.steers.map((steer) => steer.text), [FOLLOW]);
+    assert.equal(tree.nodes.filter((node) => node.kind === "user").length, 1);
+  }
+  // Read, with the carry-on naming both requests: still one block, done, the follow-up once.
+  const read = [...entries, user("s9", FOLLOW, 1700, { steer: true, said: { by: "user" }, requests: ["r9"] }), at({ type: "message", itemId: "a1", role: "assistant", text: "DONE FOLLOW" }, 1900)];
+  const blocks = cliBlocks({ entries: read, turns: [cut, { ...turn("k1", 1500, 2000, "done"), requests: ["r1", "r9"] }] }, "conv", board);
+  assert.deepEqual(blocks.map((block) => [block.key, block.state, block.error]), [["u1", "done", null]]);
+  assert.deepEqual(blocks[0]!.steers.map((steer) => steer.text), [FOLLOW]);
+  assert.deepEqual(blocks[0]!.worked, [{ fromMs: 1000, toMs: 1400 }, { fromMs: 1500, toMs: 2000 }]);
+});
+
+test("a switch's divider stays where it was drawn live when the turn ends: in its run, above a follow-up steered in after it (D65, screen pass)", () => {
+  const FOLLOW = "Also, at the very end reply FOLLOW too.";
+  const cut = { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit" as const, requests: ["r1"] };
+  const switched = { requestId: "r1", atMs: 1450, position: 0, kind: { type: "providerTransition", id: "t1", cause: "automaticFallback", from: { provider: "claude", model: "opus", effort: null }, to: { provider: "claude", model: "opus", effort: null }, account: { provider: "claude", account: "fake" }, accountLabel: "Fake second", startedAtMs: 1450 } } as unknown as BoardDigest["orchestratorSteps"][number];
+  const board = { ...NO_BOARD, orchestratorSteps: [switched], requests: { r1: { state: { type: "done" } }, r9: { state: { type: "done" }, steeredInto: "r1" } } };
+  const entries = [
+    ...limitEntries.slice(0, 5),
+    user("s9", FOLLOW, 1950, { steer: true, said: { by: "user" }, requests: ["r9"] }),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "DONE FOLLOW" }, 2000),
+  ];
+  const [block] = cliBlocks({ entries, turns: [cut, { ...turn("k1", 1500, 2100, "done"), requests: ["r1", "r9"] }] }, "conv", board);
+  const steers = block!.steers.map((steer) => ({ position: steer.position, text: steer.text, atMs: steer.message.createdAtMs, attachments: steer.message.attachments }));
+  const sequence = blockSequence({ ...block!, steers });
+  const answer = answerIndex(block!.texts, true);
+  const parts = turnParts(turnActivity(sequence, false), answer, true, false, () => true).flatMap((part) =>
+    part.type === "between" ? [part.entry.kind] : [...(part.items.length ? ["fold"] : []), ...(part.kept ?? []).map((entry) => entry.kind === "orchestrator" ? entry.steps[0]!.kind.type : entry.kind), ...(part.answer ? ["answer"] : [])]);
+  // Live: commands, the switch, DONE, the follow-up. Done: the switch stays above the follow-up.
+  assert.deepEqual(parts, ["fold", "providerTransition", "answer", "steer"]);
+});
+
+test("a thread whose turns repeat a message never repeats a node id", () => {
+  const entries = [user("u1", "Same", 1000, { requests: ["r1"] }), user("u2", "Same", 2000, { requests: ["r1"] })];
+  const { nodes } = cliThreadTree({ entries, turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }, { ...turn("u2", 2000, 2500, "done"), requests: ["r1"] }] }, "conv", [], {}, [], NO_BOARD, { state: "idle", error: null });
+  assert.equal(new Set(nodes.map((node) => node.id)).size, nodes.length, `${nodes.map((node) => node.id)}`);
+});
+
+test("a message sent after a block finished never reopens it, though the worker its turn starts works before the turn is read (demo8)", () => {
+  const entries = [
+    user("u1", "Find the secret with a worker", 1000),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "ALPHA" }, 1400),
+    user("u2", "Count README lines with a worker", 9000),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "Started a worker." }, 9200),
+  ];
+  // Its first worker is done; the new turn's worker started before its turn is read.
+  const workers = [row("aa11bb22", 1100), { ...row("cc33dd44", 9100), working: true, lastEnd: null }];
+  const blocks = cliBlocks({ entries, turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }], workers }, "conv");
+  assert.deepEqual(blocks.map((block) => block.key), ["u1", "u2"]);
+  assert.deepEqual(blocks[0]!.steers, []);
+});
+
+test("a message woken for while only a background subagent holds the block goes on in it while its turn runs, before the daemon says it joined (D113, demo8)", () => {
+  const entries = [
+    user("u1", "Start a background subagent", 1000),
+    at(tool("ag1", "Agent", '{"description":"Sleep then print","run_in_background":true}', "completed", "Started."), 1100),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "It runs in the background." }, 1200),
+    user("q1", "[queued message feedbeef · judge it: brigadier queue feedbeef join|wait|worker <id>|new-session; unjudged, it joins this work]\nWhat is 2+2?", 5000, { said: { by: "brigadier" } }),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "Four." }, 5200),
+  ];
+  const background = [{ id: "bg1", itemId: "ag1", kind: "agent" as const, label: "Sleep then print", status: "running" as const, startedAtMs: 1100, endedAtMs: null, outputFile: null, summary: null, lastLine: null }];
+  for (const turns of [[turn("u1", 1000, 1300, "done")], [turn("u1", 1000, 1300, "done"), turn("q1", 5000, null, null)]]) {
+    // The core's work block, opened with the first turn, still open while the subagent runs (D163).
+    const blocks = cliBlocks({ entries, turns, background, block: { startedAtMs: 1010 } }, "conv");
+    assert.deepEqual(blocks.map((block) => block.key), ["u1"], `${turns.length} turns read`);
+  }
+});
+
+const workerStep = (type: "paused" | "resumed" | "stopped", position: number): SequenceEntry =>
+  ({ kind: "orchestrator", steps: [{ kind: { type, taskId: "t1", ...(type === "stopped" && { reason: "Stopped by the user" }) }, position, atMs: position }], position }) as SequenceEntry;
+const stepKinds = (entries: readonly SequenceEntry[] | undefined) => (entries ?? []).map((entry) => entry.kind === "orchestrator" && entry.steps[0]?.kind.type);
+
+test("a worker paused before the answer and resumed and ended after it read in that order around it", () => {
+  const sequence: SequenceEntry[] = [workerStep("paused", 1), { kind: "text", index: 0, messageId: "a1", position: 2 }, workerStep("resumed", 3), workerStep("stopped", 4)];
+  const activity = turnActivity(sequence, false);
+  const parts = turnParts(activity, 0, true, false, () => true);
+  // Above the answer only what came before it; under it, what came after, in order.
+  assert.deepEqual(stepKinds(parts[0]?.type === "work" ? parts[0].kept : []), ["paused"]);
+  assert.deepEqual(stepKinds(belowAnswer(activity, 0, true)), ["resumed", "stopped"]);
+  assert.deepEqual(belowAnswer(activity, 0, false), []);
 });

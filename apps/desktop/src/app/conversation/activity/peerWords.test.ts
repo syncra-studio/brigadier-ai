@@ -17,8 +17,10 @@ import {
   replyOf,
   sentByCaption,
   UNKNOWN_SESSION,
+  waitExchange,
 } from "@/app/conversation/activity/peerWords";
 import type { Conversation, ItemStatus, PeerMessage, PeerState, Project } from "@/ipc/generated";
+import { summarize } from "@/app/conversation/activity/words";
 
 const docs: PeerRef = { session: "docs", title: "Docs" };
 const notes: PeerRef = { session: "notes", title: "Release notes" };
@@ -86,8 +88,8 @@ test("a row of several messages names each session once, and only the replies th
 test("a wait with no message next to it is a row of its own", () => {
   assert.deepEqual(line(exchange([], ["inProgress"], [], [docs])), ["Waiting for Docs to reply", "inProgress", true]);
   assert.deepEqual(line(exchange([], ["inProgress"])), ["Waiting for replies", "inProgress", true]);
-  assert.deepEqual(line(exchange([], ["completed"], [docs])), ["Waited for a reply from Docs", "completed", false]);
-  assert.deepEqual(line(exchange([], ["completed"], [docs, notes])), ["Waited for replies from Docs and Release notes", "completed", false]);
+  assert.deepEqual(line(exchange([], ["completed"], [docs])), ["Received a reply from Docs", "completed", false]);
+  assert.deepEqual(line(exchange([], ["completed"], [docs, notes])), ["Received replies from Docs and Release notes", "completed", false]);
   assert.deepEqual(line(exchange([], ["completed"])), ["Waited; no reply yet", "completed", false]);
 });
 
@@ -103,6 +105,15 @@ test("the row's words as a group reads them: kind, summary phrase and the waitin
   // A message waiting for the user's OK counts as sent for the group.
   assert.equal(exchangeDescribed(exchange([send(docs, "waitingForOk")])).words.kind, "message");
   assert.deepEqual(refusedDescribed(UNKNOWN_SESSION).words.done, "Couldn’t send message to a session");
+});
+
+test("a wait on its own sums up as its row reads, never as a message sent (demo9 shot 04)", () => {
+  const received = exchangeDescribed(exchange([], ["completed"], [docs]));
+  assert.equal(received.words.done, "Received a reply from Docs");
+  assert.equal(summarize([received.words]), "Received a reply");
+  assert.equal(summarize([received.words, received.words]), "Received replies");
+  assert.equal(summarize([exchangeDescribed(exchange([], ["inProgress"], [], [docs])).words]), "Waiting for a reply");
+  assert.equal(summarize([exchangeDescribed(exchange([], ["completed"])).words]), "Waited; no reply yet");
 });
 
 test("only a message the receiver has opens it there", () => {
@@ -149,4 +160,20 @@ test("the thread's own `brigadier send` row: Messaging, then Messaged, the user'
   assert.equal(sessionSentDescribed(named, "sent").status, "completed");
   assert.equal(sessionSentDescribed(named, "refused").words.done, "Couldn’t send message to Docs");
   assert.equal(sessionSentDescribed(named, "refused").words.phrase, "Couldn’t message a session");
+});
+
+test("a `brigadier wait` on another session: waiting for its reply, then received, the name opening it at the reply (D138)", () => {
+  const B = "0192aaaa-bbbb-7ccc-8ddd-00004f2a9c1e";
+  const peers = { name: (id: string | undefined) => (id === B ? { title: "Docs", project: null } : null), session: (to: string) => (B.endsWith(to) ? B : null) };
+  const kind = { type: "sessionWait" as const, itemId: "w1", to: ["4f2a9c1e"], sent: null, status: "inProgress" as const, replies: [] as { from: string; messageId?: string; text: string; atMs: number }[] };
+  const words = () => {
+    const { parts, status, waiting } = exchangeWords(waitExchange(kind, peers));
+    return [plainWords(parts), status, waiting];
+  };
+  assert.deepEqual(words(), ["Waiting for Docs to reply", "inProgress", true]);
+  kind.replies.push({ from: B, messageId: "sm-1", text: "Done.", atMs: 2 });
+  // The reply taken settles it, even before its call says it ended.
+  assert.deepEqual(words(), ["Received a reply from Docs", "completed", false]);
+  assert.deepEqual(waitExchange(kind, peers).received, [{ session: B, title: "Docs", message: "sm-1" }]);
+  assert.deepEqual(exchangeWords(waitExchange({ ...kind, status: "completed", replies: [] }, peers)).parts, ["Waited; no reply yet"]);
 });

@@ -230,9 +230,6 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Thread cards | `Action card/Question` | `app/conversation/QuestionAction.tsx` | `QuestionAction` | |
 | Thread cards | `Action card/Plan` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Thread cards | `Phase plan action` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Thread cards | `Changes file row` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
-| Thread cards | `Merge warning row` | — | — | Pen only: the code was removed in b1014e45c |
-| Thread cards | `Revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
 | Thread cards | `Open pill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
 | Thread cards | `Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
 | Thread cards | `Plan frame` | — | — | Pen only: the code was removed in cb94ccca9 |
@@ -274,12 +271,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Composer | `Dictation bar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
 | Composer | `Waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
 | Composer | `Composer hint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
-| Composer menus, rail & queue | `Capsule pill` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
 | Composer menus, rail & queue | `Step list` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Composer menus, rail & queue | `Run capsule` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Composer menus, rail & queue | `Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
-| Composer menus, rail & queue | `Request capsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
-| Composer menus, rail & queue | `Diff pill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
 | Composer menus, rail & queue | `Moved notice` | — | — | Pen only: the code was removed in efa933d5a |
 | Composer menus, rail & queue | `Rail pill` | `app/conversation/RailPill.tsx` | `RailPill` | |
 | Composer menus, rail & queue | `Stand-in pill` | `app/shell/StandInPill.tsx` | `StandInPill` | |

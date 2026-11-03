@@ -2,8 +2,9 @@
 //!
 //! A streaming turn says a word at a time, each its own piece of [`ThreadNews`], and several
 //! sessions stream at once. Sent one by one, each would be its own task on the app's main
-//! thread. Held for [`NEWS_EVERY`] instead, a session's items go in one piece, and every
-//! session's in one frame. News that says more than items (a turn that opens or ends, the
+//! thread. Held for [`NEWS_EVERY`] instead, every session's items go in one frame. Each piece
+//! keeps its own number ([`ThreadNews::seq`]): merged, a piece could hold news a read of the
+//! thread already holds beside news it doesn't, and the app couldn't tell them apart. News that says more than items (a turn that opens or ends, the
 //! context, background tasks, MCP servers, workers) goes at once, with what waited before it,
 //! and so does every other frame: nothing is sent out of order, nor later than one interval.
 
@@ -21,7 +22,7 @@ pub(crate) const NEWS_EVERY: Duration = Duration::from_millis(16);
 
 pub(crate) struct NewsWriter<W: AsyncWrite> {
     frames: FrameWriter<W>,
-    /// News waiting, items only, at most one per conversation, in the order they came.
+    /// News waiting, items only, in the order it came.
     waiting: Vec<ThreadNews>,
     /// When what waits goes.
     due: Option<Instant>,
@@ -51,14 +52,7 @@ impl<W: AsyncWrite + Unpin> NewsWriter<W> {
             self.waiting.push(news);
             return self.send_news().await;
         }
-        match self
-            .waiting
-            .iter_mut()
-            .find(|held| held.conversation_id == news.conversation_id)
-        {
-            Some(held) => held.entries.extend(news.entries),
-            None => self.waiting.push(news),
-        }
+        self.waiting.push(news);
         // News that keeps coming may win the connection's loop over the deadline: it is
         // sent here then.
         if *self.due.get_or_insert(now + NEWS_EVERY) <= now {
@@ -148,6 +142,9 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         mcp: None,
         workers: None,
         jobs: None,
+        replies: None,
+        block: None,
+        seq: news.seq,
     };
     let second = ThreadNews {
         conversation_id: news.conversation_id.clone(),
@@ -160,6 +157,9 @@ fn halves(news: &mut ThreadNews) -> (ThreadNews, ThreadNews) {
         mcp: news.mcp.take(),
         workers: news.workers.take(),
         jobs: news.jobs.take(),
+        replies: None,
+        block: news.block.take(),
+        seq: news.seq,
     };
     (first, second)
 }
@@ -174,6 +174,7 @@ fn items_only(news: &ThreadNews) -> bool {
         && news.mcp.is_none()
         && news.workers.is_none()
         && news.jobs.is_none()
+        && news.block.is_none()
 }
 
 /// Waits until `due`; forever when none.
@@ -197,6 +198,7 @@ mod tests {
         ThreadNews {
             conversation_id: ConversationId(conversation.into()),
             entries: vec![FileEntry {
+                wake: None,
                 event: ProviderEvent::MessageDelta {
                     item_id: item.into(),
                     text: text.into(),
@@ -209,6 +211,7 @@ mod tests {
                 images: Vec::new(),
                 phase: None,
                 said: None,
+                requests: Vec::new(),
             }],
             opened: false,
             ended: None,
@@ -218,6 +221,9 @@ mod tests {
             mcp: None,
             workers: None,
             jobs: None,
+            replies: None,
+            block: None,
+            seq: 0,
         }
     }
 
@@ -263,8 +269,8 @@ mod tests {
             .collect()
     }
 
-    /// 200 deltas from each of 5 sessions in one interval: one frame, one piece per session,
-    /// every word in order; before, 1000 frames.
+    /// 200 deltas from each of 5 sessions in one interval: one frame, every session's words in
+    /// order; before, 1000 frames.
     #[tokio::test]
     async fn an_intervals_deltas_go_as_one_frame_one_piece_per_session() {
         let frames = sent(async |writer| {
@@ -283,11 +289,14 @@ mod tests {
         .await;
         assert_eq!(frames.len(), 1);
         let news = news_of(&frames[0]);
-        assert_eq!(news.len(), 5);
         let words: String = (0..200).map(|n| format!("{n} ")).collect();
-        for (session, piece) in news.iter().enumerate() {
-            assert_eq!(piece.conversation_id.0, format!("s{session}"));
-            assert_eq!(texts(piece), words);
+        for session in 0..5 {
+            let said: String = news
+                .iter()
+                .filter(|piece| piece.conversation_id.0 == format!("s{session}"))
+                .map(texts)
+                .collect();
+            assert_eq!(said, words);
         }
     }
 
@@ -392,8 +401,8 @@ mod tests {
         }
     }
 
-    /// Two 9 MiB deltas of one session in one interval, then its turn's end: merged, they'd be
-    /// over the wire limit, so they go as legal frames, every word in order, the end last.
+    /// Two 9 MiB deltas of one session in one interval, then its turn's end: together, they'd
+    /// be over the wire limit, so they go as legal frames, every word in order, the end last.
     /// Before, the merged piece was retried whole and the connection dropped.
     #[tokio::test]
     async fn a_sessions_items_over_the_limit_go_in_legal_frames() {

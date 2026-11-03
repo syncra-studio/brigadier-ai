@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { canPickSkill, cliMenuCommands, hasSkillToken, limitClaudeSkills, skillLabel } from "@/app/conversation/cliCommands";
+import { canPickSkill, cliMenuCommands, hasSkillToken, keepFirstSkill, skillLabel } from "@/app/conversation/cliCommands";
 import { commandMatches } from "@/components/conversation/elements/menuMatch";
 import { cliCommandsCacheKey } from "@/app/conversation/useCliCommands";
 import type { ComposerCommand } from "@/components/conversation";
@@ -52,20 +52,21 @@ test("choices/catalog and account changes invalidate the module cache key", () =
 });
 
 
-test("Codex compact invokes its mapped RPC action without inserting model text", () => {
+test("a command Brigadier runs itself runs its action without inserting model text; one without stays text", () => {
   const invoked: string[] = [];
-  const rows = cliMenuCommands([{ ...command("compact"), invocation: "thread/compact/start" }], [], { name: "Codex", icon: null, runCommand: (name) => invoked.push(name) });
+  const rows = cliMenuCommands([{ ...command("compact"), action: "compact" }, command("help")], [], { name: "CLI", icon: null, runAction: (action) => invoked.push(action) });
   assert.equal(rows[0]?.text, undefined);
   rows[0]?.run?.();
-  assert.deepEqual(invoked, ["thread/compact/start"]);
+  assert.deepEqual(invoked, ["compact"]);
+  assert.equal(rows[1]?.text, "/help");
 });
 
 
 test("restored messages and a switch to Claude retain only their first skill chip", () => {
   const known: Mention[] = [{ type: "skill", rowId: "skill:proj-agents:one" }, { type: "skill", rowId: "skill:proj-hello:two" }];
-  assert.equal(limitClaudeSkills("/proj-hello /proj-agents explain", known), "/proj-hello  explain");
-  assert.equal(limitClaudeSkills("/proj-hello /proj-hello explain", known), "/proj-hello  explain");
-  assert.equal(limitClaudeSkills("src/proj-hello /proj-agents explain", known), "src/proj-hello /proj-agents explain");
+  assert.equal(keepFirstSkill("/proj-hello /proj-agents explain", known), "/proj-hello  explain");
+  assert.equal(keepFirstSkill("/proj-hello /proj-hello explain", known), "/proj-hello  explain");
+  assert.equal(keepFirstSkill("src/proj-hello /proj-agents explain", known), "src/proj-hello /proj-agents explain");
 });
 
 

@@ -144,7 +144,7 @@ export function shortWorkerName(title: string, fallback = "Worker task"): string
     .replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   const short = words.slice(0, 4);
   while (short.length > 2 && /^(?:to|of|for|with|and|the|a|an)$/i.test(short.at(-1) ?? "")) short.pop();
-  const name = short.join(" ") || fallback;
+  const name = short.join(" ").replace(/[,;.]+$/, "") || fallback;
   return name.split(" ").length === 1 ? `${name} task` : name;
 }
 

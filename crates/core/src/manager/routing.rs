@@ -19,8 +19,7 @@ pub(crate) struct Inputs {
 impl SessionManager {
     /// Every provider as the runtime sees it now.
     pub(crate) fn provider_states(&self, now: i64) -> Vec<ProviderState> {
-        brigadier_providers::ProviderKind::ALL
-            .into_iter()
+        brigadier_providers::adapters::kinds()
             .map(|provider| ProviderState {
                 provider,
                 logged_in: self.runtime.provider_signed_in(provider),
@@ -35,8 +34,7 @@ impl SessionManager {
         let catalogs: Vec<(
             brigadier_providers::ProviderKind,
             Vec<brigadier_providers::ModelInfo>,
-        )> = brigadier_providers::ProviderKind::ALL
-            .into_iter()
+        )> = brigadier_providers::adapters::kinds()
             .map(|provider| {
                 let models = self
                     .runtime

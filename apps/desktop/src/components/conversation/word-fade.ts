@@ -17,7 +17,7 @@ type HastNode = {
 };
 
 /** How long a word takes to fade in; keep in step with `.aui-fade` in globals.css. */
-const FADE_MS = 700;
+const FADE_MS = 150;
 
 /** The classes an element that shows fades in with, as a unit. */
 const UNITS: Record<string, string[]> = {

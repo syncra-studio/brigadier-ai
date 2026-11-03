@@ -12,6 +12,7 @@ type Feedback = typeof FeedbackModule;
 let server: ViteDevServer;
 let closeFeedback: Feedback["closeFeedback"];
 let dismissOffer: Feedback["dismissOffer"];
+let draftOffer: Feedback["draftOffer"];
 let openFeedback: Feedback["openFeedback"];
 let sendFromDialog: Feedback["sendFromDialog"];
 let sendOffer: Feedback["sendOffer"];
@@ -21,7 +22,7 @@ let useFeedbackUi: Feedback["useFeedbackUi"];
 
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ closeFeedback, dismissOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
+  ({ closeFeedback, dismissOffer, draftOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
     (await server.ssrLoadModule("/src/state/feedback.ts")) as Feedback);
 });
 
@@ -291,4 +292,34 @@ test("a Send before it knows who it posts as waits, and signs in when signed out
   assert.deepEqual(wrote, ["Stop leaves it spinning"]);
   // The ask again once signed in.
   answer?.(true);
+});
+
+// A card written up before a restart shows its reports, not "Writing up your reports…" again.
+test("an offer's write-up is kept across a restart", async () => {
+  const stored = new Map<string, string>();
+  const storage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value), removeItem: (key: string) => stored.delete(key) },
+  });
+  try {
+    draftOffer("kept", "Spins. Hangs");
+    await until(() => useFeedbackOffers.getState()["kept"]?.sending.phase === "write");
+    useFeedbackOffers.setState({}, true);
+    draftOffer("kept", "Spins. Hangs");
+    const offer = useFeedbackOffers.getState()["kept"];
+    assert.equal(offer?.sending.phase, "write");
+    assert.deepEqual(offer?.written?.reports.map((each) => each.title), ["Spins", "Hangs"]);
+    assert.deepEqual(wrote, ["Spins. Hangs"]);
+    dismissOffer("kept");
+    assert.equal(stored.size, 0);
+    // One no writer could run for is kept too: its own text in one form, not written again.
+    stored.set("brigadier.feedbackOffer.plain", "null");
+    draftOffer("plain", "Hangs");
+    assert.deepEqual(useFeedbackOffers.getState()["plain"], { written: null, sending: { phase: "write" } });
+    assert.deepEqual(wrote, ["Spins. Hangs"]);
+  } finally {
+    if (storage) Object.defineProperty(globalThis, "localStorage", storage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  }
 });

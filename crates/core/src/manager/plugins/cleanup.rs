@@ -1,16 +1,17 @@
 //! One-time retirement of the old sharing writer (L9, L10). Never infer ownership
 //! from a matching name outside the reserved @brigadier namespace.
+use brigadier_providers::KindFacts as _;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::ProviderKind;
+use brigadier_registry::Catalog;
 use brigadier_registry::Secret;
 use brigadier_registry::adapter::{CliCall, Place, Step, adapter};
 use brigadier_registry::claude_config;
 use brigadier_registry::item::{ServerSpec, TransportSpec};
-use brigadier_registry::{Agent, Catalog};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use toml_edit::{DocumentMut, Item};
@@ -91,17 +92,13 @@ impl super::super::SessionManager {
                     .map(|_| ())
                 };
                 let runner = |agent, home: &Path, steps: &[Step]| {
+                    let adapter = adapter(agent)
+                        .ok_or("Brigadier no longer drives the agent it came from.")?;
                     let mut roots = ctx.roots.clone();
-                    match agent {
-                        Agent::Claude => {
-                            roots.claude_dir = home.to_owned();
-                            roots.claude_json = claude_config::config_file(&roots.home, Some(home));
-                        }
-                        Agent::Codex => roots.codex_home = home.to_owned(),
-                    }
+                    adapter.at_home(&mut roots, home);
                     let binary = (ctx.binary)(agent);
                     brigadier_registry::adapter::apply(
-                        adapter(agent),
+                        adapter,
                         &roots,
                         &Catalog::read(&roots, None),
                         steps,
@@ -134,7 +131,7 @@ impl super::super::SessionManager {
 /// This seam lets part A supply its Sharing -> Choices translation without coupling
 /// cleanup's checkpoints to the choices schema.
 pub(super) type Import<'a> = &'a dyn Fn(&Sharing) -> Result<(), String>;
-pub(super) type Runner<'a> = &'a dyn Fn(Agent, &Path, &[Step]) -> Result<(), String>;
+pub(super) type Runner<'a> = &'a dyn Fn(ProviderKind, &Path, &[Step]) -> Result<(), String>;
 
 pub(super) struct Cleanup<'a> {
     pub data: &'a Path,
@@ -369,33 +366,32 @@ impl Cleanup<'_> {
         // Never let a CLI rewrite a config which failed parsing. It will be retried.
         join_errors(errors)?;
         for (agent, dirs) in [
-            (Agent::Claude, claude_dirs),
-            (Agent::Codex, codex_dirs.clone()),
+            (ProviderKind::Claude, claude_dirs),
+            (ProviderKind::Codex, codex_dirs.clone()),
         ] {
             for dir in dirs {
-                let key = format!("{agent:?}:{}", dir.display());
+                // Recorded keys name the agent by its vendor word ("Claude:…").
+                let key = format!("{}:{}", agent.vendor(), dir.display());
                 if state.marketplaces.contains(&key) {
                     continue;
                 }
                 // Only call remove when its catalog actually lists our marketplace.
-                let listed = match agent {
-                    Agent::Claude => {
-                        let file = dir.join("plugins/known_marketplaces.json");
-                        read_json::<Value>(&file)?.is_some_and(|v| v.get("brigadier").is_some())
-                    }
-                    Agent::Codex => {
-                        let file = dir.join("config.toml");
-                        match read_text(&file)? {
-                            Some(text) => {
-                                let doc: DocumentMut = text
-                                    .parse()
-                                    .map_err(|_| format!("{}: invalid TOML", file.display()))?;
-                                doc.get("marketplaces")
-                                    .and_then(|m| m.get("brigadier"))
-                                    .is_some()
-                            }
-                            None => false,
+                // The legacy installs earlier versions made, in Claude's and Codex's own files.
+                let listed = if agent == ProviderKind::Claude {
+                    let file = dir.join("plugins/known_marketplaces.json");
+                    read_json::<Value>(&file)?.is_some_and(|v| v.get("brigadier").is_some())
+                } else {
+                    let file = dir.join("config.toml");
+                    match read_text(&file)? {
+                        Some(text) => {
+                            let doc: DocumentMut = text
+                                .parse()
+                                .map_err(|_| format!("{}: invalid TOML", file.display()))?;
+                            doc.get("marketplaces")
+                                .and_then(|m| m.get("brigadier"))
+                                .is_some()
                         }
+                        None => false,
                     }
                 };
                 if listed {
@@ -406,11 +402,9 @@ impl Cleanup<'_> {
                         "brigadier".into(),
                     ];
                     let call = CliCall {
-                        program: if agent == Agent::Claude {
-                            "claude"
-                        } else {
-                            "codex"
-                        },
+                        program: adapter(agent)
+                            .ok_or("Brigadier no longer drives the agent it came from.")?
+                            .program(),
                         args,
                         cwd: None,
                         needs_terminal: false,
@@ -977,10 +971,8 @@ impl Original {
                         path: path.to_owned(),
                         shared: false,
                     });
-                let agent = adapter(
-                    super::ops::agent_of(*agent)
-                        .ok_or("Brigadier no longer drives the agent it came from.")?,
-                );
+                let agent =
+                    adapter(*agent).ok_or("Brigadier no longer drives the agent it came from.")?;
                 // A crash after the CLI restored it but before the checkpoint must be safe
                 // to retry. An independently changed entry is never overwritten.
                 let catalog = Catalog::read(ctx.roots, project.as_deref());
@@ -1039,14 +1031,7 @@ impl Original {
                     return Ok(());
                 }
                 let steps = agent.add_server(name, &spec, &place).map_err(|err| err.0)?;
-                runner(
-                    agent.agent(),
-                    match agent.agent() {
-                        Agent::Claude => &ctx.roots.claude_dir,
-                        Agent::Codex => &ctx.roots.codex_home,
-                    },
-                    &steps,
-                )?;
+                runner(agent.agent(), agent.home(ctx.roots), &steps)?;
                 Ok(())
             }
         }

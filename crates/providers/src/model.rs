@@ -11,72 +11,42 @@ use ts_rs::TS;
 
 use crate::redact::Redactor;
 
-/// A CLI Brigadier can drive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum ProviderKind {
-    Claude,
-    Codex,
-}
+pub use brigadier_kind::ProviderKind;
 
-impl ProviderKind {
-    pub const ALL: [ProviderKind; 2] = [ProviderKind::Claude, ProviderKind::Codex];
-
+/// What every adapter's static facts answer about its kind ([`crate::adapters`]): the
+/// unregistered kind of an old record gets its id back and nothing to run.
+pub trait KindFacts {
     /// The product name shown to the user.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code",
-            Self::Codex => "Codex",
-        }
-    }
-
-    /// A skill invoked in this CLI's own message syntax.
-    pub fn skill_invocation(self, skill: &str, question: &str) -> String {
-        let prefix = match self {
-            Self::Claude => "/",
-            Self::Codex => "$",
-        };
-        let question = question.trim();
-        if question.is_empty() {
-            format!("{prefix}{skill}")
-        } else {
-            format!("{prefix}{skill} {question}")
-        }
-    }
-
+    fn label(self) -> &'static str;
+    /// Its short vendor word, in error lines ("Claude: …").
+    fn vendor(self) -> &'static str;
     /// The binary name looked up on the login shell's PATH.
-    pub fn binary(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
-    }
-
+    fn binary(self) -> &'static str;
     /// The vendor's own installer, as typed into a terminal (PowerShell on Windows).
-    pub fn install_command(self, windows: bool) -> &'static str {
-        match (self, windows) {
-            (Self::Claude, false) => "curl -fsSL https://claude.ai/install.sh | bash",
-            (Self::Claude, true) => "irm https://claude.ai/install.ps1 | iex",
-            (Self::Codex, false) => "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-            (Self::Codex, true) => "irm https://chatgpt.com/codex/install.ps1 | iex",
-        }
-    }
-
+    fn install_command(self, windows: bool) -> &'static str;
     /// Signs the user in to the CLI, as typed into a terminal.
-    pub fn login_command(self) -> &'static str {
-        match self {
-            Self::Claude => "claude auth login",
-            Self::Codex => "codex login",
-        }
-    }
+    fn login_command(self) -> &'static str;
 }
 
-impl std::fmt::Display for ProviderKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        })
+impl KindFacts for ProviderKind {
+    fn label(self) -> &'static str {
+        crate::adapters::adapter(self).map_or(self.id(), |adapter| adapter.label)
+    }
+
+    fn vendor(self) -> &'static str {
+        crate::adapters::adapter(self).map_or(self.id(), |adapter| adapter.vendor)
+    }
+
+    fn binary(self) -> &'static str {
+        crate::adapters::adapter(self).map_or(self.id(), |adapter| adapter.binary)
+    }
+
+    fn install_command(self, windows: bool) -> &'static str {
+        crate::adapters::adapter(self).map_or("", |adapter| adapter.install[usize::from(windows)])
+    }
+
+    fn login_command(self) -> &'static str {
+        crate::adapters::adapter(self).map_or("", |adapter| adapter.login)
     }
 }
 
@@ -136,7 +106,8 @@ pub struct ModelInfo {
 }
 
 /// Marks legacy each model with a newer namesake: "Opus 4.8" beside "Opus 5.5", "GPT-6-Sol"
-/// beside "GPT-6.1-Sol". A model without a version in its name is left alone.
+/// beside "GPT-6.1-Sol". A model without a version in its name is left alone. Then names
+/// apart models that share a name ([`name_apart`]).
 pub(crate) fn mark_superseded(models: &mut [ModelInfo]) {
     let named: Vec<_> = models
         .iter()
@@ -151,6 +122,39 @@ pub(crate) fn mark_superseded(models: &mut [ModelInfo]) {
         {
             model.legacy = true;
         }
+    }
+    name_apart(models);
+}
+
+/// Models that share a name read with where they come from, so every picker, pill and header
+/// tells them apart: "GLM-5.3 (opencode)" and "GLM-5.3 (opencode-go)", the part of the id
+/// before its `/`, else the whole id.
+fn name_apart(models: &mut [ModelInfo]) {
+    let source = |id: &str| {
+        id.split_once('/')
+            .map_or(id, |(source, _)| source)
+            .to_owned()
+    };
+    let names: Vec<(String, String)> = models
+        .iter()
+        .map(|model| (model.display_name.clone(), source(&model.id)))
+        .collect();
+    for model in models.iter_mut() {
+        let namesakes: Vec<&String> = names
+            .iter()
+            .filter(|(name, _)| *name == model.display_name)
+            .map(|(_, source)| source)
+            .collect();
+        if namesakes.len() < 2 {
+            continue;
+        }
+        let own = source(&model.id);
+        let shown = if namesakes.iter().filter(|other| ***other == own).count() > 1 {
+            model.id.clone()
+        } else {
+            own
+        };
+        model.display_name = format!("{} ({shown})", model.display_name);
     }
 }
 
@@ -379,6 +383,15 @@ pub struct ApprovalRequest {
     /// words, such as `git push`, a network host, or the workspace for file changes). See [`crate::policy::Similar`].
     #[serde(default)]
     pub grant: Option<String>,
+    /// It asks to reach the network: a host, a page or a web search.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub network: bool,
+    /// The CLI's own subagent that asks: the id its thread gives the subagent's call (the
+    /// `parent` of its entries). None for the session's own request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub agent: Option<String>,
 }
 
 /// One question a CLI asks with its own question tool ([`ProviderEvent::QuestionsAsked`]).
@@ -489,6 +502,17 @@ pub fn user_deny_message(reason: &str) -> String {
     }
 }
 
+/// [`user_deny_message`], or for a worker's orchestrator (D48) its own words.
+pub fn deny_message(by: Decider, reason: &str) -> String {
+    match (by, reason.trim()) {
+        (Decider::Orchestrator, "") => "Your orchestrator declined this. Don't try it again; \
+            say in your reply what you were going to do and that you didn't do it."
+            .to_string(),
+        (Decider::Orchestrator, reason) => format!("Your orchestrator declined this: {reason}"),
+        (_, reason) => user_deny_message(reason),
+    }
+}
+
 /// Who answered an approval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -496,6 +520,8 @@ pub enum Decider {
     /// Brigadier's policy, on the user's behalf.
     Policy,
     User,
+    /// The orchestrator that started the worker (D48): `brigadier send <worker> --allow|--deny`.
+    Orchestrator,
     /// Replayed from a recording, which keeps the answer but not who gave it.
     Recorded,
 }
@@ -539,6 +565,14 @@ pub struct BackgroundTask {
     /// The last line it printed, as its output file holds it now (read by Brigadier).
     #[serde(default)]
     pub last_line: Option<String>,
+    /// The command line it runs, when it is a command and the CLI said it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    /// The CLI that runs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<ProviderKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -558,6 +592,35 @@ pub enum BackgroundTaskKind {
 pub enum BackgroundTaskStatus {
     Running,
     Completed,
+    Failed,
+    Stopped,
+}
+
+/// A background job's end, as the words that tell it say it: the CLI's notice, or Brigadier's
+/// own message to the CLI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Wake {
+    pub job: WakeJob,
+    /// The job's name: a command's description or command line, an agent's name.
+    pub label: String,
+    /// The command line it ran, when known.
+    pub command: Option<String>,
+    pub end: WakeEnd,
+    pub exit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum WakeJob {
+    Command,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum WakeEnd {
+    Finished,
     Failed,
     Stopped,
 }
@@ -899,6 +962,14 @@ pub struct McpServerState {
     pub tools: Vec<String>,
     /// "http" for a server reached over HTTP; absent when the CLI doesn't say.
     pub transport: Option<String>,
+    /// The user manages its sign-in outside the CLI (on the vendor's site): no sign-in prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub managed: bool,
+    /// Its name as the user knows it, when that isn't `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub label: Option<String>,
 }
 
 /// The group in the composer's command menu.
@@ -937,6 +1008,17 @@ pub struct CliCommand {
     pub description: Option<String>,
     /// What it takes after its name ("[pr]"), when the CLI says.
     pub argument_hint: Option<String>,
+    /// What Brigadier does itself to run it, rather than sending its text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub action: Option<CliAction>,
+}
+
+/// A built-in command Brigadier runs itself ([`CliCommand::action`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CliAction {
+    Compact,
 }
 
 /// Everything a provider session reports, in one vocabulary for every CLI.
@@ -1112,6 +1194,10 @@ pub enum ProviderEvent {
     TaskNotice {
         item_id: String,
         text: String,
+        /// The job's end it tells, when the CLI's words say one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        wake: Option<Wake>,
     },
     RateLimits {
         quota: QuotaSnapshot,
@@ -1168,18 +1254,18 @@ pub enum ProviderEvent {
     },
 }
 
-/// What a session may do without asking: its permission level, passed straight to its CLI.
-/// Brigadier adds no sandbox and answers nothing on the user's behalf; the CLI's own
-/// permission prompts reach the user as cards.
+/// What a session may do without asking: its permission level, passed to its CLI. Brigadier
+/// adds no sandbox; the CLI's own permission prompts reach the user as cards, except what the
+/// level allows on every CLI where a CLI's own settings ask more (`policy::level_allows`).
 ///
-/// | Level | Claude Code | Codex |
-/// |---|---|---|
-/// | Ask | `--permission-mode default` | approval `untrusted`, sandbox `workspace-write` |
-/// | Accept edits | `--permission-mode acceptEdits` | approval `on-request`, sandbox `workspace-write` |
-/// | Full access | `--permission-mode bypassPermissions` | approval `never`, sandbox `danger-full-access` |
+/// | Level | Claude Code | Codex | OpenCode |
+/// |---|---|---|---|
+/// | Ask | `--permission-mode default` | approval `untrusted`, sandbox `workspace-write`; read-only commands answered | edits and commands ask, read-only commands run |
+/// | Accept edits | `--permission-mode acceptEdits`, `Bash(brigadier:*)` | approval `untrusted`, sandbox `workspace-write`; edits, read-only commands and `brigadier` answered | edits, read-only commands and `brigadier` run, other commands ask |
+/// | Full access | `--permission-mode bypassPermissions` | approval `never`, sandbox `danger-full-access` | everything allowed |
 ///
 /// [`Access::ReadOnly`] is for Brigadier's own one-shot readers (a commit message, a Brain
-/// pass), never a user's level.
+/// pass) and side and tab chats, never a user's level: a chat's shell runs `brigadier` only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Access {
@@ -1531,10 +1617,6 @@ pub struct SessionSpec {
     /// `.claude-plugin/plugin.json`). Claude loads each with `--plugin-dir`; Codex adds each
     /// one's `skills` folder as an extra skills root. The user's own skills are unaffected.
     pub skill_plugins: Vec<PathBuf>,
-    /// Brigadier's skill plugins every session and Chat gets (the `/brigade` skill, S15).
-    /// Claude loads each with `--plugin-dir`, Codex adds each one's `skills` folder as an extra
-    /// skills root, as above: a plain `claude` or `codex` never lists them.
-    pub installed_skills: Vec<PathBuf>,
     /// What of the user's own setup a thread or worker goes without ([`ToolSet::user_setup`]):
     /// what they switched off for Brigadier.
     pub switched_off: SwitchedOff,
@@ -1622,9 +1704,11 @@ pub struct AllowedModels {
 }
 
 /// Something a session created that must be removed when it is disposed of. Recorded in the
-/// session's cleanup ledger the moment it is known.
+/// session's cleanup ledger the moment it is known. Records of earlier versions still load
+/// ([`LegacyArtifact`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
+    remote = "Self",
     tag = "type",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
@@ -1644,10 +1728,13 @@ pub enum Artifact {
         /// Start time, to tell it apart from a later process that reused the pid.
         started_at_ms: Option<f64>,
     },
-    /// A Claude Code session: its transcript and per-session state under the config directory.
-    ClaudeSession {
-        session_id: String,
-        /// The config directory of the account it ran on; absent: the user's own.
+    /// A CLI's session (a Claude Code session, a Codex thread): its transcript and per-session
+    /// state, removed by its adapter.
+    Session {
+        provider: ProviderKind,
+        /// The CLI's own id of it.
+        id: String,
+        /// The CLI home of the account it ran on; absent: the user's own.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         home: Option<String>,
@@ -1657,41 +1744,16 @@ pub enum Artifact {
         #[ts(optional)]
         cwd: Option<String>,
     },
-    /// A Claude Code project directory (`projects/<encoded cwd>`) that did not exist before.
-    ClaudeProjectDir { path: String },
-    /// An empty repository memory folder absent before a linked-worktree CLI started and
-    /// observed to have been created during its life. Identities prevent deleting replacements.
-    ClaudeMemoryDir {
+    /// A file or folder a CLI's session made: what it is (`kind`) and the identities that keep
+    /// a replacement from being removed are its adapter's to read, and only its adapter's
+    /// `remove` disposes of it.
+    CliFile {
+        provider: ProviderKind,
+        kind: String,
         path: String,
-        identity: (u64, u64),
-        /// The enclosing project directory, only when it too was absent before the start.
-        project_identity: Option<(u64, u64)>,
+        #[serde(default)]
+        identities: Vec<(u64, u64)>,
     },
-    /// A plan file Claude Code wrote in plan mode (`<config>/plans/<name>.md`, its
-    /// `ExitPlanMode` names it) that was not there when the session started: removed with the
-    /// session, only while it is still that file (harness D7).
-    ClaudePlanFile { path: String, identity: (u64, u64) },
-    /// Claude Code's write-staging directory in the working directory (`.claude/.cc-writes`,
-    /// or `.claude` itself when that did not exist). Removed only while it holds no files.
-    ClaudeStagingDir { path: String },
-    /// A Codex thread: its rollout file and state records, removed through `thread/delete`.
-    CodexThread {
-        thread_id: String,
-        /// The `CODEX_HOME` of the account it ran on; absent: the user's own.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        home: Option<String>,
-        /// The folder it ran in (absent in records older than this field).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        cwd: Option<String>,
-    },
-    /// The folder where Codex saves a thread's generated images
-    /// (`$CODEX_HOME/generated_images/<thread id>`), which deleting the thread leaves behind.
-    CodexGeneratedImages { path: String },
-    /// A project trust entry Codex persisted in the user's `config.toml` when a thread started
-    /// there. Removed through Codex's config API, only while it is still just `trusted`.
-    CodexProjectTrust { path: String },
     /// A file or folder Free up space proved to be Brigadier's leftover and the user approved
     /// removing: exactly that entry (bound under `root` with the identity it had when it was
     /// shown), never anything found again by name. Removed only while it is still that entry.
@@ -1746,19 +1808,282 @@ pub enum Artifact {
         path: String,
         identity: Option<(u64, u64)>,
     },
-    /// A short temp folder of a Claude session's own (`/tmp/brigadier-<id>`), for Claude's
-    /// temp files and its sandboxed commands' TMPDIR.
-    ClaudeTempDir { path: String },
     /// Folder trust Brigadier wrote in a CLI's settings `file` for `folder` (the user trusted
     /// it in Brigadier), recorded before the write with what it replaced: removed by putting
     /// that back, only while the folder is still trusted as Brigadier left it
     /// ([`crate::trust::undo`]).
     CliTrust {
-        cli: crate::trust::TrustCli,
+        cli: ProviderKind,
         file: String,
         folder: String,
         before: crate::trust::TrustBefore,
     },
+}
+
+impl Artifact {
+    /// The CLI whose adapter's `remove` disposes of it.
+    pub fn provider(&self) -> Option<ProviderKind> {
+        match self {
+            Self::Session { provider, .. } | Self::CliFile { provider, .. } => Some(*provider),
+            _ => None,
+        }
+    }
+
+    /// The CLI session it is: its CLI and the CLI's own id of it.
+    pub fn native_session(&self) -> Option<(ProviderKind, &str)> {
+        match self {
+            Self::Session { provider, id, .. } => Some((*provider, id)),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for Artifact {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Artifact::serialize(self, serializer)
+    }
+}
+
+/// Reads a record of today, or one of an earlier version's CLI-named shapes
+/// ([`LegacyArtifact`]) as today's.
+impl<'de> Deserialize<'de> for Artifact {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if let Ok(legacy) = LegacyArtifact::deserialize(&value) {
+            return Ok(legacy.into());
+        }
+        Artifact::deserialize(value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The CLI-named artifacts earlier versions recorded, read as [`Artifact::Session`] and
+/// [`Artifact::CliFile`]. Never written.
+#[derive(Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum LegacyArtifact {
+    ClaudeSession {
+        session_id: String,
+        #[serde(default)]
+        home: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    ClaudeProjectDir {
+        path: String,
+    },
+    ClaudeMemoryDir {
+        path: String,
+        identity: (u64, u64),
+        project_identity: Option<(u64, u64)>,
+    },
+    ClaudePlanFile {
+        path: String,
+        identity: (u64, u64),
+    },
+    ClaudeStagingDir {
+        path: String,
+    },
+    CodexThread {
+        thread_id: String,
+        #[serde(default)]
+        home: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    CodexGeneratedImages {
+        path: String,
+    },
+    CodexProjectTrust {
+        path: String,
+    },
+    ClaudeTempDir {
+        path: String,
+    },
+}
+
+impl From<LegacyArtifact> for Artifact {
+    fn from(legacy: LegacyArtifact) -> Self {
+        use LegacyArtifact as L;
+        let file = |provider, kind: &str, path, identities| Self::CliFile {
+            provider,
+            kind: kind.to_owned(),
+            path,
+            identities,
+        };
+        let (claude, codex) = (ProviderKind::Claude, ProviderKind::Codex);
+        match legacy {
+            L::ClaudeSession {
+                session_id,
+                home,
+                cwd,
+            } => Self::Session {
+                provider: claude,
+                id: session_id,
+                home,
+                cwd,
+            },
+            L::CodexThread {
+                thread_id,
+                home,
+                cwd,
+            } => Self::Session {
+                provider: codex,
+                id: thread_id,
+                home,
+                cwd,
+            },
+            L::ClaudeProjectDir { path } => file(claude, "projectDir", path, Vec::new()),
+            L::ClaudeMemoryDir {
+                path,
+                identity,
+                project_identity,
+            } => file(
+                claude,
+                "memoryDir",
+                path,
+                std::iter::once(identity).chain(project_identity).collect(),
+            ),
+            L::ClaudePlanFile { path, identity } => file(claude, "planFile", path, vec![identity]),
+            L::ClaudeStagingDir { path } => file(claude, "stagingDir", path, Vec::new()),
+            L::ClaudeTempDir { path } => file(claude, "tempDir", path, Vec::new()),
+            L::CodexGeneratedImages { path } => file(codex, "generatedImages", path, Vec::new()),
+            L::CodexProjectTrust { path } => file(codex, "projectTrust", path, Vec::new()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod artifact_tests {
+    use super::*;
+    use crate::claude::files::kinds;
+
+    fn read(json: &str) -> Artifact {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn file(provider: ProviderKind, kind: &str, identities: Vec<(u64, u64)>) -> Artifact {
+        Artifact::CliFile {
+            provider,
+            kind: kind.into(),
+            path: "/p".into(),
+            identities,
+        }
+    }
+
+    /// Every CLI-named record an earlier version wrote loads as today's form, which only its
+    /// adapter reads.
+    #[test]
+    fn legacy_records_load_as_sessions_and_cli_files() {
+        let (claude, codex) = (ProviderKind::Claude, ProviderKind::Codex);
+        let cases = [
+            (
+                r#"{"type":"claudeSession","sessionId":"s1","home":"/h","cwd":"/c"}"#,
+                Artifact::Session {
+                    provider: claude,
+                    id: "s1".into(),
+                    home: Some("/h".into()),
+                    cwd: Some("/c".into()),
+                },
+            ),
+            (
+                r#"{"type":"codexThread","threadId":"t1"}"#,
+                Artifact::Session {
+                    provider: codex,
+                    id: "t1".into(),
+                    home: None,
+                    cwd: None,
+                },
+            ),
+            (
+                r#"{"type":"claudeProjectDir","path":"/p"}"#,
+                file(claude, kinds::PROJECT_DIR, vec![]),
+            ),
+            (
+                r#"{"type":"claudeMemoryDir","path":"/p","identity":[1,2],"projectIdentity":[3,4]}"#,
+                file(claude, kinds::MEMORY_DIR, vec![(1, 2), (3, 4)]),
+            ),
+            (
+                r#"{"type":"claudeMemoryDir","path":"/p","identity":[1,2],"projectIdentity":null}"#,
+                file(claude, kinds::MEMORY_DIR, vec![(1, 2)]),
+            ),
+            (
+                r#"{"type":"claudePlanFile","path":"/p","identity":[5,6]}"#,
+                file(claude, kinds::PLAN_FILE, vec![(5, 6)]),
+            ),
+            (
+                r#"{"type":"claudeStagingDir","path":"/p"}"#,
+                file(claude, kinds::STAGING_DIR, vec![]),
+            ),
+            (
+                r#"{"type":"claudeTempDir","path":"/p"}"#,
+                file(claude, kinds::TEMP_DIR, vec![]),
+            ),
+            (
+                r#"{"type":"codexGeneratedImages","path":"/p"}"#,
+                file(codex, crate::codex::GENERATED_IMAGES, vec![]),
+            ),
+            (
+                r#"{"type":"codexProjectTrust","path":"/p"}"#,
+                file(codex, crate::codex::PROJECT_TRUST, vec![]),
+            ),
+            (
+                r#"{"type":"cliTrust","cli":"codex","file":"/f","folder":"/d","before":{"type":"noEntry"}}"#,
+                Artifact::CliTrust {
+                    cli: codex,
+                    file: "/f".into(),
+                    folder: "/d".into(),
+                    before: crate::trust::TrustBefore::NoEntry,
+                },
+            ),
+        ];
+        for (json, expected) in cases {
+            let artifact = read(json);
+            assert_eq!(artifact, expected, "{json}");
+            // Written back in today's form, it reads the same.
+            assert_eq!(read(&serde_json::to_string(&artifact).unwrap()), expected);
+        }
+        assert_eq!(
+            read(r#"{"type":"claudeSession","sessionId":"s1"}"#).native_session(),
+            Some((claude, "s1"))
+        );
+        assert!(
+            serde_json::from_str::<Artifact>(r#"{"type":"claudePlanFile","path":"/p"}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn todays_records_round_trip() {
+        let session = Artifact::Session {
+            provider: ProviderKind::new("later"),
+            id: "x".into(),
+            home: None,
+            cwd: Some("/c".into()),
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"session","provider":"later","id":"x","cwd":"/c"}"#
+        );
+        assert_eq!(read(&json), session);
+        assert_eq!(session.provider(), Some(ProviderKind::new("later")));
+        let made = file(ProviderKind::Claude, kinds::PLAN_FILE, vec![(1, 2)]);
+        assert_eq!(read(&serde_json::to_string(&made).unwrap()), made);
+        let process = Artifact::Process {
+            pid: 7,
+            started_at_ms: Some(1.5),
+        };
+        assert_eq!(read(&serde_json::to_string(&process).unwrap()), process);
+        assert_eq!(process.provider(), None);
+        // `identities` may be absent.
+        assert_eq!(
+            read(r#"{"type":"cliFile","provider":"codex","kind":"projectTrust","path":"/p"}"#),
+            file(ProviderKind::Codex, "projectTrust", vec![])
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1823,5 +2148,54 @@ mod input_tests {
         assert!(change.diff.unwrap().len() < 1100);
         let none = FileChange::counted("f".into(), FileChangeKind::Update, None, 1024);
         assert_eq!((none.diff, none.added, none.removed), (None, None, None));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    fn model(id: &str, name: &str) -> ModelInfo {
+        ModelInfo {
+            id: id.into(),
+            display_name: name.into(),
+            description: String::new(),
+            resolved: None,
+            efforts: Vec::new(),
+            default_effort: None,
+            is_default: false,
+            input_modalities: Vec::new(),
+            fast: None,
+            legacy: false,
+        }
+    }
+
+    /// Same-named models read with where they come from, on any CLI; others keep their name.
+    #[test]
+    fn same_named_models_read_apart() {
+        let mut models = [
+            model("opencode/glm-5.3", "GLM-5.3"),
+            model("opencode-go/glm-5.3", "GLM-5.3"),
+            model("opencode/glm-5.2", "GLM-5.2"),
+            model("router/a/x", "X"),
+            model("router/b/x", "X"),
+            model("gpt-6", "GPT-6"),
+            model("gpt-6-preview", "GPT-6"),
+        ];
+        mark_superseded(&mut models);
+        let names: Vec<&str> = models.iter().map(|m| m.display_name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "GLM-5.3 (opencode)",
+                "GLM-5.3 (opencode-go)",
+                "GLM-5.2",
+                "X (router/a/x)",
+                "X (router/b/x)",
+                "GPT-6 (gpt-6)",
+                "GPT-6 (gpt-6-preview)",
+            ]
+        );
+        assert!(models[2].legacy, "an older namesake is still legacy");
     }
 }

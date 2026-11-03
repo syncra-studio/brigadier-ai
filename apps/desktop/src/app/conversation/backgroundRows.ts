@@ -1,17 +1,17 @@
-import { persistentApp } from "@/app/conversation/persistentApps";
-import { taskEnd, taskShown } from "@/app/conversation/backgroundTasks";
+import { taskEnd } from "@/app/conversation/backgroundTasks";
 import { brigadierCalls } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
 import type { BackgroundTask, FileEntry, Preview, WorkerRow } from "@/ipc/generated";
+import { subagentOf } from "@/state/nativeWorkers";
 
 /**
  * The context card's Background rows (Q91, S12): one row per thing the session has going in the
  * background, with its state in a word: a preview it keeps running (`brigadier preview`), its
- * CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`) and its workers' CLIs'. A worker's second copy of an app
+ * CLI's own background tasks and its workers' CLIs'. A worker's second copy of an app
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
- * A preview's row leaves as soon as it ends. Ended tasks are retained by durable History, never live Background rows.
+ * A preview's row leaves as soon as it ends; a task's stays, saying how it ended (D98).
  */
 
 export type BackgroundState =
@@ -21,7 +21,7 @@ export type BackgroundState =
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
   /**
-   * One of the CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`), or of a worker's
+   * One of the CLI's own background tasks, or of a worker's
    * CLI (`worker`: its id and name).
    */
   | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; command?: string | null; state: BackgroundState; worker: { id: string; name: string | null } | null };
@@ -55,9 +55,12 @@ function portOf(preview: Preview): string | null {
   );
 }
 
-/** A wait invoked as a command, including after `start &&`, never words inside an argument. */
+/**
+ * A wait, or an ask (its card is its row, D177), invoked as a command, including after
+ * `start &&`, never words inside an argument.
+ */
 function runsBrigadierWait(command: string): boolean {
-  return runsBrigadier(command, "wait");
+  return runsBrigadier(command, "wait") || runsBrigadier(command, "ask");
 }
 
 /**
@@ -69,11 +72,12 @@ export function runsBrigadier(command: string, sub: string): boolean {
 }
 
 /**
- * Claude labels a Bash task with its description; only its originating call has the command:
- * a `command` item, as Claude's Bash always is (D38), or a tool call's `command` argument.
+ * The command a task runs, as its CLI said it; else its originating call's: a `command` item or
+ * a tool call's `command` argument (a label may be only a description).
  */
 export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[]): string | null {
   if (task.kind !== "shell" && task.kind !== "terminal") return null;
+  if (task.command) return task.command;
   const fallback = task.kind === "terminal" ? task.label : null;
   if (task.itemId === null) return fallback;
   const call = entries.find(({ event, parent }) => !parent && (event.type === "command" || event.type === "toolCall") && event.itemId === task.itemId)?.event;
@@ -88,38 +92,28 @@ export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[])
 }
 
 /**
- * Running CLI tasks (`taskShown`), excluding the session's worker
- * wait already covered by the workers card.
+ * The CLI's background tasks, running or ended, its background subagents among them (D97, D98),
+ * except the session's worker wait already covered by the workers card and an ask its card shows. A job a subagent started
+ * is that subagent's work: no row of its own (`backgroundOf` runs the subagent while it does).
  */
-export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
-  return tasks.filter((task) => taskShown(task, now) && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
+export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): BackgroundRow[] {
+  return tasks.filter((task) => subagentOf(task, tasks, entries) === undefined && !runsBrigadierWait(taskCommand(task, entries) ?? "")).map((task) => ({
     type: "task", id: `task:${task.id}`, command: taskCommand(task, entries), startedAtMs: task.startedAtMs, task, state: taskState(task), worker: null,
   }));
 }
 
 /**
- * The workers' CLIs' background tasks, by the same rules as the session's own: no row for a
- * subagent or a `brigadier wait`, each named by its worker.
+ * The workers' CLIs' background tasks, by the same rules as the session's own, each named by its
+ * worker: no row for a `brigadier wait`, nor for a subagent, whose row is in its worker's panel.
  */
-export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskId: string) => string | null, now: number): BackgroundRow[] {
+export function workerTaskRows(workers: readonly WorkerRow[], workerName: (taskId: string) => string | null): BackgroundRow[] {
   return workers.flatMap((worker) => (worker.background ?? [])
-    .filter(({ task, command }) => taskShown(task, now) && task.kind !== "agent"
+    .filter(({ task, command }) => task.kind !== "agent"
       && !runsBrigadierWait(command ?? (task.kind === "terminal" ? task.label : "")))
     .map(({ task, command }): BackgroundRow => ({
       type: "task", id: `task:${worker.id}:${task.id}`, command, startedAtMs: task.startedAtMs, task, state: taskState(task),
       worker: { id: worker.id, name: workerName(worker.id) },
     })));
-}
-
-/** Only proven app invocations belong beside previews; labels never establish command evidence. */
-export function appTaskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[], now: number): BackgroundRow[] {
-  return taskRows(tasks, entries, now).filter((row) => row.type === "task" && persistentApp(taskCommand(row.task, entries) ?? ""));
-}
-
-export function workerAppTaskRows(workers: readonly WorkerRow[], workerName: (id: string) => string | null, now: number): BackgroundRow[] {
-  const apps = workers.map((worker) => ({ ...worker, background: (worker.background ?? []).filter(({ task, command }) =>
-    (task.kind === "shell" || task.kind === "terminal") && persistentApp(command ?? (task.kind === "terminal" ? task.label : ""))) }));
-  return workerTaskRows(apps, workerName, now);
 }
 
 /**
@@ -163,4 +157,25 @@ export function backgroundRows(previews: readonly Preview[], workerName: (taskId
     return { type: "preview", id: lead.id, startedAtMs: lead.startedAtMs, preview: lead, state, worker: lead.taskId ? workerName(lead.taskId) : null, with: copies };
   });
   return rows.toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+}
+
+/** Each card's task rows shown so far (D98). */
+const seen = new Map<string, Map<string, BackgroundRow>>();
+export const rowKey = (activity: BackgroundRow) => `${activity.id}:${activity.startedAtMs}`;
+
+/**
+ * `rows` with the ended tasks the card has shown that its CLI no longer lists: a task once in
+ * the section stays, saying how it ended (D98). One gone while it ran is not: how it ended is unknown.
+ * The session's own from before its last switch to another account or CLI leave: that CLI is
+ * gone, its work goes on in the new one, and Background history keeps them (D181).
+ */
+export function withHistory(conversationId: string, rows: BackgroundRow[], switchedAtMs = 0): BackgroundRow[] {
+  const before = (row: BackgroundRow) => row.type === "task" && row.worker === null && row.task.status !== "running" && row.startedAtMs < switchedAtMs;
+  const kept = seen.get(conversationId) ?? new Map<string, BackgroundRow>();
+  seen.set(conversationId, kept);
+  const current = rows.filter((row) => !before(row));
+  for (const row of current) if (row.type === "task") kept.set(rowKey(row), row);
+  for (const [key, row] of kept) if (before(row)) kept.delete(key);
+  const listed = new Set(rows.map(rowKey));
+  return [...current, ...[...kept.values()].filter((row) => !listed.has(rowKey(row)) && row.type === "task" && row.task.status !== "running")];
 }

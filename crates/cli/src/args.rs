@@ -6,8 +6,7 @@ use crate::commands::{self, Arg, Command};
 use serde_json::{Map, Value, json};
 
 use crate::protocol::{
-    Agent, Answer, AskItem, Capability, CliRequest, ContextPart, Judgment, Permission,
-    StartRequest, Tool,
+    Answer, AskItem, Capability, CliRequest, ContextPart, Permission, StartRequest, Tool,
 };
 
 /// What the command line asks for.
@@ -15,6 +14,8 @@ use crate::protocol::{
 pub enum Invocation {
     /// `brigadier --help`, or one command's help.
     Help(Option<&'static Command>),
+    /// `brigadier help <topic>`: a how-to page, and the command of the same name's help.
+    Topic(&'static commands::Topic),
     Version,
     Run {
         command: &'static Command,
@@ -94,9 +95,10 @@ where
         "help" => {
             return match words.next() {
                 None => Ok(Invocation::Help(None)),
-                Some(name) => match commands::find(&name) {
-                    Some(command) => Ok(Invocation::Help(Some(command))),
-                    None => Err(unknown_command(&name)),
+                Some(name) => match (commands::topic(&name), commands::find(&name)) {
+                    (Some(topic), _) => Ok(Invocation::Topic(topic)),
+                    (None, Some(command)) => Ok(Invocation::Help(Some(command))),
+                    (None, None) => Err(unknown_command(&name)),
                 },
             };
         }
@@ -264,6 +266,14 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
         },
         "models" => CliRequest::Models,
         "workers" => CliRequest::Workers,
+        "state" => CliRequest::Context {
+            part: None,
+            name: None,
+            grep: None,
+            last: None,
+            item: None,
+            session: false,
+        },
         "show" => CliRequest::Show { id: id() },
         "read" => {
             let last = number("last")?;
@@ -357,10 +367,11 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             };
             CliRequest::Start(Box::new(StartRequest {
                 title: given("title"),
-                agent: args.flag("agent").map(|agent| match agent {
-                    "codex" => Agent::Codex,
-                    _ => Agent::Claude,
-                }),
+                agent: args
+                    .flag("agent")
+                    .map(str::parse)
+                    .transpose()
+                    .map_err(error)?,
                 model: given("model"),
                 effort: given("effort"),
                 work: given("work"),
@@ -399,10 +410,11 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 (false, true) => Some(Answer::Deny),
                 (false, false) => None,
             };
-            match (answer, text.trim().is_empty()) {
-                (Some(_), false) => {
+            let blank = text.trim().is_empty();
+            match (answer, blank) {
+                (Some(Answer::Allow), false) => {
                     return Err(error(
-                        "--allow and --deny answer a permission prompt and take no message".into(),
+                        "--allow takes no message; --deny takes its reason".into(),
                     ));
                 }
                 (None, true) => return Err(error("missing <text>".into())),
@@ -410,7 +422,8 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             }
             CliRequest::Send {
                 id: id(),
-                text: answer.is_none().then_some(text),
+                // A --deny's text is its reason.
+                text: (answer != Some(Answer::Allow) && !blank).then_some(text),
                 answer,
             }
         }
@@ -419,29 +432,38 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             timeout_secs: number("timeout")?,
         },
         "close" => CliRequest::Close { id: id() },
-        "queue" => {
-            let worker = args.one("worker").map(str::to_owned);
-            let judgment = match (args.one("judgment"), worker) {
-                (Some("worker"), Some(id)) => Judgment::Worker { id },
-                (Some("worker"), None) => {
-                    return Err(error(
-                        "say which worker: queue <id> worker <worker-id>".into(),
-                    ));
-                }
-                (_, Some(extra)) => {
-                    return Err(error(format!("unexpected argument {extra:?}")));
-                }
-                (Some("wait"), None) => Judgment::Wait,
-                (Some("new-session"), None) => Judgment::NewSession,
-                _ => Judgment::Join,
+        "pause" => CliRequest::Pause {
+            id: id(),
+            note: Some(args.text("note")).filter(|note| !note.trim().is_empty()),
+        },
+        "resume" => CliRequest::Resume {
+            id: id(),
+            note: Some(args.text("note")).filter(|note| !note.trim().is_empty()),
+        },
+        "switch" => {
+            let given = |name: &str| {
+                args.flag(name)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
             };
-            CliRequest::Queue { id: id(), judgment }
+            CliRequest::Switch {
+                id: id(),
+                agent: args
+                    .flag("agent")
+                    .map(str::parse)
+                    .transpose()
+                    .map_err(error)?,
+                model: given("model"),
+                effort: given("effort"),
+            }
         }
         "continue-on" => CliRequest::ContinueOn {
-            agent: match args.one("agent") {
-                Some("codex") => Agent::Codex,
-                _ => Agent::Claude,
-            },
+            agent: args
+                .one("agent")
+                .ok_or_else(|| error("missing <agent>".into()))?
+                .parse()
+                .map_err(error)?,
             after_turn: args.switch("after-turn"),
         },
         "ask" => CliRequest::Ask {
@@ -461,11 +483,12 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 return Err(error("only `context skills` takes a name".into()));
             }
             let (grep, last, item) = (given("grep"), number("last")?, given("item"));
-            if (grep.is_some() || last.is_some() || item.is_some())
+            let session = args.switch("session");
+            if (grep.is_some() || last.is_some() || item.is_some() || session)
                 && part != Some(ContextPart::Transcript)
             {
                 return Err(error(
-                    "--grep, --last and --item go with `context transcript`".into(),
+                    "--grep, --last, --item and --session go with `context transcript`".into(),
                 ));
             }
             if [grep.is_some(), last.is_some(), item.is_some()]
@@ -484,6 +507,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 grep,
                 last,
                 item,
+                session,
             }
         }
         name if Tool::of_command(name).is_some() => tool_request(command, args)?,
@@ -950,6 +974,27 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             }
             Tool::Library
         }
+        "mcp" => {
+            match (action.as_str(), words.as_slice()) {
+                ("list", []) => {}
+                ("tools", [server]) => put("server", Some(json!(server))),
+                ("call", [server, tool, rest @ ..]) if rest.len() <= 1 => {
+                    let given = rest.first().map_or("{}", String::as_str);
+                    let arguments: Value = serde_json::from_str(given)
+                        .map_err(|err| error(&format!("<json> is not JSON: {err}")))?;
+                    if !arguments.is_object() {
+                        return Err(error("<json> is a JSON object of the tool's arguments"));
+                    }
+                    put("server", Some(json!(server)));
+                    put("tool", Some(json!(tool)));
+                    put("arguments", Some(arguments));
+                }
+                ("list", _) => return Err(error("mcp list takes no arguments")),
+                ("tools", _) => return Err(error("usage: mcp tools <server>")),
+                _ => return Err(error("usage: mcp call <server> <tool> [<json>]")),
+            }
+            Tool::Mcp
+        }
         "report" => {
             let Some(title) = args.flag("title") else {
                 return Err(error("--title: the report's title"));
@@ -1004,6 +1049,7 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ProviderKind;
 
     fn run(words: &[&str]) -> (CliRequest, bool) {
         match parse(words.iter().copied()).unwrap() {
@@ -1094,7 +1140,8 @@ mod tests {
         assert!(fails(&["read", "a", "--last", "0"]).contains("whole number"));
         assert!(fails(&["read", "a", "--last", "2", "--screen"]).contains("don't go together"));
         assert!(fails(&["sessions", "--mine"]).contains("unknown option --mine"));
-        assert!(fails(&["start", "--agent", "gpt", "do it"]).contains("one of: claude, codex"));
+        // Any well-formed id passes here; the daemon refuses one it doesn't drive.
+        assert!(fails(&["start", "--agent", "Not An Id", "do it"]).contains("not a CLI id"));
         assert!(fails(&["preview", "restart"]).contains("not one of"));
         assert!(fails(&["wait", "--timeout", "soon"]).contains("whole number"));
         assert!(fails(&["read", "a", "--screen=yes"]).contains("takes no value"));
@@ -1123,7 +1170,7 @@ mod tests {
             .0,
             CliRequest::Start(Box::new(StartRequest {
                 title: None,
-                agent: Some(Agent::Codex),
+                agent: Some(ProviderKind::Codex),
                 model: Some("m".into()),
                 effort: None,
                 work: None,
@@ -1209,6 +1256,22 @@ mod tests {
             }
         );
         assert_eq!(
+            run(&["send", "ab12", "--deny", "outside", "its", "worktree"]).0,
+            CliRequest::Send {
+                id: "ab12".into(),
+                text: Some("outside its worktree".into()),
+                answer: Some(Answer::Deny)
+            }
+        );
+        assert_eq!(
+            run(&["send", "ab12", "--deny"]).0,
+            CliRequest::Send {
+                id: "ab12".into(),
+                text: None,
+                answer: Some(Answer::Deny)
+            }
+        );
+        assert_eq!(
             run(&["wait", "ab12", "cd34", "--timeout", "60"]).0,
             CliRequest::Wait {
                 ids: vec!["ab12".into(), "cd34".into()],
@@ -1227,35 +1290,62 @@ mod tests {
             CliRequest::Close { id: "ab12".into() }
         );
         assert_eq!(
+            run(&["pause", "ab12"]).0,
+            CliRequest::Pause {
+                id: "ab12".into(),
+                note: None
+            }
+        );
+        assert_eq!(
+            run(&["pause", "ab12", "the user asked"]).0,
+            CliRequest::Pause {
+                id: "ab12".into(),
+                note: Some("the user asked".into())
+            }
+        );
+        assert_eq!(
+            run(&["resume", "ab12"]).0,
+            CliRequest::Resume {
+                id: "ab12".into(),
+                note: None
+            }
+        );
+        assert_eq!(
+            run(&["resume", "ab12", "go", "on", "from", "12"]).0,
+            CliRequest::Resume {
+                id: "ab12".into(),
+                note: Some("go on from 12".into())
+            }
+        );
+        assert_eq!(
+            run(&["switch", "ab12"]).0,
+            CliRequest::Switch {
+                id: "ab12".into(),
+                agent: None,
+                model: None,
+                effort: None
+            }
+        );
+        assert_eq!(
+            run(&[
+                "switch", "ab12", "--agent", "codex", "--model", "m", "--effort", "high"
+            ])
+            .0,
+            CliRequest::Switch {
+                id: "ab12".into(),
+                agent: Some(ProviderKind::Codex),
+                model: Some("m".into()),
+                effort: Some("high".into())
+            }
+        );
+        assert_eq!(
             run(&["continue-on", "codex", "--after-turn"]).0,
             CliRequest::ContinueOn {
-                agent: Agent::Codex,
+                agent: ProviderKind::Codex,
                 after_turn: true,
             }
         );
-        assert!(parse(["continue-on", "gemini"]).is_err());
-        // A queued message's judgment (run2-D40): worker names its worker, the rest nothing.
-        for (words, judgment) in [
-            (&["queue", "9f8e", "join"][..], Judgment::Join),
-            (&["queue", "9f8e", "wait"][..], Judgment::Wait),
-            (&["queue", "9f8e", "new-session"][..], Judgment::NewSession),
-            (
-                &["queue", "9f8e", "worker", "a1b2"][..],
-                Judgment::Worker { id: "a1b2".into() },
-            ),
-        ] {
-            assert_eq!(
-                run(words).0,
-                CliRequest::Queue {
-                    id: "9f8e".into(),
-                    judgment
-                }
-            );
-        }
-        assert!(fails(&["queue", "9f8e", "worker"]).contains("say which worker"));
-        assert!(fails(&["queue", "9f8e", "join", "a1b2"]).contains("unexpected argument"));
-        assert!(fails(&["queue", "9f8e", "later"]).contains("is not one of"));
-        assert!(fails(&["queue", "9f8e"]).contains("missing <judgment>"));
+        assert!(fails(&["continue-on", "Gemini CLI"]).contains("not a CLI id"));
         assert!(fails(&["start", "--local", "--worktree", "go"]).contains("don't go together"));
         assert!(fails(&["start", "--local", "--base", "main", "go"]).contains("--base is for"));
         // Every worker is naked (D13): a skill is read, not given.
@@ -1274,7 +1364,7 @@ mod tests {
         assert!(fails(&["start", "--lean"]).contains("missing <prompt>"));
         assert!(fails(&["send", "ab12"]).contains("missing <text>"));
         assert!(fails(&["send", "ab12", "--allow", "--deny"]).contains("don't go together"));
-        assert!(fails(&["send", "ab12", "--deny", "no"]).contains("take no message"));
+        assert!(fails(&["send", "ab12", "--allow", "yes"]).contains("--allow takes no message"));
     }
 
     #[test]

@@ -115,7 +115,7 @@ pub struct PageChange {
 /// The pages folder. Its methods do blocking file work: call them off the async runtime.
 pub struct Pages {
     inner: Arc<Inner>,
-    watch: Mutex<Option<Watch>>,
+    watch: Arc<Mutex<Option<Watch>>>,
 }
 
 struct Inner {
@@ -144,6 +144,26 @@ impl Pages {
         pages
     }
 
+    /// [`Self::open`], its watcher started on a thread of its own so nothing waits for it:
+    /// under load macOS's file-event service takes seconds to start one. An outside edit made
+    /// before it watches is still found by reads.
+    pub fn open_in_background(dir: impl Into<PathBuf>) -> Self {
+        let pages = Self::unwatched(dir.into());
+        let (inner, slot) = (pages.inner.clone(), pages.watch.clone());
+        let spawned = thread::Builder::new()
+            .name("pages-watch".into())
+            .spawn(move || match watch(inner.clone()) {
+                Ok(watch) => *lock(&slot) = Some(watch),
+                Err(error) => {
+                    tracing::warn!(%error, dir = %inner.dir.display(), "pages are not watched");
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "pages are not watched");
+        }
+        pages
+    }
+
     fn unwatched(dir: PathBuf) -> Self {
         if let Err(error) = fs::create_dir_all(&dir) {
             tracing::warn!(%error, dir = %dir.display(), "could not make the pages folder");
@@ -159,7 +179,7 @@ impl Pages {
                 #[cfg(test)]
                 fail_next_save: AtomicBool::new(false),
             }),
-            watch: Mutex::new(None),
+            watch: Arc::default(),
         }
     }
 

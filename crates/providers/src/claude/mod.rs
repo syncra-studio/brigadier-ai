@@ -45,9 +45,13 @@
 //! follow only the user's model rules, passed in the session specification.
 
 pub(crate) mod files;
+mod items;
 mod memory;
 pub mod parse;
 pub mod session_file;
+mod simulate;
+mod trust;
+mod updates;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -120,6 +124,255 @@ const CHAT_TOOLS: &str = "WebSearch,WebFetch,Bash";
 /// (STRIP-DOWN-PLAN S16c). Claude Code still runs its own read-only commands (`ls`, `cat`) on
 /// files in the session's folders unasked, as its Read tool would (checked on 2.1.309).
 const BRIGADIER_ALLOWED: &str = "Bash(brigadier:*)";
+
+/// Claude Code's account homes (`accounts`).
+static HOME: crate::accounts::Home = crate::accounts::Home {
+    var: "CLAUDE_CONFIG_DIR",
+    file: None,
+    default_dir: ".claude",
+    // Its API key, bearer token and long-lived OAuth token
+    // (<https://code.claude.com/docs/en/authentication#authentication-precedence>).
+    auth_vars: &[
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ],
+    unset: &["CLAUDE_SECURESTORAGE_CONFIG_DIR"],
+    shared: &[
+        crate::accounts::Shared::Dir("projects"),
+        crate::accounts::Shared::Optional("CLAUDE.md"),
+        crate::accounts::Shared::Optional("agents"),
+        crate::accounts::Shared::Optional("commands"),
+        crate::accounts::Shared::Optional("skills"),
+        // The installed plugins, and the settings that enable them and name their
+        // marketplaces (`enabledPlugins`, `extraKnownMarketplaces`): the plugins folder
+        // alone loads none of them. Claude writes the settings through the link.
+        crate::accounts::Shared::Optional("plugins"),
+        crate::accounts::Shared::Optional("settings.json"),
+    ],
+    // A new home says its first-run setup is done (`hasCompletedOnboarding`, the key Claude
+    // Code 2.1.295 keeps there): the user went through it with their own login, and a terminal
+    // that resumes a session on this account must not ask again. Nothing else of the user's
+    // own `.claude.json` is copied.
+    seed: &[(".claude.json", "{\n  \"hasCompletedOnboarding\": true\n}\n")],
+    for_account: |platform, env, home| Arc::new(Claude::for_account(platform, env, home)),
+};
+
+/// Claude Code's entry in [`crate::adapters::ADAPTERS`].
+pub static ADAPTER: crate::adapters::Adapter = crate::adapters::Adapter {
+    kind: ProviderKind::Claude,
+    label: "Claude Code",
+    binary: "claude",
+    install: [
+        "curl -fsSL https://claude.ai/install.sh | bash",
+        "irm https://claude.ai/install.ps1 | iex",
+    ],
+    login: "claude auth login",
+    sign_in: &["auth", "login"],
+    sign_out: &["auth", "logout"],
+    home: Some(&HOME),
+    tools: &["webSearch"],
+    session_files: &[
+        files::kinds::PROJECT_DIR,
+        files::kinds::MEMORY_DIR,
+        files::kinds::PLAN_FILE,
+    ],
+    vendor: "Claude",
+    maker: "Claude Code by Anthropic",
+    cli_name: "Claude Code CLI",
+    install_guide: "https://code.claude.com/docs/en/setup",
+    usual_windows: &["five_hour", "seven_day"],
+    // Claude's spark, from Simple Icons (CC0), in its brand colour.
+    glyph: crate::adapters::Glyph {
+        view_box: "0 0 24 24",
+        path: "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z",
+        class_name: Some("text-brand-claude"),
+    },
+    one_skill_per_message: true,
+    reports_cache_writes: true,
+    commands_as_text: true,
+    subagent_tools: &["Agent", "Task"],
+    builtin_commands: &[
+        ("compact", "Compact this conversation", "compact"),
+        ("context", "Show context usage", "context"),
+        ("cost", "Show session usage", "cost"),
+        ("help", "Show Claude Code help", "help"),
+    ],
+    mcp_prompts: true,
+    cumulative_usage: false,
+    chore_family: "haiku",
+    chore_effort: None,
+    // Its settings hold it to no AI co-authors.
+    coauthors_in_instructions: false,
+    compaction: Some(|point, _| crate::NativeCompaction {
+        backstop_window: Some(backstop_window(point)),
+        ..crate::NativeCompaction::default()
+    }),
+    brigadier_compacts: true,
+    subagent_transcripts: true,
+    output_hook: true,
+    child_usage: None,
+    removes_by_id: false,
+    sign_in_code_page: true,
+    installer_off_path: true,
+    space_files: &[
+        files::kinds::TEMP_DIR,
+        files::kinds::PROJECT_DIR,
+        files::kinds::MEMORY_DIR,
+    ],
+    temp_dir: Some(files::kinds::TEMP_DIR),
+    npm_package: "@anthropic-ai/claude-code",
+    update_limits: updates::limits,
+    // Claude reads `.claude/skills` in an added folder.
+    skills_overlay: |spec, overlay| {
+        spec.add_dirs.push(overlay);
+        Ok(())
+    },
+    new: |platform, env| Arc::new(Claude::new(platform, env)),
+    // `2.1.302 (Claude Code)`.
+    names_itself: |first| first.contains("Claude Code"),
+    // Its installer leaves the shell profiles alone.
+    installer_folder: CliEnv::local_bin,
+    login_mark,
+    mcp_stores,
+    item_sources: items::sources,
+    items: items::items,
+    read_session: session_file::read,
+    session_context: |path| crate::session_file::newest(path, session_file::context_of),
+    follow_session: |path| {
+        let mut reading = session_file::Reading::new(path);
+        Box::new(move || reading.read())
+    },
+    // A file that earlier builds recorded under the project folder of a verbatim Windows path
+    // (`----C--…`, which Claude never writes) is read where Claude wrote it.
+    moved_session_file: files::without_verbatim_project,
+    leftovers: files::leftovers,
+    delta_location,
+    stream_end,
+    usage_limit: simulate::usage_limit,
+    trust: Some(&trust::TRUST),
+};
+
+/// Claude's auto-compact window as a backstop for a turn that runs on past Brigadier's point
+/// `point` (run2-D5): Claude compacts by itself ≈20k below its window, so this one has it
+/// compact ≈30k past the point. Claude takes windows of 100k to 1M.
+fn backstop_window(point: i64) -> i64 {
+    (point + 50_000).clamp(100_000, 1_000_000)
+}
+
+/// Where Claude Code keeps its login: on macOS a Keychain item (its file fallback watched
+/// too), elsewhere `<config dir>/.credentials.json`.
+fn login_mark(env: &CliEnv) -> Option<crate::login_mark::LoginMark> {
+    use crate::login_mark::{LoginMark, claude_keychain_account, claude_keychain_service};
+    let config = match env.var("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => env.home()?.join(".claude"),
+    };
+    let keychain = if cfg!(target_os = "macos") {
+        Some((
+            claude_keychain_service(env, &config)?,
+            claude_keychain_account(env.var("USER")),
+        ))
+    } else {
+        None
+    };
+    Some(LoginMark::keychain_and_file(
+        keychain,
+        config.join(".credentials.json"),
+    ))
+}
+
+/// Claude's config file for the user's own login, where their user servers (`mcpServers`) and
+/// each project's local ones (`projects.<path>.mcpServers`) are: `.claude.json` in
+/// `CLAUDE_CONFIG_DIR`, else in the home folder, as Claude Code itself picks it (an old
+/// `.config.json` in the config folder wins when present).
+pub fn main_config_file(env: &CliEnv) -> Option<PathBuf> {
+    let set = env
+        .var(HOME.var)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from);
+    let home = env.home().or_else(|| set.clone())?;
+    Some(brigadier_registry::claude_config::config_file(
+        &home,
+        set.as_deref(),
+    ))
+}
+
+/// Claude Code's MCP sign-ins: `mcpOAuth` beside its login, in its per-config Keychain item
+/// (macOS) or `.credentials.json` ([`crate::mcp_oauth`]).
+fn mcp_stores(env: &CliEnv, home: &Path) -> Vec<crate::mcp_oauth::Store> {
+    use crate::login_mark::{claude_keychain_account, claude_keychain_service};
+    let directory = env
+        .var("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+        .map(|value| {
+            if value.is_empty() {
+                env.home()
+                    .unwrap_or_else(|| home.to_owned())
+                    .join(".claude")
+            } else {
+                PathBuf::from(value)
+            }
+        })
+        .unwrap_or_else(|| home.to_owned());
+    let keychain = cfg!(target_os = "macos")
+        .then(|| {
+            claude_keychain_service(env, home)
+                .map(|service| (service, claude_keychain_account(env.var("USER"))))
+        })
+        .flatten();
+    vec![crate::mcp_oauth::Store {
+        home: directory,
+        format: crate::mcp_oauth::Format::Claude,
+        keychain,
+    }]
+}
+
+/// For a streamed delta line: its stream key, its content block and where its text is
+/// ([`crate::record`]).
+fn delta_location(line: &Value) -> Option<(String, String, &'static str)> {
+    if line.get("type")?.as_str()? != "stream_event" {
+        return None;
+    }
+    let event = line.get("event")?;
+    if event.get("type")?.as_str()? != "content_block_delta" {
+        return None;
+    }
+    let pointer = match event.pointer("/delta/type")?.as_str()? {
+        "text_delta" => "/event/delta/text",
+        "thinking_delta" => "/event/delta/thinking",
+        "input_json_delta" => "/event/delta/partial_json",
+        _ => return None,
+    };
+    let item = content_block(line, event);
+    Some((format!("{item}|{pointer}"), item, pointer))
+}
+
+/// The delta streams a line ends: `Some(block)` for one content block's, `None` for all of them.
+fn stream_end(line: &Value) -> Option<Option<String>> {
+    match line.get("type")?.as_str()? {
+        "stream_event" => {
+            let event = line.get("event")?;
+            match event.get("type")?.as_str()? {
+                "content_block_stop" => Some(Some(content_block(line, event))),
+                "message_stop" => Some(None),
+                _ => None,
+            }
+        }
+        "result" => Some(None),
+        _ => None,
+    }
+}
+
+/// A content block: its index within the (sub-agent's) message.
+fn content_block(line: &Value, event: &Value) -> String {
+    format!(
+        "{}:{}",
+        line.get("parent_tool_use_id")
+            .and_then(Value::as_str)
+            .unwrap_or("main"),
+        event.get("index").and_then(Value::as_u64).unwrap_or(0)
+    )
+}
 
 pub struct Claude {
     platform: Arc<dyn Platform>,
@@ -470,14 +723,6 @@ impl Claude {
                 .expect("settings object")
                 .remove("hooks");
         }
-        // A side chat or a raw session loads no user settings, so it is given the user's own memory
-        // setting, as set.
-        if !user_setup
-            && !memory_off(spec)
-            && let Some(on) = user_config.and_then(|dir| auto_memory(&dir.join("settings.json")))
-        {
-            layer["autoMemoryEnabled"] = json!(on);
-        }
         args.push("--settings".into());
         args.push(layer.to_string());
         args.push("--permission-mode".into());
@@ -500,9 +745,6 @@ impl Claude {
         for plugin in &spec.skill_plugins {
             args.push("--plugin-dir".into());
             args.push(plugin.display().to_string());
-        }
-        for overlay in &spec.installed_skills {
-            args.extend(["--add-dir".to_owned(), overlay.display().to_string()]);
         }
         if let Some(model) = &spec.model {
             args.push("--model".into());
@@ -808,15 +1050,12 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     // A global skillOverride would hide the injected version too. Keep its qualified
     // overlay invocation available and deny only the native plain invocation instead.
     let overlay_collision = |name: &str| {
-        spec.add_dirs
-            .iter()
-            .chain(&spec.installed_skills)
-            .any(|root| {
-                root.join(".claude/skills")
-                    .join(name)
-                    .join("SKILL.md")
-                    .is_file()
-            })
+        spec.add_dirs.iter().any(|root| {
+            root.join(".claude/skills")
+                .join(name)
+                .join("SKILL.md")
+                .is_file()
+        })
     };
     let mut allow: Vec<String> = spec
         .mcp_servers
@@ -882,12 +1121,9 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         "crossSessionInbound": "refuse",
         "permissions": permissions,
     });
-    // Claude's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
-    // memory should grow: a naked worker (D13), a side chat, which leaves nothing, and Brigadier's
-    // own one-shots.
-    if memory_off(spec) {
-        settings["autoMemoryEnabled"] = json!(false);
-    }
+    // Claude's own memory is off for every Brigadier session (core-goals D9): Brigadier's
+    // ledger, decisions and transcripts are the memory.
+    settings["autoMemoryEnabled"] = json!(false);
     // claude.ai's connectors can't work in a Brigadier tab (STRIP-DOWN-PLAN S17): nothing
     // else of what ships with Claude Code is switched off.
     if spec.tools.user_setup() {
@@ -962,24 +1198,6 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         settings["env"] = Value::Object(env);
     }
     settings
-}
-
-/// Whether a session goes without Claude's memory whatever the user's setting ([`settings`]).
-fn memory_off(spec: &SessionSpec) -> bool {
-    match spec.tools {
-        ToolSet::Default | ToolSet::Lean | ToolSet::Thread => spec.naked_worker,
-        ToolSet::SideChat => false,
-        ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat => true,
-    }
-}
-
-/// The `autoMemoryEnabled` a settings file sets, if it sets one.
-fn auto_memory(file: &Path) -> Option<bool> {
-    let text = std::fs::read_to_string(file).ok()?;
-    serde_json::from_str::<Value>(&text)
-        .ok()?
-        .get("autoMemoryEnabled")?
-        .as_bool()
 }
 
 /// Whether the settings sources this session loads disable hooks. Read only this switch:
@@ -1390,25 +1608,22 @@ impl Provider for Claude {
             // Recorded before the CLI can create them.
             if let Some(config) = self.history_dir() {
                 let project = files::project_dir(&config, &cwd);
-                let artifact = Artifact::ClaudeProjectDir {
-                    path: project.display().to_string(),
-                };
+                let artifact = files::artifact(files::kinds::PROJECT_DIR, &project, Vec::new());
                 if !project.exists() || ledger.holds(&artifact) {
                     ledger.record(artifact).await?;
                 }
             }
             ledger
-                .record(Artifact::ClaudeSession {
-                    session_id: native_id.clone(),
+                .record(Artifact::Session {
+                    provider: ProviderKind::Claude,
+                    id: native_id.clone(),
                     home: self.account_home(),
                     cwd: Some(cwd.display().to_string()),
                 })
                 .await?;
             let mut staging = None;
             for path in files::staging_dirs(&cwd) {
-                let artifact = Artifact::ClaudeStagingDir {
-                    path: path.display().to_string(),
-                };
+                let artifact = files::artifact(files::kinds::STAGING_DIR, &path, Vec::new());
                 if !path.exists() || ledger.holds(&artifact) {
                     ledger.record(artifact).await?;
                     staging = Some(path);
@@ -1471,7 +1686,7 @@ impl Provider for Claude {
                     Some(dir) => {
                         let path = dir.display().to_string();
                         ledger
-                            .record(Artifact::ClaudeTempDir { path: path.clone() })
+                            .record(files::artifact(files::kinds::TEMP_DIR, &dir, Vec::new()))
                             .await?;
                         ledger
                             .record(Artifact::ProcessesIn { dir: path.clone() })
@@ -2377,6 +2592,33 @@ fn linked_project(spec: &SessionSpec, cwd: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn claudes_main_config_file_follows_its_config_dir_or_the_home() {
+        let set = CliEnv::from_vars([
+            (
+                std::ffi::OsString::from("HOME"),
+                std::ffi::OsString::from("/home/me"),
+            ),
+            (
+                std::ffi::OsString::from("CLAUDE_CONFIG_DIR"),
+                std::ffi::OsString::from("/cfg"),
+            ),
+        ]);
+        assert_eq!(
+            main_config_file(&set),
+            Some(PathBuf::from("/cfg/.claude.json"))
+        );
+        let unset = CliEnv::from_vars([(
+            std::ffi::OsString::from("HOME"),
+            std::ffi::OsString::from("/home/me"),
+        )]);
+        assert_eq!(
+            main_config_file(&unset),
+            Some(PathBuf::from("/home/me/.claude.json"))
+        );
+    }
+
     /// A thread's shell is Claude Code's own (S2): no background-task switch, timeout ceiling or
     /// output cap of Brigadier's reaches its environment.
     #[test]
@@ -2547,8 +2789,9 @@ mod tests {
         .unwrap();
         let adapter = Claude::for_account(platform, &env, &extra);
         adapter
-            .remove(vec![Artifact::ClaudeSession {
-                session_id: id,
+            .remove(vec![Artifact::Session {
+                provider: ProviderKind::Claude,
+                id,
                 home: Some(extra.display().to_string()),
                 cwd: None,
             }])
@@ -2867,7 +3110,6 @@ for line in sys.stdin:
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
@@ -2888,19 +3130,6 @@ for line in sys.stdin:
             native_compaction: None,
             temp_tag: None,
         }
-    }
-
-    /// The `/brigade` skill loads as a plugin beside Brigadier's other skills (S15).
-    #[test]
-    fn installed_skills_load_from_overlay_roots() {
-        let dir = Temp::new();
-        let mut spec = spec(dir.path(), &["claude-sonnet-5-5"]);
-        spec.tools = ToolSet::Thread;
-        spec.installed_skills = vec![PathBuf::from("/data/brigade")];
-        let args = Claude::session_args(&spec, dir.path(), "x", false, None).unwrap();
-        let at = args.iter().position(|arg| arg == "--add-dir").unwrap();
-        assert_eq!(args[at + 1], "/data/brigade");
-        assert!(!args.iter().any(|arg| arg == "--plugin-dir"));
     }
 
     fn assert_thinking_args(args: &[String]) {
@@ -3242,7 +3471,6 @@ for line in sys.stdin:
             access,
             tools: ToolSet::Thread,
             skill_plugins: Vec::new(),
-            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: vec![ws.clone()],
             allowed_models: None,
@@ -3392,70 +3620,44 @@ for line in sys.stdin:
         );
     }
 
-    /// STRIP-DOWN-PLAN S17: Brigadier's instructions reach Claude word for word as its one
-    /// `--append-system-prompt`, and the CLI gets the session's folder and ledger in its
-    /// environment.
-    /// STRIP-DOWN-PLAN S19: Claude's own memory follows the user's setting. A thread or a
-    /// worker loads the user's settings and Brigadier sets nothing; a Chat or a raw session, which
-    /// loads none, is given the user's value as set, and nothing when they set none. Only a naked worker (D13), a
-    /// side chat and Brigadier's own one-shots go without it.
+    /// core-goals D9: Claude's own memory is off for every session, whatever the user set: a
+    /// thread, a worker (naked or not), a Chat, a side chat and Brigadier's own one-shots.
     #[test]
-    fn claudes_memory_follows_the_users_setting() {
+    fn claudes_memory_is_off_for_every_session() {
         let cwd = Temp::new();
         let config = cwd.path().join("config");
         std::fs::create_dir_all(&config).unwrap();
-        let flag = |args: &[String], name: &str| {
-            args.iter()
-                .position(|arg| arg == name)
-                .map(|at| args[at + 1].clone())
-        };
-        let memory = |tools: ToolSet, naked_worker: bool| {
-            let session = SessionSpec {
-                tools,
-                naked_worker,
-                project: Some(cwd.path().to_owned()),
-                ..spec(cwd.path(), &[])
-            };
-            let args =
-                Claude::session_args(&session, cwd.path(), "n", false, Some(&config)).unwrap();
-            let layer: Value = serde_json::from_str(&flag(&args, "--settings").unwrap()).unwrap();
-            (
-                layer.get("autoMemoryEnabled").cloned(),
-                flag(&args, "--setting-sources"),
-            )
-        };
-        for user in [Some(true), Some(false), None] {
-            let file = match user {
-                Some(on) => json!({"autoMemoryEnabled": on, "model": "opus"}),
-                None => json!({"model": "opus"}),
-            };
-            std::fs::write(config.join("settings.json"), file.to_string()).unwrap();
-            for tools in [ToolSet::Thread, ToolSet::Lean] {
+        std::fs::write(
+            config.join("settings.json"),
+            json!({"autoMemoryEnabled": true}).to_string(),
+        )
+        .unwrap();
+        for tools in [
+            ToolSet::Thread,
+            ToolSet::Lean,
+            ToolSet::Default,
+            ToolSet::SideChat,
+            ToolSet::TabChat,
+            ToolSet::Review,
+            ToolSet::Web,
+            ToolSet::None,
+        ] {
+            for naked_worker in [false, true] {
+                let session = SessionSpec {
+                    tools,
+                    naked_worker,
+                    project: Some(cwd.path().to_owned()),
+                    ..spec(cwd.path(), &[])
+                };
+                let args =
+                    Claude::session_args(&session, cwd.path(), "n", false, Some(&config)).unwrap();
+                let at = args.iter().position(|arg| arg == "--settings").unwrap();
+                let layer: Value = serde_json::from_str(&args[at + 1]).unwrap();
                 assert_eq!(
-                    memory(tools, false),
-                    (None, Some("user,project,local".into())),
-                    "{tools:?} loads the user's settings and is given none ({user:?})"
+                    layer["autoMemoryEnabled"],
+                    json!(false),
+                    "{tools:?}, naked {naked_worker}"
                 );
-            }
-            for tools in [ToolSet::SideChat, ToolSet::Default] {
-                assert_eq!(
-                    memory(tools, false).0,
-                    user.map(|on| json!(on)),
-                    "{tools:?} starts with the user's own setting"
-                );
-            }
-            assert_eq!(
-                memory(ToolSet::Lean, true).0,
-                Some(json!(false)),
-                "a naked worker"
-            );
-            for tools in [
-                ToolSet::TabChat,
-                ToolSet::Review,
-                ToolSet::Web,
-                ToolSet::None,
-            ] {
-                assert_eq!(memory(tools, false).0, Some(json!(false)), "{tools:?}");
             }
         }
     }

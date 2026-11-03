@@ -157,6 +157,31 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Whether a turn its limit cut goes on elsewhere, as its turn's end then chooses: a move
+    /// asked for, another account of its CLI, or another agent (D180).
+    pub(in crate::manager) async fn limit_goes_on(&self, conv: &ConvLive) -> bool {
+        let cli = {
+            let state = conv.state.lock().await;
+            match (&state.limit_hit, &state.cli) {
+                (Some(_), Some(cli)) => cli.clone(),
+                _ => return false,
+            }
+        };
+        self.read_seam_of(&conv.id)
+            .await
+            .moving
+            .is_some_and(|to| to.provider != cli.provider)
+            || self
+                .runtime
+                .switch_target(
+                    &cli.account,
+                    cli.model.model.as_deref(),
+                    Some(&cli.session.native_id()),
+                )
+                .is_some()
+            || self.fallback_agent(conv, &cli.model).is_some()
+    }
+
     pub(in crate::manager) async fn prepare_provider_transition(
         &self,
         conv: &ConvLive,

@@ -45,7 +45,7 @@ test("a conflicted merge card preserves its warning and resolution choice", () =
     answer: null, answers: [], createdAtMs: 1, answeredAtMs: null,
   };
   assert.deepEqual(questionRound(question), [item]);
-  assert.equal(questionRowWords(question), "Asking whether to merge into main");
+  assert.equal(questionRowWords(question), "Asking whether to merge into main · waiting");
   assert.deepEqual(questionAnswers({
     ...question, answer: "Merge & resolve conflicts", answers: ["Merge & resolve conflicts"], answeredAtMs: 2,
   }), ["Merge & resolve conflicts"]);
@@ -105,7 +105,7 @@ test("a multi-select answer is its marked options, each worded as the CLI offere
 });
 
 test("a question's row says it asks while open, and how many it asked once answered", () => {
-  assert.equal(questionRowWords(watch), "Asking a question");
+  assert.equal(questionRowWords(watch), "Asking a question · waiting");
   const answered = { ...watch, answer: "Watch", answeredAtMs: 2 };
   assert.equal(questionRowWords(answered), "Asked 1 question");
   const round: Question = {
@@ -114,7 +114,7 @@ test("a question's row says it asks while open, and how many it asked once answe
     answer: "Yes\nNo\nYes", answers: ["Yes", "No", "Yes"], answeredAtMs: 2,
   };
   assert.equal(questionRowWords(round), "Asked 3 questions");
-  assert.equal(questionRowWords({ ...round, answer: null, answers: [], answeredAtMs: null }), "Asking questions");
+  assert.equal(questionRowWords({ ...round, answer: null, answers: [], answeredAtMs: null }), "Asking questions · waiting");
   // An interview's round names itself once answered (Q78).
   assert.equal(questionRowWords({ ...round, title: "Round 2 · Budget" }), "Asked 3 questions · Round 2 · Budget");
   // Withdrawn, and the merge card, keep their words.
@@ -140,7 +140,7 @@ test("the answered question's row says how many it asked and opens to each with 
     assert.match(html, /title="Watch CI for d177d69\? It will probably fail/);
     // Pending, it says it asks, its words sweeping.
     const pending = render(watch);
-    assert.match(pending, /<span class="truncate shimmer">Asking a question<\/span>/);
+    assert.match(pending, /<span class="truncate shimmer">Asking a question · waiting<\/span>/);
   } finally {
     await server.close();
   }

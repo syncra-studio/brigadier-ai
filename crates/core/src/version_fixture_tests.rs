@@ -198,6 +198,8 @@ fn turn_records(
                             TurnStatus::Failed => TurnEnd::Failed,
                         }),
                         error: None,
+                        error_kind: None,
+                        provider: None,
                         ended_at_ms: Some(recording.header.recorded_at_ms + row.t as i64),
                         requests: vec![],
                         limit: None,
@@ -229,7 +231,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
         let kind: ProviderKind = serde_json::from_value(historical["provider"].clone()).unwrap();
         let provider: Box<dyn Provider> = match kind {
             ProviderKind::Claude => Box::new(claude::Claude::new(platform.clone(), env.clone())),
-            ProviderKind::Codex => Box::new(codex::Codex::new(platform.clone(), env.clone())),
+            _ => Box::new(codex::Codex::new(platform.clone(), env.clone())),
         };
         let (recording, _) = replay(
             provider.as_ref(),
@@ -265,7 +267,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
         let kind: ProviderKind = serde_json::from_value(index["provider"].clone()).unwrap();
         let provider: Box<dyn Provider> = match kind {
             ProviderKind::Claude => Box::new(claude::Claude::new(platform.clone(), env.clone())),
-            ProviderKind::Codex => Box::new(codex::Codex::new(platform.clone(), env.clone())),
+            _ => Box::new(codex::Codex::new(platform.clone(), env.clone())),
         };
         match index["limit"]["status"].as_str() {
             Some("missing") => assert!(index["limit"]["reason"].is_string()),
@@ -368,6 +370,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
                         .and_then(|id| phases.get(id))
                         .copied();
                     let entry = FileEntry {
+                        wake: None,
                         event: event.clone(),
                         at_ms: Some(*at),
                         updated_at_ms: None,
@@ -376,6 +379,7 @@ fn every_cli_version_replays_and_reloads_without_duplicate_items() {
                         images: vec![],
                         phase,
                         said: None,
+                        requests: Vec::new(),
                     };
                     stream = session_file::merge(stream, vec![entry]);
                 }
@@ -462,7 +466,7 @@ fn every_cli_versions_session_file_says_the_context_its_stream_reported() {
         let kind: ProviderKind = serde_json::from_value(index["provider"].clone()).unwrap();
         let provider: Box<dyn Provider> = match kind {
             ProviderKind::Claude => Box::new(claude::Claude::new(platform.clone(), env.clone())),
-            ProviderKind::Codex => Box::new(codex::Codex::new(platform.clone(), env.clone())),
+            _ => Box::new(codex::Codex::new(platform.clone(), env.clone())),
         };
         // The compaction run: one native session across its compaction, interrupt and resume.
         let case = &index["scenarios"]["compaction"];

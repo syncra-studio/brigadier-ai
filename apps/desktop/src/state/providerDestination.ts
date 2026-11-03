@@ -16,5 +16,5 @@ export function providerForSetting(label: string): ProviderKind | null {
   return PROVIDERS.find((provider) => {
     const status = overviews?.find((entry) => entry.provider === provider)?.status;
     return !status || !!status.path;
-  }) ?? PROVIDERS[0];
+  }) ?? PROVIDERS[0] ?? null;
 }

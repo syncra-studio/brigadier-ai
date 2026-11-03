@@ -1,8 +1,7 @@
 import { type FC, useMemo } from "react";
 
-import { answeredHead, elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
+import { elapsedWords, liveHead, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
-import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
 import type { BlockState } from "@/app/conversation/blocks";
 import { Tasks } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
@@ -20,6 +19,14 @@ export type ThreadStatusProps = {
   workers?: number;
   /** The turn is over, and this many background commands it started still hold it (D21). */
   commands?: number;
+  /** The turn is over, and this many subagents it started still work (D24). */
+  subagents?: number;
+  /** What holds it over, named when it is one thing (`heldWait`, D106). */
+  named?: StatusHead | null;
+  /** What its CLI is blocked on in its open turn, named (`liveWait`, D106). */
+  wait?: StatusHead | null;
+  /** Its own question card waits for the answer (D161). */
+  cardWait?: boolean;
 };
 
 /** What a live turn's last line says now, its workers by name; `null` when nothing. */
@@ -36,12 +43,12 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const head = view?.head;
   const workers = props?.workers ?? 0;
   const commands = props?.commands ?? 0;
-  return useMemo(() => {
-    if (workers > 0) return { text: workersWaitWords(workers), tone: "busy" as const };
-    if (commands > 0) return { text: commandsWaitWords(commands), tone: "still" as const };
-    return head ? { ...head, text: words } : null;
-  }, [head, words, workers, commands]);
+  // The lead's own subagents wait with it: the recovery strip owns the lead's quota wait.
+  const subagents = props?.quotaWait ? 0 : (props?.subagents ?? 0);
+  const named = props?.named ?? null;
+  return useMemo(() => liveHead(head ? { ...head, text: words } : null, workers, commands, subagents, named), [head, words, workers, commands, subagents, named]);
 }
+
 
 /** The status line on its own, when no work row says it; a long run's says how long it has gone. */
 export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
@@ -68,8 +75,3 @@ export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
   );
 };
 
-/** The line under an answer whose request still waits (see `answeredHead`). */
-export const AnsweredStatus: FC<ThreadStatusProps & { waiting: boolean; reopened: boolean }> = ({ waiting, reopened, ...props }) => {
-  const head = answeredHead(useThreadStatusHead(props), { waiting, reopened });
-  return head ? <StatusLine head={head} /> : null;
-};

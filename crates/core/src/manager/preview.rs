@@ -3099,7 +3099,6 @@ while True: time.sleep(0.03)
     async fn stale_preview_data_disposes_cleanly_and_later_records_survive_restart() {
         use crate::ledger::CleanupLedger;
         use crate::manager::flow::{Flow, Options, Reply};
-        use brigadier_providers::{claude::Claude, codex::Codex};
         use std::os::unix::fs::MetadataExt;
 
         let flow = Flow::start(
@@ -3148,14 +3147,12 @@ while True: time.sleep(0.03)
             let reloaded = CleanupLedger::load(
                 flow.manager.core.clone(),
                 runtime.platform().clone(),
-                Arc::new(Claude::new(
-                    runtime.platform().clone(),
-                    runtime.cli_env().clone(),
-                )),
-                Arc::new(Codex::new(
-                    runtime.platform().clone(),
-                    runtime.cli_env().clone(),
-                )),
+                brigadier_providers::adapters::ADAPTERS
+                    .iter()
+                    .map(|adapter| {
+                        (adapter.new)(runtime.platform().clone(), runtime.cli_env().clone())
+                    })
+                    .collect(),
             )
             .await
             .unwrap();

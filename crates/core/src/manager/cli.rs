@@ -13,10 +13,11 @@
 use std::collections::HashMap;
 
 use brigadier_cli::protocol::{
-    self as cli, Agent, Changes, CliCall, CliReply, CliRequest, ErrorCode, Item, ItemKind, Kind,
+    self as cli, Changes, CliCall, CliReply, CliRequest, ErrorCode, Item, ItemKind, Kind,
     ReadOutput, ReadView, SessionRow, SessionState, SessionsOutput, ShowOutput, WorkerRow,
     WorkerState, WorkersOutput,
 };
+use brigadier_providers::KindFacts as _;
 use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, ProviderKind};
 
@@ -53,16 +54,20 @@ pub(super) enum Target {
     Worker(Box<Task>),
 }
 
+/// Why an agent named on the command line can't run: no CLI of that id is set up in Brigadier.
+pub(super) fn unknown_agent(agent: ProviderKind) -> String {
+    let known: Vec<&str> = brigadier_providers::adapters::kinds()
+        .map(ProviderKind::id)
+        .collect();
+    format!(
+        "no agent named \"{agent}\"; Brigadier drives {}",
+        known.join(", ")
+    )
+}
+
 /// The shown id: the last 8 characters.
 pub(super) fn short(id: &str) -> String {
     id[id.len().saturating_sub(8)..].to_owned()
-}
-
-pub(super) fn agent(provider: ProviderKind) -> Agent {
-    match provider {
-        ProviderKind::Claude => Agent::Claude,
-        ProviderKind::Codex => Agent::Codex,
-    }
 }
 
 fn changes(stat: &DiffStat) -> Changes {
@@ -128,7 +133,7 @@ pub(super) fn worker_row(task: &Task, diffs: &HashMap<TaskId, Changes>) -> Worke
         id: short(&task.id.0),
         number: task.number,
         title: task.title.clone(),
-        agent: agent(task.route.choice.provider),
+        agent: task.route.choice.provider,
         model: task.route.choice.model.clone(),
         effort: task.route.choice.effort.clone(),
         state: worker_state(task.state),
@@ -204,7 +209,6 @@ fn event_item(event: &ProviderEvent, at_ms: i64) -> Option<Item> {
             }),
             ..item(ItemKind::Message, text.clone())
         },
-        ProviderEvent::Reasoning { text, .. } => item(ItemKind::Reasoning, text.clone()),
         ProviderEvent::ToolCall {
             name,
             input,
@@ -244,6 +248,8 @@ fn event_item(event: &ProviderEvent, at_ms: i64) -> Option<Item> {
             item(ItemKind::TurnEnd, word.into())
         }
         ProviderEvent::Error { error } => item(ItemKind::Error, error.message.clone()),
+        // A model's thinking is never handed to another session: it reads as hidden
+        // reasoning, which providers' safety checks refuse (D143).
         _ => return None,
     })
 }
@@ -420,6 +426,21 @@ impl SessionManager {
                 },
             );
         }
+        // The orchestrator's look-ups, counted for its drift note (D167); nothing is refused.
+        if caller.task_id.is_none()
+            && matches!(
+                call.request,
+                CliRequest::Models
+                    | CliRequest::Sessions { .. }
+                    | CliRequest::Workers
+                    | CliRequest::Show { .. }
+                    | CliRequest::Read { .. }
+                    | CliRequest::Context { .. }
+            )
+            && let Ok(conv) = self.conv(&caller.conversation_id)
+        {
+            conv.looked_up().await;
+        }
         let reply = match call.request {
             CliRequest::Models => self.cli_models(caller).await.map(|o| CliReply::ok(&o)),
             CliRequest::Sessions { all } => self
@@ -441,7 +462,18 @@ impl SessionManager {
                     reply
                 }),
             CliRequest::Close { id } => self.cli_close(caller, &id).await,
-            CliRequest::Queue { id, judgment } => self.cli_queue(caller, &id, judgment).await,
+            CliRequest::Pause { id, note } => {
+                crate::heap(|| self.cli_pause(caller, &id, note)).await
+            }
+            CliRequest::Resume { id, note } => {
+                crate::heap(|| self.cli_resume(caller, &id, note)).await
+            }
+            CliRequest::Switch {
+                id,
+                agent,
+                model,
+                effort,
+            } => crate::heap(|| self.cli_switch(caller, &id, agent, model, effort)).await,
             CliRequest::ContinueOn { agent, after_turn } => {
                 Ok(self.cli_continue_on(caller, agent, after_turn).await)
             }
@@ -456,7 +488,11 @@ impl SessionManager {
                 grep,
                 last,
                 item,
-            } => self.cli_context(caller, part, name, grep, last, item).await,
+                session,
+            } => {
+                self.cli_context(caller, part, name, (grep, last, item, session))
+                    .await
+            }
         };
         reply.unwrap_or_else(failed)
     }
@@ -466,7 +502,7 @@ impl SessionManager {
     async fn cli_continue_on(
         &self,
         caller: &CliCaller,
-        agent: cli::Agent,
+        agent: ProviderKind,
         after_turn: bool,
     ) -> CliReply {
         if caller.task_id.is_some()
@@ -481,16 +517,17 @@ impl SessionManager {
                  moved by its session",
             );
         }
-        let to = match agent {
-            cli::Agent::Claude => ProviderKind::Claude,
-            cli::Agent::Codex => ProviderKind::Codex,
-        };
+        let to = agent;
+        if brigadier_providers::adapters::adapter(to).is_none() {
+            return CliReply::error(ErrorCode::Usage, unknown_agent(to));
+        }
         match self
             .continue_on(&caller.conversation_id, to, None, after_turn)
             .await
         {
             Ok((when, choice)) => CliReply::ok(&cli::ContinueOnOutput {
                 agent,
+                label: agent.label().to_owned(),
                 model: choice.model,
                 effort: choice.effort,
                 when: match when {
@@ -630,7 +667,7 @@ impl SessionManager {
         Ok(SessionsOutput { project, sessions })
     }
 
-    async fn cli_workers(&self, caller: &CliCaller) -> crate::Result<WorkersOutput> {
+    pub(super) async fn cli_workers(&self, caller: &CliCaller) -> crate::Result<WorkersOutput> {
         let session = match &caller.task_id {
             Some(task_id) => short(&task_id.0),
             None => short(&caller.conversation_id.0),
@@ -663,6 +700,19 @@ impl SessionManager {
         })
     }
 
+    /// Worker `task` as `brigadier workers` shows it now, for the reply of an action on it (D156).
+    pub(super) async fn worker_now(&self, task: &Task) -> Option<WorkerRow> {
+        let task = self
+            .task_by_id(&task.conversation_id, &task.id)
+            .await
+            .ok()?;
+        let diffs = self.cli_worker_changes(&task.conversation_id).await;
+        Some(WorkerRow {
+            context: self.worker_context(&task),
+            ..self.cli_worker_row(&task, &diffs).await
+        })
+    }
+
     /// A worker's row with the facts git and its CLI show (harness P1), read now.
     async fn cli_worker_row(&self, task: &Task, diffs: &HashMap<TaskId, Changes>) -> WorkerRow {
         let (git, commands) = self.worker_facts(task).await;
@@ -683,8 +733,8 @@ impl SessionManager {
             CliReply::error(
                 ErrorCode::NotFound,
                 format!(
-                    "no session or worker has the id {id:?}; see `brigadier sessions --all` \
-                     and `brigadier workers`"
+                    "no session or worker has the id or name {id:?}; see `brigadier sessions \
+                     --all` and `brigadier workers`"
                 ),
             )
         };
@@ -696,15 +746,54 @@ impl SessionManager {
             |full: &str| full == id || (id.len() >= MIN_ID && short(full).starts_with(id));
         let sessions = self.cli_every_session(caller).map_err(failed)?;
         let mut found: Vec<Target> = Vec::new();
-        for (_, session) in sessions {
+        for (_, session) in &sessions {
             for task in self.core.tasks(&session.id).await.map_err(failed)? {
                 if matches(&task.id.0) {
                     found.push(Target::Worker(Box::new(task)));
                 }
             }
             if matches(&session.id.0) {
-                found.push(Target::Session(Box::new(session)));
+                found.push(Target::Session(Box::new(session.clone())));
             }
+        }
+        if found.is_empty() {
+            let here = sessions
+                .iter()
+                .find(|(_, session)| session.id == caller.conversation_id)
+                .and_then(|(_, session)| session.project_id.clone());
+            let others: Vec<&Conversation> = sessions
+                .iter()
+                .map(|(_, session)| session)
+                .filter(|session| session.id != caller.conversation_id)
+                .collect();
+            let mut found = named(&others, id);
+            // A name several projects' sessions share means the one in the caller's project.
+            let near: Vec<_> = found
+                .iter()
+                .copied()
+                .filter(|session| here.is_some() && session.project_id == here)
+                .collect();
+            if found.len() > 1 && !near.is_empty() {
+                found = near;
+            }
+            return match found.as_slice() {
+                [] => Err(not_found()),
+                [one] => Ok(Target::Session(Box::new((*one).clone()))),
+                many => Err(CliReply::error(
+                    ErrorCode::Ambiguous,
+                    format!(
+                        "{id:?} could be {}; give its id",
+                        many.iter()
+                            .map(|session| format!(
+                                "{:?} ({})",
+                                session.title,
+                                short(&session.id.0)
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )),
+            };
         }
         match found.len() {
             0 => Err(not_found()),
@@ -750,7 +839,9 @@ impl SessionManager {
                     id: short(&conversation.id.0),
                     title: conversation.title.clone(),
                     state: session_state(&conversation, activity).word().into(),
-                    agent: agent(choice.as_ref().map_or(ProviderKind::Claude, |c| c.provider)),
+                    agent: choice
+                        .as_ref()
+                        .map_or_else(brigadier_providers::adapters::default_kind, |c| c.provider),
                     model: choice.as_ref().and_then(|choice| choice.model.clone()),
                     effort: choice.as_ref().and_then(|choice| choice.effort.clone()),
                     branch,
@@ -979,6 +1070,38 @@ fn is_answer(event: &ProviderEvent) -> bool {
 }
 
 /// Pinned first, then the latest active first, as the sidebar lists them.
+/// The sessions the user's name for one reaches (D201): its whole title in any case and
+/// spacing, else every title holding each of its words.
+fn named<'a>(sessions: &[&'a Conversation], name: &str) -> Vec<&'a Conversation> {
+    let key = |text: &str| {
+        text.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let words = key(name);
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let whole: Vec<_> = sessions
+        .iter()
+        .copied()
+        .filter(|session| key(&session.title) == words)
+        .collect();
+    if !whole.is_empty() {
+        return whole;
+    }
+    sessions
+        .iter()
+        .copied()
+        .filter(|session| {
+            let title = key(&session.title).join(" ");
+            words.iter().all(|word| title.contains(word.as_str()))
+        })
+        .collect()
+}
+
 fn sidebar_order(sessions: &mut [Conversation]) {
     sessions.sort_by(|a, b| {
         b.pinned_at_ms
@@ -1042,6 +1165,30 @@ mod tests {
         assert_eq!(read[0].output.as_deref(), Some("done"));
         assert_eq!(read[0].at_ms, 3);
         assert_eq!(read[1].text, "All read.");
+    }
+
+    /// What one session reads of another never carries its thinking (D143).
+    #[test]
+    fn a_sessions_thinking_is_never_read_out() {
+        let read = items(&[
+            entry(
+                1,
+                ProviderEvent::Reasoning {
+                    item_id: "r".into(),
+                    text: "secret plan".into(),
+                },
+            ),
+            entry(
+                2,
+                ProviderEvent::Message {
+                    item_id: "m".into(),
+                    role: brigadier_providers::model::Role::Assistant,
+                    text: "Done.".into(),
+                },
+            ),
+        ]);
+        assert_eq!(read.len(), 1, "{read:?}");
+        assert_eq!(read[0].text, "Done.");
     }
 
     #[test]
