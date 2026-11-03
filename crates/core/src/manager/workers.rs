@@ -2494,6 +2494,8 @@ impl SessionManager {
         .await;
         // A `brigadier wait` already waiting on it ends: it sends nothing until resumed.
         self.worker_events.added.notify_waiters();
+        // A queued message no longer waits for it.
+        self.settle_requests(&conversation_id).await;
         Ok(true)
     }
 

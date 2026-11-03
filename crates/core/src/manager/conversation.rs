@@ -1231,7 +1231,7 @@ impl SessionManager {
             && activity.carried.is_empty()
             && !board.queue.paused
             && board.queue.ready_to_send().is_some();
-        if waiting && !self.work_holds(&conv).await {
+        if waiting && !self.queue_holds(&conv).await {
             self.kick(&conv);
         }
     }
@@ -1631,6 +1631,16 @@ impl SessionManager {
     /// what the user sends goes on in it. A side chat's or a tab chat's never holds: it keeps
     /// the plain queue.
     pub(super) async fn work_holds(&self, conv: &ConvLive) -> bool {
+        self.holds(conv, true).await
+    }
+
+    /// Whether a queued message waits for the work: as [`Self::work_holds`], but paused workers
+    /// alone don't hold it, as they may wait for that very message; it goes on as usual.
+    pub(super) async fn queue_holds(&self, conv: &ConvLive) -> bool {
+        self.holds(conv, false).await
+    }
+
+    async fn holds(&self, conv: &ConvLive, paused_hold: bool) -> bool {
         let brigade = conv.kind == ConversationKind::Session
             || self
                 .core
@@ -1649,7 +1659,8 @@ impl SessionManager {
         }
         // A paused worker keeps its work open too, until it resumes or stops (D159).
         self.core.tasks(&conv.id).await.is_ok_and(|tasks| {
-            self.workers_working(&tasks) || tasks.iter().any(|task| task.state == TaskState::Paused)
+            self.workers_working(&tasks)
+                || (paused_hold && tasks.iter().any(|task| task.state == TaskState::Paused))
         })
     }
 
@@ -2592,6 +2603,7 @@ impl SessionManager {
         // The work still holds with no turn running (its workers, its CLI's background commands):
         // a message of the user's starting this turn goes on with that work.
         let holds = self.work_holds(&conv).await;
+        let queue_held = holds && self.queue_holds(&conv).await;
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         let mut carry = false;
@@ -2647,7 +2659,7 @@ impl SessionManager {
                 Vec::new()
             };
             // A Chat's waiting message, too, waits for the block to close (D25).
-            if users.is_empty() && envelopes.is_empty() && !session && !holds {
+            if users.is_empty() && envelopes.is_empty() && !session && !queue_held {
                 match self.core.next_queued(&conv.id).await {
                     Ok(Some(item)) => {
                         conv.goes_on_own_turn(&item);
@@ -2680,7 +2692,7 @@ impl SessionManager {
                 self.settle_requests(&conv.id).await;
                 // While the block stays open (D24) a waiting message stays queued until it
                 // ends (D157).
-                if !holds && session && !sent_queued && self.send_queued(&conv).await {
+                if !queue_held && session && !sent_queued && self.send_queued(&conv).await {
                     sent_queued = true;
                     continue;
                 }

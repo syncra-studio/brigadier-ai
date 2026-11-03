@@ -139,6 +139,42 @@ async fn a_waiting_message_waits_until_the_block_ends() {
     flow.stop().await;
 }
 
+/// WAITS, then the block's only worker is paused: a paused worker keeps the block open (D159)
+/// but never holds the queue, so the message goes on its own turn, not after a block end that
+/// may never come.
+#[tokio::test]
+async fn a_waiting_message_goes_once_only_paused_workers_hold_the_block() {
+    let (flow, answers, release) = block("block-paused").await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    flow.say(FIRST).await;
+    let first = waits(&flow, FIRST).await;
+    let task = flow
+        .manager
+        .core
+        .tasks(&flow.conversation)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(flow.manager.pause_task(task.id).await.unwrap());
+    flow.until("it to leave the queue", |board| {
+        board.queue.items.is_empty() && board.requests.contains_key(&first.id)
+    })
+    .await;
+    flow.settled().await;
+    assert!(
+        flow.manager.work_holds(&conv).await,
+        "the paused worker keeps the block open"
+    );
+    let all = inputs(&answers);
+    assert_eq!(
+        all.iter().filter(|input| input.contains(FIRST)).count(),
+        1,
+        "{all:#?}"
+    );
+    release.notify_one();
+    flow.stop().await;
+}
+
 /// FITS while only the block's workers work: it joins the open block at once, framed, on a
 /// turn that goes on with that work, and never draws a block of its own (D157).
 #[tokio::test]
