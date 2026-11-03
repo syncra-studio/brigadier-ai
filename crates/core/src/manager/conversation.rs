@@ -280,6 +280,11 @@ struct ConvState {
     /// a command whose item still runs at its turn's end lingers; its terminal's leaving the
     /// list ends it too, should its item's end not come (D21).
     terminals: HashMap<String, String>,
+    /// Codex commands the turn went on from (`terminals`) that ended while it still ran, by
+    /// item: their words, end and output's tail, and how many of the model's calls ended since.
+    /// One whose end no call of its model's read (at most the turn's last ended since) is told
+    /// as a lingering one's is: Codex never says it (D177: a `brigadier ask` answered so).
+    unread_ends: HashMap<String, (String, String, String, u32)>,
     /// The request whose turn left Codex commands running (`lingering`): it works until each
     /// has ended and the thread heard of it. While they run, as while the CLI's own background
     /// jobs do (`background`), the CLI stays up (nothing retires it).
@@ -4513,6 +4518,17 @@ impl SessionManager {
         if !own_shell {
             return;
         }
+        let how = exit.map_or_else(
+            || format!("{status:?}").to_lowercase(),
+            |code| format!("exit {code}"),
+        );
+        let output = output.unwrap_or_default();
+        let tail: String = {
+            let chars: Vec<char> = output.chars().collect();
+            chars[chars.len().saturating_sub(JOB_OUTPUT_TAIL)..]
+                .iter()
+                .collect()
+        };
         {
             let mut state = conv.state.lock().await;
             if status == ItemStatus::InProgress {
@@ -4530,24 +4546,21 @@ impl SessionManager {
                     .insert(item.to_owned(), words.to_owned());
                 return;
             }
-            state.command_words.remove(item);
+            let words = state.command_words.remove(item);
             if !state.lingering.contains_key(item) {
                 state.persistent_commands.remove(item);
+                if let Some(words) = words
+                    && state.busy
+                    && state.terminals.values().any(|of| of == item)
+                {
+                    state
+                        .unread_ends
+                        .insert(item.to_owned(), (words, how, tail, 0));
+                }
                 return;
             }
         }
-        let status = exit.map_or_else(
-            || format!("{status:?}").to_lowercase(),
-            |code| format!("exit {code}"),
-        );
-        let output = output.unwrap_or_default();
-        let tail: String = {
-            let chars: Vec<char> = output.chars().collect();
-            chars[chars.len().saturating_sub(JOB_OUTPUT_TAIL)..]
-                .iter()
-                .collect()
-        };
-        self.lingering_ended(conv, item, &status, tail).await;
+        self.lingering_ended(conv, item, &how, tail).await;
     }
 
     /// A Codex background terminal of the thread's own shell was listed, or left the list
@@ -5104,6 +5117,10 @@ impl SessionManager {
                 }
             }
             ProviderEvent::Usage { total, last, calls } => {
+                // A call of its model's ended: it may have read the ends before it.
+                for end in conv.state.lock().await.unread_ends.values_mut() {
+                    end.3 += 1;
+                }
                 // Claude sums a turn's calls; the context its last call read came apart.
                 let context = conv.context_used().await;
                 self.note_use(
@@ -5338,10 +5355,12 @@ impl SessionManager {
         if self.finish_thread_stall(conv).await {
             return;
         }
-        let (limit_hit, ended, landed, carried, served, end_commands, unshown) = {
+        let (limit_hit, ended, landed, carried, served, end_commands, unshown, unread) = {
             let mut state = conv.state.lock().await;
-            // A Codex command still running when its turn ended goes on as its CLI's job.
+            // A Codex command still running when its turn ended goes on as its CLI's job; one
+            // that ended unread is told as one that ends after it.
             let words = std::mem::take(&mut state.command_words);
+            let mut unread = Vec::new();
             if status == TurnStatus::Completed
                 && (conv.kind == ConversationKind::Session || cli.launch.is_some())
             {
@@ -5350,7 +5369,14 @@ impl SessionManager {
                         state.lingering.insert(item, words);
                     }
                 }
+                for (item, (words, how, tail, calls)) in std::mem::take(&mut state.unread_ends) {
+                    if calls <= 1 {
+                        state.lingering.insert(item.clone(), words);
+                        unread.push((item, how, tail));
+                    }
+                }
             }
+            state.unread_ends.clear();
             state.commands.clear();
             // Taken now, so no turn starts on it in between.
             let end_commands = (std::mem::take(&mut state.end_commands)
@@ -5449,8 +5475,12 @@ impl SessionManager {
                 served,
                 end_commands,
                 unshown,
+                unread,
             )
         };
+        for (item, how, tail) in unread {
+            self.lingering_ended(conv, &item, &how, tail).await;
+        }
         // Its workers' events no wait took reach it now, once (S29).
         self.net_soon(&conv.id);
         // A `brigadier wait` on this session looks again (S30).

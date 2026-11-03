@@ -240,6 +240,90 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
     flow.stop().await;
 }
 
+/// A Codex command its turn went on from (a background terminal) that ends while the turn still
+/// runs, with no call of the model's after its end to read it, is told as one ending after the
+/// turn is, in the same request: Codex never says it (D177: a `brigadier ask` answered so).
+#[tokio::test]
+async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
+    use brigadier_providers::{
+        BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
+    };
+    let inputs: Log = Log::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "codex-unread-end",
+        Options {
+            thread: brigadier_providers::ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("finished after your turn") {
+                    return Reply::text("Wrote blue.");
+                }
+                let command = |status, exit_code, output: Option<&str>| ProviderEvent::Command {
+                    item_id: "cmd-1".into(),
+                    command: "brigadier ask \"Which colour?\"".into(),
+                    cwd: None,
+                    status,
+                    exit_code,
+                    output: output.map(str::to_owned),
+                    duration_ms: None,
+                    kept: None,
+                };
+                let terminal = ProviderEvent::BackgroundTask {
+                    task: BackgroundTask {
+                        command: None,
+                        provider: None,
+                        id: "4242".into(),
+                        item_id: Some("cmd-1".into()),
+                        kind: BackgroundTaskKind::Terminal,
+                        label: "brigadier ask".into(),
+                        status: BackgroundTaskStatus::Running,
+                        started_at_ms: 1,
+                        ended_at_ms: None,
+                        output_file: None,
+                        summary: None,
+                        last_line: None,
+                    },
+                };
+                for event in [
+                    command(ItemStatus::InProgress, None, None),
+                    terminal,
+                    command(
+                        ItemStatus::Completed,
+                        Some(0),
+                        Some("Which colour?: blue\n"),
+                    ),
+                ] {
+                    let _ = turn.events.send(event).await;
+                }
+                Reply::text("Waiting for your colour choice.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Ask me the colour, then write it.").await;
+    let board = flow.settled().await;
+    let root = board.requests.keys().next().unwrap().clone();
+    assert_eq!(board.requests[&root].state, RequestState::Done);
+    let inputs = inputs.lock().unwrap().clone();
+    assert!(
+        inputs.iter().any(|input| input.contains(
+            "[your background command `brigadier ask \"Which colour?\"` finished after your turn · exit 0]"
+        ) && input.contains("blue")),
+        "{inputs:#?}"
+    );
+    let answers = answers_with_requests(&flow).await;
+    assert!(
+        answers.contains(&("Wrote blue.".into(), Some(root))),
+        "{answers:?}"
+    );
+    flow.stop().await;
+}
+
 /// A command outliving its turn ends during a later turn, so Brigadier tells the CLI of it in a
 /// turn of its own once that turn ends. Its hidden word opens that turn, which goes on with the
 /// one before: the block reads open from there, not only once the CLI shows an item, seconds

@@ -57,15 +57,17 @@ test("rows sort newest first", () => {
 
 const nativeApp = (id: string, label: string, status: BackgroundTask["status"] = "running"): BackgroundTask => ({ id, itemId: `call-${id}`, kind: "shell", label, status, startedAtMs: 10, endedAtMs: null, outputFile: null, summary: null, lastLine: null });
 
-test("every command is a Background row, the session's and its workers' (D51), ended ones too (D98); the session's background subagents are (D97), a worker's and waits are not", async () => {
+test("every command is a Background row, the session's and its workers' (D51), ended ones too (D98); the session's background subagents are (D97), a worker's and waits and asks are not", async () => {
   const { taskRows, workerTaskRows } = await import("./backgroundRows");
 
   const sleep = nativeApp("sleep", "sleep 25 && echo done"), app = nativeApp("app", "Show the website"), wait = nativeApp("wait", "brigadier wait");
+  // An ask its CLI went on from: its card is its row (D177).
+  const ask = { ...nativeApp("ask", 'brigadier ask "Which colour?"'), kind: "terminal" as const };
   const agent: BackgroundTask = { ...nativeApp("agent", "Count lines"), kind: "agent" };
   const entries: FileEntry[] = [
     { event: { type: "command", itemId: "call-wait", command: "brigadier wait --all", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null } },
   ];
-  const source = [sleep, app, wait, agent];
+  const source = [sleep, app, wait, ask, agent];
   const before = structuredClone(source);
   assert.deepEqual(taskRows(source, entries).map((row) => row.id), ["task:sleep", "task:app", "task:agent"]);
   const worker = { id: "worker", background: [{ task: sleep, command: "sleep 25" }, { task: agent, command: null }] } as WorkerRow;

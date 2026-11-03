@@ -55,9 +55,12 @@ function portOf(preview: Preview): string | null {
   );
 }
 
-/** A wait invoked as a command, including after `start &&`, never words inside an argument. */
+/**
+ * A wait, or an ask (its card is its row, D177), invoked as a command, including after
+ * `start &&`, never words inside an argument.
+ */
 function runsBrigadierWait(command: string): boolean {
-  return runsBrigadier(command, "wait");
+  return runsBrigadier(command, "wait") || runsBrigadier(command, "ask");
 }
 
 /**
@@ -90,7 +93,7 @@ export function taskCommand(task: BackgroundTask, entries: readonly FileEntry[])
 
 /**
  * The CLI's background tasks, running or ended, its background subagents among them (D97, D98),
- * except the session's worker wait already covered by the workers card. A job a subagent started
+ * except the session's worker wait already covered by the workers card and an ask its card shows. A job a subagent started
  * is that subagent's work: no row of its own (`backgroundOf` runs the subagent while it does).
  */
 export function taskRows(tasks: readonly BackgroundTask[], entries: readonly FileEntry[]): BackgroundRow[] {
