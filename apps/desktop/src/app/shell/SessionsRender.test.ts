@@ -268,7 +268,7 @@ test("Done uses the recorded turn-end unread dot: opening clears it through clos
 test("Inbox mode: Pinned, Active, Working, Snoozed and Done across projects, each row naming its project; a new message brings a done row back; the switch flips to Projects", { timeout: 60000 }, async (t) => {
   type Section = { title: string; open: boolean; rows: { title: string; label: string | null }[] };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?inbox=1", "sessions-result", 30000)) as {
-    sections: Section[]; dock: { doneInside: boolean; below: number; between: number }; doneRunning: string; doneAfter: string; firstActive: string; projectsSections: string[]; mode: string; saved: boolean;
+    sections: Section[]; dock: { doneInside: boolean; below: number; between: number }; beforeWake: string; wokeLateMs: number; doneRunning: string; doneAfter: string; firstActive: string; projectsSections: string[]; mode: string; saved: boolean;
   };
   const titles = (section: Section) => section.rows.map((row) => row.title);
   assert.deepEqual(seen.sections.map(({ title, open }) => [title, open]), [
@@ -289,6 +289,8 @@ test("Inbox mode: Pinned, Active, Working, Snoozed and Done across projects, eac
   for (const row of seen.sections.flatMap((section) => section.rows)) {
     assert.equal(row.label, row.title === "Quick question" ? null : "brigadier", row.title);
   }
+  assert.equal(seen.beforeWake, "Snoozed", "held until its time");
+  assert.ok(seen.wokeLateMs >= 0 && seen.wokeLateMs < 3000, `back at its wake time, not the next minute's look (${seen.wokeLateMs}ms late)`);
   assert.equal(seen.doneRunning, "Working", "a new message's turn takes it off Done");
   assert.equal(seen.doneAfter, "Active", "the turn's end keeps it back");
   assert.equal(seen.firstActive, "Fix the login", "at the top");

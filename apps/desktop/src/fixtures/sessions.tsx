@@ -594,6 +594,14 @@ function Fixture() {
         const list = document.querySelector('[data-sidebar="sidebar"] .scroll-edge-fade')!.getBoundingClientRect();
         const panel = document.querySelector('[data-slot="sidebar-panel"]')!.getBoundingClientRect();
         seen.dock = { doneInside: Boolean(document.querySelector('[data-slot="inbox-done"] section')), below: panel.bottom - dock.bottom, between: dock.top - list.bottom };
+        // A snooze due in half a second: the row comes back then, not at the next minute's look.
+        const wakesAt = Date.now() + 500;
+        const snoozedRow = () => sections().find((section) => section.rows.some((row) => row.title === "Tidy the docs"))?.title;
+        useApp.setState((state) => ({ conversations: { ...state.conversations, "w3-a": { ...state.conversations["w3-a"]!, snoozedUntilMs: wakesAt } } }));
+        await wait(100);
+        seen.beforeWake = snoozedRow();
+        await until(() => snoozedRow() === "Active");
+        seen.wokeLateMs = Date.now() - wakesAt;
         // A new message brings the done row back: its turn runs (Working), then ends after it was done.
         useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w2-a", { run: "running", turnOpen: true })]) } }));
         await wait(100);

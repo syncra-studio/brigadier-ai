@@ -72,7 +72,7 @@ export function inboxLists(rows: readonly InboxRow[], nowMs: number): Inbox {
   };
 }
 
-/** The inbox as the sidebar shows it, re-sorted every minute so due snoozes wake. */
+/** The inbox as the sidebar shows it, re-sorted the moment a snooze is due. */
 export function useInbox(): Inbox {
   const conversations = useApp((s) => s.conversations);
   // Archived ones live in Settings → Archived; side and tab chats sit beside their session.
@@ -84,10 +84,15 @@ export function useInbox(): Inbox {
   const states = useTabStates(ids).join(" ");
   const ended = useActivity((s) => ids.map((id) => s.byConversation[id]?.turnEndedAtMs ?? 0).join(" "));
   const [nowMs, setNow] = useState(Date.now);
+  // Look again at the soonest wake, and at least every minute: the computer's sleep delays a timer,
+  // and one set over about 24 days would fire at once.
   useEffect(() => {
-    const tick = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(tick);
-  }, []);
+    const now = Date.now();
+    const wakes = listed.map((conversation) => (conversation.snoozedUntilMs ?? 0) - now).filter((wait) => wait > 0);
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(60_000, ...wakes));
+    return () => clearTimeout(timer);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- nowMs changing is what arms the next look.
+  }, [listed, nowMs]);
 
   // When each row last stopped working, in this window (memory only); set before paint so a row
   // that blinks out of Working never shows elsewhere.
