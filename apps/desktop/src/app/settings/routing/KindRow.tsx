@@ -1,13 +1,14 @@
 import type { ComponentType, SVGProps } from "react";
 
 import { NowPick } from "@/app/settings/routing/NowPick";
+import { ROLE_KINDS } from "@/app/settings/routing/roles";
 import { WhoPicks } from "@/app/settings/routing/WhoPicks";
 import { OpenChevron } from "@/app/settings/routing/parts";
 import { useListedModels } from "@/app/settings/routing/pickers";
 import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
 import { rowModelName, workName, type WorkRow } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
-import { Code, Cursor, Grid, Nodes, PullRequestOpen, Telescope } from "@/components/icons";
+import { Code, Cursor, Grid, Lifesaver, Nodes, PullRequestMerged, PullRequestOpen, Telescope, Text } from "@/components/icons";
 import type { ModelRules } from "@/ipc/generated";
 import { joinWords } from "@/lib/routing";
 
@@ -18,6 +19,9 @@ const KIND_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "Mechanical changes and search": Telescope,
   "Independent review": PullRequestOpen,
   "Computer use": Cursor,
+  Fusion: PullRequestMerged,
+  Fallback: Lifesaver,
+  "Conversation titles": Text,
 };
 
 /**
@@ -38,6 +42,7 @@ export function KindRow({
   onToggle: () => void;
 }) {
   const Icon = KIND_ICONS[row.work] ?? Grid;
+  const role = ROLE_KINDS[row.work];
   const models = useListedModels();
   const name = (found: WorkRow["rows"][number]) => rowModelName(groups, found.agent, found.model);
   const now = row.rows.find((found) => !refusingRule(rules.rules, rowChoice(found, models), row.work));
@@ -47,13 +52,13 @@ export function KindRow({
     ? `${who} · Your rules keep ${joinWords(row.rows.map(name))} out, so it can't start`
     : row.mine.length > 0
       ? who
-      : `${who} · ${row.shipped[0]?.reason ?? ""}`;
+      : `${who} · ${role?.line ?? row.shipped[0]?.reason ?? ""}`;
   return (
     <div data-slot="routing-kind" data-work={row.work} data-open={open || undefined} className="flex flex-col">
       <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3.5 py-3.5 text-start">
         <Icon aria-hidden className="text-foreground/65 size-4 shrink-0" />
         <RowText truncate title={workName(row.work)} line={line} />
-        {now && <NowPick row={now} groups={groups} />}
+        {now && !role && <NowPick row={now} groups={groups} />}
         <OpenChevron open={open} />
       </button>
       {open && <WhoPicks row={row} rules={rules} groups={groups} />}

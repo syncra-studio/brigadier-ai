@@ -2,6 +2,8 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { AutoPicks } from "@/app/settings/routing/AutoPicks";
+import { RolePicks } from "@/app/settings/routing/RolePicks";
+import { ROLE_KINDS } from "@/app/settings/routing/roles";
 import { OrderList } from "@/app/settings/routing/OrderList";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
 import { withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
@@ -56,6 +58,8 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
       </div>
       {ordering ? (
         <OrderList work={row.work} order={row.mine} rules={rules.rules} groups={groups} onSave={save} />
+      ) : ROLE_KINDS[row.work] ? (
+        <RolePicks row={row} kind={ROLE_KINDS[row.work]!} groups={groups} />
       ) : (
         <AutoPicks row={row} rules={rules.rules} groups={groups} />
       )}

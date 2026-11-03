@@ -60,13 +60,21 @@ const SHIPPED: GuidanceRow[] = [
   { work: "Architecture and broad changes", agent: "claude", model: "opus", effort: "high", reason: "Strong default for work that needs judgment across a codebase." },
   { work: "Bounded implementation", agent: "codex", model: "default", effort: "high", reason: "The CLI default suits a well specified coding task." },
   { work: "Mechanical changes and search", agent: "claude", model: "sonnet", effort: "medium", reason: "A smaller model fits a bounded task with clear checks." },
-  { work: "Independent review", agent: "codex", model: "default", effort: "high", reason: "Codex, a second provider, gives an independent reading." },
+  { work: "Independent review", agent: "codex", model: "default", effort: "high", reason: "This provider's reviewer; `--reviewing` takes the row on another provider than the author's." },
+  { work: "Independent review", agent: "claude", model: "opus", effort: "high", reason: "This provider's reviewer; `--reviewing` takes the row on another provider than the author's." },
   { work: "fusion-claude", agent: "claude", model: "opus", effort: "high", reason: "A fusion's Claude consult: the strongest Claude model." },
+  { work: "fusion-codex", agent: "codex", model: "default", effort: "high", reason: "A fusion's Codex consult: the CLI's own default model." },
+  { work: "Computer use", agent: "claude", model: "opus", effort: "high", reason: "Seeing and using apps on screen takes strong judgment." },
+  { work: "Computer use", agent: "codex", model: "default", effort: "high", reason: "The next choice when the first can't run." },
+  { work: "Fallback", agent: "claude", model: "opus", effort: "high", reason: "A session that moves to Claude Code: when it is asked to, or every account of its own agent is at its limit." },
+  { work: "Fallback", agent: "codex", model: "default", effort: "high", reason: "A session that moves to Codex: when it is asked to, or every account of its own agent is at its limit." },
+  { work: "Conversation titles", agent: "codex", model: "luna", effort: "low", reason: "A small model for short text; use available quota, cost tier and suitability among shipped title choices." },
+  { work: "Conversation titles", agent: "claude", model: "haiku", effort: null, reason: "A small model for short text; use available quota, cost tier and suitability among shipped title choices." },
 ];
 
 /** The fixture's rules file: the user's rows (one over a shipped row, one of their own) and rules. */
 const file: { rows: GuidanceRow[]; rules: ModelRule[] } = {
-  rows: [
+  rows: params.has("mockup") ? [] : [
     { work: "Bounded implementation", agent: "claude", model: "sonnet", effort: "medium", reason: "My preference." },
     { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." },
   ],
@@ -97,7 +105,7 @@ mockIPC((command, payload) => {
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     case "getUsage":
-      return { method: req.method, usage: { ...usageView(), models: [...usageView().models, unrated] } };
+      return { method: req.method, usage: { ...usageView(), registry: { ...usageView().registry, updated: "2026-10-21", checkedAtMs: Date.now() - 3 * 3_600_000 - 600_000 }, models: [...usageView().models, unrated] } };
     case "refreshAccounts":
       return { method: req.method, generation: 0 };
     case "checkRegistry":
