@@ -54,7 +54,8 @@ function changed<T extends object>(rows: Record<string, T>, before: Record<strin
       continue;
     }
     const fields: Partial<T> = known ? known.fields : {};
-    for (const key of Object.keys(row) as (keyof T)[]) {
+    // A field the row lost (Undo of Done or Snooze) counts too, so a late snapshot can't put it back.
+    for (const key of new Set([...Object.keys(was), ...Object.keys(row)]) as Set<keyof T>) {
       if (row[key] !== was[key]) fields[key] = row[key];
     }
     changes.set(id, { removed: false, fields });
@@ -70,8 +71,14 @@ function merge<T extends { id: string }>(snapshot: T[], changes: Map<string, Cha
     }
     const row = rows.get(id);
     // A row the snapshot lacks but the live feed changed stays as the store has it.
-    const kept = row ? { ...row, ...change.fields } : live[id];
+    const kept = row ? withoutRemoved({ ...row, ...change.fields }, change.fields) : live[id];
     if (kept) rows.set(id, kept);
   }
   return [...rows.values()];
+}
+
+/** `row` without the fields the live feed removed (recorded as undefined). */
+function withoutRemoved<T extends object>(row: T, fields: Partial<T>): T {
+  for (const key of Object.keys(fields) as (keyof T)[]) if (fields[key] === undefined) delete row[key];
+  return row;
 }

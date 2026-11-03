@@ -34,7 +34,15 @@ export function markSeen(id: string, atMs: number): void {
   if (!conversation || (conversation.seenAtMs ?? 0) >= atMs) return;
   // At once here, so the dot clears without waiting for the daemon's event.
   useApp.setState((s) => ({ conversations: { ...s.conversations, [id]: { ...conversation, seenAtMs: atMs } } }));
-  void request({ method: "markSeen", id, atMs }).catch(() => {});
+  // Not written: the clock goes back, so the dot stays true and the next open tries again.
+  void request({ method: "markSeen", id, atMs }).catch(() => {
+    useApp.setState((s) => {
+      const now = s.conversations[id];
+      if (now?.seenAtMs !== atMs) return {};
+      const { seenAtMs: _unsaved, ...rest } = now;
+      return { conversations: { ...s.conversations, [id]: conversation.seenAtMs === undefined ? rest : { ...rest, seenAtMs: conversation.seenAtMs } } };
+    });
+  });
 }
 
 /** Where each window kept its own "last opened" before the daemon did. */

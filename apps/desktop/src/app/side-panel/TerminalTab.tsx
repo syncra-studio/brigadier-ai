@@ -390,8 +390,10 @@ export function TerminalTab({
   /** Takes the keyboard. */
   active: boolean;
 }) {
-  // Its shell closed for its session's sleep while it showed: a new view opens a new shell.
+  // Its shell closed for its session's sleep: a new view opens a new shell once the tab shows.
   const [wakes, setWakes] = useState(0);
+  const [asleep, setAsleep] = useState(false);
+  if (asleep && active) setAsleep(false);
   const open = useCallback(
     async (cols: number, rows: number): Promise<TerminalInfo> => {
       const conversationId = placeConversation(place);
@@ -424,16 +426,17 @@ export function TerminalTab({
   );
   const reader = useCallback((read: () => string) => noteTabReader(tabId, read), [tabId]);
   // An exit the store missed (it came before the shell's id did) still closes the tab.
-  const onExit = useCallback((_code: number | null, asleep: boolean) => {
-    if (asleep) setWakes((count) => count + 1);
-    else noteShellExit(place, tabId);
+  const onExit = useCallback((_code: number | null, slept: boolean) => {
+    if (!slept) return noteShellExit(place, tabId);
+    setAsleep(true);
+    setWakes((count) => count + 1);
   }, [place, tabId]);
   const onClear = useCallback(() => forgetRestoredOutput(tabId), [tabId]);
   // What the tab showed before it was closed, when it is one brought back.
   const restored = useCallback(() => restoredOutput(tabId), [tabId]);
   return (
     <Suspense fallback={null}>
-      <TerminalView
+      {!asleep && <TerminalView
         key={wakes}
         open={open}
         focus={active}
@@ -442,7 +445,7 @@ export function TerminalTab({
         reader={reader}
         onExit={onExit}
         onClear={onClear}
-      />
+      />}
     </Suspense>
   );
 }

@@ -47,3 +47,13 @@ test("the old per-window opened times reach the daemon once", () => {
   assert.equal(now()?.seenAtMs, 350);
   assert.equal(stored.size, 0);
 });
+
+test("a seen time the daemon didn't take goes back, so the dot stays true and the next open retries", async () => {
+  useApp.setState({ conversations: { [id]: conversation({ finishedAtMs: 300 }) } });
+  // No daemon under node: the request fails.
+  markSeen(id, 300);
+  assert.equal(now()?.seenAtMs, 300, "cleared at once");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(now()?.seenAtMs, 100);
+  assert.equal(dot(), true);
+});
