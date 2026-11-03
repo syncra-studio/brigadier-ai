@@ -63,6 +63,9 @@ test("the live line says the named wait where it said Thinking, and a held block
   const status: StatusInput = { board: { ...emptyBoard("c"), run: "running", runRequest: "r1" }, requestIds: ["r1"], state: "working", thinkingLive: false, compacting: false, quotaWait: null, wait };
   assert.deepEqual(threadStatus(status).head, wait);
   assert.deepEqual(threadStatus({ ...status, wait: null }).head, { text: "Thinking", tone: "busy" });
+  // A thought the stream left open before the wait's call is over: the wait is said (demo12).
+  assert.deepEqual(threadStatus({ ...status, thinkingLive: true }).head, wait);
+  assert.equal(threadStatus({ ...status, thinkingLive: true, wait: null }).head, null);
   // A running `brigadier start … && brigadier wait` has no row: the wait is named (seen live on Claude),
   // while a command with a row of its own still says it there.
   const running = (detail: string): StatusInput => ({ ...status, board: { ...status.board, orchestratorSteps: [{ requestId: "r1", atMs: 1000, position: 1,
@@ -98,4 +101,16 @@ test("a held block a subagent's own jobs hold names that subagent, as on every C
     jobs: { holding: ["b1", "b2"] },
   };
   assert.deepEqual(heldWait(view, [1000], 1000, 1500), { text: "Waiting for subagent: Run sleep then print", tone: "still" });
+});
+
+test("Claude's foreground `brigadier wait <id>` Bash call names its worker on the live line (D106, demo12)", () => {
+  const view: ThreadView = {
+    entries: [
+      call("toolu_start", "Bash", { command: "brigadier start \"Write marks\" --title 'Write timed marks'", description: "Start" }, 1050, "completed"),
+      call("toolu_wait", "Bash", { command: "brigadier wait ad1cb8e7", description: "Wait for the worker to finish", timeout: 600000 }, 1100),
+    ],
+    turns: [turn(1000)],
+    workers: [worker("019a4a8e-0b47-7c3e-9d1f-1234ad1cb8e7", "Write timed marks")],
+  };
+  assert.deepEqual(liveWait(view), { text: "Waiting for Write timed marks", tone: "busy" });
 });

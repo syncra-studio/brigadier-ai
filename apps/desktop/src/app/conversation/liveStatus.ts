@@ -92,9 +92,11 @@ function leadHead({ board, requestIds, thinkingLive, compacting, wait }: StatusI
   // A message on its way has its own row: "Sending message to API work".
   const sending = Object.values(board.peerMessages).some((message) => message.outgoing
     && message.requestId === runRequest && message.state.type === "pending");
-  if (toolRunning || thinkingLive || compacting || streaming || sending) return null;
-  // Its CLI waits on something it started: it doesn't think (D106).
+  if (toolRunning) return null;
+  // Its CLI waits on something it started: it doesn't think (D106). Its call written, a thought
+  // or reply the stream left open is over (seen live on Claude, demo12).
   if (wait) return wait;
+  if (thinkingLive || compacting || streaming || sending) return null;
   if (board.doing) return { text: board.doing, tone: "busy" };
   return { text: board.run === "starting" ? "Starting" : "Thinking", tone: "busy" };
 }
