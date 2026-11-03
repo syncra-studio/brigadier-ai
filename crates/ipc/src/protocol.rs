@@ -2351,6 +2351,10 @@ pub enum TerminalOutput {
     Exited {
         terminal_id: String,
         code: Option<u32>,
+        /// Closed idle because its session went to sleep: the tab stays, and opening it
+        /// again starts a new shell with this one's output above it.
+        #[serde(default)]
+        asleep: bool,
     },
 }
 

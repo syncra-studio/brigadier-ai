@@ -5,6 +5,7 @@ import type { Channel } from "@tauri-apps/api/core";
 import type { BrowserEvent } from "@/ipc/generated";
 import { findState, openFind, useBrowserFind } from "./browserFind";
 import { answerPermission, closePage, faviconFits, openPage, originOf, useBrowsers } from "./browsers";
+import { useApp } from "./store";
 import { type BrowserTabState, CHAT_TAB, restoreSessionTabs, sessionTabs, useSessionTabs } from "./sessionTabs";
 
 test("favicons follow same-document navigations but not other pages", () => {
@@ -133,4 +134,37 @@ test("a site is its scheme, host and port, as the shell names it", () => {
   assert.equal(originOf("http://localhost:8080/"), "http://localhost:8080");
   assert.equal(originOf("about:blank"), null);
   assert.equal(originOf("not a url"), null);
+});
+
+test("a session's sleep closes its Browser pages but the one on screen; the tabs keep their addresses", async () => {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const closed: string[] = [];
+  mockIPC((command, payload) => {
+    if (command === "browser_close") closed.push((payload as { id: string }).id);
+    return null;
+  });
+  const shown: BrowserTabState = { kind: "browser", id: "browser:shown", opener: CHAT_TAB, url: "https://example.com/", title: "" };
+  const behind: BrowserTabState = { kind: "browser", id: "browser:behind", opener: CHAT_TAB, url: "https://example.org/a", title: "" };
+  const elsewhere: BrowserTabState = { kind: "browser", id: "browser:elsewhere", opener: CHAT_TAB, url: "https://example.net/", title: "" };
+  useSessionTabs.setState({ sessions: {
+    sleepy: { tabs: [shown, behind], active: shown.id },
+    awake: { tabs: [elsewhere], active: elsewhere.id },
+  } });
+  const before = useApp.getState();
+  const conversation = (id: string, lifecycle: string) => ({ id, lifecycle }) as unknown as (typeof before.conversations)[string];
+  useApp.setState({
+    selection: { type: "conversation", id: "sleepy" },
+    conversations: { sleepy: conversation("sleepy", "active"), awake: conversation("awake", "active") },
+  });
+  try {
+    for (const tab of [shown, behind, elsewhere]) await openPage(tab.id, tab.url, { x: 0, y: 0, width: 800, height: 600 });
+    useApp.setState(({ conversations }) => ({ conversations: { ...conversations, sleepy: conversation("sleepy", "hibernated") } }));
+    assert.deepEqual(closed, [behind.id]);
+    assert.deepEqual(Object.keys(useBrowsers.getState().pages).toSorted(), [elsewhere.id, shown.id].toSorted());
+    assert.deepEqual(sessionTabs("sleepy").tabs, [shown, behind], "the tabs and their addresses stay");
+  } finally {
+    for (const tab of [shown, behind, elsewhere]) closePage(tab.id);
+    useSessionTabs.setState({ sessions: {} });
+    useApp.setState({ selection: before.selection, conversations: before.conversations });
+  }
 });

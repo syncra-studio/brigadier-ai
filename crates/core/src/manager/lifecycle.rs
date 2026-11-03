@@ -487,6 +487,9 @@ impl SessionManager {
             }
             conv.close_cli().await;
         }
+        if let Some(host) = self.terminal_host.get() {
+            host.close_idle(&id.0);
+        }
         // Reported workers wait idle; they stop too and resume when sent back to work.
         for task in self.core.tasks(&id).await? {
             if !task.state.is_final()

@@ -15,7 +15,12 @@ export function MainTerminalTab({ conversationId, tab, active }: { conversationI
     setExited(false);
     return terminal;
   }, [conversationId, tab.id]);
-  const onExit = useCallback(() => setExited(true), []);
+  // Closed for its session's sleep while it showed: it starts again at once, its output kept.
+  const onExit = useCallback((_code: number | null, asleep: boolean) => {
+    if (!asleep) return setExited(true);
+    endMainTerminal(tab.id);
+    setAttempt((count) => count + 1);
+  }, [tab.id]);
   const onTitle = useCallback((title: string) => changeSessionTab(conversationId, tab.id,
     (current) => current.kind === "terminal" ? { ...current, title } : current), [conversationId, tab.id]);
   const onCwd = useCallback((cwd: string) => changeSessionTab(conversationId, tab.id,
