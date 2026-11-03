@@ -32,10 +32,11 @@ test("a picked model goes first in the order, the others kept after it", () => {
 
 const suggestion = (score: number) => ({ work: "Computer use", row: row("codex", "gpt-6.1-terra", "high"), score, current: "opus", currentScore: 9 });
 
+const kind = (found: GuidanceRow) => ({ work: found.work, rows: [found], shipped: [found], mine: [] });
+
 test("Who picks says the ratings only for a kind they pick", () => {
   const rated = { ...row("claude", "opus", "high"), work: "Adversarial review", reason: "Rated 9.0 of 10 for this work: Claude Code's best model by the ratings." };
   const own = { ...row("claude", "sonnet", "medium"), work: "Rule reading", reason: "Rewrites the rules you type into exact rules and advice." };
-  const kind = (found: GuidanceRow) => ({ work: found.work, rows: [found], shipped: [found], mine: [] });
   assert.equal(automaticLine(kind(rated)), "Automatic: the best-rated models, researched daily");
   assert.equal(automaticLine(kind(own)), "Automatic: set by the app, always a current model");
 });
