@@ -1,0 +1,148 @@
+Why: Respect physical window selection after pointer injection, avoid disabling the front window, and refuse terminating the foreground app or its popup owner.
+
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+index 46762674f..71bf707f5 100644
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -404,28 +404,11 @@ pub fn inject_click_screen(
+              no-foreground contract). Escalate to delivery_mode:\"foreground\"."
+         );
+     }
+-    // Remember who the user had in front so we can re-assert it below.
+-    let prev_fg = unsafe { GetForegroundWindow() };
+     // Make the target non-activatable for the click so click-activation can't
+-    // steal foreground. No z-order raise.
+-    let result = {
+-        let _noact = NoActivateGuard::arm(target_h);
+-        // One synthetic device does all `count` taps (single/double/triple click).
+-        pen_taps(sx, sy, barrel, count)
+-    };
+-    // `WS_EX_NOACTIVATE` is NOT categorical against a Chromium/Electron content
+-    // window that calls `SetForegroundWindow(self)` from its (async) click
+-    // handler. Re-assert the USER's foreground (this restores focus where the
+-    // user left it — it never raises the target). Short settle + repeat to win
+-    // the race against the async self-activation.
+-    unsafe {
+-        if result.is_ok() && !prev_fg.0.is_null() && prev_fg != target_h {
+-            force_foreground_attached(prev_fg);
+-            sleep(Duration::from_millis(12));
+-            force_foreground_attached(prev_fg);
+-        }
+-    }
+-    result
++    // steal foreground. The shared watch attributes activation and yields to
++    // physical window selection; never blindly restore an old foreground.
++    let _noact = NoActivateGuard::arm(target_h);
++    pen_taps(sx, sy, barrel, count)
+ }
+ 
+ /// True when `target`'s top-level root is the window actually visible at screen
+@@ -799,7 +782,6 @@ pub fn inject_drag_screen(
+              — it is occluded by another window. Escalate to delivery_mode:\"foreground\"."
+         );
+     }
+-    let prev_fg = unsafe { GetForegroundWindow() };
+     // Left drag → touch contact (coordinate-routed). Right/barrel drag has no
+     // touch equivalent, so fall back to a pen (rare).
+     let stroke = |()| {
+@@ -809,18 +791,9 @@ pub fn inject_drag_screen(
+             touch_drag(sx0, sy0, sx1, sy1, steps)
+         }
+     };
+-    // Chromium/GTK: pointer-aware, process injection in the background — hold
+-    // non-activatable (no raise), inject, then re-assert the user's foreground.
+-    let r = {
+-        let _noact = NoActivateGuard::arm(target_h);
+-        stroke(())
+-    };
+-    unsafe {
+-        if !prev_fg.0.is_null() && prev_fg != target_h {
+-            force_foreground_attached(prev_fg);
+-        }
+-    }
+-    r
++    // The watch, rather than an unconditional restore, respects user switches.
++    let _noact = NoActivateGuard::arm(target_h);
++    stroke(())
+ }
+ 
+ // (Removed inject_key_cloaked / inject_text_cloaked.) The macOS-aligned
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+index b1d491d0b..e83bc9343 100644
+--- a/crates/platform-windows/src/tools/launch_policy.rs
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -51,6 +51,21 @@ pub(crate) fn is_shared_frame_host(executable: &str) -> bool {
+     executable_name(executable) == "applicationframehost"
+ }
+ 
++pub(crate) fn termination_front_refusal(
++    pid: u32,
++    foreground_pid: Option<u32>,
++    owner_pid: Option<u32>,
++) -> Option<&'static str> {
++    match (foreground_pid, owner_pid) {
++        (Some(front), Some(owner)) if front != 0 && owner != 0 => {
++            (pid == front || pid == owner).then_some(
++                "Terminating this app could close your front window or its owned dialog. No termination was attempted.",
++            )
++        }
++        _ => Some("Windows could not identify the front window and its owner. No termination was attempted."),
++    }
++}
++
+ #[derive(Debug, PartialEq, Eq)]
+ pub(crate) enum TerminationObservation {
+     Terminated,
+@@ -75,6 +90,14 @@ pub(crate) fn termination_observation(
+ mod hosted_termination_tests {
+     use super::*;
+     #[test]
++    fn termination_leaves_the_front_app_and_its_popup_owner_alive() {
++        assert!(termination_front_refusal(42, Some(7), Some(7)).is_none());
++        assert!(termination_front_refusal(42, Some(42), Some(42)).is_some());
++        assert!(termination_front_refusal(42, Some(7), Some(42)).is_some());
++        assert!(termination_front_refusal(42, None, Some(7)).is_some());
++        assert!(termination_front_refusal(42, Some(7), Some(0)).is_some());
++    }
++    #[test]
+     fn each_frame_maps_to_its_own_launched_app_without_owning_the_shared_host() {
+         assert_eq!(
+             confirmed_hosted_app_pid(29628, 28908, Some(29628)),
+diff --git a/crates/platform-windows/src/tools/launch_termination.rs b/crates/platform-windows/src/tools/launch_termination.rs
+index d9b79afb4..8b221f0d3 100644
+--- a/crates/platform-windows/src/tools/launch_termination.rs
++++ b/crates/platform-windows/src/tools/launch_termination.rs
+@@ -76,6 +76,18 @@ pub(super) fn terminate_verified(pid: u32, expected_start: Option<u64>) -> Resul
+     if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
+         return Ok(false);
+     }
++    // Hosted Store windows belong to ApplicationFrameHost at the Win32 level;
++    // use their actual app pid, including the owner of a foreground popup.
++    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOTOWNER};
++    let foreground = unsafe { GetForegroundWindow() };
++    let owner = unsafe { GetAncestor(foreground, GA_ROOTOWNER) };
++    if let Some(reason) = super::launch_policy::termination_front_refusal(
++        pid,
++        crate::win32::window_app_pid(foreground.0 as u64),
++        crate::win32::window_app_pid(owner.0 as u64),
++    ) {
++        return Err(reason.into());
++    }
+     let request = unsafe { TerminateProcess(process.0, 1) };
+     let wait = unsafe { WaitForSingleObject(process.0, 2000) };
+     use super::launch_policy::{termination_observation, TerminationObservation};
+diff --git a/crates/platform-windows/src/uia/fg_bypass.rs b/crates/platform-windows/src/uia/fg_bypass.rs
+index 34e83bd1f..66f1bd8a9 100644
+--- a/crates/platform-windows/src/uia/fg_bypass.rs
++++ b/crates/platform-windows/src/uia/fg_bypass.rs
+@@ -125,5 +125,10 @@ fn make_guard(host_hwnd: isize) -> Option<DisabledHwndGuard> {
+     // cleanly via the AppFrame root.
+     let root = unsafe { GetAncestor(h, GA_ROOT) };
+     let target = if root.0.is_null() { h } else { root };
++    // Disabling the user's foreground window can itself deactivate it. An
++    // already-front target needs no shield against self-activation.
++    if unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } == target {
++        return None;
++    }
+     Some(DisabledHwndGuard::disable(target))
+ }

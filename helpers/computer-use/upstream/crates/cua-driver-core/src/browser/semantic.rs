@@ -709,7 +709,9 @@ fn attributes(node: &Value) -> HashMap<String, String> {
         .and_then(Value::as_array)
         .map(|attrs| {
             attrs
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .filter_map(|pair| {
                     Some((
                         pair[0].as_str()?.to_ascii_lowercase(),

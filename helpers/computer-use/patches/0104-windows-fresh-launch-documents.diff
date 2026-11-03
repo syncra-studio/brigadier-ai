@@ -1,0 +1,258 @@
+Why: request fresh browser windows, exclude pre-existing URL matches, open a unique blank Notepad file and confirm its selected tab, and disclose additional/restored tabs.
+
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+--- a/crates/platform-windows/src/tools/launch_policy.rs
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -144,3 +144,43 @@
+         assert!(!is_settings_process("SystemSettingsAdminFlows.exe"));
+     }
+ }
++
++pub(crate) fn is_notepad_target(target: &str) -> bool {
++    executable_name(target) == "notepad"
++        || target.to_ascii_lowercase().starts_with("microsoft.windowsnotepad_")
++}
++
++pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
++    match executable_name(target).as_str() {
++        "chrome" | "msedge" | "brave" | "chromium" | "vivaldi" | "opera" => Some("--new-window"),
++        "firefox" | "mozilla firefox" => Some("-new-window"),
++        _ => None,
++    }
++}
++
++pub(crate) fn document_title_matches(title: &str, filename: &str) -> bool {
++    let title = title.trim().trim_start_matches('*');
++    let stem = filename.strip_suffix(".txt").unwrap_or(filename);
++    [filename, stem].iter().any(|name| title == *name || title.strip_prefix(name).is_some_and(|tail| tail.starts_with(" - ")))
++}
++
++#[cfg(test)]
++mod fresh_document_tests {
++    use super::*;
++    #[test]
++    fn only_supported_apps_get_fresh_window_flags() {
++        assert_eq!(fresh_window_argument("Microsoft Edge"), Some("--new-window"));
++        assert_eq!(fresh_window_argument("chrome.exe"), Some("--new-window"));
++        assert_eq!(fresh_window_argument("notepad"), None);
++        assert!(is_notepad_target("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"));
++        assert!(is_notepad_target(r"C:\Windows\notepad.exe"));
++        assert!(!is_notepad_target("Notepad++"));
++    }
++    #[test]
++    fn restored_document_titles_cannot_match_the_new_file() {
++        assert!(document_title_matches("brigadier-cu-123.txt - Notepad", "brigadier-cu-123.txt"));
++        assert!(document_title_matches("brigadier-cu-123", "brigadier-cu-123.txt"));
++        assert!(!document_title_matches("my resume - Notepad", "brigadier-cu-123.txt"));
++        assert!(!document_title_matches("brigadier-cu-1234.txt", "brigadier-cu-123.txt"));
++    }
++}
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -130,6 +130,7 @@
+     executable: &str,
+     url: &str,
+     timeout: std::time::Duration,
++    preexisting_windows: std::collections::HashSet<u64>,
+ ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+     let executable = super::launch_policy::executable_name(executable);
+     let url = url.to_owned();
+@@ -145,6 +146,7 @@
+                         continue;
+                     }
+                     for window in crate::win32::list_windows_win32_first(process.pid) {
++                        if preexisting_windows.contains(&window.hwnd) { continue; }
+                         if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                             return None;
+                         }
+@@ -175,3 +177,77 @@
+         assert!(unsafe { matching_document(0, "example.com", false) }.is_err());
+     }
+ }
++
++/// A blank on-disk document bypasses Notepad's restore-only startup. It is the
++/// agent's actual document, reported to the caller; never overwrite an old file.
++pub(super) fn create_notepad_document() -> anyhow::Result<std::path::PathBuf> {
++    let mut nonce = [0u8; 16];
++    getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("Could not create a fresh document name: {error}"))?;
++    let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
++    let path = std::env::temp_dir().join(format!("brigadier-cu-{nonce}.txt"));
++    std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
++    Ok(path)
++}
++
++pub(super) async fn notepad_document_window(filename: String) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
++    tokio::task::spawn_blocking(move || {
++        crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++            "fresh Notepad document verification", std::time::Duration::from_secs(2), "no unverified document",
++            move |cancelled| unsafe {
++                use windows::Win32::UI::Accessibility::{IUIAutomationSelectionItemPattern, UIA_SelectionItemPatternId, UIA_TabItemControlTypeId};
++                let _com = Apartment::new();
++                let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
++                let pids: std::collections::HashSet<_> = crate::win32::list_processes().into_iter()
++                    .filter(|process| super::launch_policy::is_notepad_target(&process.name)).map(|process| process.pid).collect();
++                for window in crate::win32::list_windows_via_win32(None) {
++                    if cancelled.load(std::sync::atomic::Ordering::Acquire) { return None; }
++                    if !pids.contains(&window.pid) { continue; }
++                    let root = automation.ElementFromHandle(HWND(window.hwnd as *mut _)).ok()?;
++                    let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_TabItemControlTypeId.0.into()).ok()?;
++                    let tabs = root.FindAll(TreeScope_Subtree, &condition).ok()?;
++                    if tabs.Length().ok()? == 0 && super::launch_policy::document_title_matches(&window.title, &filename) {
++                        return Some(window); // classic Notepad has no tabs
++                    }
++                    for index in 0..tabs.Length().ok()? {
++                        let tab = tabs.GetElement(index).ok()?;
++                        let name = tab.CurrentName().ok()?.to_string();
++                        if !super::launch_policy::document_title_matches(&name, &filename) { continue; }
++                        let pattern: IUIAutomationSelectionItemPattern = tab.GetCurrentPattern(UIA_SelectionItemPatternId).ok()?.cast().ok()?;
++                        if pattern.CurrentIsSelected().ok()?.as_bool() { return Some(window); }
++                    }
++                }
++                None
++            }
++        ).map_err(|error| anyhow::anyhow!("Fresh document verification stopped because {}", crate::uia::click::deadline_reason(error)))
++    }).await?
++}
++
++pub(super) async fn additional_tabs(hwnd: u64, requested_tabs: usize) -> Option<usize> {
++    tokio::task::spawn_blocking(move || {
++        crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++            "launch tab count", std::time::Duration::from_millis(500), "unknown tab count", move |_| unsafe {
++                use windows::Win32::UI::Accessibility::UIA_TabItemControlTypeId;
++                let _com = Apartment::new();
++                let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
++                let root = automation.ElementFromHandle(HWND(hwnd as *mut _)).ok()?;
++                let condition = automation.CreatePropertyCondition(UIA_ControlTypePropertyId, &UIA_TabItemControlTypeId.0.into()).ok()?;
++                let count = root.FindAll(TreeScope_Subtree, &condition).ok()?.Length().ok()? as usize;
++                Some(count.saturating_sub(requested_tabs))
++            }
++        ).ok().flatten()
++    }).await.ok().flatten()
++}
++
++#[cfg(test)]
++mod fresh_document_tests {
++    use super::*;
++    #[test]
++    fn each_fresh_notepad_file_is_empty_unique_and_never_reuses_a_document() {
++        let first = create_notepad_document().unwrap();
++        let second = create_notepad_document().unwrap();
++        assert_ne!(first, second);
++        assert!(std::fs::read(&first).unwrap().is_empty());
++        std::fs::remove_file(first).unwrap();
++        std::fs::remove_file(second).unwrap();
++    }
++}
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2529,6 +2529,24 @@
+             );
+         }
+ 
++        let fresh_document_path = if urls.is_empty() && extra_args.is_empty()
++            && aumid_for_uwp.as_deref().or(resolved_target.as_deref()).is_some_and(super::launch_policy::is_notepad_target) {
++            match super::launch_browser::create_notepad_document() {
++                Ok(path) => {
++                    extra_args.push(super::browser_target::quote_argument(&path.to_string_lossy()));
++                    Some(path)
++                }
++                Err(error) => return ToolResult::error(format!("No app was launched: a fresh Notepad document could not be created: {error}")),
++            }
++        } else { None };
++        if let Some(flag) = resolved_target.as_deref().and_then(super::launch_policy::fresh_window_argument) {
++            if !extra_args.iter().any(|arg| arg == flag) { extra_args.insert(0, flag.into()); }
++        }
++        // Snapshot native HWNDs before launch. A pre-existing browser window
++        // with the same URL is not proof that this launch opened a fresh one.
++        let preexisting_windows: std::collections::HashSet<u64> = crate::win32::list_windows_via_win32(None)
++            .into_iter().map(|window| window.hwnd).collect();
++
+         // Single launch path. `display` is the human-readable identifier
+         // we report in the success header; for the packaged path it's
+         // the AUMID, which is more informative than the display name.
+@@ -2904,7 +2922,7 @@
+                     if remaining.is_zero() {
+                         break;
+                     }
+-                    found = match super::launch_browser::window_showing_url(executable, url, remaining).await {
++                    found = match super::launch_browser::window_showing_url(executable, url, remaining, preexisting_windows.clone()).await {
+                         Ok(window) => window,
+                         Err(error) => return ToolResult::error(format!(
+                             "Launch was requested in {display}, but its URL/window could not be confirmed: {error}. Inspect that browser with list_windows/get_window_state before retrying."
+@@ -2945,10 +2963,33 @@
+             }
+         }
+ 
++        if let Some(path) = fresh_document_path.as_ref() {
++            let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
++            for _ in 0..20 {
++                match super::launch_browser::notepad_document_window(filename.clone()).await {
++                    Ok(Some(window)) => {
++                        resolved_pid = window.pid;
++                        windows_json = vec![json!({
++                            "window_id": window.hwnd, "title": window.title,
++                            "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
++                            "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
++                        })];
++                        break;
++                    }
++                    Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
++                    Err(_) => break,
++                }
++            }
++            if windows_json.is_empty() {
++                return ToolResult::text(format!("Launch requested for {display}. Notepad has not exposed the fresh document {} as its selected tab. Opening is unconfirmed; no restored document window is returned. Inspect list_windows before retrying.", path.display()))
++                    .with_structured(json!({"code": "fresh_document_unconfirmed", "launch_confirmed": false, "launched_pid": pid, "document_path": path.to_string_lossy(), "windows": []}));
++            }
++        }
++
+         // Retain the activation's real app pid while returning its shared frame
+         // HWND. Window attribution validates that pair through the hosted
+         // CoreWindow. Only the app process may become runtime-owned/killable.
+-        if aumid_for_uwp.is_some() {
++        if aumid_for_uwp.is_some() && windows_json.is_empty() {
+             for _ in 0..10 {
+                 let host =
+                     tokio::task::spawn_blocking(move || crate::win32::resolve_uwp_host_window(pid))
+@@ -3237,6 +3278,19 @@
+             .await;
+         }
+ 
++        let mut restored_content_note = String::new();
++        if web_launch || fresh_document_path.is_some() {
++            for window in &windows_json {
++                if let Some(hwnd) = window["window_id"].as_u64() {
++                    match super::launch_browser::additional_tabs(hwnd, urls.len().max(1)).await {
++                        Some(count) if count > 0 => restored_content_note.push_str(&format!(" Window {hwnd} also exposes {count} additional tab(s), which may be restored content. Only the requested document was confirmed; do not read the other tabs.")),
++                        None => restored_content_note.push_str(" Windows did not expose a reliable tab count; other restored content could not be ruled out."),
++                        _ => {}
++                    }
++                }
++            }
++        }
++
+         let running = !windows_json.is_empty()
+             || (pid != 0
+                 && tokio::task::spawn_blocking(move || {
+@@ -3251,6 +3305,10 @@
+             .map(|guard| guard.report())
+             .unwrap_or(("Foreground preservation was not confirmed.", true));
+         let mut summary = format!("Launch requested for {display} (pid {pid}). {foreground_note}");
++        summary.push_str(&restored_content_note);
++        if let Some(path) = fresh_document_path.as_ref() {
++            summary.push_str(&format!(" Fresh document: {}.", path.display()));
++        }
+         if !running {
+             summary.push_str(" Windows did not expose a running app or its window; opening could not be confirmed.");
+         }
+@@ -3290,6 +3348,8 @@
+                 pid != 0 && foreground_pid == pid
+             },
+             "foreground_note": foreground_note,
++            "document_path": fresh_document_path.as_ref().map(|path| path.to_string_lossy()),
++            "restored_content_note": restored_content_note,
+             "windows":   windows_json,
+         });
+         let mut result = ToolResult::text(summary).with_structured(structured);

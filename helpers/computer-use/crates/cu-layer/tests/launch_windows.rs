@@ -31,7 +31,7 @@ mod windows_dispatch {
                     "page",
                     json!({
                         "action": action,
-                        "pid": std::process::id(),
+                        "pid": u32::MAX, // Invalid fixture PID; do not target the authorization process.
                         "window_id": 0,
                         "target_url_contains": "example.com"
                     }),
@@ -54,7 +54,7 @@ mod windows_dispatch {
                 "page",
                 json!({
                     "action": "get_text",
-                    "pid": std::process::id(),
+                    "pid": u32::MAX, // Invalid fixture PID; do not target the authorization process.
                     "window_id": 0,
                     "cdp_port": 9222,
                     "target_url_contains": "example.com"

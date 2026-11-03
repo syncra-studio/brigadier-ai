@@ -101,13 +101,15 @@ pub fn delivery_mode_schema() -> Value {
 pub fn would_be_silently_dropped(hwnd: u64, kind: EventKind) -> bool {
     use EventKind::*;
     if crate::input::is_chromium_target_window(hwnd) {
+        // TextInput has a separate exact renderer-child WM_CHAR route; it
+        // refuses absent/ambiguous renderers before sending anything.
         // Chromium's input thread architecture requires SendInput-queue
         // origin for pointer and keyboard events (#1623). Posted WM_CHAR and
         // plain key messages can return success while a background renderer
         // receives nothing, so they must be refused as honestly as chords.
         return matches!(
             kind,
-            MouseClick | MouseMove | MouseScroll | Keystroke | KeyCombo | TextInput
+            MouseClick | MouseMove | MouseScroll | Keystroke | KeyCombo
         );
     }
     if crate::input::has_chromium_descendant(hwnd) {

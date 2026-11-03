@@ -1,0 +1,189 @@
+Why: Route Chromium caret text to its unique visible renderer child after guarded exact-field focus, without a whole-value write.
+
+--- a/crates/platform-windows/src/input/keyboard.rs
++++ b/crates/platform-windows/src/input/keyboard.rs
+@@ -222,6 +222,48 @@
+     }
+ }
+ 
++/// Select only a visible renderer under the addressed window and field.
++/// Ambiguous renderers are refused rather than typing into another tab.
++pub fn chromium_text_target(hwnd: u64, rect: Option<(i32, i32, i32, i32)>) -> Option<u64> {
++    struct Scan {
++        rect: Option<(i32, i32, i32, i32)>,
++        renderers: Vec<u64>,
++    }
++    unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
++        let scan = &mut *(data.0 as *mut Scan);
++        if class_name(h).as_deref() != Some("Chrome_RenderWidgetHostHWND")
++            || !windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(h).as_bool()
++        {
++            return TRUE;
++        }
++        if let Some((x, y, w, hgt)) = scan.rect {
++            let mut r = windows::Win32::Foundation::RECT::default();
++            if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
++                || x + w / 2 < r.left
++                || x + w / 2 >= r.right
++                || y + hgt / 2 < r.top
++                || y + hgt / 2 >= r.bottom
++            {
++                return TRUE;
++            }
++        }
++        scan.renderers.push(h.0 as usize as u64);
++        TRUE
++    }
++    let mut scan = Scan {
++        rect,
++        renderers: Vec::new(),
++    };
++    unsafe {
++        let _ = EnumChildWindows(
++            HWND(hwnd as *mut _),
++            Some(collect),
++            LPARAM(&mut scan as *mut _ as isize),
++        );
++    }
++    (scan.renderers.len() == 1).then(|| scan.renderers[0])
++}
++
+ /// Resolve a real editor, without UIA SetFocus or activating the window.
+ /// A token's native handle wins; otherwise its rectangle scopes candidates.
+ pub fn background_text_target(
+@@ -237,6 +279,13 @@
+         if belongs(h) && class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+             return Ok(native);
+         }
++    }
++    if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd)
++    {
++        if let Some(renderer) = chromium_text_target(hwnd, rect) {
++            return Ok(renderer);
++        }
++        bail!("No unique visible Chromium renderer contains the addressed text field. No text was sent and no other tab was targeted.");
+     }
+     struct Scan {
+         rect: Option<(i32, i32, i32, i32)>,
+@@ -1190,20 +1239,68 @@
+     use super::*;
+     use windows::core::w;
+     use windows::Win32::UI::Controls::{EM_GETMODIFY, EM_SETSEL};
+-    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextW, PeekMessageW, SendMessageW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_POPUP, WM_SETTEXT};
++    use windows::Win32::UI::WindowsAndMessaging::{
++        CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextW, PeekMessageW,
++        SendMessageW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETTEXT, WS_CHILD,
++        WS_POPUP,
++    };
+ 
+     #[test]
+     fn character_insertion_preserves_surrounding_text_and_marks_edit_modified() {
+         unsafe {
+-            let parent = CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!(""), WS_POPUP, 0,0,200,100, None, None, None, None).unwrap();
+-            let edit = CreateWindowExW(WINDOW_EX_STYLE(0), w!("EDIT"), w!(""), WS_CHILD | WINDOW_STYLE(4), 0,0,180,80, parent, None, None, None).unwrap();
+-            SendMessageW(edit, WM_SETTEXT, WPARAM(0), LPARAM(w!("abcdef").as_ptr() as isize));
++            let parent = CreateWindowExW(
++                WINDOW_EX_STYLE(0),
++                w!("STATIC"),
++                w!(""),
++                WS_POPUP,
++                0,
++                0,
++                200,
++                100,
++                None,
++                None,
++                None,
++                None,
++            )
++            .unwrap();
++            let edit = CreateWindowExW(
++                WINDOW_EX_STYLE(0),
++                w!("EDIT"),
++                w!(""),
++                WS_CHILD | WINDOW_STYLE(4),
++                0,
++                0,
++                180,
++                80,
++                parent,
++                None,
++                None,
++                None,
++            )
++            .unwrap();
++            SendMessageW(
++                edit,
++                WM_SETTEXT,
++                WPARAM(0),
++                LPARAM(w!("abcdef").as_ptr() as isize),
++            );
+             SendMessageW(edit, EM_SETSEL, WPARAM(2), LPARAM(4));
+-            assert_eq!(background_text_target(parent.0 as usize as u64, Some(edit.0 as usize as u64), None, true).unwrap(), edit.0 as usize as u64);
++            assert_eq!(
++                background_text_target(
++                    parent.0 as usize as u64,
++                    Some(edit.0 as usize as u64),
++                    None,
++                    true
++                )
++                .unwrap(),
++                edit.0 as usize as u64
++            );
+             post_insert_text(edit.0 as usize as u64, "X😀", 0).unwrap();
+             let mut message = MSG::default();
+-            while PeekMessageW(&mut message, edit, WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
+-            let mut text = [0u16;64];
++            while PeekMessageW(&mut message, edit, WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
++                DispatchMessageW(&message);
++            }
++            let mut text = [0u16; 64];
+             let n = GetWindowTextW(edit, &mut text);
+             assert_eq!(String::from_utf16(&text[..n as usize]).unwrap(), "abX😀ef");
+             assert_ne!(SendMessageW(edit, EM_GETMODIFY, WPARAM(0), LPARAM(0)).0, 0);
+--- a/crates/platform-windows/src/input/delivery.rs
++++ b/crates/platform-windows/src/input/delivery.rs
+@@ -101,13 +101,15 @@
+ pub fn would_be_silently_dropped(hwnd: u64, kind: EventKind) -> bool {
+     use EventKind::*;
+     if crate::input::is_chromium_target_window(hwnd) {
++        // TextInput has a separate exact renderer-child WM_CHAR route; it
++        // refuses absent/ambiguous renderers before sending anything.
+         // Chromium's input thread architecture requires SendInput-queue
+         // origin for pointer and keyboard events (#1623). Posted WM_CHAR and
+         // plain key messages can return success while a background renderer
+         // receives nothing, so they must be refused as honestly as chords.
+         return matches!(
+             kind,
+-            MouseClick | MouseMove | MouseScroll | Keystroke | KeyCombo | TextInput
++            MouseClick | MouseMove | MouseScroll | Keystroke | KeyCombo
+         );
+     }
+     if crate::input::has_chromium_descendant(hwnd) {
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -4862,11 +4862,19 @@
+                     None => read_focused_value_uia(verify_pid),
+                 };
+                 let before = read(verify_idx);
+-                let post_res = crate::input::keyboard::post_insert_text(
+-                    text_target,
+-                    &text_for_post,
+-                    _delay_ms.min(200),
+-                );
++                let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || -> anyhow::Result<()> {
++                    // A renderer HWND is shared by DOM controls. Focus exactly the
++                    // token's editor while activation is shielded, then deliver to
++                    // that renderer rather than the Chrome_WidgetWin_1 frame.
++                    if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
++                        if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
++                            element.focus_element()?;
++                        } else {
++                            anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
++                        }
++                    }
++                    crate::input::keyboard::post_insert_text(text_target, &text_for_post, _delay_ms.min(200))
++                });
+                 std::thread::sleep(std::time::Duration::from_millis(40));
+                 let after = read(verify_idx);
+                 let observed = post_message_readback_observed(

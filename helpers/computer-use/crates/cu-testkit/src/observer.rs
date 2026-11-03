@@ -678,3 +678,9 @@ mod tests {
         assert!(delta.passed().is_empty());
     }
 }
+
+#[cfg(target_os = "windows")]
+#[path = "observer_windows.rs"]
+mod windows_native;
+#[cfg(target_os = "windows")]
+pub use windows_native::WindowsObserver as NativeObserver;

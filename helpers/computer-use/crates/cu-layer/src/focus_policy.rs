@@ -13,7 +13,10 @@
 //!   does send back an app that was already running: one the action handed
 //!   a document or a link to, which macOS brought forward;
 //! - R2: nothing is sent back right after the user's own keyboard, pointer
-//!   or trackpad input, unless the action itself launched the app;
+//!   or trackpad input, unless the action itself launched the app. A target
+//!   window rising over the user's while their app stays in front is only
+//!   left there after a mouse press (a Command-click raises a window without
+//!   switching apps): typing or moving the pointer can't raise it;
 //! - R3: system prompts and panels (a password or Touch ID prompt, a
 //!   permission or notification alert, the Dock, Spotlight) stay in front;
 //! - R4: only regular apps are sent back, never agents and panels.
@@ -70,6 +73,10 @@ pub trait Facts: Send + Sync {
     /// Seconds since the last keyboard, pointer or trackpad event from the
     /// hardware (events the helper posts to apps don't count).
     fn secs_since_user_input(&self) -> f64;
+    /// Seconds since the last mouse-button press from the hardware.
+    fn secs_since_mouse_down(&self) -> f64 {
+        self.secs_since_user_input()
+    }
 }
 
 /// Why a restore is left out, or `None` when it may run.
@@ -116,11 +123,12 @@ fn request_restore(request: &platform_macos::focus_steal::RestoreRequest) -> Res
 #[cfg(target_os = "macos")]
 pub fn allow(request: &platform_macos::focus_steal::RestoreRequest, facts: &dyn Facts) -> bool {
     let app = facts.app(request.activated_pid);
-    match refusal(
-        &request_restore(request),
-        &app,
-        facts.secs_since_user_input(),
-    ) {
+    let input = if request.kind == platform_macos::focus_steal::RestoreKind::WindowOrder {
+        facts.secs_since_mouse_down()
+    } else {
+        facts.secs_since_user_input()
+    };
+    match refusal(&request_restore(request), &app, input) {
         None => true,
         Some(reason) => {
             tracing::info!(
@@ -183,6 +191,19 @@ impl Facts for System {
         const HID_SYSTEM_STATE: i32 = 1;
         const ANY_INPUT_EVENT: u32 = u32::MAX;
         unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT) }
+    }
+
+    fn secs_since_mouse_down(&self) -> f64 {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+        }
+        const HID_SYSTEM_STATE: i32 = 1;
+        // Left, right and other mouse down.
+        [1u32, 3, 25]
+            .into_iter()
+            .map(|kind| unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, kind) })
+            .fold(f64::INFINITY, f64::min)
     }
 }
 

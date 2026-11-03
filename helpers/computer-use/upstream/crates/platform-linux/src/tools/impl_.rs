@@ -1907,7 +1907,11 @@ fn spawn_launch_command(cmd: &str, additional_arguments: &[String]) -> std::io::
         // ScreenReaderEnabled setting (which can launch Orca). Native
         // toolkits ignore these when they do not need them.
         .env("ACCESSIBILITY_ENABLED", "1")
-        .env("NO_AT_BRIDGE", "0");
+        .env("NO_AT_BRIDGE", "0")
+        // A startup id whose user time (_TIME1) predates every user action: window managers
+        // with focus-stealing prevention (mutter, KWin) map the app's window behind the
+        // user's instead of focusing it. Toolkits forward it to an already running instance.
+        .env("DESKTOP_STARTUP_ID", launch_startup_id());
     if chromium_family_program(prog)
         && !rest
             .iter()
@@ -1919,6 +1923,12 @@ fn spawn_launch_command(cmd: &str, additional_arguments: &[String]) -> std::io::
     let pid = child.id();
     reap_in_background(child);
     Ok(pid)
+}
+
+fn launch_startup_id() -> String {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("cua-driver-{}-{sequence}_TIME1", std::process::id())
 }
 
 /// Collect a launched child's exit status in the background.
@@ -2066,6 +2076,13 @@ impl Tool for LaunchAppTool {
                 .into_iter()
                 .map(|w| w.xid)
                 .collect();
+        // The user's front window, so a window manager that focuses the new window anyway
+        // can be undone and reported (X11 only; None elsewhere).
+        let focus_before =
+            tokio::task::spawn_blocking(crate::input::focus_guard::FocusSnapshot::capture)
+                .await
+                .ok()
+                .flatten();
         let result = tokio::task::spawn_blocking(
             move || -> anyhow::Result<(String, Option<u32>, String)> {
                 // Open URLs via xdg-open.
@@ -2172,16 +2189,41 @@ impl Tool for LaunchAppTool {
                     .unwrap_or_else(|_| LaunchedWindows::default());
                     let windows: Vec<Value> =
                         resolved.windows.iter().map(window_record_json).collect();
+                    // Hand the front back only from the launched app: the user may have
+                    // switched windows during the wait for its window.
+                    let launched: Vec<u32> = [Some(launcher_pid), resolved.pid]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    let focus = match focus_before {
+                        Some(snapshot) => tokio::task::spawn_blocking(move || {
+                            snapshot
+                                .front_may_be_taken_by(&launched)
+                                .then(|| snapshot.restore_if_changed(None))
+                        })
+                        .await
+                        .ok()
+                        .flatten(),
+                        None => None,
+                    };
                     let mut text = message;
                     let mut structured = json!({
                         "pid": resolved.pid,
                         "bundle_id": Value::Null,
                         "name": name,
                         "running": resolved.pid.is_some(),
-                        "active": false,
+                        "active": focus.as_ref().is_some_and(|f| f.changed && !f.restored),
                         "windows": windows,
                         "launcher_pid": launcher_pid,
                     });
+                    if let Some(focus) = focus.filter(|f| f.changed) {
+                        text.push_str(&focus.summary());
+                        if let (Some(target), Value::Object(fields)) =
+                            (structured.as_object_mut(), focus.to_json())
+                        {
+                            target.extend(fields);
+                        }
+                    }
                     if resolved.handed_off {
                         match resolved.pid {
                             Some(pid) => {
@@ -3446,7 +3488,13 @@ fn key_route_result(action: &str, route: KeyRoute, mode_label: &str) -> ToolResu
                      did not confirm the last key; the keys may not have landed.",
                 );
             }
-            text.push_str(&report.delivery_notes());
+            // On a line of its own: an unconfirmed reply's first line is
+            // replaced by the honest summary, and the focus note must stay.
+            let notes = report.delivery_notes();
+            if !notes.trim().is_empty() {
+                text.push('\n');
+                text.push_str(notes.trim());
+            }
             ToolResult::text(text).with_structured(structured)
         }
         KeyRoute::Synthetic | KeyRoute::Terminal => {
@@ -3771,8 +3819,13 @@ impl PointerRoute {
                 text.push(' ');
                 text.push_str(&foreign.describe());
             }
+            // Own line: see `mpx_focus_note`.
             if let Some(guard) = &effect.focus_guard {
-                text.push_str(&guard.summary());
+                let summary = guard.summary();
+                if !summary.trim().is_empty() {
+                    text.push('\n');
+                    text.push_str(summary.trim());
+                }
             }
         }
         text
@@ -3796,7 +3849,7 @@ impl PointerRoute {
             ),
             Self::Mpx(effect) if effect.landed() => format!(
                 "(delivery_mode={mode_label}, path={}, focus {}); {}the screen around the \
-                 point changed ({:.1}% of the region) — the action landed.",
+                 point changed ({:.1}% of the region) — the action landed.{}",
                 crate::input::MPX_POINTER_PATH,
                 if effect.focus_unchanged {
                     "untouched"
@@ -3808,12 +3861,13 @@ impl PointerRoute {
                 } else {
                     String::new()
                 },
-                effect.region_diff_pct.unwrap_or(0.0)
+                effect.region_diff_pct.unwrap_or(0.0),
+                mpx_focus_note(effect)
             ),
             Self::Mpx(effect) => format!(
                 "(delivery_mode={mode_label}, path={}, focus {}); real button events were \
                  delivered but the screen around the point did not visibly change \
-                 ({}) — confirm with a screenshot.",
+                 ({}) — confirm with a screenshot.{}",
                 crate::input::MPX_POINTER_PATH,
                 if effect.focus_unchanged {
                     "untouched"
@@ -3823,7 +3877,8 @@ impl PointerRoute {
                 effect
                     .region_diff_pct
                     .map(|pct| format!("{pct:.2}% of the region"))
-                    .unwrap_or_else(|| "region capture unavailable".to_owned())
+                    .unwrap_or_else(|| "region capture unavailable".to_owned()),
+                mpx_focus_note(effect)
             ),
             _ => format!(
                 "(delivery_mode={mode_label}{}); not verified — confirm with a screenshot.",
@@ -3831,6 +3886,28 @@ impl PointerRoute {
                     .map(|p| format!(", path={p}"))
                     .unwrap_or_default()
             ),
+        }
+    }
+}
+
+/// The focus move a real press caused, on a line of its own: the
+/// parenthesised route details are not shown to every caller, and an
+/// unconfirmed reply's first line is replaced by the honest summary.
+fn mpx_focus_note(effect: &crate::input::PointerEffect) -> &'static str {
+    if effect.focus_unchanged {
+        return "";
+    }
+    // "Restored" only when the guard found nothing still moved; when it did,
+    // its own summary says what moved and whether restoring held.
+    match &effect.focus_guard {
+        Some(guard) if guard.changed => "",
+        Some(_) => {
+            "\nThe window manager moved the desktop focus to this window for the press; it \
+             was restored to the previous window (focus_outcome=restored)."
+        }
+        None => {
+            "\nThe window manager moved the desktop focus to this window for the press; \
+             whether it was restored could not be checked."
         }
     }
 }
@@ -8327,7 +8404,12 @@ fn type_text_mpx_result(
              not confirm the last key; the text may not have landed.",
         );
     }
-    text.push_str(&report.delivery_notes());
+    // Own line: see `key_route_result`.
+    let notes = report.delivery_notes();
+    if !notes.trim().is_empty() {
+        text.push('\n');
+        text.push_str(notes.trim());
+    }
     let result = if report.skipped_characters.is_empty() {
         ToolResult::text(text)
     } else {
@@ -9018,6 +9100,19 @@ impl Tool for HotkeyTool {
             )
             .await;
         }
+        // A chord addressed to a window whose menu item carries it as its shortcut is fired
+        // through that item's accessibility action: background without a virtual keyboard,
+        // which Xvfb and most sessions without /dev/uinput access can't create.
+        if !delivery.is_foreground()
+            && !crate::wayland::is_wayland()
+            && resolved_element_index.is_none()
+            && args.get("x").is_none()
+            && args.get("y").is_none()
+        {
+            if let Some(result) = menu_shortcut_hotkey(pid, xid, &key, &mods).await {
+                return result;
+            }
+        }
         if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
             return refusal;
         }
@@ -9252,6 +9347,78 @@ impl Tool for HotkeyTool {
             Err(e) => ToolResult::error(format!("Task error: {e}")),
         }
     }
+}
+
+/// [`HotkeyTool`]'s menu-shortcut route: `None` when no single menu item of
+/// the window carries the chord, so the keyboard routes decide.
+async fn menu_shortcut_hotkey(
+    pid: u32,
+    xid: u64,
+    key: &str,
+    mods: &[String],
+) -> Option<ToolResult> {
+    use cua_driver_core::action_record::{
+        ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, ActualDelivery,
+        EvidenceKind, RequestedDelivery,
+    };
+    let chord = [mods, &[key.to_owned()]].concat().join("+");
+    let (key, mods, chord_for_task) = (key.to_owned(), mods.to_vec(), chord.clone());
+    let outcome = tokio::task::spawn_blocking(move || {
+        let modifiers: Vec<&str> = mods.iter().map(String::as_str).collect();
+        let (path, enabled) =
+            crate::atspi::native::menu_path_for_shortcut_in(pid, xid, &key, &modifiers)
+                .ok()
+                .flatten()?;
+        if !enabled {
+            return Some(Err(anyhow::anyhow!(
+                "{chord_for_task} is the shortcut of {}, which is disabled right now, so \
+                 nothing was sent",
+                path.join(" > ")
+            )));
+        }
+        Some(
+            crate::input::focus_guard::guarded(Some(pid), || {
+                crate::atspi::native::invoke_menu_path_in(pid, xid, &path)
+            })
+            .map(|((), guard)| (path, guard))
+            .map_err(|error| anyhow::anyhow!("its menu item could not be invoked: {error}")),
+        )
+    })
+    .await
+    .ok()??;
+    Some(match outcome {
+        Ok((path, guard)) => attach_focus_guard(
+            ToolResult::text(format!(
+                "Pressed {chord} through its menu item {} (accessibility action, background, \
+                 focus untouched); verify the command's effect from fresh state.",
+                path.join(" > ")
+            ))
+            .with_structured(json!({
+                "path": "ax_menu_shortcut",
+                "menu_path": path,
+                "effect": "unverifiable",
+                "delivery_mode": "background",
+            }))
+            .with_action_record(
+                ActionExecutionRecord::builder(
+                    ActionEffect::Unverifiable,
+                    ActionTransport::LinuxAtSpiAction,
+                    RequestedDelivery::Background,
+                )
+                .actual_delivery(ActualDelivery::Background)
+                .evidence(ActionEvidence {
+                    kind: EvidenceKind::NativeApiResult,
+                    detail:
+                        "The chord's menu item resolved uniquely and AT-SPI accepted its action"
+                            .into(),
+                })
+                .build()
+                .expect("menu shortcut record is valid"),
+            ),
+            guard.as_ref(),
+        ),
+        Err(error) => menu_refusal(format!("hotkey: {error}")),
+    })
 }
 
 // ── set_value ─────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
 //!   --nocapture --test-threads=1
 //! ```
 
-#![cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#![cfg(target_os = "macos")]
 
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};

@@ -1,0 +1,61 @@
+Why: Bound the browser signature check (15 s, the child killed on expiry) and the browser command-line query (10 s, kill_on_drop) so a slow revocation check or WMI query cannot stall launch_app or leave a PowerShell process behind.
+
+diff --git a/crates/platform-windows/src/browser_platform.rs b/crates/platform-windows/src/browser_platform.rs
+index 89aabf314..0829e7cc0 100644
+--- a/crates/platform-windows/src/browser_platform.rs
++++ b/crates/platform-windows/src/browser_platform.rs
+@@ -467,7 +467,34 @@ fn authenticode_output(executable: &std::path::Path) -> std::io::Result<std::pro
+         // A windowless helper would otherwise get a new, activated console.
+         .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+         .stdin(Stdio::null())
+-        .output()
++        .stdout(Stdio::piped())
++        .stderr(Stdio::piped())
++        .spawn()
++        .and_then(|child| wait_with_deadline(child, Duration::from_secs(15)))
++}
++
++/// A slow certificate revocation check must not stall the calling tool.
++/// Its output is a few short lines, so both pipes hold it until exit.
++fn wait_with_deadline(
++    mut child: std::process::Child,
++    limit: Duration,
++) -> std::io::Result<std::process::Output> {
++    let deadline = std::time::Instant::now() + limit;
++    while child.try_wait()?.is_none() {
++        if std::time::Instant::now() >= deadline {
++            let _ = child.kill();
++            let _ = child.wait();
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::TimedOut,
++                format!(
++                    "the signature check did not finish within {} s",
++                    limit.as_secs()
++                ),
++            ));
++        }
++        std::thread::sleep(Duration::from_millis(20));
++    }
++    child.wait_with_output()
+ }
+ 
+ /// Result of probing one path for write-class rights held by the calling
+@@ -837,8 +864,17 @@ pub(crate) async fn browser_command_line(pid: u32) -> Result<String, BrowserRefu
+         .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+         .stdin(Stdio::null())
+         .stderr(Stdio::null())
+-        .output()
++        // A caller's own deadline drops this future; the child must not outlive it.
++        .kill_on_drop(true)
++        .output();
++    let output = tokio::time::timeout(Duration::from_secs(10), output)
+         .await
++        .unwrap_or_else(|_| {
++            Err(std::io::Error::new(
++                std::io::ErrorKind::TimedOut,
++                "the process query did not finish within 10 s",
++            ))
++        })
+         .map_err(|error| {
+             refusal(
+                 BrowserRefusalCode::BrowserRouteUnavailable,

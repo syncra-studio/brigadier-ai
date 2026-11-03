@@ -1575,7 +1575,7 @@ pub fn windows_integrity_message(own: u32, target: u32) -> Option<&'static str> 
     if target <= own {
         None
     } else if target >= 0x3000 {
-        Some("This window runs as administrator and cannot be read or controlled from a normal session. Open the app without administrator privileges, or restart the computer-use helper as administrator.")
+        Some("This window runs as administrator and cannot be read or controlled here.\nHint: open the app without administrator privileges, or restart the computer-use helper as administrator.")
     } else {
         Some("This window runs with higher privileges than the computer-use helper and cannot be read or controlled from this session. Open the app with the same privileges as the helper.")
     }
@@ -1592,6 +1592,11 @@ mod windows_integrity_tests {
         assert!(windows_integrity_message(0x3000, 0x3000).is_none());
         let admin = windows_integrity_message(0x2000, 0x3000).unwrap();
         assert!(admin.contains("runs as administrator"));
+        assert_eq!(
+            admin.split("\nHint:").next().unwrap().matches('.').count(),
+            1
+        );
+        assert!(admin.contains("\nHint:"));
         assert!(admin.contains("cannot be read or controlled"));
         assert!(admin.contains("restart the computer-use helper as administrator"));
         let restricted = windows_integrity_message(0x1000, 0x2000).unwrap();
@@ -1656,9 +1661,13 @@ pub fn filter_tree_markdown(markdown: &str, query: &str) -> String {
         }
     }
     let mut result = String::new();
+    let mut kept_depths = vec![0; lines.len()];
     for (index, line) in lines.iter().enumerate() {
         if keep[index] {
-            result.push_str(line);
+            let depth = parents[index].map_or(0, |parent| kept_depths[parent] + 1);
+            kept_depths[index] = depth;
+            result.push_str(&"  ".repeat(depth));
+            result.push_str(line.trim_start_matches(' '));
             result.push('\n');
         }
     }
@@ -1728,7 +1737,7 @@ mod query_row_tests {
         let markdown = "- [0] Root\n  - [1] Old branch\n    - [2] Old parent\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n";
         assert_eq!(
             filter_tree_markdown(markdown, "needle"),
-            "- [0] Root\n  - [3] New branch\n      - [4] Needle\n      - [5] Needle again\n"
+            "- [0] Root\n  - [3] New branch\n    - [4] Needle\n    - [5] Needle again\n"
         );
         assert_eq!(filter_tree_markdown(markdown, "absent"), "");
     }
@@ -1741,5 +1750,324 @@ mod query_row_tests {
             filter_tree_markdown("- [0] Root\n  - Text \"First Second\"\n", "First\r\nSecond"),
             "- [0] Root\n  - Text \"First Second\"\n"
         );
+    }
+}
+
+/// The only writable Settings operation: close one exact window, never an
+/// element, pixel, modified click, or batch alias of a different input action.
+pub fn windows_settings_close_request(tool: &str, args: &Value) -> bool {
+    let absent = |key: &str| args.get(key).is_none_or(Value::is_null);
+    let empty_modifiers =
+        |key: &str| absent(key) || args[key].as_array().is_some_and(Vec::is_empty);
+    tool == "click"
+        && args["action"] == "close"
+        && args["pid"]
+            .as_u64()
+            .is_some_and(|pid| pid > 0 && u32::try_from(pid).is_ok())
+        && args["window_id"].as_u64().is_some_and(|id| id > 0)
+        && ["element_token", "element_index", "x", "y", "capture_id"]
+            .iter()
+            .all(|key| absent(key))
+        && (absent("from_zoom") || args["from_zoom"] == false)
+        && (absent("button") || args["button"] == "left")
+        && (absent("count") || args["count"] == 1)
+        && (absent("scope") || args["scope"] == "window")
+        && (absent("delivery_mode") || args["delivery_mode"] == "background")
+        && empty_modifiers("modifier")
+        && empty_modifiers("modifiers")
+}
+
+#[cfg(test)]
+mod windows_settings_close_tests {
+    use super::*;
+    #[test]
+    fn close_requires_an_exact_unmodified_window_request() {
+        let base = json!({"pid":42,"window_id":99,"action":"close"});
+        assert!(windows_settings_close_request("click", &base));
+        for tool in [
+            "double_click",
+            "right_click",
+            "press_key",
+            "type_text",
+            "invoke_menu",
+        ] {
+            assert!(!windows_settings_close_request(tool, &base));
+        }
+        for (field, value) in [
+            ("element_token", json!("s1:2")),
+            ("element_index", json!(2)),
+            ("x", json!(0)),
+            ("y", json!(0)),
+            ("capture_id", json!("capture")),
+            ("from_zoom", json!(true)),
+            ("button", json!("right")),
+            ("count", json!(2)),
+            ("modifier", json!(["ctrl"])),
+            ("modifiers", json!(["alt"])),
+            ("scope", json!("desktop")),
+            ("delivery_mode", json!("foreground")),
+            ("pid", json!(0)),
+            ("window_id", json!(0)),
+            ("action", json!("invoke")),
+        ] {
+            let mut args = base.clone();
+            args[field] = value;
+            assert!(!windows_settings_close_request("click", &args), "{args}");
+        }
+        for field in ["pid", "window_id"] {
+            let mut args = base.clone();
+            args.as_object_mut().unwrap().remove(field);
+            assert!(!windows_settings_close_request("click", &args));
+        }
+    }
+}
+
+/// Windows traversal facts not represented by the shared time/node budget.
+/// Zero counters mean every discovered subtree was visited; fallback sources
+/// which cannot establish authoritative coverage remain explicitly partial.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WindowsReadCoverage {
+    pub depth_cuts: usize,
+    pub provider_errors: usize,
+    pub source_partial: bool,
+}
+impl WindowsReadCoverage {
+    pub fn admits_depth(&mut self, depth: usize, max_depth: usize) -> bool {
+        if depth <= max_depth {
+            true
+        } else {
+            self.depth_cuts += 1;
+            false
+        }
+    }
+    pub fn apply(
+        &self,
+        walk: &crate::walk_budget::WalkOutcome,
+        structured: &mut Value,
+        filtered: bool,
+        has_elements: bool,
+    ) {
+        walk.apply(structured);
+        let reason = if self.depth_cuts > 0 {
+            Some("max_depth")
+        } else if self.provider_errors > 0 {
+            Some("provider_error")
+        } else if self.source_partial {
+            Some("partial_source")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            structured["truncated"] = json!(true);
+            if !walk.truncated() {
+                structured["truncation_reason"] = json!(reason);
+            }
+        }
+        if self.depth_cuts > 0 {
+            structured["depth_cuts"] = json!(self.depth_cuts);
+        }
+        if self.provider_errors > 0 {
+            structured["provider_errors"] = json!(self.provider_errors);
+        }
+        structured["elements_complete"] =
+            json!(has_elements && !filtered && structured["truncated"] == false);
+    }
+    pub fn note(&self, walk: &crate::walk_budget::WalkOutcome) -> Option<String> {
+        let mut notes = Vec::new();
+        if let Some(note) = walk.note() {
+            notes.push(note);
+        }
+        if self.depth_cuts > 0 {
+            notes.push(format!("Partial tree: the depth limit omitted {} subtree(s); increase max_depth where supported to read deeper.",self.depth_cuts));
+        }
+        if self.provider_errors > 0 {
+            notes.push(format!("Partial tree: the accessibility provider could not enumerate {} subtree(s); read fresh state before assuming an element is absent.",self.provider_errors));
+        }
+        if self.source_partial {
+            notes.push("Partial tree: this fallback source cannot establish complete accessibility coverage.".into());
+        }
+        (!notes.is_empty()).then(|| notes.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod windows_coverage_tests {
+    use super::*;
+    use crate::walk_budget::WalkBudget;
+    #[test]
+    fn depth_boundary_includes_the_limit_but_records_omitted_children() {
+        let mut coverage = WindowsReadCoverage::default();
+        assert!(coverage.admits_depth(0, 0));
+        assert!(!coverage.admits_depth(1, 0));
+        assert!(coverage.admits_depth(25, 25));
+        assert!(!coverage.admits_depth(26, 25));
+        assert_eq!(coverage.depth_cuts, 2);
+    }
+    #[test]
+    fn only_a_complete_unfiltered_walk_can_claim_complete_elements() {
+        let mut budget = WalkBudget::nodes_only(10);
+        assert!(budget.admit());
+        let walk = budget.outcome();
+        for (coverage, filtered, has_elements, complete, reason) in [
+            (WindowsReadCoverage::default(), false, true, true, None),
+            (WindowsReadCoverage::default(), true, true, false, None),
+            (WindowsReadCoverage::default(), false, false, false, None),
+            (
+                WindowsReadCoverage {
+                    depth_cuts: 2,
+                    ..Default::default()
+                },
+                false,
+                true,
+                false,
+                Some("max_depth"),
+            ),
+            (
+                WindowsReadCoverage {
+                    provider_errors: 1,
+                    ..Default::default()
+                },
+                false,
+                true,
+                false,
+                Some("provider_error"),
+            ),
+            (
+                WindowsReadCoverage {
+                    source_partial: true,
+                    ..Default::default()
+                },
+                false,
+                true,
+                false,
+                Some("partial_source"),
+            ),
+        ] {
+            let mut state = json!({});
+            coverage.apply(&walk, &mut state, filtered, has_elements);
+            assert_eq!(state["elements_complete"], complete, "{state}");
+            assert_eq!(state["truncation_reason"].as_str(), reason);
+            assert_eq!(state["truncated"], reason.is_some());
+            if reason == Some("max_depth") {
+                assert_eq!(state["depth_cuts"], 2);
+                assert!(coverage.note(&walk).unwrap().contains("depth limit"));
+            }
+        }
+        for timeout in [false, true] {
+            let mut limited = WalkBudget::nodes_only(1);
+            if timeout {
+                limited.stop_for_timeout();
+            } else {
+                limited.admit();
+                limited.admit();
+            }
+            let walk = limited.outcome();
+            let coverage = WindowsReadCoverage {
+                depth_cuts: 1,
+                ..Default::default()
+            };
+            let mut state = json!({});
+            coverage.apply(&walk, &mut state, false, true);
+            assert_eq!(state["elements_complete"], false);
+            assert_eq!(state["truncated"], true);
+            assert_eq!(state["depth_cuts"], 1);
+            assert_eq!(
+                state["truncation_reason"],
+                if timeout { "timeout" } else { "node_budget" }
+            );
+            assert!(coverage.note(&walk).unwrap().contains("depth limit"));
+        }
+    }
+}
+
+/// Project native ancestry while visiting every node, including omitted layout
+/// containers. A skipped sibling still ends the previous displayed branch.
+#[derive(Default)]
+pub struct KeptAncestorDepths(Vec<usize>);
+impl KeptAncestorDepths {
+    pub fn row_depth(&mut self, native_depth: usize, kept: bool) -> usize {
+        while self.0.last().is_some_and(|depth| *depth >= native_depth) {
+            self.0.pop();
+        }
+        let depth = self.0.len();
+        if kept {
+            self.0.push(native_depth);
+        }
+        depth
+    }
+}
+
+#[cfg(test)]
+mod kept_ancestor_tests {
+    use super::*;
+    #[test]
+    fn omitted_sibling_containers_do_not_nest_back_under_the_search_edit() {
+        let mut depths = KeptAncestorDepths::default();
+        let mut markdown = String::new();
+        for (native_depth, row) in [
+            (0, Some("- [0] Window \"Settings\"")),
+            (1, None),
+            (2, Some("- [1] Edit \"Search\"")),
+            (1, None),
+            (2, None),
+            (3, Some("- [2] Button \"Back\"")),
+        ] {
+            let depth = depths.row_depth(native_depth, row.is_some());
+            if let Some(row) = row {
+                markdown.push_str(&format!("{}{row}\n", "  ".repeat(depth)));
+            }
+        }
+        assert_eq!(
+            markdown,
+            "- [0] Window \"Settings\"\n  - [1] Edit \"Search\"\n  - [2] Button \"Back\"\n"
+        );
+        assert_eq!(
+            filter_tree_markdown(&markdown, "Back"),
+            "- [0] Window \"Settings\"\n  - [2] Button \"Back\"\n"
+        );
+    }
+    #[test]
+    fn read_only_kept_parents_and_separate_roots_keep_their_place() {
+        let mut depths = KeptAncestorDepths::default();
+        assert_eq!(depths.row_depth(0, false), 0);
+        assert_eq!(depths.row_depth(2, true), 0);
+        assert_eq!(depths.row_depth(3, true), 1);
+        assert_eq!(depths.row_depth(4, true), 2);
+        assert_eq!(depths.row_depth(3, true), 1);
+        assert_eq!(depths.row_depth(0, true), 0);
+    }
+}
+
+/// Closing an owner can also close its foreground popup; unknown ownership
+/// cannot establish that a background-only close is safe.
+pub fn windows_settings_close_front_refusal(
+    target_root: u64,
+    target_owner: u64,
+    front: u64,
+    front_owner: u64,
+) -> Option<&'static str> {
+    if [target_root, target_owner, front, front_owner].contains(&0) {
+        Some("Windows did not expose the front window and its owner, so background close safety could not be confirmed. No close was sent.")
+    } else if target_root == front || target_owner == front_owner {
+        Some("Closing this Settings window could change your front window or its owned dialog. No close was sent.")
+    } else {
+        None
+    }
+}
+#[cfg(test)]
+mod settings_close_front_tests {
+    use super::*;
+    #[test]
+    fn close_preserves_the_front_window_and_its_owned_popups() {
+        assert!(windows_settings_close_front_refusal(1, 1, 2, 2).is_none());
+        assert!(windows_settings_close_front_refusal(1, 1, 1, 1)
+            .unwrap()
+            .contains("front window"));
+        assert!(windows_settings_close_front_refusal(1, 1, 3, 1)
+            .unwrap()
+            .contains("owned dialog"));
+        assert!(windows_settings_close_front_refusal(1, 1, 0, 0)
+            .unwrap()
+            .contains("could not be confirmed"));
     }
 }

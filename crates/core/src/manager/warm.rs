@@ -1,59 +1,79 @@
 //! Warm task worktrees: a new worktree gets copy-on-write copies of the dependency installs and
-//! build caches the user's checkout already has, so a worker's first build or test run doesn't
-//! start from nothing.
+//! build caches the project already has (in its checkout or another of its worktrees), so a
+//! worker's first build or test run doesn't start from nothing.
 //!
 //! Best effort throughout: anything that can't be copied safely is left out, and the worker
 //! installs or builds it as it would have anyway. Never fails the task. The rule above all
-//! others: warming never writes to, renames in or deletes from the checkout, and a copy never
-//! gives a worker a way to write into it. When in doubt, the cache is left out.
+//! others: warming never writes to, renames in or deletes from a source, and a copy never
+//! gives a worker a way to write into the checkout or any worktree of the project. When in
+//! doubt, the cache is left out.
 //!
 //! - **What:** git-ignored folders named in [`CACHES`], at the root or in a tracked package
 //!   folder (one holding a [`MANIFESTS`] file) up to [`MAX_DEPTH`] folders down. A package
-//!   cache is copied only while the worktree's manifest and lockfiles match the checkout's
+//!   cache is copied only from a source whose manifest and lockfiles match the worktree's
 //!   ([`DEPENDENCY_FILES`]): otherwise its packages would be the wrong versions.
+//! - **From where:** each cache from the best of the project's places that has it ([`Root`]):
+//!   the workspace the worktree was made from (the session's, for a worker), then one with the
+//!   same lockfile ([`PREFERRED_SAME`]), then the newest. The parent survives the
+//!   [`MAX_SOURCES`] candidate cap. One that is busy or whose dependencies differ is passed over; a copy that fails
+//!   is tried from one more ([`MAX_TRIES`]).
+//! - **Cargo's `target`:** the worktree's own packages (named in its tracked `Cargo.toml`
+//!   files) are compiled for the source's files: every unit of theirs is removed from the copy
+//!   ([`forget_own_units`]), so Cargo always builds them again. Proc macros and other runtime
+//!   executables of packages with build-script runs also rebuild their compiled-in `OUT_DIR`
+//!   ([`forget_build_executables`]); ordinary dependency libraries and compiled build scripts
+//!   stay. Original rustc `.d` files go; Cargo's separate fingerprint dep-info stays.
 //! - **Never:** Python environments (a folder holding a `pyvenv.cfg`, a cache inside one, or a
 //!   link to one). Their scripts point at the interpreter and packages they were made with, so
 //!   a copy would keep using the user's own environment. A folder's name alone doesn't make one:
 //!   a package folder called `env` is warmed like any other.
-//! - **Only real folders:** every folder from the checkout or the worktree down to a cache is
+//! - **Only real folders:** every folder from a source or the worktree down to a cache is
 //!   reached without following links ([`clone::Folder`]), so a link can't send a copy, a
 //!   clean-up or a rename anywhere else.
-//! - **Paths back into the checkout:** each copy is checked before it is published.
-//!   - Links are resolved fully; one that lands in the checkout is pointed at the same place in
-//!     the worktree, and one that leads nowhere drops the copy.
-//!   - The files known to hold the checkout's path ([`known_kind`]: package shims and
+//! - **Paths back into the project:** each copy is checked before it is published. The checkout
+//!   and every worktree of the project (each by all its spellings) are protected, not only the
+//!   source.
+//!   - Links are resolved fully; one that lands in the source is pointed at the same place in
+//!     the worktree, and one that lands in another protected place, or leads nowhere, drops the
+//!     copy.
+//!   - The files known to hold the source's path ([`known_kind`]: package shims and
 //!     package-manager state, Cargo's build-script outputs and dep-info, Turbo's logs) are
 //!     rewritten to the worktree, in each format's own spelling ([`Style`]).
 //!   - Every executable file, every file in a `bin` folder and every small text file is read:
-//!     one that still names the checkout means a kind we don't know how to rewrite, and the
-//!     whole copy is dropped. So is a copy too big to read within [`MAX_PROBED_FILES`] and
-//!     [`MAX_PROBED_BYTES`].
+//!     one that still names a protected place means a kind we don't know how to rewrite, and
+//!     the whole copy is dropped. In `target`, one inside a dependency's unit (its
+//!     `build/<pkg>-<hash>` or `.fingerprint/<pkg>-<hash>`) drops only that unit, which Cargo
+//!     then builds again. A copy too big to read within [`MAX_PROBED_FILES`] and
+//!     [`MAX_PROBED_BYTES`] is dropped.
 //!   - What this can't see: a binary file (other than an executable) or a text file over
-//!     [`MAX_PROBE_BYTES`] that names the checkout. Package managers keep the paths they act on
-//!     in text state and scripts, which are read, so the gap is a tool that writes its target
-//!     path into a large or binary file at install time. In `target`, compiled programs are not
-//!     read either (their debug information always names the folder they were built in); the
-//!     ones in a profile folder (`target/debug/app`, the ones people run by hand) are removed
-//!     instead, and Cargo rebuilds the workspace's own crates in a new worktree anyway.
+//!     [`MAX_PROBE_BYTES`] that names a protected place. Package managers keep the paths they
+//!     act on in text state and scripts, which are read, so the gap is a tool that writes its
+//!     target path into a large or binary file at install time. In `target`, compiled programs
+//!     are not read either (their debug information always names the folder they were built
+//!     in); the ones in a profile folder (`target/debug/app`, the ones people run by hand) are
+//!     removed instead, and the worktree's own crates are gone already.
 //! - **Atomic:** each folder is copied into a temp folder beside the worktree (out of git's
 //!   sight, as the session or worker may already work there), checked and rewritten there,
 //!   then moved into place; on any failure the temp folder is removed. A destination that
 //!   already exists is never touched.
 //! - **Not mid-write:** a `target` is copied only while every profile's `.cargo-lock` can be
 //!   held (and it is held for the whole copy). Other caches are skipped while an install runs in
-//!   the checkout or anything at their top (or their package manager's state) changed in the
+//!   the source or anything at their top (or their package manager's state) changed in the
 //!   last [`RECENT_WRITE`]. All of it is checked again after copying, and a copy whose cache
 //!   changed meanwhile is dropped. Where a running install can't be seen (Windows), nothing is
 //!   copied.
-//! - **Bounded:** warming a worktree stops at [`WARM_DEADLINE`], and a copy with more than
+//! - **In the background:** nothing waits for warming. It stops at [`WARM_DEADLINE`], or when
+//!   the worktree is removed ([`stop`] waits for it first), and a copy with more than
 //!   [`MAX_ENTRIES`] entries isn't checked; a copy not finished in time is removed.
 
-use std::collections::BTreeSet;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use brigadier_git::Repo;
@@ -85,9 +105,9 @@ const MANIFESTS: &[&str] = &[
 ];
 
 /// The files, in its package folder, that decide what a package cache holds. A cache is copied
-/// only when the worktree has them exactly as the checkout does. For `node_modules` the root's
-/// count too (a workspace has one lockfile). Cargo's `target` needs none: Cargo rebuilds what
-/// changed by itself.
+/// only from a source that has them exactly as the worktree does. For `node_modules` the
+/// root's count too (a workspace has one lockfile). Cargo's `target` needs none: Cargo rebuilds
+/// what changed by itself.
 const DEPENDENCY_FILES: &[(&str, &[&str])] = &[
     (
         "node_modules",
@@ -117,6 +137,10 @@ const DEPENDENCY_FILES: &[(&str, &[&str])] = &[
     (".build", &["Package.swift", "Package.resolved"]),
 ];
 
+/// The files, in its package folder, that make a source of a cache better when it has them as
+/// the worktree does: the same dependency versions were built there.
+const PREFERRED_SAME: &[(&str, &[&str])] = &[("target", &["Cargo.lock"])];
+
 /// How deep a package folder may sit below the root.
 const MAX_DEPTH: usize = 3;
 
@@ -127,8 +151,15 @@ const IN_PROGRESS: &str = ".brigadier-warming-";
 /// A cache written to this recently may be mid-install or mid-build.
 const RECENT_WRITE: Duration = Duration::from_secs(10);
 
-/// How long warming one worktree may take, all its copies together.
-const WARM_DEADLINE: Duration = Duration::from_secs(20);
+/// How long warming one worktree may take, all its copies together. Nothing waits for it, so a
+/// big `target` has the time to be copied and checked.
+const WARM_DEADLINE: Duration = Duration::from_secs(120);
+
+/// How many of the places that have a cache, the newest, are weighed as its source.
+const MAX_SOURCES: usize = 16;
+
+/// How many sources a cache is copied from at most: the best, and one more if that copy fails.
+const MAX_TRIES: usize = 2;
 
 /// A copy with more entries than this isn't checked (and so isn't published).
 const MAX_ENTRIES: usize = 2_000_000;
@@ -136,7 +167,7 @@ const MAX_ENTRIES: usize = 2_000_000;
 /// A known file bigger than this can't be rewritten (and so the copy isn't published).
 const MAX_REWRITE_BYTES: u64 = 4 << 20;
 
-/// Text files up to this size are checked for the checkout's path, at any depth.
+/// Text files up to this size are checked for protected paths, at any depth.
 const MAX_PROBE_BYTES: u64 = 64 << 10;
 
 /// How many files, and how many bytes, one copy may need read; past either it isn't published.
@@ -146,35 +177,53 @@ const MAX_PROBED_BYTES: u64 = 2 << 30;
 /// What warming did, for the log.
 #[derive(Debug, Default)]
 pub struct Warmed {
-    /// Repo-relative folders copied in.
-    pub copied: Vec<String>,
-    /// Folders the checkout has that were left out, and why.
+    /// Repo-relative folders copied in, each with the place it came from and how long it took
+    /// (ms).
+    pub copied: Vec<(String, PathBuf, u64)>,
+    /// Folders left out, or the parts of a copy left out, and why.
     pub skipped: Vec<(String, String)>,
 }
 
-/// Fills the new `worktree` of `source` (the user's checkout) with copies of its caches.
-/// `aliases` are other spellings of the checkout's path (the one the project was added with);
-/// `installing` says whether a package install runs in the checkout now ([`install_running`]).
+impl Warmed {
+    /// The repo-relative folders copied in.
+    pub fn folders(&self) -> Vec<String> {
+        self.copied.iter().map(|(rel, ..)| rel.clone()).collect()
+    }
+}
+
+/// Where a worktree's caches may come from.
+pub struct Sources<'a> {
+    /// The user's checkout: its worktrees are the others.
+    pub checkout: &'a Repo,
+    /// Other spellings of the checkout's path (the one the project was added with).
+    pub aliases: &'a [PathBuf],
+    /// The workspace the worktree was made from, preferred over the rest.
+    pub parent: Option<&'a Path>,
+}
+
+/// Fills the new `worktree` with copies of the caches the project has elsewhere. `installing`
+/// says whether a package install runs in a folder now ([`install_running`]); `stopped`
+/// whether the worktree is being removed.
 pub fn warm_worktree(
-    source: &Repo,
-    aliases: &[PathBuf],
+    sources: &Sources,
     worktree: &Repo,
-    installing: &dyn Fn() -> bool,
+    installing: &dyn Fn(&Path) -> bool,
+    stopped: &(dyn Fn() -> bool + Sync),
 ) -> Warmed {
     warm_until(
-        source,
-        aliases,
+        sources,
         worktree,
         installing,
+        stopped,
         Instant::now() + WARM_DEADLINE,
     )
 }
 
 fn warm_until(
-    source: &Repo,
-    aliases: &[PathBuf],
+    sources: &Sources,
     worktree: &Repo,
-    installing: &dyn Fn() -> bool,
+    installing: &dyn Fn(&Path) -> bool,
+    stopped: &(dyn Fn() -> bool + Sync),
     deadline: Instant,
 ) -> Warmed {
     let mut warmed = Warmed::default();
@@ -186,82 +235,304 @@ fn warm_until(
             .push((".".into(), "copies aren't made on this system".into()));
         return warmed;
     }
-    // Both roots are canonical.
-    let paths = Paths::new(source.root(), aliases, worktree.root());
-    if paths.worktree.starts_with(&paths.source) || paths.source.starts_with(&paths.worktree) {
-        warmed
-            .skipped
-            .push((".".into(), "the worktree and the checkout overlap".into()));
+    // The worktree's root is canonical.
+    let into = worktree.root();
+    let roots = match roots(sources, into) {
+        Ok(roots) => roots,
+        Err(why) => {
+            warmed.skipped.push((".".into(), why));
+            return warmed;
+        }
+    };
+    if let Some(root) = roots
+        .iter()
+        .find(|root| into.starts_with(&root.path) || root.path.starts_with(into))
+    {
+        warmed.skipped.push((
+            ".".into(),
+            format!("the worktree and {} overlap", root.path.display()),
+        ));
         return warmed;
     }
-    let (tracked, in_worktree) = match (source.tracked_files(), worktree.tracked_files()) {
-        (Ok(tracked), Ok(in_worktree)) => (tracked, in_worktree.into_iter().collect()),
-        (Err(err), _) | (_, Err(err)) => {
+    let tracked = match worktree.tracked_files() {
+        Ok(tracked) => tracked,
+        Err(err) => {
             warmed.skipped.push((".".into(), err.to_string()));
             return warmed;
         }
     };
+    let in_worktree: BTreeSet<String> = tracked.iter().cloned().collect();
     let warm = Warm {
-        source,
         worktree,
-        paths: &paths,
+        roots: &roots,
         tracked: &in_worktree,
+        packages: cargo_packages(into, &tracked),
         installing,
+        stopped,
         deadline,
     };
-    if let Some(stage) = paths.worktree.parent() {
+    if let Some(stage) = into.parent() {
         clear_leftovers(stage, Path::new(""), &BTreeSet::new());
     }
     let mut cleared = BTreeSet::new();
     for rel in candidates(&package_dirs(&tracked)) {
-        // Only real folders: a link would be copied as a link back into the checkout.
-        if !fs::symlink_metadata(paths.source.join(&rel)).is_ok_and(|meta| meta.is_dir()) {
+        let found = warm.ranked(&rel);
+        if found.is_empty() {
             continue;
         }
-        if Instant::now() >= deadline {
-            warmed.skipped.push((rel, "out of time".into()));
+        if let Some(why) = warm.over() {
+            warmed.skipped.push((rel, why.into()));
             continue;
         }
         let parent = parent_of(&rel);
         if cleared.insert(parent.to_owned()) {
-            clear_leftovers(&paths.worktree, parent, &in_worktree);
+            clear_leftovers(into, parent, &in_worktree);
         }
-        match warm.one(&rel) {
-            Ok(()) => warmed.copied.push(rel),
+        match warm.one(&rel, &found) {
+            Ok(copied) => {
+                warmed.skipped.extend(
+                    copied
+                        .dropped
+                        .into_iter()
+                        .map(|(unit, why)| (format!("{rel}/{}", unit.display()), why)),
+                );
+                warmed.copied.push((rel, copied.from, copied.ms));
+            }
             Err(why) => warmed.skipped.push((rel, why)),
         }
     }
     warmed
 }
 
+/// The checkout or another worktree of the project: a place caches may come from, and one a
+/// copy must never lead back into.
+#[derive(Debug)]
+struct Root {
+    /// Canonical.
+    path: PathBuf,
+    /// Its path as tools may have written it: canonical, as git lists it, and for the checkout
+    /// as the project was added.
+    forms: Vec<PathBuf>,
+    /// The workspace the worktree was made from.
+    parent: bool,
+}
+
+/// The checkout and every worktree of it git still knows, but `worktree` itself.
+fn roots(sources: &Sources, worktree: &Path) -> Result<Vec<Root>, String> {
+    let listed = sources
+        .checkout
+        .worktrees()
+        .map_err(|err| err.to_string())?;
+    let parent = sources.parent.and_then(|path| fs::canonicalize(path).ok());
+    let checkout = sources.checkout.root();
+    let places = std::iter::once((checkout.to_owned(), sources.aliases.to_vec())).chain(
+        listed
+            .into_iter()
+            .filter(|listed| !listed.prunable)
+            .map(|listed| (listed.path.clone(), vec![listed.path])),
+    );
+    let mut roots: Vec<Root> = Vec::new();
+    for (path, spelled) in places {
+        // One that is gone has nothing to copy, and nothing to write into.
+        let Ok(canonical) = fs::canonicalize(&path) else {
+            continue;
+        };
+        if canonical == worktree {
+            continue;
+        }
+        let forms = std::iter::once(canonical.clone()).chain(spelled);
+        match roots.iter_mut().find(|root| root.path == canonical) {
+            Some(root) => root.forms.extend(forms),
+            None => roots.push(Root {
+                parent: parent.as_ref() == Some(&canonical),
+                forms: forms.collect(),
+                path: canonical,
+            }),
+        }
+    }
+    for root in &mut roots {
+        root.forms = source_forms(&root.path, &root.forms);
+    }
+    Ok(roots)
+}
+
+/// Warming registered for each worktree, from before it starts until it ends: removing a
+/// worktree stops its warming and waits for it first ([`stop`]).
+static UNDER_WAY: Mutex<Vec<(PathBuf, Arc<Flight>)>> = Mutex::new(Vec::new());
+
+#[derive(Default)]
+struct Flight {
+    stopped: AtomicBool,
+    done: Mutex<bool>,
+    finished: Condvar,
+}
+
+/// One worktree's warming, registered while it is held.
+pub struct Warming {
+    flight: Arc<Flight>,
+}
+
+impl Warming {
+    /// Registers the warming of `worktree`, before it starts in the background.
+    pub fn begin(worktree: &Path) -> Self {
+        let flight = Arc::new(Flight::default());
+        let key = fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_owned());
+        UNDER_WAY
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push((key, flight.clone()));
+        Self { flight }
+    }
+
+    /// Whether the worktree is being removed: warming stops.
+    pub fn stopped(&self) -> bool {
+        self.flight.stopped.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for Warming {
+    fn drop(&mut self) {
+        UNDER_WAY
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .retain(|(_, flight)| !Arc::ptr_eq(flight, &self.flight));
+        *self
+            .flight
+            .done
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = true;
+        self.flight.finished.notify_all();
+    }
+}
+
+/// Stops the warming of `worktree` under way, if any, and waits until it has ended (it ends by
+/// its deadline anyway), so no copy lands in or beside a worktree being removed.
+pub fn stop(worktree: &Path) {
+    let canonical = fs::canonicalize(worktree).ok();
+    let flights: Vec<Arc<Flight>> = UNDER_WAY
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .iter()
+        .filter(|(key, _)| key == worktree || canonical.as_ref() == Some(key))
+        .map(|(_, flight)| flight.clone())
+        .collect();
+    for flight in flights {
+        flight.stopped.store(true, Ordering::Release);
+        let done = flight.done.lock().unwrap_or_else(|err| err.into_inner());
+        let _ = flight.finished.wait_timeout_while(
+            done,
+            WARM_DEADLINE + Duration::from_secs(10),
+            |done| !*done,
+        );
+    }
+}
+
 /// What copying one cache needs.
 struct Warm<'a> {
-    source: &'a Repo,
     worktree: &'a Repo,
-    paths: &'a Paths,
+    roots: &'a [Root],
     /// The files the worktree tracks.
     tracked: &'a BTreeSet<String>,
-    installing: &'a dyn Fn() -> bool,
+    /// The worktree's own Cargo packages.
+    packages: BTreeSet<String>,
+    installing: &'a dyn Fn(&Path) -> bool,
+    stopped: &'a (dyn Fn() -> bool + Sync),
     deadline: Instant,
 }
 
+/// A cache copied in.
+struct Copied {
+    from: PathBuf,
+    ms: u64,
+    /// The units of a `target` left out of it, and why.
+    dropped: Vec<(PathBuf, String)>,
+}
+
 impl Warm<'_> {
-    /// Copies one cache folder, or says why not.
-    fn one(&self, rel: &str) -> Result<(), String> {
-        let ignored =
-            |repo: &Repo, path: &str| repo.is_ignored(path).map_err(|err| err.to_string());
+    /// Why warming must end now, if it must.
+    fn over(&self) -> Option<&'static str> {
+        if (self.stopped)() {
+            Some("the worktree is being removed")
+        } else if Instant::now() >= self.deadline {
+            Some("out of time")
+        } else {
+            None
+        }
+    }
+
+    /// The places that have the cache `rel` as a real folder (a link would be copied as a link
+    /// back into them), best first: the parent, then one with the same lockfile, then the
+    /// newest; the parent and the newest others, up to [`MAX_SOURCES`], are weighed.
+    fn ranked(&self, rel: &str) -> Vec<&Root> {
+        let name = last_name(rel);
+        let mut found: Vec<(&Root, Option<SystemTime>)> = self
+            .roots
+            .iter()
+            .filter(|root| {
+                fs::symlink_metadata(root.path.join(rel)).is_ok_and(|meta| meta.is_dir())
+            })
+            .map(|root| (root, newest(&root.path.join(rel), name)))
+            .collect();
+        found.sort_by_key(|(root, newest)| (Reverse(root.parent), Reverse(*newest)));
+        found.truncate(MAX_SOURCES);
+        let package = package_of(rel);
+        let into = self.worktree.root();
+        found.sort_by_cached_key(|(root, newest)| {
+            (
+                Reverse(root.parent),
+                Reverse(same_files(&root.path, into, package, name, PREFERRED_SAME)),
+                Reverse(*newest),
+            )
+        });
+        found.into_iter().map(|(root, _)| root).collect()
+    }
+
+    /// Copies one cache folder from the best of `found` that can give it, or says why not.
+    fn one(&self, rel: &str, found: &[&Root]) -> Result<Copied, String> {
         // The worktree has no such folder yet, and git only matches a folder pattern
         // (`node_modules/`) against one it can see: so ask about something inside it.
-        if !ignored(self.source, rel)? || !ignored(self.worktree, &format!("{rel}/{IN_PROGRESS}"))?
+        if !self
+            .worktree
+            .is_ignored(&format!("{rel}/{IN_PROGRESS}"))
+            .map_err(|err| err.to_string())?
         {
             return Err("git doesn't ignore it".into());
         }
-        if self.paths.worktree.join(rel).symlink_metadata().is_ok() || is_tracked(self.tracked, rel)
+        if self.worktree.root().join(rel).symlink_metadata().is_ok()
+            || is_tracked(self.tracked, rel)
         {
             return Err("the worktree already has it".into());
         }
-        let from = self.paths.source.join(rel);
-        if let Some(env) = python_env(&self.paths.source, rel) {
+        let mut why = Vec::new();
+        let mut tries = 0;
+        for root in found {
+            let place = root.path.display();
+            if let Err(not) = self.usable(root, rel) {
+                why.push(format!("{not} ({place})"));
+                continue;
+            }
+            tries += 1;
+            let started = Instant::now();
+            match self.copy(root, rel) {
+                Ok(dropped) => {
+                    return Ok(Copied {
+                        from: root.path.clone(),
+                        ms: started.elapsed().as_millis() as u64,
+                        dropped,
+                    });
+                }
+                Err(not) => why.push(format!("{not} ({place})")),
+            }
+            if tries == MAX_TRIES || self.over().is_some() {
+                break;
+            }
+        }
+        Err(why.join("; "))
+    }
+
+    /// Whether `root` can give the cache `rel` now, or why not.
+    fn usable(&self, root: &Root, rel: &str) -> Result<(), String> {
+        if let Some(env) = python_env(&root.path, rel) {
             return Err(if env == rel {
                 "it is a Python environment".into()
             } else {
@@ -269,14 +540,19 @@ impl Warm<'_> {
             });
         }
         let name = last_name(rel);
-        let package = package_of(rel);
-        if !same_dependencies(&self.paths.source, &self.paths.worktree, package, name) {
-            return Err("the worktree's dependencies differ from the checkout's".into());
+        if !same_dependencies(&root.path, self.worktree.root(), package_of(rel), name) {
+            return Err("the worktree's dependencies differ from its".into());
         }
-        let busy = || name == "node_modules" && (self.installing)();
-        let before = activity(&from, name);
-        if busy()
-            || before
+        let from = root.path.join(rel);
+        if name == "target" {
+            return match lock_cargo(&from) {
+                Some(_) => Ok(()),
+                None => Err("a build is running".into()),
+            };
+        }
+        let installing = name == "node_modules" && (self.installing)(&root.path);
+        if installing
+            || activity(&from, name)
                 .iter()
                 .any(|(_, modified)| is_recent(*modified, SystemTime::now()))
         {
@@ -286,22 +562,30 @@ impl Warm<'_> {
                 "it is being written to".into()
             });
         }
+        Ok(())
+    }
+
+    /// Copies the cache `rel` from `root`, checks it and moves it in. Returns the units of a
+    /// `target` left out.
+    fn copy(&self, root: &Root, rel: &str) -> Result<Vec<(PathBuf, String)>, String> {
+        let name = last_name(rel);
+        let package = package_of(rel);
+        let into = self.worktree.root();
+        let from = root.path.join(rel);
+        let busy = || name == "node_modules" && (self.installing)(&root.path);
+        let before = activity(&from, name);
         // Every folder on the way, on both sides, is a real one; the package folder exists in
         // the worktree (it is tracked), `.next` may not.
         let parent = parent_of(rel);
-        let src = Folder::open(&self.paths.source, parent, false)
-            .map_err(|err| format!("the checkout's folder: {err}"))?;
-        Folder::open(&self.paths.worktree, Path::new(package), false)
+        let src = Folder::open(&root.path, parent, false)
+            .map_err(|err| format!("the source's folder: {err}"))?;
+        Folder::open(into, Path::new(package), false)
             .map_err(|_| "the worktree has no such package folder")?;
-        let dst = Folder::open(&self.paths.worktree, parent, true)
+        let dst = Folder::open(into, parent, true)
             .map_err(|err| format!("the worktree's folder: {err}"))?;
         // The copy is made beside the worktree, where git can't see it (nor `git add` take it)
         // while the session or worker already works there, then moved in.
-        let stage = self
-            .paths
-            .worktree
-            .parent()
-            .ok_or("the worktree has no parent folder")?;
+        let stage = into.parent().ok_or("the worktree has no parent folder")?;
         let stage = Folder::open(stage, Path::new(""), false)
             .map_err(|err| format!("the worktree's parent folder: {err}"))?;
         let temp = format!(
@@ -309,6 +593,13 @@ impl Warm<'_> {
             &uuid::Uuid::new_v4().simple().to_string()[..12]
         );
         let copy = stage.path().join(&temp);
+        let others: Vec<PathBuf> = self
+            .roots
+            .iter()
+            .filter(|other| other.path != root.path)
+            .flat_map(|other| other.forms.iter().cloned())
+            .collect();
+        let paths = Paths::new(&root.path, &root.forms, &others, into);
         let result = (|| {
             {
                 // Held for the whole copy: a build can't start writing halfway through.
@@ -327,31 +618,397 @@ impl Warm<'_> {
                     return Err("a build started during the copy".to_owned());
                 }
             }
-            let published = self.paths.worktree.join(rel);
-            Settle {
-                copy: &copy,
-                from: &from,
-                published: &published,
-                name,
-                paths: self.paths,
-                deadline: self.deadline,
+            if let Some(why) = self.over() {
+                return Err(why.into());
             }
-            .run()?;
+            if name == "target" {
+                let mut packages = self.packages.clone();
+                // Path dependencies need not be tracked by this repository (or even live in
+                // it). Cargo records every local package without a source in its lockfile.
+                // Include the source's names too: it may have packages this worktree removed.
+                packages.extend(local_lock_packages(&root.path.join(package)));
+                packages.extend(local_lock_packages(&into.join(package)));
+                forget_own_units(&copy, &packages)
+                    .map_err(|err| format!("removing the worktree's own crates: {err}"))?;
+            }
+            let published = into.join(rel);
+            let mut dropped = if name == "target" {
+                forget_build_executables(&copy, self.deadline)
+                    .map_err(|err| format!("removing build-time executables: {err}"))?
+            } else {
+                Vec::new()
+            };
+            dropped.extend(
+                Settle {
+                    copy: &copy,
+                    from: &from,
+                    published: &published,
+                    name,
+                    paths: &paths,
+                    stopped: self.stopped,
+                    deadline: self.deadline,
+                }
+                .run()?,
+            );
             if busy() || activity(&from, name) != before {
                 return Err("it changed during the copy".into());
             }
-            if Instant::now() >= self.deadline {
-                return Err("out of time".into());
+            if let Some(why) = self.over() {
+                return Err(why.into());
             }
             stage
                 .move_new(OsStr::new(&temp), &dst, OsStr::new(name))
-                .map_err(|err| format!("publishing failed: {err}"))
+                .map_err(|err| format!("publishing failed: {err}"))?;
+            Ok(dropped)
         })();
         if result.is_err() {
             let _ = fs::remove_dir_all(&copy);
         }
         result
     }
+}
+
+/// When the cache folder `dir` named `name` was last written, as far as its top shows (and for
+/// a `target`, its profiles').
+fn newest(dir: &Path, name: &str) -> Option<SystemTime> {
+    let modified = |path: &Path| fs::symlink_metadata(path).ok()?.modified().ok();
+    let mut level = vec![dir.to_owned()];
+    let mut newest = modified(dir);
+    for _ in 0..if name == "target" { 2 } else { 1 } {
+        level = level
+            .iter()
+            .flat_map(|dir| fs::read_dir(dir).into_iter().flatten().flatten())
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect();
+        newest = level
+            .iter()
+            .map(|path| modified(path))
+            .fold(newest, Ord::max);
+    }
+    newest
+}
+
+/// The names of the Cargo packages in the worktree `root`: from its tracked `Cargo.toml`
+/// files.
+fn cargo_packages(root: &Path, tracked: &[String]) -> BTreeSet<String> {
+    tracked
+        .iter()
+        .filter(|path| *path == "Cargo.toml" || path.ends_with("/Cargo.toml"))
+        .filter_map(|path| fs::read_to_string(root.join(path)).ok())
+        .filter_map(|manifest| package_name(&manifest))
+        .collect()
+}
+
+/// The `name` in a manifest's `[package]` table.
+fn package_name(manifest: &str) -> Option<String> {
+    let manifest: toml::Value = toml::from_str(manifest).ok()?;
+    manifest
+        .get("package")
+        .or_else(|| manifest.get("project"))?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn local_lock_packages(root: &Path) -> BTreeSet<String> {
+    let read = || -> Option<BTreeSet<String>> {
+        let lock: toml::Value =
+            toml::from_str(&fs::read_to_string(root.join("Cargo.lock")).ok()?).ok()?;
+        Some(
+            lock.get("package")?
+                .as_array()?
+                .iter()
+                .filter_map(|package| {
+                    package
+                        .get("source")
+                        .is_none()
+                        .then(|| package.get("name")?.as_str().map(str::to_owned))
+                        .flatten()
+                })
+                .collect(),
+        )
+    };
+    read().unwrap_or_default()
+}
+
+/// `<name>-<hash>`, a Cargo unit's folder name (`.fingerprint/`, `build/`): the name and the
+/// 16-hex-digit hash.
+fn unit_name(entry: &str) -> Option<(&str, &str)> {
+    let (name, hash) = entry.rsplit_once('-')?;
+    (!name.is_empty() && is_hash(hash)).then_some((name, hash))
+}
+
+fn is_hash(text: &str) -> bool {
+    text.len() == 16 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A file Cargo wrote for a unit in `deps/` or `examples/` (`libfoo-<hash>.rlib`,
+/// `foo-<hash>.d`, `foo-<hash>`, `foo-<hash>.<cgu>.rcgu.o`): its crate name (maybe with a `lib`
+/// before it) and the unit's hash.
+fn output_name(entry: &str) -> Option<(&str, &str)> {
+    let stem = entry.split_once('.').map_or(entry, |(stem, _)| stem);
+    unit_name(stem)
+}
+
+/// Reads a copied folder without following a link. Eviction runs before the link probe.
+fn real_entries(dir: &Path) -> std::io::Result<Vec<fs::DirEntry>> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if !meta.is_dir() => {
+            return Err(std::io::Error::other(format!(
+                "{} is not a real folder",
+                dir.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+        _ => {}
+    }
+    fs::read_dir(dir)?.collect()
+}
+
+/// A proc macro is a dynamic library with rustc's exported declaration symbol. Cargo's
+/// fingerprint JSON does not record crate type; ordinary dylibs must not be evicted with it.
+fn proc_macro(path: &Path, deadline: Instant) -> std::io::Result<bool> {
+    let symbol = b"__rustc_proc_macro_decls_";
+    let mut file = File::open(path)?;
+    let mut bytes = vec![0; (64 << 10) + symbol.len()];
+    let mut kept = 0;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "out of time",
+            ));
+        }
+        let read = file.read(&mut bytes[kept..])?;
+        if read == 0 {
+            return Ok(false);
+        }
+        let end = kept + read;
+        if memchr::memmem::find(&bytes[..end], symbol).is_some() {
+            return Ok(true);
+        }
+        kept = (symbol.len() - 1).min(end);
+        bytes.copy_within(end - kept..end, 0);
+    }
+}
+
+/// Build-time executables with a build-script run can embed its source OUT_DIR. Rebuild
+/// proc macros (including registry/git ones), bins and test executables, retaining libraries
+/// and compiled build scripts: Cargo does not set OUT_DIR when compiling a build script.
+fn forget_build_executables(
+    target: &Path,
+    deadline: Instant,
+) -> std::io::Result<Vec<(PathBuf, String)>> {
+    let profiles = profiles(target);
+    let mut scripted = BTreeSet::new();
+    let mut units = Vec::new();
+    for profile in &profiles {
+        for entry in real_entries(&profile.join("build"))? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some((package, _)) = unit_name(&name)
+                && entry.file_type()?.is_dir()
+                && entry.path().join("out").symlink_metadata().is_ok()
+            {
+                scripted.insert(package.to_owned());
+            }
+        }
+        for entry in real_entries(&profile.join(".fingerprint"))? {
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "out of time",
+                ));
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some((package, _)) = unit_name(&name) else {
+                continue;
+            };
+            let mut executable = false;
+            for file in real_entries(&entry.path())? {
+                let filename = file.file_name().to_string_lossy().into_owned();
+                if file.file_type()?.is_file() && filename.ends_with(".json") {
+                    let json: serde_json::Value = serde_json::from_slice(&fs::read(file.path())?)?;
+                    let run = filename.starts_with("run-build-script-")
+                        || json
+                            .get("deps")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|deps| {
+                                deps.iter().any(|dep| {
+                                    dep.get(1).and_then(serde_json::Value::as_str)
+                                        == Some("build_script_build")
+                                })
+                            });
+                    if run {
+                        scripted.insert(package.to_owned());
+                    }
+                    executable |= ["bin-", "test-", "bench-"]
+                        .iter()
+                        .any(|prefix| filename.starts_with(prefix));
+                }
+            }
+            units.push((profile, name, executable));
+        }
+    }
+    let mut dropped = Vec::new();
+    for profile in &profiles {
+        let outputs = real_entries(&profile.join("deps"))?;
+        for (_, unit, executable) in units.iter().filter(|(at, _, _)| *at == profile) {
+            let (package, hash) = unit_name(unit).expect("a unit name");
+            if !scripted.contains(package) {
+                continue;
+            }
+            let matching: Vec<_> = outputs
+                .iter()
+                .filter(|entry| {
+                    output_name(&entry.file_name().to_string_lossy())
+                        .is_some_and(|(_, output_hash)| output_hash == hash)
+                })
+                .collect();
+            let mut rebuild = *executable;
+            for entry in &matching {
+                if entry.file_type()?.is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext == "so" || ext == "dylib" || ext == "dll")
+                    && proc_macro(&entry.path(), deadline)?
+                {
+                    rebuild = true;
+                }
+            }
+            if !rebuild {
+                continue;
+            }
+            fs::remove_dir_all(profile.join(".fingerprint").join(unit))?;
+            for entry in matching {
+                if entry.file_type()?.is_dir() {
+                    fs::remove_dir_all(entry.path())?;
+                } else {
+                    fs::remove_file(entry.path())?;
+                }
+            }
+            dropped.push((
+                profile
+                    .strip_prefix(target)
+                    .expect("a copied profile")
+                    .join(".fingerprint")
+                    .join(unit),
+                "a build-time executable with a build-script run must rebuild its OUT_DIR".into(),
+            ));
+        }
+    }
+    Ok(dropped)
+}
+
+/// Removes from `target`, a fresh copy, every unit of the worktree's own `packages`, in each
+/// profile folder (`debug`, `<triple>/release`, …): its `.fingerprint/<pkg>-<hash>` and
+/// `build/<pkg>-<hash>` folders (a build script compiled for the source's files writes into
+/// them) and what it left in `deps/` (by those hashes, or by its crate name). Every other
+/// folder in a profile goes whole: Cargo keeps incremental data and examples only for local
+/// packages, and the rest (an app bundle) is made from the workspace's own programs. Direct
+/// profile outputs and dep-info go too: these may be an old executable, library or proc macro
+/// with a custom target name, and stale dep-info can still name an earlier source worktree.
+/// Only the lock and the three dependency-unit folders remain. Cargo then builds the local
+/// packages again, and reuses only the other packages' units.
+fn forget_own_units(target: &Path, packages: &BTreeSet<String>) -> std::io::Result<()> {
+    let crates: BTreeSet<String> = packages.iter().map(|name| name.replace('-', "_")).collect();
+    let remove = |entry: &fs::DirEntry| -> std::io::Result<()> {
+        // Neither follows a link.
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())
+        } else {
+            fs::remove_file(entry.path())
+        }
+    };
+    let entries = real_entries;
+    for profile in profiles(target) {
+        let mut hashes = BTreeSet::new();
+        for unit_dir in [".fingerprint", "build"] {
+            for entry in entries(&profile.join(unit_dir))? {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some((package, hash)) = unit_name(&name)
+                    && packages.contains(package)
+                {
+                    hashes.insert(hash.to_owned());
+                    remove(&entry)?;
+                }
+            }
+        }
+        for entry in entries(&profile.join("deps"))? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some((krate, hash)) = output_name(&name) else {
+                continue;
+            };
+            let own = |krate: &str| crates.contains(krate);
+            if hashes.contains(hash) || own(krate) || krate.strip_prefix("lib").is_some_and(own) {
+                remove(&entry)?;
+            }
+        }
+        for entry in entries(&profile)? {
+            let name = entry.file_name();
+            let kind = entry.file_type()?;
+            let keep = (kind.is_dir()
+                && [".fingerprint", "build", "deps"].contains(&&*name.to_string_lossy()))
+                || (kind.is_file() && name == ".cargo-lock");
+            if !keep {
+                remove(&entry)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The profile folders in a `target`: the ones, up to two down, that hold a `.fingerprint`.
+fn profiles(target: &Path) -> Vec<PathBuf> {
+    let real_dir = |path: &Path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir());
+    let subfolders = |dir: &PathBuf| -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect()
+    };
+    let top = subfolders(&target.to_owned());
+    let below: Vec<PathBuf> = top.iter().flat_map(subfolders).collect();
+    top.into_iter()
+        .chain(below)
+        .filter(|dir| real_dir(&dir.join(".fingerprint")))
+        .collect()
+}
+
+/// The unit of a dependency's build a file in a `target` lies in, as its profile folder and
+/// `<pkg>-<hash>`: `<profile>/build/<pkg>-<hash>/…` or `<profile>/.fingerprint/<pkg>-<hash>/…`
+/// (a profile may sit in a target-triple folder).
+fn unit_of(rel: &Path) -> Option<(PathBuf, String)> {
+    let parts: Vec<&OsStr> = rel.iter().collect();
+    [1, 2].into_iter().find_map(|at| {
+        let unit = parts.get(at + 1)?.to_str()?;
+        (parts.len() > at + 2
+            && (parts[at] == "build" || parts[at] == ".fingerprint")
+            && unit_name(unit).is_some())
+        .then(|| (parts[..at].iter().collect(), unit.to_owned()))
+    })
+}
+
+/// rustc's Make dep-info has already been translated into Cargo's binary `dep-*` files in
+/// `.fingerprint`. Cargo reads those for freshness, not these original output-path records.
+/// Do not remove native compiler dep-info in build-script `out/` directories.
+fn rustc_dep_info(rel: &Path) -> bool {
+    if rel.extension() != Some(OsStr::new("d")) {
+        return false;
+    }
+    let parts: Vec<&OsStr> = rel.iter().collect();
+    [1, 2].into_iter().any(|at| {
+        (parts.len() == at + 2 && parts[at] == "deps")
+            || (parts.len() == at + 3
+                && parts[at] == "build"
+                && parts[at + 1].to_str().and_then(unit_name).is_some()
+                && parts[at + 2].to_string_lossy().starts_with("build_script_"))
+    })
 }
 
 /// Package folders among the tracked files: the root (`""`) and every folder up to
@@ -458,9 +1115,21 @@ fn clear_leftovers(worktree: &Path, rel: &Path, tracked: &BTreeSet<String>) {
 }
 
 /// Whether the worktree has the files that decide what the cache `name` in `package` holds
-/// exactly as the checkout does.
+/// exactly as `source` does.
 fn same_dependencies(source: &Path, worktree: &Path, package: &str, name: &str) -> bool {
-    let Some((_, files)) = DEPENDENCY_FILES.iter().find(|(cache, _)| *cache == name) else {
+    same_files(source, worktree, package, name, DEPENDENCY_FILES)
+}
+
+/// Whether the worktree has the files `table` names for the cache `name` in `package` exactly
+/// as `source` does (`true` when it names none).
+fn same_files(
+    source: &Path,
+    worktree: &Path,
+    package: &str,
+    name: &str,
+    table: &[(&str, &[&str])],
+) -> bool {
+    let Some((_, files)) = table.iter().find(|(cache, _)| *cache == name) else {
         return true;
     };
     let mut dirs = vec![package];
@@ -619,38 +1288,92 @@ impl Format {
     }
 }
 
-/// The checkout's path in each spelling, and the worktree that takes its place in a copy.
+/// The source's path in each spelling, the worktree that takes its place in a copy, and the
+/// other protected places (the checkout and the project's other worktrees), which a copy must
+/// not name at all.
 struct Paths {
-    /// The checkout and the worktree, canonical.
+    /// The source and the worktree, canonical.
     source: PathBuf,
     worktree: PathBuf,
-    /// The checkout's path as tools may have written it, longest first (so `/private/var/x`
-    /// is rewritten before `/var/x`).
+    /// The source's path as tools may have written it, longest first (so `/private/var/x` is
+    /// rewritten before `/var/x`).
     forms: Vec<Vec<u8>>,
-    /// Each of them in every [`Style`], ready to be searched for.
+    /// The other places' paths, in every spelling: a link may not lead into one.
+    others: Vec<PathBuf>,
+    /// The other places inside the source (a worktree in the checkout), in every [`Style`]:
+    /// rewriting the source's path would hide them, so they are looked for first.
+    inner: Vec<Finder<'static>>,
+    /// Every place's path in every [`Style`], ready to be searched for.
     spellings: Vec<Finder<'static>>,
+    /// Any of [`Self::spellings`], found at once: most files name none.
+    any: Option<regex::bytes::Regex>,
 }
 
 impl Paths {
-    fn new(source: &Path, aliases: &[PathBuf], worktree: &Path) -> Self {
+    fn new(source: &Path, aliases: &[PathBuf], others: &[PathBuf], worktree: &Path) -> Self {
+        let bytes = |form: PathBuf| form.into_os_string().into_encoded_bytes();
         let forms: Vec<Vec<u8>> = source_forms(source, aliases)
             .into_iter()
-            .map(|form| form.into_os_string().into_encoded_bytes())
+            .map(bytes)
             .collect();
-        let mut spellings: Vec<Finder<'static>> = Vec::new();
-        for form in &forms {
-            for style in Style::ALL {
-                let spelled = style.spell(form);
-                if !spellings.iter().any(|seen| seen.needle() == spelled) {
-                    spellings.push(Finder::new(&spelled).into_owned());
+        let others: Vec<PathBuf> = others
+            .iter()
+            .filter(|other| other.is_absolute() && other.components().count() > 1)
+            .cloned()
+            .collect();
+        let spell = |forms: &mut dyn Iterator<Item = Vec<u8>>| {
+            let mut spellings: Vec<Finder<'static>> = Vec::new();
+            for form in forms {
+                for style in Style::ALL {
+                    let spelled = style.spell(&form);
+                    if !spellings.iter().any(|seen| seen.needle() == spelled) {
+                        spellings.push(Finder::new(&spelled).into_owned());
+                    }
                 }
             }
-        }
+            spellings
+        };
+        let spellings = spell(
+            &mut forms
+                .iter()
+                .cloned()
+                .chain(others.iter().cloned().map(bytes)),
+        );
+        let inner = spell(
+            &mut others
+                .iter()
+                .filter(|other| {
+                    source_forms(source, aliases)
+                        .iter()
+                        .any(|form| other.starts_with(form) && *other != form)
+                })
+                .cloned()
+                .map(bytes),
+        );
+        let pattern = spellings
+            .iter()
+            .map(|spelled| regex::escape(&String::from_utf8_lossy(spelled.needle())))
+            .collect::<Vec<_>>()
+            .join("|");
+        // Paths that aren't UTF-8 are looked for one by one.
+        let any = spellings
+            .iter()
+            .all(|spelled| std::str::from_utf8(spelled.needle()).is_ok())
+            .then(|| {
+                regex::bytes::RegexBuilder::new(&pattern)
+                    .size_limit(64 << 20)
+                    .build()
+                    .ok()
+            })
+            .flatten();
         Self {
             source: source.to_owned(),
             worktree: worktree.to_owned(),
             forms,
+            others,
+            inner,
             spellings,
+            any,
         }
     }
 
@@ -665,15 +1388,22 @@ impl Paths {
             .then(|| style.spell(path))
     }
 
-    /// Whether `bytes`, a file of `format`, names the checkout in any spelling.
+    /// Whether `bytes` may name a protected place: `false` only when none is in it at all.
+    fn may_name(&self, bytes: &[u8]) -> bool {
+        self.any.as_ref().is_none_or(|any| any.is_match(bytes))
+    }
+
+    /// Whether `bytes`, a file of `format`, names a protected place in any spelling.
     fn named_in(&self, bytes: &[u8], format: Format) -> bool {
-        self.spellings
-            .iter()
-            .any(|spelled| path_matches(bytes, spelled, format).next().is_some())
+        self.may_name(bytes)
+            && self
+                .spellings
+                .iter()
+                .any(|spelled| path_matches(bytes, spelled, format).next().is_some())
     }
 }
 
-/// The checkout's path and its aliases, longest first.
+/// A place's path and its aliases, longest first.
 fn source_forms(source: &Path, aliases: &[PathBuf]) -> Vec<PathBuf> {
     let mut forms: Vec<PathBuf> = std::iter::once(source.to_owned())
         .chain(aliases.iter().cloned())
@@ -685,45 +1415,106 @@ fn source_forms(source: &Path, aliases: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// Checks a finished copy of `from` (a cache folder named `name`) at `copy`, to be published
-/// at `published`: rewrites what points into the checkout to point into the worktree instead,
-/// and fails when something still does or can't be checked.
+/// at `published`: rewrites what points into the source to point into the worktree instead,
+/// and fails when something still names a protected place or can't be checked. In a `target`,
+/// such a file inside a dependency's unit only drops that unit.
 struct Settle<'a> {
     copy: &'a Path,
     from: &'a Path,
     published: &'a Path,
     name: &'a str,
     paths: &'a Paths,
+    stopped: &'a (dyn Fn() -> bool + Sync),
     deadline: Instant,
 }
 
-/// A file to read for the checkout's path: all of it, or only if it is small text.
+/// A file to read for protected paths: all of it, or only if it is small text.
 type Probe = (PathBuf, bool);
 
+/// Units of a `target` to leave out (profile folder, `<pkg>-<hash>`), and why.
+type Dropped = Mutex<BTreeMap<(PathBuf, String), String>>;
+
 impl Settle<'_> {
-    /// Walks the copy, while a few readers check the files the walk hands them.
-    fn run(&self) -> Result<(), String> {
+    /// Walks the copy, while a few readers check the files the walk hands them. Returns the
+    /// units left out of a `target`, by their `build` folder.
+    fn run(&self) -> Result<Vec<(PathBuf, String)>, String> {
         let (send, receive) = std::sync::mpsc::channel::<Probe>();
         let receive = Mutex::new(receive);
         let failed = Mutex::new(None::<String>);
+        let dropped = Dropped::default();
         let readers = std::thread::available_parallelism().map_or(4, |count| count.get().min(8));
         let walked = std::thread::scope(|scope| {
             for _ in 0..readers {
-                scope.spawn(|| self.read(&receive, &failed));
+                scope.spawn(|| self.read(&receive, &failed, &dropped));
             }
             // Dropping the sender (also on failure) lets the readers finish.
-            self.walk(send, &failed)
+            self.walk(send, &failed, &dropped)
         });
         walked?;
-        match failed.into_inner().unwrap_or_else(|err| err.into_inner()) {
-            Some(why) => Err(why),
-            None => Ok(()),
+        if let Some(why) = failed.into_inner().unwrap_or_else(|err| err.into_inner()) {
+            return Err(why);
         }
+        let dropped = dropped.into_inner().unwrap_or_else(|err| err.into_inner());
+        let mut left_out = Vec::new();
+        for ((profile, unit), why) in dropped {
+            for kind in ["build", ".fingerprint"] {
+                match fs::remove_dir_all(self.copy.join(&profile).join(kind).join(&unit)) {
+                    Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(format!("leaving out {unit}: {err}"));
+                    }
+                    _ => {}
+                }
+            }
+            left_out.push((profile.join("build").join(unit), why));
+        }
+        Ok(left_out)
+    }
+
+    /// Why checking must end now, if it must.
+    fn over(&self) -> Option<&'static str> {
+        if (self.stopped)() {
+            Some("the worktree is being removed")
+        } else if Instant::now() >= self.deadline {
+            Some("out of time")
+        } else {
+            None
+        }
+    }
+
+    /// The dependency unit of a `target` that `rel` lies in, which a file that can't be
+    /// settled drops (not the whole copy).
+    fn unit(&self, rel: &Path) -> Option<(PathBuf, String)> {
+        (self.name == "target").then(|| unit_of(rel)).flatten()
+    }
+
+    /// Leaves out the unit `rel` lies in, if it lies in one; `false` when it doesn't (the
+    /// whole copy goes).
+    fn drop_unit(&self, rel: &Path, why: &str, dropped: &Dropped) -> bool {
+        let Some(unit) = self.unit(rel) else {
+            return false;
+        };
+        dropped
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .entry(unit)
+            .or_insert_with(|| format!("{}: {why}", rel.display()));
+        true
+    }
+
+    fn is_dropped(&self, rel: &Path, dropped: &Dropped) -> bool {
+        self.unit(rel).is_some_and(|unit| {
+            dropped
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .contains_key(&unit)
+        })
     }
 
     fn walk(
         &self,
         probes: std::sync::mpsc::Sender<Probe>,
         failed: &Mutex<Option<String>>,
+        dropped: &Dropped,
     ) -> Result<(), String> {
         let (mut seen, mut probed, mut probed_bytes) = (0usize, 0usize, 0u64);
         let mut pending = vec![PathBuf::new()];
@@ -735,8 +1526,8 @@ impl Settle<'_> {
                 if seen > MAX_ENTRIES {
                     return Err("too many files to check".into());
                 }
-                if Instant::now() >= self.deadline {
-                    return Err("out of time".into());
+                if let Some(why) = self.over() {
+                    return Err(why.into());
                 }
                 if failed
                     .lock()
@@ -751,15 +1542,20 @@ impl Settle<'_> {
                 if file_name == "pyvenv.cfg" {
                     return Err(format!("{} is in a Python environment", rel.display()));
                 }
+                if self.is_dropped(&rel, dropped) {
+                    continue;
+                }
                 let kind = entry.file_type().map_err(|err| err.to_string())?;
                 if kind.is_symlink() {
-                    relink(
+                    if let Err(why) = relink(
                         &self.copy.join(&rel),
                         &self.from.join(&rel),
                         &self.published.join(&rel),
                         self.paths,
-                    )
-                    .map_err(|why| format!("{}: {why}", rel.display()))?;
+                    ) && !self.drop_unit(&rel, &why, dropped)
+                    {
+                        return Err(format!("{}: {why}", rel.display()));
+                    }
                 } else if kind.is_dir() {
                     if file_name == ".venv" || file_name == "venv" {
                         return Err(format!("{} is a Python environment", rel.display()));
@@ -767,14 +1563,17 @@ impl Settle<'_> {
                     pending.push(rel);
                 } else if !kind.is_file() {
                     // A pipe, socket or device: reading one could block forever.
-                    return Err(format!("{} is not a regular file", rel.display()));
+                    let why = "not a regular file";
+                    if !self.drop_unit(&rel, why, dropped) {
+                        return Err(format!("{} is {why}", rel.display()));
+                    }
                 } else {
                     let meta = entry.metadata().map_err(|err| err.to_string())?;
-                    let Some(whole) = self
-                        .file(&rel, &meta)
-                        .map_err(|why| format!("{}: {why}", rel.display()))?
-                    else {
-                        continue;
+                    let whole = match self.file(&rel, &meta) {
+                        Ok(Some(whole)) => whole,
+                        Ok(None) => continue,
+                        Err(why) if self.drop_unit(&rel, &why, dropped) => continue,
+                        Err(why) => return Err(format!("{}: {why}", rel.display())),
                     };
                     probed += 1;
                     probed_bytes += meta.len();
@@ -788,13 +1587,18 @@ impl Settle<'_> {
         Ok(())
     }
 
-    /// Rewrites one regular file if it is a known kind, or says whether to read it for the
-    /// checkout's path: `Some(true)` all of it, `Some(false)` if it is small text.
+    /// Rewrites one regular file if it is a known kind, or says whether to read it for
+    /// protected paths: `Some(true)` all of it, `Some(false)` if it is small text.
     fn file(&self, rel: &Path, meta: &fs::Metadata) -> Result<Option<bool>, String> {
         let path = self.copy.join(rel);
+        if self.name == "target" && rustc_dep_info(rel) {
+            return fs::remove_file(&path)
+                .map(|()| None)
+                .map_err(|err| err.to_string());
+        }
         let executable = is_executable(meta);
-        // A program Cargo built for the checkout, in a profile folder: one a person might run
-        // by hand. Cargo builds it again when it is needed.
+        // A program Cargo built for the source, in a profile folder: one a person might run by
+        // hand. Cargo builds it again when it is needed.
         if self.name == "target"
             && executable
             && path
@@ -817,11 +1621,13 @@ impl Settle<'_> {
         Ok((whole || meta.len() <= MAX_PROBE_BYTES).then_some(whole))
     }
 
-    /// Reads the files the walk hands over until there are no more or one names the checkout.
+    /// Reads the files the walk hands over until there are no more or one names a protected
+    /// place outside a unit that can be left out.
     fn read(
         &self,
         probes: &Mutex<std::sync::mpsc::Receiver<Probe>>,
         failed: &Mutex<Option<String>>,
+        dropped: &Dropped,
     ) {
         let fail = |why: String| {
             failed
@@ -838,17 +1644,24 @@ impl Settle<'_> {
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
                 .is_some()
+                || self.is_dropped(&rel, dropped)
             {
                 continue;
             }
-            if Instant::now() >= self.deadline {
-                fail("out of time".into());
+            if let Some(why) = self.over() {
+                fail(why.into());
                 continue;
             }
-            match names_checkout(&self.copy.join(&rel), whole, self.paths) {
-                Ok(false) => {}
-                Ok(true) => fail(format!("{} refers to the checkout", rel.display())),
-                Err(why) => fail(format!("{}: {why}", rel.display())),
+            let (why, message) = match names_checkout(&self.copy.join(&rel), whole, self.paths) {
+                Ok(false) => continue,
+                Ok(true) => {
+                    let why = "refers to the checkout or another worktree of the project";
+                    (why.to_owned(), format!("{} {why}", rel.display()))
+                }
+                Err(why) => (why.clone(), format!("{}: {why}", rel.display())),
+            };
+            if !self.drop_unit(&rel, &why, dropped) {
+                fail(message);
             }
         }
     }
@@ -865,7 +1678,7 @@ fn is_executable(_meta: &fs::Metadata) -> bool {
     false
 }
 
-/// Whether the file at `path` names the checkout. With `whole`, all of it is read, binary or
+/// Whether the file at `path` names a protected place. With `whole`, all of it is read, binary or
 /// not; otherwise it is a small file, checked only if it is text.
 fn names_checkout(path: &Path, whole: bool, paths: &Paths) -> Result<bool, String> {
     const CHUNK: usize = 1 << 20;
@@ -891,10 +1704,11 @@ fn names_checkout(path: &Path, whole: bool, paths: &Paths) -> Result<bool, Strin
         let read = file.read(&mut chunk).map_err(|err| err.to_string())?;
         window.extend_from_slice(&chunk[..read]);
         let ended = read == 0;
-        let named = paths.spellings.iter().any(|spelled| {
-            path_matches(&window, spelled, Format::Plain)
-                .any(|(at, _)| ended || at + spelled.needle().len() < window.len())
-        });
+        let named = paths.may_name(&window)
+            && paths.spellings.iter().any(|spelled| {
+                path_matches(&window, spelled, Format::Plain)
+                    .any(|(at, _)| ended || at + spelled.needle().len() < window.len())
+            });
         if named {
             return Ok(true);
         }
@@ -906,11 +1720,12 @@ fn names_checkout(path: &Path, whole: bool, paths: &Paths) -> Result<bool, Strin
     }
 }
 
-/// Points a copied link at the same place it pointed at in the checkout: its target is
-/// resolved in full from where the original sits (`original`), through every link on the way.
-/// A target in the checkout becomes the same place in the worktree, where the link will sit
-/// at `published`; one elsewhere is kept by its real path. A link that leads nowhere (missing
-/// or a loop) fails the copy, as does one to a Python environment.
+/// Points a copied link at the same place it pointed at in the source: its target is resolved
+/// in full from where the original sits (`original`), through every link on the way. A target
+/// in the source becomes the same place in the worktree, where the link will sit at
+/// `published`; one outside every protected place is kept by its real path. A link into
+/// another protected place, or that leads nowhere (missing or a loop), fails the copy, as does
+/// one to a Python environment.
 fn relink(link: &Path, original: &Path, published: &Path, paths: &Paths) -> Result<(), String> {
     let text = fs::read_link(link).map_err(|err| err.to_string())?;
     let spelled = original.parent().unwrap_or(original).join(&text);
@@ -920,6 +1735,17 @@ fn relink(link: &Path, original: &Path, published: &Path, paths: &Paths) -> Resu
         || target.join("pyvenv.cfg").symlink_metadata().is_ok()
     {
         return Err("leads to a Python environment".into());
+    }
+    // The most specific place it is in decides: a worktree inside the checkout is another place.
+    let depth = |root: &Path| root.as_os_str().len();
+    if let Some(other) = paths
+        .others
+        .iter()
+        .filter(|other| target.starts_with(other))
+        .max_by_key(|other| depth(other))
+        && (!target.starts_with(&paths.source) || depth(other) > depth(&paths.source))
+    {
+        return Err(format!("leads into {}", other.display()));
     }
     let new = match target.strip_prefix(&paths.source) {
         Ok(rest) => {
@@ -1079,11 +1905,21 @@ fn rewrite_file(
     Ok(true)
 }
 
-/// `bytes`, a file of `format`, with every mention of the checkout replaced by the worktree;
+/// `bytes`, a file of `format`, with every mention of the source replaced by the worktree;
 /// `None` when there is none. Fails when a mention can't be rewritten for sure (it may be the
-/// start of a longer name, or the worktree's path can't be written in the format) or one is
-/// left in a spelling the format doesn't use.
+/// start of a longer name, or the worktree's path can't be written in the format), one is left
+/// in a spelling the format doesn't use, or another protected place is named.
 fn rewrite(bytes: &[u8], format: Format, paths: &Paths) -> Result<Option<Vec<u8>>, String> {
+    if !paths.may_name(bytes) {
+        return Ok(None);
+    }
+    if paths
+        .inner
+        .iter()
+        .any(|spelled| path_matches(bytes, spelled, format).next().is_some())
+    {
+        return Err("names another worktree of the project".into());
+    }
     let mut out = bytes.to_vec();
     let mut changed = false;
     for form in &paths.forms {
@@ -1095,7 +1931,7 @@ fn rewrite(bytes: &[u8], format: Format, paths: &Paths) -> Result<Option<Vec<u8>
                 continue;
             }
             if found.iter().any(|(_, fit)| *fit == Fit::Unsure) {
-                return Err("names the checkout in a way that can't be rewritten".into());
+                return Err("names its source in a way that can't be rewritten".into());
             }
             let to = paths
                 .worktree_in(style)
@@ -1118,7 +1954,7 @@ fn rewrite(bytes: &[u8], format: Format, paths: &Paths) -> Result<Option<Vec<u8>
         }
     }
     if paths.named_in(&out, format) {
-        return Err("still names the checkout".into());
+        return Err("still names the checkout or another worktree of the project".into());
     }
     Ok(changed.then_some(out))
 }
@@ -1351,7 +2187,7 @@ mod tests {
     }
 
     fn paths(source: &str, worktree: &str) -> Paths {
-        Paths::new(Path::new(source), &[], Path::new(worktree))
+        Paths::new(Path::new(source), &[], &[], Path::new(worktree))
     }
 
     fn rewritten(paths: &Paths, format: Format, text: &str) -> Result<Option<String>, String> {
@@ -1666,21 +2502,46 @@ mod tests {
         }
 
         fn warm_until(&self, deadline: Instant) -> Warmed {
+            self.warm_from(None, deadline)
+        }
+
+        /// Warms the worktree with `parent` as the workspace it was made from.
+        fn warm_from(&self, parent: Option<&Path>, deadline: Instant) -> Warmed {
             let worktree = self.git.open(&self.worktree).unwrap();
-            warm_until(&self.repo, &[], &worktree, &|| false, deadline)
+            let sources = Sources {
+                checkout: &self.repo,
+                aliases: &[],
+                parent,
+            };
+            warm_until(&sources, &worktree, &|_| false, &|| false, deadline)
+        }
+
+        /// Another worktree of the checkout, at `name` beside it.
+        fn add_worktree(&self, name: &str) -> PathBuf {
+            let path = self.dir.join(name);
+            let head = self.repo.resolve("HEAD").unwrap();
+            self.repo
+                .add_worktree(&path, WorktreeSpec::Detached { at: head })
+                .unwrap();
+            fs::canonicalize(path).unwrap()
         }
 
         fn warm(&self) -> Warmed {
             self.warm_until(Instant::now() + WARM_DEADLINE)
         }
 
+        /// Why `rel` was skipped, without the source it was tried from.
         fn why(warmed: &Warmed, rel: &str) -> String {
-            warmed
+            let why = warmed
                 .skipped
                 .iter()
                 .find(|(path, _)| path == rel)
                 .map(|(_, why)| why.clone())
-                .unwrap_or_else(|| panic!("{rel} wasn't skipped: {warmed:?}"))
+                .unwrap_or_else(|| panic!("{rel} wasn't skipped: {warmed:?}"));
+            match why.rsplit_once(" (/") {
+                Some((why, _)) => why.to_owned(),
+                None => why,
+            }
         }
 
         /// Copies in progress in the worktree, or beside it.
@@ -1730,7 +2591,7 @@ mod tests {
         fx.link("absolute/index.js", "node_modules/a/chained");
         fx.age("node_modules");
         let warmed = fx.warm();
-        assert_eq!(warmed.copied, ["node_modules"], "{warmed:?}");
+        assert_eq!(warmed.folders(), ["node_modules"], "{warmed:?}");
         let copy = fx.worktree.join("node_modules");
         let shim = fs::read_to_string(copy.join(".bin/vite")).unwrap();
         let worktree = fs::canonicalize(&fx.worktree).unwrap();
@@ -1788,7 +2649,7 @@ mod tests {
         );
         fx.age("node_modules");
         let warmed = fx.warm();
-        assert_eq!(warmed.copied, ["node_modules"], "{warmed:?}");
+        assert_eq!(warmed.folders(), ["node_modules"], "{warmed:?}");
         assert_eq!(fs::read(fx.root().join("important")).unwrap(), b"keep me");
         assert!(
             !fs::read_to_string(fx.worktree.join("node_modules/.bin/tool"))
@@ -1863,7 +2724,7 @@ mod tests {
         fs::remove_dir_all(fx.root().join("node_modules/tool/bin")).unwrap();
         fx.write("node_modules/tool/data/blob", &big);
         fx.age("node_modules");
-        assert_eq!(fx.warm().copied, ["node_modules"]);
+        assert_eq!(fx.warm().folders(), ["node_modules"]);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1899,7 +2760,11 @@ mod tests {
         // `tools/venv` is a Python environment too: a package inside it is left out, and said so.
         fx.write("tools/venv/pyvenv.cfg", b"home = /usr/bin");
         let warmed = fx.warm();
-        assert_eq!(warmed.copied, ["packages/env/node_modules"], "{warmed:?}");
+        assert_eq!(
+            warmed.folders(),
+            ["packages/env/node_modules"],
+            "{warmed:?}"
+        );
         assert!(
             fx.worktree
                 .join("packages/env/node_modules/a/index.js")
@@ -2020,7 +2885,7 @@ mod tests {
         fx.write("node_modules/a/index.js", b"export {}");
         fx.age("node_modules");
         let warmed = fx.warm();
-        assert_eq!(warmed.copied, ["node_modules"], "{warmed:?}");
+        assert_eq!(warmed.folders(), ["node_modules"], "{warmed:?}");
         assert!(!fx.worktree.join(&untracked).exists());
         assert!(fx.worktree.join(&tracked).join("README").exists());
         assert!(
@@ -2046,7 +2911,7 @@ mod tests {
         assert!(Fixture::why(&warmed, "node_modules").contains("dependencies differ"));
         assert!(!fx.worktree.join("node_modules").exists());
         fx.write("pnpm-lock.yaml", b"lockfileVersion: '9.0'\n");
-        assert_eq!(fx.warm().copied, ["node_modules"]);
+        assert_eq!(fx.warm().folders(), ["node_modules"]);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -2075,20 +2940,25 @@ mod tests {
         fx.age("node_modules");
         fx.age(".turbo");
         let worktree = fx.git.open(&fx.worktree).unwrap();
+        let sources = Sources {
+            checkout: &fx.repo,
+            aliases: &[],
+            parent: None,
+        };
         let warmed = warm_until(
-            &fx.repo,
-            &[],
+            &sources,
             &worktree,
-            &|| true,
+            &|_| true,
+            &|| false,
             Instant::now() + WARM_DEADLINE,
         );
         assert_eq!(
             Fixture::why(&warmed, "node_modules"),
             "an install is running"
         );
-        assert_eq!(warmed.copied, ["target", ".turbo"], "{warmed:?}");
+        assert_eq!(warmed.folders(), ["target", ".turbo"], "{warmed:?}");
         let warmed = fx.warm();
-        assert_eq!(warmed.copied, ["node_modules"], "{warmed:?}");
+        assert_eq!(warmed.folders(), ["node_modules"], "{warmed:?}");
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -2123,18 +2993,11 @@ mod tests {
             format!("{source}/target/debug/deps/app-1a2b: {source}/src/main.rs\n").as_bytes(),
         );
         let warmed = fx.warm();
-        assert_eq!(warmed.copied, ["target"], "{warmed:?}");
+        assert_eq!(warmed.folders(), ["target"], "{warmed:?}");
         let copy = fx.worktree.join("target/debug");
         assert!(!copy.join("app").exists());
         assert!(copy.join("deps/app-1a2b").exists());
-        let worktree = fs::canonicalize(&fx.worktree).unwrap();
-        assert_eq!(
-            fs::read_to_string(copy.join("deps/app-1a2b.d")).unwrap(),
-            format!(
-                "{0}/target/debug/deps/app-1a2b: {0}/src/main.rs\n",
-                worktree.display()
-            )
-        );
+        assert!(!copy.join("deps/app-1a2b.d").exists());
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -2172,7 +3035,7 @@ mod tests {
             steps(&out).as_bytes(),
         );
         let warmed = fx.warm();
-        assert_eq!(warmed.copied, ["target"], "{warmed:?}");
+        assert_eq!(warmed.folders(), ["target"], "{warmed:?}");
         let worktree = fs::canonicalize(&fx.worktree).unwrap();
         let moved = format!(
             "{}/target/debug/build/whisper-rs-sys-1a2b/out",
@@ -2219,5 +3082,735 @@ mod tests {
         let warmed = fx.warm();
         assert!(warmed.copied.is_empty());
         assert_eq!(warmed.skipped[0].1, "git doesn't ignore it");
+    }
+
+    #[test]
+    fn package_names_come_from_the_package_table() {
+        assert_eq!(
+            package_name("[ package ]\n'name' = 'spaced'\n"),
+            Some("spaced".into())
+        );
+        assert_eq!(
+            package_name("package = { name = 'inline' }\n"),
+            Some("inline".into())
+        );
+        assert_eq!(
+            package_name(
+                "[workspace]\nname = \"no\"\n\n[package] # the crate\nversion = \"1\"\nname = \"brigadier-core\"\n"
+            ),
+            Some("brigadier-core".into())
+        );
+        assert_eq!(
+            package_name("[package]\nname='single'\n"),
+            Some("single".into())
+        );
+        assert_eq!(package_name("[workspace]\nmembers = []\n"), None);
+        assert_eq!(package_name("[dependencies]\nname = \"x\"\n"), None);
+        assert_eq!(
+            unit_name("whisper-rs-sys-0123456789abcdef"),
+            Some(("whisper-rs-sys", "0123456789abcdef"))
+        );
+        assert_eq!(unit_name("whisper-rs-sys-1a2b"), None);
+        assert_eq!(
+            output_name("libbrigadier_core-0123456789abcdef.rlib"),
+            Some(("libbrigadier_core", "0123456789abcdef"))
+        );
+        assert_eq!(
+            output_name("app-0123456789abcdef.0hxc9rb3.08z7hlf.rcgu.o"),
+            Some(("app", "0123456789abcdef"))
+        );
+        assert_eq!(
+            output_name("app-0123456789abcdef"),
+            Some(("app", "0123456789abcdef"))
+        );
+        assert_eq!(
+            unit_of(Path::new("debug/build/ring-0123456789abcdef/out/x.c")),
+            Some((PathBuf::from("debug"), "ring-0123456789abcdef".into()))
+        );
+        assert_eq!(
+            unit_of(Path::new(
+                "aarch64-apple-darwin/release/.fingerprint/ring-0123456789abcdef/lib-ring.json"
+            )),
+            Some((
+                PathBuf::from("aarch64-apple-darwin/release"),
+                "ring-0123456789abcdef".into()
+            ))
+        );
+        // The unit's own folder, a file beside the units, or dep-info: not in a unit.
+        assert_eq!(
+            unit_of(Path::new("debug/build/ring-0123456789abcdef")),
+            None
+        );
+        assert_eq!(
+            unit_of(Path::new("debug/deps/ring-0123456789abcdef.d")),
+            None
+        );
+        assert_eq!(unit_of(Path::new("debug/build/ring-1a2b/output")), None);
+    }
+
+    #[test]
+    fn the_worktrees_own_units_go_from_every_profile() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-units-{}", uuid::Uuid::new_v4().simple()));
+        let target = dir.join("target");
+        let (own, bin, registry) = ("0000000000000001", "0000000000000002", "0000000000000003");
+        let files = |profile: &str| {
+            vec![
+                format!("{profile}/.cargo-lock"),
+                // A package with a hyphen in its name, its lib and its build script.
+                format!("{profile}/.fingerprint/my-core-{own}/lib-my_core.json"),
+                format!("{profile}/build/my-core-{own}/build-script-build"),
+                format!("{profile}/build/my-core-0000000000000004/out/generated.rs"),
+                format!("{profile}/deps/libmy_core-{own}.rlib"),
+                format!("{profile}/deps/my_core-{own}.d"),
+                // An older build of it no fingerprint names any more.
+                format!("{profile}/deps/libmy_core-0000000000000009.rmeta"),
+                // A binary and an example named other than the package, found by hash.
+                format!("{profile}/.fingerprint/my-app-{bin}/bin-app"),
+                format!("{profile}/deps/app-{bin}"),
+                format!("{profile}/deps/app-{bin}.0abc.rcgu.o"),
+                format!("{profile}/examples/demo-{bin}"),
+                format!("{profile}/examples/demo"),
+                format!("{profile}/incremental/my_core-1ab2cd3ef4gh5/s-x/dep-graph.bin"),
+                format!("{profile}/bundle/macos/My.app/Contents/MacOS/app"),
+                format!("{profile}/app.d"),
+                format!("{profile}/libmy_core.rlib"),
+                format!("{profile}/libcustom_target.dylib"),
+                // A registry package, one named like ours but longer, and its outputs.
+                format!("{profile}/.fingerprint/serde-{registry}/lib-serde.json"),
+                format!("{profile}/.fingerprint/my-core-macros-{registry}/lib-my_core_macros.json"),
+                format!("{profile}/build/serde-{registry}/output"),
+                format!("{profile}/deps/libserde-{registry}.rlib"),
+                format!("{profile}/deps/libmy_core_macros-{registry}.dylib"),
+            ]
+        };
+        let profiles = ["debug", "release", "aarch64-apple-darwin/debug"];
+        for profile in profiles {
+            for file in files(profile) {
+                let path = target.join(file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, "").unwrap();
+            }
+        }
+        let packages: BTreeSet<String> = ["my-core", "my-app"].map(String::from).into();
+        forget_own_units(&target, &packages).unwrap();
+        for profile in profiles {
+            let at = |rel: &str| target.join(profile).join(rel).exists();
+            for gone in [
+                format!(".fingerprint/my-core-{own}"),
+                format!("build/my-core-{own}"),
+                "build/my-core-0000000000000004".into(),
+                format!("deps/libmy_core-{own}.rlib"),
+                format!("deps/my_core-{own}.d"),
+                "deps/libmy_core-0000000000000009.rmeta".into(),
+                format!(".fingerprint/my-app-{bin}"),
+                format!("deps/app-{bin}"),
+                format!("deps/app-{bin}.0abc.rcgu.o"),
+                "examples".into(),
+                "incremental".into(),
+                "bundle".into(),
+                "app.d".into(),
+                "libmy_core.rlib".into(),
+                "libcustom_target.dylib".into(),
+            ] {
+                assert!(!at(&gone), "{profile}/{gone} is still there");
+            }
+            for kept in [
+                ".cargo-lock".to_owned(),
+                format!(".fingerprint/serde-{registry}/lib-serde.json"),
+                format!(".fingerprint/my-core-macros-{registry}/lib-my_core_macros.json"),
+                format!("build/serde-{registry}/output"),
+                format!("deps/libserde-{registry}.rlib"),
+                format!("deps/libmy_core_macros-{registry}.dylib"),
+            ] {
+                assert!(at(&kept), "{profile}/{kept} went");
+            }
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eviction_never_follows_copied_build_or_deps_links() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-evict-links-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        for linked in ["build", "deps"] {
+            let target = dir.join(linked).join("target");
+            let source = dir.join(linked).join("source");
+            fs::create_dir_all(target.join("debug/.fingerprint")).unwrap();
+            fs::create_dir_all(&source).unwrap();
+            let name = if linked == "build" {
+                "own-0000000000000001"
+            } else {
+                "libown-0000000000000001.rlib"
+            };
+            let original = source.join(name);
+            fs::write(&original, "source must survive").unwrap();
+            std::os::unix::fs::symlink(&source, target.join("debug").join(linked)).unwrap();
+            let result = forget_own_units(&target, &BTreeSet::from(["own".into()]));
+            assert_eq!(
+                fs::read_to_string(&original).unwrap(),
+                "source must survive"
+            );
+            assert!(result.is_err(), "a linked unit folder must reject the copy");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_packages_include_untracked_and_external_path_dependencies() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-lock-packages-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Cargo.lock"), "version = 4\n[[package]]\nname = 'external-path'\nversion = '1.0.0'\n[[package]]\nname = 'registry'\nversion = '1.0.0'\nsource = 'registry+https://example.test/index'\n[[package]]\nname = 'git-dep'\nversion = '1.0.0'\nsource = 'git+https://example.test/repo'\n").unwrap();
+        assert_eq!(
+            local_lock_packages(&dir),
+            BTreeSet::from(["external-path".into()])
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn scripted_proc_macros_rebuild_but_libraries_and_build_scripts_stay() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-proc-units-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let write = |path: PathBuf, bytes: &[u8]| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        };
+        for profile in ["debug", "aarch64-apple-darwin/release"] {
+            let at = dir.join(profile);
+            for (package, hash, filename, marker, json) in [
+                (
+                    "out-macro",
+                    "0000000000000001",
+                    "lib-custom.json",
+                    true,
+                    "{}",
+                ),
+                (
+                    "dep-macro",
+                    "0000000000000002",
+                    "lib-custom.json",
+                    true,
+                    r#"{"deps":[[0,"build_script_build",false,0]]}"#,
+                ),
+                (
+                    "plain-macro",
+                    "0000000000000003",
+                    "lib-custom.json",
+                    true,
+                    "{}",
+                ),
+                (
+                    "ordinary-lib",
+                    "0000000000000004",
+                    "lib-custom.json",
+                    false,
+                    "{}",
+                ),
+                (
+                    "out-macro",
+                    "0000000000000005",
+                    "bin-tool.json",
+                    false,
+                    "{}",
+                ),
+                (
+                    "out-macro",
+                    "0000000000000006",
+                    "test-lib-custom.json",
+                    false,
+                    "{}",
+                ),
+            ] {
+                write(
+                    at.join(format!(".fingerprint/{package}-{hash}/{filename}")),
+                    json.as_bytes(),
+                );
+                for ext in ["so", "dylib", "dll"] {
+                    let mut bytes = vec![0; (64 << 10) - 9];
+                    if marker {
+                        bytes.extend(b"__rustc_proc_macro_decls_0123456789abcdef__");
+                    }
+                    write(at.join(format!("deps/libcustom-{hash}.{ext}")), &bytes);
+                }
+                write(
+                    at.join(format!("deps/libcustom-{hash}.rlib")),
+                    b"library output",
+                );
+            }
+            for package in ["out-macro", "ordinary-lib"] {
+                fs::create_dir_all(at.join(format!("build/{package}-0000000000000010/out")))
+                    .unwrap();
+                write(
+                    at.join(format!(
+                        "build/{package}-0000000000000020/build-script-build"
+                    )),
+                    b"compiled build script",
+                );
+                write(at.join(format!(".fingerprint/{package}-0000000000000020/build-script-build-script-build.json")), b"{}");
+            }
+        }
+        let dropped =
+            forget_build_executables(&dir, Instant::now() + Duration::from_secs(10)).unwrap();
+        assert_eq!(dropped.len(), 8);
+        for profile in ["debug", "aarch64-apple-darwin/release"] {
+            let at = dir.join(profile);
+            for (package, hash) in [
+                ("out-macro", "0000000000000001"),
+                ("dep-macro", "0000000000000002"),
+                ("out-macro", "0000000000000005"),
+                ("out-macro", "0000000000000006"),
+            ] {
+                assert!(!at.join(format!(".fingerprint/{package}-{hash}")).exists());
+                for ext in ["so", "dylib", "dll", "rlib"] {
+                    assert!(!at.join(format!("deps/libcustom-{hash}.{ext}")).exists());
+                }
+            }
+            for (package, hash) in [
+                ("plain-macro", "0000000000000003"),
+                ("ordinary-lib", "0000000000000004"),
+            ] {
+                assert!(at.join(format!(".fingerprint/{package}-{hash}")).exists());
+                assert!(at.join(format!("deps/libcustom-{hash}.rlib")).exists());
+                assert!(at.join(format!("deps/libcustom-{hash}.so")).exists());
+            }
+            assert!(
+                at.join("build/out-macro-0000000000000020/build-script-build")
+                    .exists()
+            );
+            assert!(at.join(".fingerprint/out-macro-0000000000000020").exists());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn rustc_output_dep_info_from_previous_worktrees_is_discarded() {
+        let Some(fx) = Fixture::new("target/\n") else {
+            return;
+        };
+        let previous = fx.add_worktree("previous");
+        let stale = format!(
+            "{}/target/debug/deps/libdep.rlib: registry/source.rs\n",
+            previous.display()
+        );
+        fx.write(
+            "target/debug/.fingerprint/dep-0000000000000001/dep-lib-dep",
+            b"\0cargo dep-info",
+        );
+        fx.write(
+            "target/debug/.fingerprint/dep-0000000000000001/lib-dep.json",
+            b"{}",
+        );
+        fx.write("target/debug/deps/dep-0000000000000001.d", stale.as_bytes());
+        fx.write(
+            "target/debug/build/dep-0000000000000002/build_script_build-0000000000000002.d",
+            stale.as_bytes(),
+        );
+        fx.write(
+            "target/debug/build/dep-0000000000000002/out/native.d",
+            b"native.o: native.c\n",
+        );
+        let warmed = fx.warm();
+        assert_eq!(warmed.folders(), ["target"], "{warmed:?}");
+        let at = fx.worktree.join("target/debug");
+        assert!(!at.join("deps/dep-0000000000000001.d").exists());
+        assert!(
+            !at.join("build/dep-0000000000000002/build_script_build-0000000000000002.d")
+                .exists()
+        );
+        assert!(
+            at.join(".fingerprint/dep-0000000000000001/dep-lib-dep")
+                .exists()
+        );
+        assert!(at.join("build/dep-0000000000000002/out/native.d").exists());
+    }
+
+    #[test]
+    fn warming_is_stopped_and_waited_for() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-stop-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&dir).unwrap();
+        let warming = Warming::begin(&dir);
+        let other = Warming::begin(&dir.join("elsewhere"));
+        let stopper = {
+            let dir = dir.clone();
+            std::thread::spawn(move || stop(&dir))
+        };
+        let started = Instant::now();
+        while !warming.stopped() {
+            assert!(started.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // It waits until the warming has ended.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!stopper.is_finished());
+        assert!(!other.stopped());
+        drop(warming);
+        stopper.join().unwrap();
+        // Nothing under way: it returns at once.
+        stop(&dir);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Dates a folder and what is at its top a minute back.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn age_dir(dir: &Path) {
+        let past = SystemTime::now() - Duration::from_secs(60);
+        let mut paths = vec![dir.to_owned()];
+        paths.extend(
+            fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.path()),
+        );
+        for path in paths {
+            if !fs::symlink_metadata(&path).unwrap().is_symlink() {
+                File::open(path).unwrap().set_modified(past).unwrap();
+            }
+        }
+    }
+
+    /// Writes `.turbo/from` saying `name` in `root`, dated a minute back (`newer` a few seconds
+    /// later than the rest).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn turbo_in(root: &Path, name: &str, newer: bool) {
+        let dir = root.join(".turbo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("from"), name).unwrap();
+        age_dir(&dir);
+        if newer {
+            let later = SystemTime::now() - Duration::from_secs(30);
+            File::open(&dir).unwrap().set_modified(later).unwrap();
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_parent_is_the_first_source_then_the_newest() {
+        let Some(fx) = Fixture::new(".turbo/\n") else {
+            return;
+        };
+        let parent = fx.add_worktree("session");
+        let sibling = fx.add_worktree("sibling");
+        // A worktree git still lists but that is gone.
+        let gone = fx.add_worktree("gone");
+        turbo_in(fx.root(), "checkout", false);
+        turbo_in(&parent, "session", false);
+        turbo_in(&sibling, "sibling", true);
+        fs::remove_dir_all(&gone).unwrap();
+        let from = |warmed: &Warmed| {
+            assert_eq!(warmed.folders(), [".turbo"], "{warmed:?}");
+            let copied = fs::read_to_string(fx.worktree.join(".turbo/from")).unwrap();
+            fs::remove_dir_all(fx.worktree.join(".turbo")).unwrap();
+            (copied, warmed.copied[0].1.clone())
+        };
+        let deadline = || Instant::now() + WARM_DEADLINE;
+        let warmed = fx.warm_from(Some(&parent), deadline());
+        assert_eq!(from(&warmed), ("session".into(), parent.clone()));
+        // Without one, the newest.
+        let warmed = fx.warm_from(None, deadline());
+        assert_eq!(from(&warmed), ("sibling".into(), sibling.clone()));
+        // A parent that is busy is passed over.
+        fs::write(parent.join(".turbo/from"), "session, now").unwrap();
+        let warmed = fx.warm_from(Some(&parent), deadline());
+        assert_eq!(from(&warmed).0, "sibling");
+        // A source whose copy fails is left for the next one, and only one more is tried.
+        age_dir(&parent.join(".turbo"));
+        let sneaky = |root: &Path| {
+            fs::write(
+                root.join(".turbo/from"),
+                format!("cd {}/x", fx.root().display()),
+            )
+            .unwrap();
+            age_dir(&root.join(".turbo"));
+        };
+        sneaky(&parent);
+        let warmed = fx.warm_from(Some(&parent), deadline());
+        assert_eq!(from(&warmed).0, "sibling");
+        sneaky(&sibling);
+        let warmed = fx.warm_from(Some(&parent), deadline());
+        assert!(warmed.copied.is_empty(), "{warmed:?}");
+        let why = &warmed.skipped[0].1;
+        assert_eq!(why.matches("refers to the checkout").count(), 2, "{why}");
+        assert!(
+            !why.contains(&format!("({})", fx.root().display())),
+            "{why}"
+        );
+        assert!(!fx.worktree.join(".turbo").exists());
+        assert!(fx.leftovers().is_empty());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn an_old_parent_survives_the_source_candidate_cap() {
+        let Some(fx) = Fixture::new(".turbo/\n") else {
+            return;
+        };
+        let parent = fx.add_worktree("parent");
+        turbo_in(&parent, "parent", false);
+        for i in 0..=MAX_SOURCES {
+            let newer = fx.add_worktree(&format!("newer-{i}"));
+            turbo_in(&newer, "newer", true);
+        }
+        let warmed = fx.warm_from(Some(&parent), Instant::now() + WARM_DEADLINE);
+        assert_eq!(warmed.folders(), [".turbo"], "{warmed:?}");
+        assert_eq!(warmed.copied[0].1, parent);
+        assert_eq!(
+            fs::read_to_string(fx.worktree.join(".turbo/from")).unwrap(),
+            "parent"
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn every_worktree_of_the_project_is_protected() {
+        let Some(fx) = Fixture::new("node_modules/\n") else {
+            return;
+        };
+        let sibling = fx.add_worktree("sibling");
+        fs::create_dir_all(sibling.join("shared")).unwrap();
+        fx.write("node_modules/a/index.js", b"export {}");
+        // A link into another worktree would let the worker write there.
+        fx.link(sibling.join("shared"), "node_modules/a/shared");
+        fx.age("node_modules");
+        let warmed = fx.warm();
+        assert!(
+            Fixture::why(&warmed, "node_modules").contains("leads into"),
+            "{warmed:?}"
+        );
+        // As would a script that names it.
+        fs::remove_file(fx.root().join("node_modules/a/shared")).unwrap();
+        fx.write(
+            "node_modules/.bin/tool",
+            format!("#!/bin/sh\ncd {}/shared\n", sibling.display()).as_bytes(),
+        );
+        fx.age("node_modules");
+        let warmed = fx.warm();
+        assert!(
+            Fixture::why(&warmed, "node_modules").contains("another worktree"),
+            "{warmed:?}"
+        );
+        assert!(!fx.worktree.join("node_modules").exists());
+        // The paths of each place are known, and a worktree inside the source is looked for
+        // before the source's path is rewritten.
+        let p = Paths::new(
+            Path::new("/app"),
+            &[],
+            &[PathBuf::from("/app/.worktrees/x"), PathBuf::from("/other")],
+            Path::new("/new"),
+        );
+        assert!(p.named_in(b"see /other/y", Format::Plain));
+        assert!(!p.named_in(b"see /others", Format::Plain));
+        assert!(rewrite(b"/app/.worktrees/x/y", Format::Plain, &p).is_err());
+        assert_eq!(
+            rewrite(b"/app/src", Format::Plain, &p).unwrap().unwrap(),
+            b"/new/src"
+        );
+        assert!(rewrite(b"/app/src /other/z", Format::Plain, &p).is_err());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_unit_naming_another_place_is_dropped_but_not_the_copy() {
+        let Some(fx) = Fixture::with("target/\n", |root| {
+            fs::create_dir_all(root.join("crates/my-app")).unwrap();
+            fs::write(
+                root.join("crates/my-app/Cargo.toml"),
+                "[package]\nname = \"my-app\"\n",
+            )
+            .unwrap();
+        }) else {
+            return;
+        };
+        let sibling = fx.add_worktree("sibling");
+        let source = fx.root().to_string_lossy().into_owned();
+        let (bad, good, own) = ("00000000000000aa", "00000000000000bb", "00000000000000cc");
+        fx.write("target/debug/.cargo-lock", b"");
+        // A dependency's build script wrote another worktree's path where it can't be
+        // rewritten: only that unit goes.
+        fx.write(
+            &format!("target/debug/build/cmake-dep-{bad}/out/cache.txt"),
+            format!("CMAKE_HOME={}/build\n", sibling.display()).as_bytes(),
+        );
+        fx.write(
+            &format!("target/debug/.fingerprint/cmake-dep-{bad}/lib.json"),
+            b"{}",
+        );
+        fx.write(
+            &format!("target/debug/build/serde-{good}/output"),
+            format!("cargo:rustc-link-search={source}/target/debug/build/serde-{good}/out\n")
+                .as_bytes(),
+        );
+        fx.write(
+            &format!("target/debug/.fingerprint/serde-{good}/lib.json"),
+            b"{}",
+        );
+        // The worktree's own crate, compiled for the source's files.
+        fx.write(
+            &format!("target/debug/build/my-app-{own}/out/where.txt"),
+            format!("{source}/crates/my-app\n").as_bytes(),
+        );
+        fx.write(
+            &format!("target/debug/.fingerprint/my-app-{own}/bin-my-app"),
+            b"",
+        );
+        fx.write(
+            &format!("target/debug/deps/my_app-{own}"),
+            format!("\0{source}\0").as_bytes(),
+        );
+        let warmed = fx.warm();
+        assert_eq!(warmed.folders(), ["target"], "{warmed:?}");
+        let copy = fx.worktree.join("target/debug");
+        assert!(!copy.join(format!("build/cmake-dep-{bad}")).exists());
+        assert!(!copy.join(format!(".fingerprint/cmake-dep-{bad}")).exists());
+        assert!(
+            Fixture::why(&warmed, &format!("target/debug/build/cmake-dep-{bad}"))
+                .contains("cache.txt")
+        );
+        assert!(
+            copy.join(format!(".fingerprint/serde-{good}/lib.json"))
+                .exists()
+        );
+        let worktree = fs::canonicalize(&fx.worktree).unwrap();
+        assert_eq!(
+            fs::read_to_string(copy.join(format!("build/serde-{good}/output"))).unwrap(),
+            format!(
+                "cargo:rustc-link-search={}/target/debug/build/serde-{good}/out\n",
+                worktree.display()
+            )
+        );
+        for gone in [
+            format!("build/my-app-{own}"),
+            format!(".fingerprint/my-app-{own}"),
+            format!("deps/my_app-{own}"),
+        ] {
+            assert!(!copy.join(&gone).exists(), "{gone}");
+        }
+        // One outside any unit drops the whole copy.
+        fs::remove_dir_all(fx.worktree.join("target")).unwrap();
+        fx.write(
+            "target/notes.txt",
+            format!("{}/target\n", sibling.display()).as_bytes(),
+        );
+        let warmed = fx.warm();
+        assert!(
+            Fixture::why(&warmed, "target").contains("refers to the checkout or another worktree"),
+            "{warmed:?}"
+        );
+        assert!(!fx.worktree.join("target").exists());
+        assert!(fx.leftovers().is_empty());
+    }
+
+    /// Warms a real worktree by hand: `BRIGADIER_WARM_CHECKOUT` (the project's checkout),
+    /// `BRIGADIER_WARM_PARENT` (the source to prefer) and `BRIGADIER_WARM_INTO` (a new worktree
+    /// of it). Prints what came, from where and how long it took.
+    #[test]
+    #[ignore = "warms a real worktree; run by hand"]
+    fn warm_a_real_worktree() {
+        let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+        let (Some(checkout), Some(parent), Some(into)) = (
+            var("BRIGADIER_WARM_CHECKOUT"),
+            var("BRIGADIER_WARM_PARENT"),
+            var("BRIGADIER_WARM_INTO"),
+        ) else {
+            return;
+        };
+        let git = brigadier_git::Git::new(PathBuf::from("git"), std::env::vars_os().collect());
+        let repo = git.open(&checkout).unwrap();
+        let worktree = git.open(&into).unwrap();
+        let sources = Sources {
+            checkout: &repo,
+            aliases: std::slice::from_ref(&checkout),
+            parent: Some(&parent),
+        };
+        let started = Instant::now();
+        let warmed = warm_worktree(&sources, &worktree, &|_| false, &|| false);
+        println!("ms: {}", started.elapsed().as_millis());
+        for (rel, from, ms) in &warmed.copied {
+            println!("copied {rel} from {} in {ms} ms", from.display());
+        }
+        for (rel, why) in &warmed.skipped {
+            println!("skipped {rel}: {why}");
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    #[ignore = "runs sequential real cargo builds; run explicitly under the build lock"]
+    fn warmed_workspace_recompiles_own_build_script_library_and_proc_macro() {
+        let fx = Fixture::with("target/\n", |root| {
+            let files = [
+                ("Cargo.toml", "[ package ]\nname = 'warm-proof'\nversion = '0.1.0'\nedition = '2024'\n[workspace]\nmembers = ['dep', 'mac']\n[dependencies]\nlocal-dep = { path = 'dep' }\nlocal-mac = { path = 'mac' }\n"),
+                ("src/main.rs", "fn main() { println!(\"{}|{}|{}\", env!(\"CARGO_MANIFEST_DIR\"), local_dep::path(), local_mac::path!()); }\n"),
+                ("build.rs", "fn main() { std::fs::write(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/build-ran\"), \"ran\").unwrap(); }\n"),
+                ("dep/Cargo.toml", "[package]\nname = 'local-dep'\nversion = '0.1.0'\nedition = '2024'\n[lib]\nname = 'local_dep'\n"),
+                ("dep/src/lib.rs", "pub fn path() -> &'static str { env!(\"CARGO_MANIFEST_DIR\") }\n"),
+                ("mac/Cargo.toml", "[package]\nname = 'local-mac'\nversion = '0.1.0'\nedition = '2024'\n[lib]\nproc-macro = true\n"),
+                ("mac/src/lib.rs", "extern crate proc_macro; #[proc_macro] pub fn path(_: proc_macro::TokenStream) -> proc_macro::TokenStream { format!(\"{:?}\", env!(\"CARGO_MANIFEST_DIR\")).parse().unwrap() }\n"),
+            ];
+            for (path, contents) in files {
+                let path = root.join(path);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, contents).unwrap();
+            }
+        }).expect("copy-on-write filesystem required for this explicit verification");
+        let build = |root: &Path| {
+            let result = std::process::Command::new("cargo")
+                .args(["build", "--offline", "-v"])
+                .env("CARGO_BUILD_JOBS", "2")
+                .env_remove("CARGO_TARGET_DIR")
+                .current_dir(root)
+                .output()
+                .unwrap();
+            let log = String::from_utf8_lossy(&result.stderr).into_owned();
+            println!("build {}:\n{log}", root.display());
+            assert!(result.status.success(), "{log}");
+            log
+        };
+        build(fx.root());
+        fs::remove_file(fx.root().join("build-ran")).unwrap();
+        let warmed = fx.warm();
+        println!("warming: {warmed:?}");
+        assert!(warmed.folders().contains(&"target".into()), "{warmed:?}");
+        let log = build(&fx.worktree);
+        for name in ["warm-proof", "local-dep", "local-mac"] {
+            assert!(
+                log.lines()
+                    .any(|line| line.trim_start().starts_with(&format!("Compiling {name} "))),
+                "{name} was not compiled: {log}"
+            );
+            assert!(
+                !log.lines()
+                    .any(|line| line.trim_start().starts_with(&format!("Fresh {name} "))),
+                "{name} was reused: {log}"
+            );
+        }
+        assert!(
+            !fx.root().join("build-ran").exists(),
+            "the copied build script wrote to the source"
+        );
+        assert!(fx.worktree.join("build-ran").is_file());
+        let output = std::process::Command::new(fx.worktree.join("target/debug/warm-proof"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            format!(
+                "{}|{}|{}",
+                fx.worktree.display(),
+                fx.worktree.join("dep").display(),
+                fx.worktree.join("mac").display()
+            )
+        );
     }
 }

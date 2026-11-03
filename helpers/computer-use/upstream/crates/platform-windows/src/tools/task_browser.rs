@@ -1,0 +1,1493 @@
+//! Windows task-browser ownership. No inbound attach, user-profile setup or
+//! user-profile deletion. Only internally created, lifecycle-bound profiles get
+//! automatically generated DevTools arguments.
+use crate::browser_platform::WindowsBrowserPlatform;
+use anyhow::{anyhow, bail, Context, Result};
+use cua_driver_core::browser::types::{OwnedEndpoint, ProcessFingerprint};
+use cua_driver_core::browser::{parse_devtools_active_port, BrowserPlatform};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::io::AsRawHandle;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Storage::FileSystem::{
+    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct DirectoryId {
+    volume: u32,
+    index: u64,
+    created: u64,
+}
+
+fn directory_id(file: &File) -> Result<DirectoryId> {
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe {
+        GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info)?;
+    }
+    if info.dwFileAttributes & 0x400 != 0 {
+        bail!("task profile directory is a reparse point");
+    }
+    Ok(DirectoryId {
+        volume: info.dwVolumeSerialNumber,
+        index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        created: (u64::from(info.ftCreationTime.dwHighDateTime) << 32)
+            | u64::from(info.ftCreationTime.dwLowDateTime),
+    })
+}
+
+fn reject_reparse_ancestors(path: &Path) -> Result<()> {
+    for ancestor in path.ancestors() {
+        if std::fs::symlink_metadata(ancestor)?.file_attributes() & 0x400 != 0 {
+            bail!("task browser profile ancestry contains a reparse point");
+        }
+    }
+    Ok(())
+}
+
+fn nonce() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow!("ownership nonce unavailable: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+static RUNTIME: OnceLock<String> = OnceLock::new();
+static PROFILES: Mutex<Vec<Arc<Profile>>> = Mutex::new(Vec::new());
+
+pub(super) fn lifecycle(args: &Value) -> Result<String> {
+    if let Some(key) = cua_driver_core::tool_args::session_key(args) {
+        return Ok(key);
+    }
+    if RUNTIME.get().is_none() {
+        let _ = RUNTIME.set(nonce()?);
+    }
+    let key = format!("runtime-{}", RUNTIME.get().unwrap());
+    Ok(
+        match cua_driver_core::tool::current_dispatch_runtime_scope() {
+            Some(scope) => format!("__cua_runtime_{scope}:{key}"),
+            None => key,
+        },
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Marker {
+    schema: String,
+    nonce: String,
+    lifecycle: String,
+    creator_pid: u32,
+    executable: String,
+    directory: DirectoryId,
+    process: Option<ProcessFingerprint>,
+    endpoint: Option<String>,
+    retired: bool,
+}
+
+pub(super) struct Profile {
+    pub(super) path: PathBuf,
+    pub(super) executable: String,
+    directory: Mutex<Option<File>>,
+    marker_file: Mutex<Option<File>>,
+    record: Mutex<Marker>,
+    watching: std::sync::atomic::AtomicBool,
+    /// Kill-on-close job holding every process this profile started.
+    job: Mutex<Option<Job>>,
+}
+
+impl Profile {
+    pub(super) fn known_pid(&self) -> Option<u32> {
+        self.record
+            .lock()
+            .unwrap()
+            .process
+            .as_ref()
+            .and_then(|p| u32::try_from(p.pid).ok())
+    }
+    fn verify(&self) -> Result<Marker> {
+        let expected = self.record.lock().unwrap().clone();
+        if expected.retired {
+            bail!("the task-browser lifecycle has ended");
+        }
+        reject_reparse_ancestors(&self.path)?;
+        let directory = self.directory.lock().unwrap();
+        if directory_id(
+            directory
+                .as_ref()
+                .context("task lifecycle directory handle ended")?,
+        )? != expected.directory
+        {
+            bail!("task profile directory identity changed");
+        }
+        let current = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&self.path)?;
+        if directory_id(&current)? != expected.directory {
+            bail!("task profile path was replaced");
+        }
+        let mut file = self.marker_file.lock().unwrap();
+        let file = file
+            .as_mut()
+            .context("task lifecycle marker handle ended")?;
+        file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        (&mut *file).take(65537).read_to_end(&mut bytes)?;
+        if bytes.len() > 65536 || serde_json::from_slice::<Marker>(&bytes)? != expected {
+            bail!("task-browser lifecycle/ownership marker changed");
+        }
+        Ok(expected)
+    }
+
+    fn persist(&self, next: Marker) -> Result<()> {
+        let bytes = serde_json::to_vec(&next)?;
+        let mut file = self.marker_file.lock().unwrap();
+        let file = file
+            .as_mut()
+            .context("task lifecycle marker handle ended")?;
+        file.seek(SeekFrom::Start(0))?;
+        file.set_len(0)?;
+        file.write_all(&bytes)?;
+        file.sync_data()?;
+        *self.record.lock().unwrap() = next;
+        Ok(())
+    }
+
+    pub(super) fn arguments(&self) -> Vec<String> {
+        vec![
+            super::browser_target::quote_argument(&format!(
+                "--user-data-dir={}",
+                self.path.display()
+            )),
+            "--remote-debugging-address=127.0.0.1".into(),
+            "--remote-debugging-port=0".into(),
+            "--no-first-run".into(),
+            "--no-default-browser-check".into(),
+            "--disable-background-mode".into(),
+            // No startup window means no startup activation request; pages
+            // open through the proven endpoint as inactive windows instead.
+            "--no-startup-window".into(),
+        ]
+    }
+
+    /// Open the requested pages as background targets through this profile's
+    /// proven endpoint: the first in a new, inactive, off-screen window, the
+    /// rest as background tabs. Chromium never requests activation for them.
+    pub(super) async fn open_pages(&self, urls: &[String]) -> Result<()> {
+        let record = self.verify()?;
+        let ws = record
+            .endpoint
+            .context("the task-browser endpoint has not been proven")?;
+        let conn = cua_driver_core::browser::cdp_ws::CdpConnection::connect(&ws).await?;
+        let (x, y) = offscreen_origin();
+        let (width, height) = default_window_size();
+        let first = urls
+            .first()
+            .map(|url| page_url(url))
+            .unwrap_or_else(|| "about:blank".into());
+        conn.call(
+            None,
+            "Target.createTarget",
+            json!({"url": first, "newWindow": true, "background": true,
+                   "left": x, "top": y, "width": width, "height": height}),
+        )
+        .await?;
+        for url in urls.iter().skip(1) {
+            conn.call(
+                None,
+                "Target.createTarget",
+                json!({"url": page_url(url), "background": true}),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn confirm(&self, launched_pid: u32) -> Result<ProcessFingerprint> {
+        let record = self.verify()?;
+        let platform = WindowsBrowserPlatform::default();
+        let root = record
+            .process
+            .as_ref()
+            .map(|p| p.pid)
+            .unwrap_or(i64::from(launched_pid));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        loop {
+            let attempt: Result<_> = async {
+                let text = std::fs::read_to_string(self.path.join("DevToolsActivePort"))?;
+                let (port, ws_path) = parse_devtools_active_port(&text)
+                    .context("invalid private-profile endpoint file")?;
+                let expected = format!("ws://127.0.0.1:{port}{ws_path}");
+                let endpoint = if record.process.is_some() {
+                    platform
+                        .discover_owned_endpoint(root)
+                        .await
+                        .map_err(|e| anyhow!(e.message))?
+                } else {
+                    platform
+                        .discover_spawned_endpoint(root, &expected)
+                        .await
+                        .map_err(|e| anyhow!(e.message))?
+                }
+                .context("private endpoint is not process-owned")?;
+                if endpoint.ws_url != expected {
+                    bail!("profile endpoint differs from the process-owned endpoint");
+                }
+                let pid = endpoint
+                    .ownership
+                    .listener_pid
+                    .unwrap_or(endpoint.ownership.owner_pid);
+                let process = platform
+                    .process_fingerprint(pid)
+                    .await
+                    .map_err(|e| anyhow!(e.message))?;
+                if process.start_time.is_none()
+                    || process
+                        .executable
+                        .as_deref()
+                        .and_then(crate::browser_installation_path::plain_windows_path)
+                        .is_none_or(|exe| !exe.eq_ignore_ascii_case(&self.executable))
+                {
+                    bail!("private browser executable/lifetime proof failed");
+                }
+                if record.process.as_ref().is_some_and(|old| old != &process) {
+                    bail!("private browser process was replaced");
+                }
+                Ok((process, endpoint))
+            }
+            .await;
+            match attempt {
+                Ok((process, endpoint)) => {
+                    let mut next = record;
+                    next.process = Some(process.clone());
+                    next.endpoint = Some(endpoint.ws_url);
+                    self.persist(next)?;
+                    return Ok(process);
+                }
+                Err(error) if std::time::Instant::now() >= deadline => return Err(error),
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+            }
+        }
+    }
+}
+
+/// Caller profile-selection arguments opt out. Never append debug flags to a
+/// caller-selected directory, even if its name resembles an owned profile.
+pub(super) fn explicit_profile(target: &str, args: &[String]) -> bool {
+    let all = std::iter::once(target).chain(args.iter().map(String::as_str));
+    all.flat_map(|s| s.split(|c: char| c.is_whitespace() || c == '"' || c == '\''))
+        .any(|s| {
+            s.starts_with("--user-data-dir")
+                || s.starts_with("--profile-directory")
+                || s == "--guest"
+                || s == "--incognito"
+        })
+}
+
+pub(super) fn prepare(
+    target: &str,
+    args: &[String],
+    key: &str,
+    new_instance: bool,
+) -> Result<Option<Arc<Profile>>> {
+    if explicit_profile(target, args) {
+        return Ok(None);
+    }
+    let (file, _) = super::impl_::split_launchable_target(target);
+    let Some(executable) = WindowsBrowserPlatform::default()
+        .task_browser_executable(&file)
+        .map_err(|e| anyhow!(e.message))?
+    else {
+        return Ok(None);
+    };
+    if !new_instance {
+        for profile in PROFILES.lock().unwrap().iter().rev() {
+            let record = profile.record.lock().unwrap().clone();
+            if record.lifecycle == key
+                && !record.retired
+                && profile.executable.eq_ignore_ascii_case(&executable)
+            {
+                // A live process is re-proven asynchronously before reuse below.
+                let living = record.process.as_ref().is_some_and(|process| {
+                    crate::browser_platform::process_identity(process.pid as u32).is_ok_and(
+                        |(start, exe)| {
+                            process.start_time == Some(start)
+                                && exe
+                                    .as_deref()
+                                    .and_then(crate::browser_installation_path::plain_windows_path)
+                                    .is_some_and(|exe| {
+                                        exe.eq_ignore_ascii_case(&profile.executable)
+                                    })
+                        },
+                    )
+                });
+                if living && profile.verify().is_ok() {
+                    return Ok(Some(profile.clone()));
+                }
+            }
+        }
+    }
+    let root = task_root()?;
+    std::fs::create_dir_all(&root)?;
+    reject_reparse_ancestors(&root)?;
+    let id = nonce()?;
+    let path = root.join(format!("task-{id}"));
+    std::fs::create_dir(&path)?;
+    let directory = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES.0)
+        .share_mode(3)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(&path)?;
+    let marker = Marker {
+        schema: "brigadier-task-browser-v1".into(),
+        nonce: id,
+        lifecycle: key.into(),
+        creator_pid: std::process::id(),
+        executable: executable.clone(),
+        directory: directory_id(&directory)?,
+        process: None,
+        endpoint: None,
+        retired: false,
+    };
+    let marker_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .share_mode(1)
+        .open(path.join("brigadier-task-owner.json"))?;
+    let profile = Arc::new(Profile {
+        path,
+        executable,
+        directory: Mutex::new(Some(directory)),
+        marker_file: Mutex::new(Some(marker_file)),
+        record: Mutex::new(marker.clone()),
+        watching: std::sync::atomic::AtomicBool::new(false),
+        job: Mutex::new(None),
+    });
+    profile.persist(marker)?;
+    PROFILES.lock().unwrap().push(profile.clone());
+    // Retain an audit trail, including retirement when the directory is removed.
+    if let Some(home) = std::env::var_os("CUA_DRIVER_STATE_DIR") {
+        let mut audit = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(home).join("task-browser-profiles.jsonl"))?;
+        writeln!(
+            audit,
+            "{}",
+            json!({"profile":profile.path,"owner":profile.record.lock().unwrap().clone()})
+        )?;
+    }
+    Ok(Some(profile))
+}
+
+pub(super) fn retire(key: &str) {
+    for profile in PROFILES.lock().unwrap().iter() {
+        let record = profile.record.lock().unwrap().clone();
+        if record.lifecycle == key {
+            let mut next = record;
+            next.retired = true;
+            let _ = profile.persist(next);
+            // Closing the job is asynchronous; maintenance waits for process exit.
+            let _ = profile.terminate();
+        }
+    }
+}
+
+/// Known task profiles cannot be attached by another lifecycle. Ordinary
+/// pre-existing addressed browsers are not set up or redirected here.
+pub(super) async fn endpoint_at_use(pid: u32, key: &str) -> Result<Option<OwnedEndpoint>> {
+    let profiles = PROFILES.lock().unwrap().clone();
+    for profile in profiles {
+        let record = profile.record.lock().unwrap().clone();
+        if record
+            .process
+            .as_ref()
+            .is_none_or(|p| p.pid != i64::from(pid))
+        {
+            continue;
+        }
+        if record.lifecycle != key || record.retired {
+            bail!("the task browser belongs to a different or ended lifecycle");
+        }
+        profile.verify()?;
+        let platform = WindowsBrowserPlatform::default();
+        let current = platform
+            .process_fingerprint(pid.into())
+            .await
+            .map_err(|e| anyhow!(e.message))?;
+        if Some(&current) != record.process.as_ref() {
+            bail!("the task browser process identity changed");
+        }
+        let endpoint = platform
+            .discover_owned_endpoint(pid.into())
+            .await
+            .map_err(|e| anyhow!(e.message))?
+            .context("task endpoint no longer owned")?;
+        if Some(&endpoint.ws_url) != record.endpoint.as_ref() {
+            bail!("task endpoint changed; no arbitrary attach attempted");
+        }
+        let text = std::fs::read_to_string(profile.path.join("DevToolsActivePort"))?;
+        let (port, path) =
+            parse_devtools_active_port(&text).context("private endpoint file no longer valid")?;
+        if endpoint.ws_url != format!("ws://127.0.0.1:{port}{path}") {
+            bail!("private-profile endpoint file changed");
+        }
+        profile.verify()?;
+        return Ok(Some(endpoint));
+    }
+    Ok(None)
+}
+
+/// Off-screen origin for new task-browser windows: beyond every monitor, so
+/// the new top-level window covers nothing until it is placed.
+fn offscreen_origin() -> (i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+    let (x, y, w, h) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    (x + w + 3000, y + h + 3000)
+}
+
+/// Command-line launches accepted local paths; CDP targets need URLs.
+fn page_url(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let unc = value.starts_with(r"\\") || value.starts_with("//");
+    if !drive && !unc {
+        return value.to_owned();
+    }
+    let path = value.replace('\\', "/");
+    let mut url = String::from(if drive { "file:///" } else { "file:" });
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"/:-._~!$&'()*+,;=@".contains(&byte) {
+            url.push(byte as char);
+        } else {
+            url.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    url
+}
+
+/// Caller window-geometry flags opt out of off-screen placement.
+pub(super) fn offscreen_argument(caller_args: &[String]) -> Option<String> {
+    let explicit = caller_args.iter().any(|arg| {
+        [
+            "--window-position",
+            "--start-maximized",
+            "--start-fullscreen",
+            "--kiosk",
+            "--app",
+        ]
+        .iter()
+        .any(|flag| arg.contains(flag))
+    });
+    (!explicit).then(|| {
+        let (x, y) = offscreen_origin();
+        format!("--window-position={x},{y}")
+    })
+}
+
+/// How the launch's new windows reached the screen.
+#[derive(Default)]
+pub(super) struct Placement {
+    pub(super) placed: Vec<u64>,
+    pub(super) behind_active: bool,
+    pub(super) on_screen_before_placement: bool,
+}
+
+impl Placement {
+    pub(super) fn note(&self) -> &'static str {
+        if self.placed.is_empty() {
+            " No new browser window was found to place; one may still be off-screen. Inspect list_windows."
+        } else if self.on_screen_before_placement {
+            " A new browser window appeared on screen before it could be placed; it was then moved behind your active window without being activated."
+        } else if self.behind_active {
+            " The browser window opened off-screen and was then placed directly behind your active window, without being activated or covering it."
+        } else {
+            " The browser window opened off-screen and was then placed at the back of the window stack, without being activated."
+        }
+    }
+}
+
+/// Move every new top-level window of the task browser on screen behind the
+/// user's active window, one SetWindowPos each. Never activates, never moves
+/// or restacks the user's window, and never touches a pre-existing window.
+pub(super) async fn place_new_windows(
+    pid: u32,
+    preexisting: &std::collections::HashSet<u64>,
+) -> Placement {
+    let preexisting = preexisting.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut placement = Placement::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut quiet_since = None;
+        loop {
+            let fresh: Vec<_> = crate::win32::list_windows_via_win32(Some(pid))
+                .into_iter()
+                .filter(|w| {
+                    w.pid == pid
+                        && !w.minimized
+                        && is_browser_frame(w.hwnd)
+                        && !preexisting.contains(&w.hwnd)
+                        && !placement.placed.contains(&w.hwnd)
+                })
+                .collect();
+            for window in &fresh {
+                if let Some(behind) = place_one(window, &mut placement) {
+                    placement.placed.push(window.hwnd);
+                    placement.behind_active |= behind;
+                }
+            }
+            let now = std::time::Instant::now();
+            if !placement.placed.is_empty() && fresh.is_empty() {
+                let since = *quiet_since.get_or_insert(now);
+                if now.duration_since(since) >= std::time::Duration::from_millis(150) {
+                    break;
+                }
+            } else {
+                quiet_since = None;
+            }
+            if now >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        placement
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Returns `Some(true)` when placed directly behind the active window,
+/// `Some(false)` when placed at the back of the stack.
+fn place_one(window: &crate::win32::WindowInfo, placement: &mut Placement) -> Option<bool> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowThreadProcessId, SetWindowPos,
+        GWL_EXSTYLE, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+        WS_EX_TOPMOST,
+    };
+    let hwnd = HWND(window.hwnd as *mut _);
+    let (offscreen_x, offscreen_y) = offscreen_origin();
+    let offscreen = window.x >= offscreen_x - 100 || window.y >= offscreen_y - 100;
+    let active = unsafe { GetForegroundWindow() };
+    let mut active_pid = 0;
+    unsafe { GetWindowThreadProcessId(active, Some(&mut active_pid)) };
+    let mut class = [0u16; 64];
+    let len = unsafe { GetClassNameW(active, &mut class) }.max(0) as usize;
+    let class = String::from_utf16_lossy(&class[..len]);
+    let topmost = unsafe { GetWindowLongW(active, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0 != 0;
+    // Behind the user's window when there is one; otherwise behind everything.
+    let behind_active = !active.is_invalid()
+        && active_pid != window.pid
+        && !topmost
+        && !matches!(
+            class.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+        );
+    let after = if behind_active { active } else { HWND_BOTTOM };
+    let result = if offscreen {
+        let monitor = unsafe { MonitorFromWindow(active, MONITOR_DEFAULTTOPRIMARY) };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+            return None;
+        }
+        let work = info.rcWork;
+        let width = window.width.min(work.right - work.left - 32).max(1);
+        let height = window.height.min(work.bottom - work.top - 32).max(1);
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                after,
+                work.left + 16,
+                work.top + 16,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            )
+        }
+    } else {
+        // Already on screen (the browser ignored the position): end any
+        // covering now without moving it.
+        placement.on_screen_before_placement = true;
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSIZE | SWP_NOMOVE,
+            )
+        }
+    };
+    result.ok().map(|_| behind_active)
+}
+
+/// A normal window size inside the primary monitor's work area.
+fn default_window_size() -> (i32, i32) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut work = RECT::default();
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some(&mut work as *mut RECT as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .is_ok();
+    if !ok {
+        return (1280, 800);
+    }
+    (
+        (work.right - work.left - 32).clamp(640, 1280),
+        (work.bottom - work.top - 32).clamp(480, 900),
+    )
+}
+
+/// Merge `feature` into the one `--disable-features=` switch (Chromium
+/// honours only the last such switch), or add one.
+pub(super) fn disable_feature(extra_args: &mut Vec<String>, feature: &str) {
+    if let Some(index) = extra_args
+        .iter()
+        .rposition(|arg| arg.starts_with("--disable-features="))
+    {
+        if !extra_args[index]
+            .trim_start_matches("--disable-features=")
+            .split(',')
+            .any(|existing| existing.trim() == feature)
+        {
+            extra_args[index] = format!("{},{feature}", extra_args[index]);
+        }
+    } else {
+        extra_args.push(format!("--disable-features={feature}"));
+    }
+}
+
+impl Profile {
+    /// Edge implicitly signs a new profile into the Windows user's account,
+    /// which would sync the user's own data into a task-controlled profile.
+    pub(super) fn disabled_features(&self) -> &'static [&'static str] {
+        let edge = Path::new(&self.executable)
+            .file_stem()
+            .is_some_and(|stem| stem.eq_ignore_ascii_case("msedge"));
+        if edge {
+            &["msImplicitSignin"]
+        } else {
+            &[]
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_features_merge_into_the_single_switch() {
+        let mut args = vec![
+            "--disable-features=CalculateNativeWinOcclusion".to_owned(),
+            "--new-window".to_owned(),
+        ];
+        disable_feature(&mut args, "msImplicitSignin");
+        disable_feature(&mut args, "msImplicitSignin");
+        assert_eq!(
+            args[0],
+            "--disable-features=CalculateNativeWinOcclusion,msImplicitSignin"
+        );
+        let mut none = vec!["--new-window".to_owned()];
+        disable_feature(&mut none, "msImplicitSignin");
+        assert_eq!(none[1], "--disable-features=msImplicitSignin");
+    }
+
+    #[test]
+    fn local_paths_become_file_urls_and_urls_pass_through() {
+        assert_eq!(
+            page_url(r"C:\test dir\a#b.html"),
+            "file:///C:/test%20dir/a%23b.html"
+        );
+        assert_eq!(
+            page_url(r"\\server\share\x.html"),
+            "file://server/share/x.html"
+        );
+        assert_eq!(
+            page_url("https://example.com/?q=1"),
+            "https://example.com/?q=1"
+        );
+    }
+
+    #[test]
+    fn caller_profile_and_geometry_flags_opt_out() {
+        assert!(explicit_profile(
+            "chrome",
+            &[r"--user-data-dir=C:\x".into()]
+        ));
+        assert!(explicit_profile(
+            "chrome",
+            &["--profile-directory=\"Profile 2\"".into()]
+        ));
+        assert!(!explicit_profile("chrome", &["--new-window".into()]));
+        assert!(offscreen_argument(&["--start-maximized".into()]).is_none());
+        assert!(offscreen_argument(&["--new-window".into()])
+            .is_some_and(|arg| arg.starts_with("--window-position=")));
+    }
+}
+
+impl Profile {
+    /// `--no-startup-window` keeps Chromium alive without windows. Once the
+    /// task browser has shown a window and then has none for two checks, close
+    /// it through its own proven endpoint. Maintenance removes it after exit.
+    pub(super) fn watch_lifetime(self: &Arc<Self>, pid: u32) {
+        if self
+            .watching
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let profile = self.clone();
+        tokio::spawn(async move {
+            let mut empty = 0;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let Ok(record) = profile.verify() else { break };
+                let Some(process) = record.process.clone() else {
+                    break;
+                };
+                let alive = crate::browser_platform::process_identity(pid)
+                    .is_ok_and(|(start, _)| process.start_time == Some(start));
+                if !alive {
+                    break;
+                }
+                let windows = crate::win32::list_windows_via_win32(Some(pid))
+                    .into_iter()
+                    .filter(|window| window.pid == pid)
+                    .count();
+                empty = if windows == 0 { empty + 1 } else { 0 };
+                if empty < 2 {
+                    continue;
+                }
+                if let Ok(Some(endpoint)) = endpoint_at_use(pid, &record.lifecycle).await {
+                    if let Ok(conn) =
+                        cua_driver_core::browser::cdp_ws::CdpConnection::connect(&endpoint.ws_url)
+                            .await
+                    {
+                        let _ = conn.call(None, "Browser.close", json!({})).await;
+                    }
+                }
+                break;
+            }
+            profile
+                .watching
+                .store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+}
+
+/// Browser frames only: owned bubbles and tool windows stay where the
+/// browser anchors them.
+fn is_browser_frame(hwnd: u64) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindow, GetWindowLongW, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
+    };
+    let hwnd = HWND(hwnd as *mut _);
+    let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.is_invalid());
+    let tool = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_TOOLWINDOW.0 != 0;
+    !owned && !tool
+}
+
+/// The driver's own task-browser root (set by the host), else per-user state.
+fn task_root() -> Result<PathBuf> {
+    Ok(std::env::var_os("CUA_DRIVER_BROWSER_PROFILE_ROOT")
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA").map(|local| {
+                PathBuf::from(local)
+                    .join("CuaDriver")
+                    .join("BrowserProfiles")
+            })
+        })
+        .context("no driver-owned browser profile directory is configured")?
+        .join("task-browsers"))
+}
+
+/// A kill-on-close job object: closing it (helper exit, crash, retire or a
+/// failed proof) ends every process the task browser started.
+struct Job(windows::Win32::Foundation::HANDLE);
+// SAFETY: a job handle is a kernel handle usable from any thread.
+unsafe impl Send for Job {}
+unsafe impl Sync for Job {}
+impl Drop for Job {
+    fn drop(&mut self) {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+fn kill_on_close_job() -> Result<Job> {
+    use windows::Win32::System::JobObjects::{
+        CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    let job = Job(unsafe { CreateJobObjectW(None, None) }?);
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            &limits as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    }?;
+    Ok(job)
+}
+
+/// Start `command_line` suspended, place it in `job`, and only then resume
+/// it. A process that cannot be contained is ended before it ever runs.
+fn spawn_in_job(job: &Job, command_line: &str, show: u16, flags: u32) -> Result<u32> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+    use windows::Win32::System::Threading::{
+        CreateProcessW, ResumeThread, TerminateProcess, CREATE_SUSPENDED, PROCESS_CREATION_FLAGS,
+        PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOW,
+    };
+    let mut command: Vec<u16> = command_line.encode_utf16().chain(Some(0)).collect();
+    let startup = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        dwFlags: STARTF_USESHOWWINDOW,
+        wShowWindow: show,
+        ..Default::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    unsafe {
+        CreateProcessW(
+            None,
+            PWSTR(command.as_mut_ptr()),
+            None,
+            None,
+            false,
+            CREATE_SUSPENDED | PROCESS_CREATION_FLAGS(flags),
+            None,
+            None,
+            &startup,
+            &mut process,
+        )?;
+        let contained = AssignProcessToJobObject(job.0, process.hProcess);
+        if contained.is_err() || ResumeThread(process.hThread) == u32::MAX {
+            let _ = TerminateProcess(process.hProcess, 1);
+            let _ = CloseHandle(process.hThread);
+            let _ = CloseHandle(process.hProcess);
+            bail!("the task browser could not be contained in its owned job; it was ended before running");
+        }
+        let _ = CloseHandle(process.hThread);
+        let _ = CloseHandle(process.hProcess);
+    }
+    Ok(process.dwProcessId)
+}
+
+/// What [`Profile::terminate`] did, for replies.
+pub(super) struct Closed(bool);
+impl Closed {
+    pub(super) fn note(&self) -> &'static str {
+        if self.0 {
+            " The task-owned browser it started was closed."
+        } else {
+            ""
+        }
+    }
+}
+
+impl Profile {
+    /// Launch through this profile's kill-on-close job (created on first use).
+    pub(super) fn spawn_contained(&self, command_line: &str, show: u16) -> Result<u32> {
+        let mut job = self.job.lock().unwrap();
+        if job.is_none() {
+            *job = Some(kill_on_close_job()?);
+        }
+        spawn_in_job(
+            job.as_ref().expect("job just created"),
+            command_line,
+            show,
+            0,
+        )
+    }
+
+    /// End every process this profile started. Never touches other browsers.
+    pub(super) fn terminate(&self) -> Closed {
+        let mut record = self.record.lock().unwrap().clone();
+        record.retired = true;
+        let _ = self.persist(record);
+        Closed(self.job.lock().unwrap().as_ref().is_some_and(|job| {
+            unsafe { windows::Win32::System::JobObjects::TerminateJobObject(job.0, 1) }.is_ok()
+        }))
+    }
+}
+
+/// True when `command_line` runs a profile under this driver's task-browser
+/// root (any lifecycle, including one from before a helper restart).
+fn is_task_profile_command_line(command_line: &str, root: &Path) -> bool {
+    let root = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    command_line
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+        .split("--user-data-dir=")
+        .skip(1)
+        .any(|rest| rest.trim_start_matches('"').starts_with(&root))
+}
+
+/// Refuse a generic endpoint for a browser running a task profile that no
+/// live lifecycle owns: its transport belongs to an ended lifecycle.
+pub(super) async fn refuse_orphaned_task_profile(pid: u32) -> Result<()> {
+    let command_line = crate::browser_platform::browser_command_line(pid)
+        .await
+        .map_err(|e| anyhow!(e.message))?;
+    // Any driver's task profile carries the ownership marker; ambiguous or
+    // unreadable profile arguments fail closed.
+    let marked = crate::browser_platform::user_data_dir_from_command_line(&command_line, None)
+        .map_err(|e| anyhow!(e.message))?
+        .is_some_and(|dir| dir.join("brigadier-task-owner.json").exists());
+    if marked || is_task_profile_command_line(&command_line, &task_root()?) {
+        bail!("this browser runs a task-owned profile from another or ended helper lifecycle; its transport is not attached");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod containment_tests {
+    use super::*;
+
+    #[test]
+    fn task_profile_command_lines_are_recognized_only_under_the_root() {
+        let root = Path::new(r"C:\State\browser-profiles\task-browsers");
+        assert!(is_task_profile_command_line(
+            r#""C:\Chrome\chrome.exe" "--user-data-dir=C:\State\browser-profiles\task-browsers\task-ab" --no-first-run"#,
+            root
+        ));
+        assert!(is_task_profile_command_line(
+            r#"chrome.exe --user-data-dir=c:/state/browser-profiles/task-browsers/task-ab"#,
+            root
+        ));
+        assert!(!is_task_profile_command_line(
+            r#"chrome.exe --user-data-dir=C:\Users\me\AppData\Local\Google\Chrome\User Data"#,
+            root
+        ));
+        assert!(!is_task_profile_command_line(
+            r#"chrome.exe --new-window"#,
+            root
+        ));
+    }
+
+    /// A process placed in the job before it runs ends when the job closes.
+    #[test]
+    fn closing_the_job_ends_a_contained_process() {
+        use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_SYNCHRONIZE,
+        };
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let job = kill_on_close_job().unwrap();
+        // A windowless console process that would otherwise run for a minute.
+        let pid = spawn_in_job(
+            &job,
+            &format!(r#""{system}\System32\PING.EXE" -n 60 127.0.0.1"#),
+            0,
+            CREATE_NO_WINDOW.0,
+        )
+        .unwrap();
+        let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.unwrap();
+        drop(job);
+        let ended = unsafe { WaitForSingleObject(process, 5000) } == WAIT_OBJECT_0;
+        let _ = unsafe { CloseHandle(process) };
+        assert!(ended, "the contained process outlived its job");
+    }
+}
+
+/// Query the kernel rather than treating access denied as process exit.
+fn process_gone(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+    match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+        Ok(handle) => {
+            let exited = unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0;
+            let _ = unsafe { CloseHandle(handle) };
+            exited
+        }
+        Err(error) => error.code() == windows::core::HRESULT::from_win32(ERROR_INVALID_PARAMETER.0),
+    }
+}
+
+fn browser_gone(record: &Marker) -> bool {
+    record.process.as_ref().is_none_or(|process| {
+        u32::try_from(process.pid).is_ok_and(|pid| {
+            process_gone(pid)
+                || crate::browser_platform::process_identity(pid)
+                    .is_ok_and(|(started, _)| process.start_time != Some(started))
+        })
+    })
+}
+
+fn audit_retirement(path: &Path, owner: &Marker) {
+    if let Some(home) = std::env::var_os("CUA_DRIVER_STATE_DIR") {
+        if let Ok(mut audit) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(home).join("task-browser-profiles.jsonl"))
+        {
+            let _ = writeln!(audit, "{}", json!({"profile": path, "owner": owner}));
+        }
+    }
+}
+
+impl Profile {
+    fn cleanup_exited(&self) -> Result<()> {
+        let mut record = self.record.lock().unwrap().clone();
+        if !browser_gone(&record) {
+            bail!("task browser is still running");
+        }
+        if record.process.is_none() && !record.retired {
+            bail!("launch still pending");
+        }
+        if let Some(job) = self.job.lock().unwrap().as_ref() {
+            use windows::Win32::System::JobObjects::{
+                JobObjectBasicAccountingInformation, QueryInformationJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            unsafe {
+                QueryInformationJobObject(
+                    job.0,
+                    JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut _,
+                    std::mem::size_of_val(&info) as u32,
+                    None,
+                )?;
+            }
+            if info.ActiveProcesses != 0 {
+                // The browser may have exited before one of its children.
+                unsafe {
+                    windows::Win32::System::JobObjects::TerminateJobObject(job.0, 1)?;
+                }
+                bail!("task browser job is still running");
+            }
+        }
+        if !self.path.exists() {
+            return Ok(());
+        }
+        reject_reparse_ancestors(&self.path)?;
+        let current = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&self.path)?;
+        if directory_id(&current)? != record.directory {
+            bail!("task profile was replaced");
+        }
+        // Pin the direct child while validating; recursive removal never follows
+        // reparse points. Refuse any such entry rather than removing its contents.
+        reject_reparse_tree(&self.path)?;
+        record.retired = true;
+        if self.marker_file.lock().unwrap().is_some() {
+            self.persist(record.clone())?;
+            audit_retirement(&self.path, &record);
+        }
+        self.job.lock().unwrap().take();
+        self.marker_file.lock().unwrap().take();
+        self.directory.lock().unwrap().take();
+        drop(current);
+        let quarantine = quarantine_profile(&self.path, &record)?;
+        delete_quarantined(quarantine, &record)?;
+        Ok(())
+    }
+}
+
+struct QuarantinedProfile {
+    path: PathBuf,
+    directory: File,
+    _parent: File,
+}
+
+fn quarantine_profile(path: &Path, record: &Marker) -> Result<QuarantinedProfile> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
+    let root = path.parent().context("task profile has no parent")?;
+    reject_reparse_ancestors(path)?;
+    let open = |path: &Path| {
+        OpenOptions::new()
+            .access_mode(0x10000 | FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(path)
+    };
+    // DELETE access plus no FILE_SHARE_DELETE pins both names during removal.
+    // Rename the validated handle, never whichever directory now occupies path.
+    let parent = open(root)?;
+    let directory = open(path)?;
+    if directory_id(&directory)? != record.directory {
+        bail!("task profile was replaced before quarantine");
+    }
+    let tombstone =
+        std::path::absolute(root)?.join(format!("retired-{}-{}", record.nonce, nonce()?));
+    // Windows reads the new name up to a NUL whatever FileNameLength says.
+    // Live (2026-11-02, Windows 11 26300): without one the retired folder got
+    // stray characters after its nonce and was never deleted.
+    let mut name: Vec<u16> = tombstone.as_os_str().encode_wide().collect();
+    let length = name.len() * 2;
+    name.push(0);
+    let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let size = offset + name.len() * 2;
+    let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
+    unsafe {
+        let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        (*info).FileNameLength = length as u32;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            storage.as_mut_ptr().cast::<u8>().add(offset).cast(),
+            name.len(),
+        );
+        SetFileInformationByHandle(
+            HANDLE(directory.as_raw_handle()),
+            FileRenameInfo,
+            info.cast(),
+            size as u32,
+        )?;
+    }
+    let current = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES.0)
+        .share_mode(7)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(&tombstone)?;
+    if directory_id(&current)? != record.directory {
+        bail!("quarantined task profile was replaced");
+    }
+    let owner: Marker =
+        serde_json::from_slice(&std::fs::read(tombstone.join("brigadier-task-owner.json"))?)?;
+    if owner != *record {
+        bail!("quarantined task ownership changed");
+    }
+    Ok(QuarantinedProfile {
+        path: tombstone,
+        directory,
+        _parent: parent,
+    })
+}
+
+fn delete_quarantined(profile: QuarantinedProfile, record: &Marker) -> Result<()> {
+    use windows::Win32::Storage::FileSystem::{
+        FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+    };
+    reject_reparse_tree(&profile.path)?;
+    // Preserve the proof until all contents are removed, for retry after a crash.
+    for entry in std::fs::read_dir(&profile.path)? {
+        let entry = entry?;
+        if entry.file_name() == "brigadier-task-owner.json" {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    let marker = profile.path.join("brigadier-task-owner.json");
+    std::fs::remove_file(&marker)?;
+    let disposition = FILE_DISPOSITION_INFO {
+        DeleteFile: true.into(),
+    };
+    let deleted = unsafe {
+        SetFileInformationByHandle(
+            HANDLE(profile.directory.as_raw_handle()),
+            FileDispositionInfo,
+            &disposition as *const _ as *const _,
+            std::mem::size_of_val(&disposition) as u32,
+        )
+    };
+    if let Err(error) = deleted {
+        if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).open(marker) {
+            let _ = file.write_all(&serde_json::to_vec(record)?);
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn reject_reparse_tree(path: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata.file_attributes() & 0x400 != 0 {
+            bail!("task profile contains a reparse point");
+        }
+        if metadata.is_dir() {
+            reject_reparse_tree(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn sweep_stale(root: &Path) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    reject_reparse_ancestors(root)?;
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        let attempt = || -> Result<()> {
+            reject_reparse_ancestors(&path)?;
+            let directory = OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES.0)
+                .share_mode(3)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(&path)?;
+            let marker_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(1)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(path.join("brigadier-task-owner.json"))?;
+            let mut bytes = Vec::new();
+            (&marker_file).take(65537).read_to_end(&mut bytes)?;
+            if bytes.len() > 65536 {
+                bail!("oversize task marker");
+            }
+            let mut record: Marker = serde_json::from_slice(&bytes)?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            let tombstone = name
+                .strip_prefix(&format!("retired-{}-", record.nonce))
+                .is_some_and(|suffix| {
+                    suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+                });
+            if record.schema != "brigadier-task-browser-v1"
+                || record.nonce.len() != 32
+                || !record.nonce.bytes().all(|b| b.is_ascii_hexdigit())
+                || (name != format!("task-{}", record.nonce) && !tombstone)
+                || directory_id(&directory)? != record.directory
+                || (!process_gone(record.creator_pid) && !(tombstone && record.retired))
+                || !browser_gone(&record)
+            {
+                bail!("task profile is unproven or still owned");
+            }
+            record.retired = true;
+            let profile = Profile {
+                path: path.clone(),
+                executable: record.executable.clone(),
+                directory: Mutex::new(Some(directory)),
+                marker_file: Mutex::new(Some(marker_file)),
+                record: Mutex::new(record),
+                watching: std::sync::atomic::AtomicBool::new(false),
+                job: Mutex::new(None),
+            };
+            profile.cleanup_exited()
+        };
+        let _ = attempt();
+    }
+    Ok(())
+}
+
+pub(super) fn retire_all(scope: Option<&str>) {
+    let prefix = scope.map(|scope| format!("__cua_runtime_{scope}:"));
+    let profiles: Vec<_> = PROFILES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|profile| {
+            let record = profile.record.lock().unwrap();
+            prefix.as_ref().map_or_else(
+                || !record.lifecycle.starts_with("__cua_runtime_"),
+                |prefix| record.lifecycle.starts_with(prefix),
+            )
+        })
+        .cloned()
+        .collect();
+    for profile in &profiles {
+        let mut record = profile.record.lock().unwrap().clone();
+        record.retired = true;
+        let _ = profile.persist(record);
+        profile.terminate();
+        let _ = profile.cleanup_exited();
+    }
+    // TerminateJobObject returns before all child processes have exited.
+    // Give normal daemon teardown a chance to finish deletion itself.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let pending = profiles
+            .iter()
+            .any(|profile| profile.cleanup_exited().is_err());
+        if !pending {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+pub(super) fn start_cleanup() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        if let Ok(root) = task_root() {
+            let _ = sweep_stale(&root);
+        }
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            for profile in PROFILES.lock().unwrap().iter() {
+                let _ = profile.cleanup_exited();
+            }
+            if let Ok(root) = task_root() {
+                let _ = sweep_stale(&root);
+            }
+            // A Notepad tab can retain unsaved content without writing this file.
+            // Wait for all Notepad processes to exit; runtime teardown is also a
+            // cleanup boundary, and never removes files written or replaced.
+            let notepad_running = crate::win32::list_processes()
+                .iter()
+                .any(|process| super::launch_policy::is_notepad_target(&process.name));
+            super::launch_browser::poll_documents(notepad_running);
+        });
+    });
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    #[test]
+    fn swapped_profile_is_never_deleted_and_tombstone_stays_pinned() {
+        let root = tempfile::tempdir().unwrap();
+        let path = fixture(root.path(), 0);
+        let record: Marker =
+            serde_json::from_slice(&std::fs::read(path.join("brigadier-task-owner.json")).unwrap())
+                .unwrap();
+        let validated = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+            .open(&path)
+            .unwrap();
+        assert_eq!(directory_id(&validated).unwrap(), record.directory);
+        drop(validated);
+        let moved = root.path().join("checked-original");
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("Bookmarks"), "user profile").unwrap();
+        assert!(quarantine_profile(&path, &record).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path.join("Bookmarks")).unwrap(),
+            "user profile"
+        );
+
+        let quarantine = quarantine_profile(&moved, &record).unwrap();
+        assert!(
+            std::fs::rename(&quarantine.path, root.path().join("swapped-tombstone")).is_err(),
+            "DELETE handle without share-delete must pin the tombstone"
+        );
+        let tombstone = quarantine.path.clone();
+        delete_quarantined(quarantine, &record).unwrap();
+        assert!(!tombstone.exists());
+        assert_eq!(
+            std::fs::read_to_string(path.join("Bookmarks")).unwrap(),
+            "user profile"
+        );
+    }
+
+    fn fixture(root: &Path, creator_pid: u32) -> PathBuf {
+        let id = nonce().unwrap();
+        let path = root.join(format!("task-{id}"));
+        std::fs::create_dir(&path).unwrap();
+        let dir = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(3)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&path)
+            .unwrap();
+        let record = Marker {
+            schema: "brigadier-task-browser-v1".into(),
+            nonce: id,
+            lifecycle: "test-session".into(),
+            creator_pid,
+            executable: "chrome.exe".into(),
+            directory: directory_id(&dir).unwrap(),
+            process: None,
+            endpoint: None,
+            retired: false,
+        };
+        std::fs::write(
+            path.join("brigadier-task-owner.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir(path.join("Default")).unwrap();
+        std::fs::write(path.join("Default").join("Preferences"), "test data").unwrap();
+        path
+    }
+    #[test]
+    fn stale_sweep_removes_only_proven_profiles_of_dead_creators() {
+        let root = tempfile::tempdir().unwrap();
+        let stale = fixture(root.path(), 0);
+        let live = fixture(root.path(), std::process::id());
+        let live_browser = fixture(root.path(), 0);
+        let marker = live_browser.join("brigadier-task-owner.json");
+        let mut record: Marker = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+        let (started, executable) =
+            crate::browser_platform::process_identity(std::process::id()).unwrap();
+        record.process = Some(ProcessFingerprint {
+            pid: std::process::id().into(),
+            start_time: Some(started),
+            executable,
+        });
+        std::fs::write(marker, serde_json::to_vec(&record).unwrap()).unwrap();
+        let replaced = fixture(root.path(), 0);
+        let marker = replaced.join("brigadier-task-owner.json");
+        let mut record: Marker = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+        record.directory.index ^= 1;
+        std::fs::write(marker, serde_json::to_vec(&record).unwrap()).unwrap();
+        let ordinary = root.path().join("task-unowned");
+        std::fs::create_dir(&ordinary).unwrap();
+        sweep_stale(root.path()).unwrap();
+        assert!(!stale.exists());
+        assert!(live.exists(), "a live creator can still reuse its profile");
+        assert!(
+            live_browser.exists(),
+            "a surviving browser must not lose its profile"
+        );
+        assert!(replaced.exists());
+        assert!(ordinary.exists());
+    }
+}

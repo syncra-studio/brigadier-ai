@@ -1,0 +1,903 @@
+Why: Record brief and delegated foreground activations through bounded WinEvents, preserve late-window hand-back, and remove synthetic-key UWP restoration hidden from launch reports.
+
+diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/platform-windows/src/input/foreground_policy.rs
+@@ -0,0 +1,177 @@
++//! Foreground observation decisions; no Win32 calls, tested on every host.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub(crate) struct Observation {
++    pub activated: bool,
++    pub restored: bool,
++    pub monitoring: bool,
++    pub interrupted: bool,
++}
++
++impl Observation {
++    pub(crate) fn report(self) -> (&'static str, bool) {
++        match (self.activated, self.restored, self.monitoring, self.interrupted) {
++            (true, true, _, _) => (
++                "App activation was observed; your previous window was confirmed in front at reply time. A brief focus change occurred.", false),
++            (true, false, _, _) => (
++                "App activation was observed; your previous window could not be confirmed in front. Opening and foreground preservation are separate results.", true),
++            (false, _, _, true) => (
++                "Foreground monitoring stopped after user input or the previous window closed; foreground preservation is unconfirmed.", true),
++            (false, _, true, false) => (
++                "No app activation has been recorded before this reply. Monitoring continues for up to 8 seconds after the call; this does not guarantee a flash-free launch.", false),
++            _ => ("Foreground observation was unavailable or its bounded watch expired; preservation is unconfirmed.", true),
++        }
++    }
++}
++
++pub(crate) fn may_hand_back(
++    prior_valid: bool,
++    input_unchanged: bool,
++    target: bool,
++    still_front: bool,
++) -> bool {
++    prior_valid && input_unchanged && target && still_front
++}
++
++pub(crate) fn expired(elapsed_ms: u128, since_end_ms: Option<u128>) -> bool {
++    elapsed_ms >= 30_000 || since_end_ms.is_some_and(|ms| ms >= 8_000)
++}
++
++// Moving the pointer and typing into the user's current window must not
++// disarm protection. Yield when the user explicitly selects another window.
++pub(crate) fn switch_key(vk: u32, alt: bool, ctrl: bool, injected: bool) -> bool {
++    !injected
++        && (matches!(vk, 0x5B | 0x5C) || (alt && matches!(vk, 0x09 | 0x1B)) || (ctrl && vk == 0x1B))
++}
++
++pub(crate) fn switch_click(injected: bool, clicked_prior: bool) -> bool {
++    !injected && !clicked_prior
++}
++
++pub(crate) fn launch_names(mut expected: Vec<String>) -> Vec<String> {
++    for name in expected.clone() {
++        match name.as_str() {
++            "calculator" | "calc" | "calculatorapp" => {
++                expected.extend(["calculatorapp".into(), "applicationframehost".into()])
++            }
++            "task manager" | "taskmgr" => expected.push("taskmgr".into()),
++            "windows powershell" | "powershell" | "pwsh" | "windows terminal" => {
++                expected.extend(["powershell".into(), "pwsh".into(), "windowsterminal".into()])
++            }
++            "notepad" | "systemsettings" => expected.push("applicationframehost".into()),
++            _ => {}
++        }
++    }
++    if expected.is_empty() {
++        expected.push("applicationframehost".into());
++    }
++    expected.sort_unstable();
++    expected.dedup();
++    expected
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn launch_attribution_covers_reported_shell_and_store_delegates() {
++        for (requested, host) in [
++            ("calculator", "calculatorapp"),
++            ("calc", "applicationframehost"),
++            ("task manager", "taskmgr"),
++            ("windows powershell", "windowsterminal"),
++            ("chrome", "chrome"),
++            ("notepad", "applicationframehost"),
++        ] {
++            assert!(launch_names(vec![requested.into()])
++                .iter()
++                .any(|name| name == host));
++        }
++        assert_eq!(launch_names(Vec::new()), vec!["applicationframehost"]);
++        assert!(!launch_names(vec!["chrome".into()]).contains(&"windowsterminal".into()));
++    }
++
++    #[test]
++    fn only_physical_window_selection_disarms_the_watch() {
++        assert!(switch_click(false, false));
++        assert!(!switch_click(false, true));
++        assert!(!switch_click(true, false));
++        assert!(switch_key(0x09, true, false, false));
++        assert!(switch_key(0x5B, false, false, false));
++        assert!(switch_key(0x1B, false, true, false));
++        assert!(!switch_key(0x09, true, false, true));
++        assert!(!switch_key(0x41, false, false, false));
++        assert!(!switch_key(0x0D, false, false, false));
++    }
++
++    #[test]
++    fn report_uses_activation_evidence_not_a_successful_noop_restore() {
++        let unseen = Observation {
++            restored: true,
++            monitoring: true,
++            ..Default::default()
++        };
++        assert!(unseen
++            .report()
++            .0
++            .starts_with("No app activation has been recorded"));
++        let observed = Observation {
++            activated: true,
++            restored: true,
++            ..unseen
++        };
++        assert!(observed
++            .report()
++            .0
++            .contains("A brief focus change occurred"));
++        assert!(!observed.report().1);
++        assert!(
++            Observation {
++                restored: false,
++                ..observed
++            }
++            .report()
++            .1
++        );
++    }
++
++    #[test]
++    fn unarmed_expired_and_user_interrupted_watches_never_claim_preservation() {
++        assert!(Observation::default().report().1);
++        assert!(
++            Observation {
++                interrupted: true,
++                ..Default::default()
++            }
++            .report()
++            .1
++        );
++        assert!(
++            Observation {
++                activated: true,
++                restored: false,
++                ..Default::default()
++            }
++            .report()
++            .1
++        );
++    }
++
++    #[test]
++    fn never_undo_user_input_unrelated_windows_or_a_later_foreground_change() {
++        assert!(may_hand_back(true, true, true, true));
++        assert!(!may_hand_back(false, true, true, true));
++        assert!(!may_hand_back(true, false, true, true));
++        assert!(!may_hand_back(true, true, false, true));
++        assert!(!may_hand_back(true, true, true, false));
++    }
++
++    #[test]
++    fn late_splash_and_main_window_watch_has_two_finite_deadlines() {
++        assert!(!expired(29_999, None));
++        assert!(expired(30_000, None));
++        assert!(!expired(9_000, Some(7_999)));
++        assert!(expired(9_000, Some(8_000)));
++        assert!(expired(30_000, Some(0)));
++    }
++}
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -0,0 +1,380 @@
++//! A bounded event-backed foreground watch, shared by launch and input guards.
++//! Out-of-context WinEvents record even switches shorter than a polling tick.
++//! Restoration uses no synthetic keys and never moves the pointer.
++use std::cell::RefCell;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{mpsc, Arc, Mutex, Weak};
++use std::time::{Duration, Instant};
++use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
++use windows::Win32::System::LibraryLoader::GetModuleHandleW;
++use windows::Win32::System::Threading::{
++    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
++};
++use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
++use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
++use windows::Win32::UI::WindowsAndMessaging::{
++    CallNextHookEx, DispatchMessageW, GetAncestor, GetForegroundWindow, GetWindowThreadProcessId,
++    IsWindow, PeekMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint,
++    EVENT_SYSTEM_FOREGROUND, GA_ROOT, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED,
++    LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_REMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL,
++    WINEVENT_OUTOFCONTEXT, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
++    WM_SYSKEYDOWN, WM_XBUTTONDOWN,
++};
++
++#[path = "foreground_policy.rs"]
++mod policy;
++
++#[derive(Clone, PartialEq, Eq)]
++pub(crate) enum Target {
++    Launch(Vec<String>),
++    Processes(Vec<u32>),
++}
++
++impl Target {
++    pub(crate) fn launch(expected: Vec<String>) -> Self {
++        Self::Launch(policy::launch_names(expected))
++    }
++}
++
++struct State {
++    observation: policy::Observation,
++    ended: Option<Instant>,
++    target_pids: Vec<u32>,
++    holders: usize,
++}
++
++struct Watch {
++    prior: usize,
++    prior_pid: u32,
++    user_selected: AtomicBool,
++    started: Instant,
++    cancelled: AtomicBool,
++    target: Target,
++    state: Mutex<State>,
++}
++
++thread_local! {
++    static CURRENT: RefCell<Option<Weak<Watch>>> = const { RefCell::new(None) };
++}
++
++pub(crate) struct ForegroundWatch {
++    watch: Arc<Watch>,
++    requests: mpsc::Sender<mpsc::SyncSender<policy::Observation>>,
++}
++
++// Reuse an existing app watch across nested guards and successive run_steps.
++// Its worker owns the sender until its finite deadline, avoiding one thread
++// for every click in a burst. A retired watch is never reused.
++struct LiveWatch {
++    watch: Weak<Watch>,
++    requests: mpsc::Sender<mpsc::SyncSender<policy::Observation>>,
++}
++static LIVE: Mutex<Vec<LiveWatch>> = Mutex::new(Vec::new());
++
++pub(crate) fn window_process(hwnd: HWND) -> u32 {
++    let mut pid = 0;
++    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
++    pid
++}
++
++fn process_name(pid: u32) -> Option<String> {
++    unsafe {
++        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
++        let mut path = vec![0u16; 32768];
++        let mut len = path.len() as u32;
++        let result = QueryFullProcessImageNameW(
++            handle,
++            PROCESS_NAME_WIN32,
++            windows::core::PWSTR(path.as_mut_ptr()),
++            &mut len,
++        );
++        let _ = CloseHandle(handle);
++        result.ok()?;
++        let path = String::from_utf16_lossy(&path[..len as usize]).to_ascii_lowercase();
++        Some(
++            path.rsplit(['\\', '/'])
++                .next()?
++                .trim_end_matches(".exe")
++                .to_owned(),
++        )
++    }
++}
++
++impl Watch {
++    fn observe(&self, event_hwnd: HWND) {
++        let prior = HWND(self.prior as *mut _);
++        let prior_valid = self.prior != 0
++            && unsafe { IsWindow(prior) }.as_bool()
++            && window_process(prior) == self.prior_pid;
++        let input_unchanged = !self.user_selected.load(Ordering::Acquire);
++        {
++            let mut state = self.state.lock().unwrap();
++            if !state.observation.monitoring {
++                return;
++            }
++            if !prior_valid || !input_unchanged {
++                state.observation.interrupted = true;
++                state.observation.monitoring = false;
++                return;
++            }
++        }
++        if event_hwnd == prior || event_hwnd.0.is_null() {
++            return;
++        }
++        let pid = window_process(event_hwnd);
++        let target = match &self.target {
++            Target::Processes(targets) => pid != 0 && targets.contains(&pid),
++            Target::Launch(names) => {
++                self.state.lock().unwrap().target_pids.contains(&pid)
++                    || process_name(pid).is_some_and(|name| names.contains(&name))
++            }
++        };
++        if !target {
++            return;
++        }
++        self.state.lock().unwrap().observation.activated = true;
++        // An event may describe a transient switch already restored by Windows.
++        // Record it, but never overwrite a newer foreground from an old event.
++        if policy::may_hand_back(
++            prior_valid,
++            !self.user_selected.load(Ordering::Acquire),
++            target,
++            unsafe { GetForegroundWindow() } == event_hwnd,
++        ) {
++            unsafe { super::force_foreground_attached(prior) };
++        }
++    }
++
++    fn snapshot(&self) -> policy::Observation {
++        self.observe(unsafe { GetForegroundWindow() });
++        let mut result = self.state.lock().unwrap().observation;
++        result.restored = unsafe { GetForegroundWindow() } == HWND(self.prior as *mut _);
++        result
++    }
++}
++
++unsafe extern "system" fn foreground_event(
++    _: HWINEVENTHOOK,
++    _: u32,
++    hwnd: HWND,
++    _: i32,
++    _: i32,
++    _: u32,
++    _: u32,
++) {
++    let watch = CURRENT.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
++    if let Some(watch) = watch {
++        watch.observe(hwnd);
++    }
++}
++
++// Read-only hooks distinguish real window selection from motion and from our
++// injected input. No event is swallowed and no input is synthesized.
++unsafe extern "system" fn mouse_event(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
++    if code >= 0
++        && matches!(
++            wparam.0 as u32,
++            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
++        )
++    {
++        let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
++        CURRENT.with(|slot| {
++            if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {
++                let clicked = unsafe { GetAncestor(WindowFromPoint(event.pt), GA_ROOT) };
++                if policy::switch_click(
++                    event.flags & LLMHF_INJECTED != 0,
++                    clicked.0 as usize == watch.prior,
++                ) {
++                    watch.user_selected.store(true, Ordering::Release);
++                }
++            }
++        });
++    }
++    unsafe { CallNextHookEx(None, code, wparam, lparam) }
++}
++
++unsafe extern "system" fn keyboard_event(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
++    if code >= 0 && matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
++        let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
++        if policy::switch_key(
++            event.vkCode,
++            event.flags.contains(LLKHF_ALTDOWN),
++            unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } < 0,
++            event.flags.contains(LLKHF_INJECTED),
++        ) {
++            CURRENT.with(|slot| {
++                if let Some(watch) = slot.borrow().as_ref().and_then(Weak::upgrade) {
++                    watch.user_selected.store(true, Ordering::Release);
++                }
++            });
++        }
++    }
++    unsafe { CallNextHookEx(None, code, wparam, lparam) }
++}
++
++impl ForegroundWatch {
++    pub(crate) fn start(prior: usize, target: Target) -> Self {
++        let mut live = LIVE.lock().unwrap();
++        live.retain(|entry| {
++            entry
++                .watch
++                .upgrade()
++                .is_some_and(|watch| watch.state.lock().unwrap().observation.monitoring)
++        });
++        for entry in live.iter() {
++            if let Some(watch) = entry.watch.upgrade() {
++                if watch.prior == prior
++                    && watch.target == target
++                    && matches!(target, Target::Processes(_))
++                    && watch.started.elapsed() < Duration::from_secs(20)
++                {
++                    let mut state = watch.state.lock().unwrap();
++                    if state.observation.monitoring && !watch.user_selected.load(Ordering::Acquire)
++                    {
++                        state.holders += 1;
++                        state.ended = None;
++                        drop(state);
++                        return Self {
++                            watch,
++                            requests: entry.requests.clone(),
++                        };
++                    }
++                }
++            }
++        }
++        let watch = Arc::new(Watch {
++            prior,
++            prior_pid: window_process(HWND(prior as *mut _)),
++            user_selected: AtomicBool::new(false),
++            started: Instant::now(),
++            cancelled: AtomicBool::new(false),
++            target,
++            state: Mutex::new(State {
++                observation: policy::Observation::default(),
++                ended: None,
++                target_pids: Vec::new(),
++                holders: 1,
++            }),
++        });
++        let (requests, receive) = mpsc::channel::<mpsc::SyncSender<policy::Observation>>();
++        let (ready, armed) = mpsc::sync_channel(1);
++        let worker = watch.clone();
++        std::thread::spawn(move || {
++            CURRENT.with(|slot| *slot.borrow_mut() = Some(Arc::downgrade(&worker)));
++            let hook = unsafe {
++                SetWinEventHook(
++                    EVENT_SYSTEM_FOREGROUND,
++                    EVENT_SYSTEM_FOREGROUND,
++                    None,
++                    Some(foreground_event),
++                    0,
++                    0,
++                    WINEVENT_OUTOFCONTEXT,
++                )
++            };
++            let module = unsafe { GetModuleHandleW(None) }
++                .ok()
++                .map(|module| HINSTANCE(module.0))
++                .unwrap_or_default();
++            let mouse =
++                unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_event), module, 0) }.ok();
++            let keyboard =
++                unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_event), module, 0) }.ok();
++            let monitoring = !hook.0.is_null()
++                && mouse.is_some()
++                && keyboard.is_some()
++                && prior != 0
++                && unsafe { GetForegroundWindow() }.0 as usize == prior;
++            worker.state.lock().unwrap().observation.monitoring = monitoring;
++            let _ = ready.send(());
++            while monitoring && !worker.cancelled.load(Ordering::Acquire) {
++                let mut message = MSG::default();
++                // Pump the hook's owning thread; callbacks are delivered here.
++                // Bound each drain as an app may produce events continuously.
++                for _ in 0..128 {
++                    if !unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
++                        break;
++                    }
++                    unsafe { DispatchMessageW(&message) };
++                }
++                worker.observe(unsafe { GetForegroundWindow() });
++                for reply in receive.try_iter().take(128) {
++                    let _ = reply.send(worker.snapshot());
++                }
++                let state = worker.state.lock().unwrap();
++                if !state.observation.monitoring
++                    || policy::expired(
++                        worker.started.elapsed().as_millis(),
++                        state.ended.map(|end| end.elapsed().as_millis()),
++                    )
++                {
++                    break;
++                }
++                drop(state);
++                std::thread::sleep(Duration::from_millis(2));
++            }
++            worker.state.lock().unwrap().observation.monitoring = false;
++            if !hook.0.is_null() {
++                let _ = unsafe { UnhookWinEvent(hook) };
++            }
++            if let Some(mouse) = mouse {
++                let _ = unsafe { UnhookWindowsHookEx(mouse) };
++            }
++            if let Some(keyboard) = keyboard {
++                let _ = unsafe { UnhookWindowsHookEx(keyboard) };
++            }
++            CURRENT.with(|slot| *slot.borrow_mut() = None);
++        });
++        // Ready before any activation is sent. Failure remains an unknown
++        // observation in reports, never a false "no activation" claim.
++        if armed.recv_timeout(Duration::from_millis(250)).is_err() {
++            watch.cancelled.store(true, Ordering::Release);
++            watch.state.lock().unwrap().observation.monitoring = false;
++        }
++        live.push(LiveWatch {
++            watch: Arc::downgrade(&watch),
++            requests: requests.clone(),
++        });
++        Self { watch, requests }
++    }
++
++    #[allow(dead_code)] // Launch call sites register broker-returned pids.
++    pub(crate) fn register_pid(&self, pid: u32) {
++        if pid != 0 {
++            self.watch.state.lock().unwrap().target_pids.push(pid);
++        }
++    }
++
++    pub(crate) fn report(&self) -> (&'static str, bool) {
++        let (reply, receive) = mpsc::sync_channel(1);
++        if self.requests.send(reply).is_ok() {
++            if let Ok(observation) = receive.recv_timeout(Duration::from_millis(100)) {
++                return observation.report();
++            }
++        }
++        let mut observation = self.watch.state.lock().unwrap().observation;
++        observation.restored = unsafe { GetForegroundWindow() }.0 as usize == self.watch.prior;
++        observation.monitoring = false;
++        observation.report()
++    }
++}
++
++impl Drop for ForegroundWatch {
++    fn drop(&mut self) {
++        let mut state = self.watch.state.lock().unwrap();
++        state.holders = state.holders.saturating_sub(1);
++        if state.holders == 0 {
++            state.ended = Some(Instant::now());
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn null_prior_is_reported_unconfirmed_without_touching_foreground() {
++        let watch = ForegroundWatch::start(0, Target::Processes(Vec::new()));
++        assert!(watch.report().1);
++    }
++}
+diff --git a/crates/platform-windows/src/tools/launch_focus.rs b/crates/platform-windows/src/tools/launch_focus.rs
+--- a/crates/platform-windows/src/tools/launch_focus.rs
++++ b/crates/platform-windows/src/tools/launch_focus.rs
+@@ -1,57 +1,9 @@
+-//! Watch launch-time activation, including shell delegation to existing processes.
+-use std::sync::{Arc, Mutex};
+-use std::time::{Duration, Instant};
+-use windows::Win32::Foundation::{CloseHandle, HWND};
+-use windows::Win32::System::Threading::{
+-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+-};
+-use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+-use windows::Win32::UI::WindowsAndMessaging::{
+-    GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
+-};
++//! Launch-time foreground observation uses the same event-backed guard as input.
++use crate::input::inject::foreground_watch::{ForegroundWatch, Target};
+ 
+-#[derive(Default)]
+-struct State {
+-    restored: bool,
+-    failed: bool,
+-    ended: Option<Instant>,
+-}
+-
+-pub(super) struct LaunchForegroundGuard(Arc<Mutex<State>>);
+-
+-fn input_tick() -> Option<u32> {
+-    let mut info = LASTINPUTINFO {
+-        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+-        ..Default::default()
+-    };
+-    unsafe { GetLastInputInfo(&mut info) }
+-        .as_bool()
+-        .then_some(info.dwTime)
+-}
+-
+-fn window_process(hwnd: HWND) -> u32 {
+-    let mut pid = 0;
+-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+-    pid
+-}
+-
+-fn process_name(pid: u32) -> Option<String> {
+-    unsafe {
+-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+-        let mut path = vec![0u16; 32768];
+-        let mut len = path.len() as u32;
+-        let result = QueryFullProcessImageNameW(
+-            handle,
+-            PROCESS_NAME_WIN32,
+-            windows::core::PWSTR(path.as_mut_ptr()),
+-            &mut len,
+-        );
+-        let _ = CloseHandle(handle);
+-        result.ok()?;
+-        Some(super::launch_policy::executable_name(
+-            &String::from_utf16_lossy(&path[..len as usize]),
+-        ))
+-    }
++pub(super) struct LaunchForegroundGuard {
++    watch: ForegroundWatch,
++    _lock: crate::input::ForegroundLockGuard,
+ }
+ 
+ pub(super) fn associated_executable(url: &str) -> Option<String> {
+@@ -82,94 +34,34 @@
+ 
+ impl LaunchForegroundGuard {
+     pub(super) fn start(prior: usize, expected: Vec<String>) -> Self {
+-        let state = Arc::new(Mutex::new(State::default()));
+-        let worker = state.clone();
+-        // Capture before spawning so user input during the launch always disarms restoration.
+-        let initial_input = input_tick();
+-        let prior_pid = window_process(HWND(prior as *mut _));
+-        // Name resolution can take time. Do not undo a switch made before the watcher starts.
+-        if unsafe { GetForegroundWindow() } != HWND(prior as *mut _) {
+-            return Self(state);
++        // Shell/Store registrations delegate to differently named window hosts.
++        // These names identify foreground attribution only, never an app pid.
++        let prior_valid = prior != 0
++            && unsafe {
++                windows::Win32::UI::WindowsAndMessaging::IsWindow(windows::Win32::Foundation::HWND(
++                    prior as *mut _,
++                ))
++                .as_bool()
++            };
++        let prior = if super::launch_policy::may_restore_foreground(prior_valid, true, false, true)
++        {
++            prior
++        } else {
++            0
++        };
++        let lock = crate::input::ForegroundLockGuard::acquire();
++        Self {
++            watch: ForegroundWatch::start(prior, Target::launch(expected)),
++            _lock: lock,
+         }
+-        std::thread::spawn(move || {
+-            let hard_deadline = Instant::now() + Duration::from_secs(20);
+-            loop {
+-                let ended = worker.lock().unwrap().ended;
+-                if Instant::now() >= hard_deadline
+-                    || ended.is_some_and(|end| end.elapsed() >= Duration::from_secs(3))
+-                    || initial_input.is_none()
+-                    || input_tick() != initial_input
+-                {
+-                    break;
+-                }
+-                let prior_hwnd = HWND(prior as *mut _);
+-                let foreground = unsafe { GetForegroundWindow() };
+-                let prior_valid = prior != 0
+-                    && unsafe { IsWindow(prior_hwnd) }.as_bool()
+-                    && window_process(prior_hwnd) == prior_pid;
+-                if !prior_valid {
+-                    break;
+-                }
+-                if foreground != prior_hwnd {
+-                    let matches = process_name(window_process(foreground))
+-                        .is_some_and(|name| expected.contains(&name));
+-                    if super::launch_policy::may_restore_foreground(
+-                        prior_valid,
+-                        input_tick() == initial_input,
+-                        false,
+-                        matches,
+-                    ) {
+-                        // No synthetic keypress: attach only for this verified hand-back.
+-                        let restored =
+-                            unsafe { crate::input::force_foreground_attached(prior_hwnd) };
+-                        let mut state = worker.lock().unwrap();
+-                        state.restored |= restored;
+-                        state.failed = !restored;
+-                    } else if !foreground.0.is_null() {
+-                        // Another app took over; preserve that switch for the rest of this launch.
+-                        break;
+-                    }
+-                }
+-                std::thread::sleep(Duration::from_millis(20));
+-            }
+-        });
+-        Self(state)
++    }
++
++    #[allow(dead_code)] // Used by the launch call-site integration.
++    pub(super) fn register_pid(&self, pid: u32) {
++        self.watch.register_pid(pid);
+     }
+ 
+     pub(super) fn report(&self) -> (&'static str, bool) {
+-        let state = self.0.lock().unwrap();
+-        if state.failed {
+-            (
+-                "Windows activated the app; handing focus back to your previous window could not be confirmed.",
+-                true,
+-            )
+-        } else if state.restored {
+-            (
+-                "Windows activated the app; focus was restored to your previous window.",
+-                false,
+-            )
+-        } else {
+-            ("No launch activation was observed; focus hand-back remains guarded for late windows.", false)
+-        }
++        self.watch.report()
+     }
+ }
+-
+-impl Drop for LaunchForegroundGuard {
+-    fn drop(&mut self) {
+-        self.0.lock().unwrap().ended = Some(Instant::now());
+-    }
+-}
+-
+-#[cfg(test)]
+-mod tests {
+-    use super::*;
+-    #[test]
+-    fn report_never_claims_unconfirmed_handoff_succeeded() {
+-        let guard = LaunchForegroundGuard(Arc::new(Mutex::new(State {
+-            failed: true,
+-            ..State::default()
+-        })));
+-        assert!(guard.report().1);
+-        assert!(guard.report().0.contains("could not be confirmed"));
+-    }
+-}
+diff --git a/crates/platform-windows/src/launch_uwp.rs b/crates/platform-windows/src/launch_uwp.rs
+--- a/crates/platform-windows/src/launch_uwp.rs
++++ b/crates/platform-windows/src/launch_uwp.rs
+@@ -40,7 +40,6 @@
+ use cua_driver_core::single_flight::SingleFlight;
+ 
+ use windows::core::{Interface, GUID, HSTRING, PCWSTR, PWSTR};
+-use windows::Win32::Foundation::HWND;
+ use windows::Win32::System::Com::{
+     CoCreateInstance, CoInitializeEx, CoTaskMemFree, IBindCtx, CLSCTX_LOCAL_SERVER,
+     COINIT_APARTMENTTHREADED,
+@@ -48,9 +47,8 @@
+ use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
+ use windows::Win32::UI::Shell::{
+     ApplicationActivationManager, BHID_EnumItems, IApplicationActivationManager, IEnumShellItems,
+-    IShellItem, IShellItem2, SHCreateItemFromParsingName, AO_NONE, SIGDN_NORMALDISPLAY,
++    IShellItem, IShellItem2, SHCreateItemFromParsingName, AO_NOERRORUI, SIGDN_NORMALDISPLAY,
+ };
+-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+ 
+ /// `PKEY_AppUserModel_ID` (System.AppUserModel.ID) — the property key whose
+ /// string value on each `shell:AppsFolder` entry is the AUMID we need to
+@@ -73,17 +71,12 @@
+ /// the spawned UWP / MSIX process (not a stub pid).
+ ///
+ /// `args` is forwarded verbatim as the activation `arguments` string;
+-/// pass `""` if the app takes no launch arguments. `AO_NONE` keeps
+-/// behavior identical to a user-driven Start Menu click — splash screen
+-/// shown, error UI shown on failure, default activation kind.
+-///
+-/// **Background-launch invariant** — the AppX runtime's default activation
+-/// brings the newly-activated app to the foreground (same as a Start Menu
+-/// click). cua-driver's contract is the opposite: launched apps must not
+-/// steal focus from whatever the human is doing. We snapshot the pre-call
+-/// foreground window with `GetForegroundWindow` and restore it after
+-/// activation returns. This matches macOS's `NSWorkspace.openApplication`
+-/// + `activates=false` + `oapp` AppleEvent invariant.
++/// pass `""` if the app takes no launch arguments. AO_NOERRORUI suppresses
++/// broker error dialogs. AppX has no normal interactive no-activate option:
++/// AO_NOSPLASHSCREEN requires package debugging (otherwise Windows terminates
++/// the app); AO_PRELAUNCH does not open its interactive window. The caller's
++/// foreground guard must be armed before entering this function.
++/// https://learn.microsoft.com/windows/win32/api/shobjidl_core/nf-shobjidl_core-iapplicationactivationmanager-activateapplication
+ ///
+ /// Errors propagate the `HRESULT` from `ActivateApplication`. The most
+ /// common failures:
+@@ -118,80 +111,15 @@
+     let aumid_h = HSTRING::from(aumid);
+     let args_h = HSTRING::from(args);
+ 
+-    // Snapshot prior foreground BEFORE activation — that's our restore
+-    // target. Captured even if null; the restore step is a no-op then.
+-    let prior_foreground = unsafe { GetForegroundWindow() };
+-
+-    let pid = unsafe {
+-        manager.ActivateApplication(PCWSTR(aumid_h.as_ptr()), PCWSTR(args_h.as_ptr()), AO_NONE)?
+-    };
+-
+-    // Restore the prior foreground window. AppX activation has already
+-    // run by this point and may have stolen focus; flip it back so the
+-    // human's typing context is preserved. The restore is best-effort —
+-    // failures (null prior, target window destroyed, target hung) are
+-    // logged at debug level and otherwise swallowed because the launch
+-    // itself succeeded and we don't want to fail the tool call on a
+-    // focus-restore corner case.
+-    restore_foreground_best_effort(prior_foreground);
+-
+-    Ok(pid)
+-}
+-
+-/// Best-effort restore of the foreground window. Run in a tight retry
+-/// loop because UWP activations sometimes push their own window to
+-/// foreground a few milliseconds AFTER `ActivateApplication` returns —
+-/// a single immediate SetForegroundWindow call would race the AppX
+-/// runtime and lose. Three attempts spaced 50ms apart covers the window.
+-///
+-/// **Foreground-lock workaround:** Windows restricts SetForegroundWindow
+-/// to processes that meet specific conditions (foreground process,
+-/// owner of last input, etc.). The daemon usually meets none of these
+-/// when launch_app is called from MCP. We inject a single VK_NONAME
+-/// synthetic keypress via `keybd_event` to claim "owner of last input"
+-/// status long enough for SetForegroundWindow to succeed. VK_NONAME
+-/// (0xFC) is the reserved no-name virtual-key code — it does not map
+-/// to any UI action and is safe to inject without side effects.
+-fn restore_foreground_best_effort(prior: HWND) {
+-    use windows::Win32::UI::Input::KeyboardAndMouse::{
+-        keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+-    };
+-    use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
+-
+-    if prior.0.is_null() {
+-        tracing::debug!(target: "launch_uwp", "no prior foreground to restore");
+-        return;
+-    }
+-
+-    // Claim "owner of last input" so the next SetForegroundWindow call
+-    // isn't silently dropped by the foreground lock. VK_NONAME (0xFC)
+-    // doesn't trigger any application's key handler.
+-    const VK_NONAME: u8 = 0xFC;
++    // Do not synthesize a key or restore independently here: both would hide
++    // activation evidence from the shared launch guard and synthetic input
++    // would disarm its user-input check. Watch splash and main windows there.
+     unsafe {
+-        keybd_event(VK_NONAME, 0, KEYBD_EVENT_FLAGS(0), 0);
+-        keybd_event(VK_NONAME, 0, KEYEVENTF_KEYUP, 0);
+-    }
+-
+-    for attempt in 0..3 {
+-        if attempt > 0 {
+-            std::thread::sleep(std::time::Duration::from_millis(50));
+-        }
+-        unsafe {
+-            if !IsWindow(prior).as_bool() {
+-                tracing::debug!(target: "launch_uwp", "prior foreground HWND no longer valid");
+-                return;
+-            }
+-            let ok = SetForegroundWindow(prior).as_bool();
+-            tracing::debug!(
+-                target: "launch_uwp",
+-                "SetForegroundWindow attempt {} -> {}",
+-                attempt + 1,
+-                ok,
+-            );
+-            if ok {
+-                return;
+-            }
+-        }
++        manager.ActivateApplication(
++            PCWSTR(aumid_h.as_ptr()),
++            PCWSTR(args_h.as_ptr()),
++            AO_NOERRORUI,
++        )
+     }
+ }
+ 
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -52,6 +52,9 @@
+     WindowFromPoint, GA_ROOT, GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, PT_TOUCH,
+     WS_EX_NOACTIVATE,
+ };
++
++#[path = "foreground_watch.rs"]
++pub(crate) mod foreground_watch;
+ 
+ #[derive(Default)]
+ struct ForegroundLockState {

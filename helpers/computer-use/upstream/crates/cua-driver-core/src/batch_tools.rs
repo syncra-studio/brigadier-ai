@@ -754,7 +754,17 @@ impl Plan {
         };
         if let Some(mut args) = observe {
             let filled = fill_observed_window(&mut args, last_window.as_ref());
-            let result = if filled {
+            let closed = structured["steps"]
+                .as_array()
+                .and_then(|steps| steps.last())
+                .and_then(|step| step.get("closed_window"))
+                .filter(|window| {
+                    window["pid"] == args["pid"] && window["window_id"] == args["window_id"]
+                });
+            let result = if let Some(window) = closed {
+                ToolResult::text("The observed window closed.")
+                    .with_structured(json!({"status":"closed", "pid":window["pid"], "window_id":window["window_id"], "summary":"The observed window closed."}))
+            } else if filled {
                 registry.invoke(OBSERVE_TOOL, args).await
             } else {
                 ToolResult::error("no window to observe: no step resolved one")
@@ -1008,6 +1018,22 @@ async fn run_step(
         if let (true, Some(note)) = (ok, refound_note) {
             notes.push(note);
         }
+        // The registry projects legacy structured data into the public action
+        // result. Use the retained producer evidence, which refers to the exact
+        // window this action targeted, rather than parsing the public prose.
+        if ok
+            && result.action_record.as_ref().is_some_and(|record| {
+                record.effect == crate::action_record::ActionEffect::Confirmed
+                    && record.evidence.iter().any(|evidence| {
+                        evidence.kind == crate::action_record::EvidenceKind::WindowChange
+                            && evidence.detail == "Target window/dialog closed"
+                    })
+            })
+        {
+            if let Some(window) = last_window.as_ref() {
+                report["closed_window"] = json!({"pid":window.pid, "window_id":window.window_id});
+            }
+        }
         report["ok"] = json!(ok);
         report["message"] = json!(message);
         if !ok {
@@ -1166,6 +1192,9 @@ fn fill_observed_window(args: &mut Value, last: Option<&Window>) -> bool {
 
 /// One line saying what the end-of-batch read found.
 fn observation_summary(state: &Value) -> String {
+    if state["status"] == "closed" {
+        return "The observed window closed.".to_owned();
+    }
     let status = state.get("since_status").and_then(Value::as_str);
     let since = state.get("since").and_then(Value::as_str).unwrap_or("");
     match status {

@@ -1,0 +1,97 @@
+Why: Recognize both WinUI caption Close ids while excluding tab/document ancestry, and explain failed Chromium background focus plainly.
+
+--- a/crates/platform-windows/src/input/action_policy.rs
++++ b/crates/platform-windows/src/input/action_policy.rs
+@@ -9,7 +9,11 @@
+     automation_id: &str,
+     top_right: bool,
+ ) -> bool {
+-    button && (native_hit == 20 || (automation_id.eq_ignore_ascii_case("CloseButton") && top_right))
++    button
++        && (native_hit == 20
++            || ((automation_id.eq_ignore_ascii_case("CloseButton")
++                || automation_id.eq_ignore_ascii_case("Close"))
++                && top_right))
+ }
+ 
+ #[cfg(test)]
+@@ -26,6 +30,8 @@
+     fn native_caption_or_winui_close_identity_is_required() {
+         assert!(caption_close(true, 20, "", false));
+         assert!(caption_close(true, 1, "CloseButton", true));
++        assert!(caption_close(true, 1, "Close", true));
++        assert!(!caption_close(true, 1, "Close", false));
+         assert!(!caption_close(true, 1, "CloseButton", false));
+         assert!(!caption_close(true, 1, "CloseTab", true));
+         assert!(!caption_close(false, 20, "CloseButton", true));
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -230,6 +230,7 @@
+         // Win11 Notepad exposes a custom caption button below a Pane rather
+         // than a UIA TitleBar. Native non-client hit-test or its exact caption
+         // id at the top-right identifies it without confusing Close Tab.
++        let mut native_caption = false;
+         if let Ok(rect) = element.CurrentBoundingRectangle() {
+             let x = rect.left + (rect.right - rect.left) / 2;
+             let y = rect.top + (rect.bottom - rect.top) / 2;
+@@ -251,11 +252,13 @@
+                 && x < window.right
+                 && y >= window.top
+                 && y < window.top + 80;
+-            if crate::input::action_policy::caption_close(true, hit as isize, &id, top_right) {
+-                return true;
+-            }
+-        }
+-        if !name.eq_ignore_ascii_case("close") && !id.eq_ignore_ascii_case("close") {
++            native_caption =
++                crate::input::action_policy::caption_close(true, hit as isize, &id, top_right);
++        }
++        if !name.eq_ignore_ascii_case("close")
++            && !id.eq_ignore_ascii_case("close")
++            && !native_caption
++        {
+             return false;
+         }
+         let Ok(uia) = automation() else {
+@@ -265,19 +268,24 @@
+             return false;
+         };
+         let mut current = element.clone();
+-        for _ in 0..4 {
++        for _ in 0..16 {
+             let Ok(parent) = walker.GetParentElement(&current) else {
+                 break;
+             };
+-            if parent.CurrentControlType().ok() == Some(UIA_TitleBarControlTypeId) {
+-                return crate::input_outcome::close_button_identity(true, true, &name, &id);
++            let kind = parent.CurrentControlType().ok();
++            if kind == Some(UIA_TabItemControlTypeId) || kind == Some(UIA_DocumentControlTypeId) {
++                return false;
++            }
++            if kind == Some(UIA_TitleBarControlTypeId) {
++                return native_caption
++                    || crate::input_outcome::close_button_identity(true, true, &name, &id);
+             }
+             if parent.CurrentControlType().ok() == Some(UIA_WindowControlTypeId) {
+                 break;
+             }
+             current = parent;
+         }
+-        false
++        native_caption
+     }
+ }
+ 
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -5033,7 +5033,9 @@
+                     // that renderer rather than the Chrome_WidgetWin_1 frame.
+                     if crate::input::is_chromium_target_window(hwnd) || crate::input::has_chromium_descendant(hwnd) {
+                         if let Some(element) = admitted.as_ref().filter(|e| e.is_uia()) {
+-                            element.focus_element()?;
++                            element.focus_element().map_err(|error| anyhow::anyhow!(
++                                "Windows could not establish background focus on the exact Chromium text field while activation was shielded ({error}). No text was sent; whole-value replacement was not attempted."
++                            ))?;
+                         } else {
+                             anyhow::bail!("Chromium background typing requires an element_token for the exact text field. No text was sent.");
+                         }

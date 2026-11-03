@@ -475,9 +475,11 @@ impl Tool for PageTool {
             }
 
             "query_dom" => {
-                let selector = args
-                    .get("css_selector")
-                    .and_then(|v| v.as_str())
+                // `selector` is click_element's name for it; taking it here keeps a
+                // mixed-up call from silently querying every element.
+                let selector = ["css_selector", "selector"]
+                    .iter()
+                    .find_map(|key| args.get(*key).and_then(|v| v.as_str()))
                     .unwrap_or("*")
                     .to_owned();
                 let attributes: Vec<String> = args

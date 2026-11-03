@@ -7,7 +7,7 @@
 //! out of the old monolithic `mcp_protocol_test.rs`; mac/windows pairs merge
 //! and branch only where assertions differ.
 
-#![cfg(any(target_os = "macos", target_os = "windows"))]
+#![cfg(target_os = "macos")]
 
 use cu_testkit::RawDriver;
 

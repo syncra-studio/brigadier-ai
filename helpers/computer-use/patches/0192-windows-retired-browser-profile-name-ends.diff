@@ -1,0 +1,27 @@
+Why: Retiring a task-browser profile passes the new folder name with a terminating NUL: Windows read past the name, the retired folder got stray characters after its nonce, and it was never deleted.
+
+diff --git a/crates/platform-windows/src/tools/task_browser.rs b/crates/platform-windows/src/tools/task_browser.rs
+index d5ac71947..34dd0d470 100644
+--- a/crates/platform-windows/src/tools/task_browser.rs
++++ b/crates/platform-windows/src/tools/task_browser.rs
+@@ -1165,13 +1165,18 @@ fn quarantine_profile(path: &Path, record: &Marker) -> Result<QuarantinedProfile
+     }
+     let tombstone =
+         std::path::absolute(root)?.join(format!("retired-{}-{}", record.nonce, nonce()?));
+-    let name: Vec<u16> = tombstone.as_os_str().encode_wide().collect();
++    // Windows reads the new name up to a NUL whatever FileNameLength says.
++    // Live (2026-11-02, Windows 11 26300): without one the retired folder got
++    // stray characters after its nonce and was never deleted.
++    let mut name: Vec<u16> = tombstone.as_os_str().encode_wide().collect();
++    let length = name.len() * 2;
++    name.push(0);
+     let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+     let size = offset + name.len() * 2;
+     let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
+     unsafe {
+         let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+-        (*info).FileNameLength = (name.len() * 2) as u32;
++        (*info).FileNameLength = length as u32;
+         std::ptr::copy_nonoverlapping(
+             name.as_ptr(),
+             storage.as_mut_ptr().cast::<u8>().add(offset).cast(),

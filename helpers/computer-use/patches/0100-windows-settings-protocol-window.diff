@@ -1,0 +1,94 @@
+Why: resolve pidless Settings protocol launches through the exact SystemSettings-owned native frame without repeated global UIA waits.
+
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+--- a/crates/platform-windows/src/tools/launch_policy.rs
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -119,3 +119,28 @@
+         );
+     }
+ }
++
++/// Settings protocol launches often return pid 0; match its actual app identity,
++/// never a shared frame host or a localized window title.
++pub(crate) fn is_settings_protocol_launch(has_app: bool, urls: &[String]) -> bool {
++    !has_app && urls.len() == 1 && urls[0].to_ascii_lowercase().starts_with("ms-settings:")
++}
++
++pub(crate) fn is_settings_process(executable: &str) -> bool {
++    executable_name(executable) == "systemsettings"
++}
++
++#[cfg(test)]
++mod settings_protocol_tests {
++    use super::*;
++    #[test]
++    fn protocol_resolution_never_uses_an_unrelated_process_or_host() {
++        assert!(is_settings_protocol_launch(false, &["ms-settings:about".into()]));
++        assert!(!is_settings_protocol_launch(true, &["ms-settings:about".into()]));
++        assert!(!is_settings_protocol_launch(false, &["https://example.com".into()]));
++        assert!(!is_settings_protocol_launch(false, &[]));
++        assert!(is_settings_process("SystemSettings.exe"));
++        assert!(!is_settings_process("ApplicationFrameHost.exe"));
++        assert!(!is_settings_process("SystemSettingsAdminFlows.exe"));
++    }
++}
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2859,6 +2859,38 @@
+         let mut windows_json: Vec<serde_json::Value> = Vec::new();
+         let mut resolved_pid: u32 = pid;
+ 
++        if super::launch_policy::is_settings_protocol_launch(target_file_opt.is_some(), &urls) {
++            // EnumWindows already attributes each ApplicationFrameHost frame to
++            // its CoreWindow app pid. Avoid the global UIA deadline and pid-0
++            // launcher fallback on every poll.
++            for _ in 0..30 {
++                let window = tokio::task::spawn_blocking(|| {
++                    let settings_pids: std::collections::HashSet<_> = crate::win32::list_processes()
++                        .into_iter()
++                        .filter(|process| super::launch_policy::is_settings_process(&process.name))
++                        .map(|process| process.pid)
++                        .collect();
++                    let mut windows = crate::win32::list_windows_via_win32(None)
++                        .into_iter()
++                        .filter(|window| settings_pids.contains(&window.pid));
++                    let first = windows.next()?;
++                    // Multiple Settings frames cannot be attributed to this
++                    // protocol activation without additional evidence.
++                    windows.next().is_none().then_some(first)
++                }).await.unwrap_or(None);
++                if let Some(window) = window {
++                    resolved_pid = window.pid;
++                    windows_json.push(json!({
++                        "window_id": window.hwnd, "title": window.title,
++                        "bounds": {"x": window.x, "y": window.y, "width": window.width, "height": window.height},
++                        "layer": 0, "z_index": 0, "is_on_screen": window.is_on_screen,
++                    }));
++                    break;
++                }
++                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
++            }
++        }
++
+         if web_launch {
+             let executable = target_file_opt.as_deref().unwrap_or("");
+             let mut confirmed = Vec::new();
+@@ -2945,7 +2977,7 @@
+         }
+ 
+         for _ in 0..5 {
+-            if !windows_json.is_empty() {
++            if pid == 0 || !windows_json.is_empty() {
+                 break;
+             }
+             let wins =
+@@ -2965,7 +2997,7 @@
+             }
+             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+         }
+-        if windows_json.is_empty() {
++        if pid != 0 && windows_json.is_empty() {
+             // Launcher-stub fallback. Compute the exe basename from the
+             // launchable target so name-based matching has something to work
+             // with (e.g. "gimp-3.exe" → prefix "gimp" matches "gimp-3.2.exe").

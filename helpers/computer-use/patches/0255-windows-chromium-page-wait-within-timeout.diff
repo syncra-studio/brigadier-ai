@@ -1,0 +1,89 @@
+Why: The Chromium page wait before a window read is bounded by the caller's timeout_ms, at most 600 ms, with each pause capped to the time left: the walk's own clock starts only at the first node, so a 100 ms read waited the full 600 ms.
+
+diff --git a/crates/platform-windows/src/uia/mod.rs b/crates/platform-windows/src/uia/mod.rs
+index e17db9dfd..bdcca163c 100644
+--- a/crates/platform-windows/src/uia/mod.rs
++++ b/crates/platform-windows/src/uia/mod.rs
+@@ -169,6 +169,8 @@ fn wait_for_chromium_page(hwnd: u64, budget: &WalkBudget) {
+     if !crate::input::is_chromium_target_window(hwnd) {
+         return;
+     }
++    let started = std::time::Instant::now();
++    let limit = page_wait_limit(budget.time_limit());
+     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+     let Ok(automation) = (unsafe {
+         CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+@@ -188,17 +190,30 @@ fn wait_for_chromium_page(hwnd: u64, budget: &WalkBudget) {
+     }) else {
+         return;
+     };
+-    for attempt in 0..5 {
++    loop {
+         if unsafe { root.FindFirst(TreeScope_Descendants, &document) }.is_ok() {
+             return;
+         }
+-        if attempt == 4 || budget.expired() {
+-            return;
++        match page_wait_sleep(limit.saturating_sub(started.elapsed())) {
++            Some(pause) => std::thread::sleep(pause),
++            None => return,
+         }
+-        std::thread::sleep(std::time::Duration::from_millis(150));
+     }
+ }
+ 
++/// The page wait runs before the walk's own clock starts, so it is bounded by
++/// the caller's `timeout_ms` itself, and never longer than 600 ms.
++fn page_wait_limit(time_limit: Option<std::time::Duration>) -> std::time::Duration {
++    let backstop = std::time::Duration::from_millis(600);
++    time_limit.map_or(backstop, |limit| limit.min(backstop))
++}
++
++/// The next pause between page checks, capped to the time left; `None` once
++/// the wait is used up.
++fn page_wait_sleep(remaining: std::time::Duration) -> Option<std::time::Duration> {
++    (!remaining.is_zero()).then(|| remaining.min(std::time::Duration::from_millis(150)))
++}
++
+ unsafe fn walk_tree_unsafe(
+     hwnd: u64,
+     query: Option<&str>,
+@@ -1190,6 +1205,38 @@ fn filter_tree(markdown: &str, query: &str) -> String {
+     cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
+ }
+ 
++#[cfg(test)]
++mod chromium_page_wait_tests {
++    use super::*;
++    use std::time::Duration;
++
++    #[test]
++    fn the_page_wait_never_outlasts_the_callers_timeout() {
++        assert_eq!(
++            page_wait_limit(Some(Duration::from_millis(100))),
++            Duration::from_millis(100)
++        );
++        assert_eq!(
++            page_wait_limit(Some(Duration::from_secs(5))),
++            Duration::from_millis(600)
++        );
++        assert_eq!(page_wait_limit(None), Duration::from_millis(600));
++    }
++
++    #[test]
++    fn each_pause_fits_in_the_time_left() {
++        assert_eq!(
++            page_wait_sleep(Duration::from_millis(500)),
++            Some(Duration::from_millis(150))
++        );
++        assert_eq!(
++            page_wait_sleep(Duration::from_millis(40)),
++            Some(Duration::from_millis(40))
++        );
++        assert_eq!(page_wait_sleep(Duration::ZERO), None);
++    }
++}
++
+ #[cfg(test)]
+ mod multiline_query_tests {
+     use super::*;

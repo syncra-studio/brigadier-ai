@@ -300,37 +300,18 @@ fn set_thread_working_directory(directory: std::os::fd::BorrowedFd<'_>) -> std::
     }
 }
 
-/// Linux: the calling thread stops sharing the process's working directory
-/// (`unshare(CLONE_FS)`), then moves to `directory`.
-#[cfg(target_os = "linux")]
-fn set_thread_working_directory(directory: std::os::fd::BorrowedFd<'_>) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-
-    // SAFETY: CLONE_FS only detaches this thread's file-system attributes.
-    if unsafe { libc::unshare(libc::CLONE_FS) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: the descriptor is a directory the caller keeps open.
-    if unsafe { libc::fchdir(directory.as_raw_fd()) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
 /// Bind `name` inside the already opened and checked `directory`. The stale
-/// socket check, the bind, and the chmod all run on a dedicated thread whose
-/// working directory is `directory`, and they use the bare relative `name`.
-/// The kernel therefore resolves the socket inside the checked directory even
-/// if a component of the original path was renamed after the check.
+/// socket check, the bind, and the chmod resolve `name` through `directory`
+/// itself (a dedicated thread whose working directory it is on macOS, its
+/// /proc/self/fd entry on Linux), so the socket lands inside the checked
+/// directory even if a component of the original path was renamed after the
+/// check.
 #[cfg(unix)]
 fn bind_socket_in_directory(
     directory: &std::os::fd::OwnedFd,
     name: &std::ffi::OsStr,
     display: &std::path::Path,
 ) -> anyhow::Result<std::os::unix::net::UnixListener> {
-    use std::os::fd::AsFd;
-
     let relative = std::path::Path::new(name);
     if relative.components().count() != 1
         || !matches!(
@@ -343,21 +324,42 @@ fn bind_socket_in_directory(
             display.display()
         );
     }
+    // The opened directory's /proc entry resolves inside it as a thread working directory
+    // would, without unshare(2), which container seccomp profiles (Docker's default) refuse.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let inside = std::path::Path::new("/proc/self/fd")
+            .join(directory.as_raw_fd().to_string())
+            .join(relative);
+        bind_private_socket(&inside, display)
+    }
+    #[cfg(not(target_os = "linux"))]
     std::thread::scope(|scope| {
         scope
             .spawn(|| -> anyhow::Result<std::os::unix::net::UnixListener> {
-                set_thread_working_directory(directory.as_fd()).map_err(|error| {
-                    anyhow::anyhow!("enter socket directory for {}: {error}", display.display())
-                })?;
-                remove_stale_socket(relative, display)?;
-                let listener = std::os::unix::net::UnixListener::bind(relative)
-                    .map_err(|error| anyhow::anyhow!("bind {}: {error}", display.display()))?;
-                set_private_socket_permissions(relative)?;
-                Ok(listener)
+                set_thread_working_directory(std::os::fd::AsFd::as_fd(directory)).map_err(
+                    |error| {
+                        anyhow::anyhow!("enter socket directory for {}: {error}", display.display())
+                    },
+                )?;
+                bind_private_socket(relative, display)
             })
             .join()
             .map_err(|_| anyhow::anyhow!("socket bind thread panicked for {}", display.display()))?
     })
+}
+
+#[cfg(unix)]
+fn bind_private_socket(
+    path: &std::path::Path,
+    display: &std::path::Path,
+) -> anyhow::Result<std::os::unix::net::UnixListener> {
+    remove_stale_socket(path, display)?;
+    let listener = std::os::unix::net::UnixListener::bind(path)
+        .map_err(|error| anyhow::anyhow!("bind {}: {error}", display.display()))?;
+    set_private_socket_permissions(path)?;
+    Ok(listener)
 }
 
 #[cfg(unix)]
@@ -2797,10 +2799,9 @@ pub fn run_status_cmd(socket_path: &str, pid_file_path: &str) {
 
 #[cfg(test)]
 mod external_permission_flow_tests {
-    use super::{
-        clamp_external_permission_prompt, screen_capture_verification_response,
-        validate_system_permission_request,
-    };
+    #[cfg(target_os = "macos")]
+    use super::validate_system_permission_request;
+    use super::{clamp_external_permission_prompt, screen_capture_verification_response};
 
     #[test]
     fn external_permission_flow_clamps_agent_prompt_requests() {
@@ -2858,10 +2859,11 @@ mod external_permission_flow_tests {
 
 #[cfg(test)]
 mod socket_authentication_tests {
+    #[cfg(target_os = "macos")]
+    use super::ProcessIdentity;
     use super::{
         host_request_is_authorized, parse_request_with_token, parse_request_with_tokens,
         process_descends_from, socket_peer_requires_authorized_root, DaemonRequest,
-        ProcessIdentity,
     };
     use std::collections::HashMap;
 

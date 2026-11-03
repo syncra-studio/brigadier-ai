@@ -83,6 +83,67 @@ impl WindowsBrowserPlatform {
             browser_cursors: Arc::new(Mutex::new(BrowserCursorTracker::default())),
         }
     }
+
+    /// Resolve the exact Chrome/Edge installation named by a task launch,
+    /// retaining the same installation/write/signature checks as browser setup.
+    pub(crate) fn task_browser_executable(
+        &self,
+        requested: &str,
+    ) -> Result<Option<String>, BrowserRefusal> {
+        let name = std::path::Path::new(requested)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(name.as_str(), "chrome" | "msedge") {
+            return Ok(None);
+        }
+        let explicit = requested.contains(['\\', '/']);
+        let requested_real = if explicit {
+            Some(std::fs::canonicalize(requested).map_err(|error| {
+                refusal(
+                    BrowserRefusalCode::BrowserRouteUnavailable,
+                    format!("cannot resolve the requested browser executable: {error}"),
+                )
+            })?)
+        } else {
+            None
+        };
+        let context = browser_launch_context()?;
+        for (candidate, trusted_root, expected_cn, expected_org) in isolated_browser_candidates()? {
+            if candidate
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_none_or(|stem| !stem.eq_ignore_ascii_case(&name))
+            {
+                continue;
+            }
+            let installation =
+                launch_token_installation_write_access(&context, &candidate, &trusted_root);
+            let Some(executable) = installation.executable.filter(|_| installation.installed)
+            else {
+                continue;
+            };
+            if requested_real.as_ref().is_some_and(|path| {
+                plain_windows_path(&path.to_string_lossy())
+                    .is_none_or(|path| !path.eq_ignore_ascii_case(&executable))
+            }) {
+                continue;
+            }
+            if installation.write_access == InstallationWriteAccess::Untrusted
+                || !has_trusted_authenticode_identity(
+                    std::path::Path::new(&executable),
+                    expected_cn,
+                    expected_org,
+                )
+            {
+                continue;
+            }
+            return Ok(Some(executable));
+        }
+        Err(refusal(BrowserRefusalCode::BrowserRouteUnavailable,
+            "the requested Chrome/Edge installation could not be proven protected and vendor-signed; no task browser was launched"))
+    }
 }
 
 impl Default for WindowsBrowserPlatform {
@@ -372,6 +433,7 @@ fn has_trusted_authenticode_identity(
 }
 
 fn authenticode_output(executable: &std::path::Path) -> std::io::Result<std::process::Output> {
+    use std::os::windows::process::CommandExt;
     // Some Windows PowerShell 5.1 builds cannot resolve a `\\?\` verbatim
     // path through `-LiteralPath` ("A drive named '\?\C' does not exist"),
     // which would make every candidate look unsigned. Pass the plain path.
@@ -402,8 +464,37 @@ fn authenticode_output(executable: &std::path::Path) -> std::io::Result<std::pro
         // PowerShell, ignoring an incompatible inherited PSModulePath. Pass the
         // browser path as data so PowerShell never parses it as command text.
         .env("CUA_BROWSER_ATTEST_PATH", &executable)
+        // A windowless helper would otherwise get a new, activated console.
+        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|child| wait_with_deadline(child, Duration::from_secs(15)))
+}
+
+/// A slow certificate revocation check must not stall the calling tool.
+/// Its output is a few short lines, so both pipes hold it until exit.
+fn wait_with_deadline(
+    mut child: std::process::Child,
+    limit: Duration,
+) -> std::io::Result<std::process::Output> {
+    let deadline = std::time::Instant::now() + limit;
+    while child.try_wait()?.is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "the signature check did not finish within {} s",
+                    limit.as_secs()
+                ),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child.wait_with_output()
 }
 
 /// Result of probing one path for write-class rights held by the calling
@@ -414,6 +505,7 @@ enum WriteProbe {
     Failed(String),
 }
 
+#[cfg(test)]
 fn current_token_write_denial_reason(path: &std::path::Path, directory: bool) -> Option<String> {
     match current_token_write_probe(path, directory, false) {
         WriteProbe::Denied => None,
@@ -720,7 +812,7 @@ fn is_windows_absolute_path(path: &std::path::Path) -> bool {
         || value.starts_with(r"\\")
 }
 
-fn user_data_dir_from_command_line(
+pub(crate) fn user_data_dir_from_command_line(
     command_line: &str,
     default: Option<PathBuf>,
 ) -> Result<Option<PathBuf>, BrowserRefusal> {
@@ -757,7 +849,7 @@ fn system_powershell_path() -> Result<PathBuf, BrowserRefusal> {
     Ok(system_directory_path()?.join("WindowsPowerShell\\v1.0\\powershell.exe"))
 }
 
-async fn browser_command_line(pid: u32) -> Result<String, BrowserRefusal> {
+pub(crate) async fn browser_command_line(pid: u32) -> Result<String, BrowserRefusal> {
     let powershell = system_powershell_path()?;
     let script = format!(
         "$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); (Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' -ErrorAction Stop).CommandLine"
@@ -770,10 +862,20 @@ async fn browser_command_line(pid: u32) -> Result<String, BrowserRefusal> {
             "-Command",
             &script,
         ])
+        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
+        // A caller's own deadline drops this future; the child must not outlive it.
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(Duration::from_secs(10), output)
         .await
+        .unwrap_or_else(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the process query did not finish within 10 s",
+            ))
+        })
         .map_err(|error| {
             refusal(
                 BrowserRefusalCode::BrowserRouteUnavailable,
@@ -941,7 +1043,7 @@ fn canonical_discovered_websocket_url(url: &str, expected_port: u16) -> Option<S
         })
 }
 
-fn process_identity(pid: u32) -> Result<(u64, Option<String>), BrowserRefusal> {
+pub(crate) fn process_identity(pid: u32) -> Result<(u64, Option<String>), BrowserRefusal> {
     let handle =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(|_| {
             refusal(
@@ -3228,7 +3330,6 @@ mod tests {
             eprintln!(
                 "installed browser correctly refused for this write-capable runner token: {diagnostics:?}"
             );
-            return;
         }
     }
     use std::sync::atomic::{AtomicUsize, Ordering};

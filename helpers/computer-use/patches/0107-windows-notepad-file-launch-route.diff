@@ -1,0 +1,25 @@
+Why: pass fresh Notepad files through its executable alias and avoid claiming URL confirmation when only the app window was verified.
+
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -319,6 +319,7 @@
+ pub(crate) fn named_desktop_executable(name: &str) -> Option<&'static str> {
+     match name.trim().to_ascii_lowercase().as_str() {
+         "file explorer" | "windows explorer" | "explorer" | "explorer.exe" => Some("explorer.exe"),
++        "notepad" | "notepad.exe" => Some("notepad.exe"),
+         _ => None,
+     }
+ }
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -3343,7 +3343,7 @@
+             for window in &windows_json {
+                 if let Some(hwnd) = window["window_id"].as_u64() {
+                     match super::launch_browser::additional_tabs(hwnd, urls.len().max(1)).await {
+-                        Some(count) if count > 0 => restored_content_note.push_str(&format!(" Window {hwnd} also exposes {count} additional tab(s), which may be restored content. Only the requested document was confirmed; do not read the other tabs.")),
++                        Some(count) if count > 0 => restored_content_note.push_str(&format!(" Window {hwnd} also exposes {count} additional tab(s), which may be restored content. These additional tabs were not read; do not read them as the requested document.")),
+                         None => restored_content_note.push_str(" Windows did not expose a reliable tab count; other restored content could not be ruled out."),
+                         _ => {}
+                     }

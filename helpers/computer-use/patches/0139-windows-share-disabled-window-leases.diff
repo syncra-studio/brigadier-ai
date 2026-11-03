@@ -1,0 +1,225 @@
+Why: Share disabled-window ownership across overlapping UIA workers so only the final holder restores the original state, and ignore recycled HWND identities.
+
+diff --git a/crates/platform-windows/src/uia/fg_bypass.rs b/crates/platform-windows/src/uia/fg_bypass.rs
+index 66f1bd8a9..1796cca1a 100644
+--- a/crates/platform-windows/src/uia/fg_bypass.rs
++++ b/crates/platform-windows/src/uia/fg_bypass.rs
+@@ -29,46 +29,71 @@
+ //! is therefore gated on `is_xaml_host_hwnd || is_chromium_target_window` and is
+ //! a no-op for other hosts.
+ 
++use std::collections::BTreeMap;
++use std::sync::Mutex;
+ use windows::Win32::Foundation::HWND;
+ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+-use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GA_ROOT};
++use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetWindowThreadProcessId, GA_ROOT};
+ 
+ /// RAII guard that disables a window on construction and restores its
+-/// previous enabled-state on Drop. Always re-arms on Drop even if the
+-/// wrapped action panics.
++/// original enabled-state when the last overlapping guard drops. Leases are
++/// shared across UIA worker threads, including calls that finish asynchronously.
+ pub struct DisabledHwndGuard {
+-    hwnd: HWND,
++    key: Option<(isize, u32, u32)>,
++}
++
++struct DisableLease {
++    holders: usize,
+     was_enabled: bool,
+-    armed: bool,
++}
++
++static DISABLE_LEASES: Mutex<BTreeMap<(isize, u32, u32), DisableLease>> =
++    Mutex::new(BTreeMap::new());
++
++fn window_key(hwnd: HWND) -> Option<(isize, u32, u32)> {
++    let mut pid = 0;
++    let tid = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
++    (pid != 0 && tid != 0).then_some((hwnd.0 as isize, pid, tid))
+ }
+ 
+ impl DisabledHwndGuard {
+     /// Disable `hwnd` for the lifetime of the guard. No-op for null HWND.
+     pub fn disable(hwnd: HWND) -> Self {
+-        if hwnd.0.is_null() {
+-            return Self {
+-                hwnd,
+-                was_enabled: false,
+-                armed: false,
+-            };
+-        }
+-        // `EnableWindow` returns nonzero iff the window was *previously
+-        // disabled* — invert to get the "was enabled" state we want to
+-        // restore at Drop time.
+-        let was_disabled = unsafe { EnableWindow(hwnd, false).as_bool() };
+-        Self {
+-            hwnd,
+-            was_enabled: !was_disabled,
+-            armed: true,
+-        }
++        let Some(key) = window_key(hwnd) else {
++            return Self { key: None };
++        };
++        let mut leases = DISABLE_LEASES.lock().unwrap_or_else(|e| e.into_inner());
++        let lease = leases.entry(key).or_insert_with(|| {
++            // EnableWindow returns nonzero iff the window was previously disabled.
++            let was_enabled = !unsafe { EnableWindow(hwnd, false).as_bool() };
++            DisableLease {
++                holders: 0,
++                was_enabled,
++            }
++        });
++        lease.holders += 1;
++        Self { key: Some(key) }
+     }
+ }
+ 
+ impl Drop for DisabledHwndGuard {
+     fn drop(&mut self) {
+-        if self.armed {
++        let Some(key) = self.key else { return };
++        let mut leases = DISABLE_LEASES.lock().unwrap_or_else(|e| e.into_inner());
++        let Some(lease) = leases.get_mut(&key) else {
++            return;
++        };
++        lease.holders -= 1;
++        if lease.holders != 0 {
++            return;
++        }
++        let was_enabled = lease.was_enabled;
++        leases.remove(&key);
++        let hwnd = HWND(key.0 as *mut _);
++        // A destroyed/recycled window must not inherit another window's restoration.
++        if was_enabled && window_key(hwnd) == Some(key) {
+             unsafe {
+-                let _ = EnableWindow(self.hwnd, self.was_enabled);
++                let _ = EnableWindow(hwnd, true);
+             }
+         }
+     }
+@@ -132,3 +157,123 @@ fn make_guard(host_hwnd: isize) -> Option<DisabledHwndGuard> {
+     }
+     Some(DisabledHwndGuard::disable(target))
+ }
++
++#[cfg(test)]
++mod disable_lease_tests {
++    use super::*;
++    use windows::core::w;
++    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
++    use windows::Win32::UI::WindowsAndMessaging::{
++        CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, MSG, PM_REMOVE,
++        WINDOW_EX_STYLE, WS_POPUP,
++    };
++
++    struct HiddenWindow(HWND);
++    impl HiddenWindow {
++        fn new() -> Self {
++            Self(unsafe {
++                CreateWindowExW(
++                    WINDOW_EX_STYLE(0),
++                    w!("STATIC"),
++                    w!(""),
++                    WS_POPUP,
++                    0,
++                    0,
++                    10,
++                    10,
++                    None,
++                    None,
++                    None,
++                    None,
++                )
++                .unwrap()
++            })
++        }
++        fn enabled(&self) -> bool {
++            unsafe { IsWindowEnabled(self.0).as_bool() }
++        }
++    }
++    impl Drop for HiddenWindow {
++        fn drop(&mut self) {
++            unsafe {
++                let _ = DestroyWindow(self.0);
++            }
++        }
++    }
++
++    #[test]
++    fn disable_lease_restores_only_after_last_drop_in_either_order() {
++        for first_created_first_dropped in [true, false] {
++            let window = HiddenWindow::new();
++            let first = DisabledHwndGuard::disable(window.0);
++            let second = DisabledHwndGuard::disable(window.0);
++            assert!(!window.enabled());
++            let (first_drop, last_drop) = if first_created_first_dropped {
++                (first, second)
++            } else {
++                (second, first)
++            };
++            drop(first_drop);
++            assert!(
++                !window.enabled(),
++                "another holder still shields this window"
++            );
++            drop(last_drop);
++            assert!(
++                window.enabled(),
++                "the initial state must survive overlapping calls"
++            );
++        }
++        let window = HiddenWindow::new();
++        unsafe {
++            let _ = EnableWindow(window.0, false);
++        }
++        let first = DisabledHwndGuard::disable(window.0);
++        let second = DisabledHwndGuard::disable(window.0);
++        drop(first);
++        drop(second);
++        assert!(
++            !window.enabled(),
++            "do not enable an originally modal/disabled window"
++        );
++    }
++
++    #[test]
++    fn disable_lease_is_shared_between_worker_threads() {
++        let window = HiddenWindow::new();
++        let first = DisabledHwndGuard::disable(window.0);
++        let hwnd = window.0 .0 as isize;
++        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
++        let (release_tx, release_rx) = std::sync::mpsc::channel();
++        let worker = std::thread::spawn(move || {
++            let second = DisabledHwndGuard::disable(HWND(hwnd as *mut _));
++            ready_tx.send(()).unwrap();
++            release_rx.recv().unwrap();
++            drop(second);
++        });
++        ready_rx
++            .recv_timeout(std::time::Duration::from_secs(5))
++            .unwrap();
++        drop(first);
++        assert!(!window.enabled(), "the other thread still owns its lease");
++        release_tx.send(()).unwrap();
++        // EnableWindow sends WM_ENABLE to this owning thread; pump it while
++        // the final holder restores the state from its worker thread.
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
++        while !worker.is_finished() && std::time::Instant::now() < deadline {
++            let mut message = MSG::default();
++            unsafe {
++                while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
++                    DispatchMessageW(&message);
++                }
++            }
++            std::thread::sleep(std::time::Duration::from_millis(1));
++        }
++        assert!(
++            worker.is_finished(),
++            "cross-thread EnableWindow did not finish"
++        );
++        worker.join().unwrap();
++        assert!(window.enabled());
++    }
++}

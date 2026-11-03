@@ -51,8 +51,8 @@ fn main() {
         "Header does not match Swift format: {header:?}"
     );
     assert!(
-        header.contains("SkyLight Space SPIs unavailable"),
-        "Windows should append the SPI-unavailable note (matches Swift's else branch)"
+        !header.contains("SkyLight") && !header.contains("Space SPIs"),
+        "Windows must not claim that a macOS framework is unavailable"
     );
 
     let wins = v

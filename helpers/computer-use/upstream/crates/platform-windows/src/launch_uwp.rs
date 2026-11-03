@@ -40,7 +40,6 @@ use std::time::Duration;
 use cua_driver_core::single_flight::SingleFlight;
 
 use windows::core::{Interface, GUID, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, IBindCtx, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED,
@@ -48,9 +47,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 use windows::Win32::UI::Shell::{
     ApplicationActivationManager, BHID_EnumItems, IApplicationActivationManager, IEnumShellItems,
-    IShellItem, IShellItem2, SHCreateItemFromParsingName, AO_NONE, SIGDN_NORMALDISPLAY,
+    IShellItem, IShellItem2, SHCreateItemFromParsingName, AO_NOERRORUI, SIGDN_NORMALDISPLAY,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 /// `PKEY_AppUserModel_ID` (System.AppUserModel.ID) — the property key whose
 /// string value on each `shell:AppsFolder` entry is the AUMID we need to
@@ -73,17 +71,12 @@ const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
 /// the spawned UWP / MSIX process (not a stub pid).
 ///
 /// `args` is forwarded verbatim as the activation `arguments` string;
-/// pass `""` if the app takes no launch arguments. `AO_NONE` keeps
-/// behavior identical to a user-driven Start Menu click — splash screen
-/// shown, error UI shown on failure, default activation kind.
-///
-/// **Background-launch invariant** — the AppX runtime's default activation
-/// brings the newly-activated app to the foreground (same as a Start Menu
-/// click). cua-driver's contract is the opposite: launched apps must not
-/// steal focus from whatever the human is doing. We snapshot the pre-call
-/// foreground window with `GetForegroundWindow` and restore it after
-/// activation returns. This matches macOS's `NSWorkspace.openApplication`
-/// + `activates=false` + `oapp` AppleEvent invariant.
+/// pass `""` if the app takes no launch arguments. AO_NOERRORUI suppresses
+/// broker error dialogs. AppX has no normal interactive no-activate option:
+/// AO_NOSPLASHSCREEN requires package debugging (otherwise Windows terminates
+/// the app); AO_PRELAUNCH does not open its interactive window. The caller's
+/// foreground guard must be armed before entering this function.
+/// https://learn.microsoft.com/windows/win32/api/shobjidl_core/nf-shobjidl_core-iapplicationactivationmanager-activateapplication
 ///
 /// Errors propagate the `HRESULT` from `ActivateApplication`. The most
 /// common failures:
@@ -118,80 +111,15 @@ pub fn launch_uwp(aumid: &str, args: &str) -> windows::core::Result<u32> {
     let aumid_h = HSTRING::from(aumid);
     let args_h = HSTRING::from(args);
 
-    // Snapshot prior foreground BEFORE activation — that's our restore
-    // target. Captured even if null; the restore step is a no-op then.
-    let prior_foreground = unsafe { GetForegroundWindow() };
-
-    let pid = unsafe {
-        manager.ActivateApplication(PCWSTR(aumid_h.as_ptr()), PCWSTR(args_h.as_ptr()), AO_NONE)?
-    };
-
-    // Restore the prior foreground window. AppX activation has already
-    // run by this point and may have stolen focus; flip it back so the
-    // human's typing context is preserved. The restore is best-effort —
-    // failures (null prior, target window destroyed, target hung) are
-    // logged at debug level and otherwise swallowed because the launch
-    // itself succeeded and we don't want to fail the tool call on a
-    // focus-restore corner case.
-    restore_foreground_best_effort(prior_foreground);
-
-    Ok(pid)
-}
-
-/// Best-effort restore of the foreground window. Run in a tight retry
-/// loop because UWP activations sometimes push their own window to
-/// foreground a few milliseconds AFTER `ActivateApplication` returns —
-/// a single immediate SetForegroundWindow call would race the AppX
-/// runtime and lose. Three attempts spaced 50ms apart covers the window.
-///
-/// **Foreground-lock workaround:** Windows restricts SetForegroundWindow
-/// to processes that meet specific conditions (foreground process,
-/// owner of last input, etc.). The daemon usually meets none of these
-/// when launch_app is called from MCP. We inject a single VK_NONAME
-/// synthetic keypress via `keybd_event` to claim "owner of last input"
-/// status long enough for SetForegroundWindow to succeed. VK_NONAME
-/// (0xFC) is the reserved no-name virtual-key code — it does not map
-/// to any UI action and is safe to inject without side effects.
-fn restore_foreground_best_effort(prior: HWND) {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
-
-    if prior.0.is_null() {
-        tracing::debug!(target: "launch_uwp", "no prior foreground to restore");
-        return;
-    }
-
-    // Claim "owner of last input" so the next SetForegroundWindow call
-    // isn't silently dropped by the foreground lock. VK_NONAME (0xFC)
-    // doesn't trigger any application's key handler.
-    const VK_NONAME: u8 = 0xFC;
+    // Do not synthesize a key or restore independently here: both would hide
+    // activation evidence from the shared launch guard and synthetic input
+    // would disarm its user-input check. Watch splash and main windows there.
     unsafe {
-        keybd_event(VK_NONAME, 0, KEYBD_EVENT_FLAGS(0), 0);
-        keybd_event(VK_NONAME, 0, KEYEVENTF_KEYUP, 0);
-    }
-
-    for attempt in 0..3 {
-        if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        unsafe {
-            if !IsWindow(prior).as_bool() {
-                tracing::debug!(target: "launch_uwp", "prior foreground HWND no longer valid");
-                return;
-            }
-            let ok = SetForegroundWindow(prior).as_bool();
-            tracing::debug!(
-                target: "launch_uwp",
-                "SetForegroundWindow attempt {} -> {}",
-                attempt + 1,
-                ok,
-            );
-            if ok {
-                return;
-            }
-        }
+        manager.ActivateApplication(
+            PCWSTR(aumid_h.as_ptr()),
+            PCWSTR(args_h.as_ptr()),
+            AO_NOERRORUI,
+        )
     }
 }
 

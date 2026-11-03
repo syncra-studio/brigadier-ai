@@ -3,7 +3,7 @@
 //!
 //! The helper's socket only takes peers signed like the helper, so every request goes through
 //! the helper's own binary (`brigadier-cu host …`, one JSON line out). Showing the status never
-//! starts the helper: a running one is asked, otherwise what it last wrote is shown, marked as
+//! starts the helper: a reachable one is asked, otherwise what it last wrote is shown, marked as
 //! not current. Only a button the user presses (Grant…, Check again, the capture check) may
 //! start it.
 //!
@@ -36,6 +36,8 @@ const WAKE_GAP: Duration = Duration::from_secs(30);
 const HOST_TIMEOUT: Duration = Duration::from_secs(45);
 /// Refreshing the helper (so it sees a new Screen Recording grant) at most this often.
 const REFRESH_SPACING: Duration = Duration::from_secs(5);
+/// With no helper on record, the watchdog asks for an unrecorded one at most this often.
+const UNRECORDED_SPACING: Duration = Duration::from_secs(30);
 /// Written once screen capture is confirmed: setup is finished.
 pub(crate) const CAPTURE_CONFIRMED: &str = "capture-confirmed";
 /// Touched by an agent's call that starts waiting for setup: the setup window opens.
@@ -79,6 +81,8 @@ struct HostState {
     /// The newest setup request answered (its file's change time); older ones, also from
     /// before Brigadier started, open nothing.
     setup_asked: SystemTime,
+    /// The watchdog's last `host status` while no helper was on record.
+    unrecorded_look: Option<Instant>,
 }
 
 impl Default for HostState {
@@ -88,6 +92,7 @@ impl Default for HostState {
             trouble: None,
             last: None,
             setup_asked: SystemTime::now(),
+            unrecorded_look: None,
         }
     }
 }
@@ -186,6 +191,27 @@ fn setup_of(
         Some(_) if !capture_confirmed => ComputerSetup::ConfirmCapture,
         Some(_) => ComputerSetup::Ready,
     }
+}
+
+/// macOS keeps its recorded-process shortcut; other desktops probe the endpoint even
+/// when a previous daemon's PID record is missing or stale.
+fn query_live_status(platform: ComputerPlatform, recorded: bool) -> bool {
+    platform != ComputerPlatform::Macos || recorded
+}
+
+/// What the watchdog does while no helper is on record. `None`: nothing can be listening
+/// (macOS; Linux without the helper's socket file), so the in-process status is the true one.
+/// Otherwise (Windows' pipe leaves no file) whether to run `host status` now: at most every
+/// [`UNRECORDED_SPACING`], and at once after a wake; between looks the last one stands.
+/// Settings asks for itself, so it always shows the true status.
+fn look_for_unrecorded(
+    platform: ComputerPlatform,
+    socket_exists: bool,
+    woke: bool,
+    since_last: Option<Duration>,
+) -> Option<bool> {
+    (query_live_status(platform, false) && (platform == ComputerPlatform::Windows || socket_exists))
+        .then(|| woke || since_last.is_none_or(|gap| gap >= UNRECORDED_SPACING))
 }
 
 /// Whether process `pid` exists.
@@ -350,7 +376,10 @@ impl SessionManager {
 
     /// Computer use as Settings shows it. Starts nothing.
     pub async fn computer_use_status(&self) -> ComputerUseStatus {
-        let raw = if self.computer_helper_recorded() {
+        // A stale PID record must not hide a reachable Windows/Linux daemon.
+        // host status only probes the endpoint; it never starts a helper.
+        let raw = if query_live_status(ComputerPlatform::current(), self.computer_helper_recorded())
+        {
             self.computer_host(&["status"]).await.ok()
         } else {
             None
@@ -620,8 +649,22 @@ impl SessionManager {
             tracing::info!("the Mac woke; checking the computer-use helper");
         }
         if !self.computer_helper_recorded() {
-            self.computer_host_state().strikes = 0;
-            let status = self.computer_status_from(None).await;
+            let socket = self.computer_home().join("cu.sock").exists();
+            let look = {
+                let mut state = self.computer_host_state();
+                state.strikes = 0;
+                let since = state.unrecorded_look.map(|at| at.elapsed());
+                let look = look_for_unrecorded(ComputerPlatform::current(), socket, woke, since);
+                if look == Some(true) {
+                    state.unrecorded_look = Some(Instant::now());
+                }
+                look
+            };
+            let status = match look {
+                None => self.computer_status_from(None).await,
+                Some(true) => self.computer_use_status().await,
+                Some(false) => return,
+            };
             self.publish_computer_status(&status);
             return;
         }
@@ -703,6 +746,45 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn stale_pid_records_do_not_hide_live_desktop_status() {
+        use super::super::flow::{Flow, Options, Reply};
+        let flow = Flow::start(
+            "cu-stale-record",
+            Options::default(),
+            std::sync::Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+        )
+        .await;
+        let home = flow.manager.data_dir.join("computer");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("cu.pid"), "0").unwrap();
+        std::fs::write(
+            home.join("permissions.json"),
+            r#"{"accessibility":false,"screen_recording":false,"pid":0}"#,
+        )
+        .unwrap();
+        assert!(!flow.manager.computer_helper_recorded());
+        for platform in [ComputerPlatform::Windows, ComputerPlatform::Linux] {
+            assert!(query_live_status(
+                platform,
+                flow.manager.computer_helper_recorded()
+            ));
+        }
+        assert!(!query_live_status(ComputerPlatform::Macos, false));
+        let status = flow
+            .manager
+            .computer_status_from(Some(serde_json::json!({
+                "state": "healthy",
+                "permissions": { "accessibility": true, "screen_recording": true,
+                    "platform": { "notes": ["Live desktop details"] } }
+            })))
+            .await;
+        assert!(status.current);
+        assert_eq!(status.accessibility, PermissionState::Granted);
+        assert_eq!(status.screen_recording, PermissionState::Granted);
+        assert_eq!(status.notes, ["Live desktop details"]);
+    }
+
     #[test]
     fn setup_follows_the_setting_the_permissions_and_the_capture_check() {
         assert_eq!(
@@ -749,6 +831,34 @@ mod tests {
         assert_eq!(
             setup_of(false, Some(&Trouble::Restarting), None, false),
             ComputerSetup::Off
+        );
+    }
+
+    #[test]
+    fn without_a_helper_on_record_the_watchdog_seldom_runs_one() {
+        use ComputerPlatform::{Linux, Macos, Windows};
+        let soon = Some(TICK);
+        let later = Some(UNRECORDED_SPACING);
+        for (platform, socket) in [(Macos, true), (Linux, false)] {
+            for since in [None, soon, later] {
+                assert_eq!(look_for_unrecorded(platform, socket, true, since), None);
+            }
+        }
+        for platform in [Linux, Windows] {
+            assert_eq!(look_for_unrecorded(platform, true, false, None), Some(true));
+            assert_eq!(
+                look_for_unrecorded(platform, true, false, soon),
+                Some(false)
+            );
+            assert_eq!(
+                look_for_unrecorded(platform, true, false, later),
+                Some(true)
+            );
+            assert_eq!(look_for_unrecorded(platform, true, true, soon), Some(true));
+        }
+        assert_eq!(
+            look_for_unrecorded(Windows, false, false, soon),
+            Some(false)
         );
     }
 

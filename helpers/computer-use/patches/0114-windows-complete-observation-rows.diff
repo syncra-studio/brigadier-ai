@@ -1,0 +1,143 @@
+Why: Include read-only UIA rows in internal verification observations before claiming complete coverage, preserving public addressable rows and documenting Settings window Close.
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -1152,12 +1152,24 @@
+ // ── get_window_state ─────────────────────────────────────────────────────────
+ 
+ /// Build a single structured element entry for `get_window_state`.
+-/// Returns `None` when the node has no `element_index` (non-actionable rows).
++/// Public rows need an element_index. Internal observations also include
++/// display-only text so complete walks cannot falsely report its absence.
+ fn build_element_entry(
+     n: &crate::uia::UiaNode,
+     snapshot_id: Option<u32>,
+ ) -> Option<serde_json::Value> {
+-    let idx = n.element_index?;
++    build_read_element_entry(n, snapshot_id, false)
++}
++
++fn build_read_element_entry(
++    n: &crate::uia::UiaNode,
++    snapshot_id: Option<u32>,
++    include_display_only: bool,
++) -> Option<serde_json::Value> {
++    let idx = n.element_index;
++    if idx.is_none() && !include_display_only {
++        return None;
++    }
+     // `label`: name → value → automation_id → help_text.
+     let label = n
+         .name
+@@ -1165,13 +1177,15 @@
+         .or_else(|| n.value.clone())
+         .or_else(|| n.automation_id.clone())
+         .or_else(|| n.help_text.clone());
+-    let mut entry = json!({
+-        "element_index": idx,
+-        "role": n.control_type,
+-        "depth": n.depth,
+-    });
+-    if let Some(snapshot_id) = snapshot_id {
+-        entry["element_token"] = json!(cua_driver_core::element_token::token_for(snapshot_id, idx));
++    let mut entry = json!({ "role": n.control_type, "depth": n.depth });
++    if let Some(idx) = idx {
++        entry["element_index"] = json!(idx);
++        if let Some(snapshot_id) = snapshot_id {
++            entry["element_token"] =
++                json!(cua_driver_core::element_token::token_for(snapshot_id, idx));
++        }
++    } else {
++        entry["display_only"] = json!(true);
+     }
+     if n.in_web_content {
+         entry["in_web_content"] = json!(true);
+@@ -1640,7 +1654,13 @@
+                     let elements: Vec<serde_json::Value> = tr
+                         .nodes
+                         .iter()
+-                        .filter_map(|n| build_element_entry(n, snapshot_id))
++                        .filter_map(|n| {
++                            if observation_only {
++                                build_read_element_entry(n, snapshot_id, true)
++                            } else {
++                                build_element_entry(n, snapshot_id)
++                            }
++                        })
+                         .collect();
+                     let elements = cua_driver_core::element_query::project_elements_for_query(
+                         elements,
+@@ -1661,7 +1681,11 @@
+                         }
+                         _ => elements,
+                     };
+-                    structured["total_element_count"] = json!(count);
++                    structured["total_element_count"] = json!(if observation_only {
++                        tr.nodes.len()
++                    } else {
++                        count
++                    });
+                     structured["returned_element_count"] = json!(elements.len());
+                     structured["elements"] = json!(elements);
+                     // Surface 6: snapshot id mirror for debug correlation.
+@@ -3642,7 +3666,7 @@
+                 `count: 2` posts two down/up pairs for a double-click. Pixel clicks need \
+                 a visible on-screen window to anchor the coordinate conversion (errors \
+                 with `pid X has no on-screen window` otherwise).\n\n\
+-                Exactly one of `element_token` or (`x` AND `y`) must be provided. \
++                For Windows Settings, `action:\"close\"` with exact pid/window_id closes that window without an element or pixels. Otherwise, exactly one of `element_token` or (`x` AND `y`) must be provided. \
+                 `pid` is required for window scope and omitted for desktop scope. After a `zoom` call, \
+                 pass `from_zoom=true` to auto-translate zoom-image coords back to \
+                 full-window space.\n\n\
+@@ -10414,3 +10438,52 @@
+ mod display_only_tests;
+ #[cfg(test)]
+ mod value_write_readback_tests;
++
++#[cfg(test)]
++mod complete_observation_rows_tests {
++    use super::*;
++    #[test]
++    fn complete_observations_include_read_only_text_without_minting_input_tokens() {
++        let node = crate::uia::UiaNode {
++            element_index: None,
++            control_type: "Text".into(),
++            name: Some("Windows 11 Pro".into()),
++            value: Some("read-only value".into()),
++            automation_id: None,
++            help_text: None,
++            actions: Vec::new(),
++            enabled: Some(true),
++            selected: None,
++            element_ptr: 0,
++            center_x: 0,
++            center_y: 0,
++            rect: None,
++            msaa_role: None,
++            depth: 1,
++            parent_element_index: Some(0),
++            in_web_content: false,
++        };
++        assert!(build_read_element_entry(&node, Some(1), false).is_none());
++        let row = build_read_element_entry(&node, Some(1), true).unwrap();
++        assert_eq!(row["label"], "Windows 11 Pro");
++        assert_eq!(row["value"], "read-only value");
++        assert_eq!(row["display_only"], true);
++        assert!(row.get("element_token").is_none());
++        assert!(row.get("element_index").is_none());
++        let mut web = node.clone();
++        web.in_web_content = true;
++        assert_eq!(
++            build_read_element_entry(&web, None, true).unwrap()["in_web_content"],
++            true
++        );
++    }
++    #[tokio::test]
++    async fn malformed_close_never_reaches_native_dispatch() {
++        let result =
++            close_settings_window(json!({"pid":42,"window_id":99,"action":"close","x":0})).await;
++        assert_eq!(
++            result.structured_content.unwrap()["delivery_attempted"],
++            false
++        );
++    }
++}

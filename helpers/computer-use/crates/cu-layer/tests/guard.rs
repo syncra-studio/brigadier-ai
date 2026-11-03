@@ -12,7 +12,8 @@ use cua_driver_core::tool::{Tool, ToolDef, ToolRegistry};
 use serde_json::{json, Value};
 
 /// pid 100 = the user's Brigadier, 102 = TextEdit, 103 = Terminal,
-/// 106 = System Settings. Window 9000 belongs to Brigadier, 9001 to TextEdit.
+/// 106 = System Settings. Windows 9000, 9001, 9002 belong to Brigadier,
+/// TextEdit, Terminal respectively.
 struct FakeApps;
 
 fn app(name: &str, bundle: &str, pid: i64) -> TargetIdentity {
@@ -37,6 +38,7 @@ impl Lookups for FakeApps {
         match window_id {
             9000 => Some(100),
             9001 => Some(102),
+            9002 => Some(103),
             _ => None,
         }
     }
@@ -351,7 +353,7 @@ async fn a_token_of_a_refused_app_is_refused() {
     };
     let read = scope::with_scope(
         unlocked,
-        harness.call("get_window_state", json!({"pid": 103, "window_id": 1})),
+        harness.call("get_window_state", json!({"pid": 103, "window_id": 9002})),
     )
     .await;
     assert_ne!(read.is_error, Some(true), "{}", text(&read));

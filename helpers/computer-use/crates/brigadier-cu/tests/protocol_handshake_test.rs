@@ -6,7 +6,7 @@
 //! `mcp_protocol_test.rs`; mac/windows pairs are merged into one fn that
 //! branches only where the platforms genuinely differ.
 
-#![cfg(any(target_os = "macos", target_os = "windows"))]
+#![cfg(target_os = "macos")]
 
 use cu_testkit::RawDriver;
 

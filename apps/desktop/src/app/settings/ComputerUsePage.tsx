@@ -208,7 +208,9 @@ function PermissionRow({ permission, status, checking }: { permission: ComputerP
 function DesktopRow({ status }: { status: ComputerUseStatus | null }) {
   const row = COMPUTER_USE_ROWS.desktop;
   const notes = status?.notes ?? [];
-  const description = notes.length > 0 ? notes.join(" ") : "Shown once an agent has used apps here.";
+  const description = notes.length > 0 ? notes.join(" ")
+    : status?.current && status.setup.state === "ready" ? "Agents can use apps on this computer."
+    : "Desktop details are available while the helper is running.";
   return <SettingsRow label={row.label} description={<span data-slot="desktop-notes">{description}</span>} />;
 }
 

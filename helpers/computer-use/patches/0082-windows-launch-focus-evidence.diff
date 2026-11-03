@@ -1,0 +1,243 @@
+Why: Bind broker and resolved app pids to launch observations, sample active and focus wording together, and keep confirmed opening distinct from unconfirmed foreground preservation.
+
+diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
+--- a/crates/platform-windows/src/input/foreground_policy.rs
++++ b/crates/platform-windows/src/input/foreground_policy.rs
+@@ -71,2 +71,38 @@
+ 
++/// Attribution can arrive after a broker's brief foreground event. Keep
++/// bounded evidence until its real pid is returned; never infer activation
++/// from calling SetForegroundWindow successfully on an already-front window.
++#[derive(Default)]
++pub(crate) struct ActivationEvidence {
++    known: Vec<u32>,
++    pending: Vec<u32>,
++    pub(crate) activated: bool,
++}
++
++impl ActivationEvidence {
++    pub(crate) fn observe(&mut self, pid: u32, name_matches: bool) -> bool {
++        if pid == 0 {
++            return false;
++        }
++        if name_matches || self.known.contains(&pid) {
++            self.activated = true;
++            return true;
++        }
++        if self.pending.len() < 64 && !self.pending.contains(&pid) {
++            self.pending.push(pid);
++        }
++        false
++    }
++
++    pub(crate) fn bind(&mut self, pid: u32) {
++        if pid == 0 {
++            return;
++        }
++        if !self.known.contains(&pid) {
++            self.known.push(pid);
++        }
++        self.activated |= self.pending.contains(&pid);
++    }
++}
++
+ #[cfg(test)]
+@@ -74,2 +110,36 @@
+     use super::*;
++
++    #[test]
++    fn a_broker_pid_binds_a_brief_event_recorded_before_activation_returned() {
++        let mut evidence = ActivationEvidence::default();
++        assert!(!evidence.observe(42, false));
++        assert!(!evidence.activated);
++        evidence.bind(42);
++        assert!(evidence.activated);
++        assert!(evidence.observe(42, false));
++    }
++
++    #[test]
++    fn unrelated_events_and_a_successful_noop_restore_are_not_activation_evidence() {
++        let mut evidence = ActivationEvidence::default();
++        evidence.observe(17, false);
++        evidence.bind(42);
++        assert!(!evidence.activated);
++        assert!(!evidence.observe(0, true));
++        assert!(evidence.observe(42, false));
++        let mut named = ActivationEvidence::default();
++        assert!(named.observe(99, true));
++        assert!(named.activated);
++    }
++
++    #[test]
++    fn pending_broker_evidence_is_bounded() {
++        let mut evidence = ActivationEvidence::default();
++        for pid in 1..=1000 {
++            evidence.observe(pid, false);
++        }
++        assert_eq!(evidence.pending.len(), 64);
++        evidence.bind(0);
++        assert!(!evidence.activated);
++    }
+ 
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+--- a/crates/platform-windows/src/input/foreground_watch.rs
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -41,3 +41,3 @@
+     ended: Option<Instant>,
+-    target_pids: Vec<u32>,
++    evidence: policy::ActivationEvidence,
+     holders: usize,
+@@ -61,3 +61,3 @@
+     watch: Arc<Watch>,
+-    requests: mpsc::Sender<mpsc::SyncSender<policy::Observation>>,
++    requests: mpsc::Sender<mpsc::SyncSender<(policy::Observation, usize)>>,
+ }
+@@ -69,3 +69,3 @@
+     watch: Weak<Watch>,
+-    requests: mpsc::Sender<mpsc::SyncSender<policy::Observation>>,
++    requests: mpsc::Sender<mpsc::SyncSender<(policy::Observation, usize)>>,
+ }
+@@ -126,6 +126,9 @@
+             Target::Processes(targets) => pid != 0 && targets.contains(&pid),
+-            Target::Launch(names) => {
+-                self.state.lock().unwrap().target_pids.contains(&pid)
+-                    || process_name(pid).is_some_and(|name| names.contains(&name))
+-            }
++            Target::Launch(names) => process_name(pid).is_some_and(|name| names.contains(&name)),
++        };
++        let target = {
++            let mut state = self.state.lock().unwrap();
++            let target = state.evidence.observe(pid, target);
++            state.observation.activated = state.evidence.activated;
++            target
+         };
+@@ -134,3 +137,2 @@
+         }
+-        self.state.lock().unwrap().observation.activated = true;
+         // An event may describe a transient switch already restored by Windows.
+@@ -147,7 +149,8 @@
+ 
+-    fn snapshot(&self) -> policy::Observation {
++    fn snapshot(&self) -> (policy::Observation, usize) {
+         self.observe(unsafe { GetForegroundWindow() });
+         let mut result = self.state.lock().unwrap().observation;
+-        result.restored = unsafe { GetForegroundWindow() } == HWND(self.prior as *mut _);
+-        result
++        let foreground = unsafe { GetForegroundWindow() }.0 as usize;
++        result.restored = foreground == self.prior;
++        (result, foreground)
+     }
+@@ -254,3 +257,3 @@
+                 ended: None,
+-                target_pids: Vec::new(),
++                evidence: policy::ActivationEvidence::default(),
+                 holders: 1,
+@@ -258,3 +261,3 @@
+         });
+-        let (requests, receive) = mpsc::channel::<mpsc::SyncSender<policy::Observation>>();
++        let (requests, receive) = mpsc::channel::<mpsc::SyncSender<(policy::Observation, usize)>>();
+         let (ready, armed) = mpsc::sync_channel(1);
+@@ -340,14 +343,17 @@
+ 
+-    #[allow(dead_code)] // Launch call sites register broker-returned pids.
+     pub(crate) fn register_pid(&self, pid: u32) {
+         if pid != 0 {
+-            self.watch.state.lock().unwrap().target_pids.push(pid);
+-        }
+-    }
+-
+-    pub(crate) fn report(&self) -> (&'static str, bool) {
++            let mut state = self.watch.state.lock().unwrap();
++            state.evidence.bind(pid);
++            state.observation.activated = state.evidence.activated;
++        }
++    }
++
++    pub(crate) fn report(&self) -> (&'static str, bool, usize) {
+         let (reply, receive) = mpsc::sync_channel(1);
+         if self.requests.send(reply).is_ok() {
+-            if let Ok(observation) = receive.recv_timeout(Duration::from_millis(100)) {
+-                return observation.report();
++            if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(100))
++            {
++                let (note, failed) = observation.report();
++                return (note, failed, foreground);
+             }
+@@ -355,5 +361,7 @@
+         let mut observation = self.watch.state.lock().unwrap().observation;
+-        observation.restored = unsafe { GetForegroundWindow() }.0 as usize == self.watch.prior;
++        let foreground = unsafe { GetForegroundWindow() }.0 as usize;
++        observation.restored = foreground == self.watch.prior;
+         observation.monitoring = false;
+-        observation.report()
++        let (note, failed) = observation.report();
++        (note, failed, foreground)
+     }
+diff --git a/crates/platform-windows/src/tools/launch_focus.rs b/crates/platform-windows/src/tools/launch_focus.rs
+--- a/crates/platform-windows/src/tools/launch_focus.rs
++++ b/crates/platform-windows/src/tools/launch_focus.rs
+@@ -2,2 +2,3 @@
+ use crate::input::inject::foreground_watch::{ForegroundWatch, Target};
++use std::sync::atomic::{AtomicUsize, Ordering};
+ 
+@@ -5,2 +6,3 @@
+     watch: ForegroundWatch,
++    reported_foreground: AtomicUsize,
+     _lock: crate::input::ForegroundLockGuard,
+@@ -55,2 +57,3 @@
+             _lock: lock,
++            reported_foreground: AtomicUsize::new(0),
+         }
+@@ -58,3 +61,2 @@
+ 
+-    #[allow(dead_code)] // Used by the launch call-site integration.
+     pub(super) fn register_pid(&self, pid: u32) {
+@@ -64,3 +66,10 @@
+     pub(super) fn report(&self) -> (&'static str, bool) {
+-        self.watch.report()
++        let (note, failed, foreground) = self.watch.report();
++        self.reported_foreground
++            .store(foreground, Ordering::Release);
++        (note, failed)
++    }
++
++    pub(super) fn reported_foreground(&self) -> usize {
++        self.reported_foreground.load(Ordering::Acquire)
+     }
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2906,2 +2906,5 @@
+         // so callers can target it with subsequent calls. See #1615.
++        if let Some(guard) = foreground_guard.as_ref() {
++            guard.register_pid(pid);
++        }
+         let mut windows_json: Vec<serde_json::Value> = Vec::new();
+@@ -3366,2 +3369,5 @@
+                 .unwrap_or(false));
++        if let Some(guard) = foreground_guard.as_ref() {
++            guard.register_pid(pid);
++        }
+         let (foreground_note, foreground_failed) = foreground_guard
+@@ -3432,3 +3438,20 @@
+         let mut result = ToolResult::text(summary).with_structured(structured);
+-        if foreground_failed || !running {
++        // Use one foreground sample for active and observation wording.
++        let foreground_at_report = foreground_guard
++            .as_ref()
++            .map(|guard| guard.reported_foreground())
++            .unwrap_or(0);
++        if let Some(content) = result.structured_content.as_mut() {
++            content["active"] = json!(
++                windows_json
++                    .iter()
++                    .any(|window| window["window_id"].as_u64() == Some(foreground_at_report as u64))
++                    || (pid != 0
++                        && crate::input::inject::foreground_watch::window_process(
++                            windows::Win32::Foundation::HWND(foreground_at_report as *mut _)
++                        ) == pid)
++            );
++            content["focus_hand_back_unconfirmed"] = json!(foreground_failed);
++        }
++        if !running {
+             result.is_error = Some(true);

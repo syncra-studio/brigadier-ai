@@ -1,0 +1,76 @@
+Why: A click on a background dialog's button through a token read from its owner window hid nothing, and the closing dialog raised itself and its owner over the user's window for 4 ms.
+
+diff --git a/crates/platform-windows/src/uia/click.rs b/crates/platform-windows/src/uia/click.rs
+index 564a41a37..df886bbd8 100644
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -18,8 +18,9 @@ use windows::Win32::System::Com::{
+ use windows::Win32::UI::Accessibility::*;
+ use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+ use windows::Win32::UI::WindowsAndMessaging::{
+-    GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect, IsWindow,
+-    SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND, WM_NCHITTEST,
++    GetAncestor, GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect,
++    GetWindowThreadProcessId, IsWindow, SendMessageTimeoutW, GA_ROOT, SMTO_ABORTIFHUNG, WM_CLOSE,
++    WM_COMMAND, WM_NCHITTEST,
+ };
+ 
+ struct ComApartment(bool);
+@@ -353,8 +354,12 @@ fn try_click(
+     let noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
+     // A background dialog that closes activates its owner, which Windows
+     // raises over the user's window: keep the owner hidden until it is gone.
+-    let hidden_owner =
+-        (!expand_only).then(|| super::dialog_owner::HiddenOwner::arm(HWND(hwnd as *mut _)));
++    // The token may come from a read of the owner window, which also lists
++    // the dialog's controls: arm on the window the element really lives in.
++    let hidden_owner = (!expand_only).then(|| {
++        let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
++        super::dialog_owner::HiddenOwner::arm(element_root_window(HWND(hwnd as *mut _), &element))
++    });
+     let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
+     drop(hidden_owner);
+     // Say so when the app took the front during the click (a Save closing
+@@ -376,6 +381,42 @@ fn try_click(
+     result
+ }
+ 
++/// The top-level window holding `element`: its own or its nearest ancestor's
++/// native window, when that belongs to the token window's process.
++/// Falls back to the token window.
++fn element_root_window(token: HWND, element: &IUIAutomationElement) -> HWND {
++    fn process(hwnd: HWND) -> u32 {
++        let mut pid = 0;
++        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
++        pid
++    }
++    let native = |e: &IUIAutomationElement| {
++        unsafe { e.CurrentNativeWindowHandle() }
++            .ok()
++            .filter(|h| !h.0.is_null())
++    };
++    let mut found = native(element);
++    if found.is_none() {
++        if let Ok(walker) = automation().and_then(|uia| unsafe { uia.ControlViewWalker() }) {
++            let mut current = element.clone();
++            for _ in 0..16 {
++                let Ok(parent) = (unsafe { walker.GetParentElement(&current) }) else {
++                    break;
++                };
++                found = native(&parent);
++                if found.is_some() {
++                    break;
++                }
++                current = parent;
++            }
++        }
++    }
++    found
++        .map(|h| unsafe { GetAncestor(h, GA_ROOT) })
++        .filter(|root| !root.0.is_null() && process(*root) != 0 && process(*root) == process(token))
++        .unwrap_or(token)
++}
++
+ fn try_click_guarded(
+     hwnd: u64,
+     ptr: usize,

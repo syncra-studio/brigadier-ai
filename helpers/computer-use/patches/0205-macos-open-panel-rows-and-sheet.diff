@@ -1,0 +1,196 @@
+Why: On macOS a background pixel click on a list or sidebar row with no press action selects that row through accessibility, confirmed by read-back (#676); panels report whether they show a sheet, so a Go to Folder shortcut that opened nothing says so (#675).
+
+diff --git a/crates/platform-macos/src/ax/panel.rs b/crates/platform-macos/src/ax/panel.rs
+index 04741c9c8..3fe6bba4e 100644
+--- a/crates/platform-macos/src/ax/panel.rs
++++ b/crates/platform-macos/src/ax/panel.rs
+@@ -158,6 +158,35 @@ pub fn keyboard_pid(pid: i32, wid: u32) -> Option<i32> {
+     }
+ }
+ 
++/// Whether the exact Open/Save panel `wid` of `pid` shows a sheet (its Go to
++/// Folder sheet). `None` when the window isn't such a panel.
++pub fn panel_has_sheet(pid: i32, wid: u32) -> Option<bool> {
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return None;
++        }
++        AXUIElementSetMessagingTimeout(app, 0.1);
++        let windows = copy_ax_windows_including(app, pid, wid);
++        CFRelease(app as CFTypeRef);
++        let mut found = None;
++        for window in windows {
++            if found.is_none() && ax_get_window_id(window) == Some(wid) && is_panel(window) {
++                let children = copy_children(window);
++                let sheet = children
++                    .iter()
++                    .any(|child| copy_string_attr(*child, "AXRole").as_deref() == Some("AXSheet"));
++                for child in children {
++                    CFRelease(child as CFTypeRef);
++                }
++                found = Some(sheet);
++            }
++            CFRelease(window as CFTypeRef);
++        }
++        found
++    }
++}
++
+ /// Open/Save panels own their key equivalents (notably Cmd-Shift-G). The
+ /// client app's identically bound Find Previous menu must never intercept them.
+ pub fn blocks_app_menu(pid: i32, wid: u32) -> bool {
+diff --git a/crates/platform-macos/src/ax/point_target.rs b/crates/platform-macos/src/ax/point_target.rs
+index dcf0752d2..55aaf3b66 100644
+--- a/crates/platform-macos/src/ax/point_target.rs
++++ b/crates/platform-macos/src/ax/point_target.rs
+@@ -58,7 +58,33 @@ pub unsafe fn press_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIEle
+     geometry_target(pid, wid, x, y)
+ }
+ 
++/// The one selectable row (`AXRow` exposing `AXSelected`) under the point in
++/// window `wid`, found by geometry like [`press_target`]'s fallback. Rows have
++/// no press action, so a click on one is answered by selecting it.
++///
++/// # Safety
++/// Calls into the accessibility API; the caller releases the result.
++pub unsafe fn row_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElementRef> {
++    geometry_target_where(pid, wid, x, y, |element| {
++        copy_string_attr(element, "AXRole").as_deref() == Some("AXRow")
++            && copy_bool_attr(element, "AXSelected").is_some()
++    })
++}
++
+ unsafe fn geometry_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElementRef> {
++    geometry_target_where(pid, wid, x, y, |element| {
++        copy_bool_attr(element, "AXEnabled") != Some(false)
++            && copy_action_names(element).iter().any(|a| a == "AXPress")
++    })
++}
++
++unsafe fn geometry_target_where(
++    pid: i32,
++    wid: u32,
++    x: f64,
++    y: f64,
++    wanted: impl Fn(AXUIElementRef) -> bool,
++) -> Option<AXUIElementRef> {
+     let app = AXUIElementCreateApplication(pid);
+     if app.is_null() {
+         return None;
+@@ -104,10 +130,7 @@ unsafe fn geometry_target(pid: i32, wid: u32, x: f64, y: f64) -> Option<AXUIElem
+                     pending.push((child, child_path));
+                 }
+             }
+-            if inside == Some(true)
+-                && copy_bool_attr(element, "AXEnabled") != Some(false)
+-                && copy_action_names(element).iter().any(|a| a == "AXPress")
+-            {
++            if inside == Some(true) && wanted(element) {
+                 core_foundation::base::CFRetain(element as CFTypeRef);
+                 candidates.push((element, path));
+             }
+diff --git a/crates/platform-macos/src/tools/click.rs b/crates/platform-macos/src/tools/click.rs
+index 5764869ff..73a9b30f1 100644
+--- a/crates/platform-macos/src/tools/click.rs
++++ b/crates/platform-macos/src/tools/click.rs
+@@ -1156,8 +1156,24 @@ impl Tool for ClickTool {
+                                     screen_y,
+                                 )
+                             };
++                            // Ok(None): fall through to the routed pixel path;
++                            // Ok(Some(None)): pressed or focused (unconfirmed);
++                            // Ok(Some(Some(role))): a row selected, read back.
++                            // No pressable element: a list or sidebar row has
++                            // no press action, so select the row under the
++                            // point instead.
++                            let element = match element {
++                                Some(element) => Some(element),
++                                None if !focus_only => crate::ax::point_target::row_target(
++                                    pid,
++                                    hit_test_wid,
++                                    screen_x,
++                                    screen_y,
++                                ),
++                                None => None,
++                            };
+                             let Some(element) = element else {
+-                                return Ok::<bool, anyhow::Error>(false);
++                                return Ok::<Option<Option<String>>, anyhow::Error>(None);
+                             };
+                             // The pid-scoped hit-test can resolve an element from a
+                             // same-process sibling overlapping the requested point.
+@@ -1168,7 +1184,7 @@ impl Tool for ClickTool {
+                                 != Some(hit_test_wid)
+                             {
+                                 CFRelease(element as _);
+-                                return Ok(false);
++                                return Ok(None);
+                             }
+                             // An element that does not advertise AXPress can still
+                             // accept it as a no-op. On a toolkit that drops routed
+@@ -1180,8 +1196,15 @@ impl Tool for ClickTool {
+                                     .iter()
+                                     .any(|action| action == "AXPress")
+                             {
++                                // A click on a list or sidebar row selects it (an
++                                // Open panel's sidebar drops routed clicks): select
++                                // that row the way a token click does, read back.
++                                let _key_focus = crate::key_focus_guard::protect(pid);
++                                let selected = crate::input::ax_actions::select_nearest_container(
++                                    element as usize,
++                                );
+                                 CFRelease(element as _);
+-                                return Ok(false);
++                                return Ok(selected.map(Some));
+                             }
+                             let _key_focus = crate::key_focus_guard::protect(pid);
+                             let delivered = if focus_only {
+@@ -1200,7 +1223,7 @@ impl Tool for ClickTool {
+                                 true
+                             };
+                             CFRelease(element as _);
+-                            Ok(delivered)
++                            Ok(delivered.then_some(None))
+                         })
+                         .await
+                     },
+@@ -1208,7 +1231,28 @@ impl Tool for ClickTool {
+                 .await;
+                 let changes = super::finish_window_observation(snapshot).await;
+                 match ax_result {
+-                    Ok(Ok(true)) => {
++                    Ok(Ok(Some(Some(role)))) => {
++                        crate::cursor::overlay::send_command(
++                            cursor_key.clone(),
++                            cursor_overlay::OverlayCommand::ClickPulse {
++                                x: screen_x,
++                                y: screen_y,
++                            },
++                        );
++                        return ToolResult::text(format!(
++                            "✅ Selected the {role} at this point through accessibility; \
++                             confirmed by reading its selection back.{}",
++                            changes.result_suffix()
++                        ))
++                        .with_structured(serde_json::json!({
++                            "path": "ax",
++                            "delivery_attempted": true,
++                            "verified": true,
++                            "effect": "confirmed",
++                            "evidence": [{ "kind": "accessibility_readback" }]
++                        }));
++                    }
++                    Ok(Ok(Some(None))) => {
+                         crate::cursor::overlay::send_command(
+                             cursor_key.clone(),
+                             cursor_overlay::OverlayCommand::ClickPulse {
+@@ -1228,7 +1272,7 @@ impl Tool for ClickTool {
+                             "effect": "unverifiable"
+                         }));
+                     }
+-                    Ok(Ok(false)) if focus_only => {
++                    Ok(Ok(None)) if focus_only => {
+                         return ToolResult::error(
+                             "Background PX focus is unavailable at the requested point.".to_owned(),
+                         )

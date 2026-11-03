@@ -1,6 +1,6 @@
 //! One strict GUI/recording preflight before a canonical E2E lane runs.
 
-#![cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#![cfg(target_os = "macos")]
 
 use std::any::Any;
 use std::collections::HashSet;

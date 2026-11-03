@@ -109,6 +109,7 @@ fn is_executable_inside_brigadier_helper_app_path(path: &std::path::Path) -> boo
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn cargo_run_is_not_inside_bundle() {
         // The unit-test runner image lives under `target/<config>/

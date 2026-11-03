@@ -60,6 +60,8 @@ screencapturekit = { version = "8.0.1", features = ["macos_15_0"] }
 
 
 [dev-dependencies]
+# Test-home exit cleanup uses the C runtime on Windows too.
+libc = "0.2"
 tokio = { workspace = true, features = ["full"] }
 base64 = { workspace = true }
 # Isolated HOME / cache directories for `version_check` unit tests so they

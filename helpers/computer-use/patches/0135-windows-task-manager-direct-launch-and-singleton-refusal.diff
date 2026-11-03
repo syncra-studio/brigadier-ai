@@ -1,0 +1,169 @@
+Why: Resolve Task Manager to the trusted system executable and use direct non-activating process creation, refusing reuse of an existing singleton and refusing launch without a valid prevention lock.
+
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+index bdfc8659c..da2bc566e 100644
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -91,7 +91,8 @@ impl ForegroundLockGuard {
+     }
+ 
+     pub fn acquired(&self) -> bool {
+-        self.held
++        let state = FOREGROUND_LOCK_STATE.lock().unwrap();
++        self.held && state.locked && self.generation == state.generation
+     }
+ }
+ 
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+index f18620684..073e3c861 100644
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -320,6 +320,7 @@ pub(crate) fn named_desktop_executable(name: &str) -> Option<&'static str> {
+     match name.trim().to_ascii_lowercase().as_str() {
+         "file explorer" | "windows explorer" | "explorer" | "explorer.exe" => Some("explorer.exe"),
+         "notepad" | "notepad.exe" => Some("notepad.exe"),
++        "task manager" | "taskmgr" | "taskmgr.exe" => Some("taskmgr.exe"),
+         _ => None,
+     }
+ }
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 6bceeb25f..fe2501df4 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2672,7 +2672,7 @@ impl Tool for LaunchAppTool {
+         // fail because the shell only resolves a single filesystem path
+         // there. No-op for AUMID tokens / plain paths without args / UWP
+         // `shell:appsFolder\..!..` tokens.
+-        let (target_file_opt, extra_joined) = {
++        let (mut target_file_opt, extra_joined) = {
+             let base_extra = extra_args.join(" ");
+             if launch_path_opt.is_some() {
+                 if let Some(t) = resolved_target.as_deref() {
+@@ -2694,23 +2694,34 @@ impl Tool for LaunchAppTool {
+             }
+         };
+ 
++        let direct_task_manager = if let Some(target) = target_file_opt.as_deref() {
++            match super::launch_focus::task_manager_direct_path(target) {
++                Ok(Some(path)) => {
++                    target_file_opt = Some(path);
++                    true
++                }
++                Ok(None) => false,
++                Err(message) => return ToolResult::error(message),
++            }
++        } else {
++            false
++        };
++
+         // Strict no-activation is available only for the desktop launch path.
+         // UWP activation is broker-controlled and retains its existing
+         // restore-after-activation behavior.
+-        let mut foreground_lock = if start_minimized && aumid_for_uwp.is_none() {
+-            Some(crate::input::ForegroundLockGuard::acquire())
+-        } else {
+-            None
+-        };
++        let mut foreground_lock =
++            if (start_minimized || direct_task_manager) && aumid_for_uwp.is_none() {
++                Some(crate::input::ForegroundLockGuard::acquire())
++            } else {
++                None
++            };
+         if foreground_lock
+             .as_ref()
+             .is_some_and(|guard| !guard.acquired())
+         {
+             return ToolResult::error(
+-                "Background minimized launch is unavailable because Windows did not grant the \
+-                 foreground lock required to prevent the new process from activating. No process \
+-                 was started. Launch without start_minimized only when a foreground change is \
+-                 acceptable.",
++                "Background launch is unavailable because Windows did not grant the activation-prevention lock required for this launch. No process was started.",
+             )
+             .with_structured(json!({
+                 "code": "background_unavailable",
+@@ -2789,7 +2800,7 @@ impl Tool for LaunchAppTool {
+             let target_for_shell = target_file_opt.clone();
+             let extra_for_shell = extra_joined.clone();
+             let n_show_for_shell = n_show;
+-            let direct_minimized_exe = start_minimized
++            let direct_background_exe = (start_minimized || direct_task_manager)
+                 && target_for_shell.as_deref().is_some_and(|target| {
+                     std::path::Path::new(target).is_file()
+                         && std::path::Path::new(target)
+@@ -2829,7 +2840,7 @@ impl Tool for LaunchAppTool {
+                 let args_w = to_wide(&extra_for_shell);
+ 
+                 use crate::standard_user_launch::AppLaunchToken;
+-                let pid = if direct_minimized_exe {
++                let pid = if direct_background_exe {
+                     let target = target_for_shell
+                         .as_deref()
+                         .expect("checked executable path");
+diff --git a/crates/platform-windows/src/tools/launch_focus.rs b/crates/platform-windows/src/tools/launch_focus.rs
+index 3b9f0cc85..545c6431e 100644
+--- a/crates/platform-windows/src/tools/launch_focus.rs
++++ b/crates/platform-windows/src/tools/launch_focus.rs
+@@ -73,3 +73,61 @@ impl LaunchForegroundGuard {
+         self.reported_foreground.load(Ordering::Acquire)
+     }
+ }
++/// Task Manager's shell registration auto-elevates and reuses its singleton.
++/// Use the trusted executable directly, and never activate an existing instance.
++pub(super) fn task_manager_direct_path(target: &str) -> Result<Option<String>, String> {
++    use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES};
++    use windows::Win32::System::Diagnostics::ToolHelp::{
++        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
++        TH32CS_SNAPPROCESS,
++    };
++    use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
++    let name = super::launch_policy::executable_name(target);
++    if name != "taskmgr" && name != "task manager" {
++        return Ok(None);
++    }
++    let mut buffer = [0u16; 32768];
++    let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
++    if length == 0 || length >= buffer.len() {
++        return Err("Windows did not identify its trusted system directory. No Task Manager launch was sent.".into());
++    }
++    let executable = format!(
++        "{}\\taskmgr.exe",
++        String::from_utf16_lossy(&buffer[..length])
++    );
++    if target.contains(['\\', '/']) && !target.replace('/', "\\").eq_ignore_ascii_case(&executable)
++    {
++        return Ok(None);
++    }
++    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.map_err(|e| {
++        format!("Could not check whether Task Manager already runs: {e}. No launch was sent.")
++    })?;
++    let result = (|| {
++        let mut entry = PROCESSENTRY32W {
++            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
++            ..Default::default()
++        };
++        unsafe { Process32FirstW(snapshot, &mut entry) }.map_err(|e| {
++            format!("Could not enumerate running processes: {e}. No Task Manager launch was sent.")
++        })?;
++        loop {
++            let end = entry
++                .szExeFile
++                .iter()
++                .position(|&ch| ch == 0)
++                .unwrap_or(entry.szExeFile.len());
++            if String::from_utf16_lossy(&entry.szExeFile[..end]).eq_ignore_ascii_case("taskmgr.exe")
++            {
++                return Err(format!("Task Manager is already running (pid {}). Windows can bring that single-instance window forward, including an elevated instance. No launch was sent because keeping your window in front could not be guaranteed.", entry.th32ProcessID));
++            }
++            match unsafe { Process32NextW(snapshot, &mut entry) } {
++                Ok(()) => {},
++                Err(error) if error.code() == windows::core::HRESULT::from_win32(ERROR_NO_MORE_FILES.0) => break,
++                Err(error) => return Err(format!("Could not finish checking running processes: {error}. No Task Manager launch was sent.")),
++            }
++        }
++        Ok(Some(executable))
++    })();
++    let _ = unsafe { CloseHandle(snapshot) };
++    result
++}

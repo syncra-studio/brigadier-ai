@@ -8,6 +8,8 @@ use cua_driver_core::tool::ToolRegistry;
 #[cfg(any(target_os = "windows", test))]
 mod browser_target;
 #[cfg(target_os = "windows")]
+mod chromium_text;
+#[cfg(target_os = "windows")]
 mod impl_;
 #[cfg(target_os = "windows")]
 mod launch_browser;
@@ -21,6 +23,8 @@ mod launch_termination;
 pub(crate) mod page;
 #[cfg(target_os = "windows")]
 pub(crate) mod page_bookmark;
+#[cfg(target_os = "windows")]
+mod task_browser;
 // Pure title parsing for `page_bookmark`; ungated so its tests run on any host.
 pub(crate) mod page_title_marker;
 
@@ -36,7 +40,16 @@ pub fn build_registry_with_provider(
     provider: Option<std::sync::Arc<dyn cua_driver_core::consent::ProtectedConsentProvider>>,
 ) -> ToolRegistry {
     #[cfg(target_os = "windows")]
-    return impl_::build_registry_with_provider(compat, provider);
+    {
+        task_browser::start_cleanup();
+        let scope = cua_driver_core::tool::current_dispatch_runtime_scope();
+        let mut registry = impl_::build_registry_with_provider(compat, provider);
+        registry.retain_runtime_cleanup(move || {
+            launch_browser::cleanup_documents(scope.as_deref());
+            task_browser::retire_all(scope.as_deref());
+        });
+        registry
+    }
 
     #[cfg(not(target_os = "windows"))]
     {

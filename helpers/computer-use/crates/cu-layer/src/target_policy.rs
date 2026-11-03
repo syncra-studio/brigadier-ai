@@ -116,18 +116,17 @@ pub fn enforce(
     if is_listing_tool(tool) {
         return Ok(());
     }
-    #[cfg(not(target_os = "macos"))]
     enforce_executable_launch(tool, args, allowed)?;
     let own_pid = i64::from(std::process::id());
     let mut checked_pid = None;
     if let Some(pid) = args.get("pid").and_then(Value::as_i64) {
         checked_pid = Some(pid);
-        check_pid(tool, pid, own_pid, allowed, resolver)?;
+        check_pid(tool, args, pid, own_pid, allowed, resolver)?;
     }
     if let Some(window_id) = args.get("window_id").and_then(Value::as_u64) {
         if let Some(owner) = (resolver.pid_for_window)(window_id) {
             if checked_pid != Some(owner) {
-                check_pid(tool, owner, own_pid, allowed, resolver)?;
+                check_pid(tool, args, owner, own_pid, allowed, resolver)?;
             }
         } else {
             #[cfg(not(target_os = "macos"))]
@@ -141,7 +140,7 @@ pub fn enforce(
             bundle_id: Some(bundle_id.to_owned()),
             pid: None,
         };
-        check(tool, &identity, allowed)?;
+        check_call(tool, args, &identity, allowed)?;
     }
     if tool == "launch_app" {
         if let Some(name) = args.get("name").and_then(Value::as_str) {
@@ -150,7 +149,7 @@ pub fn enforce(
                 bundle_id: None,
                 pid: None,
             };
-            check(tool, &identity, allowed)?;
+            check_call(tool, args, &identity, allowed)?;
         }
         if let Some(urls) = args.get("urls").and_then(Value::as_array) {
             for url in urls.iter().filter_map(Value::as_str) {
@@ -170,6 +169,7 @@ pub fn enforce(
 
 fn check_pid(
     tool: &str,
+    args: &Value,
     pid: i64,
     own_pid: i64,
     allowed: &[String],
@@ -186,15 +186,21 @@ fn check_pid(
     }
     match identity {
         Some(identity) => {
-            check(tool, &identity, allowed)?;
+            check_call(tool, args, &identity, allowed)?;
             #[cfg(not(target_os = "macos"))]
             {
                 let unlocked = identity
                     .bundle_id
                     .as_ref()
                     .is_some_and(|id| allowed.iter().any(|entry| entry.eq_ignore_ascii_case(id)));
-                if !unlocked && process_hosts_terminal(pid) {
-                    return Err(refusal(tool, &identity, RefusalReason::Terminal));
+                if !unlocked {
+                    if let Some(evidence) = process_hosts_terminal(pid) {
+                        let identity = TargetIdentity {
+                            pid: identity.pid.or(Some(pid)),
+                            ..identity
+                        };
+                        return Err(console_host_refusal(tool, &identity, &evidence));
+                    }
                 }
             }
             Ok(())
@@ -218,13 +224,78 @@ fn unresolved_identity(tool: &str) -> ToolResult {
         .with_structured(json!({"code":"target_identity_unavailable"}))
 }
 
+/// System Settings processes that `launch_app` started (it was not running
+/// before), so an agent may quit the window it opened. The user's own
+/// System Settings stays out of reach.
+static TASK_LAUNCHED_SETTINGS: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+
+/// Record that `launch_app` started this System Settings process.
+pub fn note_task_launched_settings(bundle_id: &str, pid: i64) {
+    if bundle_id.eq_ignore_ascii_case(MACOS_SETTINGS) {
+        let mut pids = TASK_LAUNCHED_SETTINGS.lock().unwrap();
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+}
+
+const MACOS_SETTINGS: &str = "com.apple.systempreferences";
+
+fn is_macos_settings(identity: &TargetIdentity) -> bool {
+    identity
+        .bundle_id
+        .as_deref()
+        .is_some_and(|id| id.eq_ignore_ascii_case(MACOS_SETTINGS))
+}
+
+fn task_launched_settings(identity: &TargetIdentity) -> bool {
+    is_macos_settings(identity)
+        && identity
+            .pid
+            .is_some_and(|pid| TASK_LAUNCHED_SETTINGS.lock().unwrap().contains(&pid))
+}
+
 /// Check one resolved identity.
 pub fn check(tool: &str, identity: &TargetIdentity, allowed: &[String]) -> Result<(), ToolResult> {
     match classify(identity, allowed) {
-        Some(RefusalReason::SecuritySurface) if reads_settings(tool, identity) => Ok(()),
+        Some(RefusalReason::SecuritySurface)
+            if reads_settings(tool, identity)
+                || tool == "kill_app"
+                    && (is_windows_settings(identity) || task_launched_settings(identity)) =>
+        {
+            Ok(())
+        }
+        Some(RefusalReason::SecuritySurface)
+            if tool == "kill_app" && is_macos_settings(identity) =>
+        {
+            let message = "target_not_allowed: kill_app refused to quit System Settings: it was \
+                           already open before this task's launch_app, so it is the user's own \
+                           window. Leave it open; kill_app quits only a System Settings that \
+                           launch_app started.";
+            Err(ToolResult::error(message).with_structured(json!({
+                "code": "target_not_allowed",
+                "reason": "user_owned_settings",
+                "tool": tool,
+            })))
+        }
         Some(reason) => Err(refusal(tool, identity, reason)),
         None => Ok(()),
     }
+}
+
+fn check_call(
+    tool: &str,
+    args: &Value,
+    identity: &TargetIdentity,
+    allowed: &[String],
+) -> Result<(), ToolResult> {
+    if is_windows_settings(identity)
+        && classify(identity, allowed) == Some(RefusalReason::SecuritySurface)
+        && cua_driver_core::window_state_view::windows_settings_close_request(tool, args)
+    {
+        return Ok(());
+    }
+    check(tool, identity, allowed)
 }
 
 /// System Settings may be opened and read (a version, whether a setting is
@@ -235,6 +306,17 @@ fn reads_settings(tool: &str, identity: &TargetIdentity) -> bool {
             tool,
             "launch_app" | "get_window_state" | "verify_state" | "get_accessibility_tree" | "zoom"
         )
+}
+
+/// Windows Settings owns a separate app process; terminating it cannot change
+/// a setting. Other security surfaces and platform Settings retain their policy.
+fn is_windows_settings(identity: &TargetIdentity) -> bool {
+    let id = identity
+        .bundle_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    id == "systemsettings" || id.starts_with("windows.immersivecontrolpanel")
 }
 
 /// Whether `identity` is System Settings.
@@ -277,7 +359,7 @@ pub fn classify(identity: &TargetIdentity, allowed: &[String]) -> Option<Refusal
     if is_security_surface(&bundle, &name) {
         return Some(RefusalReason::SecuritySurface);
     }
-    if is_brigadier(&bundle, &name, identity.pid.is_some()) {
+    if is_brigadier(&bundle, &name, identity.pid) {
         return Some(RefusalReason::UserBrigadier);
     }
     let host = std::env::var(crate::HOST_BUNDLE_ID_ENV)
@@ -301,17 +383,71 @@ fn is_driver(bundle: &str, name: &str) -> bool {
         || matches!(name, "brigadier-cu" | "brigadier computer use")
 }
 
-fn is_brigadier(bundle: &str, name: &str, running: bool) -> bool {
+fn is_brigadier(bundle: &str, name: &str, pid: Option<i64>) -> bool {
     // The name only decides when the bundle is unknown (launch by name), so
     // a development build named "Brigadier Dev" is not mistaken for it. A
-    // running process without a bundle is a bare binary (`tauri dev`), never
-    // the installed app, which runs from its bundle (#510).
+    // macOS process without a bundle is a bare binary (`tauri dev`), never
+    // the installed app, which runs from its bundle (#510). Windows dev
+    // builds have the same executable id as the installed app: use its path.
     bundle == "ai.brigadier.app"
         || bundle.starts_with("ai.brigadier.app.")
-        // Windows and Linux: the installed app's executables (a development
-        // build runs from a Cargo build folder and has no id).
-        || matches!(bundle, "brigadier" | "brigadier-app" | "brigadierd")
-        || (bundle.is_empty() && !running && name == "brigadier")
+        || (matches!(bundle, "brigadier" | "brigadier-app" | "brigadierd")
+            && is_installed_brigadier_process(pid))
+        || (bundle.is_empty() && pid.is_none() && name == "brigadier")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_installed_brigadier_process(_pid: Option<i64>) -> bool {
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn is_installed_brigadier_process(pid: Option<i64>) -> bool {
+    let executable = pid
+        .and_then(|pid| u32::try_from(pid).ok())
+        .and_then(crate::lookup::executable_of);
+    let local_app_data = std::env::var("LOCALAPPDATA").ok();
+    windows_brigadier_path_is_protected(
+        executable.as_deref().and_then(std::path::Path::to_str),
+        local_app_data.as_deref(),
+    )
+}
+
+/// NSIS currentUser + productName Brigadier installs under LOCALAPPDATA/Brigadier.
+/// Unknown paths stay protected. Compare directory boundaries, ignoring Windows
+/// casing, slash style and the extended-length prefix returned by some APIs.
+#[cfg(any(target_os = "windows", test))]
+fn windows_brigadier_path_is_protected(
+    executable: Option<&str>,
+    local_app_data: Option<&str>,
+) -> bool {
+    fn normalize(path: &str) -> Option<String> {
+        let path = path.replace('/', "\\").to_lowercase();
+        let path = path.strip_prefix(r"\\?\").unwrap_or(&path);
+        if !(path.as_bytes().get(1) == Some(&b':') && path.as_bytes().get(2) == Some(&b'\\'))
+            && !path.starts_with(r"\\")
+        {
+            return None;
+        }
+        let mut parts = Vec::new();
+        for part in path.split('\\') {
+            match part {
+                "." => {}
+                ".." => {
+                    parts.pop()?;
+                }
+                _ => parts.push(part),
+            }
+        }
+        Some(parts.join("\\").trim_end_matches('\\').to_owned())
+    }
+    let Some(executable) = executable.and_then(normalize) else {
+        return true;
+    };
+    let Some(local_app_data) = local_app_data.and_then(normalize) else {
+        return true;
+    };
+    executable.starts_with(&format!("{local_app_data}\\brigadier\\"))
 }
 
 fn is_security_surface(bundle: &str, name: &str) -> bool {
@@ -365,6 +501,8 @@ fn is_windows_or_linux_security_surface(bundle: &str) -> bool {
             | "mmc"
             | "rundll32"
             | "gnome-shell"
+            // GNOME's X11 window frames: their buttons close and move other apps' windows.
+            | "mutter-x11-frames"
             | "lxpolkit"
             | "gcr-prompter"
             | "gcr-viewer"
@@ -401,6 +539,20 @@ pub fn is_terminal(bundle: &str, name: &str) -> bool {
         ))
         || bundle.starts_with("dev.warp.")
         || is_windows_or_linux_terminal(bundle)
+        || is_windows_or_linux_terminal(name)
+        || name == "wmux"
+        || matches!(
+            name,
+            "windows terminal"
+                | "command prompt"
+                | "git bash"
+                | "git cmd"
+                | "windows command processor"
+                | "windows console host"
+        )
+        || name == "windows powershell"
+        || name.starts_with("windows powershell ")
+        || name.starts_with("powershell ")
         || matches!(
             name,
             "terminal"
@@ -507,15 +659,31 @@ struct ProcessFact {
     parent: i64,
     executable: String,
     has_tty: bool,
+    /// When the process started (on Windows a FILETIME), if known. Windows
+    /// keeps a dead parent's id in its children's records and reuses ids, so
+    /// a "parent" that started after its child is not the one that created it.
+    started: Option<u64>,
+}
+
+/// The console or shell process that made a target look like a terminal,
+/// and the processes between it and the target.
+#[cfg(any(not(target_os = "macos"), test))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConsoleEvidence {
+    pid: i64,
+    executable: String,
+    /// `(pid, executable)` from the evidence's parent up to, not including,
+    /// the target.
+    via: Vec<(i64, String)>,
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
-fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> bool {
-    let parents: std::collections::HashMap<i64, i64> = processes
+fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> Option<ConsoleEvidence> {
+    let by_pid: std::collections::HashMap<i64, &ProcessFact> = processes
         .iter()
-        .map(|process| (process.pid, process.parent))
+        .map(|process| (process.pid, process))
         .collect();
-    processes.iter().any(|process| {
+    processes.iter().find_map(|process| {
         let executable = process.executable.to_ascii_lowercase();
         let executable = executable.rsplit(['/', '\\']).next().unwrap_or(&executable);
         let executable = executable.strip_suffix(".exe").unwrap_or(executable);
@@ -528,41 +696,63 @@ fn hosts_terminal(pid: i64, processes: &[ProcessFact], windows: bool) -> bool {
             process.has_tty && is_windows_or_linux_terminal(executable)
         };
         if !evidence {
-            return false;
+            return None;
         }
-        let mut ancestor = process.pid;
+        let mut via = Vec::new();
+        if process.pid == pid {
+            return Some(ConsoleEvidence {
+                pid: process.pid,
+                executable: process.executable.clone(),
+                via,
+            });
+        }
+        let mut child = process;
         // Bound traversal and tolerate exit races, cycles and reparenting.
         for _ in 0..128 {
-            if ancestor == pid {
-                return true;
+            if child.parent <= 0 || child.parent == child.pid {
+                return None;
             }
-            let Some(parent) = parents.get(&ancestor).copied() else {
-                return false;
-            };
-            if parent <= 0 || parent == ancestor {
-                return false;
+            let parent = by_pid.get(&child.parent).copied();
+            // A parent younger than its child holds a reused id: the real
+            // parent has exited. An unknown start time keeps the link, so a
+            // process that cannot be queried still fails closed.
+            if let Some((Some(parent_started), Some(child_started))) =
+                parent.map(|parent| (parent.started, child.started))
+            {
+                if parent_started > child_started {
+                    return None;
+                }
             }
-            ancestor = parent;
+            // The target need not be in the snapshot (it may have just
+            // exited); naming it as parent is enough, as before start times.
+            if child.parent == pid {
+                return Some(ConsoleEvidence {
+                    pid: process.pid,
+                    executable: process.executable.clone(),
+                    via,
+                });
+            }
+            let parent = parent?;
+            via.push((parent.pid, parent.executable.clone()));
+            child = parent;
         }
-        false
+        None
     })
 }
 
 #[cfg(target_os = "linux")]
-fn process_hosts_terminal(pid: i64) -> bool {
+fn process_hosts_terminal(pid: i64) -> Option<ConsoleEvidence> {
     let Ok(mut child) = std::process::Command::new("/bin/ps")
         .args(["-A", "-o", "pid=,ppid=,tty=,comm="])
         .stdout(std::process::Stdio::piped())
         .spawn()
     else {
-        return false;
+        return None;
     };
     // Drain concurrently: a full stdout pipe must not turn the deadline into
     // a permanent refusal on machines with many processes.
     use std::io::Read;
-    let Some(mut stdout) = child.stdout.take() else {
-        return false;
-    };
+    let mut stdout = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -573,9 +763,8 @@ fn process_hosts_terminal(pid: i64) -> bool {
     // Even after stdout closes, do not wait indefinitely for ps to exit.
     let _ = child.kill();
     let _ = child.wait();
-    let Ok(output) = output else {
-        return false;
-    };
+    let output = output.ok()?;
+    // Linux reparents orphans, so `ppid` never names a dead parent.
     let processes: Vec<ProcessFact> = String::from_utf8_lossy(&output)
         .lines()
         .filter_map(|line| {
@@ -588,6 +777,7 @@ fn process_hosts_terminal(pid: i64) -> bool {
                 parent,
                 executable: fields.collect::<Vec<_>>().join(" "),
                 has_tty: !matches!(tty, "?" | "??" | "-"),
+                started: None,
             })
         })
         .collect();
@@ -595,23 +785,23 @@ fn process_hosts_terminal(pid: i64) -> bool {
 }
 
 #[cfg(windows)]
-fn process_hosts_terminal(pid: i64) -> bool {
+fn process_hosts_terminal(pid: i64) -> Option<ConsoleEvidence> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
+    let mut processes = Vec::new();
     // SAFETY: the snapshot is closed on every successful acquisition; each
     // PROCESSENTRY32W has the required size and a live, fixed-size name buffer.
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return false;
+            return None;
         };
         let mut entry = PROCESSENTRY32W {
             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
             ..Default::default()
         };
-        let mut processes = Vec::new();
         let mut next = Process32FirstW(snapshot, &mut entry);
         while next.is_ok() {
             let len = entry
@@ -624,12 +814,94 @@ fn process_hosts_terminal(pid: i64) -> bool {
                 parent: i64::from(entry.th32ParentProcessID),
                 executable: String::from_utf16_lossy(&entry.szExeFile[..len]),
                 has_tty: false,
+                started: None,
             });
             next = Process32NextW(snapshot, &mut entry);
         }
         let _ = CloseHandle(snapshot);
-        hosts_terminal(pid, &processes, true)
     }
+    // Toolhelp keeps a dead parent's id and Windows reuses ids, so a console
+    // whose creator exited can name an unrelated app as its parent. Start
+    // times are read only when the ids alone suggest a terminal host.
+    hosts_terminal(pid, &processes, true)?;
+    for process in &mut processes {
+        process.started = process_start_time(process.pid);
+    }
+    hosts_terminal(pid, &processes, true)
+}
+
+/// A process's creation time (FILETIME), read without attaching to it.
+#[cfg(windows)]
+fn process_start_time(pid: i64) -> Option<u64> {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let pid = u32::try_from(pid).ok().filter(|pid| *pid != 0)?;
+    let (mut created, mut exited, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    // SAFETY: a limited, read-only handle, closed after one query.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let read = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user);
+        let _ = CloseHandle(handle);
+        read.ok()?;
+    }
+    Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+/// A terminal refusal from process evidence rather than the app's identity.
+/// It says what was found, so a refused ordinary app can be diagnosed.
+#[cfg(any(not(target_os = "macos"), test))]
+fn console_host_refusal(
+    tool: &str,
+    identity: &TargetIdentity,
+    evidence: &ConsoleEvidence,
+) -> ToolResult {
+    let bundle = identity
+        .bundle_id
+        .as_deref()
+        .map(|bundle| format!(" ({bundle})"))
+        .unwrap_or_default();
+    let mut found = format!("{} (pid {})", evidence.executable, evidence.pid);
+    for (pid, executable) in &evidence.via {
+        found.push_str(&format!(", started by {executable} (pid {pid})"));
+    }
+    let target_pid = identity
+        .pid
+        .map(|pid| format!(" (pid {pid})"))
+        .unwrap_or_default();
+    let message = format!(
+        "target_not_allowed: {tool} refused to target '{name}'{bundle}. '{name}' is not a \
+         known terminal app, but a console or shell process runs under it: {found}, started \
+         by '{name}'{target_pid}. Brigadier Computer Use treats an app that hosts a console as \
+         a terminal app and does not act on it by default. If this app is a terminal, run the \
+         command in your own shell instead; otherwise ask the user to do this step.",
+        name = identity.name
+    );
+    ToolResult::error(message.clone()).with_structured(json!({
+        "code": "target_not_allowed",
+        "reason": RefusalReason::Terminal.as_str(),
+        "detected": "console_in_process_tree",
+        "console": {
+            "pid": evidence.pid,
+            "executable": evidence.executable,
+            "via": evidence
+                .via
+                .iter()
+                .map(|(pid, executable)| json!({"pid": pid, "executable": executable}))
+                .collect::<Vec<_>>(),
+        },
+        "tool": tool,
+        "app": identity.name,
+        "bundle_id": identity.bundle_id,
+        "pid": identity.pid,
+        "message": message,
+    }))
 }
 
 /// Native launch aliases do not pass through the macOS `name`/`bundle_id`
@@ -648,6 +920,15 @@ fn enforce_executable_launch(
             continue;
         };
         let reference = reference.trim();
+        check(
+            tool,
+            &TargetIdentity {
+                name: app_name_from_reference(reference),
+                bundle_id: None,
+                pid: None,
+            },
+            allowed,
+        )?;
         let token = if let Some(quoted) = reference.strip_prefix('"') {
             quoted.split('"').next().unwrap_or(quoted)
         } else if reference.contains('!') {
@@ -704,9 +985,18 @@ fn enforce_executable_launch(
 
 /// `launch_app` accepts a display name or an app path; compare the app name.
 fn app_name_from_reference(reference: &str) -> String {
-    let trimmed = reference.trim().trim_end_matches('/');
-    let last = trimmed.rsplit('/').next().unwrap_or(trimmed);
-    last.strip_suffix(".app").unwrap_or(last).to_owned()
+    let trimmed = reference
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches(['/', '\\']);
+    let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let lower = last.to_ascii_lowercase();
+    for suffix in [".app", ".exe", ".lnk", ".desktop"] {
+        if lower.ends_with(suffix) {
+            return last[..last.len() - suffix.len()].to_owned();
+        }
+    }
+    last.to_owned()
 }
 
 /// A `brigadier:` (or `brigadier-*:`) URL opens in the user's Brigadier.
@@ -727,10 +1017,11 @@ const SETTINGS_REFUSAL: &str =
      com.apple.Software-Update-Settings.extension, com.apple.Displays-Settings.extension, \
      com.apple.Network-Settings.extension, com.apple.BluetoothSettings or \
      com.apple.settings.PrivacySecurity.extension, then get_window_state. To change a \
-     setting, ask the user to do this step.";
+     setting, ask the user to do this step. kill_app quits a System Settings that \
+     launch_app started.";
 #[cfg(target_os = "windows")]
 const SETTINGS_REFUSAL: &str =
-    "Settings can be opened and read, never clicked or typed into. To read a page, open it \
+    "Settings can be opened, read and closed; all other input is refused. Close a task-owned window with click using pid, window_id and action:\"close\" without an element or pixels; use kill_app if normal close fails. To read a page, open it \
      directly: launch_app with urls [\"ms-settings:<page>\"], for example ms-settings:about \
      (the Windows version), ms-settings:windowsupdate, ms-settings:display or \
      ms-settings:network, then get_window_state. To change a setting, ask the user to do \
@@ -740,6 +1031,11 @@ const SETTINGS_REFUSAL: &str =
     "The system settings can be opened and read, never clicked or typed into: open them \
      with launch_app, then get_window_state. To change a setting, ask the user to do this \
      step.";
+
+const WINDOW_FRAMES_REFUSAL: &str =
+    "This is the window manager's frame (title bar and its buttons), drawn around other apps' \
+     windows; its buttons close and move them. Brigadier Computer Use doesn't use it: act on the \
+     app's own window instead.";
 
 #[cfg(target_os = "macos")]
 const SECURITY_REFUSAL: &str =
@@ -753,7 +1049,11 @@ const SECURITY_REFUSAL: &str =
 
 /// The typed refusal returned to the model.
 pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> ToolResult {
-    let bundle = identity.bundle_id.as_deref().unwrap_or("unknown bundle");
+    let bundle = identity
+        .bundle_id
+        .as_deref()
+        .map(|bundle| format!(" ({bundle})"))
+        .unwrap_or_default();
     let why = match reason {
         RefusalReason::UserBrigadier => {
             "Brigadier Computer Use never acts on the user's Brigadier app or its windows. Use the \
@@ -768,11 +1068,22 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
             "Brigadier Computer Use does not act on itself or on the app that hosts it."
         }
         RefusalReason::SecuritySurface if is_settings(identity) => SETTINGS_REFUSAL,
+        RefusalReason::SecuritySurface
+            if identity
+                .bundle_id
+                .as_deref()
+                .is_some_and(|bundle| bundle.eq_ignore_ascii_case("mutter-x11-frames")) =>
+        {
+            WINDOW_FRAMES_REFUSAL
+        }
         RefusalReason::SecuritySurface => SECURITY_REFUSAL,
-        RefusalReason::StoreApp => "Store apps can't be driven in the background on Windows yet. Ask the user to do this step.",
+        RefusalReason::StoreApp => {
+            "Windows shows this app inside a shared frame window, so Brigadier can't tell \
+             which app it is and won't act on it. Ask the user to do this step."
+        }
     };
     let message = format!(
-        "target_not_allowed: {tool} refused to target '{}' ({bundle}). {why}",
+        "target_not_allowed: {tool} refused to target '{}'{bundle}. {why}",
         identity.name
     );
     ToolResult::error(message.clone()).with_structured(json!({
@@ -788,6 +1099,76 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_brigadier_dev_paths_are_allowed() {
+        let local = Some(r"C:\Users\me\AppData\Local");
+        for path in [
+            r"C:\src\brigadier\target\debug\brigadier-app.exe",
+            r"C:\src\brigadier\target\release\brigadier-app.exe",
+            r"D:\test-app\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\Brigadier-dev\brigadier-app.exe",
+        ] {
+            assert!(
+                !super::windows_brigadier_path_is_protected(Some(path), local),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_installed_brigadier_paths_are_refused() {
+        let local = Some(r"C:\Users\me\AppData\Local\");
+        for path in [
+            r"C:\Users\me\AppData\Local\Brigadier\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\Brigadier\brigadier.exe",
+            r"C:\Users\me\AppData\Local\Brigadier\brigadierd.exe",
+            r"c:/users/ME/appdata/local/BRIGADIER/brigadier-app.exe",
+            r"\\?\C:\Users\me\AppData\Local\Brigadier\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\Brigadier\target\debug\brigadier-app.exe",
+            r"C:\Users\me\AppData\Local\other\..\Brigadier\brigadier-app.exe",
+        ] {
+            assert!(
+                super::windows_brigadier_path_is_protected(Some(path), local),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_unreadable_brigadier_paths_are_refused() {
+        assert!(super::windows_brigadier_path_is_protected(
+            None,
+            Some(r"C:\Users\me\AppData\Local")
+        ));
+        assert!(super::windows_brigadier_path_is_protected(
+            Some(r"C:\dev\brigadier-app.exe"),
+            None
+        ));
+        assert!(super::windows_brigadier_path_is_protected(
+            Some("brigadier-app.exe"),
+            Some(r"C:\Users\me\AppData\Local")
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_brigadier_policy_uses_pid_path_and_fails_closed() {
+        let mut identity = super::TargetIdentity {
+            name: "brigadier-app".into(),
+            bundle_id: Some("brigadier-app".into()),
+            pid: Some(i64::from(std::process::id())),
+        };
+        // This test binary runs outside the installed app's folder.
+        assert_eq!(super::classify(&identity, &[]), None);
+        for pid in [None, Some(-1), Some(0)] {
+            identity.pid = pid;
+            assert_eq!(
+                super::classify(&identity, &[]),
+                Some(super::RefusalReason::UserBrigadier)
+            );
+        }
+    }
+
     use super::*;
 
     fn process(pid: i64, parent: i64, executable: &str, has_tty: bool) -> ProcessFact {
@@ -796,7 +1177,64 @@ mod tests {
             parent,
             executable: executable.into(),
             has_tty,
+            started: None,
         }
+    }
+
+    #[test]
+    fn terminal_display_names_paths_and_shell_aliases_are_refused_before_launch() {
+        with_fake_apps(|resolver| {
+            for name in [
+                "Windows PowerShell",
+                "Windows PowerShell (x86)",
+                "Windows PowerShell ISE",
+                "Git CMD",
+                "Windows Command Processor",
+                "Windows Console Host",
+                "PowerShell 7 (x64)",
+                "powershell",
+                "pwsh",
+                "cmd",
+                "wt",
+                "Windows Terminal",
+                "wmux",
+                "bash",
+                "wsl",
+                "conhost",
+                "zsh",
+                "fish",
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "C:\\Users\\user\\Windows PowerShell.lnk",
+                "/bin/bash",
+                "/Applications/Terminal.app",
+            ] {
+                for key in ["name", "path", "launch_path"] {
+                    let args = json!({key:name});
+                    assert_eq!(
+                        reason_of(enforce("launch_app", &args, &[], resolver)).as_deref(),
+                        Some("terminal"),
+                        "{args}"
+                    );
+                }
+            }
+            for name in ["Notepad", "Calculator"] {
+                assert!(
+                    enforce("launch_app", &json!({"name":name}), &[], resolver).is_ok(),
+                    "{name}"
+                );
+            }
+            // Console is a log viewer on macOS, but a terminal name elsewhere.
+            assert_eq!(
+                enforce(
+                    "launch_app",
+                    &json!({"name": "/Applications/Console.app"}),
+                    &[],
+                    resolver,
+                )
+                .is_ok(),
+                cfg!(target_os = "macos")
+            );
+        });
     }
 
     #[test]
@@ -807,20 +1245,138 @@ mod tests {
                 process(11, 10, "broker.exe", false),
                 process(12, 11, host, false),
             ];
-            assert!(hosts_terminal(10, &processes, true), "{host}");
-            assert!(!hosts_terminal(99, &processes, true));
+            assert!(hosts_terminal(10, &processes, true).is_some(), "{host}");
+            assert!(hosts_terminal(99, &processes, true).is_none());
         }
         let shell = [
             process(20, 1, "unknown-gui", false),
             process(21, 20, "/bin/zsh", true),
         ];
-        assert!(hosts_terminal(20, &shell, false));
+        assert!(hosts_terminal(20, &shell, false).is_some());
         let script = [
             process(20, 1, "ordinary-gui", false),
             process(21, 20, "/bin/zsh", false),
         ];
-        assert!(!hosts_terminal(20, &script, false));
-        assert!(!hosts_terminal(20, &[process(21, 21, "sh", true)], false));
+        assert!(hosts_terminal(20, &script, false).is_none());
+        assert!(hosts_terminal(20, &[process(21, 21, "sh", true)], false).is_none());
+        // A target missing from the snapshot is still found through its child.
+        assert!(hosts_terminal(20, &shell[1..], false).is_some());
+    }
+
+    fn started(pid: i64, parent: i64, executable: &str, at: u64) -> ProcessFact {
+        ProcessFact {
+            started: Some(at),
+            ..process(pid, parent, executable, false)
+        }
+    }
+
+    /// A console whose creator exited still names the creator's id, and
+    /// Windows hands that id to the next process, here a task browser.
+    #[test]
+    fn a_console_naming_a_reused_parent_id_does_not_make_a_browser_a_terminal() {
+        let processes = [
+            started(4, 0, "System", 1),
+            // An orphaned shell and its console from a script that exited.
+            started(5428, 14164, "bash.exe", 100),
+            started(5429, 5428, "conhost.exe", 101),
+            // The task browser that later received id 14164, and its children.
+            started(21000, 4, "brigadier-cu.exe", 50),
+            started(14164, 21000, "chrome.exe", 200),
+            started(14170, 14164, "chrome.exe", 201),
+            started(14171, 14164, "chrome.exe", 202),
+        ];
+        assert_eq!(hosts_terminal(14164, &processes, true), None);
+        // A stale link part way up the chain breaks it too.
+        let deeper = [
+            started(30, 0, "explorer.exe", 1),
+            started(31, 30, "chrome.exe", 300),
+            started(32, 31, "broker.exe", 100),
+            started(33, 32, "OpenConsole.exe", 110),
+        ];
+        assert_eq!(hosts_terminal(31, &deeper, true), None);
+        // The same tree without start times (an unreadable process) still
+        // counts: unknown times fail closed.
+        let unknown: Vec<ProcessFact> = processes
+            .iter()
+            .map(|fact| process(fact.pid, fact.parent, &fact.executable, false))
+            .collect();
+        assert!(hosts_terminal(14164, &unknown, true).is_some());
+    }
+
+    #[test]
+    fn real_terminal_hosts_are_still_found_with_start_times() {
+        // Windows Terminal hosts OpenConsole and the shell as children.
+        let windows_terminal = [
+            started(40, 1, "explorer.exe", 1),
+            started(41, 40, "WindowsTerminal.exe", 10),
+            started(42, 41, "OpenConsole.exe", 11),
+            started(43, 41, "pwsh.exe", 11),
+        ];
+        assert!(hosts_terminal(41, &windows_terminal, true).is_some());
+        // A renamed terminal through a broker, with ordered start times.
+        let renamed = [
+            started(10, 1, "renamed-host.exe", 5),
+            started(11, 10, "broker.exe", 6),
+            started(12, 11, "conhost.exe", 7),
+        ];
+        let evidence = hosts_terminal(10, &renamed, true).unwrap();
+        assert_eq!(evidence.pid, 12);
+        assert_eq!(evidence.via, vec![(11, "broker.exe".to_owned())]);
+        // A conhost-hosted shell renamed to something unknown.
+        let hosted = [
+            started(50, 1, "my-shell.exe", 20),
+            started(51, 50, "conhost.exe", 20),
+        ];
+        assert!(hosts_terminal(50, &hosted, true).is_some());
+        // Real terminals keep their identity refusal regardless of the tree.
+        for name in ["WindowsTerminal", "conhost", "cmd", "pwsh"] {
+            assert_eq!(
+                classify(&exe_identity(name), &[]),
+                Some(RefusalReason::Terminal),
+                "{name}"
+            );
+        }
+        // The browser itself is not a terminal by identity.
+        assert_eq!(classify(&exe_identity("chrome"), &[]), None);
+    }
+
+    fn exe_identity(name: &str) -> TargetIdentity {
+        TargetIdentity {
+            name: name.into(),
+            bundle_id: Some(name.to_ascii_lowercase()),
+            pid: None,
+        }
+    }
+
+    #[test]
+    fn a_process_tree_refusal_says_which_console_was_found() {
+        let identity = TargetIdentity {
+            name: "chrome".into(),
+            bundle_id: Some("chrome".into()),
+            pid: Some(14164),
+        };
+        let evidence = ConsoleEvidence {
+            pid: 5429,
+            executable: "conhost.exe".into(),
+            via: vec![(5428, "bash.exe".into())],
+        };
+        let result = console_host_refusal("get_window_state", &identity, &evidence);
+        let structured = result.structured_content.clone().unwrap();
+        assert_eq!(structured["reason"], "terminal");
+        assert_eq!(structured["detected"], "console_in_process_tree");
+        assert_eq!(structured["console"]["pid"], 5429);
+        assert_eq!(structured["console"]["via"][0]["executable"], "bash.exe");
+        let message = structured["message"].as_str().unwrap();
+        assert!(message.starts_with("target_not_allowed: get_window_state refused"));
+        assert!(
+            message.contains("'chrome' is not a known terminal app"),
+            "{message}"
+        );
+        assert!(
+            message.contains("conhost.exe (pid 5429), started by bash.exe (pid 5428), started by 'chrome' (pid 14164)"),
+            "{message}"
+        );
+        assert!(!message.contains("does not act on terminal apps by default"));
     }
 
     #[test]
@@ -845,7 +1401,7 @@ mod tests {
             "foot",
             "tilix",
         ] {
-            if cfg!(target_os = "macos") && matches!(terminal, "wmux" | "tabby" | "git-bash") {
+            if cfg!(target_os = "macos") && matches!(terminal, "tabby" | "git-bash") {
                 assert!(!is_terminal(terminal, terminal), "{terminal}");
                 continue;
             }
@@ -871,10 +1427,57 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_shell_launches_are_refused_before_native_target_lookup() {
+        let resolver = TargetResolver {
+            app_for_pid: &|_| panic!("shell launch must be refused before native lookup"),
+            pid_for_window: &|_| panic!("shell launch must be refused before native lookup"),
+        };
+        for args in [
+            json!({"name":"Windows PowerShell"}),
+            json!({"path":"C:\\Windows\\System32\\cmd.exe"}),
+            json!({"launch_path":"wt.exe"}),
+        ] {
+            assert_eq!(
+                reason_of(enforce("launch_app", &args, &[], &resolver)).as_deref(),
+                Some("terminal")
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_process_snapshot_does_not_attach_a_console() {
         // Only a read-only Toolhelp snapshot; the test harness has no terminal
         // descendants and looking up a nonexistent PID cannot find a host.
-        assert!(!process_hosts_terminal(i64::from(u32::MAX)));
+        assert!(process_hosts_terminal(i64::from(u32::MAX)).is_none());
+        // Start times read with a limited handle: this process has one, a
+        // nonexistent id has none.
+        assert!(process_start_time(i64::from(std::process::id())).is_some());
+        assert!(process_start_time(i64::from(u32::MAX - 3)).is_none());
+    }
+
+    /// A real console child is still found once start times are checked.
+    #[cfg(windows)]
+    #[test]
+    fn windows_a_live_console_child_is_still_found() {
+        use std::os::windows::process::CommandExt;
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let mut child = std::process::Command::new(format!(r"{system}\System32\cmd.exe"))
+            .args(["/d", "/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+            .spawn()
+            .unwrap();
+        let found = (0..50).find_map(|_| {
+            let found = process_hosts_terminal(i64::from(std::process::id()));
+            if found.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            found
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(found.is_some());
     }
 
     #[test]
@@ -888,9 +1491,15 @@ mod tests {
         let state = result.structured_content.unwrap();
         assert_eq!(state["reason"], "store_app_background_unsupported");
         let message = state["message"].as_str().unwrap();
-        assert!(message.contains("Store apps can't be driven in the background on Windows yet"));
+        assert!(message.contains("Windows shows this app inside a shared frame window"));
+        assert!(message.contains("can't tell which app it is and won't act on it"));
+        assert!(!message.contains("shared host"));
+        assert!(!message.contains("the helper identifies"));
         assert!(message.contains("Ask the user to do this step"));
         assert!(!message.contains("credential"));
+        for executable in ["calculatorapp", "notepad", "photos"] {
+            assert_eq!(classify(&app(executable, executable, 42), &[]), None);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -1071,6 +1680,117 @@ mod tests {
     }
 
     #[test]
+    fn only_an_exact_settings_window_close_passes_the_input_policy() {
+        let identity = TargetIdentity {
+            name: "Settings".into(),
+            bundle_id: Some("systemsettings".into()),
+            pid: Some(42),
+        };
+        let args = json!({"pid":42,"window_id":99,"action":"close"});
+        let resolver = TargetResolver {
+            app_for_pid: &|_| Some(identity.clone()),
+            pid_for_window: &|_| Some(42),
+        };
+        assert!(enforce("click", &args, &[], &resolver).is_ok());
+        for (field, value) in [
+            ("x", json!(0)),
+            ("element_token", json!("s1:0")),
+            ("action", json!("press")),
+            ("modifier", json!(["ctrl"])),
+        ] {
+            let mut modified = args.clone();
+            modified[field] = value;
+            assert!(
+                enforce("click", &modified, &[], &resolver).is_err(),
+                "{modified}"
+            );
+        }
+        for id in [
+            "consent",
+            "credentialuibroker",
+            "com.apple.systempreferences",
+            "gnome-control-center",
+        ] {
+            let other = TargetIdentity {
+                bundle_id: Some(id.into()),
+                name: id.into(),
+                pid: Some(42),
+            };
+            assert!(check_call("click", &args, &other, &[]).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn windows_settings_can_be_terminated_but_other_input_stays_refused() {
+        for id in [
+            "systemsettings",
+            "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
+        ] {
+            let identity = TargetIdentity {
+                name: "Settings".into(),
+                bundle_id: Some(id.into()),
+                pid: Some(42),
+            };
+            assert!(check("kill_app", &identity, &[]).is_ok());
+            assert!(check("get_window_state", &identity, &[]).is_ok());
+            for tool in [
+                "click",
+                "double_click",
+                "right_click",
+                "press_key",
+                "hotkey",
+                "type_text",
+                "set_value",
+                "scroll",
+                "invoke_menu",
+            ] {
+                assert!(check(tool, &identity, &[]).is_err(), "{tool}");
+            }
+        }
+        for id in [
+            "consent",
+            "credentialuibroker",
+            "regedit",
+            "com.apple.systempreferences",
+            "gnome-control-center",
+        ] {
+            let identity = TargetIdentity {
+                name: id.into(),
+                bundle_id: Some(id.into()),
+                pid: Some(43),
+            };
+            assert!(check("kill_app", &identity, &[]).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn only_a_task_launched_macos_settings_can_be_quit() {
+        let settings = |pid| TargetIdentity {
+            name: "System Settings".into(),
+            bundle_id: Some(MACOS_SETTINGS.into()),
+            pid: Some(pid),
+        };
+        let refused = check("kill_app", &settings(9101), &[]).unwrap_err();
+        let structured = refused.structured_content.unwrap();
+        assert_eq!(structured["reason"], "user_owned_settings");
+        note_task_launched_settings("com.apple.TextEdit", 9101);
+        assert!(check("kill_app", &settings(9101), &[]).is_err());
+        note_task_launched_settings(MACOS_SETTINGS, 9102);
+        assert!(check("kill_app", &settings(9102), &[]).is_ok());
+        assert!(check("kill_app", &settings(9101), &[]).is_err());
+        for tool in [
+            "click",
+            "press_key",
+            "hotkey",
+            "type_text",
+            "set_value",
+            "invoke_menu",
+        ] {
+            assert!(check(tool, &settings(9102), &[]).is_err(), "{tool}");
+        }
+    }
+
+    #[test]
     fn system_settings_can_be_opened_and_read_but_not_changed() {
         with_fake_apps(|resolver| {
             for (tool, args) in [
@@ -1213,9 +1933,20 @@ mod tests {
             "polkit-kde-authentication-agent-1",
             "gcr-prompter",
             "pinentry-gnome3",
+            "mutter-x11-frames",
         ] {
             assert_eq!(reason(prompt), Some("security_surface"), "{prompt}");
         }
+        let frames = refusal(
+            "click",
+            &exe("mutter-x11-frames"),
+            RefusalReason::SecuritySurface,
+        );
+        assert!(
+            format!("{:?}", frames.content).contains("window manager's frame"),
+            "{:?}",
+            frames.content
+        );
         for app in ["notepad", "gedit", "firefox", "chrome"] {
             assert_eq!(reason(app), None, "{app}");
         }

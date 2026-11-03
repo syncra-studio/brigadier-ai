@@ -1,0 +1,142 @@
+Why: On macOS press_key ends its value readback and pre-focus pauses as soon as the change or focus is seen (same caps), batch lookups poll every 80 ms, and invoke_menu logs how long a background item took to enable.
+
+diff --git a/crates/cua-driver-core/src/batch_tools/locate.rs b/crates/cua-driver-core/src/batch_tools/locate.rs
+index 361cbf572..52358e5be 100644
+--- a/crates/cua-driver-core/src/batch_tools/locate.rs
++++ b/crates/cua-driver-core/src/batch_tools/locate.rs
+@@ -50,7 +50,10 @@ pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: u64 = 5_000;
+ pub(crate) const DEFAULT_EXPECT_TIMEOUT_MS: u64 = 2_000;
+ /// Longest wait any single check may ask for.
+ pub(crate) const MAX_CHECK_TIMEOUT_MS: u64 = 10_000;
+-const POLL_INTERVAL: Duration = Duration::from_millis(250);
++/// A found target ends the wait at its next poll; on macOS 80 ms keeps that
++/// close to when it appears. Other platforms keep their measured 250 ms.
++const POLL_INTERVAL: Duration =
++    Duration::from_millis(if cfg!(target_os = "macos") { 80 } else { 250 });
+ const CANDIDATES_SHOWN: usize = 5;
+ /// Most windows of one app a lookup reads per poll.
+ const MAX_WINDOWS_SEARCHED: usize = 4;
+diff --git a/crates/platform-macos/src/tools/invoke_menu.rs b/crates/platform-macos/src/tools/invoke_menu.rs
+index fb12df875..d2ac48d80 100644
+--- a/crates/platform-macos/src/tools/invoke_menu.rs
++++ b/crates/platform-macos/src/tools/invoke_menu.rs
+@@ -623,6 +623,12 @@ unsafe fn invoke_path_in_background(
+                 std::thread::sleep(ENABLE_POLL);
+                 waited += ENABLE_POLL;
+             }
++            tracing::info!(
++                target: "invoke_menu",
++                waited_ms = waited.as_millis() as u64,
++                enabled = copy_bool_attr(target, "AXEnabled") != Some(false),
++                "background menu item enable wait"
++            );
+         }
+         if copy_bool_attr(target, "AXEnabled") == Some(false) {
+             return Err(BackgroundPressError::Disabled {
+diff --git a/crates/platform-macos/src/tools/press_key.rs b/crates/platform-macos/src/tools/press_key.rs
+index c1f4190f2..3dab511a2 100644
+--- a/crates/platform-macos/src/tools/press_key.rs
++++ b/crates/platform-macos/src/tools/press_key.rs
+@@ -108,12 +108,12 @@ fn dispatch_with_ax_oracle(
+     let before = element_ptr.and_then(|ptr| read_ax_key_state(pid, window_id, ptr));
+     let result = dispatch();
+     // Native controls normally publish their new value/selection on the next
+-    // run-loop turn. Keep this bounded and reuse the exact retained element so
+-    // a focus move cannot become false confirmation from a different control.
+-    if before.is_some() {
+-        std::thread::sleep(std::time::Duration::from_millis(60));
+-    }
+-    let after = element_ptr.and_then(|ptr| read_ax_key_state(pid, window_id, ptr));
++    // run-loop turn. Re-read until it changes, bounded at 60 ms, and reuse the
++    // exact retained element so a focus move cannot become false confirmation
++    // from a different control.
++    let after = settled_key_state(before.as_ref(), || {
++        element_ptr.and_then(|ptr| read_ax_key_state(pid, window_id, ptr))
++    });
+     if owns_element {
+         if let Some(ptr) = element_ptr {
+             unsafe { CFRelease(ptr as _) };
+@@ -123,6 +123,28 @@ fn dispatch_with_ax_oracle(
+     Ok(matches!((before, after), (Some(before), Some(after)) if ax_state_changed(&before, &after)))
+ }
+ 
++/// Read the state again every 10 ms until it differs from `before`, for at
++/// most 60 ms; the last read is returned. Without `before` it reads once.
++fn settled_key_state(
++    before: Option<&AxKeyState>,
++    mut read: impl FnMut() -> Option<AxKeyState>,
++) -> Option<AxKeyState> {
++    let Some(before) = before else {
++        return read();
++    };
++    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(60);
++    loop {
++        std::thread::sleep(std::time::Duration::from_millis(10));
++        let after = read();
++        let changed = after
++            .as_ref()
++            .is_some_and(|after| ax_state_changed(before, after));
++        if changed || std::time::Instant::now() >= deadline {
++            return after;
++        }
++    }
++}
++
+ fn ax_state_changed(before: &AxKeyState, after: &AxKeyState) -> bool {
+     matches!((&before.value, &after.value), (Some(before), Some(after)) if before != after)
+         || matches!((before.selected, after.selected), (Some(before), Some(after)) if before != after)
+@@ -418,11 +440,20 @@ impl Tool for PressKeyTool {
+                 // Pre-focus the element under suppression so its
+                 // side-effects are captured by the snapshot + lease.
+                 if let Some(guard) = pre_focus_guard.clone() {
++                    // Wait until the app reports the element focused, at
++                    // most the 30 ms this used to sleep unconditionally.
+                     let _ = tokio::task::spawn_blocking(move || {
+-                        crate::input::ax_actions::focus_element(guard.as_ptr())
++                        let ptr = guard.as_ptr();
++                        let _ = crate::input::ax_actions::focus_element(ptr);
++                        let deadline =
++                            std::time::Instant::now() + std::time::Duration::from_millis(30);
++                        while !crate::input::ax_actions::is_element_focused(pid, ptr)
++                            && std::time::Instant::now() < deadline
++                        {
++                            std::thread::sleep(std::time::Duration::from_millis(5));
++                        }
+                     })
+                     .await;
+-                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                 }
+ 
+                 tokio::task::spawn_blocking(move || {
+@@ -509,6 +540,31 @@ impl Tool for PressKeyTool {
+ 
+ #[cfg(test)]
+ mod tests {
++    #[test]
++    fn key_state_readback_ends_when_the_value_changes_and_waits_out_no_change() {
++        use super::{settled_key_state, AxKeyState};
++        let state = |value: &str| AxKeyState {
++            value: Some(value.into()),
++            selected: None,
++        };
++        let before = state("a");
++        let mut reads = 0;
++        let started = std::time::Instant::now();
++        let after = settled_key_state(Some(&before), || {
++            reads += 1;
++            Some(state(if reads >= 2 { "ab" } else { "a" }))
++        });
++        assert_eq!(after, Some(state("ab")));
++        assert_eq!(reads, 2);
++        assert!(started.elapsed() < std::time::Duration::from_millis(60));
++        let started = std::time::Instant::now();
++        assert_eq!(
++            settled_key_state(Some(&before), || Some(state("a"))),
++            Some(state("a"))
++        );
++        assert!(started.elapsed() >= std::time::Duration::from_millis(60));
++    }
++
+     use super::*;
+ 
+     #[test]

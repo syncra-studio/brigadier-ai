@@ -1,67 +1,38 @@
-//! Universal background mouse actuator: coordinate-routed pointer/touch
-//! injection that delivers a click to whatever window sits under a screen
-//! point **without** `SetForegroundWindow` and **without** moving the user's
-//! mouse cursor.
+//! Background input guards and checked coordinate helpers.
 //!
-//! Why this exists: the PostMessage path (`mouse::post_click`) is invisible and
-//! never raises, but Chromium/Electron/GTK/WPF content silently ignore posted
-//! synthetic `WM_*BUTTON` messages — their input arrives through the *system
-//! input queue*, not the per-window message queue. The historical fallback for
-//! those was `send_click_synthesized` (SendInput + a `SetForegroundWindow`
-//! swap), which is exactly the visible "flash" we want to eliminate.
-//!
-//! Touch injection routes by coordinate through the system input queue (so
-//! Chromium et al. accept it; the OS promotes it to `WM_*BUTTON` for legacy
-//! Win32 windows that don't consume `WM_POINTER`), and — per the RE in
-//! `docs/windows-background-input-re-plan.md` §4.4 — the kernel injection path
-//! (`NtUserInjectMouseInput`/`NtUserInjectTouchInput`) gates only on a
-//! per-process injection-enable, NOT on the target being foreground. The one
-//! residual is that a tap on an *inactive* top-level window can still trigger
-//! click-activation; we contain that with `NoActivateGuard` (WS_EX_NOACTIVATE)
-//! plus a `force_foreground_attached(prev_fg)` re-assertion of the USER's
-//! foreground afterward. Per the macOS-aligned contract a background actuation
-//! never raises/restacks the target: when coordinate-routed input can't reach
-//! it (occluded at the point), the caller returns `background_unavailable`
-//! rather than raising it (see `target_visible_at_point`).
-//!
-//! Scope: left-button taps (single/double/triple). Right/middle have no clean
-//! touch mapping; callers fall back to their existing routing for those.
+//! Semantic UIA and native posted-message routes are preferred by callers.
+//! The final pen/touch injection fallback is refused: Windows pointer input
+//! and mouse promotion do not provide a stationary-system-cursor guarantee.
+//! Never hide an excursion with cursor clipping, hiding, or a snap-back.
 
 use anyhow::{bail, Result};
-use core::ffi::c_void;
 use std::sync::Mutex;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HANDLE, HWND, POINT, RECT};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-use windows::Win32::UI::Controls::{
-    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE,
-    POINTER_FEEDBACK_DEFAULT, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
-};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
 };
-use windows::Win32::UI::Input::Pointer::{
-    InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE,
-    POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
-};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-    IsWindow, LockSetForegroundWindow, SetCursorPos, SetForegroundWindow, SetWindowLongPtrW,
-    WindowFromPoint, GA_ROOT, GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, PT_TOUCH,
-    WS_EX_NOACTIVATE,
+    GetAncestor, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+    IsHungAppWindow, IsIconic, IsWindowVisible, IsZoomed, LockSetForegroundWindow,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GA_ROOT, GWL_EXSTYLE,
+    GWL_STYLE, GW_HWNDNEXT, LSFW_LOCK, LSFW_UNLOCK, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SW_MINIMIZE, SW_SHOWNOACTIVATE,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MINIMIZEBOX,
 };
 
-#[derive(Default)]
-struct ForegroundLockState {
-    holders: usize,
-    locked: bool,
-}
+#[path = "foreground_watch.rs"]
+pub(crate) mod foreground_watch;
+
+use foreground_watch::policy::ForegroundLockState;
 
 static FOREGROUND_LOCK_STATE: Mutex<ForegroundLockState> = Mutex::new(ForegroundLockState {
     holders: 0,
     locked: false,
+    generation: 0,
 });
 
 /// Prevent other processes from taking the foreground during a background
@@ -69,6 +40,7 @@ static FOREGROUND_LOCK_STATE: Mutex<ForegroundLockState> = Mutex::new(Foreground
 /// still balances the documented unlock call and overlapping driver launches.
 pub struct ForegroundLockGuard {
     held: bool,
+    generation: u64,
 }
 
 impl ForegroundLockGuard {
@@ -83,14 +55,215 @@ impl ForegroundLockGuard {
             }
         }
         if state.locked {
-            state.holders += 1;
+            state.add_holder();
         }
-        Self { held: state.locked }
+        Self {
+            held: state.locked,
+            generation: state.generation,
+        }
     }
 
     pub fn acquired(&self) -> bool {
-        self.held
+        let state = FOREGROUND_LOCK_STATE.lock().unwrap();
+        self.held && state.locked && self.generation == state.generation
     }
+}
+
+/// Revoke every overlapping launch lease on physical input. Stale drops
+/// cannot unlock a later generation, and no existing lease can re-lock it.
+static LAST_PHYSICAL_INPUT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn foreground_input_time() -> Option<u32> {
+    LAST_PHYSICAL_INPUT
+        .load(std::sync::atomic::Ordering::Acquire)
+        .checked_sub(1)
+        .map(|time| time as u32)
+}
+
+pub(crate) fn revoke_foreground_lock(time: u32) {
+    LAST_PHYSICAL_INPUT.store(u64::from(time) + 1, std::sync::atomic::Ordering::Release);
+    let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
+    if state.revoke() {
+        let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
+    }
+}
+
+pub(crate) fn foreground_generation() -> u64 {
+    FOREGROUND_LOCK_STATE.lock().unwrap().generation
+}
+
+/// Win32 has no atomic conditional foreground swap. Check both selection and
+/// physical-input generation at each boundary, never resampling a new victim.
+pub(crate) unsafe fn hand_back_foreground(
+    prior: HWND,
+    displaced: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    // If prevention already failed, relinquish every live lease before a
+    // conditional hand-back. Keep holder counts, so none of these leases can
+    // re-lock; physical input can still revoke their generation at any time.
+    {
+        let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
+        if unsafe { GetForegroundWindow() } != displaced {
+            return false;
+        }
+        if state.locked {
+            let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
+            state.locked = false;
+        }
+    }
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    let my_tid = unsafe { GetCurrentThreadId() };
+    let tid = unsafe { GetWindowThreadProcessId(displaced, None) };
+    let attached = tid != 0 && tid != my_tid;
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    if attached {
+        let _ = unsafe { AttachThreadInput(my_tid, tid, true) };
+    }
+    if allowed() && unsafe { GetForegroundWindow() } == displaced {
+        let _ = unsafe { SetForegroundWindow(prior) };
+    }
+    if attached {
+        let _ = unsafe { AttachThreadInput(my_tid, tid, false) };
+    }
+    (unsafe { GetForegroundWindow() }) == prior
+}
+
+const Z_ONLY: SET_WINDOW_POS_FLAGS =
+    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_NOOWNERZORDER.0);
+
+/// Put `window` directly under `prior` without activating either. Z-order is
+/// not subject to the foreground lock; posted so a busy app cannot block us.
+pub(crate) unsafe fn place_behind(window: HWND, prior: HWND) -> bool {
+    unsafe { SetWindowPos(window, prior, 0, 0, 0, 0, Z_ONLY | SWP_ASYNCWINDOWPOS) }.is_ok()
+}
+
+/// Put `window` and its owner at the bottom of the z-order without activating
+/// either; posted like [`place_behind`]. Live (2026-11-02, Windows 11 26300):
+/// for Notepad's Save as dialog and its disabled owner, placing either under
+/// the user's window was accepted but changed nothing, while the bottom took
+/// both. The owner moves with its dialog, so SWP_NOOWNERZORDER is left out.
+pub(crate) unsafe fn place_at_bottom(window: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
+    let flags =
+        SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_ASYNCWINDOWPOS.0);
+    unsafe { SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, flags) }.is_ok()
+}
+
+/// Facts for [`foreground_watch::policy::may_minimize_for_hand_back`].
+/// Windows activates the next visible window, so hidden windows between the
+/// displaced window and the user's are skipped. Live (2026-11-02, Windows 11
+/// 26300): hidden IME windows sat right under Notepad and placing the user's
+/// window there was ignored, so a launch refused to hand the front back.
+pub(crate) unsafe fn minimize_facts(
+    prior: HWND,
+    displaced: HWND,
+) -> foreground_watch::policy::MinimizeFacts {
+    let style = unsafe { GetWindowLongPtrW(displaced, GWL_STYLE) } as u32;
+    let ex = unsafe { GetWindowLongPtrW(displaced, GWL_EXSTYLE) } as u32;
+    foreground_watch::policy::MinimizeFacts {
+        visible: unsafe { IsWindowVisible(displaced) }.as_bool(),
+        iconic: unsafe { IsIconic(displaced) }.as_bool(),
+        zoomed: unsafe { IsZoomed(displaced) }.as_bool(),
+        minimizable: style & WS_MINIMIZEBOX.0 != 0,
+        topmost: ex & WS_EX_TOPMOST.0 != 0,
+        tool: ex & WS_EX_TOOLWINDOW.0 != 0,
+        prior_next: next_visible_below(displaced) == Some(prior),
+        prior_hung: unsafe { IsHungAppWindow(prior) }.as_bool(),
+    }
+}
+
+/// Second hand-back route, for when Windows refuses `hand_back_foreground`
+/// because this process holds no foreground right. Windows itself activates
+/// the next window when the front window is minimized, so place the user's
+/// window right under the displaced one, minimize it, then show it again
+/// without activation under the user's window. The app window is always shown
+/// again, whatever happened. Live (2026-11-01, Windows 11 26300): Notepad's
+/// cold launch handed back within 20 ms and stayed behind; an Explorer folder
+/// window kept the front while minimized, so that case is reported refused.
+pub(crate) unsafe fn hand_back_by_minimizing(
+    prior: HWND,
+    displaced: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
+    unsafe { hand_back_by_minimizing_window(prior, displaced, displaced, allowed) }
+}
+
+/// [`hand_back_by_minimizing`] for a window that cannot be minimized itself,
+/// such as a modal dialog: minimize its root owner instead, which hides the
+/// owner's dialogs with it. Live (2026-11-02, Windows 11 26300): Notepad's
+/// Save as dialog kept the front after the attached hand-back; minimizing its
+/// owner gave the front back to the user's window within 4 ms. The caller
+/// passes `owner` only once it is proven to be the target app's own window.
+pub(crate) unsafe fn hand_back_by_minimizing_owner(
+    prior: HWND,
+    displaced: HWND,
+    owner: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
+    unsafe { hand_back_by_minimizing_window(prior, displaced, owner, allowed) }
+}
+
+/// The first visible top-level window below `window` (bounded).
+fn next_visible_below(window: HWND) -> Option<HWND> {
+    let mut next = unsafe { GetWindow(window, GW_HWNDNEXT) }.ok()?;
+    for _ in 0..512 {
+        if next.0.is_null() {
+            return None;
+        }
+        if unsafe { IsWindowVisible(next) }.as_bool() {
+            return Some(next);
+        }
+        next = unsafe { GetWindow(next, GW_HWNDNEXT) }.ok()?;
+    }
+    None
+}
+
+unsafe fn hand_back_by_minimizing_window(
+    prior: HWND,
+    displaced: HWND,
+    minimized: HWND,
+    allowed: impl Fn() -> bool,
+) -> bool {
+    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
+        return false;
+    }
+    if unsafe { IsHungAppWindow(prior) }.as_bool() {
+        return false;
+    }
+    // Synchronous: the user's window must be next before the minimize.
+    let _ = unsafe { SetWindowPos(prior, minimized, 0, 0, 0, 0, Z_ONLY) };
+    let facts = unsafe { minimize_facts(prior, minimized) };
+    if !foreground_watch::policy::may_minimize_for_hand_back(facts)
+        || !allowed()
+        || unsafe { GetForegroundWindow() } != displaced
+    {
+        return false;
+    }
+    let displaced = minimized;
+    // Both requests are posted to the app's thread and run in order there.
+    let _ = unsafe { ShowWindowAsync(displaced, SW_MINIMIZE) };
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline && unsafe { GetForegroundWindow() } != prior && allowed() {
+        sleep(Duration::from_millis(2));
+    }
+    let _ = unsafe { ShowWindowAsync(displaced, SW_SHOWNOACTIVATE) };
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline && unsafe { IsIconic(displaced) }.as_bool() {
+        sleep(Duration::from_millis(2));
+    }
+    let handed = unsafe { GetForegroundWindow() } == prior;
+    if handed {
+        let _ = unsafe { place_behind(displaced, prior) };
+    }
+    handed
 }
 
 impl Drop for ForegroundLockGuard {
@@ -99,10 +272,8 @@ impl Drop for ForegroundLockGuard {
             return;
         }
         let mut state = FOREGROUND_LOCK_STATE.lock().unwrap();
-        state.holders = state.holders.saturating_sub(1);
-        if state.holders == 0 {
+        if state.release(self.generation) {
             let _ = unsafe { LockSetForegroundWindow(LSFW_UNLOCK) };
-            state.locked = false;
             tracing::debug!(target: "launch_app.focus_lock", "unlocked foreground changes after background launch");
         }
     }
@@ -154,234 +325,181 @@ pub(crate) unsafe fn force_foreground_assisted(target: HWND) -> (bool, bool) {
     (false, true)
 }
 
-/// RAII guard that makes a specific target window **unable to become the
-/// foreground/active window** for the duration of an actuation, by adding the
-/// `WS_EX_NOACTIVATE` extended style to its top-level window.
-///
-/// Why this and not a global foreground-lock: our own injected/posted input
-/// (or a UIA-Invoke) legitimizes the target's foreground claim, so even a
-/// maxed `SPI_*FOREGROUNDLOCKTIMEOUT` won't stop the steal. `WS_EX_NOACTIVATE`
-/// is categorical — Windows refuses to activate the window *at all* (clicks,
-/// `SetForegroundWindow(self)` from WPF/XAML/Tauri handlers, mouse-activate) —
-/// while the window still RECEIVES the click/key. It is per-window (no session
-/// side effects) and reversed on drop. Covers the self-activation that the
-/// EnableWindow/UWP bypass cannot (WPF `UIElement.Focus()`→SetForegroundWindow).
+/// Suppress system activation of the target and its owner while background
+/// input is in flight. Explicit app activation may bypass this style; the
+/// event watch handles observed activation and late dialog dismissal.
+/// Leases are shared so overlapping run_steps do not clear each other's bit.
 pub struct NoActivateGuard {
-    // Store the handle as an integer so the guard is `Send` and can be held
-    // across `.await` in the async tools.
-    root_addr: isize,
-    applied: bool,
+    styles: Vec<(isize, u32, u32)>,
+    watch: foreground_watch::ForegroundWatch,
 }
 
+struct StyleLease {
+    holders: usize,
+    added: bool,
+}
+
+static STYLE_LEASES: Mutex<std::collections::BTreeMap<(isize, u32, u32), StyleLease>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
 impl NoActivateGuard {
-    /// Arm on the top-level (GA_ROOT) ancestor of `hwnd`.
     pub fn arm(hwnd: HWND) -> Self {
-        unsafe {
-            let root = {
-                let r = GetAncestor(hwnd, GA_ROOT);
-                if r.0.is_null() {
-                    hwnd
-                } else {
-                    r
-                }
-            };
-            let prev = GetWindowLongPtrW(root, GWL_EXSTYLE);
-            let want = WS_EX_NOACTIVATE.0 as isize;
-            // Apply WS_EX_NOACTIVATE if not already set (prev can be 0, so don't
-            // gate on it — we just need to check the bit and set it if absent).
-            let applied = (prev & want) == 0 && {
-                SetWindowLongPtrW(root, GWL_EXSTYLE, prev | want);
-                // Confirm it took (cross-process SetWindowLongPtr can be denied
-                // by UIPI on higher-integrity targets).
-                (GetWindowLongPtrW(root, GWL_EXSTYLE) & want) != 0
-            };
-            Self {
-                root_addr: root.0 as isize,
-                applied,
+        use windows::Win32::UI::WindowsAndMessaging::GA_ROOTOWNER;
+        let front = unsafe { GetForegroundWindow() }.0 as usize;
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        let root = if root.0.is_null() { hwnd } else { root };
+        let owner = unsafe { GetAncestor(root, GA_ROOTOWNER) };
+        let mut styles = Vec::new();
+        let mut pids = Vec::new();
+        for window in [root, owner] {
+            let pid = foreground_watch::window_process(window);
+            if !window.0.is_null() && pid != 0 {
+                pids.push(pid);
             }
         }
+        pids.sort_unstable();
+        pids.dedup();
+        // The front window may be the target app's own, such as a dialog that
+        // took the front during an earlier action. It is never the user's
+        // window: handing the front "back" to it fought the app's owner while
+        // the dialog closed and left no window in front. Use the user's window
+        // from a live watch in which this app took the front without input,
+        // or restore nothing.
+        let front_pid = foreground_watch::window_process(HWND(front as *mut _));
+        // In a shared host, such as ApplicationFrameHost, only the target's
+        // own frames are its windows; the user's other apps share the pid.
+        let front_is_target = front_pid != 0
+            && foreground_watch::policy::input_window_matches(
+                pids.contains(&front_pid),
+                front == root.0 as usize || front == owner.0 as usize,
+                foreground_watch::process_name(front_pid)
+                    .is_none_or(|name| name == "applicationframehost"),
+            );
+        let inherited = front_is_target.then(|| foreground_watch::inherited_prior(front_pid));
+        let prior = match inherited {
+            Some(inherited) => inherited.unwrap_or(0),
+            None => front,
+        };
+        let mut leases = STYLE_LEASES.lock().unwrap();
+        for window in [root, owner] {
+            if window.0.is_null() || window.0 as usize == front {
+                continue;
+            }
+            let mut pid = 0;
+            let tid = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+            if pid == 0 || tid == 0 {
+                continue;
+            }
+            let key = (window.0 as isize, pid, tid);
+            if styles.contains(&key) {
+                continue;
+            }
+            let lease = leases.entry(key).or_insert_with(|| {
+                let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+                let want = WS_EX_NOACTIVATE.0 as isize;
+                let added = current & want == 0
+                    && unsafe {
+                        SetWindowLongPtrW(window, GWL_EXSTYLE, current | want);
+                        GetWindowLongPtrW(window, GWL_EXSTYLE) & want != 0
+                    };
+                StyleLease { holders: 0, added }
+            });
+            lease.holders += 1;
+            styles.push(key);
+        }
+        drop(leases);
+        let target = foreground_watch::Target::Processes(
+            pids,
+            styles.iter().map(|key| key.0 as usize).collect(),
+        );
+        let watch = if prior != front {
+            foreground_watch::ForegroundWatch::start_displaced(prior, target)
+        } else {
+            foreground_watch::ForegroundWatch::start(prior, target, true)
+        };
+        Self { styles, watch }
+    }
+
+    /// A sentence for the action's reply when the app took the front during
+    /// it; None when nothing was recorded.
+    pub fn action_note(&self) -> Option<&'static str> {
+        self.watch.action_note()
     }
 }
 
 impl Drop for NoActivateGuard {
     fn drop(&mut self) {
-        if self.applied {
-            unsafe {
-                let root = HWND(self.root_addr as *mut _);
-                let current = GetWindowLongPtrW(root, GWL_EXSTYLE);
-                let noactivate = WS_EX_NOACTIVATE.0 as isize;
-                // Clear only the bit this guard added. Restoring the full
-                // captured value can clobber unrelated style changes the app
-                // made while the background action was in flight.
-                SetWindowLongPtrW(root, GWL_EXSTYLE, current & !noactivate);
+        let mut leases = STYLE_LEASES.lock().unwrap();
+        for key in &self.styles {
+            let Some(lease) = leases.get_mut(key) else {
+                continue;
+            };
+            lease.holders = lease.holders.saturating_sub(1);
+            if lease.holders != 0 {
+                continue;
+            }
+            let added = lease.added;
+            leases.remove(key);
+            let window = HWND(key.0 as *mut _);
+            let mut pid = 0;
+            let tid = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+            // Do not modify an unrelated window if Windows recycled the HWND.
+            if added && pid == key.1 && tid == key.2 {
+                unsafe {
+                    let current = GetWindowLongPtrW(window, GWL_EXSTYLE);
+                    SetWindowLongPtrW(
+                        window,
+                        GWL_EXSTYLE,
+                        current & !(WS_EX_NOACTIVATE.0 as isize),
+                    );
+                }
             }
         }
     }
 }
 
-/// PEN_FLAG_BARREL (winuser.h) — pen barrel button held == secondary (right)
-/// button. `penFlags` is a raw u32 in the bindings, so use the literal.
-const PEN_FLAG_BARREL: u32 = 0x00000001;
-
-// (Removed ZorderGuard.) The macOS-aligned contract forbids a `background`
-// actuation from raising/restacking the target: coordinate-routed pen/touch
-// only lands on the topmost VISIBLE window, so an occluded target is reported
-// as `background_unavailable` (see `target_visible_at_point`) and the agent
-// escalates to `delivery_mode:"foreground"` instead of the driver raising it.
-
-/// One down→up **pen** tap at screen `(sx, sy)`. When `barrel` is set the pen's
-/// barrel button is held for the contact, which the system maps to a secondary
-/// (right) click — both for `WM_POINTER`-aware apps (Chromium/WPF/UWP) and via
-/// pen→mouse promotion for legacy Win32. A fresh synthetic pen device is
-/// created and destroyed per tap (right/middle clicks are rare).
-fn pen_taps(sx: i32, sy: i32, barrel: bool, count: usize) -> Result<()> {
-    unsafe {
-        let dev = CreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_DEFAULT)
-            .map_err(|e| anyhow::anyhow!("CreateSyntheticPointerDevice(PEN): {e}"))?;
-        let pen_flags = if barrel { PEN_FLAG_BARREL } else { 0 };
-        let mk = |flags| POINTER_TYPE_INFO {
-            r#type: PT_PEN,
-            Anonymous: POINTER_TYPE_INFO_0 {
-                penInfo: POINTER_PEN_INFO {
-                    pointerInfo: POINTER_INFO {
-                        pointerType: PT_PEN,
-                        pointerId: 0,
-                        pointerFlags: flags,
-                        sourceDevice: HANDLE::default(),
-                        hwndTarget: HWND::default(),
-                        ptPixelLocation: POINT { x: sx, y: sy },
-                        ..Default::default()
-                    },
-                    penFlags: pen_flags,
-                    penMask: 0,
-                    pressure: 512,
-                    rotation: 0,
-                    tiltX: 0,
-                    tiltY: 0,
-                },
-            },
-        };
-        let down = mk(POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT);
-        let up = mk(POINTER_FLAG_UP);
-        // Reuse the SAME synthetic device for every tap. A double/triple click
-        // is two/three down-up cycles from one digitizer; creating a fresh
-        // device per tap (the old loop) fails the next
-        // CreateSyntheticPointerDevice in quick succession — which is exactly
-        // why background double_click on Chromium errored. See #1984.
-        let mut result: Result<()> = Ok(());
-        let n = count.max(1);
-        for i in 0..n {
-            let r1 = InjectSyntheticPointerInput(dev, &[down]);
-            sleep(Duration::from_millis(25));
-            let r2 = InjectSyntheticPointerInput(dev, &[up]);
-            if let Err(e) = r1.and(r2) {
-                result = Err(anyhow::anyhow!("InjectSyntheticPointerInput(pen): {e}"));
-                break;
-            }
-            if i + 1 < n {
-                sleep(Duration::from_millis(70));
-            }
-        }
-        let _ = DestroySyntheticPointerDevice(dev);
-        result?;
-    }
-    Ok(())
+// Guard even unindexed key/text calls: a posted Return can dismiss a dialog
+// asynchronously and let its owner activate after PostMessage has returned.
+pub fn guarded_post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_key(hwnd, key, modifiers)
 }
 
-/// Inject a click at **screen** coordinates `(sx, sy)`, routed by the system to
-/// whatever window is under that point — without a foreground swap and without
-/// moving the user's cursor. The target is cloaked for the duration so any
-/// click-activation raise stays invisible, then the user's foreground is
-/// restored.
-///
-/// - `left`  → synthetic-pen primary tap (proven path; promoted to a left click
-///   for non-pointer-aware apps, and accepted directly by Chromium/WPF/UWP).
-/// - `right` → synthetic-pen tap with the barrel button held (secondary click).
-/// - `middle`→ unsupported (no clean pointer mapping); returns `Err` so the
-///   caller can fall back to its existing routing / structured error.
-///
-/// We use the same `CreateSyntheticPointerDevice`/`InjectSyntheticPointerInput`
-/// path for both buttons — `InjectTouchInput` proved unreliable for left-clicks
-/// on Chromium content (returned errors), whereas synthetic-pen injection lands
-/// reliably and routes by coordinate with no foreground dependency.
-pub fn inject_click_screen(
-    target: u64,
-    sx: i32,
-    sy: i32,
-    count: usize,
-    button: &str,
+pub fn guarded_post_key_to(
+    hwnd: u64,
+    child: Option<u64>,
+    key: &str,
+    modifiers: &[&str],
 ) -> Result<()> {
-    if target == 0 {
-        bail!("inject_click_screen: null target window");
-    }
-    let target_h = HWND(target as *mut _);
-    unsafe {
-        if !IsWindow(target_h).as_bool() {
-            bail!("inject_click_screen: invalid or stale target HWND");
-        }
-    }
-    if let Some(msg) = crate::input::post_message_blocked_by_uipi(target) {
-        // Higher-integrity target: injection into its queue is blocked too.
-        bail!(msg);
-    }
-
-    let barrel = match button {
-        "left" => false,
-        "right" => true,
-        other => bail!("background injection supports left/right buttons only (got {other:?})"),
-    };
-
-    // macOS-aligned contract: a `background` actuation NEVER fronts or raises
-    // (mirrors macOS CGEvent-to-pid, which never touches z-order/focus). Synthetic
-    // pen/touch is coordinate-routed to the TOP-MOST VISIBLE window at the point,
-    // so if the target is occluded there we'd silently click the occluder. We do
-    // NOT raise to win the hit-test (that's the foreground rung's job, which the
-    // agent opts into). Instead bail — the caller surfaces `background_unavailable`
-    // and the agent escalates to `delivery_mode:"foreground"`.
-    if unsafe { !target_visible_at_point(target_h, sx, sy) } {
-        bail!(
-            "background coordinate injection cannot reach this target at ({sx},{sy}) \
-             — it is occluded by another window (raising it would break the \
-             no-foreground contract). Escalate to delivery_mode:\"foreground\"."
-        );
-    }
-    // Remember who the user had in front so we can re-assert it below.
-    let prev_fg = unsafe { GetForegroundWindow() };
-    // Make the target non-activatable for the click so click-activation can't
-    // steal foreground. No z-order raise.
-    let result = {
-        let _noact = NoActivateGuard::arm(target_h);
-        // One synthetic device does all `count` taps (single/double/triple click).
-        pen_taps(sx, sy, barrel, count)
-    };
-    // `WS_EX_NOACTIVATE` is NOT categorical against a Chromium/Electron content
-    // window that calls `SetForegroundWindow(self)` from its (async) click
-    // handler. Re-assert the USER's foreground (this restores focus where the
-    // user left it — it never raises the target). Short settle + repeat to win
-    // the race against the async self-activation.
-    unsafe {
-        if result.is_ok() && !prev_fg.0.is_null() && prev_fg != target_h {
-            force_foreground_attached(prev_fg);
-            sleep(Duration::from_millis(12));
-            force_foreground_attached(prev_fg);
-        }
-    }
-    result
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_key_to(hwnd, child, key, modifiers)
 }
 
-/// True when `target`'s top-level root is the window actually visible at screen
-/// point `(sx, sy)` — i.e. coordinate-routed pen/touch there would land on it
-/// rather than an occluder. Used to enforce the macOS-aligned rule that a
-/// `background` actuation never raises: when this is false the injection bails
-/// and the tool returns `background_unavailable` (escalate to foreground).
-unsafe fn target_visible_at_point(target: HWND, sx: i32, sy: i32) -> bool {
-    let top = WindowFromPoint(POINT { x: sx, y: sy });
-    if top.0.is_null() {
-        return false;
-    }
-    let top_root = GetAncestor(top, GA_ROOT);
-    let target_root = GetAncestor(target, GA_ROOT);
-    !top_root.0.is_null() && top_root == target_root
+pub fn guarded_post_char(hwnd: u64, ch: char) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_char(hwnd, ch)
+}
+
+pub fn guarded_post_type_text(hwnd: u64, text: &str) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_type_text(hwnd, text)
+}
+
+pub fn guarded_post_type_text_with_delay(hwnd: u64, text: &str, inter_char_ms: u64) -> Result<()> {
+    let _guard = NoActivateGuard::arm(HWND(hwnd as *mut _));
+    super::keyboard::post_type_text_with_delay(hwnd, text, inter_char_ms)
+}
+
+/// This is only the final injection rung. Callers retain their earlier UIA
+/// and native message routes; those do not inject a system pointing device.
+pub fn inject_click_screen(
+    _target: u64,
+    _sx: i32,
+    _sy: i32,
+    _count: usize,
+    _button: &str,
+) -> Result<()> {
+    bail!("background_unavailable: Windows cannot guarantee this synthetic pointer click without moving your pointer. No click was sent. Use an accessible element or ask the user to click.")
 }
 
 /// True when screen point `(x, y)` lies within `hwnd`'s window rectangle.
@@ -460,6 +578,20 @@ pub fn window_is_iconic(hwnd: u64) -> bool {
     unsafe { IsIconic(HWND(hwnd as *mut _)).as_bool() }
 }
 
+/// Native posted drags remain available to callers where supported. The
+/// pointer-injection fallback cannot promise to leave the user's cursor alone.
+pub fn inject_drag_screen(
+    _target: u64,
+    _sx0: i32,
+    _sy0: i32,
+    _sx1: i32,
+    _sy1: i32,
+    _steps: usize,
+    _button: &str,
+) -> Result<()> {
+    bail!("background_unavailable: Windows cannot guarantee this synthetic pointer drag without moving your pointer. No drag was sent. Use set_value for an accessible slider or ask the user to drag.")
+}
+
 #[cfg(test)]
 mod iconic_sentinel_tests {
     use super::*;
@@ -509,259 +641,6 @@ mod iconic_sentinel_tests {
         assert!(!point_in_rect(0, 0, 0, 0, 0, 1080));
         assert!(!point_in_rect(0, 0, 0, 0, 1920, -1));
     }
-}
-
-/// One pen press-drag-release from screen `(sx0,sy0)` to `(sx1,sy1)`, with
-/// `steps` interpolated in-contact UPDATE points between the down and the up.
-/// A single synthetic pen device is created for the whole stroke. The barrel
-/// button is held when `barrel` is set (secondary-button drag).
-fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool) -> Result<()> {
-    unsafe {
-        let dev = CreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_DEFAULT)
-            .map_err(|e| anyhow::anyhow!("CreateSyntheticPointerDevice(PEN): {e}"))?;
-        let pen_flags = if barrel { PEN_FLAG_BARREL } else { 0 };
-        let mk = |flags, x: i32, y: i32| POINTER_TYPE_INFO {
-            r#type: PT_PEN,
-            Anonymous: POINTER_TYPE_INFO_0 {
-                penInfo: POINTER_PEN_INFO {
-                    pointerInfo: POINTER_INFO {
-                        pointerType: PT_PEN,
-                        pointerId: 0,
-                        pointerFlags: flags,
-                        sourceDevice: HANDLE::default(),
-                        hwndTarget: HWND::default(),
-                        ptPixelLocation: POINT { x, y },
-                        ..Default::default()
-                    },
-                    penFlags: pen_flags,
-                    penMask: 0,
-                    pressure: 512,
-                    rotation: 0,
-                    tiltX: 0,
-                    tiltY: 0,
-                },
-            },
-        };
-        // Press at the start.
-        let down = mk(
-            POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-            sx0,
-            sy0,
-        );
-        let mut res = InjectSyntheticPointerInput(dev, &[down]);
-        // Interpolated in-contact moves so frameworks that gate drag-tracking on
-        // motion (rather than a single down→up) see a continuous stroke.
-        let steps = steps.max(1);
-        for i in 1..=steps {
-            sleep(Duration::from_millis(8));
-            let t = i as f64 / steps as f64;
-            let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
-            let y = sy0 + ((sy1 - sy0) as f64 * t).round() as i32;
-            let mv = mk(
-                POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-                x,
-                y,
-            );
-            res = res.and(InjectSyntheticPointerInput(dev, &[mv]));
-        }
-        // Release at the end.
-        sleep(Duration::from_millis(8));
-        let up = mk(POINTER_FLAG_UP, sx1, sy1);
-        res = res.and(InjectSyntheticPointerInput(dev, &[up]));
-        let _ = DestroySyntheticPointerDevice(dev);
-        res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(pen drag): {e}"))?;
-    }
-    Ok(())
-}
-
-/// A **persistent** synthetic touch digitizer, created once and never
-/// destroyed. This is load-bearing: a transient (per-stroke) device is gone
-/// before WPF's WISP stylus stack can bind to it, so the OS falls back to
-/// legacy touch→mouse promotion — which drags the user's cursor to the
-/// contact. A *standing* digitizer is enumerated as a real tablet, so WPF (and
-/// other stylus/pointer-aware frameworks) consume the contact as touch/stylus
-/// and promote it to mouse INTERNALLY, without the OS moving the system cursor.
-static TOUCH_DEV: Mutex<isize> = Mutex::new(0);
-
-/// One **touch** press-drag-release from screen `(sx0,sy0)` to `(sx1,sy1)` with
-/// `steps` interpolated in-contact moves, via the persistent [`TOUCH_DEV`].
-/// Unlike a pen (an absolute *cursor* device — injecting one drags the user's
-/// mouse pointer along), a touch contact from a standing digitizer is consumed
-/// as touch/stylus and does NOT move the user's cursor. Serialized on the
-/// single shared device (one stroke at a time across all sessions).
-fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()> {
-    let mut dev_guard = TOUCH_DEV.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        // A non-pointer-aware window (WPF) makes the OS promote the PRIMARY touch
-        // contact to a mouse event, which drags the system cursor to the contact
-        // — and the OS gates delivery on the cursor actually reaching it, so the
-        // move can't be prevented from a background process (pinning/clipping the
-        // cursor just drops the input). What we CAN do is snap the cursor back to
-        // exactly where the user left it the instant the stroke ends, so the net
-        // displacement is zero and (with a fast, few-step stroke) the excursion
-        // is a brief flick rather than a sustained drag. Pointer-aware targets
-        // (Chromium) never promote, so the cursor never moves and this restore is
-        // a harmless no-op.
-        let mut cpos = POINT::default();
-        let have_cpos = GetCursorPos(&mut cpos).is_ok();
-        let dev = if *dev_guard != 0 {
-            HSYNTHETICPOINTERDEVICE(*dev_guard as *mut c_void)
-        } else {
-            let d = CreateSyntheticPointerDevice(PT_TOUCH, 1, POINTER_FEEDBACK_DEFAULT)
-                .map_err(|e| anyhow::anyhow!("CreateSyntheticPointerDevice(TOUCH): {e}"))?;
-            *dev_guard = d.0 as isize;
-            d
-        };
-        let mk = |flags, x: i32, y: i32| POINTER_TYPE_INFO {
-            r#type: PT_TOUCH,
-            Anonymous: POINTER_TYPE_INFO_0 {
-                touchInfo: POINTER_TOUCH_INFO {
-                    pointerInfo: POINTER_INFO {
-                        pointerType: PT_TOUCH,
-                        pointerId: 0,
-                        pointerFlags: flags,
-                        sourceDevice: HANDLE::default(),
-                        hwndTarget: HWND::default(),
-                        ptPixelLocation: POINT { x, y },
-                        ..Default::default()
-                    },
-                    touchFlags: 0,
-                    touchMask: 0,
-                    rcContact: RECT {
-                        left: x - 2,
-                        top: y - 2,
-                        right: x + 2,
-                        bottom: y + 2,
-                    },
-                    rcContactRaw: RECT {
-                        left: x - 2,
-                        top: y - 2,
-                        right: x + 2,
-                        bottom: y + 2,
-                    },
-                    orientation: 0,
-                    pressure: 512,
-                },
-            },
-        };
-        // Fast stroke: line-tool canvases only need down→up (the segment is the
-        // straight line between them), so a few in-contact frames with a tiny
-        // dwell is plenty — and the shorter the stroke, the briefer the cursor
-        // excursion before we snap it back.
-        let down = mk(
-            POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-            sx0,
-            sy0,
-        );
-        let mut res = InjectSyntheticPointerInput(dev, &[down]);
-        let steps = steps.clamp(1, 3);
-        for i in 1..=steps {
-            sleep(Duration::from_millis(2));
-            let t = i as f64 / steps as f64;
-            let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
-            let y = sy0 + ((sy1 - sy0) as f64 * t).round() as i32;
-            let mv = mk(
-                POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-                x,
-                y,
-            );
-            res = res.and(InjectSyntheticPointerInput(dev, &[mv]));
-        }
-        sleep(Duration::from_millis(2));
-        let up = mk(POINTER_FLAG_UP, sx1, sy1);
-        res = res.and(InjectSyntheticPointerInput(dev, &[up]));
-        // Snap the cursor back to where the user left it. The OS processes the
-        // promoted mouse messages slightly after injection, so a single restore
-        // right after the `up` can be overrun by that late move — settle briefly,
-        // then restore, and restore once more to win the race. No-op for
-        // pointer-aware targets (Chromium) that never moved the cursor.
-        if have_cpos {
-            let _ = SetCursorPos(cpos.x, cpos.y);
-            sleep(Duration::from_millis(12));
-            let _ = SetCursorPos(cpos.x, cpos.y);
-        }
-        // device intentionally NOT destroyed — see TOUCH_DEV.
-        res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(touch drag): {e}"))?;
-    }
-    Ok(())
-}
-
-/// Inject a press-drag-release at **screen** coordinates, routed by the system
-/// to whatever window is under the path — without a foreground swap and without
-/// moving the user's cursor. This is the background fallback for canvases whose
-/// content (Chromium/WPF/GTK) silently drops a PostMessage drag: synthetic-pen
-/// input arrives through the system input queue and is accepted directly
-/// (Chromium/WPF) or promoted to mouse for legacy Win32. `left` → primary
-/// stroke, `right` → barrel-held secondary stroke; the target is held
-/// non-activatable + cloaked so any transient raise stays invisible.
-pub fn inject_drag_screen(
-    target: u64,
-    sx0: i32,
-    sy0: i32,
-    sx1: i32,
-    sy1: i32,
-    steps: usize,
-    button: &str,
-) -> Result<()> {
-    if target == 0 {
-        bail!("inject_drag_screen: null target window");
-    }
-    let target_h = HWND(target as *mut _);
-    unsafe {
-        if !IsWindow(target_h).as_bool() {
-            bail!("inject_drag_screen: invalid or stale target HWND");
-        }
-    }
-    if let Some(msg) = crate::input::post_message_blocked_by_uipi(target) {
-        bail!(msg);
-    }
-    let barrel = match button {
-        "left" => false,
-        "right" => true,
-        other => bail!("background injection supports left/right buttons only (got {other:?})"),
-    };
-    // macOS-aligned contract: a `background` drag NEVER fronts/raises. WPF's
-    // Wisp stylus stack only PROCESSES injected input while the window is the
-    // ACTIVE foreground (verified by RE) — and background is not allowed to
-    // force that — so a WPF drag is simply undeliverable in background. Bail so
-    // the tool returns background_unavailable (escalate to foreground).
-    if crate::input::delivery::is_wpf_target_window(target) {
-        bail!(
-            "background drag is not deliverable to a WPF target — its Wisp stylus \
-             stack only processes injected input while the window is foreground, \
-             which background must not force. Escalate to delivery_mode:\"foreground\"."
-        );
-    }
-    // Coordinate-routed touch/pen lands on the topmost VISIBLE window at the
-    // start point. If the target is occluded there, bail rather than raise it.
-    if unsafe { !target_visible_at_point(target_h, sx0, sy0) } {
-        bail!(
-            "background drag cannot reach this target at the start point ({sx0},{sy0}) \
-             — it is occluded by another window. Escalate to delivery_mode:\"foreground\"."
-        );
-    }
-    let prev_fg = unsafe { GetForegroundWindow() };
-    // Left drag → touch contact (coordinate-routed). Right/barrel drag has no
-    // touch equivalent, so fall back to a pen (rare).
-    let stroke = |()| {
-        if barrel {
-            pen_drag(sx0, sy0, sx1, sy1, steps, true)
-        } else {
-            touch_drag(sx0, sy0, sx1, sy1, steps)
-        }
-    };
-    // Chromium/GTK: pointer-aware, process injection in the background — hold
-    // non-activatable (no raise), inject, then re-assert the user's foreground.
-    let r = {
-        let _noact = NoActivateGuard::arm(target_h);
-        stroke(())
-    };
-    unsafe {
-        if !prev_fg.0.is_null() && prev_fg != target_h {
-            force_foreground_attached(prev_fg);
-        }
-    }
-    r
 }
 
 // (Removed inject_key_cloaked / inject_text_cloaked.) The macOS-aligned

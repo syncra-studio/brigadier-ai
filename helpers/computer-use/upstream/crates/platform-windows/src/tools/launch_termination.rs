@@ -17,11 +17,25 @@ impl Drop for ProcessHandle {
 /// A true return means Windows accepted termination and confirmed exit; false
 /// means it confirmed the process exited independently. A timeout is an error.
 pub(super) fn terminate_verified(pid: u32, expected_start: Option<u64>) -> Result<bool, String> {
+    // Inspect privileges before asking for terminate rights, so elevated
+    // targets get the same plain refusal as reads/actions, even when opening
+    // with PROCESS_TERMINATE would fail first.
+    let query = ProcessHandle(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+        .map_err(|error| format!("Windows could not inspect app process {pid}: {error}. No termination was attempted."))?);
+    if let Some(message) = crate::input::process_control_integrity_refusal(query.0)? {
+        return Err(message);
+    }
     let process = ProcessHandle(unsafe {
         OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
     }.map_err(|error| format!(
         "Windows could not open app process {pid} for verified termination: {error}. No termination was attempted."
     ))?);
+
+    // Check the termination handle as well: PID reuse must not substitute a
+    // higher-integrity process between the query and opening this handle.
+    if let Some(message) = crate::input::process_control_integrity_refusal(process.0)? {
+        return Err(message);
+    }
 
     let mut path = vec![0u16; 32768];
     let mut path_len = path.len() as u32;
@@ -61,6 +75,27 @@ pub(super) fn terminate_verified(pid: u32, expected_start: Option<u64>) -> Resul
 
     if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
         return Ok(false);
+    }
+    // Hosted Store windows belong to ApplicationFrameHost at the Win32 level;
+    // use their actual app pid, including the owner of a foreground popup.
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOTOWNER};
+    let foreground = unsafe { GetForegroundWindow() };
+    let owner = unsafe { GetAncestor(foreground, GA_ROOTOWNER) };
+    let app_pid = |hwnd: windows::Win32::Foundation::HWND| {
+        let id = hwnd.0 as u64;
+        let owner_pid = crate::win32::window_owner_pid(id)?;
+        if crate::input::delivery::read_class_name(id) == "ApplicationFrameWindow" {
+            // A shared host is not proof that another Store app is in front.
+            // Refuse if the hosted app identity cannot be established.
+            crate::win32::resolve_uwp_app_pid(owner_pid, id)
+        } else {
+            Some(owner_pid)
+        }
+    };
+    if let Some(reason) =
+        super::launch_policy::termination_front_refusal(pid, app_pid(foreground), app_pid(owner))
+    {
+        return Err(reason.into());
     }
     let request = unsafe { TerminateProcess(process.0, 1) };
     let wait = unsafe { WaitForSingleObject(process.0, 2000) };

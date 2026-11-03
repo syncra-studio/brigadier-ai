@@ -39,7 +39,9 @@ fn default_home() -> PathBuf {
 /// leaves its folder to the next run, which removes it.
 #[cfg(test)]
 mod test_home {
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
     use std::sync::OnceLock;
 
     const PREFIX: &str = "brigadier-cu-test-home-";
@@ -48,6 +50,7 @@ mod test_home {
         static HOME: OnceLock<PathBuf> = OnceLock::new();
         HOME.get_or_init(|| {
             let temp = std::env::temp_dir();
+            #[cfg(unix)]
             remove_killed(&temp);
             let home = temp.join(format!("{PREFIX}{}", std::process::id()));
             let _ = std::fs::create_dir_all(&home);
@@ -63,6 +66,7 @@ mod test_home {
         );
     }
 
+    #[cfg(unix)]
     fn remove_killed(temp: &Path) {
         let Ok(entries) = std::fs::read_dir(temp) else {
             return;

@@ -1,0 +1,71 @@
+Why: Normalize absolute local Explorer folder arguments to Windows separators so forward slashes cannot be parsed as switches that open the wrong folder.
+
+diff --git a/crates/platform-windows/src/tools/browser_target.rs b/crates/platform-windows/src/tools/browser_target.rs
+index 8ae6e713d..f18620684 100644
+--- a/crates/platform-windows/src/tools/browser_target.rs
++++ b/crates/platform-windows/src/tools/browser_target.rs
+@@ -359,3 +359,43 @@ mod tab_count_tests {
+         assert_eq!(additional_tab_count(1, 2), None);
+     }
+ }
++
++/// Explorer parses forward slashes in a drive path as switches, even inside
++/// quotes. Normalize only absolute filesystem arguments, never web URLs.
++pub(crate) fn launch_argument(target: &str, value: &str) -> String {
++    let name = target.rsplit(['\\', '/']).next().unwrap_or(target);
++    let bytes = value.as_bytes();
++    let drive_path = bytes.len() >= 3
++        && bytes[0].is_ascii_alphabetic()
++        && bytes[1] == b':'
++        && matches!(bytes[2], b'/' | b'\\');
++    if name.eq_ignore_ascii_case("explorer.exe") || name.eq_ignore_ascii_case("explorer") {
++        if drive_path || value.starts_with("//") {
++            return quote_argument(&value.replace('/', "\\"));
++        }
++    }
++    quote_argument(value)
++}
++#[cfg(test)]
++mod path_arguments {
++    use super::*;
++    #[test]
++    fn explorer_drive_and_unc_paths_are_not_switches() {
++        assert_eq!(
++            launch_argument("explorer.exe", "C:/test folder/file.txt"),
++            quote_argument(r"C:\test folder\file.txt")
++        );
++        assert_eq!(
++            launch_argument(r"C:\Windows\explorer.exe", "//server/share/folder"),
++            quote_argument(r"\\server\share\folder")
++        );
++        assert_eq!(
++            launch_argument("chrome.exe", "https://example.com/a/b"),
++            quote_argument("https://example.com/a/b")
++        );
++        assert_eq!(
++            launch_argument("explorer.exe", "https://example.com/a/b"),
++            quote_argument("https://example.com/a/b")
++        );
++    }
++}
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 98e5d08a1..6bceeb25f 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2604,10 +2604,12 @@ impl Tool for LaunchAppTool {
+         let urls_in_arguments =
+             super::browser_target::urls_belong_to_app(resolved_target.is_some(), !urls.is_empty());
+         if urls_in_arguments {
+-            extra_args.extend(
+-                urls.iter()
+-                    .map(|url| super::browser_target::quote_argument(url)),
+-            );
++            extra_args.extend(urls.iter().map(|url| {
++                super::browser_target::launch_argument(
++                    resolved_target.as_deref().unwrap_or_default(),
++                    url,
++                )
++            }));
+         }
+ 
+         let fresh_document_path = if urls.is_empty()

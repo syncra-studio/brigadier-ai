@@ -76,8 +76,10 @@ impl AXPageReader {
     }
 
     /// Query elements from AX tree markdown by CSS selector (maps to AX roles).
-    pub fn query(selector: &str, tree_markdown: &str) -> Vec<AXElement> {
-        let roles = css_selector_to_ax_roles(selector);
+    /// `None` when the selector is more than a bare tag name the tree can
+    /// match: ids, classes, attributes and combinators need the page's DOM.
+    pub fn query(selector: &str, tree_markdown: &str) -> Option<Vec<AXElement>> {
+        let roles = css_selector_to_ax_roles(selector)?;
         let match_all = roles.is_empty();
 
         let mut result = Vec::new();
@@ -89,7 +91,7 @@ impl AXPageReader {
                 result.push(el);
             }
         }
-        result
+        Some(result)
     }
 }
 
@@ -218,8 +220,11 @@ fn best_text(el: &AXElement) -> String {
     String::new()
 }
 
-fn css_selector_to_ax_roles(selector: &str) -> Vec<&'static str> {
-    match selector.trim() {
+/// The bare tag names the accessibility tree can stand in for.
+pub const AX_SELECTORS: &str = "a, button, input, h1-h6, p, img, select, li or *";
+
+fn css_selector_to_ax_roles(selector: &str) -> Option<Vec<&'static str>> {
+    Some(match selector.trim() {
         "a" | "link" => vec!["AXLink"],
         "button" => vec!["AXButton"],
         "input" => vec!["AXTextField", "AXCheckBox", "AXRadioButton"],
@@ -229,13 +234,26 @@ fn css_selector_to_ax_roles(selector: &str) -> Vec<&'static str> {
         "select" => vec!["AXPopUpButton", "AXComboBox"],
         "li" => vec!["AXStaticText"],
         "*" | "" => vec![],
-        _ => vec![],
-    }
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::AXPageReader;
+
+    #[test]
+    fn only_bare_tag_selectors_are_matched_in_the_tree() {
+        let tree = "- [0] AXWindow \"W\"\n  - [1] AXButton \"Submit\"\n  - [2] AXLink \"Example\"";
+        assert_eq!(AXPageReader::query("button", tree).unwrap().len(), 1);
+        assert_eq!(AXPageReader::query("*", tree).unwrap().len(), 3);
+        for unsupported in ["#submit", ".primary", "a[href]", "div > a", "section"] {
+            assert!(
+                AXPageReader::query(unsupported, tree).is_none(),
+                "{unsupported}"
+            );
+        }
+    }
 
     #[test]
     fn page_text_leaves_out_the_menu_bar() {

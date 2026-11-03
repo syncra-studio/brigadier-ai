@@ -5,7 +5,7 @@
 //! * **AX path** (`element_token`): performs AXAction on the cached
 //!   element. Fires via AX RPC — the target app never needs to be frontmost.
 //!   Extra behaviors vs. the naive dispatch:
-//!   - AXTextField / AXTextArea: 800 ms post-click delay for WebKit DOM focus settle.
+//!   - AXTextField / AXTextArea: waits up to 800 ms for the field to report focus.
 //!   - AXPopUpButton: appends the list of available options and redirects to set_value.
 //!   - Advertised-action warning if the element didn't list the requested action.
 //!
@@ -872,28 +872,13 @@ impl Tool for ClickTool {
             .await;
 
             // Drop the wildcard lease + detect window/foreground side-effects.
-            let acted_at = std::time::Instant::now();
             let changes = super::finish_window_observation(snapshot).await;
 
             match result {
                 Ok(Ok((
-                    (
-                        mut msg,
-                        needs_webkit_delay,
-                        suspected_noop,
-                        selection_verified,
-                        selection_via_pixel,
-                    ),
+                    (mut msg, suspected_noop, selection_verified, selection_via_pixel),
                     fronted,
                 ))) => {
-                    // For text inputs, wait 800ms for WebKit DOM focus to settle
-                    // before returning — matches the Swift reference behaviour.
-                    // The window watch above already used part of it.
-                    if needs_webkit_delay {
-                        let settle = std::time::Duration::from_millis(800)
-                            .saturating_sub(acted_at.elapsed());
-                        tokio::time::sleep(settle).await;
-                    }
                     msg.push_str(&changes.result_suffix());
                     // AX dispatch went through, but AXPerformAction returning
                     // success does not confirm the on-screen effect (many elements
@@ -1156,8 +1141,24 @@ impl Tool for ClickTool {
                                     screen_y,
                                 )
                             };
+                            // Ok(None): fall through to the routed pixel path;
+                            // Ok(Some(None)): pressed or focused (unconfirmed);
+                            // Ok(Some(Some(role))): a row selected, read back.
+                            // No pressable element: a list or sidebar row has
+                            // no press action, so select the row under the
+                            // point instead.
+                            let element = match element {
+                                Some(element) => Some(element),
+                                None if !focus_only => crate::ax::point_target::row_target(
+                                    pid,
+                                    hit_test_wid,
+                                    screen_x,
+                                    screen_y,
+                                ),
+                                None => None,
+                            };
                             let Some(element) = element else {
-                                return Ok::<bool, anyhow::Error>(false);
+                                return Ok::<Option<Option<String>>, anyhow::Error>(None);
                             };
                             // The pid-scoped hit-test can resolve an element from a
                             // same-process sibling overlapping the requested point.
@@ -1168,7 +1169,7 @@ impl Tool for ClickTool {
                                 != Some(hit_test_wid)
                             {
                                 CFRelease(element as _);
-                                return Ok(false);
+                                return Ok(None);
                             }
                             // An element that does not advertise AXPress can still
                             // accept it as a no-op. On a toolkit that drops routed
@@ -1180,8 +1181,15 @@ impl Tool for ClickTool {
                                     .iter()
                                     .any(|action| action == "AXPress")
                             {
+                                // A click on a list or sidebar row selects it (an
+                                // Open panel's sidebar drops routed clicks): select
+                                // that row the way a token click does, read back.
+                                let _key_focus = crate::key_focus_guard::protect(pid);
+                                let selected = crate::input::ax_actions::select_nearest_container(
+                                    element as usize,
+                                );
                                 CFRelease(element as _);
-                                return Ok(false);
+                                return Ok(selected.map(Some));
                             }
                             let _key_focus = crate::key_focus_guard::protect(pid);
                             let delivered = if focus_only {
@@ -1200,7 +1208,7 @@ impl Tool for ClickTool {
                                 true
                             };
                             CFRelease(element as _);
-                            Ok(delivered)
+                            Ok(delivered.then_some(None))
                         })
                         .await
                     },
@@ -1208,7 +1216,28 @@ impl Tool for ClickTool {
                 .await;
                 let changes = super::finish_window_observation(snapshot).await;
                 match ax_result {
-                    Ok(Ok(true)) => {
+                    Ok(Ok(Some(Some(role)))) => {
+                        crate::cursor::overlay::send_command(
+                            cursor_key.clone(),
+                            cursor_overlay::OverlayCommand::ClickPulse {
+                                x: screen_x,
+                                y: screen_y,
+                            },
+                        );
+                        return ToolResult::text(format!(
+                            "✅ Selected the {role} at this point through accessibility; \
+                             confirmed by reading its selection back.{}",
+                            changes.result_suffix()
+                        ))
+                        .with_structured(serde_json::json!({
+                            "path": "ax",
+                            "delivery_attempted": true,
+                            "verified": true,
+                            "effect": "confirmed",
+                            "evidence": [{ "kind": "accessibility_readback" }]
+                        }));
+                    }
+                    Ok(Ok(Some(None))) => {
                         crate::cursor::overlay::send_command(
                             cursor_key.clone(),
                             cursor_overlay::OverlayCommand::ClickPulse {
@@ -1228,7 +1257,7 @@ impl Tool for ClickTool {
                             "effect": "unverifiable"
                         }));
                     }
-                    Ok(Ok(false)) if focus_only => {
+                    Ok(Ok(None)) if focus_only => {
                         return ToolResult::error(
                             "Background PX focus is unavailable at the requested point.".to_owned(),
                         )
@@ -1500,8 +1529,8 @@ impl Tool for ClickTool {
 
 // ── AX click implementation (blocking) ───────────────────────────────────────
 
-/// Returns `(summary_text, needs_webkit_delay, suspected_noop,
-/// selection_verified, selection_via_pixel)`.
+/// Returns `(summary_text, suspected_noop, selection_verified,
+/// selection_via_pixel)`.
 ///
 /// `suspected_noop` is true when the element did not advertise the action we
 /// dispatched — AXUIElementPerformAction returns success regardless, so this is
@@ -1544,7 +1573,7 @@ fn perform_ax_click(
     selection_pixel: Option<SelectionPixelTarget>,
     modifiers: &[String],
     foreground: bool,
-) -> anyhow::Result<(String, bool, bool, bool, bool)> {
+) -> anyhow::Result<(String, bool, bool, bool)> {
     let (element_ptr, idx) = element;
     let (pid, window_id) = window;
     let ax_action = crate::input::ax_actions::map_action(action_str)?;
@@ -1578,10 +1607,27 @@ fn perform_ax_click(
                          confirmed AXSelected=true."
                     ),
                     false,
-                    false,
                     true,
                     false,
                 ));
+            }
+            // A text area has no press action (AXPress fails with -25206). What
+            // a click into it is for is a caret to type at: focus it and put the
+            // caret at the end of its text, confirmed by reading the caret back.
+            if matches!(role.as_str(), "AXTextArea" | "AXTextField") {
+                if let Some(len) = unsafe { crate::document_edit::place_caret_at_end(pid, element) }
+                {
+                    return Ok((
+                        format!(
+                            "✅ [{idx}] {role} has no press action, so it was focused and its \
+                             caret put at the end of its text ({len} characters); confirmed by \
+                             reading the caret back. type_text now adds text there."
+                        ),
+                        false,
+                        true,
+                        false,
+                    ));
+                }
             }
         }
 
@@ -1652,7 +1698,6 @@ fn perform_ax_click(
                                          AXSelected read-back."
                                     ),
                                     false,
-                                    false,
                                     true,
                                     true,
                                 ));
@@ -1708,7 +1753,6 @@ fn perform_ax_click(
                          {err}."
                     ),
                     false,
-                    false,
                     true,
                     false,
                 ));
@@ -1726,7 +1770,6 @@ fn perform_ax_click(
                         "✅ Selected nearest {selected_role} for [{idx}] {role} \"{title}\" \
                          after AXPress returned {err}; confirmed AXSelected=true."
                     ),
-                    false,
                     false,
                     true,
                     false,
@@ -1792,9 +1835,18 @@ fn perform_ax_click(
         ));
     }
 
-    // WebKit DOM focus settle: 800 ms for text inputs (returned to async caller).
-    let needs_webkit_delay =
-        ax_action == "AXPress" && (role == "AXTextField" || role == "AXTextArea");
+    // A pressed text input takes focus asynchronously in web views (WebKit
+    // and Chromium move DOM focus, then mirror it to AXFocused). Wait for the
+    // field to report focus, up to the old fixed 800 ms settle, so typing
+    // right after lands in it; a native field reports focus at once.
+    if ax_action == "AXPress" && (role == "AXTextField" || role == "AXTextArea") {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(800);
+        while unsafe { copy_bool_attr(element, "AXFocused") } != Some(true)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
 
     // Show focus-rect highlight around the element (matches Swift showFocusRect).
     // Also move the cursor to the element center so the glide animation plays.
@@ -1817,7 +1869,7 @@ fn perform_ax_click(
     let _ = pid;
     let _ = window_id; // used by caller context
 
-    Ok((summary, needs_webkit_delay, suspected_noop, false, false))
+    Ok((summary, suspected_noop, false, false))
 }
 
 #[cfg(test)]

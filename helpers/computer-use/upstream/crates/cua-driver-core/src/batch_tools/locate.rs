@@ -50,7 +50,10 @@ pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: u64 = 5_000;
 pub(crate) const DEFAULT_EXPECT_TIMEOUT_MS: u64 = 2_000;
 /// Longest wait any single check may ask for.
 pub(crate) const MAX_CHECK_TIMEOUT_MS: u64 = 10_000;
-const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// A found target ends the wait at its next poll; on macOS 80 ms keeps that
+/// close to when it appears. Other platforms keep their measured 250 ms.
+const POLL_INTERVAL: Duration =
+    Duration::from_millis(if cfg!(target_os = "macos") { 80 } else { 250 });
 const CANDIDATES_SHOWN: usize = 5;
 /// Most windows of one app a lookup reads per poll.
 const MAX_WINDOWS_SEARCHED: usize = 4;

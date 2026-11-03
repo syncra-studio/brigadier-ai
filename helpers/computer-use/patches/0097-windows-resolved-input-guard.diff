@@ -1,0 +1,46 @@
+Why: Arm the shared background guard after resolving the actual text HWND and retain click target/owner protection through command readback.
+
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -4635,17 +4635,6 @@
+             }
+         }
+ 
+-        // Same no-raise guard as click: a XAML/WPF ValuePattern.SetValue handler
+-        // calls UIElement.Focus()→SetForegroundWindow; WS_EX_NOACTIVATE on the
+-        // target makes that a no-op while the value still gets set. Safe because
+-        // type_text never uses the SendInput foreground-swap path. No-op for
+-        // delivery_mode:"foreground" and when no window_id was given.
+-        let _noact = match (delivery != DeliveryMode::Foreground, hwnd_opt) {
+-            (true, Some(h)) => Some(crate::input::NoActivateGuard::arm(
+-                windows::Win32::Foundation::HWND(h as *mut _),
+-            )),
+-            _ => None,
+-        };
+         let _delay_ms = args.u64_or("delay_ms", 30).min(200);
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+@@ -4669,6 +4658,11 @@
+                 }
+             }
+         };
++        // Arm after resolving the real HWND, including calls that omit
++        // window_id. The shared guard also covers a modal dialog's owner.
++        let _noact = (delivery != DeliveryMode::Foreground).then(|| {
++            crate::input::NoActivateGuard::arm(windows::Win32::Foundation::HWND(hwnd as *mut _))
++        });
+         if let Some(element) = admitted.as_ref() {
+             let (cx, cy) = element.center;
+             pin_overlay_above(&cursor_key, hwnd);
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -329,6 +329,9 @@
+         // existing background coordinate route instead of entering that handler.
+         return Ok(None);
+     }
++    // Keep target/owner protection alive through native commands and their
++    // bounded readback, even if this helper was reached without a window_id.
++    let _noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
+     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
+     let readback = Readback::new(hwnd, Some(ptr));
+     if !expand_only {

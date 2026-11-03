@@ -60,7 +60,7 @@ impl FfmpegVideoBackend {
             })?;
         }
 
-        let mut cmd = Command::new(&ffmpeg);
+        let mut cmd = tool_command(&ffmpeg);
         cmd.arg("-y").arg("-loglevel").arg("error");
 
         platform_input_args(&mut cmd);
@@ -209,7 +209,7 @@ pub fn find_ffprobe() -> Option<PathBuf> {
 }
 
 pub(crate) fn find_ffmpeg() -> Option<PathBuf> {
-    if Command::new("ffmpeg")
+    if tool_command("ffmpeg")
         .arg("-version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -328,4 +328,19 @@ fn platform_input_args(cmd: &mut Command) {
         let _ = framerate;
         let _ = cmd;
     }
+}
+
+/// A console tool (ffmpeg, ffprobe, `where`) started without a console
+/// window. On Windows a helper that has no console of its own would otherwise
+/// open a new, activated terminal window for every such child.
+pub(crate) fn tool_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }

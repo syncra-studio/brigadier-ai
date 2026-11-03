@@ -1,0 +1,655 @@
+Why: Linux background keys and pixel clicks work without /dev/uinput: the virtual pointer and keyboard pair is fed through its own XTEST devices (core events stay on: Xorg's software cursor keeps a no-core master's cursor without a reference, a use-after-free that aborts the server); keys reach the window under the pair's pointer (PointerRoot focus) so no window manager activates it; the focus guard stamps the user's window with a fresh user time so a dialog the app opens later can't take the front, restores an active window the window manager dropped, ignores a stacking list that was empty at capture, and the focus notes of real input stay on a line of their own.
+
+diff --git a/crates/platform-linux/src/input/focus_guard.rs b/crates/platform-linux/src/input/focus_guard.rs
+index 184e416b2..1088f26a7 100644
+--- a/crates/platform-linux/src/input/focus_guard.rs
++++ b/crates/platform-linux/src/input/focus_guard.rs
+@@ -33,6 +33,7 @@ use x11rb::protocol::xproto::{
+ };
+ use x11rb::protocol::Event;
+ use x11rb::rust_connection::RustConnection;
++use x11rb::wrapper::ConnectionExt as _;
+ use x11rb::COPY_DEPTH_FROM_PARENT;
+ 
+ /// How long the guard watches for a late focus change after delivery (a
+@@ -61,6 +62,8 @@ struct Atoms {
+     net_client_list_stacking: u32,
+     net_wm_pid: u32,
+     net_wm_name: u32,
++    net_wm_user_time: u32,
++    net_wm_user_time_window: u32,
+     utf8_string: u32,
+ }
+ 
+@@ -82,6 +85,8 @@ impl X {
+             net_client_list_stacking: intern(b"_NET_CLIENT_LIST_STACKING")?,
+             net_wm_pid: intern(b"_NET_WM_PID")?,
+             net_wm_name: intern(b"_NET_WM_NAME")?,
++            net_wm_user_time: intern(b"_NET_WM_USER_TIME")?,
++            net_wm_user_time_window: intern(b"_NET_WM_USER_TIME_WINDOW")?,
+             utf8_string: intern(b"UTF8_STRING")?,
+         };
+         Ok(Self { conn, root, atoms })
+@@ -276,6 +281,32 @@ impl X {
+         let _ = self.conn.flush();
+     }
+ 
++    /// Stamp `window` with the server's current time as its last user
++    /// interaction. Real input gives the target app fresh event times; a
++    /// window it maps or a focus request it makes later would carry them and
++    /// win the window manager's focus-stealing check against the user's
++    /// window. With this stamp the user's window is newer, so it keeps the front.
++    fn touch_user_time(&self, window: Window) {
++        let time = self.server_time();
++        if time == 0 {
++            return;
++        }
++        let holder = self
++            .window_property(window, self.atoms.net_wm_user_time_window, 1)
++            .first()
++            .copied()
++            .filter(|w| *w != 0)
++            .unwrap_or(window);
++        let _ = self.conn.change_property32(
++            PropMode::REPLACE,
++            holder,
++            self.atoms.net_wm_user_time,
++            AtomEnum::CARDINAL,
++            &[time],
++        );
++        let _ = self.conn.flush();
++    }
++
+     fn set_focus(&self, window: Window, revert_to: InputFocus) {
+         // BadWindow / BadMatch (destroyed or unmapped meanwhile) are expected
+         // and swallowed: the verification loop decides what to do next.
+@@ -517,16 +548,20 @@ impl FocusSnapshot {
+         if focus > 1 && focus != self.core_focus {
+             changes.push(format!("focus 0x{:x}->0x{:x}", self.core_focus, focus));
+         }
++        // The user's active window gone to none (openbox after a focus event
++        // of the virtual keyboard) is a change too: nothing has the front.
+         let active = x.active_window();
+-        if active != self.active && active.is_some() {
++        if active != self.active && (active.is_some() || self.active.is_some()) {
+             changes.push(format!(
+                 "active 0x{:x}->0x{:x}",
+                 self.active.unwrap_or(0),
+                 active.unwrap_or(0)
+             ));
+         }
++        // An empty stacking list at capture (xfwm4 before it lists the user's
++        // window) leaves nothing to compare with or restore to.
+         let top = x.stacking_top();
+-        if top != self.stacking_top && top.is_some() {
++        if top != self.stacking_top && top.is_some() && self.stacking_top.is_some() {
+             changes.push(format!(
+                 "stacking_top 0x{:x}->0x{:x}",
+                 self.stacking_top.unwrap_or(0),
+@@ -611,6 +646,9 @@ impl FocusSnapshot {
+         let mut report = FocusGuardReport::default();
+         // The target app owns the focus: whatever it maps next is its own.
+         let target_owns_focus = target_pid.is_some() && self.previous_owner == target_pid;
++        if let Some(active) = self.active.filter(|_| !target_owns_focus) {
++            x.touch_user_time(active);
++        }
+ 
+         // Settle watch: stop at the first observed change. A new top-level
+         // (dialog being mapped) extends the watch when the focus belongs to
+@@ -792,6 +830,16 @@ impl FocusSnapshot {
+ 
+     fn reassert(&self, x: &X) {
+         if let Some(prev) = self.active {
++            // The WM dropped the active window while the core focus never left
++            // it (openbox after a focus event of the virtual keyboard). It only
++            // re-marks a window active on a FocusIn, which setting the same
++            // focus again does not send.
++            if x.active_window().is_none()
++                && self.core_focus > 1
++                && x.core_focus().0 == self.core_focus
++            {
++                x.set_focus(1, InputFocus::POINTER_ROOT);
++            }
+             x.activate(prev, x.active_window().unwrap_or(0));
+         }
+         if self.core_focus > 1 {
+diff --git a/crates/platform-linux/src/input/mod.rs b/crates/platform-linux/src/input/mod.rs
+index 7a0cd50da..7bf9c0aeb 100644
+--- a/crates/platform-linux/src/input/mod.rs
++++ b/crates/platform-linux/src/input/mod.rs
+@@ -32,7 +32,7 @@ pub use mpx_keyboard::{
+ };
+ 
+ use anyhow::{anyhow, bail, Context, Result};
+-use evdev::uinput::VirtualDevice;
++use evdev::uinput::VirtualDevice as UinputDevice;
+ use evdev::{AttributeSet, EventType, InputEvent, Key, RelativeAxisType};
+ use std::cell::RefCell;
+ use std::collections::HashMap;
+@@ -560,6 +560,159 @@ fn kde_x11_uinput_hotplug_is_unsafe_from_env() -> bool {
+     )
+ }
+ 
++/// The slave that feeds a session's master pair: a uinput device on a real Xorg
++/// with a writable `/dev/uinput`, else the master's own XTEST slave. Every new
++/// master comes with an XTEST pointer and keyboard; XTest requests from a
++/// connection whose client pointer is that master go through them, so they
++/// reach the master's sprite and focus as real (non-`send_event`) input while
++/// the user's core pointer and focus stay put. That needs no uinput, so Xvfb,
++/// containers and desktops without access to `/dev/uinput` get the same route.
++pub(crate) enum VirtualDevice {
++    Uinput(UinputDevice),
++    Xtest(XtestSlave),
++}
++
++pub(crate) struct XtestSlave {
++    conn: RustConnection,
++}
++
++impl XtestSlave {
++    /// A connection whose core requests use `master_pointer` (and its paired
++    /// keyboard), so its XTest input is that master's.
++    fn new(master_pointer: i32) -> Result<Self> {
++        use x11rb::protocol::xinput::ConnectionExt as _;
++        let (conn, _) = connect_x11_for_input()?;
++        conn.xinput_xi_set_client_pointer(x11rb::NONE, master_pointer as u16)?
++            .check()
++            .context("XISetClientPointer for the virtual master")?;
++        Ok(Self { conn })
++    }
++
++    /// evdev events as XTest input. Key codes are X keycodes minus 8; wheel
++    /// detents are buttons 4-7; the high-resolution wheel axes repeat the
++    /// detents and are skipped.
++    fn emit(&mut self, events: &[InputEvent]) -> std::io::Result<()> {
++        use x11rb::protocol::xtest::ConnectionExt as _;
++        let io = |error: &dyn std::fmt::Display| std::io::Error::other(error.to_string());
++        let (mut dx, mut dy) = (0i32, 0i32);
++        for event in events {
++            let code = event.code();
++            let value = event.value();
++            let tap = |button: u8, times: i32| -> std::io::Result<()> {
++                for _ in 0..times.unsigned_abs() {
++                    for kind in [BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT] {
++                        self.conn
++                            .xtest_fake_input(kind, button, 0, x11rb::NONE, 0, 0, 0)
++                            .map_err(|e| io(&e))?;
++                    }
++                }
++                Ok(())
++            };
++            match event.event_type() {
++                EventType::KEY if value == 2 => {}
++                EventType::KEY => {
++                    let press = value != 0;
++                    let (kind, detail) = match xtest_button(code) {
++                        Some(button) => (
++                            if press {
++                                BUTTON_PRESS_EVENT
++                            } else {
++                                BUTTON_RELEASE_EVENT
++                            },
++                            button,
++                        ),
++                        None => (
++                            if press {
++                                KEY_PRESS_EVENT
++                            } else {
++                                KEY_RELEASE_EVENT
++                            },
++                            u8::try_from(code + 8).map_err(|e| io(&e))?,
++                        ),
++                    };
++                    self.conn
++                        .xtest_fake_input(kind, detail, 0, x11rb::NONE, 0, 0, 0)
++                        .map_err(|e| io(&e))?;
++                }
++                EventType::RELATIVE if code == RelativeAxisType::REL_X.0 => dx += value,
++                EventType::RELATIVE if code == RelativeAxisType::REL_Y.0 => dy += value,
++                EventType::RELATIVE if code == RelativeAxisType::REL_WHEEL.0 => {
++                    tap(if value > 0 { 4 } else { 5 }, value)?
++                }
++                EventType::RELATIVE if code == RelativeAxisType::REL_HWHEEL.0 => {
++                    tap(if value > 0 { 7 } else { 6 }, value)?
++                }
++                _ => {}
++            }
++        }
++        if dx != 0 || dy != 0 {
++            // detail 1: relative motion.
++            self.conn
++                .xtest_fake_input(
++                    MOTION_NOTIFY_EVENT,
++                    1,
++                    0,
++                    x11rb::NONE,
++                    dx as i16,
++                    dy as i16,
++                    0,
++                )
++                .map_err(|e| io(&e))?;
++        }
++        // A round trip: the server has run the input before the caller looks
++        // for its raw events or asks another connection about it.
++        self.conn
++            .get_input_focus()
++            .map_err(|e| io(&e))?
++            .reply()
++            .map_err(|e| io(&e))?;
++        Ok(())
++    }
++}
++
++/// The X button for an evdev button code; `None` for a key.
++fn xtest_button(code: u16) -> Option<u8> {
++    match code {
++        c if c == Key::BTN_LEFT.0 => Some(1),
++        c if c == Key::BTN_MIDDLE.0 => Some(2),
++        c if c == Key::BTN_RIGHT.0 => Some(3),
++        c if c == Key::BTN_SIDE.0 => Some(8),
++        c if c == Key::BTN_EXTRA.0 => Some(9),
++        _ => None,
++    }
++}
++
++impl VirtualDevice {
++    pub(crate) fn emit(&mut self, events: &[InputEvent]) -> std::io::Result<()> {
++        match self {
++            Self::Uinput(device) => device.emit(events),
++            Self::Xtest(slave) => slave.emit(events),
++        }
++    }
++}
++
++/// Whether a new master pair is fed by its XTEST slaves instead of uinput
++/// devices: always without a writable `/dev/uinput`, and on Xvfb, which cannot
++/// hot-add a uinput device.
++pub fn uses_xtest_slaves() -> bool {
++    !uinput_accessible() || is_xvfb_process_running()
++}
++
++/// The XTEST slave the server made with the master pair `base`.
++fn xtest_slave_id(display: *mut x11::xlib::Display, base: &str, use_: i32) -> Result<i32> {
++    let kind = if use_ == x11::xinput2::XISlavePointer {
++        "pointer"
++    } else {
++        "keyboard"
++    };
++    let name = format!("{base} XTEST {kind}");
++    xi2_query_devices(display)?
++        .into_iter()
++        .find(|(_, found_use, found_name)| *found_use == use_ && *found_name == name)
++        .map(|(id, _, _)| id)
++        .ok_or_else(|| anyhow!("no XTEST {kind} slave named '{name}'"))
++}
++
+ pub(crate) fn uinput_accessible() -> bool {
+     fs::OpenOptions::new()
+         .read(true)
+@@ -576,12 +729,10 @@ pub fn real_pointer_input_available() -> bool {
+         return false;
+     }
+ 
+-    // `ensure_master_pointer` creates an XI2 master before attaching the
+-    // uinput slave. If this process cannot open /dev/uinput, attempting that
+-    // path on every click/scroll would create and abandon an XInput master
+-    // pair until Xorg terminates the client with BadAlloc. Skip MPX entirely
+-    // when the required device is inaccessible.
+-    if !uinput_accessible() {
++    // Without a usable /dev/uinput the master pair is fed by its own XTEST
++    // slaves ([`VirtualDevice::Xtest`]); that route is for X11 sessions only.
++    let xtest = uses_xtest_slaves();
++    if xtest && crate::wayland::is_wayland() {
+         return false;
+     }
+     let Ok(display) = open_display() else {
+@@ -589,7 +740,7 @@ pub fn real_pointer_input_available() -> bool {
+     };
+     let supported = real_pointer_capabilities_available(
+         supports_parallel_pointer_injection(display).is_ok(),
+-        is_xvfb_process_running(),
++        is_xvfb_process_running() && !xtest,
+         true,
+         false,
+     );
+@@ -626,15 +777,20 @@ fn ensure_master_pointer_for_session(
+ 
+     let base = master_pointer_name(cursor_id);
+     let device_name = slave_pointer_name(&base);
++    let xtest = uses_xtest_slaves();
+     // Acquire the non-X resource before mutating the XInput hierarchy. The
+     // inexpensive availability probe above handles the normal permission
+     // denial; this ordering also prevents a race or late open failure from
+     // leaking a newly created master pair.
+-    let uinput_device = match create_uinput_pointer(&device_name) {
+-        Ok(device) => device,
+-        Err(error) => {
+-            unsafe { x11::xlib::XCloseDisplay(display) };
+-            return Err(error);
++    let uinput_device = if xtest {
++        None
++    } else {
++        match create_uinput_pointer(&device_name) {
++            Ok(device) => Some(device),
++            Err(error) => {
++                unsafe { x11::xlib::XCloseDisplay(display) };
++                return Err(error);
++            }
+         }
+     };
+     let mut change = x11::xinput2::XIAnyHierarchyChangeInfo::default();
+@@ -647,6 +803,10 @@ fn ensure_master_pointer_for_session(
+         // drags too. Note this is not what makes the WM focus the dragged
+         // window — XI2-aware WMs grab buttons for XIAllMasterDevices — see
+         // the active-window save/restore in send_parallel_virtual_pointer_drags.
++        // Never 0, not even for an XTEST-fed pair: Xorg's software cursor
++        // keeps showing a no-core master's last cursor without a reference,
++        // so an app that exits under it leaves a use-after-free that aborts
++        // the X server (seen on Xvfb 21.1.12 under valgrind).
+         (*add).send_core = 1;
+         (*add).enable = 1;
+     }
+@@ -677,13 +837,19 @@ fn ensure_master_pointer_for_session(
+     let keyboard_id = keyboard_id
+         .ok_or_else(|| anyhow!("failed to locate created master keyboard for '{cursor_id}'"))?;
+ 
+-    let slave_pointer_id = match wait_for_slave_id(
+-        display,
+-        &device_name,
+-        x11::xinput2::XISlavePointer,
+-        Duration::from_secs(5),
+-    ) {
+-        Ok(id) => id,
++    let slave = match uinput_device {
++        None => xtest_slave_id(display, &base, x11::xinput2::XISlavePointer)
++            .and_then(|id| Ok((id, VirtualDevice::Xtest(XtestSlave::new(pointer_id)?)))),
++        Some(device) => wait_for_slave_id(
++            display,
++            &device_name,
++            x11::xinput2::XISlavePointer,
++            Duration::from_secs(5),
++        )
++        .map(|id| (id, VirtualDevice::Uinput(device))),
++    };
++    let (slave_pointer_id, uinput_device) = match slave {
++        Ok(found) => found,
+         Err(error) => {
+             // Never leave the fresh master pair behind when the slave never
+             // hotplugs (no udev/libinput on this server): a stray master with
+@@ -693,8 +859,10 @@ fn ensure_master_pointer_for_session(
+             return Err(error);
+         }
+     };
+-    attach_slave_to_master(display, slave_pointer_id, pointer_id)?;
+-    set_flat_pointer_accel(display, slave_pointer_id);
++    if !xtest {
++        attach_slave_to_master(display, slave_pointer_id, pointer_id)?;
++        set_flat_pointer_accel(display, slave_pointer_id);
++    }
+     unsafe { x11::xlib::XCloseDisplay(display) };
+ 
+     let ids = MasterPointerIds {
+@@ -819,7 +987,7 @@ pub(crate) fn reap_orphaned_master_pointers() {
+     }
+ }
+ 
+-fn create_uinput_pointer(name: &str) -> Result<VirtualDevice> {
++fn create_uinput_pointer(name: &str) -> Result<UinputDevice> {
+     guarded_uinput_creation(name, |name| {
+         let mut keys = AttributeSet::<Key>::new();
+         keys.insert(Key::BTN_LEFT);
+@@ -2427,7 +2595,7 @@ fn window_children(
+ /// target itself (its WM frame) or over an override-redirect popup (a menu or
+ /// combo list the click is meant to reach, or the agent-cursor overlay);
+ /// `Ok(Some(_))` names the window that covers the point instead.
+-fn occluding_window(
++pub(super) fn occluding_window(
+     display: *mut x11::xlib::Display,
+     window: x11::xlib::Window,
+     x: i32,
+@@ -2486,7 +2654,7 @@ fn occluding_window(
+ 
+ /// What sits over the screen point a background pointer action aims at.
+ #[derive(Debug, Clone)]
+-enum PointCover {
++pub(super) enum PointCover {
+     /// The target (or a popup meant to receive the press).
+     Clear,
+     /// A window of the target's own pid; the press is retargeted to it.
+diff --git a/crates/platform-linux/src/input/mpx_keyboard.rs b/crates/platform-linux/src/input/mpx_keyboard.rs
+index 7adc8376d..c4819880a 100644
+--- a/crates/platform-linux/src/input/mpx_keyboard.rs
++++ b/crates/platform-linux/src/input/mpx_keyboard.rs
+@@ -273,7 +273,7 @@ impl KeyboardDeliveryReport {
+     }
+ }
+ 
+-fn create_uinput_keyboard(name: &str) -> Result<VirtualDevice> {
++fn create_uinput_keyboard(name: &str) -> Result<UinputDevice> {
+     guarded_uinput_creation(name, |name| {
+         let mut keys = AttributeSet::<Key>::new();
+         // Every KEY_* code the X keycode range can address, so any keycode the
+@@ -312,14 +312,21 @@ fn ensure_master_keyboard(
+             .and_then(|(_, _, name)| name.strip_suffix(" keyboard").map(str::to_owned))
+             .ok_or_else(|| anyhow!("master keyboard {} vanished", ids.keyboard_id))?;
+         let device_name = slave_keyboard_name(&base);
+-        let mut device = create_uinput_keyboard(&device_name)?;
+-        let slave_keyboard_id = wait_for_slave_id(
+-            display,
+-            &device_name,
+-            x11::xinput2::XISlaveKeyboard,
+-            Duration::from_secs(5),
+-        )?;
+-        attach_slave_to_master(display, slave_keyboard_id, ids.keyboard_id)?;
++        let (mut device, slave_keyboard_id) = if uses_xtest_slaves() {
++            // The pair's own XTEST keyboard, already attached to its master.
++            let id = xtest_slave_id(display, &base, x11::xinput2::XISlaveKeyboard)?;
++            (VirtualDevice::Xtest(XtestSlave::new(ids.pointer_id)?), id)
++        } else {
++            let device = create_uinput_keyboard(&device_name)?;
++            let id = wait_for_slave_id(
++                display,
++                &device_name,
++                x11::xinput2::XISlaveKeyboard,
++                Duration::from_secs(5),
++            )?;
++            attach_slave_to_master(display, id, ids.keyboard_id)?;
++            (VirtualDevice::Uinput(device), id)
++        };
+         warm_up_keyboard(display, &mut device, slave_keyboard_id, ids.keyboard_id);
+         let ids = MasterPointerIds {
+             slave_keyboard_id: Some(slave_keyboard_id),
+@@ -540,6 +547,7 @@ fn deliver(
+ 
+         let window = target_window as x11::xlib::Window;
+         let core_before = core_focus(display);
++        let xtest = matches!(*device.lock().unwrap(), VirtualDevice::Xtest(_));
+         let released_stuck = release_stuck_virtual_input(cursor_id, display, ids, &device);
+         select_raw_key_events(display, slave_keyboard_id)?;
+         // A BadWindow/BadMatch from XISetFocus (target unmapped meanwhile) must
+@@ -550,7 +558,37 @@ fn deliver(
+         // through the error handler, so a stale GetFocus is the real signal.
+         // Retry once — a freshly mapped/raised toplevel can miss the first set.
+         let mut focus_taken = false;
++        // An XTEST-fed pair types into the window under its own pointer
++        // (PointerRoot focus, a new master's default), parked on a point of
++        // the target nothing covers. The focus the target gets is
++        // NotifyPointer, which window managers ignore. An explicit XISetFocus
++        // makes openbox and xfwm4 activate the target, and a focus change on
++        // the pair (its core focus events) makes openbox drop the active window.
++        let parked = if xtest {
++            uncovered_point(display, window)
++        } else {
++            None
++        };
++        if xtest {
++            if let Some((x, y)) = parked {
++                let pointer_root = x11::xlib::PointerRoot as x11::xlib::Window;
++                if xi_get_focus(display, ids.keyboard_id) != Some(pointer_root) {
++                    unsafe {
++                        x11::xinput2::XISetFocus(
++                            display,
++                            ids.keyboard_id,
++                            pointer_root,
++                            x11::xlib::CurrentTime,
++                        )
++                    };
++                }
++                focus_taken = warp_master_pointer(display, ids, x, y).is_ok();
++            }
++        }
+         for attempt in 0..2 {
++            if xtest {
++                break;
++            }
+             let rc = unsafe {
+                 x11::xinput2::XISetFocus(display, ids.keyboard_id, window, x11::xlib::CurrentTime)
+             };
+@@ -564,6 +602,13 @@ fn deliver(
+             }
+         }
+         unsafe { x11::xlib::XSetErrorHandler(previous_handler) };
++        if xtest && parked.is_none() {
++            bail!(
++                "every point of window 0x{target_window:x} is covered by another window, and \
++                 the background keyboard types into the window under its own pointer, so the \
++                 keys can't reach it; nothing was sent"
++            );
++        }
+         if !focus_taken {
+             bail!(
+                 "virtual master keyboard could not take focus on window 0x{target_window:x} \
+@@ -614,7 +659,13 @@ fn deliver(
+         // guards restore the keymap and the slave disappears.
+         sleep(Duration::from_millis(30));
+         let _ = keymap_conn.get_input_focus()?.reply();
+-        let virtual_focus_held = xi_get_focus(display, ids.keyboard_id) == Some(window);
++        let virtual_focus_held = match parked {
++            Some((x, y)) => matches!(
++                occluding_window(display, window, x, y),
++                Ok(PointCover::Clear)
++            ),
++            None => xi_get_focus(display, ids.keyboard_id) == Some(window),
++        };
+         let core_focus_unchanged = core_focus(display) == core_before;
+         if !delivery_confirmed {
+             tracing::warn!(
+@@ -645,6 +696,31 @@ fn deliver(
+     result
+ }
+ 
++/// A point of `window` (screen coordinates) no other window covers: the
++/// middle first, then a grid inside it.
++fn uncovered_point(
++    display: *mut x11::xlib::Display,
++    window: x11::xlib::Window,
++) -> Option<(i32, i32)> {
++    let (left, top, width, height) = window_screen_bounds(display, window)?;
++    const PLACES: [f64; 5] = [0.5, 0.25, 0.75, 0.1, 0.9];
++    PLACES
++        .iter()
++        .flat_map(|fy| PLACES.iter().map(move |fx| (*fx, *fy)))
++        .map(|(fx, fy)| {
++            (
++                left + (f64::from(width) * fx) as i32,
++                top + (f64::from(height) * fy) as i32,
++            )
++        })
++        .find(|&(x, y)| {
++            matches!(
++                occluding_window(display, window, x, y),
++                Ok(PointCover::Clear)
++            )
++        })
++}
++
+ /// Type `text` into `target_window` without touching the core focus or the
+ /// user's pointer. See the module docs for the mechanism.
+ pub fn send_virtual_keyboard_text(
+diff --git a/crates/platform-linux/src/tools/impl_.rs b/crates/platform-linux/src/tools/impl_.rs
+index 7159f7e2c..7af01e862 100644
+--- a/crates/platform-linux/src/tools/impl_.rs
++++ b/crates/platform-linux/src/tools/impl_.rs
+@@ -3488,7 +3488,13 @@ fn key_route_result(action: &str, route: KeyRoute, mode_label: &str) -> ToolResu
+                      did not confirm the last key; the keys may not have landed.",
+                 );
+             }
+-            text.push_str(&report.delivery_notes());
++            // On a line of its own: an unconfirmed reply's first line is
++            // replaced by the honest summary, and the focus note must stay.
++            let notes = report.delivery_notes();
++            if !notes.trim().is_empty() {
++                text.push('\n');
++                text.push_str(notes.trim());
++            }
+             ToolResult::text(text).with_structured(structured)
+         }
+         KeyRoute::Synthetic | KeyRoute::Terminal => {
+@@ -3838,7 +3844,7 @@ impl PointerRoute {
+             ),
+             Self::Mpx(effect) if effect.landed() => format!(
+                 "(delivery_mode={mode_label}, path={}, focus {}); {}the screen around the \
+-                 point changed ({:.1}% of the region) — the action landed.",
++                 point changed ({:.1}% of the region) — the action landed.{}",
+                 crate::input::MPX_POINTER_PATH,
+                 if effect.focus_unchanged {
+                     "untouched"
+@@ -3850,12 +3856,13 @@ impl PointerRoute {
+                 } else {
+                     String::new()
+                 },
+-                effect.region_diff_pct.unwrap_or(0.0)
++                effect.region_diff_pct.unwrap_or(0.0),
++                mpx_focus_note(effect)
+             ),
+             Self::Mpx(effect) => format!(
+                 "(delivery_mode={mode_label}, path={}, focus {}); real button events were \
+                  delivered but the screen around the point did not visibly change \
+-                 ({}) — confirm with a screenshot.",
++                 ({}) — confirm with a screenshot.{}",
+                 crate::input::MPX_POINTER_PATH,
+                 if effect.focus_unchanged {
+                     "untouched"
+@@ -3865,7 +3872,8 @@ impl PointerRoute {
+                 effect
+                     .region_diff_pct
+                     .map(|pct| format!("{pct:.2}% of the region"))
+-                    .unwrap_or_else(|| "region capture unavailable".to_owned())
++                    .unwrap_or_else(|| "region capture unavailable".to_owned()),
++                mpx_focus_note(effect)
+             ),
+             _ => format!(
+                 "(delivery_mode={mode_label}{}); not verified — confirm with a screenshot.",
+@@ -3877,6 +3885,18 @@ impl PointerRoute {
+     }
+ }
+ 
++/// The focus move a real press caused, on a line of its own: the
++/// parenthesised route details are not shown to every caller, and an
++/// unconfirmed reply's first line is replaced by the honest summary.
++fn mpx_focus_note(effect: &crate::input::PointerEffect) -> &'static str {
++    if effect.focus_unchanged {
++        ""
++    } else {
++        "\nThe window manager moved the desktop focus to this window for the press; it was \
++         restored to the previous window (focus_outcome=restored)."
++    }
++}
++
+ /// The focus-free real-pointer route existed but the press did not go
+ /// through, on a toolkit that would silently drop the synthetic fallback.
+ #[derive(Debug)]
+@@ -8369,7 +8389,12 @@ fn type_text_mpx_result(
+              not confirm the last key; the text may not have landed.",
+         );
+     }
+-    text.push_str(&report.delivery_notes());
++    // Own line: see `key_route_result`.
++    let notes = report.delivery_notes();
++    if !notes.trim().is_empty() {
++        text.push('\n');
++        text.push_str(notes.trim());
++    }
+     let result = if report.skipped_characters.is_empty() {
+         ToolResult::text(text)
+     } else {

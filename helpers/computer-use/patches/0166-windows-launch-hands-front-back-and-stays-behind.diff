@@ -1,0 +1,569 @@
+Why: Windows refuses SetForegroundWindow to a helper without a foreground right even when attached to the front thread, so a launched app that took the front kept it, and a window shown without activation still opened on top of the user's window. Keep the launched app's new windows under the user's window, hand the front back by minimizing the launched window once (Windows then activates the user's window; the app is shown again behind it), and say plainly when Windows refused.
+
+diff --git a/crates/platform-windows/src/input/foreground_policy.rs b/crates/platform-windows/src/input/foreground_policy.rs
+index dbbaa0442..1c3428899 100644
+--- a/crates/platform-windows/src/input/foreground_policy.rs
++++ b/crates/platform-windows/src/input/foreground_policy.rs
+@@ -8,10 +8,23 @@ pub(crate) struct Observation {
+     pub monitoring: bool,
+     pub interrupted: bool,
+     pub user_input: bool,
++    /// The front was handed back and Windows refused every route.
++    pub refused: bool,
++    /// A launched window that opened over the user's window was put under it.
++    pub placed_behind: bool,
+ }
+ 
+ impl Observation {
+     pub(crate) fn report(self) -> (&'static str, bool) {
++        if self.activated
++            && self.foreground_seen
++            && !self.restored
++            && self.refused
++            && !self.user_input
++            && !self.interrupted
++        {
++            return ("The launched app took the front, and Windows refused to give it back to your window: the app is in front of your window now. Click your window to continue. The app itself opened.", true);
++        }
+         if self.user_input {
+             return ("Real user input ended automatic focus restoration; any recorded activation may reflect your own actions. Keeping the original window in front is unconfirmed.", true);
+         }
+@@ -31,6 +44,8 @@ impl Observation {
+                 "App activation was observed; your previous window could not be confirmed in front. Opening and keeping your window in front are separate results.", true),
+             (false, _, _, true) => (
+                 "Monitoring stopped after user input or the previous window closed; keeping your window in front is unconfirmed.", true),
++            (false, _, true, false) if self.placed_behind => (
++                "No app activation has been recorded before this reply. The app's window opened on top of yours and was placed behind your window. Monitoring continues for up to 8 seconds after the call; this does not guarantee a flash-free launch.", false),
+             (false, _, true, false) => (
+                 "No app activation has been recorded before this reply. Monitoring continues for up to 8 seconds after the call; this does not guarantee a flash-free launch.", false),
+             _ => ("Window activation observation was unavailable or its bounded watch expired; preservation is unconfirmed.", true),
+@@ -47,6 +62,51 @@ pub(crate) fn may_hand_back(
+     prior_valid && input_unchanged && target && still_front
+ }
+ 
++/// A launched window that Windows let take the front may be minimized once so
++/// that Windows itself activates the user's window, which must be next below
++/// it. A process without foreground rights may still minimize a window, while
++/// SetForegroundWindow, AttachThreadInput and SwitchToThisWindow are refused
++/// (Windows 11, 2026-11-01). Maximized windows are left alone: they could not
++/// be restored maximized without activation.
++#[derive(Clone, Copy, Debug, Default)]
++pub(crate) struct MinimizeFacts {
++    pub visible: bool,
++    pub iconic: bool,
++    pub zoomed: bool,
++    pub minimizable: bool,
++    pub topmost: bool,
++    pub tool: bool,
++    pub prior_next: bool,
++    pub prior_hung: bool,
++}
++
++pub(crate) fn may_minimize_for_hand_back(facts: MinimizeFacts) -> bool {
++    facts.visible
++        && !facts.iconic
++        && !facts.zoomed
++        && facts.minimizable
++        && !facts.topmost
++        && !facts.tool
++        && facts.prior_next
++        && !facts.prior_hung
++}
++
++/// A launched window shown without activation still opens on top of the
++/// z-order. Place it under the user's window while that window is in front.
++#[derive(Clone, Copy, Debug, Default)]
++pub(crate) struct CoverFacts {
++    pub visible: bool,
++    pub root: bool,
++    pub iconic: bool,
++    pub topmost: bool,
++    pub tool: bool,
++    pub target: bool,
++}
++
++pub(crate) fn place_behind_prior(facts: CoverFacts) -> bool {
++    facts.visible && facts.root && !facts.iconic && !facts.topmost && !facts.tool && facts.target
++}
++
+ pub(crate) fn expired(elapsed_ms: u128, since_end_ms: Option<u128>) -> bool {
+     elapsed_ms >= 30_000 || since_end_ms.is_some_and(|ms| ms >= 8_000)
+ }
+@@ -111,6 +171,10 @@ impl ActivationEvidence {
+         false
+     }
+ 
++    pub(crate) fn is_known(&self, pid: u32) -> bool {
++        pid != 0 && self.known.contains(&pid)
++    }
++
+     pub(crate) fn bind(&mut self, pid: u32) {
+         if pid == 0 {
+             return;
+@@ -384,3 +448,151 @@ mod input_time_tests {
+         .starts_with("Real user input ended"));
+     }
+ }
++
++#[cfg(test)]
++mod launch_hand_back_tests {
++    use super::*;
++
++    fn kept_front() -> Observation {
++        Observation {
++            activated: true,
++            foreground_seen: true,
++            monitoring: true,
++            ..Default::default()
++        }
++    }
++
++    #[test]
++    fn a_refused_hand_back_says_the_app_is_in_front_of_your_window() {
++        let (note, failed) = Observation {
++            refused: true,
++            ..kept_front()
++        }
++        .report();
++        assert!(failed);
++        assert!(note.contains("Windows refused to give it back to your window"));
++        assert!(note.contains("Click your window"));
++        // Restored, or ended by the user's own input: never the refusal.
++        assert!(Observation {
++            refused: true,
++            restored: true,
++            ..kept_front()
++        }
++        .report()
++        .0
++        .contains("A focus change occurred"));
++        assert!(Observation {
++            refused: true,
++            user_input: true,
++            ..kept_front()
++        }
++        .report()
++        .0
++        .starts_with("Real user input ended"));
++        assert!(Observation {
++            monitoring: true,
++            placed_behind: true,
++            ..Default::default()
++        }
++        .report()
++        .0
++        .contains("placed behind your window"));
++        // Not attempted yet: the earlier unconfirmed wording stays.
++        assert!(kept_front().report().0.contains("could not be confirmed"));
++    }
++
++    #[test]
++    fn minimizing_is_only_for_a_plain_window_with_your_window_next_below() {
++        let plain = MinimizeFacts {
++            visible: true,
++            minimizable: true,
++            prior_next: true,
++            ..Default::default()
++        };
++        assert!(may_minimize_for_hand_back(plain));
++        for blocked in [
++            MinimizeFacts {
++                visible: false,
++                ..plain
++            },
++            MinimizeFacts {
++                iconic: true,
++                ..plain
++            },
++            MinimizeFacts {
++                zoomed: true,
++                ..plain
++            },
++            MinimizeFacts {
++                minimizable: false,
++                ..plain
++            },
++            MinimizeFacts {
++                topmost: true,
++                ..plain
++            },
++            MinimizeFacts {
++                tool: true,
++                ..plain
++            },
++            MinimizeFacts {
++                prior_next: false,
++                ..plain
++            },
++            MinimizeFacts {
++                prior_hung: true,
++                ..plain
++            },
++        ] {
++            assert!(!may_minimize_for_hand_back(blocked), "{blocked:?}");
++        }
++    }
++
++    #[test]
++    fn only_the_launched_apps_ordinary_windows_are_placed_behind_yours() {
++        let window = CoverFacts {
++            visible: true,
++            root: true,
++            target: true,
++            ..Default::default()
++        };
++        assert!(place_behind_prior(window));
++        for kept in [
++            CoverFacts {
++                target: false,
++                ..window
++            },
++            CoverFacts {
++                topmost: true,
++                ..window
++            },
++            CoverFacts {
++                tool: true,
++                ..window
++            },
++            CoverFacts {
++                iconic: true,
++                ..window
++            },
++            CoverFacts {
++                root: false,
++                ..window
++            },
++            CoverFacts {
++                visible: false,
++                ..window
++            },
++        ] {
++            assert!(!place_behind_prior(kept), "{kept:?}");
++        }
++    }
++
++    #[test]
++    fn bound_launch_pids_are_known_and_zero_never_is() {
++        let mut evidence = ActivationEvidence::default();
++        evidence.bind(42);
++        assert!(evidence.is_known(42));
++        assert!(!evidence.is_known(7));
++        assert!(!evidence.is_known(0));
++    }
++}
+diff --git a/crates/platform-windows/src/input/foreground_watch.rs b/crates/platform-windows/src/input/foreground_watch.rs
+index ee9eb3735..2269dce28 100644
+--- a/crates/platform-windows/src/input/foreground_watch.rs
++++ b/crates/platform-windows/src/input/foreground_watch.rs
+@@ -13,13 +13,14 @@ use windows::Win32::System::Threading::{
+ use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+ use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
+ use windows::Win32::UI::WindowsAndMessaging::{
+-    CallNextHookEx, DispatchMessageW, GetAncestor, GetForegroundWindow, GetWindowThreadProcessId,
+-    IsWindow, PeekMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint,
+-    EVENT_SYSTEM_FOREGROUND, GA_ROOT, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED,
+-    LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_REMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL,
+-    WINEVENT_OUTOFCONTEXT, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
+-    WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
++    CallNextHookEx, DispatchMessageW, GetAncestor, GetForegroundWindow, GetWindow,
++    GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, PeekMessageW,
++    SetWindowsHookExW, UnhookWindowsHookEx, WindowFromPoint, EVENT_SYSTEM_FOREGROUND, GA_ROOT,
++    GWL_EXSTYLE, GW_HWNDPREV, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
++    MSLLHOOKSTRUCT, PM_REMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_KEYDOWN,
++    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
++    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
++    WM_XBUTTONUP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+ };
+ 
+ #[path = "foreground_policy.rs"]
+@@ -42,6 +43,10 @@ struct State {
+     ended: Option<Instant>,
+     evidence: policy::ActivationEvidence,
+     holders: usize,
++    // Launched windows already minimized once to hand the front back.
++    minimized: Vec<usize>,
++    // Windows above the user's window before the launch; never moved.
++    above_at_start: Vec<usize>,
+ }
+ 
+ struct Watch {
+@@ -84,6 +89,20 @@ pub(crate) fn window_process(hwnd: HWND) -> u32 {
+     pid
+ }
+ 
++/// Top-level windows above `window` in z-order, nearest first (bounded).
++fn windows_above(window: HWND) -> Vec<HWND> {
++    let mut above = Vec::new();
++    if window.0.is_null() {
++        return above;
++    }
++    let mut next = unsafe { GetWindow(window, GW_HWNDPREV) }.unwrap_or_default();
++    while !next.0.is_null() && above.len() < 256 {
++        above.push(next);
++        next = unsafe { GetWindow(next, GW_HWNDPREV) }.unwrap_or_default();
++    }
++    above
++}
++
+ fn process_name(pid: u32) -> Option<String> {
+     unsafe {
+         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+@@ -169,12 +188,80 @@ impl Watch {
+                 unsafe { GetForegroundWindow() } == event_hwnd,
+             )
+         {
+-            unsafe {
+-                super::hand_back_foreground(prior, event_hwnd, || {
+-                    !self.user_active.load(Ordering::Acquire)
+-                        && super::foreground_generation() == self.input_generation
+-                })
++            let allowed = || {
++                !self.user_active.load(Ordering::Acquire)
++                    && super::foreground_generation() == self.input_generation
++            };
++            let mut handed = unsafe { super::hand_back_foreground(prior, event_hwnd, allowed) };
++            // Windows refuses SetForegroundWindow to a process without a
++            // foreground right even when attached to the front thread. For a
++            // launch, try once per window to let Windows activate yours.
++            if !handed && matches!(self.target, Target::Launch(_)) {
++                let first = {
++                    let mut state = self.state.lock().unwrap();
++                    let key = event_hwnd.0 as usize;
++                    let first = !state.minimized.contains(&key) && state.minimized.len() < 16;
++                    if first {
++                        state.minimized.push(key);
++                    }
++                    first
++                };
++                if first {
++                    handed = unsafe { super::hand_back_by_minimizing(prior, event_hwnd, allowed) };
++                }
++            }
++            let refused = !handed && unsafe { GetForegroundWindow() } == event_hwnd && allowed();
++            self.state.lock().unwrap().observation.refused = refused;
++        }
++    }
++
++    /// While the user's window is in front, keep the launched app's windows
++    /// under it: a window shown without activation still opens on top.
++    fn keep_behind(&self) {
++        if !self.restore_allowed || !matches!(self.target, Target::Launch(_)) {
++            return;
++        }
++        let prior = HWND(self.prior as *mut _);
++        if self.prior == 0
++            || unsafe { GetForegroundWindow() } != prior
++            || window_process(prior) != self.prior_pid
++            || self.user_active.load(Ordering::Acquire)
++            || super::foreground_generation() != self.input_generation
++        {
++            return;
++        }
++        for window in windows_above(prior) {
++            if self
++                .state
++                .lock()
++                .unwrap()
++                .above_at_start
++                .contains(&(window.0 as usize))
++            {
++                continue;
++            }
++            let pid = window_process(window);
++            let target = pid != 0
++                && pid != self.prior_pid
++                && (self.state.lock().unwrap().evidence.is_known(pid)
++                    || match &self.target {
++                        Target::Launch(names) => {
++                            process_name(pid).is_some_and(|name| names.contains(&name))
++                        }
++                        Target::Processes(_, _) => false,
++                    });
++            let ex = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32;
++            let facts = policy::CoverFacts {
++                visible: unsafe { IsWindowVisible(window) }.as_bool(),
++                root: unsafe { GetAncestor(window, GA_ROOT) } == window,
++                iconic: unsafe { IsIconic(window) }.as_bool(),
++                topmost: ex & WS_EX_TOPMOST.0 != 0,
++                tool: ex & WS_EX_TOOLWINDOW.0 != 0,
++                target,
+             };
++            if policy::place_behind_prior(facts) && unsafe { super::place_behind(window, prior) } {
++                self.state.lock().unwrap().observation.placed_behind = true;
++            }
+         }
+     }
+ 
+@@ -425,6 +512,8 @@ impl ForegroundWatch {
+                 ended: None,
+                 evidence: policy::ActivationEvidence::default(),
+                 holders: 1,
++                minimized: Vec::new(),
++                above_at_start: Vec::new(),
+             }),
+         });
+         let (requests, receive) = mpsc::channel::<mpsc::SyncSender<(policy::Observation, usize)>>();
+@@ -456,12 +545,21 @@ impl ForegroundWatch {
+                 && keyboard.is_some()
+                 && prior != 0
+                 && unsafe { GetForegroundWindow() }.0 as usize == prior;
+-            worker.state.lock().unwrap().observation.monitoring = monitoring;
++            {
++                let above: Vec<usize> = windows_above(HWND(prior as *mut _))
++                    .into_iter()
++                    .map(|window| window.0 as usize)
++                    .collect();
++                let mut state = worker.state.lock().unwrap();
++                state.observation.monitoring = monitoring;
++                state.above_at_start = above;
++            }
+             // Locked before the caller acts; Windows lifts it on the user's own input.
+             let mut lock = (monitoring && worker.hold_lock)
+                 .then(super::ForegroundLockGuard::acquire)
+                 .filter(super::ForegroundLockGuard::acquired);
+             let _ = ready.send(());
++            let mut tick: u32 = 0;
+             while monitoring && !worker.cancelled.load(Ordering::Acquire) {
+                 let mut message = MSG::default();
+                 // Pump the hook's owning thread; callbacks are delivered here.
+@@ -476,6 +574,10 @@ impl ForegroundWatch {
+                     lock = None;
+                 }
+                 worker.observe(unsafe { GetForegroundWindow() }, None);
++                if tick.is_multiple_of(16) {
++                    worker.keep_behind();
++                }
++                tick = tick.wrapping_add(1);
+                 for reply in receive.try_iter().take(128) {
+                     let _ = reply.send(worker.snapshot());
+                 }
+@@ -536,9 +638,15 @@ impl ForegroundWatch {
+ 
+     pub(crate) fn report(&self) -> (&'static str, bool, usize) {
+         let (reply, receive) = mpsc::sync_channel(1);
++        // The worker answers within a poll (about 2 ms). A launch watch may be
++        // inside the one-time minimize hand-back (up to about 500 ms), so its
++        // reply waits for that result; other watches keep the short bound.
++        let wait = match self.watch.target {
++            Target::Launch(_) => Duration::from_millis(600),
++            Target::Processes(_, _) => Duration::from_millis(100),
++        };
+         if self.requests.send(reply).is_ok() {
+-            if let Ok((observation, foreground)) = receive.recv_timeout(Duration::from_millis(100))
+-            {
++            if let Ok((observation, foreground)) = receive.recv_timeout(wait) {
+                 let (note, failed) = self.describe(observation);
+                 return (note, failed, foreground);
+             }
+diff --git a/crates/platform-windows/src/input/inject.rs b/crates/platform-windows/src/input/inject.rs
+index 8425b419b..9ddf13ca5 100644
+--- a/crates/platform-windows/src/input/inject.rs
++++ b/crates/platform-windows/src/input/inject.rs
+@@ -8,7 +8,7 @@
+ use anyhow::{bail, Result};
+ use std::sync::Mutex;
+ use std::thread::sleep;
+-use std::time::Duration;
++use std::time::{Duration, Instant};
+ 
+ use windows::Win32::Foundation::HWND;
+ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+@@ -16,9 +16,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+-    GetAncestor, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+-    LockSetForegroundWindow, SetForegroundWindow, SetWindowLongPtrW, GA_ROOT, GWL_EXSTYLE,
+-    LSFW_LOCK, LSFW_UNLOCK, WS_EX_NOACTIVATE,
++    GetAncestor, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
++    IsHungAppWindow, IsIconic, IsWindowVisible, IsZoomed, LockSetForegroundWindow,
++    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GA_ROOT, GWL_EXSTYLE,
++    GWL_STYLE, GW_HWNDNEXT, LSFW_LOCK, LSFW_UNLOCK, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
++    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SW_MINIMIZE, SW_SHOWNOACTIVATE,
++    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_MINIMIZEBOX,
+ };
+ 
+ #[path = "foreground_watch.rs"]
+@@ -133,6 +136,80 @@ pub(crate) unsafe fn hand_back_foreground(
+     (unsafe { GetForegroundWindow() }) == prior
+ }
+ 
++const Z_ONLY: SET_WINDOW_POS_FLAGS =
++    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_NOOWNERZORDER.0);
++
++/// Put `window` directly under `prior` without activating either. Z-order is
++/// not subject to the foreground lock; posted so a busy app cannot block us.
++pub(crate) unsafe fn place_behind(window: HWND, prior: HWND) -> bool {
++    unsafe { SetWindowPos(window, prior, 0, 0, 0, 0, Z_ONLY | SWP_ASYNCWINDOWPOS) }.is_ok()
++}
++
++/// Facts for [`foreground_watch::policy::may_minimize_for_hand_back`].
++pub(crate) unsafe fn minimize_facts(
++    prior: HWND,
++    displaced: HWND,
++) -> foreground_watch::policy::MinimizeFacts {
++    let style = unsafe { GetWindowLongPtrW(displaced, GWL_STYLE) } as u32;
++    let ex = unsafe { GetWindowLongPtrW(displaced, GWL_EXSTYLE) } as u32;
++    foreground_watch::policy::MinimizeFacts {
++        visible: unsafe { IsWindowVisible(displaced) }.as_bool(),
++        iconic: unsafe { IsIconic(displaced) }.as_bool(),
++        zoomed: unsafe { IsZoomed(displaced) }.as_bool(),
++        minimizable: style & WS_MINIMIZEBOX.0 != 0,
++        topmost: ex & WS_EX_TOPMOST.0 != 0,
++        tool: ex & WS_EX_TOOLWINDOW.0 != 0,
++        prior_next: unsafe { GetWindow(displaced, GW_HWNDNEXT) }.ok() == Some(prior),
++        prior_hung: unsafe { IsHungAppWindow(prior) }.as_bool(),
++    }
++}
++
++/// Second hand-back route, for when Windows refuses `hand_back_foreground`
++/// because this process holds no foreground right. Windows itself activates
++/// the next window when the front window is minimized, so place the user's
++/// window right under the displaced one, minimize it, then show it again
++/// without activation under the user's window. The app window is always shown
++/// again, whatever happened. Live (2026-11-01, Windows 11 26300): Notepad's
++/// cold launch handed back within 20 ms and stayed behind; an Explorer folder
++/// window kept the front while minimized, so that case is reported refused.
++pub(crate) unsafe fn hand_back_by_minimizing(
++    prior: HWND,
++    displaced: HWND,
++    allowed: impl Fn() -> bool,
++) -> bool {
++    if !allowed() || unsafe { GetForegroundWindow() } != displaced {
++        return false;
++    }
++    if unsafe { IsHungAppWindow(prior) }.as_bool() {
++        return false;
++    }
++    // Synchronous: the user's window must be next before the minimize.
++    let _ = unsafe { SetWindowPos(prior, displaced, 0, 0, 0, 0, Z_ONLY) };
++    let facts = unsafe { minimize_facts(prior, displaced) };
++    if !foreground_watch::policy::may_minimize_for_hand_back(facts)
++        || !allowed()
++        || unsafe { GetForegroundWindow() } != displaced
++    {
++        return false;
++    }
++    // Both requests are posted to the app's thread and run in order there.
++    let _ = unsafe { ShowWindowAsync(displaced, SW_MINIMIZE) };
++    let deadline = Instant::now() + Duration::from_millis(250);
++    while Instant::now() < deadline && unsafe { GetForegroundWindow() } != prior && allowed() {
++        sleep(Duration::from_millis(2));
++    }
++    let _ = unsafe { ShowWindowAsync(displaced, SW_SHOWNOACTIVATE) };
++    let deadline = Instant::now() + Duration::from_millis(250);
++    while Instant::now() < deadline && unsafe { IsIconic(displaced) }.as_bool() {
++        sleep(Duration::from_millis(2));
++    }
++    let handed = unsafe { GetForegroundWindow() } == prior;
++    if handed {
++        let _ = unsafe { place_behind(displaced, prior) };
++    }
++    handed
++}
++
+ impl Drop for ForegroundLockGuard {
+     fn drop(&mut self) {
+         if !self.held {

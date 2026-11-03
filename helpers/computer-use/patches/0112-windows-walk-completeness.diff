@@ -1,0 +1,583 @@
+Why: Report complete UIA walks truthfully and mark depth cuts, provider enumeration failures, time/node stops and partial MSAA sources as incomplete.
+--- a/crates/cua-driver-core/src/window_state_view.rs
++++ b/crates/cua-driver-core/src/window_state_view.rs
+@@ -1817,3 +1817,161 @@
+         }
+     }
+ }
++
++/// Windows traversal facts not represented by the shared time/node budget.
++/// Zero counters mean every discovered subtree was visited; fallback sources
++/// which cannot establish authoritative coverage remain explicitly partial.
++#[derive(Clone, Copy, Debug, Default)]
++pub struct WindowsReadCoverage {
++    pub depth_cuts: usize,
++    pub provider_errors: usize,
++    pub source_partial: bool,
++}
++impl WindowsReadCoverage {
++    pub fn admits_depth(&mut self, depth: usize, max_depth: usize) -> bool {
++        if depth <= max_depth {
++            true
++        } else {
++            self.depth_cuts += 1;
++            false
++        }
++    }
++    pub fn apply(
++        &self,
++        walk: &crate::walk_budget::WalkOutcome,
++        structured: &mut Value,
++        filtered: bool,
++        has_elements: bool,
++    ) {
++        walk.apply(structured);
++        let reason = if self.depth_cuts > 0 {
++            Some("max_depth")
++        } else if self.provider_errors > 0 {
++            Some("provider_error")
++        } else if self.source_partial {
++            Some("partial_source")
++        } else {
++            None
++        };
++        if let Some(reason) = reason {
++            structured["truncated"] = json!(true);
++            if !walk.truncated() {
++                structured["truncation_reason"] = json!(reason);
++            }
++        }
++        if self.depth_cuts > 0 {
++            structured["depth_cuts"] = json!(self.depth_cuts);
++        }
++        if self.provider_errors > 0 {
++            structured["provider_errors"] = json!(self.provider_errors);
++        }
++        structured["elements_complete"] =
++            json!(has_elements && !filtered && structured["truncated"] == false);
++    }
++    pub fn note(&self, walk: &crate::walk_budget::WalkOutcome) -> Option<String> {
++        let mut notes = Vec::new();
++        if let Some(note) = walk.note() {
++            notes.push(note);
++        }
++        if self.depth_cuts > 0 {
++            notes.push(format!("Partial tree: the depth limit omitted {} subtree(s); increase max_depth where supported to read deeper.",self.depth_cuts));
++        }
++        if self.provider_errors > 0 {
++            notes.push(format!("Partial tree: the accessibility provider could not enumerate {} subtree(s); read fresh state before assuming an element is absent.",self.provider_errors));
++        }
++        if self.source_partial {
++            notes.push("Partial tree: this fallback source cannot establish complete accessibility coverage.".into());
++        }
++        (!notes.is_empty()).then(|| notes.join("\n"))
++    }
++}
++
++#[cfg(test)]
++mod windows_coverage_tests {
++    use super::*;
++    use crate::walk_budget::WalkBudget;
++    #[test]
++    fn depth_boundary_includes_the_limit_but_records_omitted_children() {
++        let mut coverage = WindowsReadCoverage::default();
++        assert!(coverage.admits_depth(0, 0));
++        assert!(!coverage.admits_depth(1, 0));
++        assert!(coverage.admits_depth(25, 25));
++        assert!(!coverage.admits_depth(26, 25));
++        assert_eq!(coverage.depth_cuts, 2);
++    }
++    #[test]
++    fn only_a_complete_unfiltered_walk_can_claim_complete_elements() {
++        let mut budget = WalkBudget::nodes_only(10);
++        assert!(budget.admit());
++        let walk = budget.outcome();
++        for (coverage, filtered, has_elements, complete, reason) in [
++            (WindowsReadCoverage::default(), false, true, true, None),
++            (WindowsReadCoverage::default(), true, true, false, None),
++            (WindowsReadCoverage::default(), false, false, false, None),
++            (
++                WindowsReadCoverage {
++                    depth_cuts: 2,
++                    ..Default::default()
++                },
++                false,
++                true,
++                false,
++                Some("max_depth"),
++            ),
++            (
++                WindowsReadCoverage {
++                    provider_errors: 1,
++                    ..Default::default()
++                },
++                false,
++                true,
++                false,
++                Some("provider_error"),
++            ),
++            (
++                WindowsReadCoverage {
++                    source_partial: true,
++                    ..Default::default()
++                },
++                false,
++                true,
++                false,
++                Some("partial_source"),
++            ),
++        ] {
++            let mut state = json!({});
++            coverage.apply(&walk, &mut state, filtered, has_elements);
++            assert_eq!(state["elements_complete"], complete, "{state}");
++            assert_eq!(state["truncation_reason"].as_str(), reason);
++            assert_eq!(state["truncated"], reason.is_some());
++            if reason == Some("max_depth") {
++                assert_eq!(state["depth_cuts"], 2);
++                assert!(coverage.note(&walk).unwrap().contains("depth limit"));
++            }
++        }
++        for timeout in [false, true] {
++            let mut limited = WalkBudget::nodes_only(1);
++            if timeout {
++                limited.stop_for_timeout();
++            } else {
++                limited.admit();
++                limited.admit();
++            }
++            let walk = limited.outcome();
++            let coverage = WindowsReadCoverage {
++                depth_cuts: 1,
++                ..Default::default()
++            };
++            let mut state = json!({});
++            coverage.apply(&walk, &mut state, false, true);
++            assert_eq!(state["elements_complete"], false);
++            assert_eq!(state["truncated"], true);
++            assert_eq!(state["depth_cuts"], 1);
++            assert_eq!(
++                state["truncation_reason"],
++                if timeout { "timeout" } else { "node_budget" }
++            );
++            assert!(coverage.note(&walk).unwrap().contains("depth limit"));
++        }
++    }
++}
+--- a/crates/platform-windows/src/uia/mod.rs
++++ b/crates/platform-windows/src/uia/mod.rs
+@@ -10,6 +10,7 @@
+ //!  take >4s when reading each property individually).
+ 
+ use cua_driver_core::walk_budget::WalkBudget;
++use cua_driver_core::window_state_view::WindowsReadCoverage;
+ use windows::core::{Interface, BSTR};
+ use windows::Win32::System::Com::{
+     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+@@ -99,6 +100,7 @@
+ pub struct UiaTreeResult {
+     pub tree_markdown: String,
+     pub nodes: Vec<UiaNode>,
++    pub coverage: WindowsReadCoverage,
+ }
+ 
+ /// Walk the UIA tree for the window with the given HWND.
+@@ -149,7 +151,11 @@
+     max_depth: usize,
+     budget: &mut WalkBudget,
+ ) -> UiaTreeResult {
+-    unsafe { walk_tree_unsafe(hwnd, query, max_depth, budget) }
++    let tree = unsafe { walk_tree_unsafe(hwnd, query, max_depth, budget) };
++    if budget.expired() {
++        budget.stop_for_timeout();
++    }
++    tree
+ }
+ 
+ unsafe fn walk_tree_unsafe(
+@@ -167,6 +173,10 @@
+                 return UiaTreeResult {
+                     tree_markdown: format!("UIA init failed: {e}"),
+                     nodes: Vec::new(),
++                    coverage: WindowsReadCoverage {
++                        provider_errors: 1,
++                        ..Default::default()
++                    },
+                 }
+             }
+         };
+@@ -178,6 +188,10 @@
+             return UiaTreeResult {
+                 tree_markdown: format!("CreateCacheRequest failed: {e}"),
+                 nodes: Vec::new(),
++                coverage: WindowsReadCoverage {
++                    provider_errors: 1,
++                    ..Default::default()
++                },
+             }
+         }
+     };
+@@ -218,7 +232,7 @@
+         n > 0 && String::from_utf16_lossy(&buf[..n as usize]).starts_with("SAL")
+     };
+     if sal_class {
+-        return crate::msaa::walk_msaa_tree_budgeted(hwnd, budget);
++        return crate::msaa::walk_msaa_tree_budgeted_with_depth(hwnd, budget, max_depth);
+     }
+ 
+     // Two-call sequence (ElementFromHandle + BuildUpdatedCache) instead of
+@@ -232,6 +246,10 @@
+             return UiaTreeResult {
+                 tree_markdown: format!("ElementFromHandle failed: {e}"),
+                 nodes: Vec::new(),
++                coverage: WindowsReadCoverage {
++                    provider_errors: 1,
++                    ..Default::default()
++                },
+             }
+         }
+     };
+@@ -256,6 +274,10 @@
+                                 "BuildUpdatedCache failed after {attempt} attempts: {e}"
+                             ),
+                             nodes: Vec::new(),
++                            coverage: WindowsReadCoverage {
++                                provider_errors: 1,
++                                ..Default::default()
++                            },
+                         };
+                     }
+                     std::thread::sleep(std::time::Duration::from_millis(40));
+@@ -267,6 +289,7 @@
+     let mut nodes: Vec<UiaNode> = Vec::new();
+     let mut lines: Vec<(usize, String)> = Vec::new();
+     let mut counter = 0usize;
++    let mut coverage = WindowsReadCoverage::default();
+ 
+     walk_cached_bounded(
+         &root_elem,
+@@ -278,6 +301,7 @@
+         &mut counter,
+         budget,
+         max_depth,
++        &mut coverage,
+     );
+ 
+     // Fallback for CoreWindow-class apps (Calculator, Settings, older UWPs).
+@@ -334,6 +358,7 @@
+                     "ElementFromHandle returned empty tree for hwnd 0x{hwnd:x}; \
+                      falling back to GetRootElement + filter ProcessId={target_pid}"
+                 );
++                let mut fallback_coverage = WindowsReadCoverage::default();
+                 walk_root_by_pid(
+                     &automation,
+                     &cache_req,
+@@ -343,9 +368,11 @@
+                     &mut fallback_counter,
+                     budget,
+                     max_depth,
++                    &mut fallback_coverage,
+                 );
+ 
+                 if fallback_nodes.iter().any(|n| n.element_index.is_some()) {
++                    coverage = fallback_coverage;
+                     nodes = fallback_nodes;
+                     lines = fallback_lines;
+                     // counter isn't read after this point — it's only used
+@@ -379,10 +406,17 @@
+             return UiaTreeResult {
+                 tree_markdown: stub,
+                 nodes: Vec::new(),
++                coverage: WindowsReadCoverage {
++                    provider_errors: 1,
++                    ..Default::default()
++                },
+             };
+         }
+     }
+ 
++    if nodes.iter().all(|node| node.element_index.is_none()) {
++        coverage.source_partial = true;
++    }
+     let raw_md = render_lines(&lines);
+     let tree_markdown = if let Some(q) = query {
+         filter_tree(&raw_md, q)
+@@ -393,6 +427,7 @@
+     UiaTreeResult {
+         tree_markdown,
+         nodes,
++        coverage,
+     }
+ }
+ 
+@@ -428,11 +463,13 @@
+     counter: &mut usize,
+     budget: &mut WalkBudget,
+     max_depth: usize,
++    coverage: &mut WindowsReadCoverage,
+ ) {
+     let root = match automation.GetRootElement() {
+         Ok(r) => r,
+         Err(e) => {
+             tracing::debug!(target: "uia", "GetRootElement failed: {e}");
++            coverage.provider_errors += 1;
+             return;
+         }
+     };
+@@ -440,6 +477,7 @@
+         Ok(c) => c,
+         Err(e) => {
+             tracing::debug!(target: "uia", "CreateTrueCondition failed: {e}");
++            coverage.provider_errors += 1;
+             return;
+         }
+     };
+@@ -447,14 +485,21 @@
+         Ok(a) => a,
+         Err(e) => {
+             tracing::debug!(target: "uia", "root.FindAll(Children) failed: {e}");
++            coverage.provider_errors += 1;
+             return;
+         }
+     };
+-    let count = kids.Length().unwrap_or(0);
++    let count = kids.Length().unwrap_or_else(|_| {
++        coverage.provider_errors += 1;
++        0
++    });
+     for i in 0..count {
+         let elem = match kids.GetElement(i) {
+             Ok(e) => e,
+-            Err(_) => continue,
++            Err(_) => {
++                coverage.provider_errors += 1;
++                continue;
++            }
+         };
+         // Read ProcessId without a cache — root.FindAll didn't use one.
+         // VARIANT for VT_I4 (UIA's ProcessId type) puts the int at
+@@ -466,11 +511,15 @@
+                 if raw.Anonymous.Anonymous.vt != 3
+                 /* VT_I4 */
+                 {
++                    coverage.provider_errors += 1;
+                     continue;
+                 }
+                 raw.Anonymous.Anonymous.Anonymous.lVal as u32
+             }
+-            Err(_) => continue,
++            Err(_) => {
++                coverage.provider_errors += 1;
++                continue;
++            }
+         };
+         if pid != target_pid {
+             continue;
+@@ -482,11 +531,12 @@
+             Ok(e) => e,
+             Err(e) => {
+                 tracing::debug!(target: "uia", "BuildUpdatedCache on pid={target_pid} match failed: {e}");
++                coverage.provider_errors += 1;
+                 continue;
+             }
+         };
+         walk_cached_bounded(
+-            &cached, 0, None, false, nodes, lines, counter, budget, max_depth,
++            &cached, 0, None, false, nodes, lines, counter, budget, max_depth, coverage,
+         );
+     }
+ }
+@@ -509,6 +559,7 @@
+         counter,
+         &mut WalkBudget::nodes_only(MAX_TOTAL_ELEMENTS),
+         MAX_DEPTH,
++        &mut WindowsReadCoverage::default(),
+     );
+ }
+ 
+@@ -523,10 +574,14 @@
+     counter: &mut usize,
+     budget: &mut WalkBudget,
+     max_depth: usize,
++    coverage: &mut WindowsReadCoverage,
+ ) {
+     // Node and time budget: a refused node is counted as discovered but not
+     // visited, and the walk unwinds with the partial tree it has.
+-    if depth > max_depth || !budget.admit() {
++    if !coverage.admits_depth(depth, max_depth) {
++        return;
++    }
++    if !budget.admit() {
+         return;
+     }
+ 
+@@ -542,7 +597,10 @@
+ 
+     // Recurse using cached children (no additional RPC).
+     if let Ok(children) = element.GetCachedChildren() {
+-        let len = children.Length().unwrap_or(0);
++        let len = children.Length().unwrap_or_else(|_| {
++            coverage.provider_errors += 1;
++            0
++        });
+         for i in 0..len {
+             if let Ok(child) = children.GetElement(i) {
+                 walk_cached_bounded(
+@@ -555,9 +613,14 @@
+                     counter,
+                     budget,
+                     max_depth,
++                    coverage,
+                 );
+-            }
+-        }
++            } else {
++                coverage.provider_errors += 1;
++            }
++        }
++    } else {
++        coverage.provider_errors += 1;
+     }
+ }
+ 
+--- a/crates/platform-windows/src/msaa.rs
++++ b/crates/platform-windows/src/msaa.rs
+@@ -72,10 +72,18 @@
+ 
+ /// [`walk_msaa_tree`] under the caller's node and time budget.
+ pub fn walk_msaa_tree_budgeted(hwnd: u64, budget: &mut WalkBudget) -> UiaTreeResult {
+-    unsafe { walk_unsafe(hwnd, budget) }
+-}
+-
+-unsafe fn walk_unsafe(hwnd: u64, budget: &mut WalkBudget) -> UiaTreeResult {
++    walk_msaa_tree_budgeted_with_depth(hwnd, budget, MAX_DEPTH - 1)
++}
++
++pub fn walk_msaa_tree_budgeted_with_depth(
++    hwnd: u64,
++    budget: &mut WalkBudget,
++    max_depth: usize,
++) -> UiaTreeResult {
++    unsafe { walk_unsafe(hwnd, budget, max_depth.min(MAX_DEPTH - 1)) }
++}
++
++unsafe fn walk_unsafe(hwnd: u64, budget: &mut WalkBudget, max_depth: usize) -> UiaTreeResult {
+     let hwnd_win = HWND(hwnd as *mut _);
+     let mut raw_root: *mut std::ffi::c_void = null_mut();
+     // AccessibleObjectFromWindow returns IAccessible (as `*mut c_void` typed
+@@ -93,6 +101,10 @@
+                 "- Window <SAL/VCL — MSAA fallback failed (AccessibleObjectFromWindow hr={hr:?})>\n"
+             ),
+             nodes: Vec::new(),
++            coverage: cua_driver_core::window_state_view::WindowsReadCoverage {
++                source_partial: true,
++                ..Default::default()
++            },
+         };
+     }
+     let root: IAccessible = IAccessible::from_raw(raw_root);
+@@ -101,12 +113,27 @@
+     let mut lines: Vec<(usize, String)> = Vec::new();
+     let mut counter = 0usize;
+ 
+-    walk(&root, 0, None, &mut nodes, &mut lines, &mut counter, budget);
++    let mut coverage = cua_driver_core::window_state_view::WindowsReadCoverage {
++        source_partial: true,
++        ..Default::default()
++    };
++    walk(
++        &root,
++        0,
++        None,
++        &mut nodes,
++        &mut lines,
++        &mut counter,
++        budget,
++        max_depth,
++        &mut coverage,
++    );
+ 
+     let tree_markdown = render_lines(&lines);
+     UiaTreeResult {
+         tree_markdown,
+         nodes,
++        coverage,
+     }
+ }
+ 
+@@ -119,8 +146,13 @@
+     lines: &mut Vec<(usize, String)>,
+     counter: &mut usize,
+     budget: &mut WalkBudget,
++    max_depth: usize,
++    coverage: &mut cua_driver_core::window_state_view::WindowsReadCoverage,
+ ) {
+-    if depth >= MAX_DEPTH || !budget.admit() {
++    if !coverage.admits_depth(depth, max_depth) {
++        return;
++    }
++    if !budget.admit() {
+         return;
+     }
+ 
+@@ -242,6 +274,8 @@
+                         lines,
+                         counter,
+                         budget,
++                        max_depth,
++                        coverage,
+                     );
+                 }
+             }
+@@ -264,6 +298,8 @@
+                     lines,
+                     counter,
+                     budget,
++                    max_depth,
++                    coverage,
+                 );
+             }
+         }
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -1511,6 +1511,10 @@
+                              delivery_mode:\"foreground\" for a dialog's default accelerator.)"
+                         ),
+                         nodes: Vec::new(),
++                        coverage: cua_driver_core::window_state_view::WindowsReadCoverage {
++                            source_partial: true,
++                            ..Default::default()
++                        },
+                     };
+                     let payload = crate::uia::snapshot::UiaSnapshot::from_nodes(
+                         &[],
+@@ -1593,8 +1597,16 @@
+                         .iter()
+                         .filter(|n| n.element_index.is_some())
+                         .count();
++                    tr.coverage.apply(
++                        &walk,
++                        &mut structured,
++                        query
++                            .as_deref()
++                            .is_some_and(|query| !query.trim().is_empty()),
++                        count > 0,
++                    );
+                     let mut header = format!("window_id={hwnd} pid={pid} elements={count}\n");
+-                    if let Some(note) = walk.note() {
++                    if let Some(note) = tr.coverage.note(&walk) {
+                         header.push_str(&note);
+                         header.push('\n');
+                     }
+@@ -1603,12 +1615,7 @@
+                         header + &tr.tree_markdown,
+                     ));
+                     structured["element_count"] = json!(count);
+-                    // UIA currently does not expose whether a bounded walk
+-                    // exhausted every subtree. Keep negative existence
+-                    // conservative until that proof is available.
+-                    structured["elements_complete"] = json!(false);
+                     structured["tree_markdown"] = json!(tr.tree_markdown);
+-                    walk.apply(&mut structured);
+ 
+                     let (snapshot_id, replaced) = (!observation_only)
+                         .then(|| {

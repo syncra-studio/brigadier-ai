@@ -312,6 +312,32 @@ struct ElectronFixture {
     args: Vec<&'static str>,
 }
 
+#[cfg(target_os = "windows")]
+fn wait_for_native_focus_stable(target: TargetWindow) {
+    use crate::observer::ObserverBackend;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let observer = NativeObserver::new();
+    let mut stable_since = None;
+    loop {
+        let focused = observer
+            .snapshot(target)
+            .is_ok_and(|state| state.foreground == Some(target.native_id));
+        if focused {
+            let since = stable_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= Duration::from_millis(150) {
+                return;
+            }
+        } else {
+            stable_since = None;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native sentinel focus did not stabilize"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn electron_fixture() -> ElectronFixture {
     #[cfg(target_os = "macos")]
     {
@@ -320,6 +346,13 @@ fn electron_fixture() -> ElectronFixture {
                 "harness-electron",
                 "CuTestHarness.Electron.app/Contents/MacOS/Electron",
             ),
+            args: vec!["--force-renderer-accessibility"],
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        ElectronFixture {
+            path: harness_app("harness-electron", "CuTestHarness.Electron.exe"),
             args: vec!["--force-renderer-accessibility"],
         }
     }

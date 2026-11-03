@@ -1,0 +1,545 @@
+Why: Keep activation shielding through synchronous character delivery and readback; cover native edit selection and dirty state in Windows tests.
+
+--- a/crates/platform-windows/src/input/keyboard.rs
++++ b/crates/platform-windows/src/input/keyboard.rs
+@@ -236,13 +236,13 @@
+         {
+             return TRUE;
+         }
+-        if let Some((x, y, w, hgt)) = scan.rect {
++        if let Some((left, top, right, bottom)) = scan.rect {
+             let mut r = windows::Win32::Foundation::RECT::default();
+             if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
+-                || x + w / 2 < r.left
+-                || x + w / 2 >= r.right
+-                || y + hgt / 2 < r.top
+-                || y + hgt / 2 >= r.bottom
++                || left + (right - left) / 2 < r.left
++                || left + (right - left) / 2 >= r.right
++                || top + (bottom - top) / 2 < r.top
++                || top + (bottom - top) / 2 >= r.bottom
+             {
+                 return TRUE;
+             }
+@@ -296,13 +296,13 @@
+         if !class_name(h).is_some_and(|c| super::text_policy::native_edit_class(&c)) {
+             return TRUE;
+         }
+-        if let Some((x, y, w, hgt)) = scan.rect {
++        if let Some((left, top, right, bottom)) = scan.rect {
+             let mut r = windows::Win32::Foundation::RECT::default();
+             if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut r).is_err()
+-                || x + w / 2 < r.left
+-                || x + w / 2 >= r.right
+-                || y + hgt / 2 < r.top
+-                || y + hgt / 2 >= r.bottom
++                || left + (right - left) / 2 < r.left
++                || left + (right - left) / 2 >= r.right
++                || top + (bottom - top) / 2 < r.top
++                || top + (bottom - top) / 2 >= r.bottom
+             {
+                 return TRUE;
+             }
+@@ -335,19 +335,26 @@
+     bail!(super::text_policy::INSERTION_UNAVAILABLE)
+ }
+ 
+-/// Queue text to exactly the proven editor; never re-resolve focus per character.
++/// Deliver characters synchronously to exactly the proven editor. A timed-out
++/// handler may have consumed a prefix; never retry or change routes automatically.
+ pub fn post_insert_text(target: u64, text: &str, delay_ms: u64) -> Result<()> {
+     if let Some(message) = crate::input::post_message_blocked_by_uipi(target) {
+         bail!(message);
+     }
+     for unit in super::text_policy::text_units(text) {
+-        unsafe {
+-            PostMessageW(
++        let sent = unsafe {
++            windows::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+                 HWND(target as *mut _),
+                 WM_CHAR,
+                 WPARAM(unit as usize),
+                 LPARAM(1),
+-            )?;
++                windows::Win32::UI::WindowsAndMessaging::SMTO_ABORTIFHUNG,
++                1000,
++                None,
++            )
++        };
++        if sent.0 == 0 {
++            bail!("The target did not acknowledge a text character before the deadline. Some text may have been inserted; read fresh state before retrying. No alternate route was attempted.");
+         }
+         if delay_ms > 0 {
+             sleep(Duration::from_millis(delay_ms));
+@@ -1233,78 +1240,3 @@
+         }
+     }
+ }
+-
+-#[cfg(test)]
+-mod caret_insertion_tests {
+-    use super::*;
+-    use windows::core::w;
+-    use windows::Win32::UI::Controls::{EM_GETMODIFY, EM_SETSEL};
+-    use windows::Win32::UI::WindowsAndMessaging::{
+-        CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextW, PeekMessageW,
+-        SendMessageW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETTEXT, WS_CHILD,
+-        WS_POPUP,
+-    };
+-
+-    #[test]
+-    fn character_insertion_preserves_surrounding_text_and_marks_edit_modified() {
+-        unsafe {
+-            let parent = CreateWindowExW(
+-                WINDOW_EX_STYLE(0),
+-                w!("STATIC"),
+-                w!(""),
+-                WS_POPUP,
+-                0,
+-                0,
+-                200,
+-                100,
+-                None,
+-                None,
+-                None,
+-                None,
+-            )
+-            .unwrap();
+-            let edit = CreateWindowExW(
+-                WINDOW_EX_STYLE(0),
+-                w!("EDIT"),
+-                w!(""),
+-                WS_CHILD | WINDOW_STYLE(4),
+-                0,
+-                0,
+-                180,
+-                80,
+-                parent,
+-                None,
+-                None,
+-                None,
+-            )
+-            .unwrap();
+-            SendMessageW(
+-                edit,
+-                WM_SETTEXT,
+-                WPARAM(0),
+-                LPARAM(w!("abcdef").as_ptr() as isize),
+-            );
+-            SendMessageW(edit, EM_SETSEL, WPARAM(2), LPARAM(4));
+-            assert_eq!(
+-                background_text_target(
+-                    parent.0 as usize as u64,
+-                    Some(edit.0 as usize as u64),
+-                    None,
+-                    true
+-                )
+-                .unwrap(),
+-                edit.0 as usize as u64
+-            );
+-            post_insert_text(edit.0 as usize as u64, "X😀", 0).unwrap();
+-            let mut message = MSG::default();
+-            while PeekMessageW(&mut message, edit, WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
+-                DispatchMessageW(&message);
+-            }
+-            let mut text = [0u16; 64];
+-            let n = GetWindowTextW(edit, &mut text);
+-            assert_eq!(String::from_utf16(&text[..n as usize]).unwrap(), "abX😀ef");
+-            assert_ne!(SendMessageW(edit, EM_GETMODIFY, WPARAM(0), LPARAM(0)).0, 0);
+-            DestroyWindow(parent).unwrap();
+-        }
+-    }
+-}
+--- a/crates/platform-windows/src/input/mod.rs
++++ b/crates/platform-windows/src/input/mod.rs
+@@ -124,18 +124,22 @@
+     if unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) } == 0 || pid == 0 {
+         return None;
+     }
+-    let target_handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+-    let message = process_control_integrity_refusal(target_handle).ok().flatten();
++    let target_handle =
++        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
++    let message = process_control_integrity_refusal(target_handle)
++        .ok()
++        .flatten();
+     let _ = unsafe { CloseHandle(target_handle) };
+     message
+-
+ }
+ 
+ /// Check the exact process handle used by kill_app, including targets with no
+ /// windows. Fail closed if either token cannot be inspected.
+ pub(crate) fn process_control_integrity_refusal(target: HANDLE) -> Result<Option<String>, String> {
+-    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }
+-        .ok_or_else(|| "Windows could not inspect this helper's privileges. No termination was attempted.".to_owned())?;
++    let own = unsafe { process_integrity_rid(GetCurrentProcess()) }.ok_or_else(|| {
++        "Windows could not inspect this helper's privileges. No termination was attempted."
++            .to_owned()
++    })?;
+     let target = unsafe { process_integrity_rid(target) }
+         .ok_or_else(|| "Windows could not inspect the target process's privileges. No termination was attempted.".to_owned())?;
+     Ok(integrity_block_message(own, target).map(str::to_owned))
+@@ -144,6 +148,18 @@
+ #[cfg(test)]
+ mod integrity_tests {
+     use super::*;
++
++    #[test]
++    fn process_control_checks_exact_handles_and_refuses_unknown_privilege() {
++        assert!(
++            process_control_integrity_refusal(unsafe { GetCurrentProcess() })
++                .unwrap()
++                .is_none()
++        );
++        assert!(process_control_integrity_refusal(HANDLE::default())
++            .unwrap_err()
++            .contains("could not inspect the target process's privileges"));
++    }
+ 
+     #[test]
+     fn administrator_windows_explain_the_read_and_input_limit_plainly() {
+@@ -163,3 +179,6 @@
+         assert!(!message.contains("administrator"));
+     }
+ }
++
++#[cfg(test)]
++mod native_text_tests;
+--- a/crates/platform-windows/src/input/action_policy.rs
++++ b/crates/platform-windows/src/input/action_policy.rs
+@@ -3,7 +3,12 @@
+     dialog_class == "#32770" && button_class.eq_ignore_ascii_case("button") && control_id == 1
+ }
+ 
+-pub fn caption_close(button: bool, native_hit: isize, automation_id: &str, top_right: bool) -> bool {
++pub fn caption_close(
++    button: bool,
++    native_hit: isize,
++    automation_id: &str,
++    top_right: bool,
++) -> bool {
+     button && (native_hit == 20 || (automation_id.eq_ignore_ascii_case("CloseButton") && top_right))
+ }
+ 
+--- /dev/null
++++ b/crates/platform-windows/src/input/native_text_tests.rs
+@@ -0,0 +1,72 @@
++use crate::input::keyboard::{background_text_target, post_insert_text};
++use windows::core::w;
++use windows::Win32::Foundation::{LPARAM, WPARAM};
++use windows::Win32::UI::Controls::{EM_GETMODIFY, EM_SETSEL};
++use windows::Win32::UI::WindowsAndMessaging::WM_CHAR;
++use windows::Win32::UI::WindowsAndMessaging::{
++    CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextW, PeekMessageW, SendMessageW,
++    MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETTEXT, WS_CHILD, WS_POPUP,
++};
++
++#[test]
++fn character_insertion_preserves_surrounding_text_and_marks_edit_modified() {
++    unsafe {
++        let parent = CreateWindowExW(
++            WINDOW_EX_STYLE(0),
++            w!("STATIC"),
++            w!(""),
++            WS_POPUP,
++            0,
++            0,
++            200,
++            100,
++            None,
++            None,
++            None,
++            None,
++        )
++        .unwrap();
++        let edit = CreateWindowExW(
++            WINDOW_EX_STYLE(0),
++            w!("EDIT"),
++            w!(""),
++            WS_CHILD | WINDOW_STYLE(4),
++            0,
++            0,
++            180,
++            80,
++            parent,
++            None,
++            None,
++            None,
++        )
++        .unwrap();
++        SendMessageW(
++            edit,
++            WM_SETTEXT,
++            WPARAM(0),
++            LPARAM(w!("abcdef").as_ptr() as isize),
++        );
++        SendMessageW(edit, EM_SETSEL, WPARAM(2), LPARAM(4));
++        assert_eq!(
++            background_text_target(
++                parent.0 as usize as u64,
++                Some(edit.0 as usize as u64),
++                None,
++                true
++            )
++            .unwrap(),
++            edit.0 as usize as u64
++        );
++        post_insert_text(edit.0 as usize as u64, "X😀", 0).unwrap();
++        let mut message = MSG::default();
++        while PeekMessageW(&mut message, edit, WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
++            DispatchMessageW(&message);
++        }
++        let mut text = [0u16; 64];
++        let n = GetWindowTextW(edit, &mut text);
++        assert_eq!(String::from_utf16(&text[..n as usize]).unwrap(), "abX😀ef");
++        assert_ne!(SendMessageW(edit, EM_GETMODIFY, WPARAM(0), LPARAM(0)).0, 0);
++        DestroyWindow(parent).unwrap();
++    }
++}
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -16,10 +16,10 @@
+     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+ };
+ use windows::Win32::UI::Accessibility::*;
++use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+ use windows::Win32::UI::WindowsAndMessaging::{
+     GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect, IsWindow,
+-    IsWindowEnabled, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND,
+-    WM_NCHITTEST,
++    SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND, WM_NCHITTEST,
+ };
+ 
+ struct ComApartment(bool);
+@@ -156,10 +156,27 @@
+ 
+ /// Bounded synchronous dispatch keeps the background guard alive while the
+ /// target handles the command. A timeout is never retried: it may have run.
+-fn send_command(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> windows::core::Result<()> {
++fn send_command(
++    hwnd: HWND,
++    message: u32,
++    wparam: WPARAM,
++    lparam: LPARAM,
++) -> windows::core::Result<()> {
+     let mut result = 0usize;
+-    let sent = unsafe { SendMessageTimeoutW(hwnd, message, wparam, lparam, SMTO_ABORTIFHUNG, 1000, Some(&mut result)) };
+-    if sent.0 == 0 { return Err(windows::core::Error::from_win32()); }
++    let sent = unsafe {
++        SendMessageTimeoutW(
++            hwnd,
++            message,
++            wparam,
++            lparam,
++            SMTO_ABORTIFHUNG,
++            1000,
++            Some(&mut result),
++        )
++    };
++    if sent.0 == 0 {
++        return Err(windows::core::Error::from_win32());
++    }
+     Ok(())
+ }
+ 
+@@ -167,23 +184,36 @@
+ /// UIA can reject the disabled dialog's button with UIA_E_ELEMENTNOTENABLED.
+ fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<HWND> {
+     unsafe {
+-        if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId { return None; }
++        if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId {
++            return None;
++        }
+         let button = GetDlgItem(hwnd, 1).ok()?;
+-        if !crate::input::action_policy::common_dialog_accept(&class_name(hwnd), &class_name(button), GetDlgCtrlID(button))
+-            || GetParent(button).ok()? != hwnd || !IsWindowEnabled(button).as_bool() { return None; }
++        if !crate::input::action_policy::common_dialog_accept(
++            &class_name(hwnd),
++            &class_name(button),
++            GetDlgCtrlID(button),
++        ) || GetParent(button).ok()? != hwnd
++            || !IsWindowEnabled(button).as_bool()
++        {
++            return None;
++        }
+         let native = element.CurrentNativeWindowHandle().ok();
+-        if native == Some(button) { return Some(button); }
+-        if element.CurrentAutomationId().ok()?.to_string() != "1" { return None; }
++        if native == Some(button) {
++            return Some(button);
++        }
++        if element.CurrentAutomationId().ok()?.to_string() != "1" {
++            return None;
++        }
+         let r = element.CurrentBoundingRectangle().ok()?;
+         let mut b = windows::Win32::Foundation::RECT::default();
+         GetWindowRect(button, &mut b).ok()?;
+-        let x = r.left + (r.right-r.left)/2;
+-        let y = r.top + (r.bottom-r.top)/2;
++        let x = r.left + (r.right - r.left) / 2;
++        let y = r.top + (r.bottom - r.top) / 2;
+         (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some(button)
+     }
+ }
+ 
+-/// Only a Close button under a TitleBar qualifies; Close Tab must stay an Invoke.
++/// Identify native/WinUI caption Close; Close Tab must stay an Invoke.
+ fn titlebar_close(hwnd: u64, element: &IUIAutomationElement) -> bool {
+     unsafe {
+         if element.CurrentControlType().ok() != Some(UIA_ButtonControlTypeId) {
+@@ -201,17 +231,29 @@
+         // than a UIA TitleBar. Native non-client hit-test or its exact caption
+         // id at the top-right identifies it without confusing Close Tab.
+         if let Ok(rect) = element.CurrentBoundingRectangle() {
+-            let x = rect.left + (rect.right-rect.left)/2;
+-            let y = rect.top + (rect.bottom-rect.top)/2;
++            let x = rect.left + (rect.right - rect.left) / 2;
++            let y = rect.top + (rect.bottom - rect.top) / 2;
+             let mut hit = 0usize;
+             if let Ok(packed) = crate::lparam::pack_xy(x, y) {
+-                let _ = SendMessageTimeoutW(HWND(hwnd as *mut _), WM_NCHITTEST, WPARAM(0), LPARAM(packed as isize), SMTO_ABORTIFHUNG, 100, Some(&mut hit));
++                let _ = SendMessageTimeoutW(
++                    HWND(hwnd as *mut _),
++                    WM_NCHITTEST,
++                    WPARAM(0),
++                    LPARAM(packed as isize),
++                    SMTO_ABORTIFHUNG,
++                    100,
++                    Some(&mut hit),
++                );
+             }
+             let mut window = windows::Win32::Foundation::RECT::default();
+             let top_right = GetWindowRect(HWND(hwnd as *mut _), &mut window).is_ok()
+-                && x >= window.right - 100 && x < window.right
+-                && y >= window.top && y < window.top + 80;
+-            if crate::input::action_policy::caption_close(true, hit as isize, &id, top_right) { return true; }
++                && x >= window.right - 100
++                && x < window.right
++                && y >= window.top
++                && y < window.top + 80;
++            if crate::input::action_policy::caption_close(true, hit as isize, &id, top_right) {
++                return true;
++            }
+         }
+         if !name.eq_ignore_ascii_case("close") && !id.eq_ignore_ascii_case("close") {
+             return false;
+@@ -291,14 +333,31 @@
+     let readback = Readback::new(hwnd, Some(ptr));
+     if !expand_only {
+         if let Some(button) = common_dialog_button(HWND(hwnd as *mut _), &element) {
+-            let result = super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
++            return super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                 ensure_active(cancelled)?;
+-                send_command(HWND(hwnd as *mut _), WM_COMMAND, WPARAM(1), LPARAM(button.0 as isize))
++                let dispatch = send_command(
++                    HWND(hwnd as *mut _),
++                    WM_COMMAND,
++                    WPARAM(1),
++                    LPARAM(button.0 as isize),
++                );
++                let observed = readback.finish(
++                    Some(ptr),
++                    "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)",
++                    ActionTransport::WindowsPostMessage,
++                );
++                if let Err(error) = dispatch {
++                    if observed
++                        .structured_content
++                        .as_ref()
++                        .and_then(|s| s["verified"].as_bool())
++                        != Some(true)
++                    {
++                        anyhow::bail!("Common-dialog accept command was attempted: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying.");
++                    }
++                }
++                Ok(Some(observed))
+             });
+-            if let Err(error) = result {
+-                anyhow::bail!("Common-dialog accept command was attempted: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying.");
+-            }
+-            return Ok(Some(readback.finish(Some(ptr), "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)", ActionTransport::WindowsPostMessage)));
+         }
+     }
+     let order = pattern_order(titlebar_close(hwnd, &element), expand_only);
+@@ -322,7 +381,9 @@
+                 let pattern = source.GetCurrentPattern(id);
+                 // Non-client Close has a precise WM_CLOSE fallback. Ordinary
+                 // client mouse messages do not implement a title-bar hit.
+-                if *action == ClickPattern::WindowClose && (pattern.is_err() || crate::input::is_xaml_host_hwnd(hwnd)) {
++                if *action == ClickPattern::WindowClose
++                    && (pattern.is_err() || crate::input::is_xaml_host_hwnd(hwnd))
++                {
+                     ensure_active(cancelled)?;
+                     send_command(HWND(hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0))?;
+                     return Ok(Some((
+@@ -376,9 +437,10 @@
+             Ok(None)
+         }
+     };
+-    let result = super::fg_bypass::run_with_uwp_bypass(hwnd as isize, dispatch)
+-        .map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
+-    Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
++    super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
++        let result = dispatch().map_err(|error| anyhow::anyhow!("UI Automation action failed: {error}; effect not confirmed. No second click was sent. Read fresh state before retrying."))?;
++        Ok(result.map(|(route, transport)| readback.finish(Some(ptr), route, transport)))
++    })
+ }
+ 
+ /// Search inside the addressed window, never ElementFromPoint on the user's
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -4861,8 +4861,9 @@
+                     Some(_) => read_cached_element_value(&admitted),
+                     None => read_focused_value_uia(verify_pid),
+                 };
++                crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
+                 let before = read(verify_idx);
+-                let post_res = crate::uia::fg_bypass::run_with_uwp_bypass(hwnd as isize, || -> anyhow::Result<()> {
++                let post_res = (|| -> anyhow::Result<()> {
+                     // A renderer HWND is shared by DOM controls. Focus exactly the
+                     // token's editor while activation is shielded, then deliver to
+                     // that renderer rather than the Chrome_WidgetWin_1 frame.
+@@ -4874,7 +4875,7 @@
+                         }
+                     }
+                     crate::input::keyboard::post_insert_text(text_target, &text_for_post, _delay_ms.min(200))
+-                });
++                })();
+                 std::thread::sleep(std::time::Duration::from_millis(40));
+                 let after = read(verify_idx);
+                 let observed = post_message_readback_observed(
+@@ -4883,6 +4884,7 @@
+                     &text_for_post,
+                 );
+                 (post_res, before, after, observed)
++                })
+             }
+         })
+         .await;
+@@ -4901,14 +4903,14 @@
+                 // prove final state from a fresh snapshot before any retry.
+                 match (&before, &after) {
+                     (Some(_), Some(_)) if observed => ToolResult::text(format!(
+-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage \
++                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR \
+                          ({_delay_ms}ms delay; the field changed and now contains the \
+                          requested text, but the insertion point is not known). Take a \
+                          fresh snapshot to verify the intended final value before retrying."
+                     ))
+                     .with_structured(changed_contains_post_message_result(text_len)),
+                     (Some(_), Some(_)) => ToolResult::text(format!(
+-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage, but \
++                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR, but \
+                          the focused field's value did not contain the requested text \
+                          after dispatch — delivery was incomplete or dropped (e.g. a \
+                          VCL/LibreOffice grid not in cell-edit mode). \
+@@ -4926,7 +4928,7 @@
+                         },
+                     })),
+                     _ => ToolResult::text(format!(
+-                        "📨 Sent {text_len} char(s) to pid {raw_pid} via PostMessage \
++                        "📨 Sent {text_len} char(s) to pid {raw_pid} via targeted WM_CHAR \
+                          ({_delay_ms}ms delay; not verified — could not read \
+                          the focused field back, e.g. the target isn't foreground or \
+                          exposes no ValuePattern). If it didn't land, retry with \

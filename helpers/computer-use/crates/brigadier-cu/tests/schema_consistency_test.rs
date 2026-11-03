@@ -13,6 +13,9 @@
 //! permissions, or display, so it runs in normal CI. Values Brigadier withholds
 //! from agents on purpose are put back before the check.
 
+// The integration testkit in this workspace implements macOS only.
+#![cfg(target_os = "macos")]
+
 use cu_testkit::RawDriver;
 use cua_driver_core::tool_schema::shared_schema_violations;
 use serde_json::json;

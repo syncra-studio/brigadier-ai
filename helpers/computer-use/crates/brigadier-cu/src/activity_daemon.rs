@@ -475,10 +475,13 @@ mod tests {
         let me = caller(Some(std::process::id()), false);
         assert!(!me.is_user());
         // Its parent is read from the kernel, which works inside a sandbox too.
+        #[cfg(target_os = "macos")]
         assert_eq!(
             me.identity.actor,
             format!("agent:{}", std::os::unix::process::parent_id())
         );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(me.identity.actor, format!("proc:{}", std::process::id()));
         assert_eq!(caller(None, false).identity.actor, "anonymous");
     }
 

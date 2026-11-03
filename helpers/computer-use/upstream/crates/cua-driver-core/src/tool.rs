@@ -1938,7 +1938,7 @@ impl ToolRegistry {
                 None => {
                     return protected_refusal(
                         "unbounded_operation_requires_unrestricted",
-                        "legacy page mutation is unbounded and requires unrestricted mode with trusted launch-time risk acceptance",
+                        "The page tool cannot click, type, or run scripts in this mode because it cannot verify the exact browser page it would change. Use get_window_state to find the control, then click, set_value, or type_text with its element token.",
                     );
                 }
             }
@@ -2333,6 +2333,9 @@ impl ToolRegistry {
             tool.invoke(args.clone()),
         )
         .await;
+        if !tool.def().read_only {
+            note_action_end();
+        }
         match resolved_name {
             "get_desktop_state" if result.is_error != Some(true) => {
                 crate::desktop_capture_scale::record_desktop_state(
@@ -3382,6 +3385,24 @@ fn is_physical_desktop_action(tool: &str) -> bool {
             | "bring_to_front"
             | "set_window_frame"
     )
+}
+
+/// When the last state-changing tool call returned. A background macOS app
+/// refreshes its menu items' enabled flags on an accessibility read at most
+/// once a second, so a flag read soon after an action can still be stale.
+static LAST_ACTION_END: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// When the last state-changing (not read-only) tool call returned, if any.
+pub fn last_action_end() -> Option<std::time::Instant> {
+    *LAST_ACTION_END
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn note_action_end() {
+    *LAST_ACTION_END
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::time::Instant::now());
 }
 
 fn requires_desktop_coordination(tool: &str, args: &Value, independent_lane: bool) -> bool {
@@ -5121,6 +5142,22 @@ resources:
                 .and_then(serde_json::Value::as_str),
             Some("unbounded_operation_requires_unrestricted")
         );
+        for action in ["click_element", "insert_text", "execute_javascript"] {
+            let refused = registry
+                .invoke_with_context(
+                    "page",
+                    serde_json::json!({"action": action, "pid": 42, "window_id": 7}),
+                    standard_context(),
+                )
+                .await;
+            let message = refused.structured_content.as_ref().unwrap()["refusal"]["message"]
+                .as_str()
+                .unwrap();
+            assert!(message.contains("cannot verify the exact browser page"));
+            assert!(message.contains("set_value, or type_text with its element token"));
+            assert!(!message.contains("unbounded"));
+            assert_eq!(hits.load(Ordering::SeqCst), 0);
+        }
 
         let allowed = registry
             .invoke_with_context(

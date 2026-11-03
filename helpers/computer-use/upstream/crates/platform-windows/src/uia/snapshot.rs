@@ -33,6 +33,17 @@ impl RetainedElement {
         result.map_err(|e| anyhow::anyhow!("UIA SetFocus failed: {e}"))
     }
 
+    /// The element's own native window, when it has one.
+    pub fn native_window(&self) -> Option<u64> {
+        if !self.is_uia() {
+            return None;
+        }
+        let element = unsafe { IUIAutomationElement::from_raw(self.ptr as *mut _) };
+        let hwnd = unsafe { element.CurrentNativeWindowHandle() }.ok();
+        std::mem::forget(element);
+        hwnd.filter(|h| !h.0.is_null()).map(|h| h.0 as usize as u64)
+    }
+
     pub fn element_has_keyboard_focus(&self) -> Option<bool> {
         if !self.is_uia() {
             return None;

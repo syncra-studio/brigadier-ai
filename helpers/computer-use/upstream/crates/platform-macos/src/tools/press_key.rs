@@ -108,12 +108,12 @@ fn dispatch_with_ax_oracle(
     let before = element_ptr.and_then(|ptr| read_ax_key_state(pid, window_id, ptr));
     let result = dispatch();
     // Native controls normally publish their new value/selection on the next
-    // run-loop turn. Keep this bounded and reuse the exact retained element so
-    // a focus move cannot become false confirmation from a different control.
-    if before.is_some() {
-        std::thread::sleep(std::time::Duration::from_millis(60));
-    }
-    let after = element_ptr.and_then(|ptr| read_ax_key_state(pid, window_id, ptr));
+    // run-loop turn. Re-read until it changes, bounded at 60 ms, and reuse the
+    // exact retained element so a focus move cannot become false confirmation
+    // from a different control.
+    let after = settled_key_state(before.as_ref(), || {
+        element_ptr.and_then(|ptr| read_ax_key_state(pid, window_id, ptr))
+    });
     if owns_element {
         if let Some(ptr) = element_ptr {
             unsafe { CFRelease(ptr as _) };
@@ -121,6 +121,28 @@ fn dispatch_with_ax_oracle(
     }
     result?;
     Ok(matches!((before, after), (Some(before), Some(after)) if ax_state_changed(&before, &after)))
+}
+
+/// Read the state again every 10 ms until it differs from `before`, for at
+/// most 60 ms; the last read is returned. Without `before` it reads once.
+fn settled_key_state(
+    before: Option<&AxKeyState>,
+    mut read: impl FnMut() -> Option<AxKeyState>,
+) -> Option<AxKeyState> {
+    let Some(before) = before else {
+        return read();
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(60);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let after = read();
+        let changed = after
+            .as_ref()
+            .is_some_and(|after| ax_state_changed(before, after));
+        if changed || std::time::Instant::now() >= deadline {
+            return after;
+        }
+    }
 }
 
 fn ax_state_changed(before: &AxKeyState, after: &AxKeyState) -> bool {
@@ -303,7 +325,7 @@ impl Tool for PressKeyTool {
         let pre_focus_ptr: Option<usize> = pre_focus_guard.as_ref().map(|g| g.as_ptr());
 
         let panel_pid = if !fg {
-            window_id.and_then(|wid| crate::ax::panel::keyboard_pid(pid, wid))
+            window_id.and_then(|wid| crate::ax::panel::event_pid(pid, wid))
         } else {
             None
         };
@@ -418,11 +440,20 @@ impl Tool for PressKeyTool {
                 // Pre-focus the element under suppression so its
                 // side-effects are captured by the snapshot + lease.
                 if let Some(guard) = pre_focus_guard.clone() {
+                    // Wait until the app reports the element focused, at
+                    // most the 30 ms this used to sleep unconditionally.
                     let _ = tokio::task::spawn_blocking(move || {
-                        crate::input::ax_actions::focus_element(guard.as_ptr())
+                        let ptr = guard.as_ptr();
+                        let _ = crate::input::ax_actions::focus_element(ptr);
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_millis(30);
+                        while !crate::input::ax_actions::is_element_focused(pid, ptr)
+                            && std::time::Instant::now() < deadline
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
                     })
                     .await;
-                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 }
 
                 tokio::task::spawn_blocking(move || {
@@ -509,6 +540,31 @@ impl Tool for PressKeyTool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn key_state_readback_ends_when_the_value_changes_and_waits_out_no_change() {
+        use super::{settled_key_state, AxKeyState};
+        let state = |value: &str| AxKeyState {
+            value: Some(value.into()),
+            selected: None,
+        };
+        let before = state("a");
+        let mut reads = 0;
+        let started = std::time::Instant::now();
+        let after = settled_key_state(Some(&before), || {
+            reads += 1;
+            Some(state(if reads >= 2 { "ab" } else { "a" }))
+        });
+        assert_eq!(after, Some(state("ab")));
+        assert_eq!(reads, 2);
+        assert!(started.elapsed() < std::time::Duration::from_millis(60));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            settled_key_state(Some(&before), || Some(state("a"))),
+            Some(state("a"))
+        );
+        assert!(started.elapsed() >= std::time::Duration::from_millis(60));
+    }
+
     use super::*;
 
     #[test]

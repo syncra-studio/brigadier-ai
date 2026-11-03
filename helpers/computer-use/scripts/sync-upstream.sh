@@ -43,10 +43,17 @@ patch_files() {
   find "$patches" -maxdepth 1 -name '*.diff' -type f 2>/dev/null | sort
 }
 
+# Git Bash ships sha256sum; macOS ships shasum. Both hash real file bytes.
+if command -v sha256sum >/dev/null 2>&1; then
+  hash_command=(sha256sum)
+else
+  hash_command=(shasum -a 256)
+fi
+
 # sha256 of every vendored file, one line each, in a stable order.
 file_hashes() {
   (cd "$1" && find crates Skills LICENSE.md "${root_files[@]}" -type f -print0 | LC_ALL=C sort -z |
-    xargs -0 shasum -a 256)
+    xargs -0 "${hash_command[@]}" | sed 's/ \*/  /')
 }
 
 if [ "${1:-}" = "--verify" ]; then
@@ -54,14 +61,19 @@ if [ "${1:-}" = "--verify" ]; then
   copy="$work/copy"
   mkdir -p "$copy"
   (cd "$up" && cp -R crates Skills LICENSE.md "${root_files[@]}" "$copy/")
+  # Compare canonical text, independent of a Windows CRLF checkout. Binary
+  # files (NUL-containing) retain their exact bytes. Only the scratch copy changes.
+  find "$copy" -type f -print0 | xargs -0 perl -i -0777 -pe 's/\r\n/\n/g unless /\0/;'
   # Undo our patches, last first, then compare with the release as it was fetched.
   patch_list="$(patch_files)"
   if [ -n "$patch_list" ]; then
     while IFS= read -r p; do
-      (cd "$copy" && git apply -R -p1 "$p") || die "patch $(basename "$p") does not reverse cleanly"
+      # Patch files can also be checked out with CRLF on Windows.
+      tr -d '\r' <"$p" >"$work/current.diff"
+      (cd "$copy" && git -c core.autocrlf=false apply -R -p1 "$work/current.diff") || die "patch $(basename "$p") does not reverse cleanly"
     done < <(printf '%s\n' "$patch_list" | sort -r)
   fi
-  if ! diff -u "$up/PRISTINE.sha256" <(file_hashes "$copy") >"$work/diff"; then
+  if ! diff -u <(tr -d '\r' <"$up/PRISTINE.sha256") <(file_hashes "$copy") >"$work/diff"; then
     cat "$work/diff" >&2
     die "upstream/ differs from the recorded release plus patches/"
   fi
@@ -138,7 +150,7 @@ ignored="$(git -C "$top" ls-files --others --ignored --exclude-standard -- "${ve
 [ -z "$ignored" ] || die "these vendored files are ignored by .gitignore: $ignored"
 
 # The record in UPSTREAM.md, between the sync markers.
-pristine_sum="$(shasum -a 256 "$up/PRISTINE.sha256" | cut -d' ' -f1)"
+pristine_sum="$("${hash_command[@]}" "$up/PRISTINE.sha256" | cut -d' ' -f1)"
 {
   echo "<!-- sync:begin (written by scripts/sync-upstream.sh) -->"
   echo "| | |"
