@@ -97,9 +97,11 @@ pub const READ_ONLY: &[&str] = &[
     "git rev-parse",
     "git ls-files",
     "git blame",
-    "git branch --show-current",
-    "git remote -v",
 ];
+
+/// Commands that only read as written, with no more words: more would change what they do
+/// (`git remote -v add x url`).
+pub const READ_ONLY_EXACT: &[&str] = &["git branch --show-current", "git remote -v"];
 
 /// Redirections that only drop or merge a command's output, never write a file.
 const QUIET_REDIRECTS: &[&str] = &["2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"];
@@ -126,7 +128,8 @@ pub fn level_allows(
                     READ_ONLY.iter().any(|read| {
                         let read: Vec<&str> = read.split(' ').collect();
                         words.len() >= read.len() && words[..read.len()] == read[..]
-                    }) || sed_prints(words)
+                    }) || READ_ONLY_EXACT.iter().any(|read| words.join(" ") == *read)
+                        || sed_prints(words)
                         // ripgrep only reads, unless `--pre` runs a program on each file.
                         || (words.first() == Some(&"rg") && !words.iter().any(|w| w.starts_with("--pre")))
                         || (edits && words.first() == Some(&"brigadier"))
@@ -173,9 +176,9 @@ fn sed_prints(words: &[&str]) -> bool {
     scripts > 0
 }
 
-/// Whether each command of `command` (`a && b`, `a | b`, its `sh -c` script), its leading
-/// variable assignments left out, is `allowed`; never one that redirects output, substitutes or
-/// writes `--output`.
+/// Whether each command of `command` (`a && b`, `a | b`, its `sh -c` script) is `allowed`;
+/// never one that redirects output, substitutes, writes `--output` or starts with a variable
+/// assignment (`GIT_EXTERNAL_DIFF=x git diff`, `LD_PRELOAD=x cat` run other programs).
 fn each_command(command: &str, allowed: impl Fn(&[&str]) -> bool) -> bool {
     let script = (unwrapped_command(command).split(' '))
         .filter(|word| !QUIET_REDIRECTS.contains(word))
@@ -187,17 +190,14 @@ fn each_command(command: &str, allowed: impl Fn(&[&str]) -> bool) -> bool {
     let commands = simple_commands(&script);
     !commands.is_empty()
         && commands.iter().all(|words| {
-            let words: Vec<&str> = words
-                .iter()
-                .map(String::as_str)
-                .skip_while(|word| {
-                    word.split_once('=').is_some_and(|(name, _)| {
-                        !name.is_empty()
-                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    })
-                })
-                .collect();
-            allowed(&words)
+            let assigns = words
+                .first()
+                .and_then(|word| word.split_once('='))
+                .is_some_and(|(name, _)| {
+                    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                });
+            let words: Vec<&str> = words.iter().map(String::as_str).collect();
+            !assigns && allowed(&words)
         })
 }
 
@@ -1305,6 +1305,12 @@ mod tests {
             "sed -f s.sed a.txt",
             "sed -n '/x/p' a.txt",
             "sed -e 1p -e 's/a/b/w out' a.txt",
+            // An assignment can make a reader run another program; exact entries take no more.
+            "GIT_EXTERNAL_DIFF=/tmp/x.sh git diff",
+            "LD_PRELOAD=./evil.so cat a",
+            "PATH=/tmp/evil:$PATH brigadier context",
+            "git remote -v set-url origin https://evil/x.git",
+            "git branch --show-current -D main",
         ] {
             assert!(!allows(Access::Ask, &run(line)), "{line}");
             assert!(!allows(Access::AcceptEdits, &run(line)), "{line}");

@@ -219,7 +219,8 @@ impl SessionManager {
             let fits = manager.judged(&conv, &message).await;
             let mut routing = conv.queue_routing.lock().await;
             // Steered, deleted or sent meanwhile: the user's or the pump's.
-            let deciding = manager.core.board(&conv.id).await.is_ok_and(|board| {
+            let board = manager.core.board(&conv.id).await.ok();
+            let deciding = board.as_ref().is_some_and(|board| {
                 board
                     .queue
                     .items
@@ -229,7 +230,11 @@ impl SessionManager {
             if !deciding {
                 return;
             }
-            if fits == Some(true) {
+            // Stopped meanwhile (queue paused) or at a seam (steer_queued would keep it for the
+            // successor, still Deciding): it waits in the rail instead.
+            let paused = board.is_some_and(|board| board.queue.paused);
+            let held = conv.state.lock().await.seam.held;
+            if fits == Some(true) && !paused && !held {
                 drop(routing);
                 let Err(err) = manager
                     .steer_queued(conv.id.clone(), message.id.clone())

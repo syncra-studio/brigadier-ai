@@ -1050,16 +1050,13 @@ impl Provider for OpenCode {
         Box::pin(async move {
             let found = self
                 .control(async |server: &Server| {
-                    let mut query = "type=user&limit=100".to_owned();
+                    let mut cursor: Option<String> = None;
                     // A long session's messages, a page at a time, newest first.
                     for _ in 0..100 {
-                        let page = server
-                            .call(
-                                Method::GET,
-                                &format!("/api/session/{id}/message?{query}"),
-                                None,
-                            )
-                            .await?;
+                        let mut query = vec![("type", "user"), ("limit", "100")];
+                        query.extend(cursor.as_deref().map(|next| ("cursor", next)));
+                        let path = with_query(&format!("/api/session/{id}/message"), &query);
+                        let page = server.call(Method::GET, &path, None).await?;
                         let messages = page["data"].as_array().cloned().unwrap_or_default();
                         if messages.iter().any(|message| {
                             message["type"] == "user"
@@ -1071,7 +1068,7 @@ impl Provider for OpenCode {
                         }
                         match page.pointer("/cursor/next").and_then(Value::as_str) {
                             Some(next) if !messages.is_empty() => {
-                                query = format!("type=user&limit=100&cursor={next}");
+                                cursor = Some(next.to_owned());
                             }
                             _ => break,
                         }

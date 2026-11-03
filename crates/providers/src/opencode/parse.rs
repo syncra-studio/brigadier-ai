@@ -566,6 +566,9 @@ pub(crate) fn permissions(access: Access, tools: ToolSet, folders: &[String]) ->
                 .iter()
                 .map(|command| rule("shell", &format!("{command} *"), "allow")),
         );
+        rules.extend(
+            (crate::policy::READ_ONLY_EXACT.iter()).map(|command| rule("shell", command, "allow")),
+        );
         rules.push(rule("shell", "*>*", "ask"));
         rules.push(rule("shell", "*--output*", "ask"));
         rules
