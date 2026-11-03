@@ -15,7 +15,9 @@ import { Toaster, TooltipProvider } from "@/components/overlays";
 import { SidebarProvider } from "@/components/layout";
 import { surface } from "@/fixtures/look";
 import { accounts, overviews, projects, usageView } from "@/fixtures/providersData";
-import type { GuidanceRow, ModelRule, ModelRules, Request } from "@/ipc/generated";
+import { IDLE_RESEARCH } from "@/fixtures/rankings";
+import type { GuidanceRow, ModelRule, ModelRules, RankingsRefresh, Request, RoutingSuggestion } from "@/ipc/generated";
+import { loadModelRules } from "@/state/modelRules";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
@@ -75,7 +77,39 @@ const file: { rows: GuidanceRow[]; rules: ModelRule[] } = {
     { type: "effortCeiling", effort: "high" },
   ],
 };
-const read = (): ModelRules => ({ path: "/Users/me/.brigadier/models.md", shipped: SHIPPED, rows: [...file.rows], rules: [...file.rules] });
+/** The ratings' view of Bounded implementation: GPT-6 rates above the Sonnet 5.5 the user put first. */
+const rated = { score: 9, current: 8.5 };
+/** The daemon's suggestion: only for an order whose first is Sonnet, and not dismissed at this rating. */
+const suggestions = (): RoutingSuggestion[] => {
+  const first = file.rows.find((row) => row.work === "Bounded implementation");
+  const dismissed = useApp
+    .getState()
+    .settings.dismissedSuggestions.some((gone) => gone.work === "Bounded implementation" && gone.model === "gpt-6" && gone.score === rated.score);
+  if (first?.model !== "sonnet" || dismissed) return [];
+  const row: GuidanceRow = { work: "Bounded implementation", agent: "codex", model: "gpt-6", effort: "high", reason: "Rated 9.0 of 10 for this work." };
+  return [{ work: row.work, row, score: rated.score, current: "sonnet", currentScore: rated.current }];
+};
+/** The last ratings research: three hours ago, on Sonnet 5.5. */
+const research: RankingsRefresh = {
+  ...IDLE_RESEARCH,
+  state: "done",
+  jobId: "research-1",
+  startedAtMs: Date.now() - 3 * 3_600_000 - 60_000,
+  finishedAtMs: Date.now() - 3 * 3_600_000,
+  model: "sonnet",
+  provider: "claude",
+  changes: [{ provider: "codex", model: "gpt-6", fields: ["strengths.implement"], sources: ["https://example.com/gpt-6"] }],
+  found: ["Bounded implementation"],
+  overlayApplied: true,
+};
+const read = (): ModelRules => ({
+  path: "/Users/me/.brigadier/models.md",
+  shipped: SHIPPED,
+  rows: [...file.rows],
+  rules: [...file.rules],
+  suggestions: suggestions(),
+  research,
+});
 /** A model the ratings don't score yet: its strength is only a placeholder. */
 const unrated = (() => {
   const base = usageView().models.find((model) => model.id === "claude-opus-4-6")!;
@@ -351,6 +385,33 @@ function Fixture() {
           seen.stepsExample = text(document.querySelector('[data-slot="routing-steps-example"]'));
           seen.strengthClosed = !document.querySelector('[data-slot="model-strength"]');
           revealSetting(ROUTING_PAGE_ROWS.strength.label);
+        },
+        () => {
+          // A better-rated model for the order of yours: a line on its row, nothing written.
+          seen.researchRow = text(document.querySelector('[data-slot="ratings-research"]'));
+          seen.suggestion = text(document.querySelector('[data-work="Bounded implementation"] [data-slot="routing-suggestion"]'));
+          seen.suggestionKinds = all('[data-slot="routing-suggestion"]').length;
+          seen.writesBeforeSuggestion = writes.length;
+          button("Dismiss", document.querySelector('[data-slot="routing-suggestion"]') ?? document)?.click();
+        },
+        () => {
+          // Dismissed: hidden at this rating, your order as it was.
+          seen.dismissed = useApp.getState().settings.dismissedSuggestions;
+          seen.suggestionAfterDismiss = all('[data-slot="routing-suggestion"]').length;
+          seen.writesAfterDismiss = writes.length;
+          // The rating changes again: it is back.
+          rated.score = 9.5;
+          void loadModelRules();
+        },
+        () => {
+          seen.suggestionBack = text(document.querySelector('[data-slot="routing-suggestion"]'));
+          button("Use it", document.querySelector('[data-slot="routing-suggestion"]') ?? document)?.click();
+        },
+        () => {
+          // Use it puts it first in your order; that click is what writes it.
+          seen.writesAfterUse = writes.length;
+          seen.orderAfterUse = file.rows.filter((row) => row.work === "Bounded implementation").map((row) => `${row.agent}/${row.model}/${row.effort}`);
+          seen.suggestionAfterUse = all('[data-slot="routing-suggestion"]').length;
         },
         () => {
           seen.strength = all('[data-slot="strength-row"]').map(text);

@@ -43,6 +43,7 @@
         "source": {
           "enum": [
             "user",
+            "ratings",
             "shipped"
           ]
         },

@@ -311,7 +311,7 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "work",
                 "KIND",
-                "A kind of work from `brigadier models`: its row (the user's, else the shipped \
+                "A kind of work from `brigadier models`: its row (the user's, else the automatic \
                  one) picks the agent, model and effort you don't give.",
             ),
             Arg::Flag {

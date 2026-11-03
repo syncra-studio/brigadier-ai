@@ -682,7 +682,9 @@ async fn shipped_title_work_selects_a_small_model_and_obeys_the_model_switch() {
     let (choice, _) = flow.manager.title_route().await.unwrap().unwrap();
     assert_eq!(choice.provider, ProviderKind::Codex);
     assert_eq!(choice.model.as_deref(), Some("gpt-6-luna"));
-    assert_eq!(choice.effort.as_deref(), Some("low"));
+    // The automatic row runs titles at low effort where the model takes it; this one's list
+    // has medium and high only, so it runs at its own default.
+    assert_eq!(choice.effort.as_deref(), None);
     assert_eq!(
         flow.manager.generate_title("Fix hover").await.as_deref(),
         Some("Fix hover")
@@ -712,9 +714,10 @@ async fn shipped_routing_weighs_quota_small_model_cost_and_work_suitability() {
     )
     .await;
     let selected = flow.manager.title_route().await.unwrap().unwrap().0;
-    // 5.6 Luna is Light, whereas 6 Luna is Standard in the registry. Operate-only
-    // Haiku 5.5 must never take this short-text job despite being the newer Haiku.
-    assert_eq!(selected.model.as_deref(), Some("gpt-5.6-luna"));
+    // Each agent's lightest small model rated for short text: Haiku 4.5 and 5.6 Luna (6 Luna
+    // is Standard), the agents in their order. Operate-only Haiku 5.5 must never take this
+    // short-text job despite being the newer Haiku.
+    assert_eq!(selected.model.as_deref(), Some("claude-haiku-4-5-20251001"));
     let note_heat = |provider, used_percent| {
         flow.manager.runtime.monitor().note(
             &AccountRef::own(provider),
@@ -736,12 +739,12 @@ async fn shipped_routing_weighs_quota_small_model_cost_and_work_suitability() {
             crate::now_ms(),
         );
     };
-    note_heat(ProviderKind::Codex, 90.0);
+    note_heat(ProviderKind::Claude, 90.0);
     let selected = flow.manager.title_route().await.unwrap().unwrap().0;
-    assert_eq!(selected.provider, ProviderKind::Claude);
-    assert_eq!(selected.model.as_deref(), Some("claude-haiku-4-5-20251001"));
-    note_heat(ProviderKind::Codex, 5.0);
-    note_heat(ProviderKind::Claude, 99.0);
+    assert_eq!(selected.provider, ProviderKind::Codex);
+    assert_eq!(selected.model.as_deref(), Some("gpt-5.6-luna"));
+    note_heat(ProviderKind::Claude, 5.0);
+    note_heat(ProviderKind::Codex, 99.0);
     assert_eq!(
         flow.manager
             .title_route()
@@ -750,7 +753,7 @@ async fn shipped_routing_weighs_quota_small_model_cost_and_work_suitability() {
             .unwrap()
             .0
             .provider,
-        ProviderKind::Codex
+        ProviderKind::Claude
     );
     flow.stop().await;
 }

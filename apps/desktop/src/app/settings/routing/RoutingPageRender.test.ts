@@ -41,7 +41,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   assert.equal(seen.readsAtOpen, 1);
   // A shipped kind opened in place: Automatic, the shipped model picked now; My order copies it into the file.
   assert.equal(seen.mode, "Automatic");
-  assert.equal(seen.whoPicks, "Who picksAutomatic advice, updated with each releaseAutomaticMy order");
+  assert.equal(seen.whoPicks, "Who picksAutomatic: the best-rated models, researched dailyAutomaticMy order");
   assert.equal(seen.shipped, "1Opus 5.5Picked nowHigh effortStrong default for work that needs judgment across a codebase.");
   const architecture = {
     work: "Architecture and broad changes",
@@ -139,6 +139,20 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "4Your rulesLast, your rules check the result: a model they keep out, or an effort above your cap, is refused and the worker doesn't start. Your rules win over everything above.",
   ]);
   assert.equal(seen.stepsExample, "For example, Docs: your rules keep Sonnet 5.5 out, so GPT-6, next in your order, runs.");  assert.equal(seen.strengthClosed, true);
+  // The daily ratings research: when it last ran and on what model.
+  assert.equal(seen.researchRow, "Daily ratings researchLast ran 3 hours ago on Sonnet 5.5 · 1 model re-rated");
+  // A better-rated model for an order of yours is a line on its row; showing it writes nothing.
+  assert.equal(seen.suggestion, "GPT-6 now rates higher for Bounded implementation · 9.0 against Sonnet 5.5's 8.5Use itDismiss");
+  assert.equal(seen.suggestionKinds, 1);
+  // Dismissed: hidden at this rating, and your order is as it was.
+  assert.deepEqual(seen.dismissed, [{ work: "Bounded implementation", agent: "codex", model: "gpt-6", score: 9 }]);
+  assert.equal(seen.suggestionAfterDismiss, 0);
+  assert.equal(seen.writesAfterDismiss, seen.writesBeforeSuggestion);
+  // Its rating changed again: back. Use it puts it first in your order, the one write.
+  assert.equal(seen.suggestionBack, "GPT-6 now rates higher for Bounded implementation · 9.5 against Sonnet 5.5's 8.5Use itDismiss");
+  assert.equal(seen.writesAfterUse, (seen.writesBeforeSuggestion as number) + 1);
+  assert.deepEqual(seen.orderAfterUse, ["codex/gpt-6/high", "claude/sonnet/medium"]);
+  assert.equal(seen.suggestionAfterUse, 0);
   assert.deepEqual(seen.strength, [
     "1Opus 5.5Frontier9.1",
     "2GPT-6Frontier9.0",

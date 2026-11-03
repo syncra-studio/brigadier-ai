@@ -16,6 +16,7 @@ import { useUsageRefresh } from "@/state/usage";
 export const ROUTING_PAGE_ROWS = {
   kinds: WHO_DOES_WHAT,
   rules: RULES,
+  research: MORE_ROWS.research,
   strength: MORE_ROWS.strength,
   steps: MORE_ROWS.steps,
   refresh: { ...MORE_ROWS.refresh, target: MORE_ROWS.strength.label },

@@ -257,6 +257,8 @@ export const useApp = create<AppState>()(() => ({
     browserFullUrl: false,
     browserDownloadsDir: "",
     browserAskDownloads: false,
+    ratingsResearchAt: "04:00",
+    dismissedSuggestions: [],
     settingsVersion: 1,
   },
   threads: {},

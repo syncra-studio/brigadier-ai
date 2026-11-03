@@ -32,6 +32,9 @@ pub async fn running(daemon: &Daemon) -> Vec<String> {
         n => running.push(format!("{n} terminals")),
     }
     running.extend(daemon.dictation.work());
+    if daemon.runtime.registry().refresh_running() {
+        running.push("the ratings research".to_owned());
+    }
     if daemon.core.settings().keep_awake == KeepAwake::Always {
         running.push("keeping the computer awake (Always)".to_owned());
     }

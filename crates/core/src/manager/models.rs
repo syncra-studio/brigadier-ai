@@ -3,7 +3,8 @@ use super::SessionManager;
 use crate::{Error, Result, now_ms};
 use crate::{GuidanceRow, ModelRule, ModelRules};
 use brigadier_cli::models::{Account, AgentAccounts, Guidance, Model, ModelsOutput, Rule, Usage};
-use brigadier_providers::{AllowedModels, ProviderKind};
+use brigadier_providers::{AllowedModels, KindFacts, ProviderKind};
+use brigadier_router::{MergedModel, PickRule, Rating};
 use std::path::PathBuf;
 
 const GUIDANCE: &str = include_str!("models_guidance.md");
@@ -51,7 +52,7 @@ fn rows(text: &str) -> Vec<GuidanceRow> {
         })
         .collect()
 }
-fn guidance(shipped: &str, user: &str) -> Vec<Guidance> {
+fn guidance(shipped: Vec<GuidanceRow>, user: &str) -> Vec<Guidance> {
     let shown = |row: GuidanceRow, source: &str| Guidance {
         work: row.work,
         agent: row.agent,
@@ -62,12 +63,17 @@ fn guidance(shipped: &str, user: &str) -> Vec<Guidance> {
     };
     // A work's rows of the user's (an order, first to last) replace all its shipped rows, in
     // the place of the first; a work of the user's own goes after the shipped ones.
-    let (shipped, user) = (rows(shipped), rows(user));
+    let user = rows(user);
     let mut merged: Vec<Guidance> = Vec::new();
     for row in &shipped {
         let mut mine = user.iter().filter(|mine| mine.work == row.work).peekable();
         if mine.peek().is_none() {
-            merged.push(shown(row.clone(), "shipped"));
+            let source = if row.reason.starts_with(RATED_REASON) {
+                "ratings"
+            } else {
+                "shipped"
+            };
+            merged.push(shown(row.clone(), source));
         } else if !merged.iter().any(|old| old.work == row.work) {
             merged.extend(mine.map(|mine| shown(mine.clone(), "user")));
         }
@@ -78,6 +84,174 @@ fn guidance(shipped: &str, user: &str) -> Vec<Guidance> {
         }
     }
     merged
+}
+/// How a shipped kind of work picks its automatic models from the ratings, and the one agent a
+/// fusion consult's kind is for (brief L11). `None`: the kind keeps its shipped rows.
+fn pick_rule(work: &str) -> Option<(PickRule, Option<ProviderKind>)> {
+    use brigadier_router::TaskCategory as C;
+    let rule = |rating, small, effort_from| PickRule {
+        rating,
+        small,
+        effort_from,
+        fallback_effort: small.then_some("low"),
+        needs_images: effort_from == C::Operate,
+    };
+    let only = |categories| Rating::Categories(categories);
+    Some(match work.trim() {
+        "Architecture and broad changes" => (
+            rule(only(&[C::Orchestrate, C::Design]), false, C::Orchestrate),
+            None,
+        ),
+        "Bounded implementation" => (rule(only(&[C::Implement]), false, C::Implement), None),
+        "Mechanical changes and search" => (
+            rule(only(&[C::Implement, C::Scout]), true, C::Implement),
+            None,
+        ),
+        "Independent review" => (rule(only(&[C::Review]), false, C::Review), None),
+        "Computer use" => (rule(only(&[C::Operate]), false, C::Operate), None),
+        "Conversation titles" => (rule(only(&[C::GitText]), true, C::GitText), None),
+        FALLBACK_WORK => (rule(Rating::Overall, false, C::Orchestrate), None),
+        work => {
+            let agent = ProviderKind::parse(work.strip_prefix("fusion-")?)?;
+            (rule(Rating::Overall, false, C::Orchestrate), Some(agent))
+        }
+    })
+}
+/// How an automatic row from the ratings starts its reason; a shipped row's reason never does.
+const RATED_REASON: &str = "Rated ";
+/// `work`'s picks from the ratings: each agent's best model it may start, best first.
+fn rated_picks(
+    work: &str,
+    models: &[MergedModel],
+    allowed: &dyn Fn(&MergedModel, &str) -> bool,
+) -> Vec<brigadier_router::Pick> {
+    let Some((rule, agent)) = pick_rule(work) else {
+        return Vec::new();
+    };
+    brigadier_router::picks(models, rule, |model| {
+        agent.is_none_or(|agent| agent == model.provider) && allowed(model, work)
+    })
+}
+/// The automatic rows: per kind of work of the shipped table, in its order, the rows its
+/// ratings give (one per agent, best first), then the shipped rows of agents with nothing rated
+/// for it; where nothing is rated at all, the shipped rows.
+fn automatic(
+    shipped: Vec<GuidanceRow>,
+    models: &[MergedModel],
+    allowed: &dyn Fn(&MergedModel, &str) -> bool,
+) -> Vec<GuidanceRow> {
+    let mut out: Vec<GuidanceRow> = Vec::new();
+    for row in &shipped {
+        if out.iter().any(|done| same_work(&done.work, &row.work)) {
+            continue;
+        }
+        let picks = rated_picks(&row.work, models, allowed);
+        if picks.is_empty() {
+            out.extend(
+                shipped
+                    .iter()
+                    .filter(|other| same_work(&other.work, &row.work))
+                    .cloned(),
+            );
+            continue;
+        }
+        let small = pick_rule(&row.work).is_some_and(|(rule, _)| rule.small);
+        // An agent with no rated model for it keeps its shipped row, after the rated ones.
+        let unrated: Vec<GuidanceRow> = shipped
+            .iter()
+            .filter(|other| {
+                same_work(&other.work, &row.work)
+                    && !picks.iter().any(|pick| pick.provider == other.agent)
+            })
+            .cloned()
+            .collect();
+        out.extend(picks.into_iter().map(|pick| GuidanceRow {
+            work: row.work.clone(),
+            agent: pick.provider,
+            reason: format!(
+                "{RATED_REASON}{:.1} of 10 for this work: {}'s best{} model by the ratings.",
+                pick.score,
+                pick.provider.label(),
+                if small { " fast or mid-sized" } else { "" },
+            ),
+            model: pick.model,
+            effort: pick.effort,
+        }));
+        out.extend(unrated);
+    }
+    out
+}
+/// The suggestions for the user's orders: for each kind of work they ordered, the best-rated
+/// model when it rates at least [`SUGGEST_MARGIN`] above the first of their order, unless they
+/// dismissed it at that rating. Reads `user` only: an order changes when the user takes one.
+/// `listed` gives the listed model a row's model word starts (`default`: the CLI's default).
+fn suggestions(
+    user: &[GuidanceRow],
+    registry: &brigadier_router::Registry,
+    models: &[MergedModel],
+    allowed: &dyn Fn(&MergedModel, &str) -> bool,
+    listed: &dyn Fn(ProviderKind, &str) -> Option<String>,
+    dismissed: &[crate::DismissedSuggestion],
+) -> Vec<crate::RoutingSuggestion> {
+    let mut found = Vec::new();
+    for (index, first) in user.iter().enumerate() {
+        if user[..index]
+            .iter()
+            .any(|row| same_work(&row.work, &first.work))
+        {
+            continue;
+        }
+        let Some((rule, _)) = pick_rule(&first.work) else {
+            continue;
+        };
+        let Some(current) = listed(first.agent, &first.model).and_then(|id| {
+            models.iter().find(|model| {
+                model.provider == first.agent && brigadier_router::is_model(model, registry, &id)
+            })
+        }) else {
+            continue;
+        };
+        let Some(current_score) = brigadier_router::picks::score(current, rule.rating) else {
+            continue;
+        };
+        let Some(best) = rated_picks(&first.work, models, allowed).into_iter().next() else {
+            continue;
+        };
+        let same = models.iter().any(|model| {
+            model.provider == best.provider
+                && model.id == best.model
+                && model.provider == current.provider
+                && model.rating_identity() == current.rating_identity()
+        });
+        if same || best.score + 1e-9 < current_score + crate::SUGGEST_MARGIN {
+            continue;
+        }
+        if dismissed.iter().any(|gone| {
+            same_work(&gone.work, &first.work)
+                && gone.agent == best.provider
+                && gone.model.eq_ignore_ascii_case(&best.model)
+                && (gone.score - best.score).abs() < 0.05
+        }) {
+            continue;
+        }
+        found.push(crate::RoutingSuggestion {
+            work: first.work.clone(),
+            row: GuidanceRow {
+                work: first.work.clone(),
+                agent: best.provider,
+                model: best.model.clone(),
+                effort: best.effort.clone(),
+                reason: format!(
+                    "{RATED_REASON}{:.1} of 10 for this work; {} rates {current_score:.1}.",
+                    best.score, first.model
+                ),
+            },
+            score: best.score,
+            current: first.model.clone(),
+            current_score,
+        });
+    }
+    found
 }
 /// The directive a rules-file line holds, with the line as the user wrote it; `None` for prose.
 fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
@@ -350,20 +524,69 @@ impl SessionManager {
             std::env::home_dir(),
         )
     }
-    /// Settings › Routing's read of the rules file, as it is on disk now (S32).
+    /// Settings › Routing's read of the rules file, as it is on disk now (S32), beside the
+    /// automatic rows the ratings give and the suggestions for the user's own orders.
     pub fn model_rules(&self) -> Result<ModelRules> {
         let path = self.models_rules_path();
         let text = editable(&path, DEFAULT_RULES)?;
+        let (shipped, suggestions) = self.automatic_view(&text)?;
         Ok(ModelRules {
             path: path.display().to_string(),
-            shipped: rows(GUIDANCE),
+            shipped,
             rows: rows(&text),
             rules: Policy::parse(&text)?
                 .entries
                 .into_iter()
                 .map(|(_, rule)| rule)
                 .collect(),
+            suggestions,
+            research: self.runtime.registry().rankings_refresh(),
         })
+    }
+    /// The suggestions for the user's orders in the rules file now.
+    pub(super) fn routing_suggestions(&self) -> Result<Vec<crate::RoutingSuggestion>> {
+        let text = editable(&self.models_rules_path(), DEFAULT_RULES)?;
+        Ok(self.automatic_view(&text)?.1)
+    }
+    /// The automatic rows and the suggestions for the rules file's `text`. A model counts when
+    /// the user left it on and no rule for that work keeps it out.
+    fn automatic_view(
+        &self,
+        text: &str,
+    ) -> Result<(Vec<GuidanceRow>, Vec<crate::RoutingSuggestion>)> {
+        let (registry, models) = self.rated_models();
+        let settings = self.core.settings();
+        let policy = Policy::parse(text)?;
+        let allowed = |model: &MergedModel, work: &str| {
+            let names: Vec<&str> = std::iter::once(model.id.as_str())
+                .chain(model.resolved.as_deref())
+                .collect();
+            crate::routing::availability::model_available(&settings, model.provider, &model.id)
+                && policy
+                    .refusal(model.provider, &names, None, Some(work))
+                    .is_none()
+        };
+        let listed = |provider: ProviderKind, word: &str| {
+            if word.trim().is_empty() || word.eq_ignore_ascii_case("default") {
+                let catalog = self.runtime.overview(provider).and_then(|o| o.models)?;
+                return catalog
+                    .models
+                    .iter()
+                    .find(|model| model.is_default)
+                    .map(|model| model.id.clone());
+            }
+            Some(self.listed_model(provider, word))
+        };
+        let shipped = automatic(rows(GUIDANCE), &models, &allowed);
+        let found = suggestions(
+            &rows(text),
+            &registry,
+            &models,
+            &allowed,
+            &listed,
+            &settings.dismissed_suggestions,
+        );
+        Ok((shipped, found))
     }
     /// Settings › Routing's save: the file's rows and rules become these, in the file's own text
     /// format, its prose kept (S32).
@@ -383,7 +606,7 @@ impl SessionManager {
     pub(super) fn work_kinds(&self) -> Result<Vec<String>> {
         let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
         let mut kinds: Vec<String> = Vec::new();
-        for row in guidance(GUIDANCE, &user) {
+        for row in guidance(self.automatic_view(&user)?.0, &user) {
             if !kinds.iter().any(|kind| same_work(kind, &row.work)) {
                 kinds.push(row.work);
             }
@@ -393,7 +616,7 @@ impl SessionManager {
 
     pub(super) fn work_rows(&self, work: &str) -> Result<Vec<Guidance>> {
         let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
-        Ok(guidance(GUIDANCE, &user)
+        Ok(guidance(self.automatic_view(&user)?.0, &user)
             .into_iter()
             .filter(|row| same_work(&row.work, work))
             .collect())
@@ -421,7 +644,8 @@ impl SessionManager {
             {
                 continue;
             }
-            let shipped = row.source == "shipped";
+            // Automatic rows (from the ratings, or the shipped table) weigh quota and tier.
+            let shipped = row.source != "user";
             let selected = self.listed_model(provider, &row.model);
             let models = inputs.models.iter().filter(|rated| {
                 rated.provider == provider
@@ -633,7 +857,7 @@ impl SessionManager {
         let now = now_ms();
         let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
         let policy = Policy::parse(&user)?;
-        let shipped = GUIDANCE;
+        let shipped = self.automatic_view(&user)?.0;
         let mut models = Vec::new();
         for provider in brigadier_providers::adapters::kinds() {
             if let Some(catalog) = self.runtime.overview(provider).and_then(|o| o.models) {
@@ -920,10 +1144,172 @@ mod tests {
             runs_as(Some(&catalog), Some("sonnet"), Some("high"))
         );
     }
+    /// A small registry: one Claude model, two Codex models (one kept for computer use only).
+    fn small_catalog() -> (brigadier_router::Registry, Vec<MergedModel>) {
+        let entry = |key: &str, cli: &str, tier: &str, strengths: serde_json::Value| {
+            serde_json::json!({
+                "key": key, "vendor": if cli == "claude" { "anthropic" } else { "openai" },
+                "cli": cli, "match": {"ids": [key]}, "tier": tier,
+                "efforts": ["low", "medium", "high"], "strengths": strengths,
+                "modalities": {"input": ["text", "image"]},
+                "defaultEffort": {"implement": "medium", "operate": "high", "review": "high"},
+                "released": "2026-01-01", "sources": ["https://example.com"]
+            })
+        };
+        let mut eyes = entry(
+            "eyes",
+            "codex",
+            "light",
+            serde_json::json!({"operate": 9.6}),
+        );
+        eyes["only"] = serde_json::json!({"operate": "strong"});
+        let document = serde_json::json!({
+            "schemaVersion": 1, "revision": 999_999, "updated": "2026-11-01",
+            "models": [
+                entry("big", "claude", "frontier",
+                    serde_json::json!({"implement": 8, "review": 9, "operate": 9})),
+                entry("sol", "codex", "strong",
+                    serde_json::json!({"implement": 9, "review": 8, "operate": 7})),
+                eyes,
+            ]
+        });
+        let registry =
+            brigadier_router::Registry::parse(&serde_json::to_vec(&document).unwrap()).unwrap();
+        let info = |id: &str| -> brigadier_providers::ModelInfo {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "displayName": id, "description": "",
+                "efforts": ["low", "medium", "high"], "isDefault": false,
+                "inputModalities": ["text", "image"], "legacy": false
+            }))
+            .unwrap()
+        };
+        let models = brigadier_router::merge(
+            &registry,
+            &[
+                (ProviderKind::Claude, &[info("big")]),
+                (ProviderKind::Codex, &[info("sol"), info("eyes")]),
+            ],
+            &[],
+            &[],
+        );
+        (registry, models)
+    }
+
+    /// The automatic rows come from the ratings, one per agent in rating order; a kind with
+    /// nothing rated keeps the shipped table's rows.
+    #[test]
+    fn automatic_rows_follow_the_ratings_and_fall_back_to_the_shipped_table() {
+        let (_, models) = small_catalog();
+        let rows = automatic(rows(GUIDANCE), &models, &|_, _| true);
+        let of = |work: &str| -> Vec<(ProviderKind, String, Option<String>)> {
+            rows.iter()
+                .filter(|row| row.work == work)
+                .map(|row| (row.agent, row.model.clone(), row.effort.clone()))
+                .collect()
+        };
+        assert_eq!(
+            of("Bounded implementation"),
+            [
+                (ProviderKind::Codex, "sol".into(), Some("medium".into())),
+                (ProviderKind::Claude, "big".into(), Some("medium".into())),
+            ]
+        );
+        assert_eq!(
+            of("Independent review"),
+            [
+                (ProviderKind::Claude, "big".into(), Some("high".into())),
+                (ProviderKind::Codex, "sol".into(), Some("high".into())),
+            ]
+        );
+        // The model kept for computer use leads there, and only there.
+        assert_eq!(
+            of("Computer use"),
+            [
+                (ProviderKind::Codex, "eyes".into(), Some("high".into())),
+                (ProviderKind::Claude, "big".into(), Some("high".into())),
+            ]
+        );
+        assert!(
+            rows.iter()
+                .filter(|r| r.model == "eyes")
+                .all(|r| r.work == "Computer use")
+        );
+        // A fusion consult's kind is its own agent's only.
+        assert_eq!(of("fusion-claude").len(), 1);
+        assert_eq!(of("fusion-claude")[0].1, "big");
+        // Nothing small is rated: the shipped rows stand in, as shipped.
+        assert_eq!(
+            of("Mechanical changes and search"),
+            [(ProviderKind::Claude, "sonnet".into(), Some("medium".into()))]
+        );
+        let titles = rows
+            .iter()
+            .find(|r| r.work == "Conversation titles")
+            .unwrap();
+        assert!(!titles.reason.starts_with(RATED_REASON));
+        // A model a rule or a switch keeps out gives its place to the agent's next best.
+        let rows = automatic(super::rows(GUIDANCE), &models, &|model, _| {
+            model.id != "eyes"
+        });
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.work == "Computer use")
+                .map(|row| row.model.as_str())
+                .collect::<Vec<_>>(),
+            ["big", "sol"]
+        );
+    }
+
+    /// A better-rated model for a kind of work the user ordered is suggested; the user's rows
+    /// are only read. Dismissed at its rating, it stays hidden until that rating changes.
+    #[test]
+    fn a_suggestion_reads_the_users_order_and_never_changes_it() {
+        let (registry, mut models) = small_catalog();
+        let mine = rows(
+            "| Computer use | claude | big | medium | Mine. |\n| Bounded implementation | codex | sol | high | Mine. |\n",
+        );
+        let kept = mine.clone();
+        let listed = |_: ProviderKind, word: &str| Some(word.to_owned());
+        let found = suggestions(&mine, &registry, &models, &|_, _| true, &listed, &[]);
+        assert_eq!(mine, kept);
+        // Eyes rates 9.6 for computer use, Big 9.0: suggested. Sol leads implementation already.
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].work, "Computer use");
+        assert_eq!(
+            (found[0].row.agent, found[0].row.model.as_str()),
+            (ProviderKind::Codex, "eyes")
+        );
+        assert_eq!(
+            (found[0].current.as_str(), found[0].current_score),
+            ("big", 9.0)
+        );
+        let dismissed = [crate::DismissedSuggestion {
+            work: "Computer use".into(),
+            agent: ProviderKind::Codex,
+            model: "eyes".into(),
+            score: found[0].score,
+        }];
+        assert!(
+            suggestions(&mine, &registry, &models, &|_, _| true, &listed, &dismissed).is_empty()
+        );
+        // Less than half a point higher: no suggestion.
+        let eyes = models.iter_mut().find(|m| m.id == "eyes").unwrap();
+        eyes.strengths
+            .insert(brigadier_router::TaskCategory::Operate, 9.4);
+        assert!(suggestions(&mine, &registry, &models, &|_, _| true, &listed, &[]).is_empty());
+        // Its rating changed again: the dismissed suggestion is back.
+        let eyes = models.iter_mut().find(|m| m.id == "eyes").unwrap();
+        eyes.strengths
+            .insert(brigadier_router::TaskCategory::Operate, 9.9);
+        let found = suggestions(&mine, &registry, &models, &|_, _| true, &listed, &dismissed);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].score, 9.9);
+        assert_eq!(mine, kept);
+    }
     #[test]
     fn user_row_overrides_shipped_row() {
         let rows = guidance(
-            GUIDANCE,
+            rows(GUIDANCE),
             "| Bounded implementation | claude | sonnet | low | My preference. |",
         );
         let row = rows
@@ -936,7 +1322,7 @@ mod tests {
     #[test]
     fn a_works_order_replaces_its_shipped_row_in_place() {
         let user = "| Independent review | claude | opus | high | First. |\n| Independent review | codex | gpt-6 | | Next. |\n| Docs | claude | haiku | low | Mine. |\n";
-        let rows = guidance(GUIDANCE, user);
+        let rows = guidance(rows(GUIDANCE), user);
         let works: Vec<_> = rows
             .iter()
             .map(|r| (r.work.as_str(), r.model.as_str(), r.source.as_str()))
