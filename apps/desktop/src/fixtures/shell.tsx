@@ -85,7 +85,7 @@ if (layout) showRows(ID, Object.values(board.tasks).map((task) => rowOf(task)));
 useApp.setState((state) => ({
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
-  settings: { ...state.settings, onboarded: true, introSeen: true },
+  settings: { ...state.settings, onboarded: true, introSeen: true, sidebarMode: "projects" },
   projects: { "shell-project": { id: "shell-project", name: "release-notes", createdAtMs: start, repos: [{ path: "/tmp/shell-fixture", name: "release-notes" }], prefs: {}, trust: [] } as unknown as Project },
   conversations: { [ID]: conversation },
   threads: { [ID]: { ...emptyThread, items } },
