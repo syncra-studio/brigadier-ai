@@ -29,9 +29,10 @@ test("a picked model goes first in the order, the others kept after it", () => {
   assert.deepEqual(withFirst([], row("claude", "sonnet")), [row("claude", "sonnet")]);
 });
 
+const suggestion = (score: number) => ({ work: "Computer use", row: row("codex", "gpt-6.1-terra", "high"), score, current: "opus", currentScore: 9 });
+
 // Dismiss keeps one entry per kind of work and model, at the rating it was dismissed at.
 test("a dismissed suggestion is kept once, at its latest rating", () => {
-  const suggestion = (score: number) => ({ work: "Computer use", row: row("codex", "gpt-6.1-terra", "high"), score, current: "opus", currentScore: 9 });
   const other = { work: "Independent review", agent: "codex" as const, model: "gpt-6-astra", score: 9.5 };
   const once = withDismissed([other], suggestion(9.6));
   assert.deepEqual(once, [other, { work: "Computer use", agent: "codex", model: "gpt-6.1-terra", score: 9.6 }]);
