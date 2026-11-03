@@ -285,16 +285,17 @@ function setOffer(id: string, next: { written?: FeedbackWriteUp | null; sending:
 /** Where an offer's write-up is kept, so a restart shows it instead of writing it up again. */
 const writeUpKey = (id: string) => `brigadier.feedbackOffer.${id}`;
 
-function keptWriteUp(id: string): FeedbackWriteUp | null {
+/** The kept write-up (`null`: no writer could run, so its own text goes in one form); `undefined` when none is kept. */
+function keptWriteUp(id: string): FeedbackWriteUp | null | undefined {
   try {
     const stored = localStorage.getItem(writeUpKey(id));
-    return stored ? (JSON.parse(stored) as FeedbackWriteUp) : null;
+    return stored === null ? undefined : (JSON.parse(stored) as FeedbackWriteUp | null);
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-function keepWriteUp(id: string, written: FeedbackWriteUp): void {
+function keepWriteUp(id: string, written: FeedbackWriteUp | null): void {
   try {
     localStorage.setItem(writeUpKey(id), JSON.stringify(written));
   } catch {
@@ -314,11 +315,11 @@ function forgetWriteUp(id: string): void {
 export function draftOffer(id: string, text: string): void {
   if (useFeedbackOffers.getState()[id]) return;
   const kept = keptWriteUp(id);
-  if (kept) return setOffer(id, { written: kept, sending: { phase: "write" } });
+  if (kept !== undefined) return setOffer(id, { written: kept, sending: { phase: "write" } });
   setOffer(id, { sending: { phase: "working", step: { step: "writing" } } });
   void writeUp(text).then((written) => {
-    // No writer could run: not kept, so a later start tries the writer again.
-    if (written) keepWriteUp(id, written);
+    // Kept even when no writer could run: a finished card never writes again after a restart (D216).
+    keepWriteUp(id, written);
     setOffer(id, { written, sending: { phase: "write" } });
   });
 }

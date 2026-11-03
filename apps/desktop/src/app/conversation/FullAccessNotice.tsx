@@ -9,8 +9,10 @@ import { useQueueRows } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
-/** "closed": it was closed, or stepped aside once "shown": gone in every session until the app restarts (D191). */
-const seen = new Set<"shown" | "closed">();
+/** Set once it was closed, or stepped aside after showing: gone in every session, across restarts (D191, D216). */
+const CLOSED = "brigadier.fullAccessNoticeClosed";
+/** "shown": it showed in this run, so stepping aside counts as closing it. */
+const seen = new Set<"shown">();
 
 /**
  * The "Full access is on" card above the composer, while a session is on Full access: the full
@@ -20,8 +22,8 @@ const seen = new Set<"shown" | "closed">();
  * waits above the composer, so it never pushes that card or the thread's last lines out of
  * view, and while messages wait in the queue, so they stay right under the conversation (#448).
  * Once it has shown and stepped aside it stays gone, as if closed (demo12). × closes it in every
- * session, new ones too, until the app restarts (D191); "Don't show again" turns it off in
- * Settings, where it can be turned back on.
+ * session, new ones too, across restarts (D191, D216); "Don't show again" turns it off in
+ * Settings, where turning it back on shows it again.
  */
 export function FullAccessNotice({ conversation, aside = false }: { conversation: Conversation; aside?: boolean }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
@@ -31,11 +33,13 @@ export function FullAccessNotice({ conversation, aside = false }: { conversation
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
   const { rows } = useQueueRows(conversation.id);
   const queued = rows.length > 0;
-  if (show && full && (aside || queued) && seen.has("shown")) seen.add("closed");
-  if (!show || !full || aside || queued || seen.has("closed")) return null;
+  // Off in Settings: turning it back on shows it again.
+  if (!show) localStorage.removeItem(CLOSED);
+  if (show && full && (aside || queued) && seen.has("shown")) localStorage.setItem(CLOSED, "1");
+  if (!show || !full || aside || queued || localStorage.getItem(CLOSED)) return null;
   seen.add("shown");
   const close = () => {
-    seen.add("closed");
+    localStorage.setItem(CLOSED, "1");
     setClosed((count) => count + 1);
   };
   return (

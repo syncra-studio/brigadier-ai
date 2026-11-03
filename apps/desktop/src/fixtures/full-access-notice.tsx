@@ -9,6 +9,8 @@
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
+// Closing it is kept across loads; each run starts with it not yet closed.
+localStorage.removeItem("brigadier.fullAccessNoticeClosed");
 const params = new URLSearchParams(location.search);
 const drive = params.has("drive");
 const waiting = params.has("waiting");

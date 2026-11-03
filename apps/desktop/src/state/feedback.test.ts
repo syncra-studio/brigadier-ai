@@ -313,6 +313,11 @@ test("an offer's write-up is kept across a restart", async () => {
     assert.deepEqual(wrote, ["Spins. Hangs"]);
     dismissOffer("kept");
     assert.equal(stored.size, 0);
+    // One no writer could run for is kept too: its own text in one form, not written again.
+    stored.set("brigadier.feedbackOffer.plain", "null");
+    draftOffer("plain", "Hangs");
+    assert.deepEqual(useFeedbackOffers.getState()["plain"], { written: null, sending: { phase: "write" } });
+    assert.deepEqual(wrote, ["Spins. Hangs"]);
   } finally {
     if (storage) Object.defineProperty(globalThis, "localStorage", storage);
     else Reflect.deleteProperty(globalThis, "localStorage");
