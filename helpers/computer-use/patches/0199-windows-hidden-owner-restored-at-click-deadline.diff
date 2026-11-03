@@ -1,7 +1,7 @@
 Why: A click that times out shows again any owner window it hid: the caller restores what the provider worker hid when the 4 s click deadline passes, and a worker that arms after the deadline hides nothing, so a hung UI Automation call can no longer leave the app's own window hidden.
 
 diff --git a/crates/platform-windows/src/uia/click.rs b/crates/platform-windows/src/uia/click.rs
-index 731debc91..d2b52ec1f 100644
+index 731debc91..5f410b2b3 100644
 --- a/crates/platform-windows/src/uia/click.rs
 +++ b/crates/platform-windows/src/uia/click.rs
 @@ -337,7 +337,13 @@ pub(crate) fn retained_click(
@@ -31,7 +31,14 @@ index 731debc91..d2b52ec1f 100644
      });
      let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
      drop(hidden_owner);
-@@ -563,7 +572,13 @@ pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolR
+@@ -559,11 +568,19 @@ fn try_click_guarded(
+ /// desktop: an occluding app must not become the click target.
+ pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolResult>> {
+     match super::windows_enum::run_uia_with_deadline_cancelable(
+-        "semantic-point-click", Duration::from_secs(4), "no fallback input",
++        "semantic-point-click",
++        Duration::from_secs(4),
++        "no fallback input",
          move |cancelled| at_point_inner(hwnd, x, y, &cancelled),
      ) {
          Ok(result) => result,

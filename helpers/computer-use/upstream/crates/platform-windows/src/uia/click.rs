@@ -568,7 +568,9 @@ fn try_click_guarded(
 /// desktop: an occluding app must not become the click target.
 pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolResult>> {
     match super::windows_enum::run_uia_with_deadline_cancelable(
-        "semantic-point-click", Duration::from_secs(4), "no fallback input",
+        "semantic-point-click",
+        Duration::from_secs(4),
+        "no fallback input",
         move |cancelled| at_point_inner(hwnd, x, y, &cancelled),
     ) {
         Ok(result) => result,
