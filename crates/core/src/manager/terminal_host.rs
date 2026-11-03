@@ -44,6 +44,10 @@ pub trait TerminalHost: Send + Sync {
         Err(Error::Invalid("terminals aren't available here".into()))
     }
 
+    /// Closes `conversation`'s shells that run nothing, keeping their output for when their
+    /// tabs open again (the session goes to sleep). A shell running something stays.
+    fn close_idle(&self, _conversation: &str) {}
+
     /// Types `data` into terminal `id`, if it is one of `conversation`'s (`terminal_run`).
     fn type_in(&self, _conversation: &str, _id: &str, _data: &str) -> Result<()> {
         Err(Error::Invalid("terminals aren't available here".into()))

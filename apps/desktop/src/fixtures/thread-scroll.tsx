@@ -13,7 +13,7 @@
  * `<pre id="thread-scroll-result">` (`&only=<step>` runs one of them); `window.threadScroll`
  * holds the steps for a browser probe.
  */
-import { cliLag, cliSays, cliTurnsRead } from "@/fixtures/cliView";
+import { cliLag, cliSays, cliTurnsRead, followBoardRun } from "@/fixtures/cliView";
 import { fixtureInput } from "@/fixtures/input";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
@@ -176,6 +176,7 @@ function appended(message: Message): void {
   });
 }
 
+followBoardRun();
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** After the next frame is laid out (and its resize observers ran). */
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));

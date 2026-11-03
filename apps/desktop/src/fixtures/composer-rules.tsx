@@ -13,13 +13,14 @@ import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { model, overview } from "@/fixtures/agents";
+import { IDLE_RESEARCH } from "@/fixtures/rankings";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { ModelRules, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 localStorage.clear();
-const rules: ModelRules = { path: "/tmp/models.md", shipped: [], rows: [], rules: [{ type: "effortCeiling", effort: "high" }] };
+const rules: ModelRules = { path: "/tmp/models.md", shipped: [], rows: [], rules: [{ type: "effortCeiling", effort: "high" }], suggestions: [], research: IDLE_RESEARCH };
 const efforts = { efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" };
 let created = 0;
 mockIPC((command, payload) => {

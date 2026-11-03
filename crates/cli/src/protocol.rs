@@ -948,7 +948,7 @@ pub struct StartReview {
 #[serde(rename_all = "camelCase")]
 pub struct StartRow {
     pub work: String,
-    /// `user` (the user's row) or `shipped`.
+    /// `user` (the user's row), `ratings` (an automatic row from the ratings) or `shipped`.
     pub source: String,
     /// What the row set: `agent`, `model`, `effort`; the flags given set the rest.
     pub picked: Vec<String>,

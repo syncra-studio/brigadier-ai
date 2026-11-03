@@ -30,6 +30,29 @@ impl SessionManager {
 
     /// The registry, the merged catalog and the providers' states.
     pub(crate) async fn routing_inputs(&self, now: i64) -> Inputs {
+        let research = match self.runtime.routing_store() {
+            Some(store) => store.research().await.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let (registry, models) = self.merged_models(&research);
+        Inputs {
+            registry,
+            models,
+            providers: self.provider_states(now),
+        }
+    }
+
+    /// The registry and each CLI's listed models as rated now: the registry's entries with the
+    /// researched overlay on top (old research notes left out). For the automatic picks, which
+    /// are read without waiting.
+    pub(crate) fn rated_models(&self) -> (Arc<Registry>, Vec<MergedModel>) {
+        self.merged_models(&[])
+    }
+
+    fn merged_models(
+        &self,
+        research: &[brigadier_router::ResearchNote],
+    ) -> (Arc<Registry>, Vec<MergedModel>) {
         let (registry, patches) = self.runtime.registry().rating_snapshot();
         let catalogs: Vec<(
             brigadier_providers::ProviderKind,
@@ -52,21 +75,13 @@ impl SessionManager {
             .iter()
             .map(|(provider, models)| (*provider, models.as_slice()))
             .collect();
-        let research = match self.runtime.routing_store() {
-            Some(store) => store.research().await.unwrap_or_default(),
-            None => Vec::new(),
-        };
-        let mut models = brigadier_router::merge(&registry, &catalogs, &research, &[]);
+        let mut models = brigadier_router::merge(&registry, &catalogs, research, &[]);
         for model in &mut models {
             for patch in &patches {
                 patch.apply(model);
             }
         }
-        Inputs {
-            registry,
-            models,
-            providers: self.provider_states(now),
-        }
+        (registry, models)
     }
 
     /// Whether the model `choice` names can run now: its provider ready, and no window that

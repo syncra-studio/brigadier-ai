@@ -30,6 +30,7 @@ pub mod load;
 pub mod merge;
 mod outcome;
 mod overrides;
+pub mod picks;
 mod quota;
 mod rankings;
 mod ratings;
@@ -52,6 +53,7 @@ pub use load::{MAX_REGISTRY_BYTES, Parsed, RegistryError};
 pub use merge::{OutcomeCount, TRIAL_OUTCOMES, is_model, merge};
 pub use outcome::{Outcome, OutcomeResult};
 pub use overrides::{OverrideEffect, OverrideRule, OverrideTarget};
+pub use picks::{Pick, PickRule, Rating, picks};
 pub use quota::{Forecast, Heat, ProviderQuota, ProviderState, QuotaSample, WindowState};
 pub use rankings::{RankedPlace, RankingUse};
 pub use registry::{

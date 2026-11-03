@@ -450,6 +450,7 @@ impl Bridge {
                 self.emit(BridgeEvent::WorkspaceChanged { target });
             }
             ServerFrame::ThreadNews { news } => self.emit(BridgeEvent::ThreadNews { news }),
+            ServerFrame::ThreadNewsMissed => self.emit(BridgeEvent::ThreadNewsMissed),
             ServerFrame::Search { id, update } => {
                 self.emit(BridgeEvent::Search { id, update });
             }

@@ -2,12 +2,12 @@ import { ChatActions } from "@/app/shell/ChatActions";
 import { noAutoscroll, TAB } from "@/app/shell/SessionTab";
 import { TabMenu } from "@/app/shell/TabMenu";
 import { Archive, Chat, X } from "@/components/icons";
-import { SidebarActivityMark, SidebarError, statusWords } from "@/components/shared";
+import { SidebarActivityMark, SidebarError } from "@/components/shared";
 import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { closeSession } from "@/state/actions";
 import { CHAT_TAB, selectTab } from "@/state/sessionTabs";
-import { type SessionStatus, useSidebarIndicators } from "@/state/tabStates";
+import { useRowMark } from "@/state/tabStates";
 
 /**
  * The session bar's first tab: the chat under its title, with its state marks and its ⋯; never
@@ -19,23 +19,19 @@ export function ChatTab({
   title,
   active,
   separator,
-  status,
-  error,
   onRename,
 }: {
   conversation: Conversation;
   title: string;
   active: boolean;
   separator: true | undefined;
-  status: SessionStatus | null;
-  error: boolean;
   onRename: () => void;
 }) {
   const id = conversation.id;
   const archived = conversation.lifecycle === "archived";
-  // An open session keeps a waiting-card dot; a finished turn has already been read.
-  const mark = useSidebarIndicators(id);
-  const showingMark = (mark.working || mark.unread) && !archived;
+  // The row's own mark; open, a finished turn has already been read.
+  const mark = useRowMark(id);
+  const showingMark = (mark.look === "working" || mark.look === "dot") && !archived;
   return (
     <TabMenu conversationId={id} tab={null} onRename={archived ? undefined : onRename}>
       <div
@@ -54,7 +50,7 @@ export function ChatTab({
           role="tab"
           aria-selected={active}
           tabIndex={active ? 0 : -1}
-          title={archived ? `${title} (Archived)` : status ? `${title} · ${statusWords(status)}` : title}
+          title={archived ? `${title} (Archived)` : mark.hover ? `${title} · ${mark.hover}` : title}
           aria-label={archived ? `${title} (Archived)` : undefined}
           onMouseDown={noAutoscroll}
           onMouseUp={(event) => { if (event.button === 1) { event.preventDefault(); closeSession(id); } }}
@@ -63,7 +59,7 @@ export function ChatTab({
           className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
         >
           {/* The sidebar row's own marks, without its state words: its error glyph leads, its spinner trails. */}
-          {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : error ? <SidebarError conversationId={id} /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
+          {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : mark.look === "error" ? <SidebarError conversationId={id} /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
           <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{title}</span>
         </button>
         <span className="grid shrink-0 place-items-center">
@@ -78,7 +74,7 @@ export function ChatTab({
           />
           {showingMark && (
             <span className="pointer-events-none col-start-1 row-start-1 group-hover/tab:invisible group-has-[:focus-visible]/tab:invisible group-has-[[aria-expanded=true]]/tab:invisible">
-              <SidebarActivityMark conversationId={id} unread={false} />
+              <SidebarActivityMark conversationId={id} />
             </span>
           )}
         </span>

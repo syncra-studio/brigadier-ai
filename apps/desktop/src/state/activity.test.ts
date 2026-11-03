@@ -4,7 +4,7 @@ import { test } from "node:test";
 import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
 import { applyToBoard, emptyBoard } from "@/state/board";
-import { sessionStatus, sidebarIndicators, tabState } from "@/state/tabStates";
+import { rowMark, tabState } from "@/state/tabStates";
 import { turnState } from "@/app/conversation/cliBlocks";
 
 const on = (conversationId: string, event: unknown): EventEnvelope =>
@@ -16,10 +16,11 @@ test("the CLI's turn opening and ending decides Working; Brigadier handing it a 
   applyActivityEvents([on("c2", { type: "runStateChanged", conversationId: "c2", state: "starting" })]);
   assert.equal(row("c2").running, true);
   applyActivityEvents([on("c2", { type: "runStateChanged", conversationId: "c2", state: "running" })]);
-  assert.equal(row("c2").running, false, "a run with no turn open is not work");
+  assert.equal(row("c2").running, true, "a run going on between turns (a handover) works, as in its thread (D4)");
   applyActivityNews({ conversationId: "c2", entries: [], opened: true });
   assert.equal(row("c2").running, true);
   applyActivityNews({ conversationId: "c2", entries: [], ended: "done" });
+  applyActivityEvents([on("c2", { type: "runStateChanged", conversationId: "c2", state: "idle" })]);
   assert.deepEqual(row("c2"), { running: false, awaiting: null, workers: 0 });
 });
 
@@ -46,7 +47,7 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.equal(row("c4").awaiting, null, "a worker's server");
   applyActivityEvents([servers(null, [{ name: "linear", status: "needs-auth" }])]);
   assert.equal(row("c4").awaiting, "signIn");
-  assert.deepEqual(sessionStatus(row("c4"), null), { state: "needsYou", reason: "sign-in" });
+  assert.deepEqual(rowMark(row("c4")), { look: "dot", hover: "Needs you · sign-in" });
   applyActivityEvents([servers(null, [{ name: "linear", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
 });
@@ -90,7 +91,7 @@ test("a stopped turn is named through reconnect and clears when another turn ope
 test("a failed or cut-off last turn reads Failed until the next turn opens; a failed run too", () => {
   applyActivityNews({ conversationId: "c5", entries: [], opened: true });
   applyActivityNews({ conversationId: "c5", entries: [], ended: "interrupted" });
-  assert.deepEqual(sessionStatus(row("c5"), null), { state: "failed", reason: null });
+  assert.deepEqual(rowMark(row("c5")), { look: "error", hover: "Failed" });
   applyActivityNews({ conversationId: "c5", entries: [], opened: true });
   assert.equal(row("c5").awaiting, null);
   applyActivityNews({ conversationId: "c5", entries: [], ended: "done" });
@@ -105,7 +106,7 @@ test("a turn a limit cut while Brigadier switches it to another account or CLI n
   applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "running" })]);
   applyActivityNews({ conversationId: "c7", entries: [], opened: true });
   applyActivityNews({ conversationId: "c7", entries: [], ended: "failed" });
-  assert.equal(tabState(row("c7"), false), null, "the switch holds the run");
+  assert.equal(tabState(row("c7"), false), "working", "the switch holds the run: it spins, as in its thread (D4)");
   applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "starting" })]);
   assert.equal(tabState(row("c7"), false), "working");
   applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "idle" })]);
@@ -136,8 +137,7 @@ test("unopened sessions fold worker news directly into activity, keep Working un
   applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(true), { ...workerRow(false), id: "other" }] });
   assert.equal(row(id).running, true);
   assert.equal(tabState(row(id), false, false, true), "working");
-  assert.deepEqual(sessionStatus(row(id), null, false, true), { state: "working", reason: null });
-  assert.deepEqual(sidebarIndicators(row(id), false, true), { working: true, error: false, unread: false });
+  assert.deepEqual(rowMark(row(id), { unread: true }), { look: "working", hover: "Working" });
   applyActivityNews({ conversationId: id, entries: [], opened: true });
   applyActivityNews({ conversationId: id, entries: [], ended: "done" });
   assert.equal(row(id).running, true, "the session ending its turn does not end its workers");
@@ -145,7 +145,7 @@ test("unopened sessions fold worker news directly into activity, keep Working un
   assert.equal(tabState(row(id), false, false, true), "done");
   applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(true)] });
   applyActivityNews({ conversationId: id, entries: [], workers: [] });
-  assert.deepEqual(sidebarIndicators(row(id), false, false), { working: false, error: false, unread: false });
+  assert.deepEqual(rowMark(row(id)), { look: null, hover: null });
 });
 
 test("the reconnect snapshot restores live worker activity without a thread view, with waiting cards taking precedence", () => {
@@ -153,10 +153,10 @@ test("the reconnect snapshot restores live worker activity without a thread view
   useActivity.setState({ byConversation: { snapshot } });
   assert.equal(row("snapshot").running, true);
   assert.equal(tabState(row("snapshot"), false, false, true), "working");
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, questions: new Set(["q"]) }), null, false, true), { state: "needsYou", reason: "question" });
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, approvals: new Set(["a"]) }), null, false, true), { state: "needsYou", reason: "approval" });
-  // A sign-in doesn't hold the turn: while it works, it reads Working.
-  assert.deepEqual(sessionStatus(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) }), null, false, true), { state: "working", reason: null });
+  assert.deepEqual(rowMark(rowActivity({ ...snapshot, questions: new Set(["q"]) })), { look: "dot", hover: "Needs you · question" });
+  assert.deepEqual(rowMark(rowActivity({ ...snapshot, approvals: new Set(["a"]) })), { look: "dot", hover: "Needs you · approval" });
+  // A sign-in doesn't hold the turn: while it works, it spins.
+  assert.deepEqual(rowMark(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) })), { look: "working", hover: "Working" });
   assert.equal(rowActivity({ ...snapshot, workersWorking: false }).running, false);
 });
 
@@ -213,4 +213,11 @@ test("a session's work holds with no turn running while one of its workers or it
   assert.equal(workHolds({ ...idle, tasks: { t1: "reported" } }), false, "a worker that reported holds nothing");
   assert.equal(workHolds({ ...idle, workersWorking: true }), true);
   assert.equal(workHolds({ ...idle, commandsWorking: true }), true);
+});
+
+test("a session put to sleep closes its turn and shows no spinner (D10)", () => {
+  applyActivityNews({ conversationId: "c9", entries: [], opened: true });
+  applyActivityEvents([on("c9", { type: "runStateChanged", conversationId: "c9", state: "hibernated" })]);
+  assert.equal(useActivity.getState().byConversation.c9?.turnOpen, false);
+  assert.deepEqual(row("c9"), { running: false, awaiting: null, workers: 0 });
 });

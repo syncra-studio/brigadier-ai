@@ -571,6 +571,24 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub finished_at_ms: Option<i64>,
+    /// When it was marked done (by the user, or after 3 idle days or a merged pull request);
+    /// absent when not done. The inbox reads it against later activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub done_at_ms: Option<i64>,
+    /// When its snooze ends; absent when not snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_until_ms: Option<i64>,
+    /// When it was last snoozed or woken by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_at_ms: Option<i64>,
+    /// How far its replies were seen: the finish time last seen in any window (its row's
+    /// unread dot).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub seen_at_ms: Option<i64>,
 }
 
 impl Conversation {
@@ -869,6 +887,17 @@ pub enum KeepAwake {
     Always,
 }
 
+/// How the sidebar lists conversations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SidebarMode {
+    /// One list across all projects: pinned, active, working, snoozed, done.
+    #[default]
+    Inbox,
+    /// Sessions under their projects, then chats.
+    Projects,
+}
+
 /// What a message sent while an answer works does by default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1040,6 +1069,14 @@ pub struct Settings {
     pub browser_downloads_dir: String,
     /// The built-in browser asks where to save each download.
     pub browser_ask_downloads: bool,
+    /// When the daily ratings research runs, local time, `HH:MM` (Settings › Routing). Missed
+    /// (asleep, or Brigadier closed), it runs at the next start.
+    pub ratings_research_at: String,
+    /// Routing suggestions the user dismissed: each stays hidden while the model's rating for
+    /// that kind of work is the one it was dismissed at.
+    pub dismissed_suggestions: Vec<DismissedSuggestion>,
+    /// How the sidebar lists conversations, the same in every window.
+    pub sidebar_mode: SidebarMode,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -1179,6 +1216,27 @@ fn default_true() -> bool {
     true
 }
 
+/// When the daily ratings research runs unless the user picks another time.
+pub const DEFAULT_RATINGS_RESEARCH_AT: &str = "04:00";
+
+impl Settings {
+    /// [`Self::ratings_research_at`] as hours and minutes; the default for a time that doesn't
+    /// read.
+    pub fn ratings_research_time(&self) -> (u8, u8) {
+        research_time(&self.ratings_research_at)
+            .or_else(|| research_time(DEFAULT_RATINGS_RESEARCH_AT))
+            .unwrap_or((4, 0))
+    }
+}
+
+/// `HH:MM` (24-hour) as hours and minutes.
+pub fn research_time(text: &str) -> Option<(u8, u8)> {
+    let (hours, minutes) = text.trim().split_once(':')?;
+    let hours: u8 = hours.parse().ok()?;
+    let minutes: u8 = minutes.parse().ok()?;
+    (hours < 24 && minutes < 60 && text.trim().len() <= 5).then_some((hours, minutes))
+}
+
 /// Workers one session runs at once unless the user picks another number (run2-D31).
 pub const DEFAULT_WORKERS_AT_ONCE: u32 = 3;
 /// The numbers Settings offers for [`Settings::workers_at_once`].
@@ -1253,6 +1311,9 @@ impl Default for Settings {
             browser_full_url: false,
             browser_downloads_dir: String::new(),
             browser_ask_downloads: false,
+            ratings_research_at: DEFAULT_RATINGS_RESEARCH_AT.to_owned(),
+            dismissed_suggestions: Vec::new(),
+            sidebar_mode: SidebarMode::Inbox,
             settings_version: SETTINGS_VERSION,
         }
     }
@@ -2192,6 +2253,22 @@ pub enum DomainEvent {
         id: ConversationId,
         wait: Option<crate::work::QuotaWait>,
     },
+    /// Marked done (`done_at_ms`), or brought back by hand.
+    ConversationDone {
+        id: ConversationId,
+        done_at_ms: Option<i64>,
+    },
+    /// Snoozed until `until_ms`, or woken by hand (none), at `at_ms`.
+    ConversationSnoozed {
+        id: ConversationId,
+        until_ms: Option<i64>,
+        at_ms: i64,
+    },
+    /// Its replies were seen up to `at_ms`.
+    ConversationSeen {
+        id: ConversationId,
+        at_ms: i64,
+    },
     MessageAppended {
         message: Message,
     },
@@ -2673,6 +2750,9 @@ impl DomainEvent {
             Self::WorkspaceArchived { .. } => "workspace.archived",
             Self::ConversationPinned { .. } => "conversation.pinned",
             Self::ConversationWaiting { .. } => "conversation.waiting",
+            Self::ConversationDone { .. } => "conversation.done",
+            Self::ConversationSnoozed { .. } => "conversation.snoozed",
+            Self::ConversationSeen { .. } => "conversation.seen",
             Self::MessageAppended { .. } => "message.appended",
             Self::SettingsChanged { .. } => "settings.changed",
             Self::RawSessionCreated { .. } => "raw.created",
@@ -2877,16 +2957,53 @@ impl ModelRule {
 }
 
 /// Settings › Routing (S32): the user's rules file, `~/.brigadier/models.md`, read as rows and
-/// rules, beside the shipped guidance it overrides.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// rules, beside the automatic guidance it overrides.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRules {
     pub path: String,
-    /// The shipped guidance, read only.
+    /// The automatic guidance, read only: per kind of work, each agent's best-rated model in
+    /// rating order; the shipped table's rows for a kind nothing is rated for.
     pub shipped: Vec<GuidanceRow>,
     /// The user's rows.
     pub rows: Vec<GuidanceRow>,
     pub rules: Vec<ModelRule>,
+    /// Better-rated models for kinds of work the user set an order for, less those dismissed.
+    /// Never applied on their own: the user's order changes only when they take one.
+    #[serde(default)]
+    pub suggestions: Vec<RoutingSuggestion>,
+    /// The latest ratings research.
+    #[serde(default)]
+    pub research: crate::routing::registry::RankingsRefresh,
+}
+
+/// A model that now rates at least [`SUGGEST_MARGIN`] above the first of the user's order for a
+/// kind of work (Settings › Routing: "X now rates higher for Y", Use it or Dismiss).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingSuggestion {
+    /// The kind of work, as the rules file's Work.
+    pub work: String,
+    /// The row Use it puts first in the order.
+    pub row: GuidanceRow,
+    /// Its rating for the kind of work, 0–10.
+    pub score: f64,
+    /// The first of the user's order, as the file names it, and its rating.
+    pub current: String,
+    pub current_score: f64,
+}
+
+/// How much higher a model must rate than the first of the user's order to be suggested.
+pub const SUGGEST_MARGIN: f64 = 0.5;
+
+/// A dismissed [`RoutingSuggestion`]: hidden while the model rates `score` for `work`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DismissedSuggestion {
+    pub work: String,
+    pub agent: ProviderKind,
+    pub model: String,
+    pub score: f64,
 }
 
 #[cfg(test)]

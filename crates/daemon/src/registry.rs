@@ -3,6 +3,11 @@
 //! with the ETag of the copy it has. The core checks what comes back and takes it only if it
 //! reads within bounds and is newer ([`brigadier_core::routing::RegistryHolder`]).
 //!
+//! Beside it, the daily ratings research ([`keep_researched`]): at the time Settings › Routing
+//! sets (04:00 by default), or at the next start when the computer slept or Brigadier was
+//! closed then, the registry is checked and the best research-rated model with quota researches
+//! the ratings ([`brigadier_core::manager::SessionManager::research_ratings`]).
+//!
 //! Only HTTPS from the repository. Development builds may point `BRIGADIER_REGISTRY_URL` at
 //! another HTTPS address, or at plain HTTP on the loopback address (127.0.0.1 or ::1), to
 //! verify updates against a local copy; release builds ignore it. The registry is not signed
@@ -23,6 +28,13 @@ const REGISTRY_URL: &str =
 /// The first check after launch, then how often.
 const FIRST_CHECK: Duration = Duration::from_secs(60);
 const CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// The first look whether the research is due, once the CLIs' model lists are in; then how
+/// often it looks (a wall-clock look, so sleep and clock changes don't throw it off).
+const FIRST_RESEARCH_LOOK: Duration = Duration::from_secs(3 * 60);
+const RESEARCH_LOOK: Duration = Duration::from_secs(60);
+/// A research no model could do (all at their limits, or none listed yet) is tried again after
+/// this long.
+const RESEARCH_RETRY_MS: i64 = 60 * 60 * 1000;
 
 /// Checks for a newer registry on schedule, until the daemon stops.
 pub async fn keep_current(daemon: Arc<Daemon>, stop: CancellationToken) -> anyhow::Result<()> {
@@ -34,6 +46,44 @@ pub async fn keep_current(daemon: Arc<Daemon>, stop: CancellationToken) -> anyho
         }
         wait = CHECK_EVERY;
         check(&daemon).await;
+    }
+}
+
+/// Runs the ratings research once a day at the set time, and at a start after a missed one,
+/// until the daemon stops.
+pub async fn keep_researched(daemon: Arc<Daemon>, stop: CancellationToken) -> anyhow::Result<()> {
+    let mut wait = FIRST_RESEARCH_LOOK;
+    let mut retry_at = 0;
+    loop {
+        tokio::select! {
+            () = stop.cancelled() => return Ok(()),
+            () = tokio::time::sleep(wait) => {}
+        }
+        wait = RESEARCH_LOOK;
+        let now = brigadier_core::now_ms();
+        let (hours, minutes) = daemon.core.settings().ratings_research_time();
+        let holder = daemon.runtime.registry().clone();
+        let ran = holder.research_ran_at();
+        if now < retry_at
+            || brigadier_core::manager::research_due(now, hours, minutes, ran).is_none()
+        {
+            continue;
+        }
+        tracing::info!("the daily ratings research is due");
+        if let Err(error) = daemon.sessions.research_ratings(check(&daemon)).await {
+            tracing::info!(%error, "the ratings research didn't run");
+            continue;
+        }
+        let refresh = holder.rankings_refresh();
+        // No model could research: tried again within the hour rather than tomorrow.
+        if refresh.model.is_none() {
+            retry_at = now + RESEARCH_RETRY_MS;
+            continue;
+        }
+        if let Err(error) = holder.note_research_ran(now) {
+            tracing::warn!(%error, "when the ratings research ran couldn't be saved");
+            retry_at = now + RESEARCH_RETRY_MS;
+        }
     }
 }
 

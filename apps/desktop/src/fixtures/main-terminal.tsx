@@ -37,7 +37,7 @@ const restart = () => [...document.querySelectorAll("button")].find((button) => 
 function exit(): void {
   const id = current!;
   current = null;
-  emitTerminalOutput({ type: "exited", terminalId: id, code: 0 });
+  emitTerminalOutput({ type: "exited", terminalId: id, code: 0, asleep: false });
 }
 function setConnected(connected: boolean): void {
   useApp.setState({ connection: { status: connected ? "connected" : "disconnected", daemon: null, reason: null } });

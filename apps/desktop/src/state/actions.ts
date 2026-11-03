@@ -1327,6 +1327,64 @@ export async function hibernate(id: string): Promise<void> {
   storeConversation(conversation);
 }
 
+/** Moves it into Done ("Mark done"), with a toast whose Undo takes it back out. */
+export async function markDone(id: string): Promise<void> {
+  const { conversation } = await request({ method: "setDone", id, done: true });
+  storeConversation(conversation);
+  toast("Marked done", {
+    actions: [{ label: "Undo", run: () => void setDone(id, false).catch(toastError) }],
+  });
+}
+
+async function setDone(id: string, done: boolean): Promise<void> {
+  const { conversation } = await request({ method: "setDone", id, done });
+  storeConversation(conversation);
+}
+
+/** Snoozes it until `untilMs`, with a toast whose Undo puts back the snooze it had. */
+export async function snoozeUntil(id: string, untilMs: number): Promise<void> {
+  const before = useApp.getState().conversations[id]?.snoozedUntilMs;
+  const { conversation } = await request({ method: "snooze", id, untilMs });
+  storeConversation(conversation);
+  const back = before !== undefined && before > Date.now() ? before : null;
+  toast(`Snoozed until ${snoozeLabel(untilMs, Date.now())}`, {
+    actions: [{
+      label: "Undo",
+      run: () => void request({ method: "snooze", id, untilMs: back })
+        .then((reply) => storeConversation(reply.conversation)).catch(toastError),
+    }],
+  });
+}
+
+function toastError(cause: unknown): void {
+  toast(errorMessage(cause), { tone: "error" });
+}
+
+/** When a snooze ends, as its menu and toast say it: "18:00" today, else "Tue 09:00". */
+export function snoozeLabel(untilMs: number, nowMs: number): string {
+  const at = new Date(untilMs);
+  const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  if (at.toDateString() === new Date(nowMs).toDateString()) return time;
+  return `${at.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+}
+
+/**
+ * The Snooze menu's wake-up times from `now`: in an hour; this evening at 18:00 while that is
+ * later than in an hour; tomorrow at 09:00; next Monday at 09:00 (a week on, on a Monday).
+ */
+export function snoozeTimes(now: Date): { label: string; untilMs: number }[] {
+  const at = (days: number, hour: number) =>
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, hour).getTime();
+  const hour = now.getTime() + 60 * 60_000;
+  const evening = at(0, 18);
+  return [
+    { label: "In 1 hour", untilMs: hour },
+    ...(evening > hour ? [{ label: "This evening", untilMs: evening }] : []),
+    { label: "Tomorrow", untilMs: at(1, 9) },
+    { label: "Next week", untilMs: at((8 - now.getDay()) % 7 || 7, 9) },
+  ];
+}
+
 /** "session", "chat", or "conversation" for a mix, made plural for `count` other than one. */
 export function conversationNoun(conversations: Conversation[], count = conversations.length) {
   const kinds = new Set(conversations.map((conversation) => conversation.kind));

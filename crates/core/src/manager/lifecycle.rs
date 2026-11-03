@@ -297,6 +297,7 @@ impl SessionManager {
         // background: on a first launch there may be many.
         let manager = self.arc();
         self.spawn(async move {
+            manager.sweep_stale_git().await;
             crate::heap(|| manager.sweep_orphans()).await;
         });
         self.sweep_test_data().await;
@@ -385,12 +386,14 @@ impl SessionManager {
         });
     }
 
-    /// Hibernates conversations idle for longer than the setting.
+    /// Hibernates conversations idle for longer than the setting, and marks done the ones
+    /// the inbox's sweep finds ([`super::inbox`]).
     pub(super) fn start_hibernation_timer(&self) {
         let manager = self.me.clone();
         self.spawn(async move {
             let mut tick = tokio::time::interval(HIBERNATE_CHECK);
             tick.tick().await;
+            let mut ticks: u32 = 0;
             loop {
                 tick.tick().await;
                 let Some(manager) = manager.upgrade() else {
@@ -400,6 +403,10 @@ impl SessionManager {
                     return;
                 }
                 manager.hibernate_idle().await;
+                ticks = ticks.wrapping_add(1);
+                if ticks.is_multiple_of(super::inbox::SWEEP_EVERY_TICKS) {
+                    manager.sweep_done().await;
+                }
                 manager.brain_upkeep().await;
             }
         });
@@ -480,6 +487,9 @@ impl SessionManager {
                 ));
             }
             conv.close_cli().await;
+        }
+        if let Some(host) = self.terminal_host.get() {
+            host.close_idle(&id.0);
         }
         // Reported workers wait idle; they stop too and resume when sent back to work.
         for task in self.core.tasks(&id).await? {
@@ -1577,6 +1587,8 @@ impl SessionManager {
         }
         let tasks = self.core.tasks(&id).await.unwrap_or_default();
         self.forget_worker_rows(&id, &tasks);
+        // Before its branches go: no other session's ref check puts them back.
+        self.ref_records.forget_conversation(&id);
         let ledger = self.runtime.ledger().clone();
         let doomed = delete_owner(&id);
         let spaces = super::branch_names::branches_owner(&id);
@@ -1637,6 +1649,13 @@ impl SessionManager {
                 "could not remove all of it yet: {}",
                 failed.join(", ")
             )));
+        }
+        // What the ledger missed in git goes too, while its folder still names its repositories;
+        // a folder another open session works in is that session's.
+        let shared = super::shared_workspace::folder_of(conversation.setup.as_ref())
+            .is_some_and(|folder| !self.sharers(&folder, &id).is_empty());
+        if delete_branches && !private_logs && !shared {
+            self.clear_session_git(&conversation).await;
         }
         if !self.remove_session_dir(&id).await {
             return Err(Error::Invalid("could not remove its folder yet".into()));

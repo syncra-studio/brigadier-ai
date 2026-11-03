@@ -56,4 +56,22 @@ peerAtMs?: number,
  * When a request of it last finished (its sidebar row's unread dot when that came while
  * it wasn't open); folded from those events, never stored as such.
  */
-finishedAtMs?: number, };
+finishedAtMs?: number, 
+/**
+ * When it was marked done (by the user, or after 3 idle days or a merged pull request);
+ * absent when not done. The inbox reads it against later activity.
+ */
+doneAtMs?: number, 
+/**
+ * When its snooze ends; absent when not snoozed.
+ */
+snoozedUntilMs?: number, 
+/**
+ * When it was last snoozed or woken by hand.
+ */
+snoozedAtMs?: number, 
+/**
+ * How far its replies were seen: the finish time last seen in any window (its row's
+ * unread dot).
+ */
+seenAtMs?: number, };

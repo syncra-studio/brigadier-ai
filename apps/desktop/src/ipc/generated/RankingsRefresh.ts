@@ -44,6 +44,11 @@ changes: Array<RatingChange>,
  */
 errors: Array<string>, 
 /**
+ * Kinds of work the user ordered for which this research found a better-rated model than
+ * before it ran (one toast tells of them).
+ */
+found: Array<string>, 
+/**
  * Whether the saved overlay matches the effective curated revision. Worked out when read,
  * never saved: overlay.json keeps the job without it.
  */

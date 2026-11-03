@@ -3,4 +3,9 @@
 /**
  * What a terminal printed, or that its shell ended.
  */
-export type TerminalOutput = { "type": "data", terminalId: string, data: string, } | { "type": "exited", terminalId: string, code: number | null, };
+export type TerminalOutput = { "type": "data", terminalId: string, data: string, } | { "type": "exited", terminalId: string, code: number | null, 
+/**
+ * Closed idle because its session went to sleep: the tab stays, and opening it
+ * again starts a new shell with this one's output above it.
+ */
+asleep: boolean, };

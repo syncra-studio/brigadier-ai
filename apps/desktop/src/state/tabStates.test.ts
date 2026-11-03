@@ -4,14 +4,14 @@ import { test } from "node:test";
 import type { Conversation, EventEnvelope } from "@/ipc/generated";
 import { fromSnapshot, rowActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
-import { TAB_STATES, TAB_STATE_WORDS, SESSION_STATUS_WORDS, applySettledTabEvents, isTaskTab, sessionStatus, settledByTab, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
+import { TAB_STATES, TAB_STATE_WORDS, applySettledTabEvents, isTaskTab, rowMark, settledByTab, tabState, useSettledTabs } from "@/state/tabStates";
 
 const quiet = { running: false, awaiting: null, workers: 0 } as const;
 
 test("session states use only activity, in the requested precedence order", () => {
   const complete = true;
   assert.equal(tabState(quiet, false), null);
-  assert.equal(sessionStatus(quiet, null, false, true), null, "no Done word on a finished row or tab");
+  assert.deepEqual(rowMark(quiet), { look: null, hover: null }, "no Done mark on a finished, read row or tab");
   assert.equal(tabState(quiet, false, false, complete), "done");
   assert.equal(tabState(quiet, false, true, complete), "stopped");
   assert.equal(tabState({ ...quiet, running: true }, false, true, complete), "working");
@@ -22,27 +22,47 @@ test("session states use only activity, in the requested precedence order", () =
   }
   assert.equal(tabState({ ...quiet, awaiting: "signIn" }, false, false, complete), "needsYou");
   assert.deepEqual(TAB_STATES, ["needsYou", "failed", "working", "stopped", "done"]);
-  assert.deepEqual(Object.values(SESSION_STATUS_WORDS), ["Needs you", "Failed", "Working", "Stopped"]);
   assert.equal("done" in TAB_STATE_WORDS, false, "a finished session has no state word");
 });
 
-test("the tooltip retains question, approval, sign-in and usage-limit reasons", () => {
-  for (const [awaiting, reason] of [["approval", "approval"], ["input", "question"], ["signIn", "sign-in"]] as const) {
-    assert.deepEqual(sessionStatus({ ...quiet, awaiting }, null), { state: "needsYou", reason });
-  }
+test("rowMark: the four looks of every row state, with their hover (§2)", () => {
   const reset = new Date(2026, 9, 18, 14, 5).getTime();
-  assert.deepEqual(sessionStatus(quiet, { resetsAtMs: reset }), { state: "working", reason: "waiting for reset 14:05" });
-  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "failed" }, { resetsAtMs: reset }), { state: "failed", reason: null });
-  assert.equal(sessionStatus(quiet, null, false, true), null, "a finished session shows no word, only its unread dot");
+  const working = { look: "working", hover: "Working" } as const;
+  const none = { look: null, hover: null } as const;
+  const cases: [string, Parameters<typeof rowMark>[0], Parameters<typeof rowMark>[1], ReturnType<typeof rowMark>][] = [
+    ["CLI turn open, run starting/running, a worker or a held command", { ...quiet, running: true }, {}, working],
+    ["waiting on a usage limit", quiet, { quotaWait: { resetsAtMs: reset } }, { look: "working", hover: "Waiting for usage limit · resets 14:05" }],
+    ["waiting on a usage limit, reset unknown", quiet, { quotaWait: { resetsAtMs: null } }, { look: "working", hover: "Waiting for usage limit" }],
+    ["working past a usage limit", { ...quiet, running: true }, { quotaWait: { resetsAtMs: reset } }, working],
+    ["an approval", { ...quiet, awaiting: "approval", running: true }, { unread: true }, { look: "dot", hover: "Needs you · approval" }],
+    ["a question", { ...quiet, awaiting: "input" }, {}, { look: "dot", hover: "Needs you · question" }],
+    ["an MCP sign-in", { ...quiet, awaiting: "signIn" }, {}, { look: "dot", hover: "Needs you · sign-in" }],
+    ["a sign-in while it works on", { ...quiet, awaiting: "signIn", running: true }, {}, working],
+    ["failed or cut off", { ...quiet, awaiting: "failed" }, { unread: true, quotaWait: { resetsAtMs: reset } }, { look: "error", hover: "Failed" }],
+    ["finished, not opened since", quiet, { unread: true }, { look: "dot", hover: "New reply" }],
+    ["finished and read", quiet, {}, none],
+    ["stopped", quiet, { stopped: true, unread: true }, none],
+    ["idle, never ran", quiet, {}, none],
+    ["needs you, in front of the user", { ...quiet, awaiting: "approval" }, { viewing: true }, none],
+  ];
+  for (const [what, activity, options, mark] of cases) assert.deepEqual(rowMark(activity, options), mark, what);
 });
 
-test("git marks still refresh the context card but never choose a row word", () => {
+test("rowMark: a sleeping row keeps an unread dot it had, and shows nothing once read (D12)", () => {
+  const asleep = fromSnapshot({ conversationId: "s", run: "hibernated", tasks: [], approvals: [], questions: [], turnEndedAtMs: 5 });
+  assert.deepEqual(rowMark(rowActivity(asleep), { unread: true }), { look: "dot", hover: "New reply" });
+  assert.deepEqual(rowMark(rowActivity(asleep), { unread: false }), { look: null, hover: null });
+  // Asleep, nothing spins and no old failure shows (D10).
+  assert.equal(rowActivity({ ...asleep, turnOpen: true, workersWorking: true }).running, false);
+  assert.equal(rowActivity({ ...asleep, ended: "failed" }).awaiting, null);
+});
+
+test("git marks still refresh the context card but never choose a row mark", () => {
   useSettledTabs.setState({ byTab: { s: { state: "merged" } } });
-  assert.equal(sessionStatus(quiet, null), null, "a git merge cannot make a never-run session Done");
+  assert.deepEqual(rowMark(quiet), { look: null, hover: null }, "a git merge cannot mark a never-run session");
   applySettledTabEvents([{ stream: "conversation:s", event: { type: "requestReady", conversationId: "s", requestId: "r", head: "abc" } } as EventEnvelope]);
   assert.deepEqual(useSettledTabs.getState().byTab.s, { state: "ready" });
-  assert.equal(sessionStatus(quiet, null), null);
-  assert.equal(sessionStatus(quiet, null, false, true), null, "a finished session shows no word, only its unread dot");
+  assert.deepEqual(rowMark(quiet), { look: null, hover: null });
 });
 
 test("D61: a session's turn end looks at git again, and only work all on the base leaves nothing to merge", () => {
@@ -85,31 +105,14 @@ test("a project's open session is a task of its own; a chat, a side chat, an arc
 });
 
 
-test("Needs you keeps a blue dot, failures a red mark, Working a spinner, and Done only an unread dot", () => {
-  for (const awaiting of ["approval", "input", "signIn"] as const) for (const running of awaiting === "signIn" ? [false] : [false, true]) for (const unread of [false, true]) {
-    assert.deepEqual(sidebarIndicators({ ...quiet, awaiting, running }, true, unread, false, true), { working: false, error: false, unread: true });
-  }
-  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "failed", running: true }, true, true), { working: false, error: true, unread: false });
-  assert.deepEqual(sidebarIndicators({ ...quiet, running: true }, false, true), { working: true, error: false, unread: false });
-  assert.deepEqual(sidebarIndicators(quiet, false, true, true, true), { working: false, error: false, unread: false });
-  assert.deepEqual(sidebarIndicators(quiet, false, true, false, true), { working: false, error: false, unread: true });
-  assert.deepEqual(sidebarIndicators(quiet, false, false, false, true), { working: false, error: false, unread: false });
-  assert.deepEqual(sidebarIndicators(quiet, false, true), { working: false, error: false, unread: false });
-});
-
 test("a session the user is looking at, or working again past a sign-in, doesn't show Needs you", () => {
   // The screenshot's session: an MCP server still wants a sign-in, and the user's reply set it working.
   const signedOff = { ...quiet, awaiting: "signIn", running: true, workers: 1 } as const;
   assert.equal(tabState(signedOff, false), "working");
-  assert.deepEqual(sessionStatus(signedOff, null), { state: "working", reason: null });
-  assert.deepEqual(sidebarIndicators(signedOff, false, false), { working: true, error: false, unread: false });
   // In front of the user, no waiting card marks its own row or tab; the next state shows instead.
   for (const awaiting of ["approval", "input", "signIn"] as const) {
     assert.equal(tabState({ ...quiet, awaiting, running: true }, false, false, false, true), "working");
     assert.equal(tabState({ ...quiet, awaiting }, false, false, true, true), "done");
-    assert.deepEqual(sessionStatus({ ...quiet, awaiting }, null, false, false, true), null);
-    assert.deepEqual(sidebarIndicators({ ...quiet, awaiting }, false, false, false, true, true), { working: false, error: false, unread: false });
+    assert.deepEqual(rowMark({ ...quiet, awaiting }, { viewing: true }), { look: null, hover: null });
   }
-  // Elsewhere, a question still needs the user.
-  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "input", running: true }, false, false), { working: false, error: false, unread: true });
 });

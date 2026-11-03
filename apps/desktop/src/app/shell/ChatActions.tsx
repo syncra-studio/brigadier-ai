@@ -1,31 +1,40 @@
 import { useAui, useThreadListSource } from "@/components/conversation";
-import { type FC, useEffect } from "react";
+import { type FC, type FormEvent, useEffect, useState } from "react";
 
 import { forkPlaces } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { branchMarkdown, latestAnswer, storedBranch } from "@/app/conversation/storedBranch";
 import { NameDialog } from "@/app/shell/NameDialog";
-import { TooltipIconButton } from "@/components/controls";
+import { Button, ErrorLine, Input, TooltipIconButton } from "@/components/controls";
 import {
   Archive,
   BranchAlt,
+  CheckCircle,
+  Clock,
   Copy,
   Dock,
   DotsHorizontal,
   Folder,
+  Moon,
   Pencil,
   Trash,
 } from "@/components/icons";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { RowAction } from "@/components/shared";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {
   archive,
   forkConversation,
+  hibernate,
+  markDone,
   renameConversation,
   setPinned,
+  snoozeLabel,
+  snoozeTimes,
+  snoozeUntil,
 } from "@/state/actions";
+import { useRowMark } from "@/state/tabStates";
 import { askDelete } from "@/state/picking";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -87,6 +96,11 @@ export const ChatActions: FC<{
   const actionsName = conversation.kind === "chat" ? "Chat actions" : "Session actions";
   const mac = useApp((s) => s.info?.platform === "macos");
 
+  const asleep = conversation.lifecycle === "hibernated";
+  // The row's spinner: it can't sleep while it works (the daemon refuses then too).
+  const working = useRowMark(id).look === "working";
+  const [picking, setPicking] = useState(false);
+
   const togglePin = () => void setPinned(id, !pinned).catch(fail);
   // No confirmation, even while it runs: archiving stops it, and Undo brings it back stopped.
   const archiveIt = () => void archive(id).catch(fail);
@@ -114,6 +128,7 @@ export const ChatActions: FC<{
   const key = (keys: string) =>
     mac ? keys : keys.replace("⌥", "Alt+").replace("⇧", "Shift+").replace("⌘", "Ctrl+");
   return (
+    <>
     <DropdownMenu modal={false}>
       {row ? (
         // A row's hover action, as the project row's ⋯ is.
@@ -210,6 +225,35 @@ export const ChatActions: FC<{
             </DropdownMenuSub>
           </>
         )}
+        {row && !archived && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => void markDone(id).catch(fail)}>
+              <CheckCircle />
+              Mark done
+            </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Clock />
+                Snooze
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <SnoozeTimes id={id} />
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setPicking(true)}>Pick a time…</DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            {!asleep && (
+              // A disabled item takes no pointer: its wrapper says why on hover.
+              <div title={working ? `It can't sleep while it works` : undefined}>
+                <DropdownMenuItem disabled={working} onSelect={() => void hibernate(id).catch(fail)}>
+                  <Moon />
+                  Put to sleep
+                </DropdownMenuItem>
+              </div>
+            )}
+          </>
+        )}
         <DropdownMenuSeparator />
         {!archived && (
           <DropdownMenuItem onSelect={archiveIt}>
@@ -225,6 +269,59 @@ export const ChatActions: FC<{
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    {row && <SnoozeDialog id={id} open={picking} onOpenChange={setPicking} />}
+    </>
+  );
+};
+
+/** Snooze ›'s wake-up times, from when the submenu opened. */
+const SnoozeTimes: FC<{ id: string }> = ({ id }) => {
+  const [now] = useState(() => Date.now());
+  return snoozeTimes(new Date(now)).map(({ label, untilMs }) => (
+    <DropdownMenuItem key={label} onSelect={() => void snoozeUntil(id, untilMs).catch(fail)}>
+      {label}
+      <DropdownMenuShortcut>{snoozeLabel(untilMs, now)}</DropdownMenuShortcut>
+    </DropdownMenuItem>
+  ));
+};
+
+/** Snooze › Pick a time…: a day and time to wake it, tomorrow at 09:00 to start. */
+const SnoozeDialog: FC<{ id: string; open: boolean; onOpenChange: (open: boolean) => void }> = ({ id, open, onOpenChange }) => (
+  <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent>{open && <SnoozeForm id={id} onDone={() => onOpenChange(false)} />}</DialogContent>
+  </Dialog>
+);
+
+/** A `datetime-local` value: local time to the minute. */
+function localInput(ms: number): string {
+  const at = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
+  return at.toISOString().slice(0, 16);
+}
+
+const SnoozeForm: FC<{ id: string; onDone: () => void }> = ({ id, onDone }) => {
+  const [value, setValue] = useState(() => localInput(snoozeTimes(new Date()).find((time) => time.label === "Tomorrow")!.untilMs));
+  const [error, setError] = useState<string | null>(null);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const untilMs = new Date(value).getTime();
+    if (!Number.isFinite(untilMs) || untilMs <= Date.now()) {
+      setError("Pick a time that's still ahead.");
+      return;
+    }
+    void snoozeUntil(id, untilMs).then(onDone, (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+  };
+  return (
+    <form onSubmit={submit} className="grid gap-4">
+      <DialogHeader>
+        <DialogTitle>Snooze until</DialogTitle>
+      </DialogHeader>
+      <Input type="datetime-local" aria-label="Wake up at" value={value} onChange={(event) => setValue(event.target.value)} autoFocus />
+      <ErrorLine error={error} />
+      <DialogFooter>
+        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
+        <Button type="submit">Snooze</Button>
+      </DialogFooter>
+    </form>
   );
 };
 
