@@ -14,7 +14,7 @@ const STEPS: readonly [string, string][] = [
   ["Automatic", "With no order of your own, it takes the first model of the automatic advice that your rules allow."],
   [
     "Your rules",
-    "Last, your rules check the result: a model they keep out, or an effort above your cap, is refused and the worker doesn't start. Your rules win over everything above.",
+    "Last, your rules check the result: an effort above a cap or below a minimum runs at that limit instead, and a model they keep out is refused, so the worker doesn't start. Your rules win over everything above.",
   ],
 ];
 

@@ -2468,7 +2468,7 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
     .unwrap();
     flow.say("Start by work.").await;
     flow.until("the started workers reported", |b| {
-        b.tasks.len() == 6
+        b.tasks.len() == 7
             && b.tasks
                 .values()
                 .all(|t| t.state == crate::work::TaskState::Reported)
@@ -2512,13 +2512,11 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
         (json!("claude"), Value::Null, json!("medium"))
     );
     assert_eq!(seen["agent flag"]["row"]["picked"], json!(["effort"]));
-    // The rules judge what results.
-    assert_eq!(seen["effort flag"]["error"]["code"], "refused");
-    assert!(
-        seen["effort flag"]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("\"effort-ceiling: high\"")
+    // The rules judge what results: an effort above the cap starts at the cap (D-L38).
+    assert_eq!(
+        worker("effort flag"),
+        (json!("codex"), json!("gpt-6-astra"), json!("high")),
+        "{seen:#?}"
     );
     assert_eq!(seen["unknown"]["error"]["code"], "not-found");
     // The work's order: its first row is kept out by the rule for that work, so the next starts.

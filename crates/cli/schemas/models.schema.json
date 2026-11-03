@@ -246,6 +246,13 @@
           }
         }
       }
+    },
+    "advice": {
+      "description": "The user's advice notes from their rules file: words to weigh when picking a model. Advice only; it restricts no start.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

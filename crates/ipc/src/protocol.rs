@@ -741,6 +741,12 @@ pub enum Request {
         rows: Vec<GuidanceRow>,
         rules: Vec<ModelRule>,
     },
+    /// Settings › Routing's Add rule: rules typed in the user's own words, rewritten by a model
+    /// of the `Rule reading` rows into exact rules and advice notes. Nothing is saved: the page
+    /// shows them, then saves with `SetModelRules`.
+    ReadModelRules {
+        text: String,
+    },
     /// A worker's thread as its CLI keeps it (S14): its CLI session files' items and turns,
     /// read-only (G19.Q6).
     WorkerThread {
@@ -1688,6 +1694,9 @@ pub enum Response {
     },
     SetModelRules {
         rules: ModelRules,
+    },
+    ReadModelRules {
+        rules: Vec<ModelRule>,
     },
     StopBackgroundTask,
     ReadBackgroundTaskOutput {

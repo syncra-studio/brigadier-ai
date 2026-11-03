@@ -2009,6 +2009,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::SetModelRules { rows, rules } => Response::SetModelRules {
             rules: sessions.set_model_rules(&rows, &rules)?,
         },
+        Request::ReadModelRules { text } => Response::ReadModelRules {
+            rules: heap(|| sessions.read_rules(&text)).await?,
+        },
         Request::DontResume { conversation_id } => {
             heap(|| sessions.dont_resume(&conversation_id)).await?;
             Response::DontResume

@@ -44,15 +44,8 @@ export function RoutingPage() {
   const usageError = useUsage((s) => s.refreshError);
   const [more, setMore] = useState<MoreRow>(null);
   const [kind, setKind] = useState<TaskCategory>("review");
-  // The kind of work open in Who does what; a rule's note opens one it would stop from starting.
+  // The kind of work open in Who does what.
   const [work, setWork] = useState<string | null>(null);
-  const openWork = (name: string) => {
-    const displayed = name === "fusion-claude" || name === "fusion-codex" ? "Fusion" : name;
-    setWork(displayed);
-    requestAnimationFrame(() =>
-      document.querySelector(`[data-slot="routing-kind"][data-work="${CSS.escape(displayed)}"]`)?.scrollIntoView({ block: "nearest" }),
-    );
-  };
   // Settings search bringing one of More's rows into view opens it.
   const revealing = useReveal((s) => s.label);
   const asked =
@@ -103,7 +96,7 @@ export function RoutingPage() {
         </p>
       )}
       <WhoDoesWhat rules={rules} groups={groups} open={work} onOpen={setWork} />
-      <Rules rules={rules} groups={groups} onOpenKind={openWork} />
+      <Rules rules={rules} groups={groups} />
       <More
         open={more}
         onOpen={setMore}

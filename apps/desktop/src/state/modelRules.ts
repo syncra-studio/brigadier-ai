@@ -44,3 +44,9 @@ export async function saveModelRules(rows: readonly GuidanceRow[], rules: readon
   const { rules: next } = await request({ method: "setModelRules", rows: [...rows], rules: [...rules] });
   useModelRules.setState({ view: next, error: null });
 }
+
+/** Has a model rewrite rules typed in the user's own words into exact rules and advice notes; nothing is saved. */
+export async function readModelRules(text: string): Promise<ModelRule[]> {
+  const { rules } = await request({ method: "readModelRules", text });
+  return rules;
+}

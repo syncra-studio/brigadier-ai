@@ -22,6 +22,7 @@ const KIND_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   Fusion: PullRequestMerged,
   Fallback: Lifesaver,
   "Conversation titles": Text,
+  "Rule reading": Text,
 };
 
 /**

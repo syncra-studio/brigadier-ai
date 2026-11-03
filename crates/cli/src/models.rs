@@ -17,6 +17,9 @@ pub struct ModelsOutput {
     pub accounts: Vec<Account>,
     pub guidance: Vec<Guidance>,
     pub rules: Vec<Rule>,
+    /// The user's advice notes from the rules file: words to weigh when picking, never a rule.
+    #[serde(default)]
+    pub advice: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

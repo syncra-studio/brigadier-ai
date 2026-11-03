@@ -413,7 +413,7 @@ impl SessionManager {
         };
         // The pin holds the model the worker runs (`gpt-6-astra` for `--model astra`), so its
         // quota recovery keeps matching its own model.
-        let quota_policy = crate::work::WorkerQuotaPolicy {
+        let mut quota_policy = crate::work::WorkerQuotaPolicy {
             work: work.clone(),
             pin: brigadier_router::Pin {
                 provider: start.agent,
@@ -438,6 +438,17 @@ impl SessionManager {
             work.as_deref(),
         )? {
             return Ok(refused(rule));
+        }
+        // D-L38: an effort above a cap or below a minimum runs at the limit instead; a pinned
+        // effort is pinned as it runs.
+        let effort = self.ruled_effort(
+            provider,
+            model.as_deref(),
+            effort.as_deref(),
+            work.as_deref(),
+        )?;
+        if quota_policy.pin.effort.is_some() {
+            quota_policy.pin.effort = effort.clone();
         }
         // Q8: the session's own level unless `--permission` says.
         let permission = match start.permission {
@@ -581,7 +592,14 @@ impl SessionManager {
             {
                 continue;
             }
-            let runs = self.runs_as(row.agent, model.as_deref(), row.effort.as_deref());
+            // The row's effort as the effort rules move it, as its start runs it.
+            let effort = self.ruled_effort(
+                row.agent,
+                model.as_deref(),
+                row.effort.as_deref(),
+                Some(work),
+            )?;
+            let runs = self.runs_as(row.agent, model.as_deref(), effort.as_deref());
             if row.agent == choice.provider
                 && runs
                     == self.runs_as(
@@ -596,7 +614,7 @@ impl SessionManager {
                 "{} {}{}",
                 brigadier_providers::KindFacts::label(row.agent),
                 model.as_deref().unwrap_or("its default model"),
-                row.effort
+                effort
                     .as_deref()
                     .map(|effort| format!(" · {effort}"))
                     .unwrap_or_default()
@@ -606,7 +624,7 @@ impl SessionManager {
             let row_choice = ModelChoice {
                 provider: row.agent,
                 model: runs.0,
-                effort: row.effort.clone(),
+                effort,
                 fast: None,
                 account: None,
             };
@@ -1865,6 +1883,8 @@ impl SessionManager {
             .as_ref()
             .and_then(|plain| plain.quota_policy.as_ref())
             .and_then(|policy| policy.work.clone());
+        // D-L38: the effort it switches to, as the effort rules move it.
+        let named = named.map(|choice| self.ruled_choice(choice, work.as_deref()));
         if let Some(choice) = &named {
             if let Some(rule) = self.model_refusal(
                 choice.provider,

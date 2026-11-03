@@ -166,6 +166,7 @@ impl SessionManager {
                         fast: None,
                         account: None,
                     })
+                    .map(|choice| self.ruled_choice(choice, Some(work)))
                     .collect(),
                 None => self.fallback_rows(),
             };
