@@ -5,8 +5,8 @@
  * such conversation's view in step with the fixture as it drives the stores, the way the
  * engine's `threadView` and `threadNews` keep the app's.
  */
-import type { FileChangeKind, FileEntry, Message, OrchestratorStep, ProviderEvent, ThreadTurn, ThreadView, TurnEnd, UserRequest } from "@/ipc/generated";
-import { applyActivityNews } from "@/state/activity";
+import type { EventEnvelope, FileChangeKind, FileEntry, Message, OrchestratorStep, ProviderEvent, ThreadTurn, ThreadView, TurnEnd, UserRequest } from "@/ipc/generated";
+import { applyActivityEvents, applyActivityNews } from "@/state/activity";
 import { type Board, useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
 import { rowOf } from "@/fixtures/workerRows";
@@ -213,6 +213,13 @@ export function cliTurnsRead(): void {
   cliLag.unread.clear();
   made.clear();
   sync();
+}
+
+/** For a fixture that sets the board's run: the activity store follows, as the app's one `runStateChanged` moves both. */
+export function followBoardRun(): void {
+  useBoard.subscribe(({ board }) => {
+    if (board) applyActivityEvents([{ event: { type: "runStateChanged", conversationId: board.conversationId, state: board.run } } as unknown as EventEnvelope]);
+  });
 }
 
 sync();

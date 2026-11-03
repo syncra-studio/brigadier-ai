@@ -12,6 +12,7 @@ import type { NotifyFinished } from "./NotifyFinished";
 import type { OwnAccountName } from "./OwnAccountName";
 import type { PermissionLevel } from "./PermissionLevel";
 import type { ProviderKind } from "./ProviderKind";
+import type { SidebarMode } from "./SidebarMode";
 
 /**
  * User settings persisted by the core.
@@ -235,6 +236,10 @@ ratingsResearchAt: string,
  * that kind of work is the one it was dismissed at.
  */
 dismissedSuggestions: Array<DismissedSuggestion>, 
+/**
+ * How the sidebar lists conversations, the same in every window.
+ */
+sidebarMode: SidebarMode, 
 /**
  * The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
  * before it existed read as 0, so their conversions run.

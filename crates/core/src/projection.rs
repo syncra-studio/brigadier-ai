@@ -21,6 +21,11 @@ pub(crate) struct Projection {
     /// can resume in a different order than they committed; an older event must not win.
     title_seqs: HashMap<String, i64>,
     pinned_seqs: HashMap<String, i64>,
+    done_seqs: HashMap<String, i64>,
+    snoozed_seqs: HashMap<String, i64>,
+    /// When each conversation was last marked done or brought back, either way: the sweep
+    /// leaves that choice alone until the thread does something after it.
+    pub(crate) done_decided_at: HashMap<ConversationId, i64>,
     setup_seqs: HashMap<String, i64>,
     lifecycle_seqs: HashMap<String, i64>,
     project_seqs: HashMap<String, i64>,
@@ -108,6 +113,31 @@ impl Projection {
                     && latest(&mut self.pinned_seqs, &id.0, seq)
                 {
                     conversation.pinned_at_ms = *pinned_at_ms;
+                }
+            }
+            DomainEvent::ConversationDone { id, done_at_ms } => {
+                if let Some(conversation) = self.conversations.get_mut(id)
+                    && latest(&mut self.done_seqs, &id.0, seq)
+                {
+                    conversation.done_at_ms = *done_at_ms;
+                    self.done_decided_at.insert(id.clone(), at_ms);
+                }
+            }
+            DomainEvent::ConversationSnoozed {
+                id,
+                until_ms,
+                at_ms,
+            } => {
+                if let Some(conversation) = self.conversations.get_mut(id)
+                    && latest(&mut self.snoozed_seqs, &id.0, seq)
+                {
+                    conversation.snoozed_until_ms = *until_ms;
+                    conversation.snoozed_at_ms = Some(*at_ms);
+                }
+            }
+            DomainEvent::ConversationSeen { id, at_ms } => {
+                if let Some(conversation) = self.conversations.get_mut(id) {
+                    conversation.seen_at_ms = conversation.seen_at_ms.max(Some(*at_ms));
                 }
             }
             DomainEvent::MessageAppended { message } => {
@@ -291,6 +321,10 @@ mod tests {
             deleting: false,
             peer_at_ms: None,
             finished_at_ms: None,
+            done_at_ms: None,
+            snoozed_until_ms: None,
+            snoozed_at_ms: None,
+            seen_at_ms: None,
         }
     }
 

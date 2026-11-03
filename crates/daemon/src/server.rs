@@ -408,9 +408,7 @@ impl Session {
                     }
                 }
                 news = next_thread_news(&mut self.thread_feed) => {
-                    if let Some(news) = news {
-                        self.writer.news(news).await?;
-                    }
+                    forward_thread_news(&mut self.writer, news).await?;
                 }
                 () = news_due(self.writer.due()) => {
                     self.writer.send_news().await?;
@@ -1145,24 +1143,36 @@ async fn next_clean_progress(
     }
 }
 
+/// The next thread news, or how many pieces this connection fell behind by (`Err`).
 async fn next_thread_news(
     feed: &mut Option<broadcast::Receiver<brigadier_core::thread_view::ThreadNews>>,
-) -> Option<brigadier_core::thread_view::ThreadNews> {
+) -> Option<Result<brigadier_core::thread_view::ThreadNews, u64>> {
     match feed {
-        Some(rx) => loop {
-            match rx.recv().await {
-                Ok(news) => break Some(news),
-                // Behind: what it missed is read again with the next `threadView`.
-                Err(RecvError::Lagged(missed)) => {
-                    tracing::warn!(missed, "a connection missed thread news");
-                }
-                Err(RecvError::Closed) => {
-                    *feed = None;
-                    break None;
-                }
+        Some(rx) => match rx.recv().await {
+            Ok(news) => Some(Ok(news)),
+            Err(RecvError::Lagged(missed)) => Some(Err(missed)),
+            Err(RecvError::Closed) => {
+                *feed = None;
+                None
             }
         },
         None => std::future::pending().await,
+    }
+}
+
+/// Sends thread news on; a lag tells the window, which reads its rows and threads again (a
+/// missed turn end would otherwise keep a row working until the next reconnect).
+async fn forward_thread_news<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut NewsWriter<W>,
+    news: Option<Result<brigadier_core::thread_view::ThreadNews, u64>>,
+) -> Result<(), brigadier_ipc::Error> {
+    match news {
+        Some(Ok(news)) => writer.news(news).await,
+        Some(Err(missed)) => {
+            tracing::warn!(missed, "a connection missed thread news");
+            writer.write(&ServerFrame::ThreadNewsMissed).await
+        }
+        None => Ok(()),
     }
 }
 
@@ -2390,6 +2400,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::SetPinned { id, pinned } => Response::SetPinned {
             conversation: Box::new(heap(|| core.set_pinned(id, pinned)).await?),
         },
+        Request::SetDone { id, done } => Response::SetDone {
+            conversation: Box::new(heap(|| core.set_done(id, done)).await?),
+        },
+        Request::Snooze { id, until_ms } => Response::Snooze {
+            conversation: Box::new(heap(|| core.snooze(id, until_ms)).await?),
+        },
+        Request::MarkSeen { id, at_ms } => Response::MarkSeen {
+            conversation: Box::new(heap(|| core.mark_seen(id, at_ms)).await?),
+        },
         Request::AppendMessage {
             conversation_id,
             text,
@@ -2927,6 +2946,45 @@ mod tests {
             .unwrap();
         let _ = std::fs::remove_dir_all(&models);
         assert!(matches!(update, Some(DictationUpdate::Downloaded)));
+    }
+
+    /// A connection that fell behind the threads' news used to only log it, and a missed turn
+    /// end kept a row working until the next reconnect: it tells the window now.
+    #[tokio::test]
+    async fn a_thread_news_lag_writes_thread_news_missed() {
+        use brigadier_ipc::frame::{FrameReader, FrameWriter};
+        let news = |seq: u64| -> brigadier_core::thread_view::ThreadNews {
+            serde_json::from_value(serde_json::json!({
+                "conversationId": "c1", "entries": [], "opened": true, "seq": seq
+            }))
+            .unwrap()
+        };
+        let (tx, rx) = broadcast::channel(2);
+        let mut feed = Some(rx);
+        for seq in 1..=5 {
+            tx.send(news(seq)).unwrap();
+        }
+        let (send, recv) = tokio::io::duplex(1 << 16);
+        let mut writer = NewsWriter::new(FrameWriter::new(send));
+        for _ in 0..3 {
+            let next = next_thread_news(&mut feed).await;
+            forward_thread_news(&mut writer, next).await.unwrap();
+        }
+        drop(writer);
+        let mut reader = FrameReader::new(recv);
+        let mut frames = Vec::new();
+        while let Some(frame) = reader.read_server().await.unwrap() {
+            frames.push(frame);
+        }
+        assert!(matches!(frames[0], ServerFrame::ThreadNewsMissed));
+        let seqs: Vec<u64> = frames[1..]
+            .iter()
+            .flat_map(|frame| match frame {
+                ServerFrame::ThreadNews { news } => news.iter().map(|news| news.seq),
+                other => panic!("not news: {other:?}"),
+            })
+            .collect();
+        assert_eq!(seqs, [4, 5], "the news kept after the lag still goes");
     }
 
     /// The first run's project scan ran git in a folder macOS then asked the user about, and

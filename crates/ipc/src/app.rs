@@ -62,6 +62,9 @@ pub enum BridgeEvent {
     ThreadNews {
         news: Vec<brigadier_core::thread_view::ThreadNews>,
     },
+    /// Some of the threads' news was dropped on the way: read the rows' activity and the
+    /// threads shown again.
+    ThreadNewsMissed,
     /// What the right sidebar's search with `id` found next, or that it ended.
     Search {
         id: u32,

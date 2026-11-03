@@ -15,7 +15,15 @@ export function MainTerminalTab({ conversationId, tab, active }: { conversationI
     setExited(false);
     return terminal;
   }, [conversationId, tab.id]);
-  const onExit = useCallback(() => setExited(true), []);
+  // Closed for its session's sleep: it starts again, its output kept, once its tab shows.
+  const [asleep, setAsleep] = useState(false);
+  if (asleep && active) setAsleep(false);
+  const onExit = useCallback((_code: number | null, slept: boolean) => {
+    if (!slept) return setExited(true);
+    endMainTerminal(tab.id);
+    setAsleep(true);
+    setAttempt((count) => count + 1);
+  }, [tab.id]);
   const onTitle = useCallback((title: string) => changeSessionTab(conversationId, tab.id,
     (current) => current.kind === "terminal" ? { ...current, title } : current), [conversationId, tab.id]);
   const onCwd = useCallback((cwd: string) => changeSessionTab(conversationId, tab.id,
@@ -29,6 +37,6 @@ export function MainTerminalTab({ conversationId, tab, active }: { conversationI
     {exited && <Banner text="The shell exited.">
       <Button size="xs" variant="ghost" onClick={restart}>Restart</Button>
     </Banner>}
-    <TerminalView key={attempt} open={open} onExit={onExit} onTitle={onTitle} onCwd={onCwd} focus={active} />
+    {!asleep && <TerminalView key={attempt} open={open} onExit={onExit} onTitle={onTitle} onCwd={onCwd} focus={active} />}
   </>;
 }
