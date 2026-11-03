@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 
-import { StopWorker } from "@/app/conversation/activity/StopWorker";
 import { WorkerGlyph } from "@/components/conversation";
 import { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 import { TooltipIconButton } from "@/components/controls";
@@ -10,7 +9,7 @@ import type { WorkerRow } from "@/ipc/generated";
 
 /**
  * A worker's header, from its row: back, its glyph and name, its model and state (a click shows
- * its details, when it has them), Stop and the panel's own actions.
+ * its details, when it has them) and the panel's own actions; no End here, the strip and rows keep it.
  */
 export function WorkerHeader({
   row,
@@ -63,7 +62,6 @@ export function WorkerHeader({
         </TooltipTrigger>
         <TooltipContent>Worker details · {model} · {state}</TooltipContent>
       </Tooltip>
-      <StopWorker row={row} name={name ?? row.title} />
       {headerActions}
     </header>
   );
