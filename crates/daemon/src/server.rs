@@ -1520,7 +1520,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             item_id,
             index,
         } => Response::MoveQueued {
-            queue: heap(|| core.move_queued(&conversation_id, &item_id, index)).await?,
+            // Through the sessions: a judge still out on it loses its say.
+            queue: heap(|| sessions.move_queued(&conversation_id, &item_id, index)).await?,
         },
         Request::ResumeQueue { conversation_id } => Response::ResumeQueue {
             queue: heap(|| sessions.resume_queue(conversation_id)).await?,

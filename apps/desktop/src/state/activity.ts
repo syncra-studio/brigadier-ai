@@ -74,7 +74,7 @@ export function signInsOf(servers: readonly McpServerState[]): string[] {
 /**
  * Its work still holds while no turn of its CLI runs: one of its workers still works, or a
  * background command of its CLI still runs or owes the turn its end starts. A message sent then
- * waits Deciding and goes on with that work, as the daemon's `work_holds` reads it.
+ * waits in the queue while it is judged, as the daemon's `work_holds` reads it.
  */
 export function workHolds(activity: Activity | undefined): boolean {
   if (!activity) return false;

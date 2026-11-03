@@ -10,8 +10,9 @@ import type { TaskId } from "./TaskId";
  */
 export type QueuedMessage = { id: string, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, queuedAtMs: number, editedAtMs: number | null, 
 /**
- * Sent while the session's turn works: the session has it and judges it with `brigadier
- * queue` (run2-D40); it waits here, Deciding, until it is judged.
+ * Only in rows stored by an older daemon, which held a message back until its judge
+ * answered; a start settles them. A message sent while the session works is now an ordinary
+ * row from the first frame, judged in the background (`queue_judging`).
  */
 deciding?: boolean, 
 /**
@@ -20,8 +21,7 @@ deciding?: boolean,
  */
 delivered?: boolean, 
 /**
- * The thread's command it waits behind while Deciding: the session reads it once that
- * command ends.
+ * Only in rows stored by an older daemon: the thread's command it waited behind.
  */
 heldBy?: HeldBy, 
 /**

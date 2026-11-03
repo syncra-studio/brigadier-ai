@@ -631,6 +631,10 @@ pub(crate) struct FakeBehavior {
     /// What the one-shot judging a follow-up answers (D157), instead of the script; `FITS`
     /// when unset.
     pub judge: Mutex<Option<&'static str>>,
+    /// That one-shot answers only once it takes a permit here.
+    pub judge_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
+    /// That one-shot first says it will retry, as a CLI whose API call failed does.
+    pub judge_retries: std::sync::atomic::AtomicBool,
     /// Closed mid-turn, it says that turn was interrupted before it ends, as the Codex and
     /// OpenCode CLIs do; off, its process just ends, as Claude Code's does.
     pub interrupt_on_close: bool,
@@ -1291,6 +1295,11 @@ impl ProviderSession for FakeSession {
                 .prompt
                 .contains("fits the work in progress")
                 .then(|| self.behavior.judge.lock().unwrap().unwrap_or("FITS"));
+            let judge_gate = self.behavior.judge_gate.lock().unwrap().clone();
+            let judge_retries = self
+                .behavior
+                .judge_retries
+                .load(std::sync::atomic::Ordering::SeqCst);
             let stops = self.stops.clone();
             stops.0.store(false, std::sync::atomic::Ordering::SeqCst);
             let session_file = self.session_file.clone();
@@ -1317,7 +1326,25 @@ impl ProviderSession for FakeSession {
                 let reply = loop {
                     let again = turn.clone();
                     let mut reply = match judged {
-                        Some(word) => Reply::text(word),
+                        Some(word) => {
+                            if judge_retries {
+                                let _ = tx
+                                    .send(ProviderEvent::Error {
+                                        error: brigadier_providers::model::ProviderError {
+                                            kind: brigadier_providers::ErrorKind::Overloaded,
+                                            message: "API request failed; retry 1 of 10".into(),
+                                            will_retry: true,
+                                            limit: None,
+                                            code: None,
+                                        },
+                                    })
+                                    .await;
+                            }
+                            if let Some(gate) = &judge_gate {
+                                let _ = gate.acquire().await;
+                            }
+                            Reply::text(word)
+                        }
                         None => script(turn).await,
                     };
                     if let Some(used) = reply.context_tokens {
@@ -2398,10 +2425,11 @@ impl Flow {
     /// ended request takes once it is over has run: it runs git in the checkout after the
     /// request shows as ended.
     pub async fn settled_in(&self, id: &ConversationId) -> Board {
+        let conv = self.manager.conv(id).ok();
         self.until_in(id, "the requests to settle", |board| {
-            // A message still Deciding is judged in a moment: not settled yet.
+            // A message being judged may move in a moment: not settled yet.
             !board.requests.is_empty()
-                && !board.queue.items.iter().any(|item| item.deciding)
+                && !conv.as_ref().is_some_and(|conv| conv.is_judging())
                 && board.requests.values().all(|request| match request.state {
                     RequestState::Working => false,
                     RequestState::Waiting => true,

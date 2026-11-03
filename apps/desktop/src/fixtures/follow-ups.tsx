@@ -44,13 +44,13 @@ function queued(items: QueuedMessage[]): EventEnvelope["event"] {
   return { type: "queueChanged", conversationId: id, queue: { items, paused: false } };
 }
 const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
-/** The row's state as the rail shows it (run2-D40). */
+/** The row's state as the rail shows it. */
 function railState() {
   const row = document.querySelector('[data-slot="message-queue-item"]');
   const notice = document.querySelector('[data-slot="message-queue-sent"]');
   return {
-    deciding: row?.getAttribute("data-deciding") === "true" && row.getAttribute("aria-busy") === "true",
-    note: row?.querySelector(".shimmer, [data-slot=held-note]")?.textContent?.split(" · ")[0] ?? null,
+    label: /Deciding/.test(row?.textContent ?? ""),
+    steer: [...(row?.querySelectorAll("button") ?? [])].some((button) => /Steer/.test(button.textContent ?? "")),
     buttons: [...(row?.querySelectorAll("button") ?? [])].map((button) => button.textContent ?? "").filter((label) => /new session|Run here/.test(label)),
     notice: notice?.querySelector("span")?.textContent ?? null,
   };
@@ -82,13 +82,11 @@ async function drive() {
   apply([queued([])]);
   await pause();
   const removed = view();
-  // The session judges it with `brigadier queue`; the rail shows each state the daemon writes.
-  apply([queued([{ ...item, deciding: true, delivered: true }])]);
+  // Being judged in the background, it reads as any other row; the rail shows the offer it may
+  // come back with.
+  apply([queued([item])]);
   await pause();
-  const deciding = railState();
-  apply([queued([{ ...item, deciding: true, delivered: true, heldBy: { command: "cargo test", sinceMs: Date.now() } }])]);
-  await pause();
-  const held = railState();
+  const judged = railState();
   apply([queued([{ ...item, delivered: true, offerSession: true }])]);
   await pause();
   const offered = railState();
@@ -99,7 +97,7 @@ async function drive() {
   apply([queued([])]);
   await pause();
   // Its CLI's turn is over but one of its workers still works: its work holds, and a message
-  // waits in the rail at once, Deciding, never a bubble of a turn of its own.
+  // waits in the rail at once, never a bubble of a turn of its own.
   useActivity.setState((state) => {
     const activity = state.byConversation[id];
     return activity ? { byConversation: { ...state.byConversation, [id]: { ...activity, tasks: { "task-2": "running" } } } } : state;
@@ -110,9 +108,8 @@ async function drive() {
   const whileWorkersWork = {
     rail: rows.length,
     chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(whileHeld)).length,
-    deciding: rows[0]?.getAttribute("data-deciding") === "true",
   };
-  respond({ type: "queued", item: { ...item, id: "while-held", text: whileHeld, deciding: true } });
+  respond({ type: "queued", item: { ...item, id: "while-held", text: whileHeld } });
   await holding;
   apply([queued([])]);
   await pause();
@@ -124,21 +121,20 @@ async function drive() {
   const chatWhileWorkersWork = {
     rail: chatRows.length,
     chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(chatWhileHeld)).length,
-    deciding: chatRows[0]?.getAttribute("data-deciding") === "true",
   };
-  respond({ type: "queued", item: { ...item, id: "chat-while-held", text: chatWhileHeld, deciding: true } });
+  respond({ type: "queued", item: { ...item, id: "chat-while-held", text: chatWhileHeld } });
   await chatHolding;
   // Another session's message in the rail (goal 4): its words and who sent it, never its header.
   const from = "c-api-work";
   useApp.setState((state) => ({ conversations: { ...state.conversations, [from]: { ...state.conversations[id]!, id: from, title: "API work" } } }));
   const peerId = "sm-0123feedbeef";
-  apply([queued([{ ...item, id: peerId, text: `[message from session "API work" (${from}) · ${peerId}]\nCan you check the schema?`, deciding: true, delivered: true, peer: { messageId: peerId, from } }])]);
+  apply([queued([{ ...item, id: peerId, text: `[message from session "API work" (${from}) · ${peerId}]\nCan you check the schema?`, peer: { messageId: peerId, from } }])]);
   await pause();
   const peerRow = document.querySelector('[data-slot="message-queue-item"]')?.textContent ?? "";
-  const fromPeer = { from: peerRow.includes("From API work"), words: peerRow.includes("Can you check the schema?"), header: peerRow.includes("[message from session"), deciding: railState().deciding };
+  const fromPeer = { from: peerRow.includes("From API work"), words: peerRow.includes("Can you check the schema?"), header: peerRow.includes("[message from session") };
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, deciding, held, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork, fromPeer });
+  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, judged, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork, fromPeer });
   document.body.append(result);
 }
 void drive();
