@@ -856,6 +856,7 @@ mod label_tests {
         assert_eq!(own_login_label(Some("  ")), "this computer's login");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn a_fake_account_is_not_the_own_login() {
         let own = brigadier_providers::ProviderStatus {

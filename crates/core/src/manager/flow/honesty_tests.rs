@@ -106,6 +106,8 @@ fn bash(command: &str, status: ItemStatus) -> ProviderEvent {
 /// A message the user steers in while the thread's command runs says so until the command
 /// ends, then the thread reads it. Every write of its request names the running turn's, so no
 /// frame ever draws it as a block of its own (D65).
+// Uses the debug-only fault injections, as tab_chat_tests does.
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     let gate = Arc::new(tokio::sync::Notify::new());

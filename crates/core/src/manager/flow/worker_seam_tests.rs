@@ -853,6 +853,8 @@ async fn a_worker_goes_through_two_rebirths_its_check_fixing_its_note_each_time(
 
 /// Development builds' on-demand compaction of an idle worker goes through its CLI's own
 /// compaction: its session hears none of them, and the third asks for its note (goal 2).
+// Uses the debug-only fault injections, as tab_chat_tests does.
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn three_compactions_asked_for_on_an_idle_worker_hand_it_off_unheard() {
     let seen = Arc::new(Seen::default());

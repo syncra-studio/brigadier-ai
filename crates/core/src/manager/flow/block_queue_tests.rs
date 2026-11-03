@@ -177,6 +177,8 @@ async fn a_waiting_message_goes_once_only_paused_workers_hold_the_block() {
 
 /// FITS while only the block's workers work: it joins the open block at once, framed, on a
 /// turn that goes on with that work, and never draws a block of its own (D157).
+// Uses the debug-only fault injections, as tab_chat_tests does.
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_message_that_fits_joins_the_open_block() {
     let (flow, answers, release) = block_judged("block-fits", "FITS").await;
@@ -262,6 +264,8 @@ async fn a_waiting_message_steered_in_is_taken_by_the_open_block() {
 /// at once, framed, on a turn that goes on with that work; nothing is queued. Its request is
 /// steered into the open block's in the very write that stores it, so no frame ever draws it
 /// as a block of its own (D65, D113).
+// Uses the debug-only fault injections, as tab_chat_tests does.
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_fresh_steer_while_the_block_is_open_is_taken_framed() {
     let (flow, answers, release) = block("block-steer-fresh").await;
