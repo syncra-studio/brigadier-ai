@@ -111,6 +111,13 @@ const card = () => document.querySelector<HTMLElement>('[data-slot="summary-card
 const wait = () => document.querySelector<HTMLElement>('[data-slot="schedule-card"]');
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
 
+/** A worker line's action words, its pause/End buttons' labels left out. */
+const actionWords = (action: Element) => {
+  const copy = action.cloneNode(true) as Element;
+  for (const button of copy.querySelectorAll('button:is([data-slot="worker-pause"], [aria-label^="End "])')) button.remove();
+  return copy.textContent;
+};
+
 /** What the card shows at rest, and what its clicks do: they open things, never grow the card. */
 async function drive(): Promise<string> {
   for (let i = 0; i < 100 && !card()?.querySelector('[data-slot="workers-summary-worker"], [data-slot="workers-summary"]'); i++) await frame();
@@ -126,7 +133,7 @@ async function drive(): Promise<string> {
   seen.odd = rows.filter((row) => Math.round(row.getBoundingClientRect().height) !== 28).map((row) => row.outerHTML.slice(0, 300));
   // A worker's line: its row, then its +N −N, a button of its own beside it.
   seen.workers = [...card()!.querySelectorAll('[aria-label="Session workers"] :is([data-slot="workers-summary"], [data-slot="workers-summary-worker"])')]
-    .map((row) => `${row.textContent}${row.nextElementSibling?.matches('[data-slot="summary-row-action"]') ? row.nextElementSibling.textContent : ""}`);
+    .map((row) => `${row.textContent}${row.nextElementSibling?.matches('[data-slot="summary-row-action"]') ? actionWords(row.nextElementSibling) : ""}`);
   const height = card()!.getBoundingClientRect().height;
   const project = card()!.querySelector('[data-slot="summary-section"]')!;
   seen.project = [...project.querySelectorAll('[data-slot="summary-row"]')].map((row) => row.textContent?.replace(/\s+/g, " ").trim());
