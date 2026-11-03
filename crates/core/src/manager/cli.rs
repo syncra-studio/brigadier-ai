@@ -444,7 +444,9 @@ impl SessionManager {
                     reply
                 }),
             CliRequest::Close { id } => self.cli_close(caller, &id).await,
-            CliRequest::Pause { id } => crate::heap(|| self.cli_pause(caller, &id)).await,
+            CliRequest::Pause { id, note } => {
+                crate::heap(|| self.cli_pause(caller, &id, note)).await
+            }
             CliRequest::Resume { id, note } => {
                 crate::heap(|| self.cli_resume(caller, &id, note)).await
             }

@@ -1752,12 +1752,21 @@ impl SessionManager {
     }
 
     /// `brigadier pause` (D7).
-    pub(super) async fn cli_pause(&self, caller: &CliCaller, id: &str) -> Result<CliReply> {
+    pub(super) async fn cli_pause(
+        &self,
+        caller: &CliCaller,
+        id: &str,
+        note: Option<String>,
+    ) -> Result<CliReply> {
         let task = match self.own_worker(caller, id).await {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
         let done = self.pause_task(task.id.clone()).await?;
+        // Held as a message to the paused worker is, and goes with its resume: one call (D150).
+        if let Some(note) = note {
+            self.send_plain(&task, note).await?;
+        }
         Ok(CliReply::ok(&ManageOutput {
             id: short(&task.id.0),
             done,

@@ -254,7 +254,10 @@ impl Bench {
 }
 
 fn pause(id: &str) -> CliRequest {
-    CliRequest::Pause { id: id.into() }
+    CliRequest::Pause {
+        id: id.into(),
+        note: None,
+    }
 }
 
 fn resume(id: &str) -> CliRequest {
@@ -306,12 +309,17 @@ fn any_switch(kind: &OrchestratorStepKind) -> bool {
 
 /// D7: the turn ends now and stays ended, its session hears no "interrupted", a message waits,
 /// `wait` doesn't wait on it; the resume gives the message, then the words, once, in the same
-/// CLI session; one "Paused" and one "Resumed" row, no lifecycle sentence besides.
+/// CLI session; one "Paused" and one "Resumed" row, no lifecycle sentence besides. A note the
+/// pause carries is held the same way: one call (D150).
 #[tokio::test]
 async fn a_pause_ends_the_turn_holds_messages_and_a_resume_goes_on_once() {
     let bench = bench("manage-pause", start("Build it."), Mode::Hold, false).await;
     let id = bench.id();
-    assert_eq!(bench.run(pause(&id)).await["done"], true);
+    let noted = CliRequest::Pause {
+        id: id.clone(),
+        note: Some("The user asked for a pause.".into()),
+    };
+    assert_eq!(bench.run(noted).await["done"], true);
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     let task = bench.task().await;
     assert_eq!(
@@ -342,7 +350,10 @@ async fn a_pause_ends_the_turn_holds_messages_and_a_resume_goes_on_once() {
     let sent = bench.run(send(&id, "Use blue.")).await;
     assert_eq!(sent["queued"], true, "{sent:#}");
     assert!(bench.with("Use blue.").is_empty(), "held, not sent");
-    assert_eq!(bench.task().await.plain.unwrap().held, vec!["Use blue."]);
+    assert_eq!(
+        bench.task().await.plain.unwrap().held,
+        vec!["The user asked for a pause.", "Use blue."]
+    );
     let waited = bench.run(super::cli_tests::wait(&[], Some(5))).await;
     assert_eq!(
         waited,
@@ -361,7 +372,8 @@ async fn a_pause_ends_the_turn_holds_messages_and_a_resume_goes_on_once() {
     assert_eq!(resumed_turns.len(), 1);
     let input = &resumed_turns[0].3;
     assert!(
-        input.find("Use blue.").unwrap() < input.find(WORDS).unwrap(),
+        input.find("The user asked for a pause.").unwrap() < input.find("Use blue.").unwrap()
+            && input.find("Use blue.").unwrap() < input.find(WORDS).unwrap(),
         "{input}"
     );
     assert_eq!(bench.with("Use blue.").len(), 1);

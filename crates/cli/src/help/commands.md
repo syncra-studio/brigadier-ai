@@ -8,7 +8,7 @@ All through `brigadier` (`--help`, `--json` on all):
 | `brigadier read <id> [--last N]` | Its last message or N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny <reason>` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one. |
-| `brigadier pause <id>` / `brigadier resume <id>` | End its turn now, holding what you send; go on where it stopped. |
+| `brigadier pause <id> ["<note>"]` / `brigadier resume <id> ["<note>"]` | End its turn now, holding what you send; go on where it stopped. |
 | `brigadier switch <id> [--agent A] [--model M] [--effort E]` | Move it to the next account or routing row, or the one named. |
 | `brigadier sessions [--all]` | Other sessions; message one if asked. |
 | `brigadier fusion offer "<question>"` | In a top-level Chat only, offer a second opinion from every installed CLI; nothing starts until the user clicks Ask. |

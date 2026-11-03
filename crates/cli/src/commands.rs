@@ -451,7 +451,10 @@ pub const COMMANDS: &[Command] = &[
         details: "Its turn ends now, as Esc ends it, and its CLI session is kept. What you \
                   send it meanwhile waits for `brigadier resume`; `brigadier wait` doesn't \
                   wait on it.",
-        args: &[positional("id", "The worker.")],
+        args: &[
+            positional("id", "The worker."),
+            rest("note", "What it should know when it goes on.", false),
+        ],
         available: true,
         schema: include_str!("../schemas/pause.schema.json"),
     },

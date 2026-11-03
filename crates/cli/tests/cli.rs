@@ -482,13 +482,15 @@ fn sample(request: &CliRequest) -> CliReply {
                 ..worker_row()
             }),
         }),
-        CliRequest::Pause { id } | CliRequest::Resume { id, .. } => CliReply::ok(&ManageOutput {
-            id: id.clone(),
-            done: true,
-            to: None,
-            off_routing: None,
-            worker: Some(worker_row()),
-        }),
+        CliRequest::Pause { id, .. } | CliRequest::Resume { id, .. } => {
+            CliReply::ok(&ManageOutput {
+                id: id.clone(),
+                done: true,
+                to: None,
+                off_routing: None,
+                worker: Some(worker_row()),
+            })
+        }
         CliRequest::Switch { id, .. } => CliReply::ok(&ManageOutput {
             id: id.clone(),
             done: true,

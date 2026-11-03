@@ -79,8 +79,13 @@ pub enum CliRequest {
     },
     /// Closes one of the caller's workers.
     Close { id: String },
-    /// Pauses one of the caller's workers (D7): its turn ends now, what is sent to it waits.
-    Pause { id: String },
+    /// Pauses one of the caller's workers (D7): its turn ends now, what is sent to it (and
+    /// `note`) waits for its resume.
+    Pause {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     /// Resumes a paused worker: what waited and `note`, then "Continue where you stopped."
     Resume {
         id: String,

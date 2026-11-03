@@ -432,7 +432,10 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             timeout_secs: number("timeout")?,
         },
         "close" => CliRequest::Close { id: id() },
-        "pause" => CliRequest::Pause { id: id() },
+        "pause" => CliRequest::Pause {
+            id: id(),
+            note: Some(args.text("note")).filter(|note| !note.trim().is_empty()),
+        },
         "resume" => CliRequest::Resume {
             id: id(),
             note: Some(args.text("note")).filter(|note| !note.trim().is_empty()),
@@ -1288,7 +1291,17 @@ mod tests {
         );
         assert_eq!(
             run(&["pause", "ab12"]).0,
-            CliRequest::Pause { id: "ab12".into() }
+            CliRequest::Pause {
+                id: "ab12".into(),
+                note: None
+            }
+        );
+        assert_eq!(
+            run(&["pause", "ab12", "the user asked"]).0,
+            CliRequest::Pause {
+                id: "ab12".into(),
+                note: Some("the user asked".into())
+            }
         );
         assert_eq!(
             run(&["resume", "ab12"]).0,
