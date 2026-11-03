@@ -96,7 +96,8 @@ function Fixture() {
         void fixtureInput({ type: "viewport", width: 1300, height: 900 });
         setWide(false);
       } },
-      { ready: () => layout() === "float", act: () => {
+      // The popover opens a frame or more after the layout floats again; a card that closed never does.
+      { ready: () => layout() === "float" && floating(), act: () => {
         seen.keptAfterNarrow = floating();
         setResult(JSON.stringify(seen));
       } },
