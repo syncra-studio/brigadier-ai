@@ -9,10 +9,8 @@ import { useQueueRows } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
-/** Conversations whose Full access notice was closed, or stepped aside once shown, until the app restarts. */
-const closedNotices = new Set<string>();
-/** Conversations whose notice has shown. */
-const shownNotices = new Set<string>();
+/** "closed": it was closed, or stepped aside once "shown": gone in every session until the app restarts (D191). */
+const seen = new Set<"shown" | "closed">();
 
 /**
  * The "Full access is on" card above the composer, while a session is on Full access: the full
@@ -21,8 +19,9 @@ const shownNotices = new Set<string>();
  * rounded like the composer. It steps aside while a question, proposal or approval
  * waits above the composer, so it never pushes that card or the thread's last lines out of
  * view, and while messages wait in the queue, so they stay right under the conversation (#448).
- * Once it has shown and stepped aside it stays gone, as if closed (demo12). × closes it for this
- * conversation; "Don't show again" turns it off in Settings, where it can be turned back on.
+ * Once it has shown and stepped aside it stays gone, as if closed (demo12). × closes it in every
+ * session, new ones too, until the app restarts (D191); "Don't show again" turns it off in
+ * Settings, where it can be turned back on.
  */
 export function FullAccessNotice({ conversation, aside = false }: { conversation: Conversation; aside?: boolean }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
@@ -32,11 +31,11 @@ export function FullAccessNotice({ conversation, aside = false }: { conversation
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
   const { rows } = useQueueRows(conversation.id);
   const queued = rows.length > 0;
-  if (show && full && (aside || queued) && shownNotices.has(conversation.id)) closedNotices.add(conversation.id);
-  if (!show || !full || aside || queued || closedNotices.has(conversation.id)) return null;
-  shownNotices.add(conversation.id);
+  if (show && full && (aside || queued) && seen.has("shown")) seen.add("closed");
+  if (!show || !full || aside || queued || seen.has("closed")) return null;
+  seen.add("shown");
   const close = () => {
-    closedNotices.add(conversation.id);
+    seen.add("closed");
     setClosed((count) => count + 1);
   };
   return (

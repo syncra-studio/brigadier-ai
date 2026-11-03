@@ -12,7 +12,9 @@ use brigadier_providers::{ErrorKind, ProviderError, ProviderEvent};
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
 use crate::manager::seam::{CARRY_ON, Phase, SeamConfig, SeamFile, read_seam, without_handoff};
+use crate::model::DomainEvent;
 use crate::thread_view::{HANDOFF_MARK, NUDGE_MARK};
+use crate::work::RunState;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -580,6 +582,27 @@ async fn a_nudge_that_cannot_be_steered_is_a_turn_of_its_own() {
     assert_eq!(nudges.len(), 1, "{nudges:?}");
     assert_eq!(file.seams[0].end.predecessor.as_ref(), Some(&nudges[0].0));
     assert!(file.seams[0].end.death.is_none());
+    // The note's turn and the successor's carry-on, for no job of the user's, never show working
+    // (core-goals D193): only the user's own turn does.
+    let working = flow
+        .events_of(&flow.conversation)
+        .await
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                DomainEvent::RunStateChanged {
+                    state: RunState::Starting | RunState::Running,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        working, 2,
+        "the user's turn starting and running, nothing else"
+    );
+    assert!(!flow.manager.cli_turn(&flow.conversation).open);
     flow.stop().await;
 }
 

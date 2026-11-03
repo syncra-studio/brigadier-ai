@@ -369,8 +369,8 @@ pub(crate) const NOTE_FIXES: u32 = 1;
 pub(crate) struct NoteCheck {
     /// A note with something in it was there to read.
     pub written: bool,
-    /// The open items, all of them.
-    pub open: usize,
+    /// The open items, all of them, verbatim.
+    pub open: Vec<String>,
     /// The open items the note leaves out (all of them without a note), verbatim.
     pub gaps: Vec<String>,
 }
@@ -382,13 +382,20 @@ pub(crate) fn check_note(record: &Path, note: &Path) -> NoteCheck {
         .filter(|text| !text.trim().is_empty());
     let (open, gaps) = match Ledger::read(record) {
         Ok(ledger) => (
-            ledger.open().len(),
+            ledger
+                .open()
+                .into_iter()
+                .map(|entry| entry.text.clone())
+                .collect(),
             handoff_gaps(&ledger, text.as_deref().unwrap_or_default())
                 .into_iter()
                 .map(|entry| entry.text.clone())
                 .collect(),
         ),
-        Err(err) => (0, vec![format!("(the ledger could not be read: {err})")]),
+        Err(err) => (
+            Vec::new(),
+            vec![format!("(the ledger could not be read: {err})")],
+        ),
     };
     NoteCheck {
         written: text.is_some(),
@@ -434,13 +441,18 @@ impl NoteCheck {
     }
 
     /// The check's result in the successor's first message: what the note leaves out is
-    /// carried word for word, so no open item is lost.
+    /// carried word for word, so no open item is lost, and a passed check lists the open items
+    /// too, so the successor raises them without a look-up (core-goals D191).
     pub(crate) fn line(&self) -> String {
         match (self.written, self.gaps.is_empty()) {
-            (_, true) if self.open == 0 => "Hand-off check: the ledger has no open items.".into(),
+            (_, true) if self.open.is_empty() => {
+                "Hand-off check: the ledger has no open items.".into()
+            }
             (true, true) => format!(
-                "Hand-off check: every open item of the ledger ({}) is in the note or closed.",
-                self.open
+                "Hand-off check: every open item of the ledger ({}) is in the note or closed. \
+                 Still open, word for word:\n{}",
+                self.open.len(),
+                self.open.join("\n")
             ),
             (written, false) => format!(
                 "Hand-off check: {} these open items of the ledger, word for word:\n{}",
@@ -489,8 +501,9 @@ fn successor_lines(generation: u32, moved: bool) -> String {
         "Resume the user's work without announcing this internal continuation, ledger \
          operations, or hand-off files. You continue an earlier session{carried}.\n\
          {CONTEXT_POINTER} Then add one ledger entry: \"Took over gen {generation} · open <ids> \
-         · applies next: <id> (how), …\". If a question waits on the user, raise the oldest one \
-         in this reply."
+         · applies next: <id> (how), …\". Unless a message of the user's below asks for \
+         something else, bring up every item still open (in the note or the hand-off check) in this reply, by \
+         yourself and in plain words: ask each open question and repeat each promise."
     )
 }
 

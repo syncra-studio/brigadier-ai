@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { REBIRTH, REFRESHED, withSeams } from "@/app/side-panel/workerSeams";
+import { REFRESHED, withSeams } from "@/app/side-panel/workerSeams";
 import type { FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
 
 const at = (atMs: number, event: ProviderEvent): FileEntry => ({ atMs, event }) as FileEntry;
@@ -12,7 +12,7 @@ const compacted = (ms: number) =>
 const shown = (view: ThreadView) =>
   withSeams(view).map(({ event }) => (event.type === "notice" ? `— ${event.message}` : event.type === "message" ? `${event.role}: ${event.text}` : event.type));
 
-test("a worker's panel shows each compaction and each rebirth once, its note and fix turns under the hood (core-goals D120)", () => {
+test("a worker's panel shows each compaction once and no mark of a rebirth, its note and fix turns under the hood (core-goals D193)", () => {
   const view: ThreadView = {
     entries: [
       user("b", "Brief: grow.", 1),
@@ -39,13 +39,11 @@ test("a worker's panel shows each compaction and each rebirth once, its note and
     "user: Brief: grow.",
     "assistant: Grown.",
     `— ${REFRESHED}`,
-    `— ${REBIRTH}`,
     "user: Next.",
     "assistant: On it.",
-    `— ${REBIRTH}`,
     "assistant: Carrying on.",
   ]);
-  // While it writes its note no divider yet, and its note turn is already under the hood.
+  // While it writes its note its note turn is already under the hood.
   const writing = { ...view, entries: view.entries.slice(0, 5), seams: [{ ...view.seams![0]!, open: true, at: null }] };
   assert.deepEqual(shown(writing), ["user: Brief: grow.", "assistant: Grown.", `— ${REFRESHED}`]);
 });

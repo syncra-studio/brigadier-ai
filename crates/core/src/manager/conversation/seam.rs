@@ -65,6 +65,9 @@ pub(super) struct SeamLive {
     /// The context a successor's CLI first reported, which its generation grows from before
     /// its seam (none for the first generation); `None` until looked up in `seam.json`.
     pub(super) base: Option<Option<i64>>,
+    /// The running turn is the hand-off's own (the note's ask, a carry-on with no request): the
+    /// tab, the sidebar and the composer keep the user's work idle through it (core-goals D193).
+    pub(super) quiet: bool,
 }
 
 /// A successor about to start: its seam, how its predecessor ended and what it carries.
@@ -364,6 +367,13 @@ impl SessionManager {
                     state.seam.nudge_due = None;
                 }
                 let death = (!written).then(|| if force { HELD_TOO_LONG.into() } else { why });
+                // A job the note was asked in goes on in the successor, working all along (D193).
+                if !stopped {
+                    let mut state = conv.state.lock().await;
+                    if state.seam.carried_request.is_none() {
+                        state.seam.carried_request = state.request.clone();
+                    }
+                }
                 self.close_seam(conv, file, Some(at_ms), death, stopped)
                     .await
             }

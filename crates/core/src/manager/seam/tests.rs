@@ -723,7 +723,8 @@ fn a_note_with_gaps_or_none_fails_the_check_and_its_line_carries_what_is_left_ou
     assert!(passed.passed() && passed.fix(&note).is_none());
     assert_eq!(
         passed.line(),
-        "Hand-off check: every open item of the ledger (1) is in the note or closed."
+        "Hand-off check: every open item of the ledger (1) is in the note or closed. Still open, \
+         word for word:\n- L2 · 11-01 20:01 · gen 1 · Open: promise to rerun the test"
     );
     // The line goes right under the note in a same-CLI hand-off.
     let boot = bootstrap(&Boot {

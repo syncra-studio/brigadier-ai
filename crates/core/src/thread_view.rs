@@ -521,6 +521,8 @@ pub(crate) struct LiveTurn {
     pub jobs_said: CliJobs,
     /// The model's context window its CLI last said: it outlasts the turn.
     pub context_window: Option<i64>,
+    /// A hand-off's own turn (core-goals D193): no turn of the user's work, never shown open.
+    pub quiet: bool,
 }
 
 /// How many commands of calls not (yet) a background task's are kept.

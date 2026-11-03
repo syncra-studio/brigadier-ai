@@ -10,7 +10,7 @@ function compactionLabel({ state }: BlockCompaction): string {
     case "running":
       return "Refreshing context";
     case "done":
-      return "Context refreshed · everything important kept";
+      return "Context refreshed · nothing was lost";
     case "failed":
       return "Couldn’t compact context";
   }

@@ -231,6 +231,8 @@ impl SessionManager {
             | None => Some(conv.carried_turn().await),
             _ => None,
         };
+        // A hand-off's own turn opens unseen (core-goals D193).
+        let quiet = conv.quiet_turn().await;
         // A turn a limit cut whose work goes on elsewhere reads handed over, never failed (D180).
         let handed_over = match event {
             Some(ProviderEvent::TurnCompleted { status, .. })
@@ -377,6 +379,7 @@ impl SessionManager {
                             // its message: the file may read the turn before the stream says it.
                             joins: carried.as_ref().is_some_and(|(_, joins, _)| *joins),
                             own: carried.as_ref().is_some_and(|(_, _, own)| *own),
+                            quiet,
                             ..LiveTurn::default()
                         };
                     }
@@ -402,6 +405,7 @@ impl SessionManager {
                             subagents: std::mem::take(&mut live.subagents),
                             jobs_said: std::mem::take(&mut live.jobs_said),
                             reading_output: live.reading_output,
+                            quiet,
                             ..LiveTurn::default()
                         };
                     }
@@ -540,6 +544,7 @@ impl SessionManager {
             }
             jobs = said_jobs(live, at);
             seq = self.next_news_seq();
+            opened &= !live.quiet;
         }
         let block_moves = opened || ended.is_some() || jobs.is_some();
         if !news.is_empty()
@@ -821,7 +826,7 @@ impl SessionManager {
             .lock()
             .unwrap()
             .get(id)
-            .is_some_and(|live| live.open);
+            .is_some_and(|live| live.open && !live.quiet);
         let last = thread_view::last_turn(&self.session_dir(id).record());
         CliTurn {
             open,

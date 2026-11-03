@@ -715,6 +715,12 @@ impl ConvLive {
         )
     }
 
+    /// Whether the running turn is a hand-off's own ([`seam::SeamLive::quiet`]).
+    pub(super) async fn quiet_turn(&self) -> bool {
+        let state = self.state.lock().await;
+        state.busy && state.seam.quiet
+    }
+
     /// Tests: the request the rest of the turn answers, as a queued message joining it sets it.
     #[cfg(test)]
     pub(super) async fn answer_request(&self, request: &str) {
@@ -1541,10 +1547,15 @@ impl SessionManager {
         let id = &conv.id;
         // A reply instead of "Build it" closes the plan's card (harness D7).
         self.plan_replied(id).await;
-        let (busy, held, compacting) = {
+        let (busy, held, compacting, quiet) = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
-            (state.busy, state.seam.held, state.compacting)
+            (
+                state.busy,
+                state.seam.held,
+                state.compacting,
+                state.busy && state.seam.quiet,
+            )
         };
         // No steer while compacting: it waits in the queue and goes once compaction is done.
         let steer = steer && !compacting;
@@ -1557,6 +1568,16 @@ impl SessionManager {
                 )
                 .await?;
             self.arm_seam_hold(conv).await;
+            return Ok(SendOutcome::Queued(item));
+        }
+        // The successor's own first turn runs: it waits in the queue for that turn's end (D193).
+        if quiet && !steer {
+            let item = conv
+                .user_write(
+                    self.core
+                        .enqueue(id, text, attachments, mentions, queue_index),
+                )
+                .await?;
             return Ok(SendOutcome::Queued(item));
         }
         if steer && busy {
@@ -2737,14 +2758,23 @@ impl SessionManager {
             // A user's message with no work held opens a new block.
             drift = state.drift_note(!holds && !users.is_empty());
             state.in_turn = users.clone();
+            // A hand-off's own turn, for no request of the user's: never shown working (D193).
+            state.seam.quiet = session
+                && users.is_empty()
+                && request.is_none()
+                && envelopes
+                    .iter()
+                    .all(|(envelope, _)| envelope.kind == InjectionKind::Seam);
             state.in_turn_envelopes.clone_from(&envelopes);
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
             break (users, envelopes, request, notes);
         };
         self.settle_requests(&conv.id).await;
-        self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
-            .await;
+        if !conv.state.lock().await.seam.quiet {
+            self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
+                .await;
+        }
         if session && !users.is_empty() {
             // Work left ready whose pull request was merged on GitHub since (by the user, while
             // the tab was idle) is recorded first, so this request starts from the new base.
@@ -5108,7 +5138,9 @@ impl SessionManager {
                     self.net_heard(&conv.id, label);
                     self.session_message_taken(&conv.id, label);
                 }
-                if let Some(request) = started {
+                if let Some(request) = started
+                    && !conv.state.lock().await.seam.quiet
+                {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
                         .await;
                 }
@@ -5390,6 +5422,7 @@ impl SessionManager {
             state.busy = false;
             state.unowned_turn = false;
             state.compacting = false;
+            state.seam.quiet = false;
             state.last_activity_ms = now_ms();
             state.replying_for.clear();
             let ended = match status {
