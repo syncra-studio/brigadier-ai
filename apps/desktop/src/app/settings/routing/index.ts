@@ -10,6 +10,8 @@ export * from "./NowPick";
 export * from "./OrderList";
 export * from "./OrderPlace";
 export * from "./RatingsLine";
+export * from "./ResearchRow";
 export * from "./StepsList";
 export * from "./StrengthRow";
+export * from "./SuggestionLine";
 export * from "./WhoPicks";

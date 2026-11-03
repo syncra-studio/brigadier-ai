@@ -19,6 +19,7 @@ import { refreshUsage, useUsage, useUsageRefresh } from "@/state/usage";
 export const ROUTING_PAGE_ROWS = {
   kinds: WHO_DOES_WHAT,
   rules: RULES,
+  research: MORE_ROWS.research,
   strength: MORE_ROWS.strength,
   steps: MORE_ROWS.steps,
   refresh: MORE_ROWS.refresh,
@@ -98,6 +99,7 @@ export function RoutingPage() {
         onCategory={setKind}
         rules={rules}
         groups={groups}
+        now={now}
       />
     </SettingsPage>
   );

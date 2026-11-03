@@ -21,7 +21,7 @@ export const effortRank = (effort: string) => EFFORT_LEVELS.indexOf(effort.toLow
 
 /** The names the words need: a rule's model pattern. */
 export type Names = {
-  /** A pattern of a rule ("fable", "claude-opus-5-5", "*") in a few words, for an agent or any. */
+  /** A pattern of a rule in a few words, for an agent or any: "fable" reads "Fable", a family; "claude-opus-5-5" reads "Opus 5.5"; "*" reads "any model". */
   pattern: (agent: ProviderKind | null, pattern: string) => string;
 };
 
@@ -30,6 +30,8 @@ export function ruleNames(groups: readonly ModelGroup[]): Names {
   const pattern = (agent: ProviderKind | null, name: string) => {
     if (name === "*") return "any model";
     if (name === "default") return agent ? shortPlaceName({ type: "vendor", provider: agent }, groups) : "the default model";
+    // A family word covers every model of the family, today's and newer ones: never one version's name.
+    if (/^\p{L}+$/u.test(name)) return name.charAt(0).toUpperCase() + name.slice(1);
     const listed = (agent ? groups.filter((group) => group.provider === agent) : groups)
       .map((group) => findModel(groups, { provider: group.provider, model: name, effort: null }))
       .find(Boolean);
@@ -85,14 +87,14 @@ export function ruleText(rule: ModelRule): string {
   }
 }
 
-/** What an effort rule is about, in a word or two ("Opus 5.5", "Codex"); `null`, every model. */
+/** What an effort rule is about, in a word or two ("Opus", "Codex"); `null`, every model. */
 const effortTarget = (rule: { agent?: ProviderKind; model?: string }, names: Names): string | null =>
   rule.agent ? cliFacts(rule.agent).vendor : rule.model ? names.pattern(null, rule.model) : null;
 
 /**
- * A rule as one plain sentence: "Never give Fable work", "Never use Sonnet for Adversarial
- * review", "Only use Opus or Sonnet on Claude", "Never go above High effort", "Never run Opus 5.5
- * above Medium", "Adversarial review never below High"; advice as its own words.
+ * A rule as one plain sentence: "Never use Fable", "Never use Sonnet for Adversarial review",
+ * "Only use Opus or Sonnet on Claude", "Never go above High effort", "Never run Opus above
+ * Medium", "Adversarial review never below High"; advice as its own words.
  */
 export function ruleTitle(rule: ModelRule, names: Names): string {
   if (rule.type === "advice") return rule.text;
@@ -100,7 +102,7 @@ export function ruleTitle(rule: ModelRule, names: Names): string {
   switch (rule.type) {
     case "forbid": {
       const models = joinWords(rule.names.map((name) => names.pattern(null, name)), "or");
-      return rule.work ? `Never use ${models}${scope}` : `Never give ${models} work`;
+      return `Never use ${models}${scope}`;
     }
     case "allow": {
       const models = joinWords(rule.names.map((name) => names.pattern(rule.agent, name)), "or");
@@ -271,14 +273,11 @@ export function refusalText(message: string, rules: readonly ModelRule[], names:
   return one ? `Refused by your rule “${one}”` : message;
 }
 
-/** A kind of work whose rows are roles (each must run), not an order (the first that can run takes it). */
-const isRoles = (work: string) => !!ROLE_KINDS[work] || work.startsWith("fusion-");
-
 /**
- * The one line under each rule that stops a kind of work from starting, keyed by the rule's
- * text: "Adversarial review can't start: it needs High, and this rule keeps Opus 5.5 at
- * Medium." A kind of work is stopped when none of its order may run, or (review, Fusion,
- * Fallback) when one of its roles may not; the line goes under the rule that refuses it.
+ * The one line under each rule that stops work, keyed by the rule's text. A kind of work with no
+ * row that may run can't start: "Docs can't start: this rule keeps out Opus." A kind of roles
+ * (review, Fallback) with a side that still may run can start, so the line names only the side
+ * it stops: "Reviews Codex's work: this rule keeps out Opus 5.5."
  */
 export function ruleWarnings(
   rules: readonly ModelRule[],
@@ -293,21 +292,24 @@ export function ruleWarnings(
       const choice = rowChoice(row, models);
       return { row, choice, rule: refusingRule(rules, choice, kind.work) };
     });
-    const stopped = isRoles(kind.work) ? refused.find((found) => found.rule) : refused.every((found) => found.rule) ? refused[0] : undefined;
-    if (!stopped?.rule) continue;
-    const { rule, choice, row } = stopped;
-    const work = workName(kind.work);
-    let line: string;
-    if (rule.type === "effortCeiling") {
-      const { floor } = effortLimits(rules, choice, kind.work);
-      const target = effortTarget(rule, names) ?? modelName(row);
-      line = `${work} can't start: it needs ${effortLabel(floor?.effort ?? rule.effort)}, and this rule keeps ${target} at ${effortLabel(rule.effort)}.`;
-    } else {
-      const out = joinWords([...new Set(refused.filter((found) => found.rule === rule).map((found) => modelName(found.row)))]);
-      line = `${work} can't start: this rule keeps out ${out}.`;
+    const roles = ROLE_KINDS[kind.work];
+    const none = refused.every((found) => found.rule);
+    const stopped = none ? refused.slice(0, 1) : roles ? refused.filter((found) => found.rule) : [];
+    for (const { rule, choice, row } of stopped) {
+      if (!rule) continue;
+      const who = none ? `${workName(kind.work)} can't start` : roles!.role(row);
+      let line: string;
+      if (rule.type === "effortCeiling") {
+        const { floor } = effortLimits(rules, choice, kind.work);
+        const target = effortTarget(rule, names) ?? modelName(row);
+        line = `${who}: it needs ${effortLabel(floor?.effort ?? rule.effort)}, and this rule keeps ${target} at ${effortLabel(rule.effort)}.`;
+      } else {
+        const out = none ? joinWords([...new Set(refused.filter((found) => found.rule === rule).map((found) => modelName(found.row)))]) : modelName(row);
+        line = `${who}: this rule keeps out ${out}.`;
+      }
+      const key = ruleText(rule);
+      warnings.set(key, [...(warnings.get(key) ?? []), line]);
     }
-    const key = ruleText(rule);
-    warnings.set(key, [...(warnings.get(key) ?? []), line]);
   }
   return new Map([...warnings].map(([key, lines]) => [key, lines.join(" ")]));
 }

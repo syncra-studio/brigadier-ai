@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/overlays";
 import { account, model, overview, status as providerStatus } from "@/fixtures/agents";
 import { usageView } from "@/fixtures/providersData";
 import type { ComputerSetup, ComputerUseStatus, GuidanceRow, ModelRules, PermissionState, Request, Settings } from "@/ipc/generated";
+import { IDLE_RESEARCH } from "@/fixtures/rankings";
 import { onComputerUse } from "@/state/computerUse";
 import { loadModelRules, useModelRules } from "@/state/modelRules";
 import { useApp } from "@/state/store";
@@ -42,7 +43,7 @@ const status = (
 
 // The rules file: the shipped "Computer use" order and nothing of the user's yet.
 const cuRow = (agent: GuidanceRow["agent"], modelId: string, effort: string | null): GuidanceRow => ({ work: "Computer use", agent, model: modelId, effort, reason: "Shipped." });
-const modelRules: ModelRules = { path: "/tmp/models.md", shipped: [cuRow("claude", "opus", "high"), cuRow("codex", "default", "high")], rows: [], rules: [] };
+const modelRules: ModelRules = { path: "/tmp/models.md", shipped: [cuRow("claude", "opus", "high"), cuRow("codex", "default", "high")], rows: [], rules: [], suggestions: [], research: IDLE_RESEARCH };
 
 const calls: string[] = [];
 const modelSaves: Request[] = [];

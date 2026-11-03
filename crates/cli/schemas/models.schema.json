@@ -226,6 +226,7 @@
           "source": {
             "enum": [
               "shipped",
+              "ratings",
               "user"
             ]
           }

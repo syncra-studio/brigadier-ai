@@ -5,16 +5,19 @@ import ReactDOMServer from "react-dom/server";
 import { createServer, type ViteDevServer } from "vite";
 
 import type * as Steps from "@/app/settings/routing/StepsList";
+import type * as Rankings from "@/fixtures/rankings";
 import type { GuidanceRow, ModelRules } from "@/ipc/generated";
 
 let server: ViteDevServer;
 let StepsList: typeof Steps.StepsList;
+let IDLE_RESEARCH: typeof Rankings.IDLE_RESEARCH;
 before(async () => {
   const globals = globalThis as Record<string, unknown>;
   globals.document ??= { documentElement: {} };
   globals.getComputedStyle ??= () => ({ getPropertyValue: () => "" });
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   ({ StepsList } = await server.ssrLoadModule("/src/app/settings/routing/StepsList.tsx") as typeof Steps);
+  ({ IDLE_RESEARCH } = await server.ssrLoadModule("/src/fixtures/rankings.ts") as typeof Rankings);
 });
 after(() => server.close());
 
@@ -24,7 +27,7 @@ const rows = (work: string): GuidanceRow[] => [
   { work, agent: "codex", model: "allowed", effort: null, reason: "" },
 ];
 const example = (shipped: GuidanceRow[], mine: GuidanceRow[] = []) => {
-  const rules: ModelRules = { path: "", shipped, rows: mine, rules: [{ type: "forbid", names: ["blocked"] }] };
+  const rules: ModelRules = { path: "", shipped, rows: mine, rules: [{ type: "forbid", names: ["blocked"] }], suggestions: [], research: IDLE_RESEARCH };
   const markup = ReactDOMServer.renderToStaticMarkup(React.createElement(StepsList, { rules, groups: [] }));
   return /<p data-slot="routing-steps-example"[^>]*>(.*?)<\/p>/.exec(markup)?.[1];
 };

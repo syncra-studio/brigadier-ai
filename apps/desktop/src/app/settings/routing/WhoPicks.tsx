@@ -6,7 +6,7 @@ import { RolePicks } from "@/app/settings/routing/RolePicks";
 import { ROLE_KINDS } from "@/app/settings/routing/roles";
 import { OrderList } from "@/app/settings/routing/OrderList";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
-import { withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
+import { automaticLine, withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Segmented } from "@/components/controls";
 import type { GuidanceRow, ModelRules } from "@/ipc/generated";
@@ -14,8 +14,9 @@ import { cn } from "@/lib/utils";
 import { saveModelRules } from "@/state/modelRules";
 
 /**
- * An opened kind: Who picks (Automatic, the shipped rows; or My order, your rows), then its
- * models. My order starts from the shipped rows; removing its last model goes back to Automatic.
+ * An opened kind: Who picks (Automatic, the rows the ratings give; or My order, your rows), then
+ * its models. My order starts from the automatic rows; removing its last model goes back to
+ * Automatic. The ratings never change your order: they suggest a better-rated model instead.
  */
 export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRules; groups: readonly ModelGroup[] }) {
   const action = useAction();
@@ -49,11 +50,7 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
           truncate
           quiet
           title="Who picks"
-          line={
-            ordering
-              ? role ? "Your models for each role" : "Your order: the first model your rules allow takes it"
-              : "Automatic advice, updated with each release"
-          }
+          line={ordering ? (role ? "Your models for each role" : "Your order: the first model your rules allow takes it") : automaticLine(row)}
         />
         <Segmented
           label={`How ${name} picks a model`}
