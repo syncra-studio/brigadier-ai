@@ -244,7 +244,7 @@ export function sendFromDialog(): void {
 /**
  * The thread's feedback cards, by offer id: the reports written from the offer (`null` when no
  * writer could run: its own text goes in one form) and where sending them is. Kept for the
- * app's run, so a card written up once isn't written again when the thread shows it anew.
+ * app's run (the write-up across restarts too), so a card written up once isn't written again.
  */
 export const useFeedbackOffers = create<
   Record<string, { written?: FeedbackWriteUp | null; sending: FeedbackSending } | undefined>
@@ -278,13 +278,49 @@ function offerSignIn(id: string, show: (step: FeedbackSignIn) => void): Promise<
 
 function setOffer(id: string, next: { written?: FeedbackWriteUp | null; sending: FeedbackSending }): void {
   useFeedbackOffers.setState({ [id]: { ...useFeedbackOffers.getState()[id], ...next } });
+  // Sent: the answer keeps what was filed, so the write-up kept for a restart can go.
+  if (next.sending.phase === "done") forgetWriteUp(id);
 }
 
-/** Writes the offer `id`'s `text` up as reports, once. */
+/** Where an offer's write-up is kept, so a restart shows it instead of writing it up again. */
+const writeUpKey = (id: string) => `brigadier.feedbackOffer.${id}`;
+
+function keptWriteUp(id: string): FeedbackWriteUp | null {
+  try {
+    const stored = localStorage.getItem(writeUpKey(id));
+    return stored ? (JSON.parse(stored) as FeedbackWriteUp) : null;
+  } catch {
+    return null;
+  }
+}
+
+function keepWriteUp(id: string, written: FeedbackWriteUp): void {
+  try {
+    localStorage.setItem(writeUpKey(id), JSON.stringify(written));
+  } catch {
+    // Storage can be full or unavailable; a restart then writes it up again.
+  }
+}
+
+function forgetWriteUp(id: string): void {
+  try {
+    localStorage.removeItem(writeUpKey(id));
+  } catch {
+    // Nothing kept.
+  }
+}
+
+/** Writes the offer `id`'s `text` up as reports, once (across restarts too). */
 export function draftOffer(id: string, text: string): void {
   if (useFeedbackOffers.getState()[id]) return;
+  const kept = keptWriteUp(id);
+  if (kept) return setOffer(id, { written: kept, sending: { phase: "write" } });
   setOffer(id, { sending: { phase: "working", step: { step: "writing" } } });
-  void writeUp(text).then((written) => setOffer(id, { written, sending: { phase: "write" } }));
+  void writeUp(text).then((written) => {
+    // No writer could run: not kept, so a later start tries the writer again.
+    if (written) keepWriteUp(id, written);
+    setOffer(id, { written, sending: { phase: "write" } });
+  });
 }
 
 /**
@@ -335,6 +371,7 @@ export function openOfferSignIn(id: string): void {
  * another card waits on it.
  */
 export function dismissOffer(id: string): void {
+  forgetWriteUp(id);
   const phase = useFeedbackOffers.getState()[id]?.sending.phase;
   if (phase === "working") return;
   offersSignIn?.shows.delete(id);
