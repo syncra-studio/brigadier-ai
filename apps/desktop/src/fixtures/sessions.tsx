@@ -50,6 +50,7 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   const { method } = req;
   requests.push(req.method === "getConversation" || req.method === "threadView" ? `${method} ${"id" in req ? req.id : req.conversationId}` : method);
+  if (req.method === "updateSettings") return { method, settings: req.settings };
   if (!params.has("rowThread")) return { method };
   switch (req.method) {
     case "getConversation":
@@ -108,6 +109,14 @@ if (params.has("neverRan")) conversations.push(session("never-ran", "Never ran",
 if (params.has("pinned")) conversations.find((each) => each.id === "w1-b")!.pinnedAtMs = 1;
 for (const each of conversations) each.seenAtMs = params.has("unread") ? 0 : 100;
 if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
+// Inbox mode: one row done, one snoozed, one pinned, and a chat, which has no project to name.
+if (params.has("inbox")) {
+  const set = (id: string, extra: Partial<Conversation>) => Object.assign(conversations.find((each) => each.id === id)!, extra);
+  set("w2-a", { doneAtMs: 50 });
+  set("w3-a", { snoozedUntilMs: Date.now() + 3_600_000, snoozedAtMs: 50 });
+  set("w1-b", { pinnedAtMs: 1 });
+  conversations.push(session("chat-1", "Quick question", 20, { kind: "chat", projectId: null }));
+}
 useApp.setState({
   catalogLoaded: true,
   connection: { status: "connected", daemon: null, reason: null },
@@ -116,6 +125,8 @@ useApp.setState({
   conversations: Object.fromEntries(conversations.map((each) => [each.id, each])),
   selection: params.has("manual") ? { type: "conversation", id: "w1-a" } : { type: "none" },
 });
+// These pages read the Projects layout; the inbox page starts in Inbox, as everyone does (D8).
+useApp.setState((state) => ({ settings: { ...state.settings, sidebarMode: params.has("inbox") ? "inbox" : "projects" } }));
 const activity = (id: string, extra: Partial<ConversationActivity>): [string, ReturnType<typeof fromSnapshot>] =>
   [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], ...extra })];
 useActivity.setState({
@@ -226,6 +237,16 @@ const cut = (title: string) => {
     word: wordsOf(button),
   };
 };
+
+/** The sidebar's sections as shown: title, folded or not, and each row's title and project label. */
+const sections = () => [...document.querySelectorAll<HTMLElement>("section")].map((section) => ({
+  title: section.querySelector("button[aria-expanded]")?.textContent?.trim(),
+  open: section.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded") === "true",
+  rows: [...section.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].map((title) => ({
+    title: title.firstChild?.textContent?.trim(),
+    label: title.querySelector('[data-slot="row-label"]')?.textContent ?? null,
+  })),
+}));
 
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
@@ -562,6 +583,27 @@ function Fixture() {
           projectHeader: { text: header.textContent?.trim(), icons: header.querySelectorAll("svg").length },
           sessions: [...list.querySelectorAll('[data-slot="row-title"]')].map((title) => title.textContent?.trim()),
         }));
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+    if (params.has("inbox")) {
+      const timer = setTimeout(async () => {
+        const seen: Record<string, unknown> = { sections: sections() };
+        // A new message brings the done row back: its turn runs (Working), then ends after it was done.
+        useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w2-a", { run: "running", turnOpen: true })]) } }));
+        await wait(100);
+        seen.doneRunning = sections().find((section) => section.rows.some((row) => row.title === "Fix the login"))?.title;
+        useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w2-a", { turnEndedAtMs: Date.now() })]) } }));
+        await wait(2500);
+        seen.doneAfter = sections().find((section) => section.rows.some((row) => row.title === "Fix the login"))?.title;
+        seen.firstActive = sections().find((section) => section.title === "Active")?.rows[0]?.title;
+        // The switch flips to Projects, and the choice goes to the daemon.
+        document.querySelector<HTMLButtonElement>('button[aria-label="Projects view"]')!.click();
+        await until(() => Boolean(document.querySelector('button[aria-label="Add project"]')));
+        seen.projectsSections = sections().map((section) => section.title);
+        seen.mode = useApp.getState().settings.sidebarMode;
+        seen.saved = requests.includes("updateSettings");
+        setResult(JSON.stringify(seen));
       }, 300);
       return () => clearTimeout(timer);
     }

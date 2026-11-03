@@ -57,6 +57,7 @@ export const ConversationRow = memo(function ConversationRow({
   actions,
   nested = false,
   forked = false,
+  label,
 }: {
   conversation: Conversation;
   active: boolean;
@@ -64,6 +65,8 @@ export const ConversationRow = memo(function ConversationRow({
   nested?: boolean;
   /** Drawn under its source: a little further in, after the fork icon (D211). */
   forked?: boolean;
+  /** Small muted text after the title: the inbox's project name (D7). */
+  label?: string | undefined;
 }) {
   const title = conversation.title;
   const pinned = conversation.pinnedAtMs !== null;
@@ -118,6 +121,7 @@ export const ConversationRow = memo(function ConversationRow({
             {/* A title too long for its row fades out at the end. */}
             <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
               {title}
+              {label && <span data-slot="row-label" className="text-muted-foreground ms-1.5 text-xs">{label}</span>}
             </span>
             <RowStatus conversationId={conversation.id} reclaimSpace />
           </NavRow>

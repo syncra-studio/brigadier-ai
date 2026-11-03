@@ -31,7 +31,7 @@ const project: Project = {
   prefs: { permission: null, orchestrator: null, environment: null, secretFiles: [".env.local", ".env.development.local"], branchPrefix: null },
   trust: [{ path: folder, trusted: true }],
 } as Project;
-useApp.setState((state) => ({ catalogLoaded: true, settings: { ...state.settings, onboarded: true }, projects: drive ? Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`p${i + 1}`, { ...project, id: `p${i + 1}`, name: `Project ${i + 1}`, createdAtMs: 8 - i }])) : { p1: project } }));
+useApp.setState((state) => ({ catalogLoaded: true, settings: { ...state.settings, onboarded: true, sidebarMode: "projects" }, projects: drive ? Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`p${i + 1}`, { ...project, id: `p${i + 1}`, name: `Project ${i + 1}`, createdAtMs: 8 - i }])) : { p1: project } }));
 
 const branch = (name: string, merged: boolean): RemovalBranch => ({
   repo: folder,

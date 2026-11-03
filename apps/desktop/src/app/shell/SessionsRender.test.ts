@@ -48,7 +48,7 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
 
   test(`${place}: the row's ⋯ opens its tab's menu`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
-    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A", "Permanently delete"]);
+    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Mark done", "Snooze", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
     assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id", "Copy as Markdown"]);
   });
 }
@@ -60,7 +60,7 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
   };
   assert.equal(seen.error, undefined);
   assert.equal(seen.open, "none", "no session is open");
-  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A", "Permanently delete"]);
+  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Mark done", "Snooze", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
   assert.equal(seen.markdown, "# Fix the login\n\n## User\n\nFix the login.\n\n## Assistant\n\nThe token expired; it refreshes now.\n\n## User\n\nAnd the logout?\n\n## Assistant\n\nLogout clears it too.\n");
   assert.deepEqual(seen.forks, [{ conversationId: "w2-a", messageId: "a2", place: "newWorktree" }]);
   // Read once, for Copy; Fork finds it held.
@@ -262,4 +262,33 @@ test("Done uses the recorded turn-end unread dot: opening clears it through clos
   assert.deepEqual([seen.before.status, seen.before.mark], ["dot", "unread"]);
   assert.deepEqual([seen.afterClose.status, seen.afterClose.mark], [null, null], "seen once opened, still seen after closing");
   assert.deepEqual([seen.nextTurn.status, seen.nextTurn.mark], ["dot", "unread"], "a later turn is a new reply");
+});
+
+
+test("Inbox mode: Pinned, Active, Working, Snoozed and Done across projects, each row naming its project; a new message brings a done row back; the switch flips to Projects", { timeout: 60000 }, async (t) => {
+  type Section = { title: string; open: boolean; rows: { title: string; label: string | null }[] };
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?inbox=1", "sessions-result", 30000)) as {
+    sections: Section[]; doneRunning: string; doneAfter: string; firstActive: string; projectsSections: string[]; mode: string; saved: boolean;
+  };
+  const titles = (section: Section) => section.rows.map((row) => row.title);
+  assert.deepEqual(seen.sections.map(({ title, open }) => [title, open]), [
+    ["Pinned", true], ["Active", true], ["Working", false], ["Snoozed", false], ["Done", false],
+  ]);
+  const [pinned, active, working, snoozed, done] = seen.sections as [Section, Section, Section, Section, Section];
+  assert.deepEqual(titles(pinned), ["Footer"], "pinned wins over working");
+  // Needs you and failed sit in Active (D11); a chat joins the same list.
+  assert.deepEqual(titles(active), ["Quick question", "Deploy the site", "Broken build", "Old fix", "Ship the release", "Finished reply", "Draft the notes", "Paused task"]);
+  assert.deepEqual(titles(working), ["Header", "Waiting on a limit", "Lone worker"]);
+  assert.deepEqual(titles(snoozed), ["Tidy the docs"]);
+  assert.deepEqual(titles(done), ["Fix the login"]);
+  // The project's name after each title; a chat has none.
+  for (const row of seen.sections.flatMap((section) => section.rows)) {
+    assert.equal(row.label, row.title === "Quick question" ? null : "brigadier", row.title);
+  }
+  assert.equal(seen.doneRunning, "Working", "a new message's turn takes it off Done");
+  assert.equal(seen.doneAfter, "Active", "the turn's end keeps it back");
+  assert.equal(seen.firstActive, "Fix the login", "at the top");
+  assert.deepEqual(seen.projectsSections, ["Pinned", "Projects", "Chats"]);
+  assert.equal(seen.mode, "projects");
+  assert.equal(seen.saved, true, "the choice is a daemon setting");
 });
