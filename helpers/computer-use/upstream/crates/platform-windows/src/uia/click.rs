@@ -337,7 +337,13 @@ pub(crate) fn retained_click(
     super::windows_enum::run_uia_with_deadline_cancelable(
         "semantic-click", Duration::from_secs(4), "no fallback input",
         move |cancelled| try_click(hwnd, retained.as_ptr(), expand_only, &cancelled),
-    ).map_err(|error| anyhow::anyhow!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error)))?
+    ).map_err(|error| {
+        // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
+        if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
+            super::dialog_owner::restore_hidden_owners();
+        }
+        anyhow::anyhow!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error))
+    })?
 }
 
 /// None means no supported semantic pattern. A failed supported action is terminal.
@@ -361,7 +367,10 @@ fn try_click(
     // the dialog's controls: arm on the window the element really lives in.
     let hidden_owner = (!expand_only).then(|| {
         let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
-        super::dialog_owner::HiddenOwner::arm(element_root_window(HWND(hwnd as *mut _), &element))
+        super::dialog_owner::HiddenOwner::arm(
+            element_root_window(HWND(hwnd as *mut _), &element),
+            cancelled,
+        )
     });
     let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
     drop(hidden_owner);
@@ -563,7 +572,13 @@ pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolR
         move |cancelled| at_point_inner(hwnd, x, y, &cancelled),
     ) {
         Ok(result) => result,
-        Err(error) => Ok(Some(ToolResult::error(format!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error))))),
+        Err(error) => {
+            // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
+            if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
+                super::dialog_owner::restore_hidden_owners();
+            }
+            Ok(Some(ToolResult::error(format!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error)))))
+        }
     }
 }
 fn at_point_inner(

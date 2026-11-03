@@ -244,6 +244,10 @@ Patches applied, in order:
 
 - `patches/0198-platform-windows-clippy-clean.diff`: platform-windows passes its own clippy with `-D warnings`: clippy's machine-applicable suggestions, `# Safety` docs on two unsafe scroll functions, a type alias, a test-only `cfg` on a helper only tests call, a removed unused duplicate of `tools::build_registry`, and scoped allows (four upstream signatures with eight arguments, and one comparison that keeps its lossy UTF-16 decode to match how the field value was read). Behaviour is unchanged.
 
+- `patches/0199-windows-hidden-owner-restored-at-click-deadline.diff`: A click that times out shows again any owner window it hid: the caller restores what the provider worker hid when the 4 s click deadline passes, and a worker that arms after the deadline hides nothing, so a hung UI Automation call can no longer leave the app's own window hidden.
+
+- `patches/0200-windows-chromium-page-wait-within-timeout.diff`: The Chromium page wait before a window read is bounded by the caller's timeout_ms, at most 600 ms, with each pause capped to the time left: the walk's own clock starts only at the first node, so a 100 ms read waited the full 600 ms.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0
