@@ -62,7 +62,7 @@ static PROFILES: Mutex<Vec<Arc<Profile>>> = Mutex::new(Vec::new());
 
 pub(super) fn lifecycle(args: &Value) -> Result<String> {
     if let Some(key) = cua_driver_core::tool_args::session_key(args) {
-        return Ok(key.into());
+        return Ok(key);
     }
     if RUNTIME.get().is_none() {
         let _ = RUNTIME.set(nonce()?);

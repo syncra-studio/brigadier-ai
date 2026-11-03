@@ -177,6 +177,12 @@ fn make_guard(host_hwnd: isize) -> Option<DisabledHwndGuard> {
     Some(DisabledHwndGuard::disable(target))
 }
 
+fn is_classic_dialog(hwnd: HWND) -> bool {
+    let mut class = [0u16; 16];
+    let len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut class) };
+    len > 0 && String::from_utf16_lossy(&class[..len as usize]) == "#32770"
+}
+
 #[cfg(test)]
 mod disable_lease_tests {
     use super::*;
@@ -295,10 +301,4 @@ mod disable_lease_tests {
         worker.join().unwrap();
         assert!(window.enabled());
     }
-}
-
-fn is_classic_dialog(hwnd: HWND) -> bool {
-    let mut class = [0u16; 16];
-    let len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut class) };
-    len > 0 && String::from_utf16_lossy(&class[..len as usize]) == "#32770"
 }

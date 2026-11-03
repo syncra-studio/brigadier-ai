@@ -413,10 +413,10 @@ fn explorer_path_argument(target: &str, value: &str) -> Option<String> {
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && matches!(bytes[2], b'/' | b'\\');
-    if name.eq_ignore_ascii_case("explorer.exe") || name.eq_ignore_ascii_case("explorer") {
-        if drive_path || value.starts_with("//") || value.starts_with(r"\\") {
-            return Some(quote_argument(&value.replace('/', "\\")));
-        }
+    if (name.eq_ignore_ascii_case("explorer.exe") || name.eq_ignore_ascii_case("explorer"))
+        && (drive_path || value.starts_with("//") || value.starts_with(r"\\"))
+    {
+        return Some(quote_argument(&value.replace('/', "\\")));
     }
     None
 }

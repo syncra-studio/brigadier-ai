@@ -564,7 +564,9 @@ pub fn paint_session_badge(
             };
             for (pixel, coverage) in glyph_pixmap
                 .data_mut()
-                .chunks_exact_mut(4)
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
                 .zip(bitmap.iter().copied())
             {
                 let alpha = ((coverage as f32) * label_opacity) as u8;

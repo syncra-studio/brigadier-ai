@@ -36,7 +36,9 @@ pub fn png_bytes_to_jpeg(png_bytes: &[u8], quality: u8) -> Result<Vec<u8>> {
 
     // RGBA → RGB if needed (drop the alpha channel — JPEG can't store it).
     let rgb_buf: Vec<u8> = if color == ColorType::Rgba8 {
-        buf.chunks_exact(4)
+        buf.as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|px| [px[0], px[1], px[2]])
             .collect()
     } else {
@@ -314,7 +316,7 @@ pub fn encode_rgba_to_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
 /// [`encode_rgba_to_png`]. Caller guarantees the buffer's size invariant.
 pub fn encode_bgra_to_png(bgra: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
     let mut rgba = bgra.to_vec();
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px.swap(0, 2); // B ↔ R
     }
     encode_rgba_to_png(&rgba, w, h)

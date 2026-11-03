@@ -51,6 +51,11 @@ use windows::Win32::UI::Accessibility::{
 ///
 /// `None` means the property could not be read. Callers fail open in that case
 /// so a transient UIA query never blocks an otherwise valid coordinate action.
+///
+/// # Safety
+///
+/// `element_ptr` must be 0 or a live `IUIAutomationElement` pointer that the
+/// caller keeps valid for the whole call.
 pub unsafe fn element_is_offscreen(element_ptr: usize) -> Option<bool> {
     if element_ptr == 0 {
         return None;
@@ -126,6 +131,11 @@ pub unsafe fn scroll_into_view_and_recenter(
 /// top-level host HWND ignores `WM_VSCROLL`. Keeping this on the UIA channel
 /// makes indexed background scrolls reach that container without activating
 /// the host window.
+///
+/// # Safety
+///
+/// `element_ptr` must be 0 or a live `IUIAutomationElement` pointer that the
+/// caller keeps valid for the whole call.
 pub unsafe fn scroll_element(
     element_ptr: usize,
     direction: &str,

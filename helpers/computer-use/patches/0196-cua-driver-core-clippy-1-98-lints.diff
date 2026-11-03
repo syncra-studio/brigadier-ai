@@ -1,0 +1,94 @@
+Why: Lint-only rewrites in cua-driver-core so `cargo clippy -p platform-windows --all-targets -- -D warnings` passes on toolchain 1.98: `as_chunks` instead of `chunks_exact` with a constant size, an explicit `truncate(false)` (the default) on the Windows history lock file, and one needless borrow. Behaviour is unchanged on every platform.
+
+diff --git a/crates/cua-driver-core/src/browser/engine.rs b/crates/cua-driver-core/src/browser/engine.rs
+index c4e14caa4..d45ca6976 100644
+--- a/crates/cua-driver-core/src/browser/engine.rs
++++ b/crates/cua-driver-core/src/browser/engine.rs
+@@ -2916,7 +2916,9 @@ fn collect_interactive(
+             .unwrap_or_default();
+         let attr = |key: &str| -> Option<&str> {
+             attrs
+-                .chunks_exact(2)
++                .as_chunks::<2>()
++                .0
++                .iter()
+                 .find(|kv| kv[0].eq_ignore_ascii_case(key))
+                 .map(|kv| kv[1].as_str())
+         };
+diff --git a/crates/cua-driver-core/src/browser/semantic.rs b/crates/cua-driver-core/src/browser/semantic.rs
+index dc7cecebc..463b9d891 100644
+--- a/crates/cua-driver-core/src/browser/semantic.rs
++++ b/crates/cua-driver-core/src/browser/semantic.rs
+@@ -709,7 +709,9 @@ fn attributes(node: &Value) -> HashMap<String, String> {
+         .and_then(Value::as_array)
+         .map(|attrs| {
+             attrs
+-                .chunks_exact(2)
++                .as_chunks::<2>()
++                .0
++                .iter()
+                 .filter_map(|pair| {
+                     Some((
+                         pair[0].as_str()?.to_ascii_lowercase(),
+diff --git a/crates/cua-driver-core/src/browser/tools.rs b/crates/cua-driver-core/src/browser/tools.rs
+index 5a041f0d4..71911f364 100644
+--- a/crates/cua-driver-core/src/browser/tools.rs
++++ b/crates/cua-driver-core/src/browser/tools.rs
+@@ -2599,7 +2599,7 @@ impl Tool for BrowserSetInputFilesTool {
+         let is_file_input = node["nodeName"]
+             .as_str()
+             .is_some_and(|name| name.eq_ignore_ascii_case("input"))
+-            && attributes.chunks_exact(2).any(|pair| {
++            && attributes.as_chunks::<2>().0.iter().any(|pair| {
+                 pair[0]
+                     .as_str()
+                     .is_some_and(|name| name.eq_ignore_ascii_case("type"))
+diff --git a/crates/cua-driver-core/src/history.rs b/crates/cua-driver-core/src/history.rs
+index 188cec2f6..e4bfa38b4 100644
+--- a/crates/cua-driver-core/src/history.rs
++++ b/crates/cua-driver-core/src/history.rs
+@@ -2399,6 +2399,7 @@ fn secure_open_lock_file(path: &Path) -> Result<File, HistoryError> {
+ fn secure_open_lock_file(path: &Path) -> Result<File, HistoryError> {
+     OpenOptions::new()
+         .create(true)
++        .truncate(false)
+         .read(true)
+         .write(true)
+         .open(path)
+diff --git a/crates/cua-driver-core/src/image_utils.rs b/crates/cua-driver-core/src/image_utils.rs
+index 63061f4e3..6b66b3fb9 100644
+--- a/crates/cua-driver-core/src/image_utils.rs
++++ b/crates/cua-driver-core/src/image_utils.rs
+@@ -36,7 +36,9 @@ pub fn png_bytes_to_jpeg(png_bytes: &[u8], quality: u8) -> Result<Vec<u8>> {
+ 
+     // RGBA → RGB if needed (drop the alpha channel — JPEG can't store it).
+     let rgb_buf: Vec<u8> = if color == ColorType::Rgba8 {
+-        buf.chunks_exact(4)
++        buf.as_chunks::<4>()
++            .0
++            .iter()
+             .flat_map(|px| [px[0], px[1], px[2]])
+             .collect()
+     } else {
+@@ -314,7 +316,7 @@ pub fn encode_rgba_to_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
+ /// [`encode_rgba_to_png`]. Caller guarantees the buffer's size invariant.
+ pub fn encode_bgra_to_png(bgra: &[u8], w: u32, h: u32) -> Result<Vec<u8>> {
+     let mut rgba = bgra.to_vec();
+-    for px in rgba.chunks_exact_mut(4) {
++    for px in rgba.as_chunks_mut::<4>().0 {
+         px.swap(0, 2); // B ↔ R
+     }
+     encode_rgba_to_png(&rgba, w, h)
+diff --git a/crates/cua-driver-core/src/perception_client/containment/windows.rs b/crates/cua-driver-core/src/perception_client/containment/windows.rs
+index ac9b94724..544a17cdc 100644
+--- a/crates/cua-driver-core/src/perception_client/containment/windows.rs
++++ b/crates/cua-driver-core/src/perception_client/containment/windows.rs
+@@ -1015,7 +1015,7 @@ struct PrivateDesktop {
+ 
+ impl PrivateDesktop {
+     fn create(token: &str, security: &PrivateSecurity) -> Result<Self, VisualParseError> {
+-        let name = wide(&format!("cua-perception-{token}"));
++        let name = wide(format!("cua-perception-{token}"));
+         let attributes = security.attributes();
+         let handle = unsafe {
+             CreateDesktopW(

@@ -238,6 +238,12 @@ Patches applied, in order:
 
 - `patches/0195-windows-common-dialog-cancel-sends-idcancel.diff`: A click on a common dialog's Cancel button sends the button's own IDCANCEL WM_COMMAND to the dialog, as Save already sends IDOK, and resolves the dialog from the element when the token came from the owner's read: UI Automation Invoke on the background dialog's Win32 button activated the dialog in the app's own thread, which raised it over the user's window for 6 ms.
 
+- `patches/0196-cua-driver-core-clippy-1-98-lints.diff`: Lint-only rewrites in cua-driver-core so `cargo clippy -p platform-windows --all-targets -- -D warnings` passes on toolchain 1.98: `as_chunks` instead of `chunks_exact` with a constant size, an explicit `truncate(false)` (the default) on the Windows history lock file, and one needless borrow. Behaviour is unchanged on every platform.
+
+- `patches/0197-cursor-overlay-clippy-1-98-lints.diff`: Lint-only rewrites in cursor-overlay for the same check: `as_chunks_mut` instead of `chunks_exact_mut` with a constant size, and the Windows theme-store block ends in its value instead of a needless `return`. The macOS and Linux blocks are unchanged.
+
+- `patches/0198-platform-windows-clippy-clean.diff`: platform-windows passes its own clippy with `-D warnings`: clippy's machine-applicable suggestions, `# Safety` docs on two unsafe scroll functions, a type alias, a test-only `cfg` on a helper only tests call, a removed unused duplicate of `tools::build_registry`, and scoped allows (four upstream signatures with eight arguments, and one comparison that keeps its lossy UTF-16 decode to match how the field value was read). Behaviour is unchanged.
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

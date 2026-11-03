@@ -63,7 +63,7 @@ fn main() {
     ];
     for tool in expected {
         assert!(
-            names.iter().any(|n| *n == tool),
+            names.contains(&tool),
             "missing tool `{tool}` in list-tools output"
         );
     }

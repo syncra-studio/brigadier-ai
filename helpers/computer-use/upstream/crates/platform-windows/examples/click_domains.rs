@@ -73,7 +73,7 @@ fn main() {
         eprintln!("Tree dump (first 2000 chars):");
         eprintln!(
             "{}",
-            &state_resp
+            state_resp
                 .replace("\\n", "\n")
                 .chars()
                 .take(2000)

@@ -505,6 +505,7 @@ enum WriteProbe {
     Failed(String),
 }
 
+#[cfg(test)]
 fn current_token_write_denial_reason(path: &std::path::Path, directory: bool) -> Option<String> {
     match current_token_write_probe(path, directory, false) {
         WriteProbe::Denied => None,
@@ -3329,7 +3330,6 @@ mod tests {
             eprintln!(
                 "installed browser correctly refused for this write-capable runner token: {diagnostics:?}"
             );
-            return;
         }
     }
     use std::sync::atomic::{AtomicUsize, Ordering};

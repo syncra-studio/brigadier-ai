@@ -3374,7 +3374,7 @@ impl Tool for LaunchAppTool {
             // with (e.g. "gimp-3.exe" → prefix "gimp" matches "gimp-3.2.exe").
             let basename_for_match = target_file_opt
                 .as_deref()
-                .and_then(|t| t.rsplit(|c: char| c == '\\' || c == '/').next())
+                .and_then(|t| t.rsplit(['\\', '/']).next())
                 .unwrap_or("")
                 .to_owned();
             // Known-slow launchers get an extended retry budget. GIMP 3.x in
@@ -3498,7 +3498,7 @@ impl Tool for LaunchAppTool {
             // pick up launcher-stub child processes.
             let stub_basename = target_file_opt
                 .as_deref()
-                .and_then(|t| t.rsplit(|c: char| c == '\\' || c == '/').next())
+                .and_then(|t| t.rsplit(['\\', '/']).next())
                 .unwrap_or("")
                 .to_owned();
             // parent_pid is the launched pid family root — used below to
@@ -5224,7 +5224,7 @@ impl Tool for TypeTextTool {
                 let (cx, cy) = match resolve_onscreen_point_with_scroll(
                     &admitted,
                     hwnd,
-                    idx as usize,
+                    idx,
                     cx,
                     cy,
                     "foreground typing",
@@ -5232,7 +5232,7 @@ impl Tool for TypeTextTool {
                     Ok(point) => point,
                     Err(result) => return result,
                 };
-                Some((idx as usize, (cx, cy)))
+                Some((idx, (cx, cy)))
             } else {
                 None
             };
@@ -5319,7 +5319,7 @@ impl Tool for TypeTextTool {
         // can't confirm (conservative: under-claim rather than false-succeed).
         let text_for_post = text.clone();
         let verify_pid = pid;
-        let verify_idx = elem_idx.map(|i| i as usize);
+        let verify_idx = elem_idx;
         // The provider deadline also covers the characters themselves, so it
         // grows with the text and its requested spacing (each character may
         // also wait for the app), bounded below the daemon's 120 s exchange.
@@ -5975,7 +5975,7 @@ impl Tool for PressKeyTool {
             let (cx, cy) = match resolve_onscreen_point_with_scroll(
                 &admitted,
                 hwnd,
-                idx as usize,
+                idx,
                 cx,
                 cy,
                 "focusing for key delivery",
@@ -6042,7 +6042,7 @@ impl Tool for PressKeyTool {
         if !px_focus && delivery == DeliveryMode::Foreground {
             let focus_target = elem_idx.map(|idx| {
                 let point = admitted.as_ref().map(|element| element.center);
-                (idx as usize, point)
+                (idx, point)
             });
             let send_result = tokio::task::spawn_blocking({
                 let admitted = admitted.clone();
@@ -8139,7 +8139,7 @@ impl Tool for DragTool {
                     to_y,
                     duration_ms,
                     steps,
-                    &button,
+                    button,
                 )
             });
             let visual_drag = track_overlay_drag(
@@ -10436,7 +10436,7 @@ impl Tool for DebugWindowInfoTool {
                         if ok.is_ok() && len > 0 {
                             let path = String::from_utf16_lossy(&buf[..len as usize]);
                             let base = path
-                                .rsplit(|c: char| c == '\\' || c == '/')
+                                .rsplit(['\\', '/'])
                                 .next()
                                 .unwrap_or(&path)
                                 .to_ascii_lowercase();
@@ -10592,10 +10592,6 @@ impl Tool for DebugWindowInfoTool {
 }
 
 // ── registry builder ──────────────────────────────────────────────────────────
-
-pub fn build_registry(compat: bool) -> ToolRegistry {
-    build_registry_with_provider(compat, None)
-}
 
 pub fn build_registry_with_provider(
     compat: bool,

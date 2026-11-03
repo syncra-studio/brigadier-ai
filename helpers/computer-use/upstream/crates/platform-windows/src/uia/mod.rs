@@ -436,8 +436,7 @@ unsafe fn walk_tree_unsafe(
             // the timeout_ms walk budget (because we skipped the hang-prone
             // fallback). Without this the caller sees an empty tree
             // and no error, which is less actionable.
-            let stub = format!(
-                "- Window <SAL class — empty primary UIA tree>\n\
+            let stub = "- Window <SAL class — empty primary UIA tree>\n\
                  (SAL providers don't expose modal-dialog children via \
                  ElementFromHandle, and the desktop-root fallback walk that \
                  would normally find them is known to hang on SAL Subtree \
@@ -445,7 +444,7 @@ unsafe fn walk_tree_unsafe(
                  (a) pixel `click(x, y)` off the screenshot `get_window_state` \
                  returns alongside this tree; \
                  (b) `press_key` with `delivery_mode:\"foreground\"` (Esc / Enter / Y / N).)\n"
-            );
+                .to_string();
             return UiaTreeResult {
                 tree_markdown: stub,
                 nodes: Vec::new(),
@@ -844,6 +843,7 @@ unsafe fn walk_native_level(
 
 /// Project one cached element into `nodes`/`lines`. Returns its control type
 /// and the parent index its descendants should inherit.
+#[allow(clippy::too_many_arguments)] // Lint: upstream signature, kept as is.
 fn emit_cached_node(
     element: &IUIAutomationElement,
     depth: usize,
@@ -997,12 +997,13 @@ fn read_cached_bool(
     }
 }
 
+/// Center x, center y, and the (left, top, right, bottom) rect when it is meaningful.
+type CenterAndRect = (i32, i32, Option<(i32, i32, i32, i32)>);
+
 /// Read bounding rect as (center_x, center_y, Some((l,t,r,b))). Returns
 /// rect=None when the element has no meaningful BoundingRectangle (offscreen
 /// containers, structure-only elements).
-fn read_cached_bounding_rect_full(
-    element: &IUIAutomationElement,
-) -> (i32, i32, Option<(i32, i32, i32, i32)>) {
+fn read_cached_bounding_rect_full(element: &IUIAutomationElement) -> CenterAndRect {
     unsafe {
         match element.CachedBoundingRectangle() {
             Ok(r) if r.right > r.left && r.bottom > r.top => (

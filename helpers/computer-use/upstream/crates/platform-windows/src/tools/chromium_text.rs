@@ -155,6 +155,8 @@ unsafe fn read_field(hwnd: u64, retained: &RetainedElement) -> Result<Field> {
     // U+FFFC, rather than the field value. Do not interpret that as a caret,
     // strip meaningful text, or guess append. The exact DOM field can supply
     // its own selection after its identity and full value have been proven.
+    // Lint: the lossy UTF-16 decode keeps this comparison equal to how `value` was read.
+    #[allow(clippy::cmp_owned)]
     let selection: Result<_> = (|| unsafe {
         let tp: IUIAutomationTextPattern = element.GetCurrentPattern(UIA_TextPatternId)?.cast()?;
         let ranges = tp.GetSelection()?;
