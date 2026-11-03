@@ -753,6 +753,42 @@ async fn a_paused_worker_closed_stops_once_and_still_reads() {
     bench.flow.stop().await;
 }
 
+/// A worker whose work already merged, its turn still reporting it, closed: no "Stopped"
+/// row, it ends done (D104, demo12).
+#[tokio::test]
+async fn a_worker_closed_once_its_work_merged_files_no_stopped_row() {
+    let bench = bench("manage-close-merged", start("Build it."), Mode::Hold, false).await;
+    let id = bench.id();
+    let task = bench.task().await;
+    let workspace = task.workspace.clone().unwrap();
+    let worktree = std::path::PathBuf::from(workspace.worktree.unwrap());
+    std::fs::write(worktree.join("marks.txt"), "1\n2\n3\n").unwrap();
+    super::git(&worktree, &["add", "marks.txt"]);
+    super::git(&worktree, &["commit", "-qm", "Add marks"]);
+    let checkout = std::path::PathBuf::from(
+        bench
+            .flow
+            .manager
+            .checkout_dir(&bench.flow.conversation)
+            .unwrap(),
+    );
+    super::git(
+        &checkout,
+        &["merge", "-q", "--ff-only", &workspace.branch.unwrap()],
+    );
+    let closed = bench.run(CliRequest::Close { id: id.clone() }).await;
+    assert_eq!(closed["closed"], true, "{closed:#}");
+    assert_eq!(
+        bench
+            .steps(|kind| matches!(kind, OrchestratorStepKind::Stopped { .. }))
+            .await,
+        0
+    );
+    assert_eq!(bench.task().await.state, TaskState::Done);
+    bench.release.notify_waiters();
+    bench.flow.stop().await;
+}
+
 /// Kept across a restart: still paused, still holding, and the resume gives it all once.
 #[tokio::test]
 async fn a_pause_and_what_it_holds_survive_a_restart() {

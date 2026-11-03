@@ -1904,6 +1904,20 @@ impl SessionManager {
         }))
     }
 
+    /// Whether `task`'s work is all in its session's branch, by git read now: its commits
+    /// merged and nothing uncommitted left in its worktree.
+    async fn worker_landed(&self, task: &Task) -> bool {
+        let rows = self
+            .worker_rows_of(&task.conversation_id, true)
+            .await
+            .unwrap_or_default();
+        rows.iter()
+            .find(|row| row.id == task.id)
+            .is_some_and(|row| {
+                row.merged && row.diff.as_ref().is_none_or(|diff| diff.files.is_empty())
+            })
+    }
+
     /// `brigadier close`: stops one of the caller's workers for good. Unfinished changes are
     /// kept as a commit on its branch, as a stop keeps them; it leaves `brigadier workers`.
     pub(super) async fn cli_close(&self, caller: &CliCaller, id: &str) -> Result<CliReply> {
@@ -1912,8 +1926,9 @@ impl SessionManager {
             Err(reply) => return Ok(reply),
         };
         // A worker closed after a turn that ended done is done, not stopped: its row reads so
-        // after a restart too, when no CLI event of its is held any more.
-        let done = self.worker_turn_done(&task.id);
+        // after a restart too, when no CLI event of its is held any more. So is one whose work
+        // already merged with nothing left over, its turn only reporting it (demo12).
+        let done = self.worker_turn_done(&task.id) || self.worker_landed(&task).await;
         // A finished worker closed files no "Stopped" row: it finished (D104).
         let closed = if done {
             self.stop_if(task.id.clone(), |state| !state.is_final(), true)
