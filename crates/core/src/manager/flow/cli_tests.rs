@@ -2783,7 +2783,7 @@ async fn a_start_off_the_routing_runs_and_says_so() {
     std::fs::write(
         flow.manager.models_rules_path(),
         format!(
-            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Independent review | codex | astra | high | Other. |\n| Independent review | claude | opus | high | Own. |\n| Bounded implementation | codex | astra |  | Its default effort. |\n| Fallback | codex | default | medium | Its default model. |\n| Fallback | claude | sonnet | low | Next. |\n"
+            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Adversarial review | codex | astra | high | Other. |\n| Adversarial review | claude | opus | high | Own. |\n| Bounded implementation | codex | astra |  | Its default effort. |\n| Fallback | codex | default | medium | Its default model. |\n| Fallback | claude | sonnet | low | Next. |\n"
         ),
     )
     .unwrap();
@@ -2968,12 +2968,12 @@ async fn a_start_off_the_routing_runs_and_says_so() {
     flow.stop().await;
 }
 
-/// An independent review (harness D22): `--reviewing` names whose work it is (a worker, or
-/// `session`, the default for the work "Independent review"); the reviewer runs on another
+/// An adversarial review (harness D22): `--reviewing` names whose work it is (a worker, or
+/// `session`, the default for the work "Adversarial review"); the reviewer runs on another
 /// provider than the authors' whose row the rules allow and whose model is free now, else a
 /// fresh session of the authors' provider. Its brief ends with where the authors' facts are.
 #[tokio::test]
-async fn an_independent_review_runs_on_another_ready_provider_than_the_authors() {
+async fn an_adversarial_review_runs_on_another_ready_provider_than_the_authors() {
     let answers = Answers::default();
     let seen = answers.clone();
     let script: Script = Arc::new(move |turn| {
@@ -3004,7 +3004,7 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
                 starts.push((
                     "of the session by default",
                     StartRequest {
-                        work: Some("independent review".into()),
+                        work: Some("adversarial review".into()),
                         ..review(&[])
                     },
                 ));
@@ -3065,7 +3065,7 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
     );
     assert_eq!(
         seen["of a codex worker"]["row"]["work"],
-        "Independent review"
+        "Adversarial review"
     );
     // The Claude session's own work, with no id: the Codex row, on Codex's default model.
     assert_eq!(
@@ -3109,7 +3109,7 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
     // A model's own window used up: the next row on another provider whose model is free.
     std::fs::write(
         flow.manager.models_rules_path(),
-        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Independent review | codex | gpt-6-astra | high | One. |\n| Independent review | codex | gpt-6-luna | high | Two. |\n| Independent review | claude | opus | high | Three. |\n",
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Adversarial review | codex | gpt-6-astra | high | One. |\n| Adversarial review | codex | gpt-6-luna | high | Two. |\n| Adversarial review | claude | opus | high | Three. |\n",
     )
     .unwrap();
     let now = crate::now_ms();

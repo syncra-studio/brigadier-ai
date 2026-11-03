@@ -12,6 +12,16 @@ pub(super) const DEFAULT_RULES: &str = include_str!("models_default.md");
 /// The Work whose rows a session moves to another agent with (S38, D25, D34).
 pub(crate) const FALLBACK_WORK: &str = "Fallback";
 
+/// Read the former work name in existing rows, scoped rules and `--work` starts.
+pub(super) fn canonical_work(work: &str) -> &str {
+    let work = work.trim();
+    if work.eq_ignore_ascii_case("Independent review") {
+        "Adversarial review"
+    } else {
+        work
+    }
+}
+
 fn rank(effort: &str) -> Option<usize> {
     [
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
@@ -42,7 +52,7 @@ fn rows(text: &str) -> Vec<GuidanceRow> {
             let agent = ProviderKind::parse(cells[1])
                 .filter(|kind| brigadier_providers::adapters::adapter(*kind).is_some())?;
             Some(GuidanceRow {
-                work: cells[0].into(),
+                work: canonical_work(cells[0]).into(),
                 agent,
                 model: cells[2].into(),
                 effort: (!cells[3].is_empty()).then(|| cells[3].into()),
@@ -94,9 +104,11 @@ fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
-    // `forbid for Independent review: sonnet`: the rule holds for that kind of work only.
+    // `forbid for Adversarial review: sonnet`: the rule holds for that kind of work only.
     let (key, work) = match key.split_once(" for ") {
-        Some((key, work)) if !work.trim().is_empty() => (key, Some(work.trim().to_owned())),
+        Some((key, work)) if !work.trim().is_empty() => {
+            (key, Some(canonical_work(work).to_owned()))
+        }
         _ => (key, None),
     };
     let parsed = match key.trim() {
@@ -189,10 +201,10 @@ impl Policy {
 }
 /// Whether two Work cells name the same kind of work, as `--work` finds a row.
 pub(super) fn same_work(a: &str, b: &str) -> bool {
-    a.trim().eq_ignore_ascii_case(b.trim())
+    canonical_work(a).eq_ignore_ascii_case(canonical_work(b))
 }
 /// A rule as the file writes it: `forbid: fable`, `allow claude: opus, sonnet`,
-/// `effort-ceiling for Independent review: medium`.
+/// `effort-ceiling for Adversarial review: medium`.
 fn rule_text(rule: &ModelRule) -> String {
     let scope = rule
         .work()
@@ -934,8 +946,55 @@ mod tests {
         assert_eq!(row.source, "user");
     }
     #[test]
+    fn the_old_review_name_reads_as_adversarial_review() {
+        let old = "Independent review";
+        let current = "Adversarial review";
+        assert_eq!(canonical_work(old), current);
+        assert!(same_work(" independent review ", current));
+        assert!(same_work(old, " adversarial REVIEW "));
+
+        let user = format!("| {old} | claude | sonnet | medium | My reviewer. |\n");
+        let rows = guidance(GUIDANCE, &user);
+        let review: Vec<_> = rows.iter().filter(|r| same_work(&r.work, old)).collect();
+        assert_eq!(
+            review.len(),
+            1,
+            "the old row replaces the shipped reviewers"
+        );
+        assert_eq!(review[0].work, current);
+        assert_eq!(review[0].model, "sonnet");
+        assert_eq!(review[0].source, "user");
+
+        let policy = Policy::parse(&format!(
+            "- forbid for {old}: sonnet\n- effort-ceiling for {old}: medium\n"
+        ))
+        .unwrap();
+        for (_, rule) in &policy.entries {
+            assert_eq!(rule.work(), Some(current));
+        }
+        for work in [old, current] {
+            assert!(
+                policy
+                    .refusal(ProviderKind::Claude, &["sonnet"], None, Some(work))
+                    .unwrap()
+                    .contains(old),
+                "a refusal still quotes the user's rule verbatim"
+            );
+            assert!(
+                policy
+                    .refusal(ProviderKind::Claude, &["opus"], Some("high"), Some(work))
+                    .is_some()
+            );
+            assert!(
+                policy
+                    .refusal(ProviderKind::Claude, &["opus"], Some("medium"), Some(work))
+                    .is_none()
+            );
+        }
+    }
+    #[test]
     fn a_works_order_replaces_its_shipped_row_in_place() {
-        let user = "| Independent review | claude | opus | high | First. |\n| Independent review | codex | gpt-6 | | Next. |\n| Docs | claude | haiku | low | Mine. |\n";
+        let user = "| Adversarial review | claude | opus | high | First. |\n| Adversarial review | codex | gpt-6 | | Next. |\n| Docs | claude | haiku | low | Mine. |\n";
         let rows = guidance(GUIDANCE, user);
         let works: Vec<_> = rows
             .iter()
@@ -944,15 +1003,15 @@ mod tests {
         assert_eq!(
             &works[3..6],
             [
-                ("Independent review", "opus", "user"),
-                ("Independent review", "gpt-6", "user"),
+                ("Adversarial review", "opus", "user"),
+                ("Adversarial review", "gpt-6", "user"),
                 ("fusion-claude", "opus", "shipped"),
             ]
         );
         assert_eq!(works.last(), Some(&("Docs", "haiku", "user")));
         assert_eq!(
             rows.iter()
-                .filter(|r| r.work == "Independent review")
+                .filter(|r| r.work == "Adversarial review")
                 .count(),
             2
         );
@@ -960,15 +1019,15 @@ mod tests {
     #[test]
     fn a_rule_for_one_kind_of_work_judges_only_its_starts() {
         let policy = Policy::parse(
-            "- forbid for Independent review: sonnet\n- effort-ceiling for Docs: low\n",
+            "- forbid for Adversarial review: sonnet\n- effort-ceiling for Docs: low\n",
         )
         .unwrap();
-        assert_eq!(policy.entries[0].0, "forbid for Independent review: sonnet");
+        assert_eq!(policy.entries[0].0, "forbid for Adversarial review: sonnet");
         assert_eq!(
             policy.entries[0].1,
             ModelRule::Forbid {
                 names: vec!["sonnet".into()],
-                work: Some("Independent review".into())
+                work: Some("Adversarial review".into())
             }
         );
         let sonnet = ["claude-sonnet-5-5"];
@@ -978,10 +1037,10 @@ mod tests {
                     ProviderKind::Claude,
                     &sonnet,
                     None,
-                    Some("independent review")
+                    Some("adversarial review")
                 )
                 .unwrap()
-                .contains("forbid for Independent review: sonnet")
+                .contains("forbid for Adversarial review: sonnet")
         );
         assert!(
             policy
@@ -1104,7 +1163,7 @@ mod tests {
             },
             ModelRule::Forbid {
                 names: vec!["sonnet".into()],
-                work: Some("Independent review".into()),
+                work: Some("Adversarial review".into()),
             },
         ];
         check_rules(std::slice::from_ref(&row), &rules).unwrap();
@@ -1112,7 +1171,7 @@ mod tests {
         let written = rewrite(DEFAULT_RULES, std::slice::from_ref(&row), &rules);
         assert!(written.starts_with(DEFAULT_RULES.trim_end()));
         assert!(written.contains(
-            "- forbid: fable\n- allow codex: gpt-6, default\n- effort-ceiling: high\n- forbid for Independent review: sonnet\n\n| Work |"
+            "- forbid: fable\n- allow codex: gpt-6, default\n- effort-ceiling: high\n- forbid for Adversarial review: sonnet\n\n| Work |"
         ));
         assert!(
             written.ends_with(

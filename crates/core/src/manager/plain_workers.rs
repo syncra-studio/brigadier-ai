@@ -35,7 +35,7 @@ use brigadier_git::WorktreeSpec;
 use brigadier_providers::{ApprovalDecision, ProviderKind, TurnStatus};
 
 use super::cli::{CliCaller, Target, short, worker_row};
-use super::models::same_work;
+use super::models::{canonical_work, same_work};
 use super::session_dir::{WorkspaceRecord, write_atomic};
 use super::worker_events::HeldEvents;
 use super::workers::{TaskLive, Workspace, task_branch};
@@ -206,8 +206,8 @@ fn refused(message: impl Into<String>) -> CliReply {
     CliReply::error(ErrorCode::Refused, message)
 }
 
-/// The kind of work an independent review is (`models_guidance.md`).
-const REVIEW_WORK: &str = "Independent review";
+/// The kind of work an adversarial review is (`models_guidance.md`).
+const REVIEW_WORK: &str = "Adversarial review";
 /// The kind of work a worker with the computer tools is (`models_guidance.md`), the row
 /// Settings › Computer use and Settings › Routing both set.
 const COMPUTER_USE_WORK: &str = "Computer use";
@@ -294,12 +294,13 @@ impl SessionManager {
                 ));
             }
         };
-        // harness D22: an independent review knows whose work it covers (`--reviewing`, the
+        // harness D22: an adversarial review knows whose work it covers (`--reviewing`, the
         // session's own by default) and runs on another ready provider than theirs.
         let reviewing = start.reviewing.clone();
         let work = start
             .work
-            .clone()
+            .as_deref()
+            .map(|work| canonical_work(work).to_owned())
             .or_else(|| (!reviewing.is_empty()).then(|| REVIEW_WORK.to_owned()))
             .or_else(|| {
                 start
@@ -621,7 +622,7 @@ impl SessionManager {
         }))
     }
 
-    /// Whose work an independent review covers: each `--reviewing` id, a worker of this
+    /// Whose work an adversarial review covers: each `--reviewing` id, a worker of this
     /// session or `session` (this session itself, also when none is given), with the
     /// provider it ran on (harness D22).
     async fn review_authors(

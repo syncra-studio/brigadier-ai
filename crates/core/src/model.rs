@@ -2842,7 +2842,7 @@ pub enum ModelRule {
     /// `forbid: fable`: no matching model.
     Forbid {
         names: Vec<String>,
-        /// `forbid for Independent review: sonnet`: only for that kind of work (a row's Work),
+        /// `forbid for Adversarial review: sonnet`: only for that kind of work (a row's Work),
         /// so only a `brigadier start --work` of it. Absent: everywhere.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
