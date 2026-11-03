@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 
 import { ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { TooltipProvider } from "@/components/overlays";
+import { account, model, overview, status as providerStatus } from "@/fixtures/agents";
+import { usageView } from "@/fixtures/providersData";
 import type { ComputerSetup, ComputerUseStatus, GuidanceRow, ModelRules, PermissionState, Request, Settings } from "@/ipc/generated";
 import { onComputerUse } from "@/state/computerUse";
 import { loadModelRules, useModelRules } from "@/state/modelRules";
@@ -21,7 +23,15 @@ if (params.has("drive")) {
   document.head.append(still);
 }
 
-useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
+const accounts = [account("claude", undefined, "claude@example.com"), account("codex", undefined, "codex@example.com")];
+useApp.setState((state) => ({
+  info: { ...state.info, platform: "macos" } as typeof state.info,
+  accounts: { accounts, warnings: [] },
+  providers: { ...state.providers, view: { providers: [
+    overview("claude", [model("opus", "Opus", { isDefault: true, defaultEffort: "high" })]),
+    overview("codex", [model("gpt-6-luna", "Gpt-6-luna", { isDefault: true, defaultEffort: "low" })]),
+  ], sessions: [], fixtures: [] } },
+}));
 
 const status = (
   setup: ComputerSetup,
@@ -31,10 +41,11 @@ const status = (
 ): ComputerUseStatus => ({ available: true, platform: "macos", accessibility, screenRecording, current, setup, sessions: [], notes: [] });
 
 // The rules file: the shipped "Computer use" order and nothing of the user's yet.
-const cuRow = (agent: GuidanceRow["agent"], model: string, effort: string | null): GuidanceRow => ({ work: "Computer use", agent, model, effort, reason: "Shipped." });
+const cuRow = (agent: GuidanceRow["agent"], modelId: string, effort: string | null): GuidanceRow => ({ work: "Computer use", agent, model: modelId, effort, reason: "Shipped." });
 const modelRules: ModelRules = { path: "/tmp/models.md", shipped: [cuRow("claude", "opus", "high"), cuRow("codex", "default", "high")], rows: [], rules: [] };
 
 const calls: string[] = [];
+const modelSaves: Request[] = [];
 // The first check's answer, held until the fixture has seen the page while it runs.
 let answerCheck: () => void = () => {};
 mockIPC((command, payload) => {
@@ -50,7 +61,10 @@ mockIPC((command, payload) => {
     case "getModelRules":
       return { method: req.method, rules: modelRules };
     case "getUsage":
-      return { method: req.method };
+      return { method: req.method, usage: usageView() };
+    case "setModelRules":
+      modelSaves.push(req);
+      return { method: req.method, rules: { ...modelRules, rows: req.rows, rules: req.rules } };
     case "getComputerUse":
       calls.push(req.method);
       // Never set up: the helper has never run.
@@ -86,6 +100,7 @@ const text = (element: Element | null | undefined) => element?.textContent?.trim
 const row = (label: string) => all('[data-slot="settings-row"]').find((element) => element.dataset.setting === label);
 const button = (name: string, root: ParentNode = document) =>
   all<HTMLButtonElement>("button", root).find((element) => text(element) === name || element.getAttribute("aria-label") === name);
+const pickModel = (name: string) => all<HTMLButtonElement>('[data-slot="model-picker-model"]').find((element) => text(element).startsWith(name))?.click();
 const buttons = (root: ParentNode | undefined) => (root ? all<HTMLButtonElement>("button", root).map(text) : []);
 
 /** What the page shows now. */
@@ -132,6 +147,33 @@ function Fixture() {
         seen.first = look();
         seen.listingCalls = [...calls];
         seen.model = modelLook();
+      },
+      // A signed-out Claude is skipped in favor of Codex, as worker starts do.
+      () => useApp.setState({ accounts: { accounts: accounts.map((entry) => entry.account.provider === "claude"
+        ? { ...entry, status: providerStatus("claude", { loggedIn: false }) } : entry), warnings: [] } }),
+      () => { seen.modelCodexOnly = modelLook(); },
+      // An extra account can lead even while the computer's own login is signed out.
+      () => useApp.setState((state) => ({ accounts: { accounts: [
+        ...state.accounts!.accounts.map((entry) => entry.account.provider === "claude" ? { ...entry, inUse: false } : entry),
+        account("claude", "extra", "extra@example.com", { inUse: true }),
+      ], warnings: [] } })),
+      () => { seen.modelExtraAccount = modelLook(); },
+      () => useApp.setState({ accounts: { accounts, warnings: [] } }),
+      // The rules refuse a picked model before anything reaches the file.
+      () => useModelRules.setState({ view: { ...modelRules, rules: [{ type: "forbid", names: ["opus"], work: "Computer use" }] } }),
+      () => button("Model for computer use")?.click(),
+      () => document.querySelector<HTMLButtonElement>('[data-slot="model-picker-agent"][data-agent="claude"]')?.click(),
+      () => pickModel("Opus"),
+      () => {
+        seen.modelForbidden = { saves: modelSaves.length, error: text(row("Model for computer use")?.querySelector('[role="alert"]')) };
+      },
+      // Moving an existing model first keeps its effort: judge that effort before saving.
+      () => useModelRules.setState({ view: { ...modelRules, rules: [{ type: "effortCeiling", effort: "low", work: "Computer use" }] } }),
+      () => button("Model for computer use")?.click(),
+      () => document.querySelector<HTMLButtonElement>('[data-slot="model-picker-agent"][data-agent="claude"]')?.click(),
+      () => pickModel("Opus"),
+      () => {
+        seen.modelAboveCeiling = { saves: modelSaves.length, error: text(row("Model for computer use")?.querySelector('[role="alert"]')) };
       },
       // A model the user picked on either page: their own row of the work.
       () => useModelRules.setState({ view: { ...modelRules, rows: [cuRow("codex", "gpt-6-luna", "low")] } }),

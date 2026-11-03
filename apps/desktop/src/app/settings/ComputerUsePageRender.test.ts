@@ -14,15 +14,20 @@ type Look = {
 type States = "unknown" | "cached" | "missingBoth" | "missingAccessibility" | "confirmCapture" | "ready" | "readyCached" | "restarting" | "failed" | "off";
 type Linux = { sections: string[]; rows: string[]; notes: string; setup: string; setupButtons: string[] };
 type Model = { shown: string; disabled: boolean | null };
-type Seen = Record<States, Look> & { model: Model; modelMine: Model; first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[]; linux: Linux; windowsNoNotes: string; linuxNoNotes: string; windowsCachedNoNotes: string; linuxCachedNoNotes: string; windowsOffNoNotes: string; linuxOffNoNotes: string };
+type Refusal = { saves: number; error: string };
+type Seen = Record<States, Look> & { model: Model; modelCodexOnly: Model; modelExtraAccount: Model; modelForbidden: Refusal; modelAboveCeiling: Refusal; modelMine: Model; first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[]; linux: Linux; windowsNoNotes: string; linuxNoNotes: string; windowsCachedNoNotes: string; linuxCachedNoNotes: string; windowsOffNoNotes: string; linuxOffNoNotes: string };
 
 // The real page in Chromium over a faked daemon.
-test("computer use settings: enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "computer-use.html?drive=1", "computer-use-result", 15000)) as Seen;
+test("computer use settings: model, enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "computer-use.html?drive=1", "computer-use-result", 20000)) as Seen;
   assert.deepEqual(seen.sections, ["Enable", "Model", "Menu bar", "Permissions", "Setup"]);
   assert.deepEqual(seen.rows, ["Let sessions use apps on this Mac", "Model for computer use", "Show in menu bar", "Accessibility", "Screen Recording", "Setup"]);
   // The model for computer use: the rules file's "Computer use" row, the shipped one first, then the user's own.
   assert.deepEqual(seen.model, { shown: "Opus · High", disabled: false });
+  assert.deepEqual(seen.modelCodexOnly, { shown: "Codex's default · High", disabled: false });
+  assert.deepEqual(seen.modelExtraAccount, { shown: "Opus · High", disabled: false });
+  assert.deepEqual(seen.modelForbidden, { saves: 0, error: "Refused by your rule “Don't use Opus for Computer use”" });
+  assert.deepEqual(seen.modelAboveCeiling, { saves: 0, error: "Refused by your rule “Never go above Low effort for Computer use”" });
   assert.deepEqual(seen.modelMine, { shown: "Gpt-6-luna · Low", disabled: false });
   // Permissions nothing has read yet (no helper has run for this data folder), with computer use
   // on: the page asks the helper once and shows what it holds, "Checking…" meanwhile.
