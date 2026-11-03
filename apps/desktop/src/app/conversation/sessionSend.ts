@@ -22,6 +22,24 @@ export function namesId(full: string, id: string): boolean {
   return full === id || (id.length >= MIN_ID && full.slice(-8).startsWith(id));
 }
 
+/** A name's words as `brigadier` compares a session's title with it: any case, any punctuation. */
+function nameWords(text: string): string[] {
+  return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/**
+ * The one session of `sessions` a `brigadier send` or `wait` names by its title (D201), as
+ * `brigadier` reads it (`manager::cli::named`): its whole title, else the one title holding each
+ * word; null when none or several do.
+ */
+export function titled(sessions: readonly { id: string; title: string }[], to: string): string | null {
+  const words = nameWords(to);
+  if (words.length === 0) return null;
+  const whole = sessions.filter(({ title }) => nameWords(title).join(" ") === words.join(" "));
+  const found = whole.length > 0 ? whole : sessions.filter(({ title }) => words.every((word) => nameWords(title).join(" ").includes(word)));
+  return found.length === 1 ? found[0]!.id : null;
+}
+
 /** A heredoc fed to the command line as one argument: `"$(cat <<'EOF'` … `EOF` `)"`. */
 const HEREDOC = /"\$\(cat\s+<<-?\s*(['"]?)(\w+)\1[ \t]*\n([\s\S]*?)\n[ \t]*\2[ \t]*\n?\s*\)"/g;
 
@@ -129,12 +147,15 @@ export function sendArgs(command: string): { to: string; text: string } | null {
   return to === undefined ? null : { to, text: words.join(" ") };
 }
 
-/** The ids `command`'s one `brigadier wait` names (none: it waits on the workers), its options left out. */
+/** Whether a word is a redirect (`2>`, `>/dev/null`). */
+const redirect = (arg: string | undefined) => arg !== undefined && /^\d*[<>]/.test(arg);
+
+/** The ids or titles `command`'s one `brigadier wait` names (none: it waits on the workers), its options left out. */
 export function waitArgs(command: string): string[] | null {
   const found = brigadierArgs(command, "wait");
   if (found?.length !== 1) return null;
-  // An id is a word, digits only too (a redirect such as `2>` is none); `--timeout`'s value is no id.
-  return found[0]!.filter((arg, index, args) => /^\w[\w-]*$/.test(arg) && args[index - 1] !== "--timeout");
+  // An id or a title (D201); an option, a redirect (`2>/dev/null`) and `--timeout`'s value are none.
+  return found[0]!.filter((arg, index, args) => !arg.startsWith("-") && !redirect(arg) && !redirect(args[index - 1]) && args[index - 1] !== "--timeout");
 }
 
 /**
@@ -158,7 +179,10 @@ export function sessionWait(step: ToolStep | null, event: ProviderEvent, view: P
 export function attachReplies(steps: readonly { kind: { type: string }; atMs?: number }[], replies: readonly WaitReply[]): void {
   const waits = steps.flatMap((step) => (step.kind.type === "sessionWait" ? [{ kind: step.kind as SessionWaitStep, atMs: step.atMs ?? 0 }] : []));
   for (const reply of replies) {
-    const wait = waits.findLast(({ kind, atMs }) => atMs <= reply.atMs && kind.to.some((id) => namesId(reply.from, id)));
+    const wait =
+      waits.findLast(({ kind, atMs }) => atMs <= reply.atMs && kind.to.some((id) => namesId(reply.from, id))) ??
+      // shortcut: a wait naming its session by title takes a reply no wait names by id; several title waits at once could swap replies, upgrade by keeping the resolved id with the reply.
+      waits.findLast(({ kind, atMs }) => atMs <= reply.atMs && kind.to.some((id) => !/^[0-9a-f-]{4,}$/i.test(id)));
     wait?.kind.replies.push(reply);
   }
 }

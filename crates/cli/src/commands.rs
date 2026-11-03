@@ -395,7 +395,8 @@ pub const COMMANDS: &[Command] = &[
         summary: "Send a worker of yours or another session a message, or answer a worker's \
                   permission prompt.",
         details: "A message is queued into its turn if it is working, else it starts a turn. \
-                  Another session (an id of `brigadier sessions --all`) gets it as a message \
+                  Another session (its title, as the user names it, or an id of `brigadier sessions \
+                  --all`) gets it as a message \
                   from this session, never as its user's, and answers with `brigadier send` \
                   back (`brigadier help sessions`). Message another session only when the user \
                   asks, or when it is absolutely needed. Another session's workers are out of \
@@ -404,7 +405,7 @@ pub const COMMANDS: &[Command] = &[
                   you, never the user: judge it yourself and answer it with --allow, or \
                   --deny <reason>; the worker waits until you do.",
         args: &[
-            positional("id", "The worker, or another session."),
+            positional("id", "The worker, or another session (its id or title)."),
             switch("allow", "Allow what its permission prompt asks."),
             switch(
                 "deny",

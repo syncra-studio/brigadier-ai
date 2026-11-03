@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ToolStep } from "@/app/conversation/activity/words";
-import { attachReplies, namesId, sendArgs, sessionSent, sessionWait, waitArgs } from "@/app/conversation/sessionSend";
+import { attachReplies, namesId, sendArgs, sessionSent, sessionWait, titled, waitArgs } from "@/app/conversation/sessionSend";
 import type { ProviderEvent, Task, WorkerRow } from "@/ipc/generated";
 
 test("a `brigadier send` command gives whom it messages and the text, however the shell quotes it", () => {
@@ -76,6 +76,22 @@ test("a send to one of the session's workers keeps its own row", () => {
   assert.equal(sessionSent(other.step, other.event), null);
   const allow = call(`brigadier send 0011aa22 --allow`, "completed", "Allowed what 0011aa22 asked.\n");
   assert.equal(sessionSent(allow.step, allow.event), null);
+});
+
+test("a session named by its title is one `send && wait`, its row the wait's, taking that session's reply (D201)", () => {
+  assert.deepEqual(waitArgs(`brigadier send "Remember for this session" "What is your codename?" && brigadier wait "Remember for this session" 2>/dev/null`), ["Remember for this session"]);
+  assert.deepEqual(waitArgs(`brigadier wait 'Docs' --timeout 600 > /tmp/out`), ["Docs"]);
+  const sessions = [{ id: "a1", title: "Remember for this session" }, { id: "b2", title: "Docs" }, { id: "c3", title: "Docs notes" }];
+  assert.equal(titled(sessions, "remember for THIS session"), "a1");
+  assert.equal(titled(sessions, "remember"), "a1");
+  assert.equal(titled(sessions, "docs"), "b2", "a whole title wins");
+  assert.equal(titled(sessions, "doc"), null, "several hold it");
+  assert.equal(titled(sessions, "nobody"), null);
+  const waiting = call(`brigadier wait "Remember for this session"`, "inProgress", null);
+  const wait = { kind: sessionWait(waiting.step, waiting.event, {})!, atMs: 1000 };
+  assert.deepEqual(wait.kind.to, ["Remember for this session"]);
+  attachReplies([wait], [{ from: "0192aaaa-bbbb-7ccc-8ddd-00004f2a9c1e", text: "Saffron.", atMs: 2000 }]);
+  assert.deepEqual(wait.kind.replies.map((reply) => reply.text), ["Saffron."]);
 });
 
 test("a `brigadier wait` on another session is its reply's row, under the newest wait on it that began before it (D138)", () => {

@@ -239,6 +239,31 @@ async fn two_sessions(flow: &Flow, seen: &Seen) -> ConversationId {
     other
 }
 
+/// D201: the one call reaches another session by the name its user calls it (its title, any
+/// case); a name more than one holds lists them, an unknown one says so.
+#[tokio::test]
+async fn a_session_is_reached_by_its_title_and_an_unclear_name_lists_them() {
+    let (flow, seen) = flow("sessions-by-title", false).await;
+    let a = flow.conversation.clone();
+    let b = two_sessions(&flow, &seen).await;
+    let title = flow.core.conversation(&b).unwrap().title;
+    let sent = ok(call(&flow, &seen, &a, send(&title.to_uppercase(), "By name.")).await);
+    assert_eq!(sent["id"], crate::manager::cli::short(&b.0), "{sent:#}");
+    let message = sent["message"].as_str().unwrap().to_owned();
+    super::eventually("B to take it", || seen.took(&b, &message) == 1).await;
+    let c = flow
+        .add_session(&format!("{title} notes"), None, ProviderKind::Claude)
+        .await;
+    let unclear = refused(call(&flow, &seen, &a, send(&title[..3], "Which?")).await);
+    assert!(
+        unclear.contains(&format!("({})", crate::manager::cli::short(&b.0)))
+            && unclear.contains(&format!("({})", crate::manager::cli::short(&c.0))),
+        "{unclear}"
+    );
+    assert!(refused(call(&flow, &seen, &a, send("nobody here", "?")).await).contains("no session"));
+    flow.settled_in(&b).await;
+}
+
 /// The plan's first, through B's queue (goal 4): A sends B a message mid-turn; it waits in
 /// B's rail and reaches B's running turn to judge, as from A (its title and id, never as its
 /// user's); B joins it and sends an answer back while A waits on B: A's wait returns that

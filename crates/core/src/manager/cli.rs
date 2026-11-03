@@ -715,8 +715,8 @@ impl SessionManager {
             CliReply::error(
                 ErrorCode::NotFound,
                 format!(
-                    "no session or worker has the id {id:?}; see `brigadier sessions --all` \
-                     and `brigadier workers`"
+                    "no session or worker has the id or name {id:?}; see `brigadier sessions \
+                     --all` and `brigadier workers`"
                 ),
             )
         };
@@ -728,15 +728,40 @@ impl SessionManager {
             |full: &str| full == id || (id.len() >= MIN_ID && short(full).starts_with(id));
         let sessions = self.cli_every_session(caller).map_err(failed)?;
         let mut found: Vec<Target> = Vec::new();
-        for (_, session) in sessions {
+        for (_, session) in &sessions {
             for task in self.core.tasks(&session.id).await.map_err(failed)? {
                 if matches(&task.id.0) {
                     found.push(Target::Worker(Box::new(task)));
                 }
             }
             if matches(&session.id.0) {
-                found.push(Target::Session(Box::new(session)));
+                found.push(Target::Session(Box::new(session.clone())));
             }
+        }
+        if found.is_empty() {
+            let others: Vec<&Conversation> = sessions
+                .iter()
+                .map(|(_, session)| session)
+                .filter(|session| session.id != caller.conversation_id)
+                .collect();
+            return match named(&others, id).as_slice() {
+                [] => Err(not_found()),
+                [one] => Ok(Target::Session(Box::new((*one).clone()))),
+                many => Err(CliReply::error(
+                    ErrorCode::Ambiguous,
+                    format!(
+                        "{id:?} could be {}; give its id",
+                        many.iter()
+                            .map(|session| format!(
+                                "{:?} ({})",
+                                session.title,
+                                short(&session.id.0)
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )),
+            };
         }
         match found.len() {
             0 => Err(not_found()),
@@ -1013,6 +1038,38 @@ fn is_answer(event: &ProviderEvent) -> bool {
 }
 
 /// Pinned first, then the latest active first, as the sidebar lists them.
+/// The sessions the user's name for one reaches (D201): its whole title in any case and
+/// spacing, else every title holding each of its words.
+fn named<'a>(sessions: &[&'a Conversation], name: &str) -> Vec<&'a Conversation> {
+    let key = |text: &str| {
+        text.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let words = key(name);
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let whole: Vec<_> = sessions
+        .iter()
+        .copied()
+        .filter(|session| key(&session.title) == words)
+        .collect();
+    if !whole.is_empty() {
+        return whole;
+    }
+    sessions
+        .iter()
+        .copied()
+        .filter(|session| {
+            let title = key(&session.title).join(" ");
+            words.iter().all(|word| title.contains(word.as_str()))
+        })
+        .collect()
+}
+
 fn sidebar_order(sessions: &mut [Conversation]) {
     sessions.sort_by(|a, b| {
         b.pinned_at_ms

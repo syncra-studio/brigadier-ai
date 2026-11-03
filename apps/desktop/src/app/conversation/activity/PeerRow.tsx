@@ -21,7 +21,7 @@ import {
 import { PeerLink } from "@/app/conversation/activity/PeerLink";
 import { type BlockOrchestratorStep, heldForWait, type PeerSentStep, type SessionSentStep, type SessionWaitStep } from "@/app/conversation/blocks";
 import { FoldedMarkdown, usePeerName } from "@/app/conversation/peerParts";
-import { namesId } from "@/app/conversation/sessionSend";
+import { namesId, titled } from "@/app/conversation/sessionSend";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ThreadActivity } from "@/components/conversation";
 import { Chat, Clock } from "@/components/icons";
@@ -44,7 +44,7 @@ type Refused = Extract<OrchestratorStepKind, { type: "messageRefused" }>;
 export type PeerLookup = {
   records: Readonly<Record<string, PeerMessage>>;
   name: (id: string | undefined) => PeerName | null;
-  /** The session a `brigadier send` named by `to` (its id, or the start of its last 8), if the app has it. */
+  /** The session a `brigadier send` named by `to` (its id, the start of its last 8, or its title), if the app has it. */
   session: (to: string) => string | null;
 };
 
@@ -66,13 +66,15 @@ function namedIn(steps: readonly BlockOrchestratorStep[], records: Readonly<Reco
  */
 export function usePeerLookup(steps: readonly BlockOrchestratorStep[]): PeerLookup {
   const records = useBoard((s) => s.board?.peerMessages) ?? NO_RECORDS;
-  const here = useViewConversation()?.projectId ?? null;
+  const view = useViewConversation();
+  const here = view?.projectId ?? null;
   const ids = namedIn(steps, records);
   const targets = steps.flatMap(({ kind }) => (kind.type === "sessionSent" ? [kind.to] : kind.type === "sessionWait" ? kind.to : []));
   // Each `brigadier send`'s session, as `brigadier` read its id; then each session named, with its project.
   const named = useApp(
     useShallow((s) => {
-      const sessions = targets.map((to) => (s.conversations[to] ? to : Object.keys(s.conversations).find((id) => namesId(id, to))));
+      const others = () => Object.values(s.conversations).filter((conversation) => conversation.id !== view?.id);
+      const sessions = targets.map((to) => (s.conversations[to] ? to : (Object.keys(s.conversations).find((id) => namesId(id, to)) ?? titled(others(), to) ?? undefined)));
       return [
         ...sessions,
         ...[...ids, ...sessions.flatMap((id) => id ?? [])].flatMap((id) => {
