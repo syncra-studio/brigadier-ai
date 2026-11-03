@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(unix)]
 use brigadier_providers::ProviderKind as Agent;
 
 #[test]

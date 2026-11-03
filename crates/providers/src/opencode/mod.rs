@@ -2038,6 +2038,7 @@ sys.stdin.read()
     /// An OpenCode whose database is a JSON file of sessions at `$OPENCODE_DB` (else the user's
     /// own, under `$HOME`), written only by a request that changes it; every request is logged
     /// with the database it went to.
+    #[cfg(unix)]
     const FAKE_DB_SERVER: &str = r#"#!/usr/bin/env python3
 import http.server, json, os, re, sys, threading
 db = os.environ.get("OPENCODE_DB") or os.path.join(os.environ["HOME"], ".local/share/opencode/opencode.db")

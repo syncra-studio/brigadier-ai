@@ -10,6 +10,7 @@ use axum::{
     routing::any,
 };
 
+#[cfg(unix)]
 /// A stdio MCP server: two pages of tools; `remember` and `recall` share the process's state;
 /// `pid` names it; `fail` answers an error result, `boom` a protocol error; `picture` an image;
 /// `ask` asks Brigadier a question of its own first; `spawn` starts a process of its own. It logs a line on stdout as it starts.
@@ -74,6 +75,7 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "no " + str(method)}})
 "#;
 
+#[cfg(unix)]
 fn stdio(script: &Path) -> McpServer {
     McpServer {
         gateway: None,
@@ -94,6 +96,7 @@ fn platform() -> Arc<dyn brigadier_sandbox::Platform> {
     brigadier_sandbox::native(brigadier_sandbox::PlatformOptions { data_dir: None }).unwrap()
 }
 
+#[cfg(unix)]
 /// Whether `pid` is still there within a few seconds (an ended process may wait to be reaped).
 async fn outlives(pid: &str) -> bool {
     for _ in 0..50 {
@@ -105,6 +108,7 @@ async fn outlives(pid: &str) -> bool {
     true
 }
 
+#[cfg(unix)]
 fn here() -> Vec<(String, String)> {
     std::env::vars().collect()
 }
@@ -118,6 +122,7 @@ async fn call(conn: &mut Conn, tool: &str, arguments: Value) -> Result<Value, Fa
     .await
 }
 
+#[cfg(unix)]
 fn alive(pid: &str) -> bool {
     std::process::Command::new("kill")
         .args(["-0", pid])

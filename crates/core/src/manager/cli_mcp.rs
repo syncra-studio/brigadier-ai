@@ -95,7 +95,7 @@ impl Failure {
 
 enum Link {
     Stdio {
-        child: Child,
+        child: Box<Child>,
         stdin: Option<ChildStdin>,
         stdout: BufReader<ChildStdout>,
     },
@@ -168,7 +168,7 @@ impl Conn {
                     return Err("the server's pipes didn't open".into());
                 };
                 Link::Stdio {
-                    child,
+                    child: Box::new(child),
                     stdin: Some(stdin),
                     stdout: BufReader::new(stdout),
                 }
