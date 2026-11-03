@@ -1987,7 +1987,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| sessions.read_thread_image(&conversation_id, &item_id)).await?;
             Response::ReadThreadImage { data, mime }
         }
-        Request::ReadLocalImage { conversation_id, path } => {
+        Request::ReadLocalImage {
+            conversation_id,
+            path,
+        } => {
             let (data, mime) = heap(|| sessions.read_local_image(&conversation_id, &path)).await?;
             Response::ReadLocalImage { data, mime }
         }

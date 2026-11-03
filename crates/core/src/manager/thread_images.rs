@@ -72,14 +72,28 @@ impl SessionManager {
         event: ProviderEvent,
     ) -> ProviderEvent {
         let paths = match &event {
-            ProviderEvent::Image { status: ItemStatus::Completed, path: Some(path), .. } => vec![path.clone()],
-            ProviderEvent::ToolCall { name, input, .. } =>
-                super::thread_items::image_path(name, input.as_deref()).into_iter().collect(),
-            ProviderEvent::Message { role: brigadier_providers::Role::Assistant, text, .. } => answer_image_paths(text),
+            ProviderEvent::Image {
+                status: ItemStatus::Completed,
+                path: Some(path),
+                ..
+            } => vec![path.clone()],
+            ProviderEvent::ToolCall { name, input, .. } => {
+                super::thread_items::image_path(name, input.as_deref())
+                    .into_iter()
+                    .collect()
+            }
+            ProviderEvent::Message {
+                role: brigadier_providers::Role::Assistant,
+                text,
+                ..
+            } => answer_image_paths(text),
             _ => Vec::new(),
         };
         if !paths.is_empty() {
-            let paths: Vec<_> = paths.iter().map(|path| self.image_source(id, path)).collect();
+            let paths: Vec<_> = paths
+                .iter()
+                .map(|path| self.image_source(id, path))
+                .collect();
             let directory = self.thread_images_dir(id);
             let result = blocking(move || {
                 for path in paths {
@@ -87,7 +101,8 @@ impl SessionManager {
                     let _ = crate::thread_image_files::retain_image(&directory, &path);
                 }
                 Ok(())
-            }).await;
+            })
+            .await;
             if let Err(err) = result {
                 tracing::warn!(conversation = %id, error = %err, "could not retain thread images");
             }
@@ -108,18 +123,24 @@ impl SessionManager {
     }
 
     /// Only absolute, content-validated images can cross the agent-path trust boundary.
-    pub async fn read_local_image(&self, id: &ConversationId, path: &str) -> Result<(String, String)> {
+    pub async fn read_local_image(
+        &self,
+        id: &ConversationId,
+        path: &str,
+    ) -> Result<(String, String)> {
         self.core.conversation(id)?;
         let source = PathBuf::from(path);
         if !source.is_absolute() {
             return Err(Error::Invalid("An image needs an absolute path".into()));
         }
-        let retained = crate::thread_image_files::retained_path(&self.thread_images_dir(id), &source);
+        let retained =
+            crate::thread_image_files::retained_path(&self.thread_images_dir(id), &source);
         blocking(move || {
             let path = if retained.is_file() { retained } else { source };
             let (bytes, mime) = crate::thread_image_files::read_image(&path)?;
             Ok((brigadier_providers::image_base64(&bytes), mime.to_owned()))
-        }).await
+        })
+        .await
     }
 
     /// The copy kept of generated image `item` ([`Self::retain_thread_image`]), if there is one.
@@ -211,7 +232,8 @@ impl SessionManager {
             _ => None,
         }
         .ok_or_else(|| Error::Invalid("This image is no longer there".into()))?;
-        self.read_local_image(id, &self.image_source(id, &path).to_string_lossy()).await
+        self.read_local_image(id, &self.image_source(id, &path).to_string_lossy())
+            .await
     }
 
     pub(super) async fn delete_thread_images(&self, id: &ConversationId) -> Result<()> {
@@ -253,23 +275,29 @@ async fn read_bounded(path: PathBuf) -> Result<(String, String)> {
 /// definitions. Backtick paths are also common in answers describing a generated image.
 fn answer_image_paths(text: &str) -> Vec<String> {
     static PATHS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let paths = PATHS.get_or_init(|| regex::Regex::new(
-        r#"(?:\]\(\s*|\]:\s*|`)(?:<([^>]+)>|([^\s)`]+))"#
-    ).expect("image paths regex"));
-    paths.captures_iter(text).filter_map(|capture| {
-        let path = capture.get(1).or_else(|| capture.get(2))?.as_str();
-        let path = path.strip_prefix("file://").unwrap_or(path);
-        // Markdown encodes spaces and non-ASCII characters in destinations.
-        let mut bytes = Vec::new();
-        let mut input = path.as_bytes().iter().copied();
-        while let Some(byte) = input.next() {
-            if byte == b'%' {
-                let a = (input.next()? as char).to_digit(16)?;
-                let b = (input.next()? as char).to_digit(16)?;
-                bytes.push((a * 16 + b) as u8);
-            } else { bytes.push(byte); }
-        }
-        let path = String::from_utf8(bytes).ok()?;
-        Path::new(&path).is_absolute().then_some(path)
-    }).collect()
+    let paths = PATHS.get_or_init(|| {
+        regex::Regex::new(r#"(?:\]\(\s*|\]:\s*|`)(?:<([^>]+)>|([^\s)`]+))"#)
+            .expect("image paths regex")
+    });
+    paths
+        .captures_iter(text)
+        .filter_map(|capture| {
+            let path = capture.get(1).or_else(|| capture.get(2))?.as_str();
+            let path = path.strip_prefix("file://").unwrap_or(path);
+            // Markdown encodes spaces and non-ASCII characters in destinations.
+            let mut bytes = Vec::new();
+            let mut input = path.as_bytes().iter().copied();
+            while let Some(byte) = input.next() {
+                if byte == b'%' {
+                    let a = (input.next()? as char).to_digit(16)?;
+                    let b = (input.next()? as char).to_digit(16)?;
+                    bytes.push((a * 16 + b) as u8);
+                } else {
+                    bytes.push(byte);
+                }
+            }
+            let path = String::from_utf8(bytes).ok()?;
+            Path::new(&path).is_absolute().then_some(path)
+        })
+        .collect()
 }

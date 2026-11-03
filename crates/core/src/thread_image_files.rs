@@ -17,7 +17,10 @@ pub fn read_image(path: &Path) -> Result<(Vec<u8>, &'static str)> {
     if !path.is_absolute() {
         return Err(invalid("An image needs an absolute path"));
     }
-    if !std::fs::metadata(path).map_err(|_| invalid("This image is no longer there"))?.is_file() {
+    if !std::fs::metadata(path)
+        .map_err(|_| invalid("This image is no longer there"))?
+        .is_file()
+    {
         return Err(invalid("This file is not an image"));
     }
     let mut options = std::fs::OpenOptions::new();
@@ -28,7 +31,9 @@ pub fn read_image(path: &Path) -> Result<(Vec<u8>, &'static str)> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(nix::libc::O_NONBLOCK);
     }
-    let mut file = options.open(path).map_err(|_| invalid("This image is no longer there"))?;
+    let mut file = options
+        .open(path)
+        .map_err(|_| invalid("This image is no longer there"))?;
     let metadata = file.metadata().map_err(invalid)?;
     if !metadata.is_file() {
         return Err(invalid("This file is not an image"));
@@ -37,7 +42,10 @@ pub fn read_image(path: &Path) -> Result<(Vec<u8>, &'static str)> {
         return Err(invalid("This image is over 11 MB"));
     }
     let mut bytes = Vec::new();
-    file.by_ref().take(MAX_IMAGE + 1).read_to_end(&mut bytes).map_err(invalid)?;
+    file.by_ref()
+        .take(MAX_IMAGE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(invalid)?;
     if bytes.len() as u64 > MAX_IMAGE {
         return Err(invalid("This image is over 11 MB"));
     }
@@ -48,7 +56,8 @@ pub fn read_image(path: &Path) -> Result<(Vec<u8>, &'static str)> {
     if is_tiff(&bytes) {
         return Ok((bytes, "image/tiff"));
     }
-    let format = image::guess_format(&bytes).map_err(|_| invalid("This file is not a supported image"))?;
+    let format =
+        image::guess_format(&bytes).map_err(|_| invalid("This file is not a supported image"))?;
     let mime = match format {
         image::ImageFormat::Png => "image/png",
         image::ImageFormat::Jpeg => "image/jpeg",
@@ -64,7 +73,9 @@ pub fn read_image(path: &Path) -> Result<(Vec<u8>, &'static str)> {
     // Room for a tall full-page Retina screenshot (2880 x 20000 RGBA is about 230 MiB).
     limits.max_alloc = Some(256 * 1024 * 1024);
     reader.limits(limits);
-    reader.decode().map_err(|_| invalid("This file is not a supported image"))?;
+    reader
+        .decode()
+        .map_err(|_| invalid("This file is not a supported image"))?;
     Ok((bytes, mime))
 }
 
@@ -74,16 +85,21 @@ const MAX_SIDE: u64 = 16384;
 /// A HEIC file: ISO media boxes that exactly fill the file, starting with `ftyp` naming an HEVC
 /// image brand (which leaves out AVIF), and holding the image's `meta` box.
 fn is_heic(bytes: &[u8]) -> bool {
-    const BRANDS: [&[u8]; 8] = [b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs"];
+    const BRANDS: [&[u8]; 8] = [
+        b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs",
+    ];
     let mut rest = bytes;
     let (mut first, mut meta) = (true, false);
     while !rest.is_empty() {
-        let Some((kind, body, after)) = iso_box(rest) else { return false };
+        let Some((kind, body, after)) = iso_box(rest) else {
+            return false;
+        };
         if first {
             // The major brand, the minor version, then the compatible brands.
             let branded = kind == b"ftyp"
                 && body.len() >= 8
-                && (body[8..].chunks_exact(4).chain(body[..4].chunks_exact(4))).any(|brand| BRANDS.contains(&brand));
+                && (body[8..].chunks_exact(4).chain(body[..4].chunks_exact(4)))
+                    .any(|brand| BRANDS.contains(&brand));
             if !branded {
                 return false;
             }
@@ -107,7 +123,11 @@ fn iso_box(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
     if end < start || end > bytes.len() as u64 {
         return None;
     }
-    Some((kind, &bytes[start as usize..end as usize], &bytes[end as usize..]))
+    Some((
+        kind,
+        &bytes[start as usize..end as usize],
+        &bytes[end as usize..],
+    ))
 }
 
 /// A TIFF file, classic or BigTIFF: its first directory lies inside the file and names a width
@@ -128,7 +148,11 @@ fn tiff_directory(bytes: &[u8]) -> Option<(u64, u64, bool)> {
     let number = |at: usize, size: usize| -> Option<u64> {
         let field = bytes.get(at..at.checked_add(size)?)?;
         let fold = |value: u64, byte: &u8| value << 8 | u64::from(*byte);
-        Some(if big_endian { field.iter().fold(0, fold) } else { field.iter().rev().fold(0, fold) })
+        Some(if big_endian {
+            field.iter().fold(0, fold)
+        } else {
+            field.iter().rev().fold(0, fold)
+        })
     };
     let (directory, count_size, entry_size, inline) = match number(2, 2)? {
         42 => (number(4, 4)?, 2, 12, 4),
@@ -139,7 +163,9 @@ fn tiff_directory(bytes: &[u8]) -> Option<(u64, u64, bool)> {
     let entries = usize::try_from(number(directory, count_size)?).ok()?;
     let (mut width, mut height, mut data) = (0, 0, false);
     for index in 0..entries {
-        let entry = directory.checked_add(count_size)?.checked_add(index.checked_mul(entry_size)?)?;
+        let entry = directory
+            .checked_add(count_size)?
+            .checked_add(index.checked_mul(entry_size)?)?;
         let value = entry + 2 + 2 + inline;
         let side = match number(entry + 2, 2)? {
             3 => number(value, 2),
@@ -160,7 +186,10 @@ fn tiff_directory(bytes: &[u8]) -> Option<(u64, u64, bool)> {
 /// Stable mapping from an agent's path to its session's copy. The agent never chooses a
 /// destination file name; the path hash also prevents equal item ids in workers colliding.
 pub fn retained_path(directory: &Path, source: &Path) -> PathBuf {
-    directory.join(format!("path-{}", blake3::hash(source.as_os_str().as_encoded_bytes()).to_hex()))
+    directory.join(format!(
+        "path-{}",
+        blake3::hash(source.as_os_str().as_encoded_bytes()).to_hex()
+    ))
 }
 
 /// Copy before recording the item. Store validated bytes, not a second read of the source.
@@ -178,7 +207,8 @@ pub fn retain_image(directory: &Path, source: &Path) -> Result<PathBuf> {
     };
     std::fs::create_dir_all(directory).map_err(invalid)?;
     let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
-    let result = std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, &target));
+    let result =
+        std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, &target));
     if result.is_err() {
         let _ = std::fs::remove_file(temporary);
     }
@@ -192,13 +222,16 @@ mod tests {
 
     /// A 1×1 PNG.
     const PNG: &[u8] = &[
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21,
-        196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 218, 99, 100, 248, 207, 80, 15, 0, 3, 134, 1, 128, 90, 52, 125,
-        107, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 218, 99, 100, 248, 207, 80,
+        15, 0, 3, 134, 1, 128, 90, 52, 125, 107, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ];
 
     fn folder(name: &str) -> PathBuf {
-        let folder = std::env::temp_dir().join(format!("thread-image-files-{name}-{}", uuid::Uuid::new_v4()));
+        let folder = std::env::temp_dir().join(format!(
+            "thread-image-files-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&folder).unwrap();
         folder
     }
@@ -215,9 +248,25 @@ mod tests {
 
     /// A classic TIFF with a directory of `(tag, type, value)` right after its header.
     fn tiff(big_endian: bool, entries: &[(u16, u16, u32)]) -> Vec<u8> {
-        let two = |value: u16| if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
-        let four = |value: u32| if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
-        let mut bytes = if big_endian { b"MM".to_vec() } else { b"II".to_vec() };
+        let two = |value: u16| {
+            if big_endian {
+                value.to_be_bytes()
+            } else {
+                value.to_le_bytes()
+            }
+        };
+        let four = |value: u32| {
+            if big_endian {
+                value.to_be_bytes()
+            } else {
+                value.to_le_bytes()
+            }
+        };
+        let mut bytes = if big_endian {
+            b"MM".to_vec()
+        } else {
+            b"II".to_vec()
+        };
         bytes.extend(two(42));
         bytes.extend(four(8));
         bytes.extend(two(entries.len() as u16));
@@ -260,7 +309,12 @@ mod tests {
     }
 
     fn heic(ftyp: &[u8]) -> Vec<u8> {
-        [iso_media_box(b"ftyp", ftyp), iso_media_box(b"meta", b"items"), iso_media_box(b"mdat", b"picture")].concat()
+        [
+            iso_media_box(b"ftyp", ftyp),
+            iso_media_box(b"meta", b"items"),
+            iso_media_box(b"mdat", b"picture"),
+        ]
+        .concat()
     }
 
     #[test]
@@ -273,7 +327,12 @@ mod tests {
         let folder = folder("not-image");
         let path = folder.join("notes.png");
         std::fs::write(&path, "Text with an image's extension.").unwrap();
-        assert!(read_image(&path).unwrap_err().to_string().contains("not a supported image"));
+        assert!(
+            read_image(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("not a supported image")
+        );
         std::fs::remove_dir_all(folder).unwrap();
         // An image's first bytes alone are not an image.
         assert!(read_bytes(&PNG[..20]).is_err());
@@ -284,17 +343,42 @@ mod tests {
         let folder = folder("oversized");
         let path = folder.join("huge.png");
         std::fs::write(&path, PNG).unwrap();
-        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(MAX_IMAGE + 1).unwrap();
-        assert!(read_image(&path).unwrap_err().to_string().contains("over 11 MB"));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(MAX_IMAGE + 1)
+            .unwrap();
+        assert!(
+            read_image(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("over 11 MB")
+        );
         std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
     fn a_missing_file_a_folder_and_a_relative_path_are_refused() {
         let folder = folder("missing");
-        assert!(read_image(&folder.join("gone.png")).unwrap_err().to_string().contains("no longer there"));
-        assert!(read_image(&folder).unwrap_err().to_string().contains("not an image"));
-        assert!(read_image(Path::new("picture.png")).unwrap_err().to_string().contains("absolute path"));
+        assert!(
+            read_image(&folder.join("gone.png"))
+                .unwrap_err()
+                .to_string()
+                .contains("no longer there")
+        );
+        assert!(
+            read_image(&folder)
+                .unwrap_err()
+                .to_string()
+                .contains("not an image")
+        );
+        assert!(
+            read_image(Path::new("picture.png"))
+                .unwrap_err()
+                .to_string()
+                .contains("absolute path")
+        );
         std::fs::remove_dir_all(folder).unwrap();
     }
 
@@ -303,7 +387,10 @@ mod tests {
         let entries = [(256, 4, 3000), (257, 3, 2000), (273, 4, 8)];
         assert_eq!(read_bytes(&tiff(false, &entries)).unwrap(), "image/tiff");
         assert_eq!(read_bytes(&tiff(true, &entries)).unwrap(), "image/tiff");
-        assert_eq!(read_bytes(&big_tiff(&[(256, 16, 3000), (257, 4, 2000), (324, 16, 16)])).unwrap(), "image/tiff");
+        assert_eq!(
+            read_bytes(&big_tiff(&[(256, 16, 3000), (257, 4, 2000), (324, 16, 16)])).unwrap(),
+            "image/tiff"
+        );
     }
 
     #[test]
@@ -315,13 +402,25 @@ mod tests {
         assert!(read_bytes(&tiff(false, &[(257, 4, 2000), (273, 4, 8)])).is_err());
         assert!(read_bytes(&tiff(false, &[(256, 4, 3000), (273, 4, 8)])).is_err());
         assert!(read_bytes(&tiff(false, &[(256, 4, 3000), (257, 4, 2000)])).is_err());
-        assert!(read_bytes(&tiff(false, &[(256, 4, 16385), (257, 4, 2000), (273, 4, 8)])).is_err());
+        assert!(
+            read_bytes(&tiff(
+                false,
+                &[(256, 4, 16385), (257, 4, 2000), (273, 4, 8)]
+            ))
+            .is_err()
+        );
     }
 
     #[test]
     fn heic_files_are_accepted_by_a_major_or_a_compatible_brand() {
-        assert_eq!(read_bytes(&heic(b"heic\0\0\0\0mif1heic")).unwrap(), "image/heic");
-        assert_eq!(read_bytes(&heic(b"mif1\0\0\0\0mif1heix")).unwrap(), "image/heic");
+        assert_eq!(
+            read_bytes(&heic(b"heic\0\0\0\0mif1heic")).unwrap(),
+            "image/heic"
+        );
+        assert_eq!(
+            read_bytes(&heic(b"mif1\0\0\0\0mif1heix")).unwrap(),
+            "image/heic"
+        );
     }
 
     #[test]
@@ -332,13 +431,26 @@ mod tests {
         assert!(read_bytes(&iso_media_box(b"ftyp", b"heic\0\0\0\0mif1heic")).is_err());
         assert!(read_bytes(&heic(b"avif\0\0\0\0mif1avif")).is_err());
         // `ftyp` is not first.
-        assert!(read_bytes(&[iso_media_box(b"meta", b"items"), iso_media_box(b"ftyp", b"heic\0\0\0\0")].concat()).is_err());
+        assert!(
+            read_bytes(
+                &[
+                    iso_media_box(b"meta", b"items"),
+                    iso_media_box(b"ftyp", b"heic\0\0\0\0")
+                ]
+                .concat()
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn a_kept_copy_survives_deleting_its_source_for_every_format() {
         let entries = [(256, 4, 3000), (257, 3, 2000), (273, 4, 8)];
-        let formats = [(PNG.to_vec(), "image/png"), (tiff(false, &entries), "image/tiff"), (heic(b"heic\0\0\0\0heic"), "image/heic")];
+        let formats = [
+            (PNG.to_vec(), "image/png"),
+            (tiff(false, &entries), "image/tiff"),
+            (heic(b"heic\0\0\0\0heic"), "image/heic"),
+        ];
         let folder = folder("kept");
         let storage = folder.join("session/thread-images");
         for (index, (bytes, mime)) in formats.iter().enumerate() {
