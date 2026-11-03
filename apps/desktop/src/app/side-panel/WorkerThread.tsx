@@ -158,18 +158,25 @@ function NativeWorkerThread({ conversationId, row }: { conversationId: string; r
   });
   const json = lead ?? worker;
   // Read once on open and once as it ends too: its lead's turn may run on long after it, and
-  // only that turn's end reads the session's thread again (D50, D69).
+  // only that turn's end reads the session's thread again (D50).
   useEffect(() => {
     let current = true;
-    const read = () =>
-      (ofWorker ? loadWorkerThread(conversationId, owner).then(() => null) : request({ method: "threadView", conversationId }).then(({ view: parent }) => JSON.stringify(ownEntries(parent, callId)))).then(
-        (entries) => {
-          if (!current) return;
-          if (entries !== null) setPolled(entries);
-          setError(null);
-        },
-        (cause: unknown) => current && setError(cause instanceof Error ? cause.message : String(cause)),
-      );
+    // One read at a time: a slow one never piles up behind the timer.
+    let reading = false;
+    const read = () => {
+      if (reading) return;
+      reading = true;
+      return (ofWorker ? loadWorkerThread(conversationId, owner).then(() => null) : request({ method: "threadView", conversationId }).then(({ view: parent }) => JSON.stringify(ownEntries(parent, callId))))
+        .then(
+          (entries) => {
+            if (!current) return;
+            if (entries !== null) setPolled(entries);
+            setError(null);
+          },
+          (cause: unknown) => current && setError(cause instanceof Error ? cause.message : String(cause)),
+        )
+        .finally(() => (reading = false));
+    };
     void read();
     if (!row.working) return () => void (current = false);
     const timer = window.setInterval(() => void read(), WORKER_THREAD_EVERY_MS);

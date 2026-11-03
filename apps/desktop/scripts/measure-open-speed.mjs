@@ -27,6 +27,8 @@ const outDir = join(scratch, 'dist');
 const now = () => performance.timeOrigin + performance.now();
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// It wipes the folder: only a scratch one under /tmp.
+if (!/^\/(private\/)?tmp\/./.test(scratch)) throw new Error(`scratch dir must be under /tmp: ${scratch}`);
 rmSync(scratch, { recursive: true, force: true });
 mkdirSync(scratch, { recursive: true });
 // The CLIs' homes, so nothing the daemon or a CLI it asks reads is the user's.

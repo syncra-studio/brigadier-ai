@@ -48,25 +48,6 @@ export function nowInLine(state: WorkerNow): string {
 }
 
 /**
- * A call at work, as the engine names a worker's (`worker_rows::step_of`), from an item of a
- * CLI's thread; `null` for what is no call, or one that ended.
- */
-export function stepAtWork(event: ProviderEvent): StepAtWork | null {
-  switch (event.type) {
-    case "command":
-      return event.status === "inProgress" && event.command ? { name: "shell", detail: event.command } : null;
-    case "toolCall":
-      return event.status === "inProgress" ? { name: event.name, detail: detailOf(event.input) } : null;
-    case "fileChanges":
-      return event.status === "inProgress" ? { name: "apply_patch", detail: changesDetail(event.changes.map((change) => change.path)) } : null;
-    case "image":
-      return event.status === "inProgress" ? { name: "imagegen", detail: event.prompt } : null;
-    default:
-      return null;
-  }
-}
-
-/**
  * What a thread's item says its agent last did, as the engine says a worker's
  * (`worker_rows::doing_of`): a call, ended or not, thinking, writing, or the first line of what
  * it wrote; `null` for anything else.

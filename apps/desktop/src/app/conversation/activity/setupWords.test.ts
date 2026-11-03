@@ -51,16 +51,17 @@ test("a turn still starting, or whose start failed, shows its setup line before 
   }
 });
 
+const runState = (state: RunState, streamSeq: number, step?: StartStepRecord["step"]): EventEnvelope =>
+  ({ seq: streamSeq, stream: "conversation:c", streamSeq, atMs: streamSeq,
+    event: { type: "runStateChanged", conversationId: "c", state, error: null, requestId: "m0", ...(step && { step }) } });
+
 test("a relaunch mid-turn (a switch) never starts the setup line again", () => {
-  const run = (state: RunState, streamSeq: number, step?: StartStepRecord["step"]): EventEnvelope =>
-    ({ seq: streamSeq, stream: "conversation:c", streamSeq, atMs: streamSeq,
-      event: { type: "runStateChanged", conversationId: "c", state, error: null, requestId: "m0", ...(step && { step }) } });
   let board = emptyBoard("c");
-  for (const envelope of [run("starting", 3), run("starting", 4, "fetching"), run("starting", 5, "worktree"), run("starting", 6, "cli")]) board = applyToBoard(board, envelope);
+  for (const envelope of [runState("starting", 3), runState("starting", 4, "fetching"), runState("starting", 5, "worktree"), runState("starting", 6, "cli")]) board = applyToBoard(board, envelope);
   assert.equal(setupStarting(board), true);
-  board = applyToBoard(board, run("running", 8));
+  board = applyToBoard(board, runState("running", 8));
   assert.equal(setupStarting(board), false);
   // The CLI started again on another account, the same request still working.
-  board = applyToBoard(board, run("starting", 13));
+  board = applyToBoard(board, runState("starting", 13));
   assert.equal(setupStarting(board), false);
 });

@@ -12,12 +12,11 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
   removeItem: (key: string) => data.delete(key),
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
-const { interrupt, restore, stopWorkers } = await import("./actions");
+const { interrupt, restore } = await import("./actions");
 const { fromSnapshot, rowActivity, useActivity } = await import("./activity");
 const { emptyBoard, stoppedBoard, useBoard } = await import("./board");
 const { useStopping } = await import("./stopping");
 const { useApp } = await import("./store");
-const { useCliThread } = await import("./cliThread");
 
 const id = "session-1";
 
@@ -61,14 +60,13 @@ beforeEach(() => {
     },
   });
   mockIPC((_command, payload) => {
-    const req = (payload as { request: RequestOf<"interrupt"> | RequestOf<"stopTask"> | RequestOf<"stopWorkers"> | RequestOf<"stopBackgroundTask"> | RequestOf<"restore"> }).request;
+    const req = (payload as { request: RequestOf<"interrupt"> | RequestOf<"stopTask"> | RequestOf<"stopBackgroundTask"> | RequestOf<"restore"> }).request;
     sent.push(req.method);
     return new Promise((resolve, reject) => {
       pending.push({
         method: req.method,
         settle: (fail) => {
           if (fail) reject(new Error(`${req.method} failed`));
-          else if (req.method === "stopWorkers") resolve({ method: req.method, taskIds: ["w1"] });
           else if (req.method === "restore") resolve({ method: req.method, outcomes: [{ id, conversation: { ...archived, lifecycle: "active" }, error: null }] });
           else resolve({ method: req.method });
         },
@@ -112,41 +110,6 @@ test("a Stop that fails shows the real state again and says why", async () => {
   assert.equal(shown().run, "running");
   assert.equal(shown().tasks.w1?.state, "running");
   assert.equal(sidebar().running, true);
-});
-
-test("Stop all shows the workers stopped at once; one the daemon didn't stop shows as it is", async () => {
-  const done = stopWorkers(id);
-  await flushed();
-  assert.equal(shown().tasks.w1?.state, "stopped");
-  assert.equal(shown().tasks.w2?.state, "stopped");
-  assert.equal(shown().run, "running", "Stop all leaves the turn be");
-  await answer("stopWorkers");
-  assert.deepEqual(await done, ["w1"]);
-  assert.equal(shown().tasks.w1?.state, "stopped");
-  assert.equal(shown().tasks.w2?.state, "queued");
-});
-
-const agent = (taskId: string) => ({ id: taskId, kind: "agent", status: "running", label: taskId, itemId: null, startedAtMs: 1, endedAtMs: null });
-
-test("stopWorkers stops only Brigadier's workers: the CLI's own agents are stopped by their own ids (the strip's Stop all does that), and go on", async () => {
-  useCliThread.setState({ views: { [id]: { entries: [], turns: [], background: [agent("a1"), agent("a2")] } } } as never);
-  const done = stopWorkers(id);
-  await flushed();
-  assert.deepEqual(sent, ["stopWorkers"]);
-  await answer("stopWorkers");
-  assert.deepEqual(await done, ["w1"]);
-  assert.deepEqual(sent, ["stopWorkers"], "no agent was stopped");
-  useCliThread.setState({ views: {} });
-});
-
-test("a Stop all that fails shows the workers running again", async () => {
-  const failed = stopWorkers(id).catch((error: unknown) => error);
-  await flushed();
-  assert.equal(sidebar().workers, 0);
-  await answer("stopWorkers", true);
-  assert.match(String(await failed), /stopWorkers failed/);
-  assert.equal(shown().tasks.w1?.state, "running");
-  assert.equal(sidebar().workers, 2);
 });
 
 const archived = { id, kind: "session", title: "Fix it", lifecycle: "archived" } as unknown as Conversation;

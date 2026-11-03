@@ -1727,15 +1727,16 @@ test("a message woken for while only a background subagent holds the block goes 
   }
 });
 
+const workerStep = (type: "paused" | "resumed" | "stopped", position: number): SequenceEntry =>
+  ({ kind: "orchestrator", steps: [{ kind: { type, taskId: "t1", ...(type === "stopped" && { reason: "Stopped by the user" }) }, position, atMs: position }], position }) as SequenceEntry;
+const stepKinds = (entries: readonly SequenceEntry[] | undefined) => (entries ?? []).map((entry) => entry.kind === "orchestrator" && entry.steps[0]?.kind.type);
+
 test("a worker paused before the answer and resumed and ended after it read in that order around it", () => {
-  const step = (type: "paused" | "resumed" | "stopped", position: number): SequenceEntry =>
-    ({ kind: "orchestrator", steps: [{ kind: { type, taskId: "t1", ...(type === "stopped" && { reason: "Stopped by the user" }) }, position, atMs: position }], position }) as SequenceEntry;
-  const sequence: SequenceEntry[] = [step("paused", 1), { kind: "text", index: 0, messageId: "a1", position: 2 }, step("resumed", 3), step("stopped", 4)];
+  const sequence: SequenceEntry[] = [workerStep("paused", 1), { kind: "text", index: 0, messageId: "a1", position: 2 }, workerStep("resumed", 3), workerStep("stopped", 4)];
   const activity = turnActivity(sequence, false);
   const parts = turnParts(activity, 0, true, false, () => true);
-  const kinds = (entries: readonly SequenceEntry[] | undefined) => (entries ?? []).map((entry) => entry.kind === "orchestrator" && entry.steps[0]?.kind.type);
   // Above the answer only what came before it; under it, what came after, in order.
-  assert.deepEqual(kinds(parts[0]?.type === "work" ? parts[0].kept : []), ["paused"]);
-  assert.deepEqual(kinds(belowAnswer(activity, 0, true)), ["resumed", "stopped"]);
+  assert.deepEqual(stepKinds(parts[0]?.type === "work" ? parts[0].kept : []), ["paused"]);
+  assert.deepEqual(stepKinds(belowAnswer(activity, 0, true)), ["resumed", "stopped"]);
   assert.deepEqual(belowAnswer(activity, 0, false), []);
 });

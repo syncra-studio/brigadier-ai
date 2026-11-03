@@ -43,7 +43,7 @@ import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { onRealActivity, realActivity, rowActivity, useActivity, workHolds } from "@/state/activity";
 import { loadThreadView, useCliThread, useUnreadThreads } from "@/state/cliThread";
-import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
+import { workerDone } from "@/app/conversation/workerPresentation";
 import {
   boardHeld,
   boardOf,
@@ -1275,20 +1275,6 @@ export async function continueWaiting(conversationId: string): Promise<void> {
 /** "Don't resume": nothing goes on its own; the session is idle until the user sends (MA5). */
 export async function dontResume(conversationId: string): Promise<void> {
   await request({ method: "dontResume", conversationId });
-}
-
-/**
- * The Workers strip's Stop all: stops every running or waiting worker of the conversation; the
- * ids stopped. They show stopped at once. The CLI's own background agents are the Subagents
- * strip's, with a Stop all of its own: they go on.
- */
-export async function stopWorkers(conversationId: string): Promise<string[]> {
-  const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
-  return showStopped(
-    { conversationId, turn: false, tasks: ids },
-    async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
-    (taskIds) => taskIds,
-  );
 }
 
 /** The user's notes on a mockup, with the marked screenshots, to the mockup's worker. */
