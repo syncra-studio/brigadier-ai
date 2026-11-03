@@ -30,7 +30,7 @@ export const MORE_ROWS = {
 export type MoreRow = "strength" | "steps" | null;
 
 /**
- * More: Model strength (the models ranked for one kind of work, with Refresh models) and How a
+ * More: Model strength (the models ranked for one kind of work) and How a
  * model is picked, each opening in place.
  */
 export function More({

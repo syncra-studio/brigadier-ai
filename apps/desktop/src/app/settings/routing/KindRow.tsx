@@ -17,7 +17,7 @@ const KIND_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "Architecture and broad changes": Nodes,
   "Bounded implementation": Code,
   "Mechanical changes and search": Telescope,
-  "Independent review": PullRequestOpen,
+  "Adversarial review": PullRequestOpen,
   "Computer use": Cursor,
   Fusion: PullRequestMerged,
   Fallback: Lifesaver,
@@ -48,11 +48,11 @@ export function KindRow({
   const now = row.rows.find((found) => !refusingRule(rules.rules, rowChoice(found, models), row.work));
   const who = row.mine.length > 0 ? `Your order · ${row.mine.map(name).join(", then ")}` : "Automatic";
   // Every model it names kept out by a rule: it can't start until one is let in or another picked.
-  const line = !now
+  const line = role ? `${row.mine.length > 0 ? "Your order" : "Automatic"} · ${role.line}` : !now
     ? `${who} · Your rules keep ${joinWords(row.rows.map(name))} out, so it can't start`
     : row.mine.length > 0
       ? who
-      : `${who} · ${role?.line ?? row.shipped[0]?.reason ?? ""}`;
+      : `${who} · ${row.shipped[0]?.reason ?? ""}`;
   return (
     <div data-slot="routing-kind" data-work={row.work} data-open={open || undefined} className="flex flex-col">
       <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3.5 py-3.5 text-start">

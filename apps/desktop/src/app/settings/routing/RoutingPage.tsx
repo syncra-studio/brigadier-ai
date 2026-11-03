@@ -2,10 +2,6 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { RatingsFooter } from "@/app/settings/routing/RatingsFooter";
-import { request } from "@/ipc/client";
-import { refreshProviders } from "@/state/actions";
-import { loadModelRules } from "@/state/modelRules";
-
 import { More, MORE_ROWS, type MoreRow } from "@/app/settings/routing/More";
 import { RULES, Rules } from "@/app/settings/routing/Rules";
 import { WHO_DOES_WHAT, WhoDoesWhat } from "@/app/settings/routing/WhoDoesWhat";
@@ -13,9 +9,11 @@ import { SettingsPage } from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
 import { Info } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
+import { request } from "@/ipc/client";
 import type { TaskCategory } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";
-import { useModelRules, useModelRulesRead } from "@/state/modelRules";
+import { refreshProviders } from "@/state/actions";
+import { loadModelRules, useModelRules, useModelRulesRead } from "@/state/modelRules";
 import { refreshUsage, useUsage, useUsageRefresh } from "@/state/usage";
 
 /** The Routing page's rows, for Settings search; the page renders this copy. */
@@ -49,9 +47,10 @@ export function RoutingPage() {
   // The kind of work open in Who does what; a rule's note opens one it would stop from starting.
   const [work, setWork] = useState<string | null>(null);
   const openWork = (name: string) => {
-    setWork(name);
+    const displayed = name === "fusion-claude" || name === "fusion-codex" ? "Fusion" : name;
+    setWork(displayed);
     requestAnimationFrame(() =>
-      document.querySelector(`[data-slot="routing-kind"][data-work="${CSS.escape(name)}"]`)?.scrollIntoView({ block: "nearest" }),
+      document.querySelector(`[data-slot="routing-kind"][data-work="${CSS.escape(displayed)}"]`)?.scrollIntoView({ block: "nearest" }),
     );
   };
   // Settings search bringing one of More's rows into view opens it.

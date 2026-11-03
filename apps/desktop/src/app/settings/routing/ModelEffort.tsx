@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 /** A dot between two words, centred on their line. */
 export function MidDot() {
-  return <span aria-hidden className="bg-muted-foreground size-0.75 shrink-0 rounded-full" />;
+  return <span className="bg-muted-foreground size-0.75 shrink-0 rounded-full"><span className="sr-only"> · </span></span>;
 }
 
 /** "✻ Opus 5.5 · High": the agent, the model, then its effort after a dot (no effort: just the model). */

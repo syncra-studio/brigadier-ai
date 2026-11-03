@@ -4,7 +4,7 @@ import { cliFacts } from "@/lib/providerKinds";
 
 /*
  * Kinds of work whose rows aren't an order (the first that can run takes it) but one model per
- * role: Independent review (the reviewer on the agent that didn't write the code), Fusion (both
+ * role: Adversarial review (the reviewer on the agent that didn't write the code), Fusion (both
  * consults at once) and Fallback (the model a session moves to). Each is one row in Who does
  * what and opens to its roles.
  */
@@ -22,7 +22,7 @@ export type RoleKind = {
 };
 
 export const ROLE_KINDS: Record<string, RoleKind> = {
-  "Independent review": {
+  "Adversarial review": {
     line: "A model from the other agent reviews the work",
     note: "Work is always reviewed on the agent that didn't write it.",
     role: (row) => `Reviews ${cliFacts(other(row.agent)).vendor}'s work`,
@@ -39,9 +39,11 @@ export const ROLE_KINDS: Record<string, RoleKind> = {
   },
 };
 
+const isConsult = (work: string) => work === "fusion-claude" || work === "fusion-codex";
+
 /** The kinds of work with a fusion's consult rows (`fusion-claude`, `fusion-codex`) as one Fusion row, in the place of the first. */
 export function withFusion(rows: readonly WorkRow[]): WorkRow[] {
-  const consults = rows.filter((row) => row.work.startsWith("fusion-"));
+  const consults = rows.filter((row) => isConsult(row.work));
   if (consults.length === 0) return [...rows];
   const fusion: WorkRow = {
     work: "Fusion",
@@ -50,5 +52,5 @@ export function withFusion(rows: readonly WorkRow[]): WorkRow[] {
     mine: consults.flatMap((row) => row.mine),
   };
   const at = rows.indexOf(consults[0]!);
-  return rows.flatMap((row, index) => (index === at ? [fusion] : row.work.startsWith("fusion-") ? [] : [row]));
+  return rows.flatMap((row, index) => (index === at ? [fusion] : isConsult(row.work) ? [] : [row]));
 }

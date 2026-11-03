@@ -19,7 +19,7 @@ const STEPS: readonly [string, string][] = [
 
 /** A fixed example, when no kind of work on the page shows one. */
 const EXAMPLE =
-  "For example, if your rules keep the first model for Independent review out, the next model in its order runs; with none left, the worker is refused.";
+  "For example, if your rules keep the first model for Adversarial review out, the next model in its order runs; with none left, the worker is refused.";
 
 /**
  * The example line: the first kind of work whose first model your rules keep out while a later
