@@ -61,8 +61,10 @@ test("inboxLists: newest first by its latest move; pins, snoozes and done by the
     { conversation: row("fork", { createdAtMs: 350, updatedAtMs: 350, forkedFrom: { conversationId: "old", messageId: "m" } }), state: null },
     { conversation: row("pin-a", { pinnedAtMs: 1 }), state: "working" },
     { conversation: row("pin-b", { pinnedAtMs: 2 }), state: null },
-    { conversation: row("run-a", { updatedAtMs: 50 }), state: "working" },
-    { conversation: row("run-b", { updatedAtMs: 60 }), state: "working" },
+    { conversation: row("run-a"), state: "working", finishedAtMs: 50 },
+    { conversation: row("run-b"), state: "working", finishedAtMs: 60 },
+    // Sleep and wake only move updatedAtMs: the row stays where it was (D7).
+    { conversation: row("slept", { updatedAtMs: 999 }), state: null, finishedAtMs: 5 },
     { conversation: row("wake-late", { snoozedUntilMs: NOW + 9, snoozedAtMs: 1 }), state: null },
     { conversation: row("wake-soon", { snoozedUntilMs: NOW + 1, snoozedAtMs: 1 }), state: null },
     { conversation: row("done-early", { doneAtMs: 100 }), state: null },
@@ -71,7 +73,7 @@ test("inboxLists: newest first by its latest move; pins, snoozes and done by the
   const ids = Object.fromEntries(Object.entries(lists).map(([section, list]) => [section, list.map((c) => c.id)]));
   assert.deepEqual(ids, {
     pinned: ["pin-b", "pin-a"],
-    active: ["needs-you", "finished", "new", "old", "fork"],
+    active: ["needs-you", "finished", "new", "old", "fork", "slept"],
     working: ["run-b", "run-a"],
     snoozed: ["wake-soon", "wake-late"],
     done: ["done-late", "done-early"],

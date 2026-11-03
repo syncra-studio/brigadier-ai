@@ -40,9 +40,12 @@ export function inboxSection(
   return "active";
 }
 
-/** A row's place in Active and Working: its latest move, so finishing, failing or needing you lifts it. */
+/**
+ * A row's place in Active and Working: created, finished, failed or left working (needs you, a new
+ * message's turn). Not `updatedAtMs`: sleep, wake and renames move it, and must not move the row (D7).
+ */
 export function activeKey(conversation: Conversation, finishedAtMs: number | undefined, leftWorkingAtMs: number | undefined): number {
-  return Math.max(conversation.createdAtMs, conversation.updatedAtMs, finishedAtMs ?? 0, leftWorkingAtMs ?? 0);
+  return Math.max(conversation.createdAtMs, finishedAtMs ?? 0, leftWorkingAtMs ?? 0);
 }
 
 export type InboxRow = {
