@@ -100,7 +100,10 @@ is vendored but not built or shipped. Another limitation is input in a pure
 Wayland session without XWayland on Linux (the
 driver's experimental Wayland backend stays off). `cu-testkit`, and so
 `brigadier-cu`'s own tests, run on macOS only; CI runs clippy for both
-crates and `cu-layer`'s tests on Windows and Linux.
+crates and `cu-layer`'s tests on Windows and Linux, and `tests/linux-live/run.sh`
+(needs Docker), which drives the helper over stdio MCP against real GTK apps on
+Xvfb under GNOME's window manager and checks every reply, its effect, and that
+the active window and pointer never move.
 
 ## Build and check
 

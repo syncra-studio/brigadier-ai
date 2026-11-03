@@ -2333,6 +2333,9 @@ impl ToolRegistry {
             tool.invoke(args.clone()),
         )
         .await;
+        if !tool.def().read_only {
+            note_action_end();
+        }
         match resolved_name {
             "get_desktop_state" if result.is_error != Some(true) => {
                 crate::desktop_capture_scale::record_desktop_state(
@@ -3382,6 +3385,24 @@ fn is_physical_desktop_action(tool: &str) -> bool {
             | "bring_to_front"
             | "set_window_frame"
     )
+}
+
+/// When the last state-changing tool call returned. A background macOS app
+/// refreshes its menu items' enabled flags on an accessibility read at most
+/// once a second, so a flag read soon after an action can still be stale.
+static LAST_ACTION_END: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// When the last state-changing (not read-only) tool call returned, if any.
+pub fn last_action_end() -> Option<std::time::Instant> {
+    *LAST_ACTION_END
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn note_action_end() {
+    *LAST_ACTION_END
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::time::Instant::now());
 }
 
 fn requires_desktop_coordination(tool: &str, args: &Value, independent_lane: bool) -> bool {

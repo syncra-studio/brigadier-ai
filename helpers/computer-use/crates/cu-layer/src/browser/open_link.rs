@@ -137,20 +137,76 @@ fn shows_a_page(window: &WindowInfo) -> bool {
     window.bounds.width >= MIN_PAGE_SIDE && window.bounds.height >= MIN_PAGE_SIDE
 }
 
-/// The pid's windows with the ones opened since `before` first, waiting a
-/// little for `expected` new windows to appear. Returns how many are new.
-/// The wait watches the quick window list, so the answer comes within a
-/// few tens of milliseconds of the window showing up.
+/// The pid's windows with the ones that show `urls` first: new windows, then
+/// existing windows titled with a url's file or folder name (Finder reuses
+/// its window, maybe one already showing it). Waits a little until each url
+/// has such a window. Returns how
+/// many are listed first. The wait watches the quick window list, so the
+/// answer comes within a few tens of milliseconds of the window showing up.
 pub fn wait_for_new_windows(
     pid: i32,
-    before: &HashSet<u32>,
-    expected: usize,
+    titles_before: &HashMap<u32, String>,
+    urls: &[String],
 ) -> (Vec<WindowInfo>, usize) {
+    let before: HashSet<u32> = titles_before.keys().copied().collect();
+    let names: Vec<String> = urls.iter().filter_map(|url| shown_name(url)).collect();
     let deadline = Instant::now() + NEW_WINDOW_WAIT;
-    wait_for_page_windows(pid, before, expected, deadline);
+    loop {
+        let now = crate::window_list::windows(Some(pid));
+        let done = count_new_page_windows(&now, &before) >= urls.len()
+            || (names.len() == urls.len() && every_name_shown(&now, &names));
+        if done || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(NEW_WINDOW_POLL);
+    }
     let mut windows = current_windows_for_pid(pid);
-    let new = new_windows_first(&mut windows, before);
-    (windows, new)
+    let new = new_windows_first(&mut windows, &before);
+    let retitled: HashSet<u32> = crate::window_list::windows(Some(pid))
+        .into_iter()
+        .filter(|w| before.contains(&w.id) && shows_a_name(w, &names))
+        .map(|w| w.id)
+        .collect();
+    windows[new..].sort_by_key(|w| !retitled.contains(&w.window_id));
+    let shown = windows[new..]
+        .iter()
+        .take_while(|w| retitled.contains(&w.window_id))
+        .count();
+    (windows, new + shown)
+}
+
+/// The name a window showing `url` is titled with: its last path component.
+/// shortcut: only %20 is decoded; other escaped names just wait out the cap.
+fn shown_name(url: &str) -> Option<String> {
+    let path = url
+        .strip_prefix("file://")
+        .unwrap_or(url)
+        .trim_end_matches('/');
+    let name = path.rsplit('/').next()?.replace("%20", " ");
+    (!name.is_empty()).then_some(name)
+}
+
+/// Whether `window` is titled with one of `names` (apps may hide a file's
+/// extension).
+fn shows_a_name(window: &crate::window_list::Window, names: &[String]) -> bool {
+    names.iter().any(|name| {
+        window.title == *name
+            || std::path::Path::new(name)
+                .file_stem()
+                .is_some_and(|stem| window.title == stem.to_string_lossy())
+    })
+}
+
+/// Whether every name is shown by one of `windows` that has its real size
+/// (Finder titles a new window while it is still 0x0).
+fn every_name_shown(windows: &[crate::window_list::Window], names: &[String]) -> bool {
+    names.iter().all(|name| {
+        windows.iter().any(|w| {
+            w.width >= MIN_PAGE_SIDE
+                && w.height >= MIN_PAGE_SIDE
+                && shows_a_name(w, std::slice::from_ref(name))
+        })
+    })
 }
 
 /// [`wait_for_new_windows`] for links a browser opened: also waits a little
@@ -322,6 +378,33 @@ async fn debugging_port(pid: i32, requested: Option<u16>) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_window_titled_with_the_folder_ends_the_wait() {
+        use super::*;
+        let window = |id, title: &str| crate::window_list::Window {
+            id,
+            pid: 1,
+            width: 800.0,
+            height: 600.0,
+            title: title.into(),
+        };
+        let names = vec![shown_name("file:///tmp/my%20scratch/").unwrap()];
+        assert_eq!(names, ["my scratch"]);
+        assert!(!every_name_shown(&[window(7, "Downloads")], &names));
+        assert!(every_name_shown(&[window(7, "my scratch")], &names));
+        // A document title may hide its extension.
+        let names = vec![shown_name("/tmp/doc.txt").unwrap()];
+        assert!(every_name_shown(&[window(9, "doc")], &names));
+        assert!(!every_name_shown(&[window(9, "doc.txt.bak")], &names));
+        // A new window titled before it is sized doesn't end the wait yet.
+        let sizing = crate::window_list::Window {
+            width: 0.0,
+            height: 0.0,
+            ..window(10, "doc")
+        };
+        assert!(!every_name_shown(&[sizing], &names));
+    }
+
     use super::*;
 
     #[test]

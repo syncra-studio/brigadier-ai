@@ -192,10 +192,11 @@ impl Tool for LaunchAppTool {
                 );
             }
         }
-        let windows_before: HashSet<u32> = crate::window_list::windows(None)
+        let titles_before: HashMap<u32, String> = crate::window_list::windows(None)
             .into_iter()
-            .map(|w| w.id)
+            .map(|w| (w.id, w.title))
             .collect();
+        let windows_before: HashSet<u32> = titles_before.keys().copied().collect();
         let running_before = apps::running_apps();
         let pids_before: HashSet<i32> = running_before.iter().map(|a| a.pid).collect();
         let is_named = |app: &apps::RunningApp| {
@@ -351,7 +352,7 @@ impl Tool for LaunchAppTool {
                 // Wait a little for the documents' windows and list them
                 // first, so the caller needn't list the windows again.
                 let (mut windows, new) =
-                    open_link::wait_for_new_windows(pid, &windows_seen, urls.len());
+                    open_link::wait_for_new_windows(pid, &titles_before, &urls);
                 if new == 0 {
                     put_window_first(&mut windows, apps::main_window_id(pid));
                 }
@@ -415,12 +416,20 @@ impl Tool for LaunchAppTool {
         }
 
         match launch_result {
-            Ok(Ok(Launched { pid, app, windows })) => {
+            Ok(Ok(Launched {
+                pid,
+                app,
+                mut windows,
+            })) => {
+                drop_noise_windows(&mut windows);
                 let app_name = app.as_ref().map(|a| a.name.as_str()).unwrap_or("?");
                 let bid = app
                     .as_ref()
                     .and_then(|a| a.bundle_id.as_deref())
                     .unwrap_or("?");
+                if !pids_before.contains(&pid) {
+                    crate::target_policy::note_task_launched_settings(bid, pid.into());
+                }
                 let mut summary = match opened_in_background {
                     Some(opened) => {
                         let links = if link_count == 1 {
@@ -626,6 +635,13 @@ pub fn names_app(
 /// Lists the window `first` first (the app's main window: the one the
 /// launch opened or brought up), ahead of any panels or helper windows,
 /// keeping the others in order.
+/// Leave out windows that carry nothing for an agent: untitled and not on
+/// screen, such as TextEdit's hidden helper window and Finder's desktop
+/// strips. list_windows still lists every window.
+pub fn drop_noise_windows(windows: &mut Vec<WindowInfo>) {
+    windows.retain(|w| !w.title.trim().is_empty() || w.is_on_screen);
+}
+
 pub fn put_window_first(windows: &mut [WindowInfo], first: Option<u32>) {
     if let Some(at) = windows.iter().position(|w| Some(w.window_id) == first) {
         windows[..=at].rotate_right(1);

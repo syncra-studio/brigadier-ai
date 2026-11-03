@@ -20,7 +20,21 @@ pub trait SnapshotPayload: Send + Sync + 'static {
         self.len() == 0
     }
     fn retain(&self, index: usize) -> Option<Self::Element>;
+    /// Whether a window's replaced reads are kept so their tokens can still
+    /// resolve through [`Self::carried_row`]. Off by default: a new read
+    /// stales every older token of that window.
+    const CARRIES_ROWS: bool = false;
+    /// The row of `self`, a newer read of the same window, that holds the
+    /// element at `row` of `older`, only when the platform can prove that
+    /// element unchanged. `None` keeps the older token stale.
+    fn carried_row(&self, _older: &Self, _row: usize) -> Option<usize> {
+        None
+    }
 }
+
+/// Replaced reads kept per window when the payload carries rows: with the
+/// current read, a token stays usable across the window's last 4 reads.
+const CARRIED_READS_PER_WINDOW: usize = 3;
 
 struct Snapshot<S> {
     id: u32,
@@ -260,6 +274,9 @@ fn out_of_range_refusal<S: SnapshotPayload>(snapshot: &Snapshot<S>, row: usize) 
 pub struct SnapshotStore<S: SnapshotPayload> {
     runtime_scope: String,
     inner: Mutex<HashMap<i32, Vec<Snapshot<S>>>>,
+    /// Replaced reads whose unchanged elements' tokens still resolve, oldest
+    /// first. Only filled when `S::CARRIES_ROWS`. Lock after `inner`.
+    replaced: Mutex<HashMap<i32, Vec<Snapshot<S>>>>,
 }
 
 impl<S: SnapshotPayload> SnapshotStore<S> {
@@ -267,6 +284,7 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
         Self {
             runtime_scope: current_runtime_scope(),
             inner: Mutex::new(HashMap::new()),
+            replaced: Mutex::new(HashMap::new()),
         }
     }
 
@@ -392,7 +410,7 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
         (screenshot_scale, window_size): (Option<f64>, Option<(f64, f64)>),
         semantic: bool,
     ) -> Option<(u32, Vec<u32>)> {
-        let (id, retired) = {
+        let (id, invalidated, retired) = {
             let mut inner = self.inner.lock().unwrap();
             if session.is_some_and(crate::session::is_session_ended) {
                 return None;
@@ -420,6 +438,12 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
             if lane.len() == LRU_CAP_PER_PID {
                 retired.push(lane.remove(0));
             }
+            // Every replaced or evicted read is reported: a kept read's tokens
+            // resolve only for elements proven unchanged.
+            let invalidated: Vec<u32> = retired.iter().map(|snapshot| snapshot.id).collect();
+            if S::CARRIES_ROWS {
+                self.keep_replaced(pid, window_id, &mut retired);
+            }
             let id = crate::element_token::mint_snapshot_id();
             lane.push(Snapshot {
                 id,
@@ -431,11 +455,42 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
                 semantic,
                 payload,
             });
-            (id, retired)
+            (id, invalidated, retired)
         };
-        let invalidated = retired.iter().map(|snapshot| snapshot.id).collect();
         drop(retired);
         Some((id, invalidated))
+    }
+
+    /// Move the window's replaced read (in `retired`) into the kept reads,
+    /// and move into `retired` the kept reads that fall out: beyond the last
+    /// [`CARRIED_READS_PER_WINDOW`], or of a window evicted from the lane.
+    fn keep_replaced(&self, pid: i32, window_id: u64, retired: &mut Vec<Snapshot<S>>) {
+        let mut replaced = self.replaced.lock().unwrap();
+        let kept = replaced.entry(pid).or_default();
+        let evicted: Vec<u64> = retired
+            .iter()
+            .map(|old| old.window_id)
+            .filter(|&id| id != window_id)
+            .collect();
+        if let Some(position) = retired
+            .iter()
+            .position(|old| old.window_id == window_id && old.semantic)
+        {
+            kept.push(retired.remove(position));
+        }
+        let mut same_window = kept.iter().filter(|old| old.window_id == window_id).count();
+        let mut index = 0;
+        while index < kept.len() {
+            let old = &kept[index];
+            let too_old = old.window_id == window_id && same_window > CARRIED_READS_PER_WINDOW;
+            if too_old || evicted.contains(&old.window_id) {
+                same_window -= usize::from(too_old);
+                retired.push(kept.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        replaced.retain(|_, kept| !kept.is_empty());
     }
 
     /// Resolve the screenshot transform from the same authoritative latest
@@ -593,9 +648,19 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
                 retired.extend::<Vec<_>>(owned);
             }
             inner.retain(|_, lane| !lane.is_empty());
-            retired
+            let count = retired.len();
+            let mut replaced = self.replaced.lock().unwrap();
+            for kept_reads in replaced.values_mut() {
+                let (owned, kept) = std::mem::take(kept_reads)
+                    .into_iter()
+                    .partition(|snapshot| snapshot.screenshot_owner.as_deref() == Some(session));
+                *kept_reads = kept;
+                retired.extend::<Vec<_>>(owned);
+            }
+            replaced.retain(|_, kept| !kept.is_empty());
+            (count, retired)
         };
-        let count = retired.len();
+        let (count, retired) = retired;
         drop(retired);
         count
     }
@@ -636,12 +701,35 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
     pub fn pid_for_token(&self, args: &serde_json::Value) -> Option<i32> {
         let token = args.get("element_token")?.as_str()?;
         let (snapshot_id, _) = parse_token(token)?;
-        self.inner
-            .lock()
-            .unwrap()
+        let owner = |lanes: &HashMap<i32, Vec<Snapshot<S>>>| {
+            lanes
+                .iter()
+                .find(|(_, lane)| lane.iter().any(|snapshot| snapshot.id == snapshot_id))
+                .map(|(pid, _)| *pid)
+        };
+        let inner = self.inner.lock().unwrap();
+        owner(&inner).or_else(|| owner(&self.replaced.lock().unwrap()))
+    }
+
+    /// A replaced read's row, resolved in its window's current read when the
+    /// platform proves the element unchanged there.
+    fn carried<'a>(
+        &self,
+        pid: i32,
+        lane: &'a [Snapshot<S>],
+        snapshot_id: u32,
+        row: usize,
+    ) -> Option<(&'a Snapshot<S>, usize)> {
+        let replaced = self.replaced.lock().unwrap();
+        let old = replaced
+            .get(&pid)?
             .iter()
-            .find(|(_, lane)| lane.iter().any(|snapshot| snapshot.id == snapshot_id))
-            .map(|(pid, _)| *pid)
+            .find(|old| old.id == snapshot_id)?;
+        let current = lane
+            .iter()
+            .find(|snapshot| snapshot.window_id == old.window_id && snapshot.semantic)?;
+        let row = current.payload.carried_row(&old.payload, row)?;
+        Some((current, row))
     }
 
     pub fn resolve(
@@ -660,10 +748,12 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
         let lane = inner.get(&pid).map(Vec::as_slice).unwrap_or_default();
         let (snapshot, element_index) = match parse_token(token) {
             Some((snapshot_id, element_index)) => {
-                let Some(snapshot) = lane.iter().find(|snapshot| snapshot.id == snapshot_id) else {
-                    return Err(stale_token_refusal(pid, lane));
-                };
-                (snapshot, element_index)
+                match lane.iter().find(|snapshot| snapshot.id == snapshot_id) {
+                    Some(snapshot) => (snapshot, element_index),
+                    None => self
+                        .carried(pid, lane, snapshot_id, element_index)
+                        .ok_or_else(|| stale_token_refusal(pid, lane))?,
+                }
             }
             // A bare row number ("11") is the `[11]` of a markdown read. It
             // names a row of the window's current snapshot, the one a fresh
@@ -691,20 +781,36 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
     }
 
     pub fn remove(&self, pid: i32, window_id: u64) -> Option<u32> {
-        let retired = {
+        let (retired, _kept) = {
             let mut inner = self.inner.lock().unwrap();
-            inner.get_mut(&pid).and_then(|lane| {
+            let retired = inner.get_mut(&pid).and_then(|lane| {
                 let position = lane.iter().position(|entry| entry.window_id == window_id)?;
                 Some(lane.remove(position))
-            })
+            });
+            let kept: Vec<_> = self
+                .replaced
+                .lock()
+                .unwrap()
+                .get_mut(&pid)
+                .map(|kept| {
+                    let (gone, stay) = std::mem::take(kept)
+                        .into_iter()
+                        .partition(|old| old.window_id == window_id);
+                    *kept = stay;
+                    gone
+                })
+                .unwrap_or_default();
+            (retired, kept)
         };
         retired.map(|snapshot| snapshot.id)
     }
 
     pub fn clear(&self) -> usize {
         let retired = std::mem::take(&mut *self.inner.lock().unwrap());
+        let kept = std::mem::take(&mut *self.replaced.lock().unwrap());
         let count = retired.len();
         drop(retired);
+        drop(kept);
         count
     }
 }

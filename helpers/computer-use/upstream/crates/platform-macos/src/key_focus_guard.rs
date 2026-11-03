@@ -251,7 +251,7 @@ fn user_switched_recently() -> bool {
 /// can raise a window a moment after the call that caused it returns (a
 /// banner, a sheet, or a menu that a renderer process opens later).
 const ORDER_WATCH: Duration = Duration::from_millis(2500);
-const ORDER_POLL: Duration = Duration::from_millis(20);
+const ORDER_POLL: Duration = Duration::from_millis(10);
 const MAX_RESTORES_PER_WATCH: u32 = 3;
 
 /// One target's watch after a guarded action.
@@ -264,6 +264,9 @@ struct Watch {
     order: bool,
     /// [`crate::window_change_detector::intentional_epoch`] when armed.
     epoch: u64,
+    /// Counts registrations: each guarded action gets its own restore cap,
+    /// also when one watcher thread keeps running across actions.
+    generation: u64,
 }
 
 /// Keep restoring the user's window above `target`, and undoing the target's
@@ -272,11 +275,13 @@ struct Watch {
 fn watch_order_after_action(target: i32, front: i32, order: bool, epoch: u64) {
     static WATCHING: OnceLock<Mutex<HashMap<i32, Watch>>> = OnceLock::new();
     let watching = WATCHING.get_or_init(|| Mutex::new(HashMap::new()));
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
     let watch = Watch {
         until: Instant::now() + ORDER_WATCH,
         front,
         order,
         epoch,
+        generation: GENERATION.fetch_add(1, Ordering::Relaxed),
     };
     {
         let mut map = watching
@@ -296,6 +301,7 @@ fn watch_order_after_action(target: i32, front: i32, order: bool, epoch: u64) {
             // re-activated in a loop.
             let mut restores = 0;
             let mut reverts = 0;
+            let mut generation = None;
             loop {
                 std::thread::sleep(ORDER_POLL);
                 let current = watching
@@ -304,6 +310,11 @@ fn watch_order_after_action(target: i32, front: i32, order: bool, epoch: u64) {
                     .get(&target)
                     .copied();
                 let Some(current) = current else { return };
+                if generation != Some(current.generation) {
+                    generation = Some(current.generation);
+                    restores = 0;
+                    reverts = 0;
+                }
                 // An activation the driver asked for since (bring_to_front,
                 // foreground delivery) is not reverted.
                 if reverts < MAX_RESTORES_PER_WATCH
@@ -533,6 +544,10 @@ pub fn protect(target_pid: i32) -> Option<Lease> {
     if !ensure_target_tap(target_pid) {
         tracing::warn!(target_pid, "key-focus guard: target event tap unavailable");
     }
+    // Watch the window order from now on, not only once the action ends: a
+    // window the target orders in during the action (an Open panel's Go to
+    // Folder sheet) is put back under the user's window within a poll.
+    watch_order_after_action(target_pid, front, !lease.above_before, lease.epoch);
     Some(lease)
 }
 

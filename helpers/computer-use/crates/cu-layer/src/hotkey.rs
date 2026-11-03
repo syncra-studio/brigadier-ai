@@ -66,10 +66,115 @@ pub trait MenuBar: Send + Sync {
     /// Presses the enabled menu item whose shortcut is `key` with
     /// `modifiers` (a [`menu_modifiers`] value), and returns its title.
     fn press(&self, pid: i32, key: &str, modifiers: i64) -> Option<String>;
+    /// Held while the menu item is pressed: hands the user's front window
+    /// back if the press raises one of the app's windows (an Open panel).
+    fn guard_front(&self, _pid: i32) -> Option<Box<dyn Send>> {
+        None
+    }
     /// Selects all the text of the focused text field (in `window_id`, when
     /// given), or else of the first one in that window. Returns what was
     /// selected, for the answer.
     fn select_all_text(&self, pid: i32, window_id: Option<u32>) -> Option<String>;
+    /// Presses `window_id`'s own close button through accessibility.
+    /// `None` when it has none to press; else whether the window is gone
+    /// from the window list afterwards.
+    fn close_window(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        None
+    }
+    /// Whether the Open/Save panel `window_id` shows a sheet within a short
+    /// wait. `None` when it isn't such a panel.
+    fn panel_sheet_opened(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        None
+    }
+    /// Whether the Open/Save panel `window_id` shows a sheet right now.
+    fn panel_sheet_shown(&self, _pid: i32, _window_id: u32) -> Option<bool> {
+        None
+    }
+}
+
+/// The answer when ⌘⇧G is asked of a panel that already shows a sheet: the
+/// keys would go to that sheet, and a sheet read back afterwards proves nothing.
+pub const GO_TO_FOLDER_SHEET_ALREADY_SHOWN: &str = "Nothing was sent: the Open/Save panel \
+    already shows a sheet (Go to Folder, New Folder or another dialog), so Go to Folder can't \
+    open on it. Read the panel: if that sheet is Go to Folder, type the path into it; otherwise \
+    close it first (press_key escape), then send the shortcut again.";
+
+/// The answer when ⌘⇧G reached a background Open/Save panel but no Go to
+/// Folder sheet opened.
+pub const GO_TO_FOLDER_NOT_OPENED: &str = "Go to Folder did not open: the shortcut was sent to \
+    the Open/Save panel, but no Go to Folder sheet appeared within 600 ms. Read the panel: if it \
+    shows another sheet or dialog, close that first. Otherwise pick the folder with the panel's \
+    sidebar and file rows (click them), or open the folder with launch_app urls.";
+
+/// The answer when the panel's Go to Folder sheet was read back.
+pub const GO_TO_FOLDER_OPENED: &str = "Go to Folder opened on the Open/Save panel (confirmed: \
+    its sheet is shown). Next: type_text the folder path with the same pid and window_id, then \
+    press_key return; the panel then shows that folder. press_key escape closes the sheet.";
+
+/// The confirmed Go to Folder answer.
+fn go_to_folder_opened() -> ToolResult {
+    use cua_driver_core::action_record::{
+        ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, ActualDelivery,
+        EvidenceKind, RequestedDelivery,
+    };
+    let result = ToolResult::text(GO_TO_FOLDER_OPENED);
+    match ActionExecutionRecord::builder(
+        ActionEffect::Confirmed,
+        ActionTransport::MacosCgEventPid,
+        RequestedDelivery::Background,
+    )
+    .evidence(ActionEvidence {
+        kind: EvidenceKind::AccessibilityReadback,
+        detail: "the panel shows its Go to Folder sheet".into(),
+    })
+    .actual_delivery(ActualDelivery::Background)
+    .build()
+    {
+        Ok(record) => result.with_action_record(record),
+        Err(_) => result,
+    }
+}
+
+/// The answer for ⌘W done with the window's close button.
+fn closed_window_result(display: &str, pid: i32, window_id: u32, gone: bool) -> ToolResult {
+    use cua_driver_core::action_record::{
+        ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport, ActualDelivery,
+        EvidenceKind, RequestedDelivery,
+    };
+    let (text, record) = if gone {
+        (
+            format!(
+                "Closed window {window_id} of pid {pid} ({display}) with its close button: the \
+                 window is gone from the window list."
+            ),
+            ActionExecutionRecord::builder(
+                ActionEffect::Confirmed,
+                ActionTransport::MacosAxAction,
+                RequestedDelivery::Background,
+            )
+            .evidence(ActionEvidence {
+                kind: EvidenceKind::WindowChange,
+                detail: "the window left the window list".into(),
+            }),
+        )
+    } else {
+        (
+            format!(
+                "Pressed the close button of window {window_id} of pid {pid} ({display}), but the \
+                 window is still open: the app may be asking to save. Read the window to see."
+            ),
+            ActionExecutionRecord::builder(
+                ActionEffect::Unverifiable,
+                ActionTransport::MacosAxAction,
+                RequestedDelivery::Background,
+            ),
+        )
+    };
+    let result = ToolResult::text(text);
+    match record.actual_delivery(ActualDelivery::Background).build() {
+        Ok(record) => result.with_action_record(record),
+        Err(_) => result,
+    }
 }
 
 /// Puts Brigadier's menu shortcuts in front of the driver's `hotkey`.
@@ -170,15 +275,46 @@ impl Tool for MenuShortcut {
         let Some((pid, window_id, key, modifiers, display)) = menu_combo(&args) else {
             return self.inner.invoke(args).await;
         };
-        if self.menu_bar.chromium(pid)
-            || window_id.is_some_and(|window_id| self.menu_bar.panel_owns_keys(pid, window_id))
-        {
+        if self.menu_bar.chromium(pid) {
             return self.inner.invoke(args).await;
         }
-        if let Some(window_id) = window_id {
-            self.menu_bar.make_main(pid, window_id);
+        if let Some(window_id) =
+            window_id.filter(|window_id| self.menu_bar.panel_owns_keys(pid, *window_id))
+        {
+            let go_to_folder = key.eq_ignore_ascii_case("g") && modifiers == SHIFT;
+            if go_to_folder && self.menu_bar.panel_sheet_shown(pid, window_id) == Some(true) {
+                return ToolResult::error(GO_TO_FOLDER_SHEET_ALREADY_SHOWN).with_structured(
+                    json!({
+                        "status": "failed",
+                        "effect": "failed",
+                        "reason": "panel_sheet_already_shown",
+                    }),
+                );
+            }
+            let result = self.inner.invoke(args).await;
+            if go_to_folder && result.is_error != Some(true) {
+                match self.menu_bar.panel_sheet_opened(pid, window_id) {
+                    Some(true) => return go_to_folder_opened(),
+                    Some(false) => {
+                        return ToolResult::error(GO_TO_FOLDER_NOT_OPENED).with_structured(json!({
+                            "status": "failed",
+                            "effect": "failed",
+                            "reason": "go_to_folder_sheet_not_shown",
+                        }))
+                    }
+                    None => {}
+                }
+            }
+            return result;
         }
-        if let Some(title) = self.menu_bar.press(pid, &key, modifiers) {
+        let pressed = {
+            let _front = self.menu_bar.guard_front(pid);
+            if let Some(window_id) = window_id {
+                self.menu_bar.make_main(pid, window_id);
+            }
+            self.menu_bar.press(pid, &key, modifiers)
+        };
+        if let Some(title) = pressed {
             return ToolResult::text(format!(
                 "Pressed {title} ({display}) in the menu bar of pid {pid}."
             ))
@@ -188,6 +324,14 @@ impl Tool for MenuShortcut {
             if let Some(what) = self.menu_bar.select_all_text(pid, window_id) {
                 return ToolResult::text(format!("Selected {what} ({display}) in pid {pid}."))
                     .with_structured(json!({}));
+            }
+        }
+        // Close Window is disabled while the app is in the background (Finder),
+        // and the posted combo never reaches it. The window's own close button
+        // does the same and works from the background.
+        if let (true, 0, Some(window_id)) = (key.eq_ignore_ascii_case("w"), modifiers, window_id) {
+            if let Some(gone) = self.menu_bar.close_window(pid, window_id) {
+                return closed_window_result(&display, pid, window_id, gone);
             }
         }
         self.inner.invoke(args).await
@@ -216,8 +360,49 @@ impl MenuBar for System {
         unsafe { system::press(pid, key, modifiers) }
     }
 
+    fn guard_front(&self, pid: i32) -> Option<Box<dyn Send>> {
+        platform_macos::key_focus_guard::protect(pid).map(|lease| Box::new(lease) as Box<dyn Send>)
+    }
+
     fn select_all_text(&self, pid: i32, window_id: Option<u32>) -> Option<String> {
         unsafe { system::select_all_text(pid, window_id) }
+    }
+
+    fn panel_sheet_shown(&self, pid: i32, window_id: u32) -> Option<bool> {
+        platform_macos::ax::panel::panel_has_sheet(pid, window_id)
+    }
+
+    fn panel_sheet_opened(&self, pid: i32, window_id: u32) -> Option<bool> {
+        // A sheet the panel opens shows within a few run-loop turns.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(600);
+        loop {
+            // A read can fail while the panel is busy presenting its sheet.
+            let shown = platform_macos::ax::panel::panel_has_sheet(pid, window_id);
+            if shown == Some(true) || std::time::Instant::now() >= deadline {
+                return shown;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    }
+
+    fn close_window(&self, pid: i32, window_id: u32) -> Option<bool> {
+        if !unsafe { system::press_close_button(pid, window_id) } {
+            return None;
+        }
+        // The window leaves the window list once the app has closed it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1000);
+        loop {
+            let open = crate::window_list::windows(Some(pid))
+                .iter()
+                .any(|w| w.id == window_id);
+            if !open {
+                return Some(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Some(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }
 
@@ -279,6 +464,27 @@ mod system {
             }
             CFRelease(element as CFTypeRef);
         }
+        pressed
+    }
+
+    /// Press the window's enabled AXCloseButton. `true` when AX accepted it.
+    pub unsafe fn press_close_button(pid: i32, window_id: u32) -> bool {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return false;
+        }
+        let mut pressed = false;
+        for window in copy_ax_windows_including(app, pid, window_id) {
+            if !pressed && ax_get_window_id(window) == Some(window_id) {
+                if let Some(button) = copy_element_attr(window, "AXCloseButton") {
+                    pressed = copy_bool_attr(button, "AXEnabled") != Some(false)
+                        && perform_action(button, "AXPress") == kAXErrorSuccess;
+                    CFRelease(button as CFTypeRef);
+                }
+            }
+            CFRelease(window as CFTypeRef);
+        }
+        CFRelease(app as CFTypeRef);
         pressed
     }
 

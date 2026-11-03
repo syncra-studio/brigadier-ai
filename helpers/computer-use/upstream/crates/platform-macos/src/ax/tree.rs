@@ -404,6 +404,11 @@ unsafe fn scope_top_level(top_level: &[AXUIElementRef], pid: i32, wid: u32) -> S
                 // XPC service windows can omit AXIdentifier. Scope metadata
                 // still marks the exact panel so the client's menu stays out.
                 Some("open-panel".to_owned())
+            } else if role == "AXScrollArea"
+                && copy_string_attr(child, "AXDescription").as_deref()
+                    == Some(super::window_scope::DESKTOP_IDENTIFIER)
+            {
+                Some(super::window_scope::DESKTOP_IDENTIFIER.to_owned())
             } else {
                 copy_string_attr(child, "AXIdentifier")
             };

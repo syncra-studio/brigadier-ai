@@ -15,7 +15,7 @@
 //! When the user has turned it off, the caller gets an honest refusal.
 
 use std::ffi::c_void;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -119,10 +119,15 @@ pub fn run_script(script: &str, args: &[&str], timeout: Duration) -> Result<Stri
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(script.as_bytes());
     }
+    // Drain both pipes while the script runs: a result larger than the pipe
+    // buffer (a long page's text) would otherwise block osascript until the
+    // timeout kills it.
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
     let deadline = Instant::now() + timeout;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -143,16 +148,25 @@ pub fn run_script(script: &str, args: &[&str], timeout: Duration) -> Result<Stri
                 })
             }
         }
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    if status.success() {
+        return Ok(String::from_utf8_lossy(&stdout).trim().to_owned());
     }
-    let output = child.wait_with_output().map_err(|error| ScriptRefusal {
-        code: "automation_failed",
-        reason: format!("osascript output could not be read: {error}"),
-    })?;
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
     Err(script_error_refusal(&stderr))
+}
+
+/// Read `pipe` to its end on its own thread.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
 }
 
 /// Map an osascript error line ("... (-1743)") to a refusal.
@@ -454,6 +468,17 @@ pub fn file_url_to_path(url: &str) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_result_larger_than_the_pipe_buffer_is_read_whole() {
+        let text = run_script(
+            "on run argv\nreturn do shell script \"yes a | head -c 200000\"\nend run",
+            &[],
+            Duration::from_secs(20),
+        )
+        .expect("osascript runs a shell command without Automation");
+        assert!(text.len() > 150_000, "got {} bytes", text.len());
+    }
 
     #[test]
     fn permission_codes_map_to_states() {

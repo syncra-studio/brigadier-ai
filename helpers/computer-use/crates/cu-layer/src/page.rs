@@ -59,6 +59,51 @@ pub fn authorize(_tool: &str, args: &Value) -> Result<(), String> {
     }
 }
 
+const SAFARI: &str = "com.apple.Safari";
+
+/// Why Safari's page text wasn't read through its scripting.
+const SAFARI_NOT_ALLOWED: &str = "Safari's page can't be read through Safari's scripting: \
+    macOS Automation doesn't allow computer use to control Safari. The user can allow it in \
+    System Settings > Privacy & Security > Automation; until then a page Safari doesn't draw \
+    (a covered window) can't be read.";
+
+/// Safari's page text in the current tab of the window, by window number.
+const SAFARI_PAGE_TEXT: &str = r#"on run argv
+  tell application "Safari" to return text of current tab of (first window whose id is ((item 1 of argv) as integer))
+end run"#;
+
+#[derive(Debug)]
+enum SafariText {
+    /// Automation for Safari isn't allowed (or not yet asked): nothing sent.
+    NotAllowed,
+    Failed,
+}
+
+/// The page text of Safari's window `window_id` through Safari's scripting,
+/// whose window id is the window number. It needs no JavaScript setting.
+/// Sends no Apple Event unless Automation is already allowed, so it never
+/// shows a consent prompt.
+fn safari_page_text(pid: i32, window_id: u32) -> Result<String, SafariText> {
+    use platform_macos::apple_events::{automation_permission, run_script, AutomationPermission};
+    let owned = platform_macos::windows::all_windows()
+        .iter()
+        .any(|window| window.window_id == window_id && window.pid == pid);
+    if !owned {
+        return Err(SafariText::Failed);
+    }
+    match automation_permission(SAFARI) {
+        AutomationPermission::Granted => {}
+        AutomationPermission::NotRunning => return Err(SafariText::Failed),
+        _ => return Err(SafariText::NotAllowed),
+    }
+    run_script(
+        SAFARI_PAGE_TEXT,
+        &[&window_id.to_string()],
+        std::time::Duration::from_secs(5),
+    )
+    .map_err(|_| SafariText::Failed)
+}
+
 pub struct MacOsPageBackend {
     cdp_sessions: Arc<CdpSessionCache>,
 }
@@ -104,7 +149,27 @@ impl PageBackend for MacOsPageBackend {
             return ax_text_fallback(pid, window_id).await;
         }
 
-        // Try JS path first; on error, fall back to AX walk.
+        // Safari's own scripting reads the page even in a covered window,
+        // which WebKit neither draws nor exposes to accessibility.
+        if bundle_id == SAFARI {
+            match tokio::task::spawn_blocking(move || safari_page_text(pid, window_id)).await? {
+                Ok(text) if !text.trim().is_empty() => return Ok(text),
+                // No Apple Event at all: the JavaScript route would show
+                // macOS's consent prompt over the user's window.
+                Err(SafariText::NotAllowed) => {
+                    let text = ax_text_fallback(pid, window_id)
+                        .await
+                        .map_err(|error| anyhow::anyhow!("{error} {SAFARI_NOT_ALLOWED}"))?;
+                    return Ok(format!(
+                        "{SAFARI_NOT_ALLOWED} This text comes from the accessibility tree \
+                         instead:\n{text}"
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        // Try JS path first; on error, read the AX tree and say why.
         match execute_js(
             "document.body.innerText",
             &bundle_id,
@@ -115,7 +180,13 @@ impl PageBackend for MacOsPageBackend {
         .await
         {
             Ok(result) => Ok(result),
-            Err(_) => ax_text_fallback(pid, window_id).await,
+            Err(error) => {
+                let text = ax_text_fallback(pid, window_id).await?;
+                Ok(format!(
+                    "{} This text comes from the accessibility tree instead:\n{text}",
+                    js_unavailable(&error)
+                ))
+            }
         }
     }
 
@@ -134,16 +205,20 @@ impl PageBackend for MacOsPageBackend {
                 .unwrap_or(false);
 
         if use_ax_fallback {
-            let results = ax_query_fallback(pid, window_id, css_selector).await?;
-            return Ok(format_ax_elements(&results));
+            let why = "This app's web view has no scripting route, so query_dom reads its \
+                       accessibility tree.";
+            return ax_query_answer(pid, window_id, css_selector, attributes, why).await;
         }
 
         let js = build_query_selector_js(css_selector, attributes);
         match execute_js(&js, &bundle_id, pid, window_id, &self.cdp_sessions).await {
             Ok(result) => Ok(result),
-            Err(_) => {
-                let results = ax_query_fallback(pid, window_id, css_selector).await?;
-                Ok(format_ax_elements(&results))
+            Err(error) => {
+                let why = format!(
+                    "{} query_dom reads the accessibility tree instead.",
+                    js_unavailable(&error)
+                );
+                ax_query_answer(pid, window_id, css_selector, attributes, &why).await
             }
         }
     }
@@ -418,12 +493,57 @@ async fn ax_text_fallback(pid: i32, window_id: u32) -> anyhow::Result<String> {
     }
 }
 
+/// Why the page's JavaScript could not run, in one plain sentence.
+fn js_unavailable(error: &anyhow::Error) -> String {
+    let raw = format!("{error:#}");
+    if raw.contains("Allow JavaScript from Apple Events") {
+        return "The page's JavaScript isn't available: Safari's \"Allow JavaScript from Apple \
+                Events\" setting (Settings > Developer) is off, and only the user can turn it on."
+            .to_owned();
+    }
+    let first = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("unknown error");
+    let first: String = first.chars().take(200).collect();
+    format!("The page's JavaScript isn't available ({first}).")
+}
+
+/// A `query_dom` answer from the AX tree: refuses selectors the tree can't
+/// match and names the attributes it can't read, so nothing is dropped
+/// without a word.
+async fn ax_query_answer(
+    pid: i32,
+    window_id: u32,
+    css_selector: &str,
+    attributes: &[String],
+    why: &str,
+) -> anyhow::Result<String> {
+    let Some(results) = ax_query_fallback(pid, window_id, css_selector).await? else {
+        anyhow::bail!(
+            "{why} The accessibility tree can match only a bare tag name ({}), not `{}`; \
+             nothing was queried.",
+            crate::browser::ax_page_reader::AX_SELECTORS,
+            css_selector.trim()
+        );
+    };
+    let mut answer = format!("{why}\n{}", format_ax_elements(&results));
+    if !attributes.is_empty() {
+        answer.push_str(&format!(
+            "\nNot included: the attribute(s) {} can't be read from the accessibility tree.",
+            attributes.join(", ")
+        ));
+    }
+    Ok(answer)
+}
+
 /// Query AX tree by CSS selector.
 async fn ax_query_fallback(
     pid: i32,
     window_id: u32,
     selector: &str,
-) -> anyhow::Result<Vec<crate::browser::ax_page_reader::AXElement>> {
+) -> anyhow::Result<Option<Vec<crate::browser::ax_page_reader::AXElement>>> {
     let sel = selector.to_owned();
     let result = tokio::task::spawn_blocking(move || {
         platform_macos::ax::tree::walk_tree(pid, Some(window_id), None)

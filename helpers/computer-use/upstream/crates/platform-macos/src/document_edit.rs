@@ -228,6 +228,55 @@ unsafe fn element_window_id(element: AXUIElementRef) -> Option<u32> {
     id
 }
 
+/// Focus a text field or area and put its caret at the end of its text, then
+/// read the focus and the caret back. `Some(length)` only when `pid`'s focused
+/// element is `element` and its caret is at the end; nothing is typed or
+/// replaced.
+///
+/// # Safety
+/// `element` must be a live `AXUIElementRef`.
+pub unsafe fn place_caret_at_end(pid: i32, element: AXUIElementRef) -> Option<usize> {
+    let _ = crate::input::ax_actions::focus_element(element as usize);
+    caret_to_end_of(element);
+    if !crate::input::ax_actions::is_element_focused(pid, element as usize) {
+        return None;
+    }
+    let len = copy_string_attr(element, "AXValue")
+        .map(|v| v.encode_utf16().count())
+        .unwrap_or(0);
+    let range = selected_range_of(element)?;
+    (range.location == len as isize && range.length == 0).then_some(len)
+}
+
+/// The element's `AXSelectedTextRange`.
+///
+/// # Safety
+/// `element` must be a live `AXUIElementRef`.
+unsafe fn selected_range_of(element: AXUIElementRef) -> Option<CfRange> {
+    use core_foundation::{base::TCFType, string::CFString};
+    let attr = CFString::new("AXSelectedTextRange");
+    let mut value: core_foundation::base::CFTypeRef = std::ptr::null();
+    let err = crate::ax::bindings::AXUIElementCopyAttributeValue(
+        element,
+        attr.as_concrete_TypeRef(),
+        &mut value,
+    );
+    if err != crate::ax::bindings::kAXErrorSuccess || value.is_null() {
+        return None;
+    }
+    let mut range = CfRange {
+        location: -1,
+        length: -1,
+    };
+    let ok = crate::ax::bindings::AXValueGetValue(
+        value as _,
+        crate::ax::bindings::kAXValueCFRangeType,
+        &mut range as *mut CfRange as *mut _,
+    );
+    core_foundation::base::CFRelease(value);
+    ok.then_some(range)
+}
+
 /// Collapse the selection to the end of the text.
 ///
 /// # Safety

@@ -215,13 +215,20 @@ impl Tool for KeepDrawnRead {
         if let Some((pid, window_id)) = read_target(&args, &result) {
             let owner = crate::scope::current().session.unwrap_or_default();
             let keep = self.keep;
-            let web = tokio::task::spawn_blocking(move || {
+            let (web, browser, covered) = tokio::task::spawn_blocking(move || {
                 keep.keep(pid, window_id, &owner);
-                keep.web_engine(pid)
+                let browser = crate::launch::apps::running_app(pid)
+                    .and_then(|app| app.bundle_id)
+                    .is_some_and(|id| crate::browser::open_link::browser_kind(&id).is_some());
+                let covered = browser && !keep.occlusion.partly_visible(window_id);
+                (keep.web_engine(pid), browser, covered)
             })
             .await
-            .unwrap_or(false);
+            .unwrap_or_default();
             note_older_picture(&mut result, web);
+            if browser {
+                note_missing_page(&mut result, &args, covered);
+            }
         }
         result
     }
@@ -253,6 +260,39 @@ pub fn note_older_picture(result: &mut ToolResult, web: bool) {
     }
     structured.insert("off_space_staleness".into(), OLDER_PICTURE.into());
     result.content.push(Content::text(OLDER_PICTURE));
+}
+
+/// What a whole read of a browser window without its page says.
+pub const NO_PAGE: &str = "This browser window's page is not in the tree: the browser has \
+    not drawn it, so neither the tree nor a screenshot shows it.";
+/// Added to [`NO_PAGE`] when the window is fully covered.
+pub const NO_PAGE_COVERED: &str = " The window is fully covered by other windows, and the \
+    browser doesn't draw a page in a window opened or kept behind them. page get_text reads \
+    its text: in Safari through Safari's scripting when macOS Automation for Safari is \
+    allowed, in other browsers when their JavaScript is available. Otherwise ask the user \
+    to uncover the window.";
+
+/// Adds [`NO_PAGE`] to a whole read (no query, not truncated) of a browser
+/// window whose tree has no web area, so an empty page isn't taken for an
+/// empty site.
+pub fn note_missing_page(result: &mut ToolResult, args: &Value, covered: bool) {
+    use cua_driver_core::protocol::Content;
+    let Some(Value::Object(structured)) = result.structured_content.as_ref() else {
+        return;
+    };
+    let whole = args.get("query").is_none_or(Value::is_null)
+        && structured.get("truncated") != Some(&Value::Bool(true));
+    let Some(tree) = structured.get("tree_markdown").and_then(Value::as_str) else {
+        return;
+    };
+    if !whole || tree.contains("AXWebArea") {
+        return;
+    }
+    let mut note = NO_PAGE.to_owned();
+    if covered {
+        note.push_str(NO_PAGE_COVERED);
+    }
+    result.content.push(Content::text(note));
 }
 
 /// The process-wide windows kept drawn, released when the process exits.
@@ -459,6 +499,45 @@ mod system {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    #[test]
+    fn a_whole_browser_read_without_its_page_says_why() {
+        use cua_driver_core::protocol::{Content, ToolResult};
+        let read = |tree: &str, truncated: bool| {
+            ToolResult::text("read").with_structured(
+                serde_json::json!({ "tree_markdown": tree, "truncated": truncated }),
+            )
+        };
+        let texts = |result: &ToolResult| {
+            result
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    Content::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut covered = read("- [0] AXWindow \"W\"\n  - [1] AXToolbar", false);
+        super::note_missing_page(&mut covered, &serde_json::json!({}), true);
+        assert!(texts(&covered).contains(super::NO_PAGE));
+        assert!(texts(&covered).contains("fully covered"));
+        for (mut result, args) in [
+            (
+                read("- [0] AXWindow\n  - AXWebArea \"Page\"", false),
+                serde_json::json!({}),
+            ),
+            (read("- [0] AXWindow", true), serde_json::json!({})),
+            (
+                read("- [0] AXWindow", false),
+                serde_json::json!({ "query": "Submit" }),
+            ),
+        ] {
+            super::note_missing_page(&mut result, &args, true);
+            assert_eq!(texts(&result), "read");
+        }
+    }
+
     use super::system::uncovered_part;
 
     #[test]

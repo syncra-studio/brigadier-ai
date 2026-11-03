@@ -400,6 +400,14 @@ mod tests {
             bytes / 4
         );
         let serialized = serde_json::to_string(&small).unwrap();
+        if !cfg!(target_os = "macos") {
+            for word in ["macOS", "Safari", "Finder", "AppKit", "Spotlight"] {
+                assert!(
+                    !serialized.contains(word),
+                    "{word} in this platform's tools/list"
+                );
+            }
+        }
         for hidden in cu_layer::catalog::OFFERED
             .iter()
             .filter(|name| {
