@@ -1,11 +1,12 @@
-//! Deciding (D157, D163): a message the user sends while a session's or a Chat's work block is
-//! open waits in the queue rail, Deciding, and one small separate model call judges it at once:
-//! a one-shot of the session's own CLI, on its account and its smallest model, that reads what
-//! the open block is doing and the message, and answers FITS or WAITS. The session's turn is
-//! never asked (the model judges, the engine plumbs: D66).
+//! Judging (D157, D163): a message the user sends while a session's or a Chat's work block is
+//! open is an ordinary row of the queue rail at once, and one small separate model call judges
+//! it in the background: a one-shot of the session's own CLI, on its account and its smallest
+//! model, that reads what the open block is doing and the message, and answers FITS or WAITS.
+//! The session's turn is never asked (the model judges, the engine plumbs: D66).
 //!
 //! - FITS: it is steered into the open block, as the user's Steer does.
-//! - WAITS (or no answer): it stays in the rail and goes on its own turn once the block ends.
+//! - WAITS, a late answer or none: it stays in the rail and goes on its own turn.
+//! - The user edited, moved, steered or deleted the row meanwhile: the answer is dropped.
 //!
 //! The user's own Steer always joins (D25). Side chats and tab chats keep the plain queue.
 
@@ -24,8 +25,8 @@ use crate::work::{AttachmentRef, QueuedMessage};
 /// How a queued message's frame begins in its CLI; the app's thread hides it (run2-D44).
 pub(crate) const FRAME: &str = "[queued message ";
 
-/// How long the judge may take before the message just waits.
-const JUDGE_PATIENCE: Duration = Duration::from_secs(30);
+/// How long the judge may take before the message just waits. A healthy one answers in 2 to 3 s.
+const JUDGE_PATIENCE: Duration = Duration::from_secs(5);
 
 /// What the judge is told it does.
 const JUDGE: &str = "You decide whether a new message from the user fits the work in progress \
@@ -123,6 +124,29 @@ fn as_message(conversation_id: &crate::model::ConversationId, item: &QueuedMessa
 }
 
 impl ConvLive {
+    /// The user took queued row `id` over: a judge still out on it no longer has a say.
+    pub(super) fn drop_judgment(&self, id: &str) {
+        self.judging.lock().unwrap().remove(id);
+    }
+
+    /// Whether a judge is still out on a row whose answer would count.
+    #[cfg(test)]
+    pub(in crate::manager) fn is_judging(&self) -> bool {
+        !self.judging.lock().unwrap().is_empty()
+    }
+
+    /// Whether row `id`'s judge still has a say.
+    #[cfg(test)]
+    pub(in crate::manager) fn judges(&self, id: &str) -> bool {
+        self.judging.lock().unwrap().contains(id)
+    }
+
+    /// Marks the conversation as compacting, as a compaction under way does.
+    #[cfg(test)]
+    pub(in crate::manager) async fn set_compacting(&self, compacting: bool) {
+        self.state.lock().await.compacting = compacting;
+    }
+
     /// Sets the line message `id`'s text goes to its CLI under, once.
     pub(super) fn frame(&self, id: &str, frame: String) {
         self.frames.lock().unwrap().insert(id.to_owned(), frame);
@@ -143,8 +167,8 @@ impl ConvLive {
 }
 
 impl SessionManager {
-    /// Queues a message sent while the conversation's block is open, Deciding, and judges it at
-    /// once (D157).
+    /// Queues a message sent while the conversation's block is open, as an ordinary row, and
+    /// judges it in the background (D157).
     pub(super) async fn queue_to_judge(
         &self,
         conv: &Arc<ConvLive>,
@@ -154,15 +178,10 @@ impl SessionManager {
         queue_index: Option<u32>,
     ) -> Result<SendOutcome> {
         let item = conv
-            .user_write(self.core.enqueue_as(
-                &conv.id,
-                text,
-                attachments,
-                mentions,
-                queue_index,
-                true,
-                None,
-            ))
+            .user_write(
+                self.core
+                    .enqueue(&conv.id, text, attachments, mentions, queue_index),
+            )
             .await?;
         self.judge_now(conv, &item);
         Ok(SendOutcome::Queued(item))
@@ -192,8 +211,7 @@ impl SessionManager {
         if !busy && !held && !paused && !holds {
             return None;
         }
-        let deciding = !held && !paused;
-        let item = match self.core.enqueue_peer(to, peer, text, deciding).await {
+        let item = match self.core.enqueue_peer(to, peer, text).await {
             Ok(Some(item)) => item,
             // Queued already (sent again after a crash): it goes on from there.
             Ok(None) => return Some(busy),
@@ -204,56 +222,39 @@ impl SessionManager {
         };
         if held {
             self.arm_seam_hold(&conv).await;
-        } else if deciding {
+        } else if !paused {
             self.judge_now(&conv, &item);
         }
         Some(busy)
     }
 
-    /// Judges Deciding `item` beside the session: FITS steers it into the open block, anything
-    /// else leaves it waiting in the rail for its own turn.
+    /// Judges queued `item` beside the session: FITS steers it into the open block; anything
+    /// else, or the user taking the row over meanwhile, leaves the queue as it stands.
     fn judge_now(&self, conv: &Arc<ConvLive>, item: &QueuedMessage) {
+        conv.judging.lock().unwrap().insert(item.id.clone());
         let (manager, conv) = (self.arc(), conv.clone());
         let message = as_message(&conv.id, item);
         self.spawn(async move {
             let fits = manager.judged(&conv, &message).await;
-            let mut routing = conv.queue_routing.lock().await;
-            // Steered, deleted or sent meanwhile: the user's or the pump's.
+            let routing = conv.queue_routing.lock().await;
+            // Edited, moved, steered or deleted meanwhile: the user's.
+            let ours = conv.judging.lock().unwrap().remove(&message.id);
             let board = manager.core.board(&conv.id).await.ok();
-            let deciding = board.as_ref().is_some_and(|board| {
-                board
-                    .queue
-                    .items
-                    .iter()
-                    .any(|queued| queued.id == message.id && queued.deciding)
+            // Sent meanwhile: the pump's. Stopped (queue paused) or at a seam: it stays queued.
+            let free = board.is_some_and(|board| {
+                !board.queue.paused && board.queue.items.iter().any(|queued| queued.id == message.id)
             });
-            if !deciding {
-                return;
-            }
-            // Stopped meanwhile (queue paused) or at a seam (steer_queued would keep it for the
-            // successor, still Deciding): it waits in the rail instead.
-            let paused = board.is_some_and(|board| board.queue.paused);
             let held = conv.state.lock().await.seam.held;
-            if fits == Some(true) && !paused && !held {
-                drop(routing);
-                let Err(err) = manager
-                    .steer_queued(conv.id.clone(), message.id.clone())
-                    .await
-                else {
+            if ours && fits == Some(true) && free && !held {
+                let Err(err) = manager.steer_routed(&conv, &message.id, routing).await else {
                     return;
                 };
-                // Refused (the session compacts): it waits in the rail, never Deciding for good.
+                // Refused (the session compacts): it stays queued for its own turn.
                 crate::logging::private_trace!(conv.private_logs, warn, "could not steer in a message that fits its block; it waits"; conversation = %conv.id, error = %err);
-                routing = conv.queue_routing.lock().await;
+            } else {
+                drop(routing);
             }
-            if let Err(err) = manager
-                .core
-                .settle_queued(&conv.id, std::slice::from_ref(&message.id), false)
-                .await
-            {
-                crate::logging::private_trace!(conv.private_logs, warn, "could not let a judged message wait"; conversation = %conv.id, error = %err);
-            }
-            drop(routing);
+            // Only paused workers hold: nothing else sends the row that stays.
             manager.kick(&conv);
         });
     }
@@ -287,13 +288,14 @@ impl SessionManager {
             return None;
         };
         let reply = self
-            .run_writer_until(
+            .run_writer_with(
                 &choice,
                 false,
                 &account,
                 JUDGE,
                 &judge_prompt(&work, &words),
                 deadline,
+                true,
             )
             .await;
         match reply {
@@ -347,8 +349,8 @@ impl SessionManager {
         lines.join("\n")
     }
 
-    /// After a start: queued messages still Deciding when the daemon stopped wait for their own
-    /// turn. Their judging didn't outlive the stop (#449).
+    /// After a start: queued messages an older daemon stopped with, still Deciding, wait for
+    /// their own turn. Their judging didn't outlive the stop (#449).
     pub(crate) async fn settle_unjudged(&self, id: &crate::model::ConversationId) {
         let Ok(board) = self.core.board(id).await else {
             return;
@@ -363,7 +365,7 @@ impl SessionManager {
         if deciding.is_empty() {
             return;
         }
-        if let Err(err) = self.core.settle_queued(id, &deciding, false).await {
+        if let Err(err) = self.core.settle_queued(id, &deciding).await {
             tracing::warn!(conversation = %id, error = %err, "could not settle queued messages after a restart");
         }
     }
@@ -381,6 +383,7 @@ impl SessionManager {
                 "this message is being sent to a worker".into(),
             ));
         }
+        conv.drop_judgment(item_id);
         // Another session's message is removed for good before it leaves the queue: a crash
         // between never sends it again.
         self.peer_removed(id, &self.core.queued(id, item_id).await?);

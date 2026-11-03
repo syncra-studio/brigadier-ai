@@ -646,6 +646,9 @@ pub(crate) struct ConvLive {
     /// Serializes queue judgments, automatic joins and user takes until the item is reserved.
     /// Released before sending to a worker, which may still be starting.
     queue_routing: tokio::sync::Mutex<()>,
+    /// Queued rows a judge is still out on and whose answer still counts: the user taking a row
+    /// over takes it off, under `queue_routing`.
+    judging: std::sync::Mutex<HashSet<String>>,
     /// How many times the user wrote: a message or a queue item stored (sent, edited, moved
     /// from the queue). Held while each is stored, so two are stored one after the other.
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
@@ -744,6 +747,7 @@ impl ConvLive {
             retry: tokio::sync::Mutex::new(()),
             transition: tokio::sync::Mutex::new(()),
             queue_routing: tokio::sync::Mutex::new(()),
+            judging: std::sync::Mutex::default(),
             user_wrote: tokio::sync::Mutex::new(0),
             feedback_offer: tokio::sync::Mutex::new(()),
             session_offer: tokio::sync::Mutex::new(()),
@@ -1396,8 +1400,8 @@ impl SessionManager {
             return Ok(SendOutcome::Queued(item));
         }
         // No turn runs, but the Chat's work still holds (its workers, its CLI's background
-        // commands): as a session's, the message joins that work, Deciding, on a turn that wakes
-        // the Chat to judge it now. A Steer still goes straight in.
+        // commands): as a session's, the message waits in the queue, judged in the background.
+        // A Steer still goes straight in.
         let mut holds = false;
         let mut into = None;
         if !paused && queue_judging::judges_queue(&conversation) {
@@ -1454,11 +1458,28 @@ impl SessionManager {
                 "this message is on its way to its worker; delete it and send it again".into(),
             ));
         }
-        conv.user_write(
-            self.core
-                .edit_queued(id, item_id, text, attachments, mentions),
-        )
-        .await
+        let queue = conv
+            .user_write(
+                self.core
+                    .edit_queued(id, item_id, text, attachments, mentions),
+            )
+            .await?;
+        conv.drop_judgment(item_id);
+        Ok(queue)
+    }
+
+    /// Moves a queued message, as the user dragged it.
+    pub async fn move_queued(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+        index: u32,
+    ) -> Result<crate::work::MessageQueue> {
+        let conv = self.conv(id)?;
+        let _routing = conv.queue_routing.lock().await;
+        let queue = self.core.move_queued(id, item_id, index).await?;
+        conv.drop_judgment(item_id);
+        Ok(queue)
     }
 
     /// Reserves worker row `item_id` for one delivery, with the row as it is now (an edit
@@ -1499,6 +1520,19 @@ impl SessionManager {
             return self.steer_queued_to_worker(&id, item).await;
         }
         let routing = conv.queue_routing.lock().await;
+        conv.drop_judgment(&item_id);
+        self.steer_routed(&conv, &item_id, routing).await
+    }
+
+    /// [`Self::steer_queued`] of a session's row, the queue's routing already held.
+    pub(super) async fn steer_routed(
+        &self,
+        conv: &Arc<ConvLive>,
+        item_id: &str,
+        routing: tokio::sync::MutexGuard<'_, ()>,
+    ) -> Result<()> {
+        self.admit()?;
+        let id = conv.id.clone();
         // At a seam it stays queued for the successor (S22).
         let (held, compacting) = {
             let state = conv.state.lock().await;
@@ -1513,7 +1547,7 @@ impl SessionManager {
         // The work in progress takes it (D25); with no turn running, in its open block from
         // the first frame.
         let busy = conv.state.lock().await.busy;
-        let holds = !busy && self.work_holds(&conv).await;
+        let holds = !busy && self.work_holds(conv).await;
         let into = if holds {
             self.request_for(&id).await
         } else {
@@ -1521,13 +1555,13 @@ impl SessionManager {
         };
         let message = conv
             .user_write(async {
-                let item = self.core.queued(&id, &item_id).await?;
+                let item = self.core.queued(&id, item_id).await?;
                 self.append_queued(id.clone(), item, into).await
             })
             .await?;
         drop(routing);
         let frame = (busy || holds).then(|| queue_judging::STEERED.to_owned());
-        self.join_working(&conv, message, frame).await;
+        self.join_working(conv, message, frame).await;
         Ok(())
     }
 
@@ -1601,14 +1635,14 @@ impl SessionManager {
             return Ok(SendOutcome::Sent(message));
         }
         if busy && !paused {
-            // The session judges it, as it waits Deciding (run2-D40).
+            // It waits in the queue, judged in the background (D157).
             return self
                 .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
         // No turn runs, but the session's work still holds (its workers, its CLI's background
-        // commands): the message joins that work all the same, Deciding, on a turn that wakes
-        // the session to judge it now. A Steer still goes straight in.
+        // commands): the message waits in the queue all the same, judged in the background. A
+        // Steer still goes straight in.
         let holds = !paused && self.work_holds(conv).await;
         if !steer && holds {
             return self

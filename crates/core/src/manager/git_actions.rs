@@ -581,8 +581,7 @@ impl SessionManager {
         .await
     }
 
-    /// Shared tool-less transport. The caller's deadline covers startup and the reply; cleanup
-    /// continues on its own after.
+    /// [`Self::run_writer_with`], letting its CLI retry until `deadline`.
     pub(super) async fn run_writer_until(
         &self,
         choice: &ModelChoice,
@@ -591,6 +590,24 @@ impl SessionManager {
         system: &str,
         prompt: &str,
         deadline: tokio::time::Instant,
+    ) -> Result<Option<String>> {
+        self.run_writer_with(choice, fast, account, system, prompt, deadline, false)
+            .await
+    }
+
+    /// Shared tool-less transport. The caller's deadline covers startup and the reply; cleanup
+    /// continues on its own after. `no_retries`: the first error its CLI will retry ends it, for
+    /// a caller that would rather go without the reply than wait.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn run_writer_with(
+        &self,
+        choice: &ModelChoice,
+        fast: bool,
+        account: &AccountRef,
+        system: &str,
+        prompt: &str,
+        deadline: tokio::time::Instant,
+        no_retries: bool,
     ) -> Result<Option<String>> {
         let run = uuid::Uuid::now_v7().to_string();
         let owner = format!("gen:{run}");
@@ -661,6 +678,12 @@ impl SessionManager {
                         }
                         ProviderEvent::Error { error } if !error.will_retry => {
                             limit = error.limit.or(limit);
+                        }
+                        ProviderEvent::Error { error } if no_retries => {
+                            return Err(Error::Provider(format!(
+                                "the message writer's CLI is retrying: {}",
+                                error.message
+                            )));
                         }
                         ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. } => break,
                         _ => {}

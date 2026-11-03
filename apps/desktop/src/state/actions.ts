@@ -752,9 +752,7 @@ export async function send(
           mentions: outgoing.mentions,
           createdAtMs: Date.now(),
           queuedIds: queue?.items.map((item) => item.id) ?? [],
-          // The session or Chat judges what is sent while it works (run2-D40); a side chat's
-          // waits plainly.
-          ...(queued ? { queued: { index: slot, deciding: (working || running) && !paused && !target?.sideOf } } : {}),
+          ...(queued ? { queued: { index: slot } } : {}),
         },
       ],
     }));
