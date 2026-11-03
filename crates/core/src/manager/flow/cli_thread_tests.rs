@@ -1292,3 +1292,43 @@ async fn a_read_says_which_news_it_holds() {
     );
     flow.stop().await;
 }
+
+/// A turn's own message the CLI says after the turn opened (Claude's comes with the first token,
+/// seconds on) says the turn opened again: the read the open asked for had no such turn, so the
+/// thread read its newest turn as the one before, over, and its live line said "Thinking" over
+/// a running `brigadier start … && brigadier wait` (demo13).
+#[tokio::test]
+async fn a_turns_own_message_said_after_it_opened_reads_its_turns_again() {
+    use brigadier_providers::{ProviderEvent, Role};
+
+    let flow = Flow::start(
+        "cli-thread-message-after-open",
+        Options::default(),
+        script(|_| async { Reply::text("Started.") }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let conv = flow.manager.conv(&id).unwrap();
+    let mut news = flow.manager.subscribe_thread_news();
+    let mut opened = async |event: ProviderEvent| {
+        flow.manager.follow_cli_thread(&conv, Some(&event)).await;
+        let mut said = false;
+        while let Ok(item) = news.try_recv() {
+            said |= item.conversation_id == id && item.opened;
+        }
+        said
+    };
+    assert!(opened(ProviderEvent::TurnStarted { turn_id: None }).await);
+    let message = |item_id: &str| ProviderEvent::Message {
+        item_id: item_id.into(),
+        role: Role::User,
+        text: "Start another worker".into(),
+    };
+    assert!(
+        opened(message("u2")).await,
+        "its own message reads the turns again"
+    );
+    // A message steered into it once it has its own is no new turn.
+    assert!(!opened(message("u3")).await);
+    flow.stop().await;
+}

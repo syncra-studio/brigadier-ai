@@ -397,6 +397,10 @@ impl SessionManager {
                         };
                     }
                     if !steer {
+                        // Its own message, said after the turn opened (Claude's comes with the
+                        // first token): the thread reads its turns again, the read at the open
+                        // had none of it (demo13: the open turn read as the one before, over).
+                        opened |= live.awaiting_user;
                         live.awaiting_user = false;
                         live.waking_until = None;
                         live.user_message = Some(item_id.clone());
