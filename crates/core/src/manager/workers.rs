@@ -3035,7 +3035,7 @@ fn stopped_note(tasks: &[Task], all: bool) -> String {
         (false, _) => ("", "them"),
     };
     format!(
-        "[worker] The user stopped {what}{names}. You didn't stop {them} and nothing failed. \
+        "[worker] The user ended {what}{names} for good. You didn't end {them} and nothing failed. \
          Don't message, steer or approve {them}, and don't start {them} again unless the user \
          asks."
     )

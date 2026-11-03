@@ -203,10 +203,10 @@ async fn brigadiers_steers_are_brigadiers_and_the_users_steer_is_theirs() {
     flow.say("Hold.").await;
     until_given(&flow, &inputs, "Hold.").await;
     // The user stopped a worker: Brigadier tells the running turn.
-    let stopped = "[worker] The user stopped task-3 \"Fix the flaky test\". You didn't stop it and nothing failed.";
+    let stopped = "[worker] The user ended task-3 \"Fix the flaky test\" for good. You didn't end it and nothing failed.";
     let conv = flow.manager.conv(&flow.conversation).unwrap();
     flow.manager.tell_thread_now(&conv, stopped.into()).await;
-    until_given(&flow, &inputs, "The user stopped task-3").await;
+    until_given(&flow, &inputs, "The user ended task-3").await;
     assert_eq!(flow.noted_said(stopped), Some(Said::Brigadier));
     // The user's own steer, with a note that waited for their next message after it: only
     // their words show.
