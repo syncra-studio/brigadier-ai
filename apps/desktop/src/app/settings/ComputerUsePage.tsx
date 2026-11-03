@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 import { TargetPicker, useListedModels } from "@/app/settings/routing/pickers";
-import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
+import { refusingRule, rowChoice, ruleNames, ruleTitle } from "@/app/settings/routing/ruleWords";
 import { rowModelName, targetModel, withFirst, withOrder, workRows } from "@/app/settings/routing/words";
 import { Badge, Button, SettingsSelectTrigger } from "@/components/controls";
 import { ProviderGlyph } from "@/components/icons";
@@ -181,14 +181,23 @@ function ModelRow() {
   const error = useModelRules((s) => s.error);
   const groups = useModelGroups();
   const models = useListedModels();
+  const accounts = useApp((s) => s.accounts?.accounts);
   const save = useAction();
   const row = COMPUTER_USE_ROWS.model;
   const work = workRows(rules).find((found) => found.work === COMPUTER_USE_WORK);
-  const now = rules && work?.rows.find((found) => !refusingRule(rules.rules, rowChoice(found, models), found.work));
+  // The daemon skips a CLI whose lead account isn't signed in (including extra accounts).
+  const now = rules && work?.rows.find((found) =>
+    accounts?.some((account) => account.account.provider === found.agent && account.inUse && account.status?.loggedIn) &&
+    !refusingRule(rules.rules, rowChoice(found, models), found.work));
   const pick = (target: OverrideTarget) => {
     if (!rules || !work) return;
     const picked = { work: work.work, agent: target.provider, model: targetModel(target), effort: null, reason: "Your choice." };
-    void save.run(() => saveModelRules(withOrder(rules.rows, work.work, withFirst(work.rows, picked)), rules.rules));
+    save.run(async () => {
+      const order = withFirst(work.rows, picked);
+      const refusal = refusingRule(rules.rules, rowChoice(order[0]!, models), work.work);
+      if (refusal) throw new Error(`Refused by your rule “${ruleTitle(refusal, ruleNames(groups))}”`);
+      await saveModelRules(withOrder(rules.rows, work.work, order), rules.rules);
+    });
   };
   return (
     <SettingsRow label={row.label} description={row.description} error={save.error ?? (rules ? null : error)}>
