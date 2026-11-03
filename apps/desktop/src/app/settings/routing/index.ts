@@ -9,7 +9,7 @@ export * from "./MoreRowHead";
 export * from "./NowPick";
 export * from "./OrderList";
 export * from "./OrderPlace";
-export * from "./RatingsFooter";
+export * from "./RatingsLine";
 export * from "./StepsList";
 export * from "./StrengthRow";
 export * from "./WhoPicks";

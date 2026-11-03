@@ -1,13 +1,12 @@
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { RatingsFooter } from "@/app/settings/routing/RatingsFooter";
+import { RatingsLine, RefreshModels } from "@/app/settings/routing/RatingsLine";
 import { More, MORE_ROWS, type MoreRow } from "@/app/settings/routing/More";
 import { RULES, Rules } from "@/app/settings/routing/Rules";
 import { WHO_DOES_WHAT, WhoDoesWhat } from "@/app/settings/routing/WhoDoesWhat";
 import { SettingsPage } from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
-import { Info } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import { request } from "@/ipc/client";
 import type { TaskCategory } from "@/ipc/generated";
@@ -58,31 +57,26 @@ export function RoutingPage() {
   return (
     <SettingsPage
       title="Routing"
-      description="Which agent, model and effort suit each kind of work. A session follows these when it starts workers; change only what you want to."
+      description={
+        <>
+          Which agent, model and effort suit each kind of work. Changes apply to new work only.
+          <RatingsLine registry={registry} now={now} />
+        </>
+      }
       actions={
-        <div className="flex flex-col items-end gap-1.5 pt-2.25">
-          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-            <Info aria-hidden className="size-3.25" />
-            Applies to new work only
-          </span>
-          <RatingsFooter
-            label={MORE_ROWS.refresh.label}
-            registry={registry}
-            now={now}
-            running={refreshing.busy}
-            busy={refreshing.busy}
-            disabled={refreshing.busy}
-            onRefresh={() =>
-              refreshing.run(async () => {
-                // The live state `brigadier models` shows (each agent's models, every
-                // account's usage), the ratings, then the automatic advice and your file.
-                await Promise.all([refreshProviders(null), request({ method: "checkRegistry" })]);
-                await refreshUsage();
-                await loadModelRules();
-              })
-            }
-          />
-        </div>
+        <RefreshModels
+          label={MORE_ROWS.refresh.label}
+          busy={refreshing.busy}
+          onRefresh={() =>
+            refreshing.run(async () => {
+              // The live state `brigadier models` shows (each agent's models, every
+              // account's usage), the ratings, then the automatic advice and your file.
+              await Promise.all([refreshProviders(null), request({ method: "checkRegistry" })]);
+              await refreshUsage();
+              await loadModelRules();
+            })
+          }
+        />
       }
     >
       {(refreshing.error ?? usageError) && (

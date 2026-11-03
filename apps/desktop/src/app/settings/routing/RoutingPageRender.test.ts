@@ -16,8 +16,8 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   const dump = await renderFixtureLive(t, "routing.html?drive=1", "routing-result", 40000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.equal(
-    String(seen.note).replace(/Ratings updated Oct 21 · checked .*? agoRefresh models$/, ""),
-    "RoutingWhich agent, model and effort suit each kind of work. A session follows these when it starts workers; change only what you want to.Applies to new work only",
+    String(seen.note).replace(/Ratings updated Oct 21 · checked .*? ago/, ""),
+    "RoutingWhich agent, model and effort suit each kind of work. Changes apply to new work only.Refresh models",
   );
   assert.deepEqual((seen.sections as string[]).slice(-3), ["Who does what", "Rules", "More"]);
   assert.equal(seen.sources, "Automatic picks ship with the app. Model strength, below, is rated from release notes and benchmarks, checked daily, and adjusted by how each model did in your sessions.");
