@@ -6,7 +6,7 @@ import type { ProviderKind } from "./ProviderKind";
  */
 export type ModelRule = { "type": "forbid", names: Array<string>, 
 /**
- * `forbid for Independent review: sonnet`: only for that kind of work (a row's Work),
+ * `forbid for Adversarial review: sonnet`: only for that kind of work (a row's Work),
  * so only a `brigadier start --work` of it. Absent: everywhere.
  */
 work?: string, } | { "type": "allow", agent: ProviderKind | null, names: Array<string>, work?: string, } | { "type": "effortCeiling", effort: string, work?: string, };

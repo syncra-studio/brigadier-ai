@@ -317,8 +317,8 @@ pub const COMMANDS: &[Command] = &[
             Arg::Flag {
                 long: "reviewing",
                 value: Some("ID"),
-                help: "An independent review of a worker's work, or `session` for this \
-                       session's own (its plan): the work \"Independent review\" on another \
+                help: "An adversarial review of a worker's work, or `session` for this \
+                       session's own (its plan): the work \"Adversarial review\" on another \
                        ready CLI than the author's, else a fresh session of the author's. Its \
                        brief is told to read `brigadier show <id>` and `brigadier context`.",
                 choices: &[],
