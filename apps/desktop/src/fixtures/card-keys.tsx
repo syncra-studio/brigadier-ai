@@ -111,7 +111,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(what: string, check: () => boolean, ms = 5000) {
   const end = performance.now() + ms;
   while (!check()) {
-    if (performance.now() > end) throw new Error(`timed out waiting for ${what}`);
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}; focus=${focused()}; page=${document.querySelector("#root")?.textContent?.slice(0, 500)}`);
     await sleep(16);
   }
 }
@@ -160,11 +160,13 @@ const question: PendingAction = { type: "question", id: "merge" };
 const sent = (from: number) => () => calls.length > from;
 /** The card goes, as when Settings takes the window, and comes back. */
 async function visitSettings(action: PendingAction) {
+  const before = field()?.textContent ?? "";
   root.render(<p>Settings</p>);
   await until("the card to go", () => document.querySelector("[data-slot=action-card]") === null);
   await mountCard(action);
+  await until("the saved answer to render", () => field().textContent === before);
 }
-const field = () => document.querySelector<HTMLInputElement>("[data-slot=action-card] input")!;
+const field = () => document.querySelector<HTMLElement>("[data-slot=action-card] [contenteditable=true]")!;
 const options = () => [...document.querySelectorAll<HTMLElement>("[data-slot=action-option]")];
 const results = new URLSearchParams(location.search).get("case") === "kept" ? {
   // The answer the user lit, and then the text typed in the free-text row, survive a visit to Settings.
@@ -179,9 +181,9 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     seen.litAfter = lit();
     await fixtureClick(field());
     for (const letter of "tiers") await key(letter);
-    seen.typedBefore = field().value;
+    seen.typedBefore = field().textContent;
     await visitSettings(action);
-    seen.typedAfter = field().value;
+    seen.typedAfter = field().textContent;
     // Answered from elsewhere while Settings is open: the kept state goes with the question.
     root.render(<p>Settings</p>);
     await until("the card to go", () => document.querySelector("[data-slot=action-card]") === null);
@@ -190,7 +192,7 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     useBoard.setState({ board: { ...useBoard.getState().board!, questions } });
     await mountCard(action);
     seen.litReopened = lit();
-    seen.typedReopened = field().value;
+    seen.typedReopened = field().textContent;
   }),
   // A card with options takes an answer typed in its free-text row, sent as typed.
   typed: await run(async () => {

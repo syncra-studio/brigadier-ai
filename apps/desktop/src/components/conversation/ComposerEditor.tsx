@@ -34,7 +34,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } 
 
 import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { WorkerGlyph } from "./elements/worker-glyph";
-import { type BlobAttachmentAdapter, FILES_UPLOADING, readingFiles, uploading } from "@/app/conversation/attachments";
+import { type BlobAttachmentAdapter, ComposerAttachmentsContext, FILES_UPLOADING, readingFiles, uploading } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
 import { Chat, Folder } from "@/components/icons";
@@ -58,7 +58,7 @@ import {
   sameImages,
   splitAtMarkers,
 } from "@/app/conversation/inlineImages";
-import { DIRECT_ITEM, directTaskOf, mentionOf, type MentionTarget } from "@/app/conversation/Mentions";
+import { DIRECT_ITEM, directTaskOf, mentionOf, type MentionMemory, type MentionTarget } from "@/app/conversation/Mentions";
 import { usePlanMode } from "@/app/conversation/PlusMenu";
 import { askPausedSend } from "@/app/conversation/PausedSend";
 import { chipContent, pastedText, pasteKind, structuredHtml } from "@/components/conversation/pasteContent";
@@ -96,6 +96,10 @@ import { directSendingOf, directToOf, setDirectTo } from "@/state/directTo";
 export type ComposerInputProps = {
   placeholder: string;
   autoFocus: boolean;
+  /** A card uses the same editor and paste handling, with its own answer keys. */
+  card?: boolean;
+  mentions?: MentionMemory;
+  children?: React.ReactNode;
 };
 
 /** The rich field's chips: code is a mark there, not a chip. */
@@ -114,11 +118,15 @@ const NO_TARGETS: readonly MentionTarget[] = [];
 export default function ComposerEditor({
   placeholder,
   autoFocus,
+  card = false,
+  mentions,
+  children,
 }: ComposerInputProps) {
   const target = useContext(ComposerTargetContext);
-  const memory = target?.mentions ?? null;
+  const memory = mentions ?? target?.mentions ?? null;
   const targets = target?.targets ?? NO_TARGETS;
-  const rich = useRichComposer();
+  const preferredRich = useRichComposer();
+  const rich = !card && preferredRich;
   const kinds = rich ? RICH_CHIPS : PLAIN_CHIPS;
   // One formatter per memory and set of workers: a new one reads the field's text again, so a
   // draft read back before the session's workers were known has its `@task-N` chips once they are.
@@ -165,11 +173,14 @@ export default function ComposerEditor({
       cancelOnEscape={false}
       // Enter is ComposerKeys': it sends, ⌥ and ⌘ the other ways.
       submitMode="none"
-      aria-label="Message input"
+      aria-label={card ? "Your answer" : "Message input"}
+      compact={card}
     >
-      <FocusGuard />
-      <ComposerKeys formatter={formatter} deleted={deleted} deletedPastes={deletedPastes} />
-      <PlanBackspace />
+      {!card && <FocusGuard />}
+      {!card && <ComposerKeys deleted={deleted} deletedPastes={deletedPastes} />}
+      <ComposerPaste formatter={formatter} deleted={deleted} deletedPastes={deletedPastes} inlineOnly={card} />
+      {!card && <PlanBackspace />}
+      {children}
       <InlineSync kind="image" deleted={deleted} />
       <InlineSync kind="paste" deleted={deletedPastes} />
     </ChipComposerInput>
@@ -276,18 +287,9 @@ const mentionLook: MentionLook = ({ directiveType, directiveId, label }) => {
  * images along, at any length; ⌃⇧D starts dictating at the caret and stops (or
  * cancels) again. The `@` and `/` menus take their keys first.
  */
-function ComposerKeys({
-  formatter,
-  deleted,
-  deletedPastes,
-}: {
-  formatter: Unstable_DirectiveFormatter;
-  deleted: DeletedImages;
-  deletedPastes: DeletedImages;
-}) {
+function ComposerKeys({ deleted, deletedPastes }: { deleted: DeletedImages; deletedPastes: DeletedImages }) {
   const [editor] = useLexicalComposerContext();
   const aui = useAui();
-  const reader = useContext(AttachmentReaderContext);
   const pull = usePullQueued();
   const target = useContext(ComposerTargetContext);
   const history = usePromptHistory(
@@ -295,11 +297,9 @@ function ComposerKeys({
     target?.queue.attachments ?? null,
     useMemo(() => [deleted, deletedPastes], [deleted, deletedPastes]),
   );
-  const adapter = target?.queue.attachments ?? null;
   const owner = target?.conversation?.id ?? NEW_CHAT_SCOPE;
   // A project's session: ⌘⏎ starts a new one in the background.
   const taskTab = target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
-  const privateLogs = Boolean(target?.conversation?.tabChat);
   const conversationId = target?.conversation?.id ?? null;
   const pulled = target?.queue.pulled ?? null;
   const dictation = useDictation(owner);
@@ -355,18 +355,7 @@ function ComposerKeys({
       event.preventDefault();
       return true;
     };
-    // Lexical puts the selection's text on the clipboard; its images are noted here, and the
-    // clipboard marked as theirs.
-    const copy = (event: ClipboardEvent | KeyboardEvent | null) => {
-      copiedChips = copiedFrom($getSelection()?.getTextContent() ?? "", aui, reader);
-      if (copiedChips && event instanceof ClipboardEvent) {
-        event.clipboardData?.setData(COPIED_CHIPS_TYPE, copiedChips.token);
-      }
-      return false;
-    };
     return mergeRegister(
-      editor.registerCommand(COPY_COMMAND, copy, COMMAND_PRIORITY_NORMAL),
-      editor.registerCommand(CUT_COMMAND, copy, COMMAND_PRIORITY_NORMAL),
       editor.registerCommand(KEY_ARROW_UP_COMMAND, arrow("ArrowUp"), COMMAND_PRIORITY_NORMAL),
       editor.registerCommand(KEY_ARROW_DOWN_COMMAND, arrow("ArrowDown"), COMMAND_PRIORITY_NORMAL),
       // Below the input's own Enter handling, so an open mention or command menu takes Enter
@@ -425,6 +414,49 @@ function ComposerKeys({
         },
         COMMAND_PRIORITY_NORMAL,
       ),
+    );
+  }, [
+    editor,
+    aui,
+    pull,
+    history,
+    owner,
+    canDictate,
+    dictating,
+    opening,
+    mac,
+    followUp,
+    taskTab,
+    conversationId,
+    pulled,
+  ]);
+  return null;
+}
+
+/** Clipboard chips are shared by the main composer and every card editor. */
+function ComposerPaste({ formatter, deleted, deletedPastes, inlineOnly }: {
+  formatter: Unstable_DirectiveFormatter;
+  deleted: DeletedImages;
+  deletedPastes: DeletedImages;
+  inlineOnly: boolean;
+}) {
+  const [editor] = useLexicalComposerContext();
+  const aui = useAui();
+  const reader = useContext(AttachmentReaderContext);
+  const target = useContext(ComposerTargetContext);
+  const adapter = useContext(ComposerAttachmentsContext) ?? target?.queue.attachments ?? null;
+  const privateLogs = Boolean(target?.conversation?.tabChat);
+  useEffect(() => {
+    const copy = (event: ClipboardEvent | KeyboardEvent | null) => {
+      copiedChips = copiedFrom($getSelection()?.getTextContent() ?? "", aui, reader);
+      if (copiedChips && event instanceof ClipboardEvent) {
+        event.clipboardData?.setData(COPIED_CHIPS_TYPE, copiedChips.token);
+      }
+      return false;
+    };
+    return mergeRegister(
+      editor.registerCommand(COPY_COMMAND, copy, COMMAND_PRIORITY_NORMAL),
+      editor.registerCommand(CUT_COMMAND, copy, COMMAND_PRIORITY_NORMAL),
       editor.registerCommand(
         PASTE_COMMAND,
         (event) => {
@@ -432,7 +464,7 @@ function ComposerKeys({
           const files = [...event.clipboardData.files];
           const text = event.clipboardData.getData("text/plain");
           const composer = aui.composer();
-          const context = { editor, formatter, aui, reader, adapter, deleted, deletedPastes, privateLogs };
+          const context = { editor, formatter, aui, reader, adapter, deleted, deletedPastes, privateLogs, inlineOnly };
           // Chips cut or copied with their images and texts come back as chips, however long
           // their text.
           const copied = copiedChipsOn(event.clipboardData, text);
@@ -453,7 +485,8 @@ function ComposerKeys({
             return true;
           }
           event.preventDefault();
-          if (pastesInline({ files, uris: event.clipboardData.getData("text/uri-list") })) {
+          if (inlineOnly || pastesInline({ files, uris: event.clipboardData.getData("text/uri-list") })) {
+            if (inlineOnly && !files.every((file) => file.type.startsWith("image/"))) return true;
             pasteImages(files, context);
             return true;
           }
@@ -463,27 +496,7 @@ function ComposerKeys({
         COMMAND_PRIORITY_NORMAL,
       ),
     );
-  }, [
-    editor,
-    aui,
-    reader,
-    adapter,
-    privateLogs,
-    formatter,
-    deleted,
-    deletedPastes,
-    pull,
-    history,
-    owner,
-    canDictate,
-    dictating,
-    opening,
-    mac,
-    followUp,
-    taskTab,
-    conversationId,
-    pulled,
-  ]);
+  }, [editor, aui, reader, adapter, privateLogs, formatter, deleted, deletedPastes, inlineOnly]);
   return null;
 }
 
@@ -541,6 +554,7 @@ function copiedChipsOn(clipboard: DataTransfer, text: string): CopiedChips | nul
 
 /** What pasting into a composer works with. */
 type PasteContext = {
+  inlineOnly: boolean;
   privateLogs: boolean;
   editor: LexicalEditor;
   formatter: Unstable_DirectiveFormatter;
@@ -952,7 +966,7 @@ function pasteChipText(
 ) {
   const { editor, formatter, aui } = context;
   const composer = aui.composer();
-  if (composer.getState().text.trim() === "") {
+  if (!context.inlineOnly && composer.getState().text.trim() === "") {
     void composer.addAttachment(pastedTextFile(content, { markdown }));
     return;
   }
@@ -972,7 +986,9 @@ function pasteChipText(
 function InlineSync({ kind, deleted }: { kind: InlineKind; deleted: DeletedImages }) {
   const aui = useAui();
   const reader = useContext(AttachmentReaderContext);
-  const adapter = useContext(ComposerTargetContext)?.queue.attachments;
+  const cardAttachments = useContext(ComposerAttachmentsContext);
+  const target = useContext(ComposerTargetContext);
+  const adapter = cardAttachments ?? target?.queue.attachments;
   const text = useAuiState((s) => s.composer.text);
   const attachments = useAuiState((s) => s.composer.attachments);
   // Numbers whose chip has been in the text.

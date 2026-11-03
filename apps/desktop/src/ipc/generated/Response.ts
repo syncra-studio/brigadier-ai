@@ -143,7 +143,7 @@ watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "c
 /**
  * Why the user's chosen model didn't write it, when it didn't.
  */
-note: string | null, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "writeUpFeedback", writeUp: FeedbackWriteUp, } | { "method": "fileFeedback", 
+note: string | null, } | { "method": "answerCard" } | { "method": "prepareCardAnswer", text: string, } | { "method": "answerQuestion" } | { "method": "writeUpFeedback", writeUp: FeedbackWriteUp, } | { "method": "fileFeedback", 
 /**
  * Whether `gh` is signed in; when it isn't, `results` is empty.
  */

@@ -1562,6 +1562,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| core.pin_draft_attachments(scope, attachments)).await?;
             Response::PinDraftAttachments
         }
+        Request::PrepareCardAnswer {
+            conversation_id,
+            text,
+            attachments,
+            mentions,
+        } => Response::PrepareCardAnswer {
+            text: heap(|| {
+                sessions.prepare_card_answer(conversation_id, text, attachments, mentions)
+            })
+            .await?,
+        },
         Request::ReadAttachment { id } => Response::ReadAttachment {
             data: BASE64.encode(heap(|| core.read_attachment(&id)).await?),
         },
