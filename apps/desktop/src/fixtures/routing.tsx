@@ -72,7 +72,7 @@ const SHIPPED: GuidanceRow[] = [
   { work: "Fallback", agent: "codex", model: "default", effort: "high", reason: "A session that moves to Codex: when it is asked to, or every account of its own agent is at its limit." },
   { work: "Conversation titles", agent: "codex", model: "luna", effort: "low", reason: "A small model for short text; use available quota, cost tier and suitability among shipped title choices." },
   { work: "Conversation titles", agent: "claude", model: "haiku", effort: null, reason: "A small model for short text; use available quota, cost tier and suitability among shipped title choices." },
-  { work: "Rule reading", agent: "claude", model: "sonnet", effort: "medium", reason: "Rewrites the rules you type into exact rules and advice; a family word, so it follows newer models." },
+  { work: "Rule reading", agent: "claude", model: "sonnet", effort: "medium", reason: "Rewrites the rules you type into exact rules and advice." },
   { work: "Rule reading", agent: "codex", model: "default", effort: "medium", reason: "The next choice when the first can't run." },
 ];
 

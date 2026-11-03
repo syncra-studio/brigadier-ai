@@ -17,5 +17,5 @@ Advice only. Edit this table to change the advice. User rows with the same Work 
 | Fallback | codex | default | high | A session that moves to Codex: when it is asked to, or every account of its own agent is at its limit. |
 | Conversation titles | codex | luna | low | A small model for short text; use available quota, cost tier and suitability among shipped title choices. |
 | Conversation titles | claude | haiku | | A small model for short text; use available quota, cost tier and suitability among shipped title choices. |
-| Rule reading | claude | sonnet | medium | Rewrites the rules you type into exact rules and advice; a family word, so it follows newer models. |
+| Rule reading | claude | sonnet | medium | Rewrites the rules you type into exact rules and advice. |
 | Rule reading | codex | default | medium | The next choice when the first can't run. |

@@ -32,7 +32,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "Computer useAutomatic · Seeing and using apps on screen takes strong judgment.Opus 5.5 · High",
     "FallbackAutomatic · The model a session runs on when it moves to the other agent",
     "Conversation titlesAutomatic · A small model for short text; use available quota, cost tier and suitability among shipped title choices.GPT-6 Luna · Low",
-    "Rule readingAutomatic · Rewrites the rules you type into exact rules and advice; a family word, so it follows newer models.Sonnet 5.5 · Medium",
+    "Rule readingAutomatic · Rewrites the rules you type into exact rules and advice.Sonnet 5.5 · Medium",
     "Release notesYour order · GPT-6GPT-6 · Low",
   ];
   assert.deepEqual(seen.kinds, kinds);
