@@ -1051,3 +1051,135 @@ async fn a_deleted_session_takes_what_it_wrote_and_keeps_a_saved_page() {
 async fn an_archived_then_deleted_session_takes_what_it_wrote_and_keeps_a_saved_page() {
     delete_takes_what_the_session_wrote_and_keeps_a_saved_page(true).await;
 }
+
+/// Archive, then Delete, the user's way (D23): none of its worktrees, git's records of them
+/// or its branches stay, another session's ref check afterwards brings none back, and the
+/// user's own branch stays.
+#[tokio::test]
+async fn an_archived_then_deleted_session_leaves_nothing_in_git() {
+    use crate::manager::refcheck::Caller;
+    let flow = Flow::start("20261103-delete-git-w19", options(), script()).await;
+    let id = flow.conversation.clone();
+    flow.say("Start workers").await;
+    flow.settled().await;
+    reported_workers(&flow, &id, 2).await;
+    git(&flow.repo, &["branch", "mine"]);
+    let space = format!("brigadier/{}/", id.short());
+    let branches = || git(&flow.repo, &["branch", "--format=%(refname:short)"]);
+    assert!(
+        branches().contains(&format!("{space}task-")),
+        "{}",
+        branches()
+    );
+    // A worktree of another repository its CLI made in its folder, which no record names.
+    let other_repo = flow.scratch().join("other-repo");
+    std::fs::create_dir_all(&other_repo).unwrap();
+    git(&other_repo, &["init", "-q", "-b", "main"]);
+    git(
+        &other_repo,
+        &["commit", "-q", "--allow-empty", "-m", "start"],
+    );
+    let other_tree = flow.manager.session_dir(&id).root().join("other-tree");
+    git(
+        &other_repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("{space}cli-other"),
+            &other_tree.display().to_string(),
+        ],
+    );
+    flow.manager
+        .ref_check(&flow.repo, Caller::Thread(id.clone()))
+        .await;
+    flow.manager.archive(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    flow.manager.delete(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    assert!(flow.core.conversation(&id).is_err(), "the session is gone");
+    assert!(
+        !branches().contains(&space),
+        "after the delete: {}",
+        branches()
+    );
+    let other = ConversationId("01a00000-0000-7000-8000-00000000beef".into());
+    flow.manager
+        .ref_check(&flow.repo, Caller::Thread(other))
+        .await;
+    assert!(!branches().contains(&space), "{}", branches());
+    assert!(branches().contains("mine"), "{}", branches());
+    let worktrees = git(&flow.repo, &["worktree", "list", "--porcelain"]);
+    assert!(!worktrees.contains(id.short()), "{worktrees}");
+    let other_branches = git(&other_repo, &["branch", "--format=%(refname:short)"]);
+    assert_eq!(other_branches.trim(), "main");
+    let other_trees = git(&other_repo, &["worktree", "list", "--porcelain"]);
+    assert!(!other_trees.contains(id.short()), "{other_trees}");
+    flow.stop().await;
+}
+
+/// What deletes before D23 left in git goes at launch: git's record of a worktree in the
+/// sessions folder whose folder is gone, and the `brigadier/<id>/` branches of a session the
+/// records no longer have. A live session's branches, the user's, and a deleted session's
+/// branch a worktree that is still there has out, stay.
+#[tokio::test]
+async fn the_launch_sweep_takes_old_deletes_git_leftovers_only() {
+    let flow = Flow::start("20261103-stale-git-w19", options(), script()).await;
+    let live = flow.conversation.short().to_owned();
+    let sessions = flow.manager.runtime.platform().paths().sessions_dir.clone();
+    let old = sessions.join("0ddba11a");
+    git(
+        &flow.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "brigadier/0ddba11a/session",
+            &old.join("work").display().to_string(),
+        ],
+    );
+    git(&flow.repo, &["branch", "brigadier/0ddba11a/task-1-old"]);
+    std::fs::remove_dir_all(&old).unwrap();
+    let elsewhere = flow.repo.with_file_name("cu-integrate-w19-user-tree");
+    git(
+        &flow.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "brigadier/5eed5eed/session",
+            &elsewhere.display().to_string(),
+        ],
+    );
+    git(&flow.repo, &["branch", &format!("brigadier/{live}/keep")]);
+    git(&flow.repo, &["branch", "mine"]);
+    flow.manager.sweep_stale_git().await;
+    let branches = git(&flow.repo, &["branch", "--format=%(refname:short)"]);
+    assert!(!branches.contains("0ddba11a"), "{branches}");
+    for kept in [
+        "brigadier/5eed5eed/session".to_owned(),
+        format!("brigadier/{live}/keep"),
+        "mine".to_owned(),
+    ] {
+        assert!(branches.lines().any(|b| b == kept), "{kept}: {branches}");
+    }
+    let worktrees = git(&flow.repo, &["worktree", "list", "--porcelain"]);
+    assert!(!worktrees.contains("0ddba11a"), "{worktrees}");
+    assert!(
+        worktrees.contains("cu-integrate-w19-user-tree"),
+        "{worktrees}"
+    );
+    git(
+        &flow.repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &elsewhere.display().to_string(),
+        ],
+    );
+    flow.stop().await;
+}

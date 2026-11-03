@@ -402,6 +402,75 @@ impl SessionManager {
         sweep
     }
 
+    /// Delete's last word in git (D23), after the ledger's removals: in each repository the
+    /// conversation worked in, its worktrees in its folder go, forced (git's records of those
+    /// whose folder is gone too), then every branch of its namespace. Failures are logged; the
+    /// delete goes on.
+    pub(super) async fn clear_session_git(&self, conversation: &crate::model::Conversation) {
+        let id = conversation.id.clone();
+        let folder = self.session_dir(&id).root().to_path_buf();
+        let mut repos: BTreeSet<PathBuf> = worktree_repos(&folder).into_iter().collect();
+        if let Some(Setup::Session { repo, .. }) = &conversation.setup {
+            repos.insert(PathBuf::from(repo));
+        }
+        for task in self.core.tasks(&id).await.unwrap_or_default() {
+            repos.extend(task.plain.and_then(|plain| plain.repo).map(PathBuf::from));
+        }
+        let git = self.git.clone();
+        let folder = folder.canonicalize().unwrap_or(folder);
+        let _ = blocking(move || {
+            for repo in repos.iter().filter(|repo| repo.exists()) {
+                match clear_in_repo(&git, repo, &folder, &id) {
+                    Ok(removed) if !removed.is_empty() => {
+                        tracing::info!(conversation = %id, ?removed, "removed a deleted session's branches the ledger left");
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(conversation = %id, repo = %repo.display(), error = %err, "could not remove all a deleted session left in git");
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await;
+    }
+
+    /// What deletes before D23 left in git: in each repository this data folder knows, git's
+    /// records of worktrees in its sessions folder whose folder is gone, and the
+    /// `brigadier/<short id>/` branches of sessions its records no longer have (and whose folder
+    /// is gone: the orphan sweep keeps one with uncommitted work). A branch a worktree that is
+    /// still there has out stays.
+    pub(crate) async fn sweep_stale_git(&self) {
+        let catalog = self.core.catalog();
+        let mut repos: BTreeSet<PathBuf> = catalog
+            .projects
+            .iter()
+            .flat_map(|project| project.repos.iter().map(|repo| PathBuf::from(&repo.path)))
+            .collect();
+        repos.extend(catalog.conversations.iter().filter_map(|c| match &c.setup {
+            Some(Setup::Session { repo, .. }) => Some(PathBuf::from(repo)),
+            _ => None,
+        }));
+        let sessions = self.runtime.platform().paths().sessions_dir.clone();
+        let sessions = sessions.canonicalize().unwrap_or(sessions);
+        let (git, manager) = (self.git.clone(), self.arc());
+        let _ = blocking(move || {
+            for repo in repos.iter().filter(|repo| repo.exists()) {
+                match sweep_stale_repo(&git, repo, &sessions, || manager.live_shorts()) {
+                    Ok(removed) if !removed.is_empty() => {
+                        tracing::info!(repo = %repo.display(), ?removed, "removed deleted sessions' branches");
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(repo = %repo.display(), error = %err, "could not sweep deleted sessions' branches");
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await;
+    }
+
     /// The short ids of the conversations in the catalog right now.
     fn live_shorts(&self) -> HashSet<String> {
         self.core
@@ -667,6 +736,83 @@ fn worktree_repos(folder: &Path) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+/// [`SessionManager::clear_session_git`] in one repository: the branches it removed.
+fn clear_in_repo(
+    git: &brigadier_git::Git,
+    repo: &Path,
+    folder: &Path,
+    id: &ConversationId,
+) -> brigadier_git::Result<Vec<String>> {
+    let repo = git.open(repo)?;
+    let main = repo.root().to_path_buf();
+    for worktree in repo.worktrees()? {
+        if worktree.path != main
+            && worktree.path.starts_with(folder)
+            && let Err(err) = repo.remove_worktree(&worktree.path, true)
+        {
+            // Its branch stays with it; the rest goes on.
+            tracing::warn!(worktree = %worktree.path.display(), error = %err, "could not remove a deleted session's worktree");
+        }
+    }
+    let names = repo.read_only(&["for-each-ref", "--format=%(refname:strip=2)", "refs/heads"])?;
+    let spaces: BTreeSet<String> = names
+        .lines()
+        .filter_map(|name| branch_namespace(id, name))
+        .collect();
+    let mut removed = Vec::new();
+    for space in spaces {
+        removed.extend(repo.remove_namespace(&space)?.deleted);
+    }
+    Ok(removed)
+}
+
+/// [`SessionManager::sweep_stale_git`] in one repository: the branches it removed. `live` is
+/// read after the listing, so a session made meanwhile is in it.
+fn sweep_stale_repo(
+    git: &brigadier_git::Git,
+    repo: &Path,
+    sessions: &Path,
+    live: impl FnOnce() -> HashSet<String>,
+) -> brigadier_git::Result<Vec<String>> {
+    let repo = git.open(repo)?;
+    let names = repo.read_only(&[
+        "for-each-ref",
+        "--format=%(refname:strip=2)",
+        "refs/heads/brigadier/",
+    ])?;
+    let worktrees = repo.worktrees()?;
+    let live = live();
+    let stale = |short: &str| {
+        short.len() == 8
+            && short.bytes().all(|b| b.is_ascii_hexdigit())
+            && !live.contains(short)
+            && !sessions.join(short).exists()
+    };
+    let gone_record = worktrees.iter().any(|worktree| {
+        !worktree.path.exists()
+            && worktree
+                .path
+                .strip_prefix(sessions)
+                .ok()
+                .and_then(|rest| rest.components().next()?.as_os_str().to_str())
+                .is_some_and(stale)
+    });
+    if gone_record {
+        repo.prune_worktrees()?;
+    }
+    let spaces: BTreeSet<String> = names
+        .lines()
+        .filter_map(|name| name.strip_prefix("brigadier/")?.split_once('/'))
+        .filter(|(short, rest)| !rest.is_empty() && stale(short))
+        .map(|(short, _)| format!("brigadier/{short}/"))
+        .collect();
+    let mut removed = Vec::new();
+    for space in spaces {
+        removed.extend(repo.remove_namespace(&space)?.deleted);
+    }
+    Ok(removed)
 }
 
 #[cfg(test)]
