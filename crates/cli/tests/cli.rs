@@ -247,6 +247,7 @@ fn sample(request: &CliRequest) -> CliReply {
             rules: vec![brigadier_cli::models::Rule {
                 rule: "forbid: fable".into(),
             }],
+            rules_path: "/Users/me/.brigadier/models.md".into(),
         }),
         CliRequest::Sessions { all } => CliReply::ok(&SessionsOutput {
             project: (!all).then(|| "brigadier-ai".into()),

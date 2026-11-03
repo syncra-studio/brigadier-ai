@@ -1093,7 +1093,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             g.source
         ));
     }
-    lines.push("Your rules (~/.brigadier/models.md):".into());
+    lines.push(format!("Your rules ({}):", output.rules_path));
     for rule in &output.rules {
         lines.push(format!("  {}", rule.rule));
     }
@@ -1198,8 +1198,13 @@ mod tests {
             }],
             guidance: vec![],
             rules: vec![],
+            rules_path: "/tmp/dev-data/models.md".into(),
         };
         let text = models(&output);
+        assert!(
+            text.contains("Your rules (/tmp/dev-data/models.md):"),
+            "{text}"
+        );
         // The worker count leads, so the 25-line cut never hides it (run2-D31).
         assert_eq!(
             text.lines().nth(1),

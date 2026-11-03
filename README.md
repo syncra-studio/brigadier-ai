@@ -265,6 +265,8 @@ and effort itself, for every session it starts.
   each), and your own rules on top.
 - **Your rules.** `~/.brigadier/models.md` is your own editable file: forbidden models, an effort
   ceiling, allowlists. The shipped default carries today's rules (never Fable, effort ≤ high).
+  A dev build or custom data folder keeps its own `models.md` there instead, unless
+  `BRIGADIER_MODELS_FILE` names another file.
   `brigadier start` refuses only what this file forbids, and quotes the rule.
 - **Registry.** `registry/models.json` rates every model Brigadier drives: strengths per kind of
   work, efforts, context window. The app checks this repository for a newer revision daily. It

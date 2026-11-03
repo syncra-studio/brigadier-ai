@@ -519,7 +519,7 @@ impl SessionManager {
         }
         rules_file(
             std::env::var_os("BRIGADIER_MODELS_FILE"),
-            std::env::var_os("BRIGADIER_DATA_DIR").is_some_and(|dir| !dir.is_empty()),
+            brigadier_sandbox::default_data_dir().ok().as_deref(),
             &self.data_dir,
             std::env::home_dir(),
         )
@@ -855,7 +855,8 @@ impl SessionManager {
     }
     pub(super) async fn cli_models(&self, caller: &super::cli::CliCaller) -> Result<ModelsOutput> {
         let now = now_ms();
-        let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
+        let rules_path = self.models_rules_path();
+        let user = editable(&rules_path, DEFAULT_RULES)?;
         let policy = Policy::parse(&user)?;
         let shipped = self.automatic_view(&user)?.0;
         let mut models = Vec::new();
@@ -956,6 +957,7 @@ impl SessionManager {
                 .into_iter()
                 .map(|(rule, _)| Rule { rule })
                 .collect(),
+            rules_path: rules_path.display().to_string(),
         })
     }
 }
@@ -1052,41 +1054,48 @@ fn runs_as(
     )
 }
 
-/// The rules file: the one `BRIGADIER_MODELS_FILE` names, else a scratch data dir's own (a
-/// development run, `BRIGADIER_DATA_DIR`), never the user's (D31), else the user's in their home.
+/// The rules file: the one `BRIGADIER_MODELS_FILE` names, else the user's in their home when
+/// `data_dir` is the `installed` app's, else that data dir's own: a dev build or a custom data
+/// dir, however it was given, never the user's (D31).
 fn rules_file(
     named: Option<std::ffi::OsString>,
-    scratch: bool,
+    installed: Option<&std::path::Path>,
     data_dir: &std::path::Path,
     home: Option<PathBuf>,
 ) -> PathBuf {
     match named {
         Some(file) => PathBuf::from(file),
-        None if scratch => data_dir.join("models.md"),
-        None => home
+        None if installed == Some(data_dir) => home
             .unwrap_or_else(|| data_dir.to_owned())
             .join(".brigadier/models.md"),
+        None => data_dir.join("models.md"),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    /// A development run on a scratch data dir keeps its own routing: setting a row there never
+    /// A dev build or custom data dir keeps its own routing whether it came from
+    /// `BRIGADIER_DATA_DIR`, `--data-dir` or `--brigadier-data-dir`: setting a row there never
     /// writes the user's (demo8 wrote it); the installed app keeps the user's own.
     #[test]
-    fn a_scratch_data_dir_keeps_its_own_rules() {
+    fn only_the_installed_data_dir_uses_the_rules_in_home() {
         let data = std::path::Path::new("/tmp/scratch-data");
+        let installed = std::path::Path::new("/Users/me/Library/Application Support/Brigadier");
         let home = Some(PathBuf::from("/Users/me"));
         assert_eq!(
-            super::rules_file(None, true, data, home.clone()),
+            super::rules_file(None, Some(installed), data, home.clone()),
             data.join("models.md")
         );
         assert_eq!(
-            super::rules_file(None, false, data, home.clone()),
+            super::rules_file(None, None, data, home.clone()),
+            data.join("models.md")
+        );
+        assert_eq!(
+            super::rules_file(None, Some(installed), installed, home.clone()),
             PathBuf::from("/Users/me/.brigadier/models.md")
         );
         assert_eq!(
-            super::rules_file(Some("/x/m.md".into()), true, data, home),
+            super::rules_file(Some("/x/m.md".into()), Some(installed), installed, home),
             PathBuf::from("/x/m.md")
         );
     }

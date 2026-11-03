@@ -17,6 +17,8 @@ pub struct ModelsOutput {
     pub accounts: Vec<Account>,
     pub guidance: Vec<Guidance>,
     pub rules: Vec<Rule>,
+    /// The file those rules are in: the user's own to edit, not an app-internal path.
+    pub rules_path: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
