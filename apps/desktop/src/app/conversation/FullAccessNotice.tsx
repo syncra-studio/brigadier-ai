@@ -9,8 +9,10 @@ import { useQueueRows } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
-/** Conversations whose Full access notice was closed, until the app restarts. */
+/** Conversations whose Full access notice was closed, or stepped aside once shown, until the app restarts. */
 const closedNotices = new Set<string>();
+/** Conversations whose notice has shown. */
+const shownNotices = new Set<string>();
 
 /**
  * The "Full access is on" card above the composer, while a session is on Full access: the full
@@ -18,10 +20,11 @@ const closedNotices = new Set<string>();
  * and buttons; heights rounded to whole pixels, so the thread's footer stays on the pixel grid),
  * rounded like the composer. It steps aside while a question, proposal or approval
  * waits above the composer, so it never pushes that card or the thread's last lines out of
- * view, and while messages wait in the queue, so they stay right under the conversation (#448). × closes it for this conversation; "Don't show again" turns it off in Settings, where it
- * can be turned back on.
+ * view, and while messages wait in the queue, so they stay right under the conversation (#448).
+ * Once it has shown and stepped aside it stays gone, as if closed (demo12). × closes it for this
+ * conversation; "Don't show again" turns it off in Settings, where it can be turned back on.
  */
-export function FullAccessNotice({ conversation }: { conversation: Conversation }) {
+export function FullAccessNotice({ conversation, aside = false }: { conversation: Conversation; aside?: boolean }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
   const [, setClosed] = useState(0);
   // One that came while nobody could see the window is simply there when it shows again.
@@ -29,7 +32,9 @@ export function FullAccessNotice({ conversation }: { conversation: Conversation 
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
   const { rows } = useQueueRows(conversation.id);
   const queued = rows.length > 0;
-  if (!show || !full || queued || closedNotices.has(conversation.id)) return null;
+  if (show && full && (aside || queued) && shownNotices.has(conversation.id)) closedNotices.add(conversation.id);
+  if (!show || !full || aside || queued || closedNotices.has(conversation.id)) return null;
+  shownNotices.add(conversation.id);
   const close = () => {
     closedNotices.add(conversation.id);
     setClosed((count) => count + 1);

@@ -133,7 +133,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
           projectId={!conversation && resolved.kind === "session" ? (resolved.project?.id ?? null) : null}
         />
         {/* Out of the way while a decision waits above the composer (see FullAccessNotice). */}
-        {conversation && !archived && !current && !slot && <FullAccessNotice conversation={conversation} />}
+        {conversation && !archived && <FullAccessNotice conversation={conversation} aside={!!current || !!slot} />}
         <SlashCommands
           conversation={conversation}
           groups={resolved.groups}

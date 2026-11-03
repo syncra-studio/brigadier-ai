@@ -68,7 +68,7 @@ function setQueue(items: { id: string; text: string }[]): void {
   );
 }
 
-/** A message waits in the queue (#448): whether the card is there with it, and back once it left. */
+/** A message waits in the queue (#448): whether the card is there with it, and still gone once it left. */
 async function runQueued() {
   for (let tries = 0; tries < 80 && !notice(); tries += 1) await pause();
   const before = notice() !== null;
@@ -77,7 +77,7 @@ async function runQueued() {
   const rail = document.querySelector('[data-slot="message-queue-item"]') !== null;
   const withQueue = notice() !== null;
   setQueue([]);
-  for (let tries = 0; tries < 30 && !notice(); tries += 1) await pause();
+  for (let tries = 0; tries < 5 && !notice(); tries += 1) await pause();
   report({ before, rail, withQueue, after: notice() !== null });
 }
 
