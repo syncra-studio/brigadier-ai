@@ -158,3 +158,24 @@ export function backgroundRows(previews: readonly Preview[], workerName: (taskId
   });
   return rows.toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
 }
+
+/** Each card's task rows shown so far (D98). */
+const seen = new Map<string, Map<string, BackgroundRow>>();
+export const rowKey = (activity: BackgroundRow) => `${activity.id}:${activity.startedAtMs}`;
+
+/**
+ * `rows` with the ended tasks the card has shown that its CLI no longer lists: a task once in
+ * the section stays, saying how it ended (D98). One gone while it ran is not: how it ended is unknown.
+ * The session's own from before its last switch to another account or CLI leave: that CLI is
+ * gone, its work goes on in the new one, and Background history keeps them (D181).
+ */
+export function withHistory(conversationId: string, rows: BackgroundRow[], switchedAtMs = 0): BackgroundRow[] {
+  const before = (row: BackgroundRow) => row.type === "task" && row.worker === null && row.task.status !== "running" && row.startedAtMs < switchedAtMs;
+  const kept = seen.get(conversationId) ?? new Map<string, BackgroundRow>();
+  seen.set(conversationId, kept);
+  const current = rows.filter((row) => !before(row));
+  for (const row of current) if (row.type === "task") kept.set(rowKey(row), row);
+  for (const [key, row] of kept) if (before(row)) kept.delete(key);
+  const listed = new Set(rows.map(rowKey));
+  return [...current, ...[...kept.values()].filter((row) => !listed.has(rowKey(row)) && row.type === "task" && row.task.status !== "running")];
+}

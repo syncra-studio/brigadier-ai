@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { appCommand, backgroundRows } from "@/app/conversation/backgroundRows";
+import { appCommand, backgroundRows, withHistory } from "@/app/conversation/backgroundRows";
 import type { Preview, PreviewState, BackgroundTask, FileEntry, WorkerRow } from "@/ipc/generated";
 
 const preview = (id: string, name: string, command: string, startedAtMs: number, state: PreviewState = { type: "running" }, extra: Partial<Preview> = {}): Preview =>
@@ -83,4 +83,19 @@ test("every command is a Background row, the session's and its workers' (D51), e
     { event: { type: "command", itemId: "call-own", command: "sleep 40 && python3 -c 'print(6*7)'", cwd: "/work", status: "inProgress", exitCode: null, output: null, durationMs: null }, parent: "call-agent" },
   ];
   assert.deepEqual(taskRows([agent, own], inside).map((row) => [row.id, row.state]), [["task:agent", "running"]]);
+});
+
+const shownIds = (shown: ReturnType<typeof withHistory>) => shown.map((row) => row.id);
+
+const sessionTask = (id: string, startedAtMs: number, status: BackgroundTask["status"]): ReturnType<typeof withHistory>[number] => {
+  const task = { id, itemId: id, kind: "shell", label: "Sleep 4 seconds (1 of 6)", status, startedAtMs, endedAtMs: status === "running" ? null : startedAtMs + 300, outputFile: null, summary: null, lastLine: null } as BackgroundTask;
+  return { type: "task", id: `task:${id}`, startedAtMs, task, state: status === "running" ? "running" : "stopped", worker: null };
+};
+
+test("D181: a switch to another account or CLI takes the gone CLI's ended commands off the card; its new ones stay", () => {
+  const cut = [sessionTask("a", 10, "stopped"), sessionTask("b", 20, "stopped")];
+  assert.deepEqual(shownIds(withHistory("d181", cut)), ["task:a", "task:b"], "ended rows stay (D98)");
+  // The switch landed at 30: listed or only kept, the old CLI's rows leave; one started after stays.
+  assert.deepEqual(shownIds(withHistory("d181", [...cut, sessionTask("c", 40, "completed")], 30)), ["task:c"]);
+  assert.deepEqual(shownIds(withHistory("d181", [], 30)), ["task:c"]);
 });

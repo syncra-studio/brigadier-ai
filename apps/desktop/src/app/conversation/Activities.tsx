@@ -1,7 +1,7 @@
 import { useContext, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows, workerTaskRows } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows, rowKey, taskRows, withHistory, workerTaskRows } from "@/app/conversation/backgroundRows";
 import { endWords, taskEnd } from "@/app/conversation/backgroundTasks";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
@@ -38,22 +38,8 @@ const label = (activity: Activity) =>
       ? activity.task.kind === "terminal" ? commandWords(activity.task.label) : activity.task.kind === "agent" ? `Subagent: ${activity.task.label}` : activity.task.label
       : activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name);
 
-/** Each card's task rows shown so far, and the cards whose section has shown (D98). */
-const seen = new Map<string, Map<string, Activity>>();
+/** The cards whose section has shown (D98). */
 const appeared = new Set<string>();
-const rowKey = (activity: Activity) => `${activity.id}:${activity.startedAtMs}`;
-
-/**
- * `rows` with the ended tasks the card has shown that its CLI no longer lists: a task once in
- * the section stays, saying how it ended (D98). One gone while it ran is not: how it ended is unknown.
- */
-function withHistory(conversationId: string, rows: Activity[]): Activity[] {
-  const kept = seen.get(conversationId) ?? new Map<string, Activity>();
-  seen.set(conversationId, kept);
-  for (const row of rows) if (row.type === "task") kept.set(rowKey(row), row);
-  const listed = new Set(rows.map(rowKey));
-  return [...rows, ...[...kept.values()].filter((row) => !listed.has(rowKey(row)) && row.type === "task" && row.task.status !== "running")];
-}
 
 /** No background tasks. */
 const NO_TASKS: readonly BackgroundTask[] = [];
@@ -68,9 +54,12 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const cliTasks = useCliThread((s) => (s.views[conversationId] ? backgroundOf(s.views[conversationId]) : NO_TASKS));
   const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
   const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
+  const switchedAtMs = useBoard((s) => s.board?.conversationId === conversationId
+    ? Math.max(0, ...s.board.orchestratorSteps.flatMap((step) => step.kind.type === "providerTransition" && !step.kind.taskId ? [step.kind.startedAtMs] : []))
+    : 0);
   // Every background command and subagent, the session's and its workers' (D51, D97); ended ones
   // stay, saying how they ended (D98).
-  const activities = withHistory(conversationId, [...rows, ...taskRows(cliTasks, entries), ...workerTaskRows(workers, (taskId) => rowName(workers, taskId))])
+  const activities = withHistory(conversationId, [...rows, ...taskRows(cliTasks, entries), ...workerTaskRows(workers, (taskId) => rowName(workers, taskId))], switchedAtMs)
     .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   // Running ones count on the clock every live time shares (D94).
   const now = useTicking(activities.some((activity) => activity.type === "preview" || activity.task.status === "running"));
