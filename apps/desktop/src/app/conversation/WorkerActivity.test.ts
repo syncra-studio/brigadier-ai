@@ -145,10 +145,10 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   assert.equal(rendering.stripRows, 3);
   // With no worker at work, no strip.
   assert.equal(rendering.noStrip, true);
-  // Each worker that runs or waits has its own End, on its row and in its view's header; a
-  // click sends that worker's stop (UI audit M4, D199).
+  // Each worker that runs or waits has its own End on its row, never in its view's header,
+  // which keeps only the panel's close; a click sends that worker's stop (UI audit M4, D199).
   assert.deepEqual(rendering.stripStops, ["End Check active", "End Check blocked", "End Check queued"]);
-  assert.equal(rendering.headerStop, "End Check active");
+  assert.equal(rendering.headerStop, undefined);
   assert.equal(rendering.doneHeaderStop, false);
   // Its Workers list row has it too: a worker stops without being opened first (#201).
   assert.deepEqual(rendering.listStops, ["End Check queued", "End Check blocked", "End Check active"]);

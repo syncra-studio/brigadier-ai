@@ -9,7 +9,7 @@ import { type ModelGroup, SettingsCard } from "@/components/shared";
 import { Button } from "@/components/controls";
 import { Plus, Spinner, Warning, X } from "@/components/icons";
 import type { ModelRule, ModelRules } from "@/ipc/generated";
-import { readModelRules, saveModelRules } from "@/state/modelRules";
+import { readModelRules, saveModelRules, useModelRules } from "@/state/modelRules";
 import { toast } from "@/state/toasts";
 
 export const RULES = {
@@ -56,7 +56,7 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
               onClose={() => setAdding(false)}
               onSaved={(before) => {
                 setAdding(false);
-                toast("Rules added", { actions: [{ label: "Undo", run: () => void save(before) }] });
+                toast("Rules added", { actions: [{ label: "Undo", run: () => void undoAdd(before) }] });
               }}
             />
           )}
@@ -79,6 +79,13 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
       )}
     </SettingsSection>
   );
+}
+
+/** Undo outlives the render that added the rules, so it saves over the file as it is now. */
+function undoAdd(before: readonly ModelRule[]): Promise<void> {
+  const view = useModelRules.getState().view;
+  if (!view) return Promise.resolve();
+  return saveModelRules(view, view.rows, before).catch(() => toast("Couldn't undo: your rules changed."));
 }
 
 /** One rule: its sentence, "advice" in grey if it is only advice, a × to remove it; a warning line when it stops something. */

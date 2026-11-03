@@ -54,23 +54,24 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const switchedAtMs = useBoard((s) => s.board?.conversationId === conversationId
     ? Math.max(0, ...s.board.orchestratorSteps.flatMap((step) => step.kind.type === "providerTransition" && !step.kind.taskId ? [step.kind.startedAtMs] : []))
     : 0);
-  // Every background command and subagent, the session's and its workers' (D51, D97); ended ones
-  // stay, saying how they ended (D98).
+  // Every background command and subagent, the session's and its workers' (D51, D97); only
+  // running ones are listed, ended ones (failed too) live in Background history (supersedes D98).
   const activities = withHistory(conversationId, [...rows, ...taskRows(cliTasks, entries), ...workerTaskRows(workers, (taskId) => rowName(workers, taskId))], switchedAtMs)
     .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   // Running ones count on the clock every live time shares (D94).
-  const now = useTicking(activities.some((activity) => activity.type === "preview" || activity.task.status === "running"));
-  // No section while it has no row, never an empty heading (D195); ended rows keep it (D98).
+  const running = activities.filter((activity) => activity.type === "preview" || activity.task.status === "running");
+  const now = useTicking(running.length > 0);
+  // No section until something has run (D195); after that its heading keeps the History clock.
   if (!activities.length) return null;
   return (
-    <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length} collapsible
+    <SummarySection data-activities foldKey="activities" title="Background" count={running.length} unfoldOnIncrease={running.length} collapsible={running.length > 0}
       action={
         <TooltipIconButton data-slot="background-history-link" tooltip="Background history" aria-label="Background history" size="icon-xs"
           onClick={() => openPanelTab(conversationId, { type: "backgroundHistory" }, "Background history")}>
           <Clock />
         </TooltipIconButton>
       }>
-      {activities.map((activity) => (
+      {running.map((activity) => (
         <BackgroundRow key={rowKey(activity)} conversationId={conversationId} activity={activity} now={now} />
       ))}
     </SummarySection>

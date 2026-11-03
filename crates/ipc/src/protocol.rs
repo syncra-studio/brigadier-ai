@@ -689,6 +689,11 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
+    /// A local Markdown image, validated by content and bounded before returning bytes.
+    ReadLocalImage {
+        conversation_id: ConversationId,
+        path: String,
+    },
     /// Stops one of the thread's CLI's background tasks (`task_id`, the CLI's own id), or one
     /// of its worker `worker_id`'s CLI, as the CLI's own Stop does.
     StopBackgroundTask {
@@ -901,6 +906,13 @@ pub enum Request {
         conversation_id: ConversationId,
         card_id: CardId,
         decision: ApprovalDecision,
+    },
+    /// Saves pasted images and resolves composer pastes and mentions for a plain-text card answer.
+    PrepareCardAnswer {
+        conversation_id: ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
     },
     /// Answers a question card's round: one answer per question, the picked option's label or
     /// the user's own words.
@@ -1697,6 +1709,10 @@ pub enum Response {
         data: String,
         mime: String,
     },
+    ReadLocalImage {
+        data: String,
+        mime: String,
+    },
     ThreadView {
         view: brigadier_core::thread_view::ThreadView,
     },
@@ -1815,6 +1831,9 @@ pub enum Response {
         note: Option<String>,
     },
     AnswerCard,
+    PrepareCardAnswer {
+        text: String,
+    },
     AnswerQuestion,
     WriteUpFeedback {
         write_up: FeedbackWriteUp,

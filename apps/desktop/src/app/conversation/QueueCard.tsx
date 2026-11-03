@@ -2,6 +2,7 @@ import {
   ArrowCurvedRight,
   ChatCompose,
   DotsHorizontal,
+  Hamburger,
   Pencil,
   Play,
   Stack,
@@ -28,7 +29,6 @@ import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { AttachmentRef, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { deleteQueued, openQueuedAsSession, openQueuedInSideChat, resumeQueue, runQueuedHere } from "@/state/actions";
-import { HeldNote } from "@/app/conversation/HeldNote";
 import { useBoard } from "@/state/board";
 import { useQueueRows, type QueueRow } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
@@ -62,9 +62,9 @@ export function usePullQueued(): ((index: number) => Promise<void>) | null {
       const at = index < 0 ? items.length + index : index;
       const item = items[at];
       const composer = aui.composer();
-      // One the session has, or is being given, can't be written again (run2-D46).
+      // One the session has can't be written again (run2-D46).
       // Another session's words are never the user's to write again (goal 4).
-      if (!target || !conversationId || !item || item.delivered || item.deciding || item.peer || !composer.getState().isEmpty) return;
+      if (!target || !conversationId || !item || item.delivered || item.peer || !composer.getState().isEmpty) return;
       await deleteQueued(conversationId, item.id);
       target.queue.pulled.set(conversationId, at, item.mentions, item.worker ?? null);
       // One for a worker goes back to that worker (goal 8).
@@ -97,7 +97,7 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
 /**
  * The queue card on the composer rail: what waits for the running turn, one row each (glyph,
  * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. A message
- * sent while the session works shows Deciding while the session judges it (run2-D40); one it
+ * sent while the session works is an ordinary row, judged in the background (D157); one it
  * judged could run apart waits for the user's pick, "Open as a new session" or "Run here"; one
  * it sent on to a worker just leaves (D90). Its ⋯ edits
  * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
@@ -159,8 +159,8 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
           return (
             <MessageQueueItem
               key={item.id}
+              data-queue-item-id={item.id}
               dragging={dragging === item.id}
-              deciding={!!item.deciding}
               grip={
                 items.length > 1 && !item.local && (
                   <button
@@ -170,7 +170,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                     className={cn(ghostButton, "size-full cursor-grab touch-none active:cursor-grabbing")}
                     {...grip(item.id, index)}
                   >
-                    <DotsHorizontal className="size-icon-sm rotate-90" />
+                    <Hamburger className="size-icon-sm" />
                   </button>
                 )
               }
@@ -187,16 +187,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )}
               </span>
               {item.peer && <FromPeer from={item.peer.from} />}
-              {item.deciding && item.heldBy ? (
-                <HeldNote held={item.heldBy} className="min-w-24 shrink-8 truncate" />
-              ) : item.deciding ? (
-                <span
-                  title="The session is checking whether this belongs to the work in progress"
-                  className="text-muted-foreground shimmer shrink-0 text-xs motion-reduce:animate-none"
-                >
-                  Deciding
-                </span>
-              ) : item.worker ? (
+              {item.worker ? (
                 <ToWorker taskId={item.worker} />
               ) : item.offerSession && (
                 <>
@@ -251,7 +242,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem
-                    disabled={!pull || !composerEmpty || !!item.local || !!item.delivered || !!item.deciding || !!item.peer}
+                    disabled={!pull || !composerEmpty || !!item.local || !!item.delivered || !!item.peer}
                     onSelect={() => action.run(async () => pull?.(stored.indexOf(item)))}
                   >
                     <Pencil />

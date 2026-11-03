@@ -1298,7 +1298,6 @@ impl SessionManager {
                     attachments,
                     mentions,
                     queue_index,
-                    false,
                     Some(task.id.clone()),
                 )
                 .await?;

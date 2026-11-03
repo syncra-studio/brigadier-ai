@@ -66,14 +66,14 @@ test("Background rows: a spinner while a process is on its way, a green live dot
   }
 });
 
-test("a background command is a Background row, the session's or a worker's (D51), a background subagent too (D97); ended, each stays, saying how (D98)", { timeout: 90000 }, async (t) => {
+test("a background command is a Background row, the session's or a worker's (D51), a background subagent too (D97); ended, each leaves for Background history", { timeout: 90000 }, async (t) => {
   for (const [scenario, rows] of [["tasks", ["task:a0c79", "task:bdza4j3ng"]], ["workerTasks", ["task:task-2:b7dev"]]] as const) {
     const seen = JSON.parse(await renderFixtureLive(t, `activities.html?${scenario}=1`, "activities-result", 60000)) as { running: string[]; ended: string[]; history: boolean; liveSection: boolean };
     // The session's background subagent is here (D97); a worker's is in its panel.
     assert.deepEqual(seen.running, rows);
     assert.equal(seen.liveSection, true);
-    assert.deepEqual(seen.ended, rows);
-    // Nothing runs any more: the section and its history link stay (D98).
+    // Ended rows leave; nothing runs any more, yet the heading keeps its history link.
+    assert.deepEqual(seen.ended, []);
     assert.equal(seen.history, true);
   }
 });
@@ -120,7 +120,7 @@ test("raw session/worker commands use Background once and stop only their exact 
   assert.deepEqual(seen.running, ["task:raw-browser", "task:raw-dev", "task:task-2:worker-test", "task:raw-tests", "task:task-2:b7dev"]);
   assert.equal(seen.workerName, "Demo of the fixes");
   assert.match(seen.output, /^panel:output:task:raw-browser:\d+$/, "terminal output remains invocation-bound");
-  assert.deepEqual(seen.ended, ["task:raw-browser", "task:raw-dev", "task:raw-tests", "task:task-2:b7dev"], "completed, failed and stopped commands stay, saying how (D98)");
+  assert.deepEqual(seen.ended, [], "completed, failed and stopped commands leave for Background history");
   // The worker's app still runs: the section and its history link stay.
   assert.equal(seen.history, true);
   assert.deepEqual(seen.stops, [

@@ -36,7 +36,7 @@ export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ 
   if (view.rows.length === 1) {
     return (
       <ul data-slot="workers-strip" className="flex flex-col px-1 py-1">
-        <StripRow conversationId={conversationId} taskId={view.rows[0]!} />
+        <StripRow conversationId={conversationId} taskId={view.rows[0]!} lone />
       </ul>
     );
   }

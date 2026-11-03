@@ -139,6 +139,12 @@ impl SessionManager {
         if stopped {
             return Ok(());
         }
+        {
+            // The user chose where it runs: a new run starts there.
+            let mut state = conv.state.lock().await;
+            state.failed_models.clear();
+            state.run_origin = None;
+        }
         self.prepare_provider_transition(
             &conv,
             from,
@@ -162,6 +168,15 @@ impl SessionManager {
     pub(in crate::manager) async fn limit_goes_on(&self, conv: &ConvLive) -> bool {
         let cli = {
             let state = conv.state.lock().await;
+            // A model that can't serve it: the next one its run hasn't seen fail.
+            if state.model_failed
+                && state.limit_hit.is_none()
+                && let Some(cli) = &state.cli
+            {
+                let mut tried = state.failed_models.clone();
+                tried.push(self.tried_model(&cli.model));
+                return self.next_session_model(&cli.model, &tried).is_some();
+            }
             match (&state.limit_hit, &state.cli) {
                 (Some(_), Some(cli)) => cli.clone(),
                 _ => return false,
@@ -223,6 +238,40 @@ impl SessionManager {
         if let Err(err) = result {
             tracing::warn!(conversation = %conv.id, error = %err, "could not keep provider transition intent");
         }
+    }
+
+    /// The session goes back to the model its run started on, with nothing launching: its row
+    /// goes in now, and no launch confirms it again.
+    pub(super) async fn file_session_move_back(
+        &self,
+        conv: &ConvLive,
+        mut from: ModelChoice,
+        to: ModelChoice,
+    ) {
+        if let Err(err) = self.clear_provider_transition(&conv.id).await {
+            tracing::warn!(conversation = %conv.id, error = %err, "could not clear a provider transition");
+        }
+        let account = self.runtime.account_for(&to);
+        if from.account.is_none() {
+            from.account = Some(self.runtime.account_for(&from).choice_id());
+        }
+        let mut shown = to;
+        shown.account = Some(account.choice_id());
+        self.orchestrator_step_in(
+            &conv.id,
+            None,
+            OrchestratorStepKind::ProviderTransition {
+                task_id: None,
+                id: uuid::Uuid::new_v4().to_string(),
+                cause: ProviderTransitionCause::AutomaticFallback,
+                from,
+                to: shown,
+                account_label: self.runtime.account_label(&account),
+                account,
+                started_at_ms: crate::now_ms(),
+            },
+        )
+        .await;
     }
 
     pub(in crate::manager) async fn clear_provider_transition(

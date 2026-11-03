@@ -734,12 +734,9 @@ async fn a_queued_message_cut_off_before_its_turn_began_goes_again_after_a_crash
     super::eventually("B's turn to run", || seen.took(&b, "Hold.") == 1).await;
     let sent = ok(call(&flow, &seen, &a, send(&b.0, "Wait me.")).await);
     let message = sent["message"].as_str().unwrap().to_owned();
+    let conv = flow.manager.conv(&b).unwrap();
     flow.until_in(&b, "A's message to wait, judged", |board| {
-        board
-            .queue
-            .items
-            .iter()
-            .any(|item| item.id == message && !item.deciding)
+        !conv.is_judging() && board.queue.items.iter().any(|item| item.id == message)
     })
     .await;
     let reached = Arc::new(tokio::sync::Notify::new());

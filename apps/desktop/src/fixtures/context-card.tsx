@@ -6,6 +6,7 @@
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { ConversationToolbar } from "@/app/shell/ConversationToolbar";
@@ -55,6 +56,13 @@ function Fixture() {
   const { panel, workspace } = useSidePanel(id, true, false, "project");
   const [result, setResult] = useState("");
   const [wide, setWide] = useState(false);
+  // The pane follows the window in one frame, as in the app. Narrowed before the window, it would
+  // read as a side panel taking the room, and the card would wait behind its button.
+  useEffect(() => {
+    const follow = () => flushSync(() => setWide(window.innerWidth >= 1400));
+    window.addEventListener("resize", follow);
+    return () => window.removeEventListener("resize", follow);
+  }, []);
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -89,12 +97,10 @@ function Fixture() {
         seen.keptAfterClick = floating();
         // The window itself changes size (the summary floats or pins on that, not on a side panel).
         void fixtureInput({ type: "viewport", width: 1400, height: 900 });
-        setWide(true);
       } },
       { ready: () => layout() !== "float", act: () => {
         seen.keptAfterWiden = beside();
         void fixtureInput({ type: "viewport", width: 1300, height: 900 });
-        setWide(false);
       } },
       // The popover opens a frame or more after the layout floats again; a card that closed never does.
       { ready: () => layout() === "float" && floating(), act: () => {

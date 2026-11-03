@@ -3,7 +3,7 @@
 use brigadier_providers::KindFacts as _;
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use brigadier_providers::{LimitHit, LimitKind, Origin, TurnInput};
+use brigadier_providers::{LimitHit, LimitKind, Origin, TurnInput, TurnStatus};
 use serde::{Deserialize, Serialize};
 
 use super::TaskLive;
@@ -26,115 +26,6 @@ struct Transition {
     to: ModelChoice,
     cause: ProviderTransitionCause,
     wait_tries: u32,
-}
-
-#[cfg(test)]
-mod rules_tests {
-    use crate::manager::flow::{Flow, Options, Reply};
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn quota_moves_adjust_effort_and_obey_fallback_rules() {
-        let flow = Flow::start(
-            "quota-model-rules",
-            Options::default(),
-            Arc::new(|turn| {
-                Box::pin(async move {
-                    if turn.input.contains("Start a worker.") {
-                        turn.start_worker("worker", "Reply once.").await;
-                    }
-                    Reply::text("Done.")
-                })
-            }),
-        )
-        .await;
-        flow.say("Start a worker.").await;
-        let board = flow.settled().await;
-        let mut task = Flow::task(&board, 1).clone();
-        task.route.choice.model = Some("opus".into());
-        task.route.choice.effort = Some("high".into());
-        // An effort that was pinned at start still yields to a newly set cap on a move.
-        task.plain
-            .as_mut()
-            .unwrap()
-            .quota_policy
-            .as_mut()
-            .unwrap()
-            .pin
-            .effort = Some("high".into());
-        std::fs::write(
-            flow.manager.models_rules_path(),
-            "- effort-ceiling: medium\n",
-        )
-        .unwrap();
-        let choices = flow.manager.worker_quota_choices(&task).await;
-        assert!(!choices.is_empty(), "the cap refused the pinned worker");
-        assert!(
-            choices
-                .iter()
-                .all(|choice| choice.effort.as_deref() == Some("medium")),
-            "effort cap bypassed: {choices:?}"
-        );
-
-        task.plain
-            .as_mut()
-            .unwrap()
-            .quota_policy
-            .as_mut()
-            .unwrap()
-            .pin
-            .effort = None;
-        std::fs::write(
-            flow.manager.models_rules_path(),
-            "- forbid for Fallback: *\n",
-        )
-        .unwrap();
-        let choices = flow.manager.worker_quota_choices(&task).await;
-        assert!(!choices.is_empty());
-        assert!(
-            choices
-                .iter()
-                .all(|choice| choice.provider == task.route.choice.provider),
-            "fallback rule bypassed: {choices:?}"
-        );
-        // A named work used to bypass Fallback entirely.
-        task.plain
-            .as_mut()
-            .unwrap()
-            .quota_policy
-            .as_mut()
-            .unwrap()
-            .work = Some("Docs".into());
-        std::fs::write(flow.manager.models_rules_path(), "| Docs | claude | opus | high | Own |\n| Docs | codex | default | high | Other |\n- forbid for Fallback: *\n").unwrap();
-        let choices = flow.manager.worker_quota_choices(&task).await;
-        assert!(!choices.is_empty());
-        assert!(
-            choices
-                .iter()
-                .all(|choice| choice.provider == task.route.choice.provider),
-            "named work bypassed Fallback: {choices:?}"
-        );
-        std::fs::write(flow.manager.models_rules_path(), "| Docs | claude | opus | high | Own |\n| Docs | codex | default | high | Other |\n- effort-ceiling for Docs: medium\n- effort-floor for Fallback: high\n").unwrap();
-        let choices = flow.manager.worker_quota_choices(&task).await;
-        assert!(!choices.is_empty());
-        assert!(
-            choices
-                .iter()
-                .all(|choice| choice.provider == task.route.choice.provider
-                    && choice.effort.as_deref() == Some("medium")),
-            "conflicting move bounds ignored: {choices:?}"
-        );
-        // Floors also adjust an already-running worker on its own agent.
-        task.route.choice.effort = Some("medium".into());
-        std::fs::write(
-            flow.manager.models_rules_path(),
-            "- effort-floor for Docs: high\n",
-        )
-        .unwrap();
-        let choices = flow.manager.worker_quota_choices(&task).await;
-        assert_eq!(choices[0].effort.as_deref(), Some("high"));
-        flow.stop().await;
-    }
 }
 
 impl SessionManager {
@@ -219,6 +110,233 @@ impl SessionManager {
         });
     }
 
+    /// Its CLI gave up on its model (at capacity, overloaded, a server or network error): the
+    /// worker goes on at once with the next model its run hasn't seen fail, with the usual
+    /// "Switched" row. With none left, its turn ends as a failed one does and says so.
+    pub(in crate::manager) fn move_off_failed_model(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        failure: AttemptEnd,
+    ) {
+        let (manager, live, task) = (self.arc(), live.clone(), task.clone());
+        // Never close the CLI from its own event pump: its close waits for that pump.
+        self.spawn(async move {
+            manager.go_on_past_failed_model(&live, &task, failure).await;
+        });
+    }
+
+    async fn go_on_past_failed_model(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        failure: AttemptEnd,
+    ) {
+        let mut failure = failure;
+        loop {
+            let settled = live.settle.lock().await;
+            let rerouting = live.reroute.lock().await;
+            let Ok(task) = self.task_by_id(&task.conversation_id, &task.id).await else {
+                return;
+            };
+            let tried = {
+                let mut state = live.state.lock().await;
+                // A stop, a pause or its session's message took it meanwhile.
+                if task.state.is_final()
+                    || super::explicitly_paused(&task)
+                    || state.stopping
+                    || state.busy
+                {
+                    return;
+                }
+                state
+                    .run_origin
+                    .get_or_insert_with(|| task.route.choice.clone());
+                let failed = self.tried_model(&task.route.choice);
+                if !state.failed_models.contains(&failed) {
+                    state.failed_models.push(failed);
+                }
+                state.failed_models.clone()
+            };
+            let Some(target) = self.next_worker_model(&task, &tried).await else {
+                drop((rerouting, settled));
+                return self
+                    .nothing_takes_worker(live, &task, failure, &tried)
+                    .await;
+            };
+            let mut from = task.route.choice.clone();
+            from.account = Some(match live.cli().await {
+                Some(cli) => cli.account.choice_id(),
+                None => self.runtime.account_for(&from).choice_id(),
+            });
+            let intent = Transition {
+                id: uuid::Uuid::new_v4().to_string(),
+                from,
+                to: target,
+                cause: ProviderTransitionCause::AutomaticFallback,
+                wait_tries: 0,
+            };
+            let closing = failure.clone();
+            let closed = self
+                .update_task(&task.conversation_id, &task.id, |task| {
+                    fallback::end_attempt(task, Some(closing));
+                    task.error = None;
+                })
+                .await;
+            if let Err(err) = closed {
+                tracing::warn!(task = %task.id, error = %err, "could not record a failed model");
+            }
+            let why = "its model could not serve it (at capacity or failing); continue from the \
+                       worker's records and check git before repeating work";
+            let moved = self.move_worker(live, &task, &intent, why, false).await;
+            drop((rerouting, settled));
+            let task = match moved {
+                Ok(Some(task)) => task,
+                Ok(None) => return,
+                Err(err) => {
+                    tracing::warn!(task = %task.id, error = %err, "could not move a worker off its failed model");
+                    return self
+                        .nothing_takes_worker(live, &task, failure, &tried)
+                        .await;
+                }
+            };
+            // Not `message_worker`: its quota cancel would take the intent its launch confirms.
+            let Err(err) = self
+                .send_worker_text(&task.conversation_id, &task, super::RESUME_WORDS.into())
+                .await
+            else {
+                return;
+            };
+            // That one could not start either: the next goes on.
+            tracing::info!(task = %task.id, error = %err, "the model a worker moved to could not start");
+            failure = AttemptEnd::Error {
+                kind: brigadier_providers::ErrorKind::Process,
+                message: err.to_string(),
+            };
+        }
+    }
+
+    /// The first model the worker may move to that its run hasn't seen fail, on an account
+    /// that can take it.
+    async fn next_worker_model(
+        &self,
+        task: &Task,
+        tried: &[fallback::TriedModel],
+    ) -> Option<ModelChoice> {
+        let session = self.last_worker_native_id(task).await;
+        for mut choice in self.worker_move_choices(task).await {
+            if tried.contains(&self.tried_model(&choice)) {
+                continue;
+            }
+            let model = self
+                .runs_as(choice.provider, choice.model.as_deref(), None)
+                .0;
+            let account = crate::accounts::ready(
+                &self.core.settings(),
+                choice.provider,
+                model.as_deref(),
+                &self
+                    .runtime
+                    .resume_candidates(choice.provider, session.as_deref()),
+                &[],
+                now_ms(),
+            );
+            if let Some(account) = account {
+                choice.account = Some(account.choice_id());
+                return Some(choice);
+            }
+        }
+        None
+    }
+
+    /// Nothing can take the worker: its run is over, it goes back to the model the run started
+    /// on (its next message tries that first), and its turn ends as a failed one does, saying
+    /// so.
+    async fn nothing_takes_worker(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        failure: AttemptEnd,
+        tried: &[fallback::TriedModel],
+    ) {
+        let AttemptEnd::Error { kind, message } = failure.clone() else {
+            return;
+        };
+        let origin = live.state.lock().await.run_origin.clone();
+        live.end_model_run().await;
+        // A stop or a pause took it meanwhile: its end is theirs.
+        let Some((task, back_on)) = self.back_to_run_origin(live, task, failure, origin).await
+        else {
+            return;
+        };
+        live.set_cutoff(AttemptEnd::Error {
+            kind,
+            message: fallback::nothing_takes_it(&message, tried, back_on.as_ref()),
+        })
+        .await;
+        self.plain_turn_ended(live, &task, TurnStatus::Failed).await;
+    }
+
+    /// The worker's route goes back to `origin`, with its row in its session's thread now, as
+    /// nothing launches until its next message. `None`: a stop or a pause took it meanwhile.
+    /// The model is `None` when it stayed: on `origin` already, or the move could not be
+    /// recorded.
+    async fn back_to_run_origin(
+        &self,
+        live: &Arc<TaskLive>,
+        task: &Task,
+        failure: AttemptEnd,
+        origin: Option<ModelChoice>,
+    ) -> Option<(Task, Option<ModelChoice>)> {
+        let _settled = live.settle.lock().await;
+        let _rerouting = live.reroute.lock().await;
+        let task = self
+            .task_by_id(&task.conversation_id, &task.id)
+            .await
+            .ok()?;
+        if task.state.is_final() || super::explicitly_paused(&task) {
+            return None;
+        }
+        let origin = origin.filter(|origin| !fallback::same_model(origin, &task.route.choice));
+        let Some(origin) = origin else {
+            return Some((task, None));
+        };
+        let account = self.runtime.account_for(&origin);
+        let mut from = task.route.choice.clone();
+        from.account = Some(match live.cli().await {
+            Some(cli) => cli.account.choice_id(),
+            None => self.runtime.account_for(&from).choice_id(),
+        });
+        let intent = Transition {
+            id: uuid::Uuid::new_v4().to_string(),
+            from,
+            to: origin.clone(),
+            cause: ProviderTransitionCause::AutomaticFallback,
+            wait_tries: 0,
+        };
+        let closed = self
+            .update_task(&task.conversation_id, &task.id, |task| {
+                fallback::end_attempt(task, Some(failure));
+            })
+            .await;
+        if let Err(err) = closed {
+            tracing::warn!(task = %task.id, error = %err, "could not record a failed model");
+        }
+        let why = "nothing else could serve it, so it went back to the model it started on; \
+                   continue from the worker's records and check git before repeating work";
+        let task = match self.move_worker(live, &task, &intent, why, false).await {
+            Ok(Some(task)) => task,
+            Ok(None) => return None,
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not move a worker back to its model");
+                return Some((task, None));
+            }
+        };
+        self.file_worker_move_now(&task, intent, origin.clone(), &account)
+            .await;
+        Some((task, Some(origin)))
+    }
+
     pub(in crate::manager) async fn cancel_worker_quota(
         &self,
         live: &TaskLive,
@@ -250,6 +368,21 @@ impl SessionManager {
         .await
     }
 
+    /// The choices of a `Work`'s routing rows, in its order.
+    fn work_choices(&self, work: &str) -> Vec<ModelChoice> {
+        self.work_rows(work)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| ModelChoice {
+                provider: row.agent,
+                model: (!row.model.eq_ignore_ascii_case("default")).then(|| row.model.clone()),
+                effort: row.effort,
+                fast: None,
+                account: None,
+            })
+            .collect()
+    }
+
     async fn worker_quota_choices(&self, task: &Task) -> Vec<ModelChoice> {
         let settings = self.core.settings();
         let policy = task
@@ -262,24 +395,51 @@ impl SessionManager {
         if settings.switch_providers
             && let Some(policy) = policy
         {
-            let work = policy
-                .work
-                .as_deref()
-                .unwrap_or(crate::manager::models::FALLBACK_WORK);
-            choices.extend(
-                self.work_rows(work)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|row| ModelChoice {
-                        provider: row.agent,
-                        model: (!row.model.eq_ignore_ascii_case("default"))
-                            .then(|| self.listed_model(row.agent, &row.model)),
-                        effort: row.effort,
-                        fast: None,
-                        account: None,
-                    }),
-            );
+            let rows = match policy.work.as_deref() {
+                Some(work) => self.work_choices(work),
+                None => self.fallback_rows(),
+            };
+            choices.extend(rows);
         }
+        self.allowed_worker_choices(task, choices).await
+    }
+
+    /// Where a worker can move off its model: its own model (another account of it), the next
+    /// rows of its Work, then the Fallback rows. Another agent's rows need "another agent when
+    /// all are out" on; its pins and its rules hold either way. A legacy worker, with no policy
+    /// kept, stays on its own.
+    async fn worker_move_choices(&self, task: &Task) -> Vec<ModelChoice> {
+        let settings = self.core.settings();
+        let mut own = task.route.choice.clone();
+        own.account = None;
+        let mut rows = Vec::new();
+        if let Some(policy) = task
+            .plain
+            .as_ref()
+            .and_then(|plain| plain.quota_policy.as_ref())
+        {
+            if let Some(work) = policy.work.as_deref() {
+                rows = self.after_row_of(self.work_choices(work), &own);
+            }
+            rows.extend(self.after_row_of(self.fallback_rows(), &own));
+            rows.retain(|row| row.provider == own.provider || settings.switch_providers);
+        }
+        let mut choices = vec![own];
+        choices.extend(rows);
+        self.allowed_worker_choices(task, choices).await
+    }
+
+    /// What of `choices` this worker may run on: its agents on, its pins, its rules, its grants.
+    async fn allowed_worker_choices(
+        &self,
+        task: &Task,
+        choices: Vec<ModelChoice>,
+    ) -> Vec<ModelChoice> {
+        let settings = self.core.settings();
+        let policy = task
+            .plain
+            .as_ref()
+            .and_then(|plain| plain.quota_policy.as_ref());
         let mut allowed = Vec::new();
         for choice in choices {
             let work = policy.and_then(|p| p.work.as_deref());
@@ -633,6 +793,25 @@ impl SessionManager {
         }
     }
 
+    /// Nothing launches now: its move's row goes in now, and no launch confirms it again.
+    async fn file_worker_move_now(
+        &self,
+        task: &Task,
+        intent: Transition,
+        to: ModelChoice,
+        account: &AccountRef,
+    ) {
+        let path = self.worker_record(task).join("quota-transition.json");
+        let _ = blocking(move || {
+            std::fs::remove_file(path).or_else(|err| match err.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(Error::Invalid(err.to_string())),
+            })
+        })
+        .await;
+        self.file_worker_transition(task, intent, to, account).await;
+    }
+
     /// The one switch row of a worker's move (goal 1), in its session's thread.
     async fn file_worker_transition(
         &self,
@@ -783,7 +962,7 @@ impl SessionManager {
         );
         let choices = match &named {
             Some(choice) => vec![choice.clone()],
-            None => self.worker_quota_choices(&task).await,
+            None => self.worker_move_choices(&task).await,
         };
         let session = self.last_worker_native_id(&task).await;
         let mut target = None;
@@ -835,6 +1014,8 @@ impl SessionManager {
         target.account = Some(account.choice_id());
         self.cancel_worker_quota(&live, &task).await?;
         live.state.lock().await.quota_cancelled = false;
+        // Its session chose where it runs: a new run starts there.
+        live.end_model_run().await;
         let mut from = wait
             .as_ref()
             .and_then(|wait| wait.model.clone())
@@ -852,16 +1033,7 @@ impl SessionManager {
             return Err(Error::Invalid("the worker was stopped meanwhile".into()));
         };
         if !goes_on {
-            // Nothing launches now: its row goes in now, and no launch confirms it again.
-            let path = self.worker_record(&task).join("quota-transition.json");
-            let _ = blocking(move || {
-                std::fs::remove_file(path).or_else(|err| match err.kind() {
-                    std::io::ErrorKind::NotFound => Ok(()),
-                    _ => Err(Error::Invalid(err.to_string())),
-                })
-            })
-            .await;
-            self.file_worker_transition(&task, intent, target.clone(), &account)
+            self.file_worker_move_now(&task, intent, target.clone(), &account)
                 .await;
             return Ok((target, account));
         }
@@ -886,5 +1058,114 @@ impl SessionManager {
             return Err(err);
         }
         Ok((target, account))
+    }
+}
+
+#[cfg(test)]
+mod rules_tests {
+    use crate::manager::flow::{Flow, Options, Reply};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn quota_moves_adjust_effort_and_obey_fallback_rules() {
+        let flow = Flow::start(
+            "quota-model-rules",
+            Options::default(),
+            Arc::new(|turn| {
+                Box::pin(async move {
+                    if turn.input.contains("Start a worker.") {
+                        turn.start_worker("worker", "Reply once.").await;
+                    }
+                    Reply::text("Done.")
+                })
+            }),
+        )
+        .await;
+        flow.say("Start a worker.").await;
+        let board = flow.settled().await;
+        let mut task = Flow::task(&board, 1).clone();
+        task.route.choice.model = Some("opus".into());
+        task.route.choice.effort = Some("high".into());
+        // An effort that was pinned at start still yields to a newly set cap on a move.
+        task.plain
+            .as_mut()
+            .unwrap()
+            .quota_policy
+            .as_mut()
+            .unwrap()
+            .pin
+            .effort = Some("high".into());
+        std::fs::write(
+            flow.manager.models_rules_path(),
+            "- effort-ceiling: medium\n",
+        )
+        .unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty(), "the cap refused the pinned worker");
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.effort.as_deref() == Some("medium")),
+            "effort cap bypassed: {choices:?}"
+        );
+
+        task.plain
+            .as_mut()
+            .unwrap()
+            .quota_policy
+            .as_mut()
+            .unwrap()
+            .pin
+            .effort = None;
+        std::fs::write(
+            flow.manager.models_rules_path(),
+            "- forbid for Fallback: *\n",
+        )
+        .unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty());
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.provider == task.route.choice.provider),
+            "fallback rule bypassed: {choices:?}"
+        );
+        // A named work used to bypass Fallback entirely.
+        task.plain
+            .as_mut()
+            .unwrap()
+            .quota_policy
+            .as_mut()
+            .unwrap()
+            .work = Some("Docs".into());
+        std::fs::write(flow.manager.models_rules_path(), "| Docs | claude | opus | high | Own |\n| Docs | codex | default | high | Other |\n- forbid for Fallback: *\n").unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty());
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.provider == task.route.choice.provider),
+            "named work bypassed Fallback: {choices:?}"
+        );
+        std::fs::write(flow.manager.models_rules_path(), "| Docs | claude | opus | high | Own |\n| Docs | codex | default | high | Other |\n- effort-ceiling for Docs: medium\n- effort-floor for Fallback: high\n").unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty());
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.provider == task.route.choice.provider
+                    && choice.effort.as_deref() == Some("medium")),
+            "conflicting move bounds ignored: {choices:?}"
+        );
+        // Floors also adjust an already-running worker on its own agent.
+        task.route.choice.effort = Some("medium".into());
+        std::fs::write(
+            flow.manager.models_rules_path(),
+            "- effort-floor for Docs: high\n",
+        )
+        .unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert_eq!(choices[0].effort.as_deref(), Some("high"));
+        flow.stop().await;
     }
 }

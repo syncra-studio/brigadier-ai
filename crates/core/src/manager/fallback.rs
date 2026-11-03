@@ -5,7 +5,7 @@
 use brigadier_providers::KindFacts as _;
 use std::time::Duration;
 
-use brigadier_providers::{ErrorKind, LimitHit, LimitKind, ProviderError};
+use brigadier_providers::{ErrorKind, LimitHit, LimitKind, ProviderError, ProviderKind};
 
 use super::SessionManager;
 use crate::model::ModelChoice;
@@ -21,11 +21,15 @@ const RESET_SPREAD_MS: u64 = 60_000;
 /// Provider checks this close together make one retry of the work waiting for quota.
 const PROVIDER_CHECK_SETTLE: Duration = Duration::from_secs(2);
 
+/// What a session hears when it goes on, in the same CLI session, on another model.
+pub(crate) const CONTINUE_ON_MODEL: &str = "[Your last turn stopped early: its model could not serve it. You now run on another model, in the same session. Carry on from where you stopped. Don't redo anything you already did.]";
+
 /// What a worker's error means for its task.
 pub(crate) enum ErrorVerdict {
     /// Its turn ends early: its session hears why when the turn is over.
     HandOff(AttemptEnd),
-    /// A transient error (overloaded, server, network).
+    /// Its model can't serve it now (at capacity, overloaded, a server or network error): the
+    /// next model of its routing goes on with it.
     Transient,
     /// The task's error.
     Keep,
@@ -57,9 +61,59 @@ pub(crate) fn verdict(error: &ProviderError) -> ErrorVerdict {
                 message: error.message.clone(),
             })
         }
-        ErrorKind::Overloaded | ErrorKind::Server | ErrorKind::Network => ErrorVerdict::Transient,
+        kind if kind_model_failed(kind) => ErrorVerdict::Transient,
         _ => ErrorVerdict::Keep,
     }
+}
+
+/// Whether an error of `kind` says its model can't serve it now, which another model may get
+/// past.
+pub(crate) fn kind_model_failed(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::Overloaded | ErrorKind::Server | ErrorKind::Network
+    )
+}
+
+/// Whether its CLI gave up on `error` because its model can't serve it now.
+pub(crate) fn model_failed(error: &ProviderError) -> bool {
+    matches!(verdict(error), ErrorVerdict::Transient)
+}
+
+/// A model one run tried and saw fail this way: what it runs as, so `opus`,
+/// `claude-opus-5-5` and a CLI's default count as one.
+pub(crate) type TriedModel = (ProviderKind, Option<String>);
+
+/// What a failed turn says when nothing could take the work: `back_on`, the model its run
+/// started on, where it went back to.
+pub(crate) fn nothing_takes_it(
+    message: &str,
+    tried: &[TriedModel],
+    back_on: Option<&ModelChoice>,
+) -> String {
+    let models = tried
+        .iter()
+        .map(|(provider, model)| match model {
+            Some(model) => format!("{} {model}", provider.label()),
+            None => format!("{}'s default model", provider.label()),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let back = back_on.map_or(String::new(), |choice| {
+        format!(
+            " It is back on {}; its next message tries that first.",
+            model_label(choice)
+        )
+    });
+    format!(
+        "{} Nothing else in its routing can take it now (tried {models}).{back}",
+        message.trim()
+    )
+}
+
+/// Whether `a` and `b` are one choice of model and effort, whichever account each names.
+pub(crate) fn same_model(a: &ModelChoice, b: &ModelChoice) -> bool {
+    a.provider == b.provider && a.model == b.model && a.effort == b.effort
 }
 
 impl SessionManager {
@@ -81,6 +135,27 @@ impl SessionManager {
                 manager.retry_waiting_work().await;
             }
         });
+    }
+
+    /// What `choice` counts as in a run's list of models that failed.
+    pub(super) fn tried_model(&self, choice: &ModelChoice) -> TriedModel {
+        let model = self
+            .runs_as(choice.provider, choice.model.as_deref(), None)
+            .0;
+        (choice.provider, model)
+    }
+
+    /// `rows`, starting from the one after `from`'s own row (where it has one).
+    pub(super) fn after_row_of(
+        &self,
+        mut rows: Vec<ModelChoice>,
+        from: &ModelChoice,
+    ) -> Vec<ModelChoice> {
+        let from = self.tried_model(from);
+        if let Some(at) = rows.iter().position(|row| self.tried_model(row) == from) {
+            rows.rotate_left(at + 1);
+        }
+        rows
     }
 
     /// Everything that waits for quota looks again, now: after the user changed their rules,
