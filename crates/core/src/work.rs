@@ -2336,14 +2336,6 @@ pub struct MergedTurnChanges {
     pub stat: DiffStat,
 }
 
-/// The files named before confirming a turn's start-tree restore.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnRevert {
-    pub expected_tree: String,
-    pub changed_after: Vec<String>,
-}
-
 /// A file Undo or Reapply leaves as it is, with why in plain words.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

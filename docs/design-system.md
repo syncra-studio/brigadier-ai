@@ -230,9 +230,9 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Thread cards | `Action card/Question` | `app/conversation/QuestionAction.tsx` | `QuestionAction` | |
 | Thread cards | `Action card/Plan` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Thread cards | `Phase plan action` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Thread cards | `Changes file row` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
+| Thread cards | `Changes file row` | — | — | Pen only: the code was removed with the in-thread Changes card (D174) |
 | Thread cards | `Merge warning row` | — | — | Pen only: the code was removed in b1014e45c |
-| Thread cards | `Revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
+| Thread cards | `Revert confirm row` | — | — | Pen only: the code was removed with the in-thread Changes card (D174) |
 | Thread cards | `Open pill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
 | Thread cards | `Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
 | Thread cards | `Plan frame` | — | — | Pen only: the code was removed in cb94ccca9 |

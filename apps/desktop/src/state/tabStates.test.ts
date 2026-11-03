@@ -4,7 +4,7 @@ import { test } from "node:test";
 import type { Conversation, EventEnvelope } from "@/ipc/generated";
 import { fromSnapshot, rowActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
-import { TAB_STATES, TAB_STATE_WORDS, SESSION_STATUS_WORDS, applySettledTabEvents, isTaskTab, nothingToMerge, sessionStatus, settledByTab, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
+import { TAB_STATES, TAB_STATE_WORDS, SESSION_STATUS_WORDS, applySettledTabEvents, isTaskTab, sessionStatus, settledByTab, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
 
 const quiet = { running: false, awaiting: null, workers: 0 } as const;
 
@@ -63,11 +63,6 @@ test("D61: a session's turn end looks at git again, and only work all on the bas
     m: { state: "merged", ahead: 0, landed: true },
     n: { landed: true },
   });
-  assert.equal(nothingToMerge({ landed: true }), true, "committed and pushed in one turn, never ready");
-  assert.equal(nothingToMerge({ state: "merged", ahead: 0, landed: false }), false, "an uncommitted edit since");
-  assert.equal(nothingToMerge({ state: "merged" }), true, "just merged, before the fresh look");
-  assert.equal(nothingToMerge({ state: "ready", ahead: 9, landed: false }), false);
-  assert.equal(nothingToMerge(undefined), false);
 });
 
 test("a failed turn needs the user until the next one runs", () => {

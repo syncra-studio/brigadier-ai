@@ -21,7 +21,7 @@ use crate::projection::Projection;
 
 use crate::work::{
     AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, QueuedMessage,
-    RequestState, RequestUndo, Task, TaskId, UserRequest,
+    RequestState, Task, TaskId, UserRequest,
 };
 use crate::{Error, Result, now_ms};
 
@@ -1813,35 +1813,6 @@ impl Core {
             return Ok(());
         }
         request.review = review;
-        let event = DomainEvent::RequestUpdated { request };
-        let stored = self
-            .record(vec![(streams::conversation(id), event.clone())])
-            .await?;
-        if let Some(board) = boards.get_mut(id) {
-            board.apply(&event, stored[0]);
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn set_request_undo(
-        &self,
-        id: &ConversationId,
-        request_id: &str,
-        undo: RequestUndo,
-    ) -> Result<()> {
-        let mut boards = self.boards.lock().await;
-        if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
-            boards.insert(id.clone(), board);
-        }
-        let Some(mut request) = boards
-            .get(id)
-            .and_then(|board| board.requests.get(request_id))
-            .cloned()
-        else {
-            return Err(Error::NotFound(format!("request {request_id}")));
-        };
-        request.undo = Some(undo);
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])

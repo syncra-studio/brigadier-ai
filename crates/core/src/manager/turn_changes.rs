@@ -1,10 +1,9 @@
-//! Changes cards are git diffs of retained turn trees. No tool-call ownership inference.
+//! Turn changes are git diffs of retained turn trees. No tool-call ownership inference.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use brigadier_git::Oid;
 use brigadier_providers::{Artifact, ProviderEvent};
 use brigadier_store::{NewEvent, StreamPage};
 use serde::{Deserialize, Serialize};
@@ -12,8 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{
-    FileReview, PendingChanges, PendingFile, PendingHunk, RequestChanges, RequestUndo, TurnRevert,
-    UndoOutcome,
+    FileReview, PendingChanges, PendingFile, PendingHunk, RequestChanges, UndoOutcome,
 };
 use crate::{Error, Result};
 
@@ -253,80 +251,6 @@ impl SessionManager {
                 .await?;
         }
         Ok(())
-    }
-
-    /// Read the confirmation's complete list of files changed since this turn ended.
-    pub async fn prepare_turn_revert(
-        &self,
-        id: ConversationId,
-        request: String,
-    ) -> Result<TurnRevert> {
-        let (checkout, _) = self
-            .changes_checkout(&id)
-            .ok_or_else(|| Error::Invalid("the session's checkout is unavailable".into()))?;
-        let turn = self
-            .snapshot_turn_record(&id, &request)
-            .await?
-            .ok_or_else(|| Error::NotFound("turn snapshot".into()))?;
-        let (git, session) = (self.git.clone(), id.0.clone());
-        blocking(move || {
-            let repo = git.open(&checkout).map_err(git_error)?;
-            let tree = repo.snapshot_tree().map_err(git_error)?;
-            let end = repo
-                .turn_tree(&session, turn.number, true)
-                .map_err(git_error)?;
-            Ok(TurnRevert {
-                expected_tree: tree.0.clone(),
-                changed_after: repo.diff_scope(&end, &tree).map_err(git_error)?.1,
-            })
-        })
-        .await
-    }
-
-    /// Restore the start tree only after the confirmation names later files and supplies the
-    /// exact tree the user reviewed. A newer edit invalidates that confirmation.
-    pub async fn revert_turn(
-        &self,
-        id: ConversationId,
-        request: String,
-        expected_tree: String,
-    ) -> Result<UndoOutcome> {
-        let lock = self.turn_snapshots.lock(&id);
-        let _guard = lock.lock().await;
-        if let Ok(conv) = self.conv(&id)
-            && conv.is_busy().await
-        {
-            return Err(Error::Invalid("the session is still working".into()));
-        }
-        let (checkout, _) = self
-            .changes_checkout(&id)
-            .ok_or_else(|| Error::Invalid("the session's checkout is unavailable".into()))?;
-        let turn = self
-            .snapshot_turn_record(&id, &request)
-            .await?
-            .ok_or_else(|| Error::NotFound("turn snapshot".into()))?;
-        let (git, session) = (self.git.clone(), id.0.clone());
-        let restored = blocking(move || {
-            git.open(&checkout)
-                .map_err(git_error)?
-                .revert_turn(&session, turn.number, &Oid(expected_tree))
-                .map_err(git_error)
-        })
-        .await?;
-        self.core
-            .set_request_undo(
-                &id,
-                &request,
-                RequestUndo {
-                    reverted: true,
-                    commits: Vec::new(),
-                },
-            )
-            .await?;
-        Ok(UndoOutcome {
-            restored,
-            held: Vec::new(),
-        })
     }
 
     /// Only explicit pending review entries wait; snapshot turns alone create no review queue.

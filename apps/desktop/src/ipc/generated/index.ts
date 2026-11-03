@@ -460,7 +460,6 @@ export type { TrialState } from "./TrialState";
 export type { TrustBefore } from "./TrustBefore";
 export type { TrustFailure } from "./TrustFailure";
 export type { TurnEnd } from "./TurnEnd";
-export type { TurnRevert } from "./TurnRevert";
 export type { TurnStatus } from "./TurnStatus";
 export type { UiMeasurements } from "./UiMeasurements";
 export type { UndoMetrics } from "./UndoMetrics";

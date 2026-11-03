@@ -27,7 +27,7 @@ fn git_out(repo: &std::path::Path, args: &[&str]) -> String {
 }
 
 #[tokio::test]
-async fn turn_snapshot_revert_restores_the_start_tree_and_refuses_newer_edits() {
+async fn turn_snapshot_reviews_the_turn_diff() {
     let flow = Flow::start(
         "20261022-0805-take-over-5-sessions-w178-revert",
         Options::default(),
@@ -75,33 +75,6 @@ async fn turn_snapshot_revert_restores_the_start_tree_and_refuses_newer_edits() 
         .unwrap();
     assert_eq!(review.insertions, 2);
     assert!(review.patch.contains("+two"));
-    let (checkout, _) = flow.manager.changes_checkout(&id).unwrap();
-    std::fs::write(checkout.join("later.txt"), "after the turn\n").unwrap();
-    let preview = flow
-        .manager
-        .prepare_turn_revert(id.clone(), request.id.clone())
-        .await
-        .unwrap();
-    assert_eq!(preview.changed_after, ["later.txt"]);
-    std::fs::write(checkout.join("later.txt"), "after confirmation\n").unwrap();
-    assert!(
-        flow.manager
-            .revert_turn(id.clone(), request.id.clone(), preview.expected_tree)
-            .await
-            .is_err()
-    );
-    let preview = flow
-        .manager
-        .prepare_turn_revert(id.clone(), request.id.clone())
-        .await
-        .unwrap();
-    flow.manager
-        .revert_turn(id.clone(), request.id.clone(), preview.expected_tree)
-        .await
-        .unwrap();
-    let start = format!("refs/brigadier/s/{id}/turn-1-start");
-    assert!(git_out(&checkout, &["diff", &start, "--"]).is_empty());
-    assert!(git_out(&checkout, &["ls-files", "--others", "--exclude-standard"]).is_empty());
     flow.stop().await;
 }
 

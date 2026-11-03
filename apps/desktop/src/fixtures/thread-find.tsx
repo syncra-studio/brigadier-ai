@@ -25,8 +25,6 @@ import { createRoot } from "react-dom/client";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
-import { ChangesCard } from "@/app/conversation/ChangesCard";
-import { ViewContext } from "@/app/conversation/viewContext";
 import { mountInThread } from "@/components/conversation";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
@@ -676,20 +674,11 @@ async function drive(): Promise<void> {
       const host = document.createElement("div");
       // Inside the newest row, which is always mounted: Find searches the thread's message rows.
       [...viewport().querySelectorAll('[data-slot="aui_message-group"] > [data-thread-row]')].at(-1)!.append(host);
-      const changed: UserRequest = {
-        id: "find-files", conversationId: "long", preview: "Files", state: { type: "done" },
-        startedAtMs: start, endedAtMs: start + 1, steeredInto: null, steeredAfter: null,
-        undo: null, worked: [], quotaWait: false,
-        changes: { settled: true, stat: { insertions: 2, deletions: 0, files: ["otter.ts", "badger.ts"].map((path) => ({ path, insertions: 1, deletions: 0, binary: false })) } },
-      };
-      useBoard.setState(({ board }) => ({ board: board && { ...board, requests: { ...board.requests, [changed.id]: changed } } }));
-      const root = createRoot(host);
-      root.render(<ViewContext.Provider value={{ selection: { type: "conversation", id: "long" }, conversation, embedded: false }}><ChangesCard requestIds={[changed.id]} /></ViewContext.Provider>);
+      // Text in a button is never selectable: Find rings the button instead.
+      host.innerHTML = '<button type="button">otter.ts badger.ts</button>';
       await settle(300);
       await find("otter.ts");
-      const row = host.querySelector('[data-slot="turn-diff-file"] > button')!;
-      const style = getComputedStyle(row);
-      result["ring"] = { onRow: row.hasAttribute(ACTIVE_BUTTON), inset: parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset) <= 0 };
+      result["ring"] = host.querySelector("button")!.hasAttribute(ACTIVE_BUTTON);
       // WebKit can paint button ranges on neighbouring selectable text. They must never enter the registry.
       result["buttonMarks"] = matches()?.size ?? 0;
       const prose = document.createElement("p");
@@ -724,7 +713,6 @@ async function drive(): Promise<void> {
       await until(() => bar() === null);
       await settle(100);
       result["manualExpanded"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
-      root.unmount();
       host.remove();
     } else if (CODE) {
       // A word only in a folded code block's hidden lines: those lines mount for Find, and it counts the word (#569).

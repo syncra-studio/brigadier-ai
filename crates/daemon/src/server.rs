@@ -1380,8 +1380,6 @@ fn read_beside(request: &Request) -> bool {
             | Request::GetSessionDiff { .. }
             | Request::GetWorkerDiffs { .. }
             | Request::GetWorkerSource { .. }
-            | Request::PrepareTurnRevert { .. }
-            | Request::RevertTurn { .. }
             | Request::GetPendingChanges { .. }
             | Request::GetReviewDiff { .. }
             | Request::GetWorkspaceTree { .. }
@@ -1935,20 +1933,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.switch_branch(conversation_id, head)).await?;
             Response::SwitchBranch
         }
-        Request::PrepareTurnRevert {
-            conversation_id,
-            request_id,
-        } => Response::PrepareTurnRevert {
-            preview: heap(|| sessions.prepare_turn_revert(conversation_id, request_id)).await?,
-        },
-        Request::RevertTurn {
-            conversation_id,
-            request_id,
-            expected_tree,
-        } => Response::RevertTurn {
-            outcome: heap(|| sessions.revert_turn(conversation_id, request_id, expected_tree))
-                .await?,
-        },
         Request::GetPendingChanges {
             conversation_id,
             path,

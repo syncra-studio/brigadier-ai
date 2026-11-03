@@ -46,7 +46,6 @@ import {
   updateIndices,
 } from "@/app/conversation/blocks";
 import type { ThreadStatusProps } from "@/app/conversation/ThreadStatus";
-import { useTurnChanged } from "@/app/conversation/ChangesCard";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -160,7 +159,11 @@ export const RequestBlock: FC = () => {
   }, [holds, show]);
   const { wait: quotaWait, recovered: quotaRecovered } = useBlockQuotaRecovery(meta);
   const requestIds = meta?.requestIds;
-  const changed = useTurnChanged(requestIds ?? []);
+  // A turn that changed code (a retained git diff) keeps its answer's Details.
+  const changed = useBoard((s) => (requestIds ?? []).some((id) => {
+    const changes = s.board?.requests[id]?.changes;
+    return !!changes && (changes.stat.files.length > 0 || (changes.merged?.length ?? 0) > 0);
+  }));
   // Its model's turn runs now: what that turn offers waits for it to end, not for its workers.
   const turnRuns = useBoard((s) => {
     const board = s.board;

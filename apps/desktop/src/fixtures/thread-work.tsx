@@ -32,7 +32,6 @@ import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadS
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
 import { ComposerTargetContext, type ComposerTarget } from "@/app/conversation/composerTarget";
-import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { OpenFileContext } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
@@ -129,12 +128,6 @@ useBoard.setState({
   board: {
     ...emptyBoard(CHAT), loaded: true,
     requests: {
-      one: request("one", "done", { stat: stat([["scripts/run.mjs", 4, 1]]), settled: true }),
-      four: request("four", "done", {
-        stat: stat([["src/a.ts", 3, 1], ["src/b.ts", 2, 0], ["src/c.ts", 1, 1], ["src/notes.md", 5, 0]]),
-        held: [{ path: "src/notes.md", reason: "src/notes.md also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is." }],
-        settled: true,
-      }),
       live: request("live", "working", { stat: stat([["src/math.js", 8, 2], ["src/new.ts", 3, 0]]), settled: false }),
     },
   } as unknown as ReturnType<typeof emptyBoard>,
@@ -264,12 +257,6 @@ function Page() {
             <Case id="made-gathered">
               <MadeImages steps={[...views, ...made]} />
             </Case>
-            <Case id="turn-diff-one">
-              <ChangesCard requestIds={["one"]} />
-            </Case>
-            <Case id="turn-diff-four">
-              <ChangesCard requestIds={["four"]} />
-            </Case>
             <Case id="pill">
               <ComposerTargetContext.Provider value={capsuleTarget}>
                 <ComposerCapsule />
@@ -374,20 +361,6 @@ async function measure(): Promise<object> {
   await until(() => all("[data-slot=image-generation]", at("later")).length === 1);
   out.later = [shut, later()!.getAttribute("data-state"), text(one("[role=button]", later()!))];
 
-  // The turn's changed files, from the request's own record.
-  const card = (id: string) => ({
-    title: text(one("[data-slot=turn-diff-title]", at(id))),
-    counts: text(one("[data-slot=turn-diff-counts]", at(id))),
-    files: all("[data-slot=turn-diff-file]", at(id)).length,
-    more: text(one("[data-slot=turn-diff-more]", at(id))),
-    undo: all("button", at(id)).find((button) => /Revert/.test(button.textContent ?? "")) ?? null,
-  });
-  const oneCard = card("turn-diff-one");
-  const fourCard = card("turn-diff-four");
-  out.turnDiff = {
-    one: { ...oneCard, undo: text(oneCard.undo) },
-    four: { ...fourCard, undo: text(fourCard.undo), held: fourCard.undo?.getAttribute("title") ?? null },
-  };
   // The pill of the working request, from its record; a click opens its first file.
   await until(() => one("[data-slot=composer-capsule]", at("pill")));
   out.pill = text(one("[data-slot=composer-capsule]", at("pill")));

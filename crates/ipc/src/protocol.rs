@@ -27,8 +27,8 @@ use brigadier_core::{
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
     SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TrackedPullRequest, TrackedWork,
-    TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn,
-    WorkerDiff, WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn, WorkerDiff,
+    WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -651,17 +651,6 @@ pub enum Request {
     PinDraftAttachments {
         scope: String,
         attachments: Vec<AttachmentRef>,
-    },
-    /// Preview the later files before confirming a turn snapshot restore.
-    PrepareTurnRevert {
-        conversation_id: ConversationId,
-        request_id: String,
-    },
-    /// Restore the turn's start tree, only while the confirmed current tree still matches.
-    RevertTurn {
-        conversation_id: ConversationId,
-        request_id: String,
-        expected_tree: String,
     },
     /// The changes agents made in a session's checkout that the user hasn't kept or undone yet
     /// (the file review, a turn diff card's Undo All and Keep All): every file, or `path`'s.
@@ -1675,12 +1664,6 @@ pub enum Response {
         data: String,
     },
     PinDraftAttachments,
-    PrepareTurnRevert {
-        preview: TurnRevert,
-    },
-    RevertTurn {
-        outcome: UndoOutcome,
-    },
     GetPendingChanges {
         pending: PendingChanges,
     },

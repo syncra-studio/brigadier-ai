@@ -32,15 +32,6 @@ export function refreshSettledTabsSoon(): void {
   refreshing = setTimeout(() => { refreshing = null; void loadSettledTabs().catch(() => {}); }, 3000);
 }
 
-/**
- * Whether a session's work is all on its base with nothing left to merge, as git last told (its
- * own merge, or work its thread put on the base or its remote by itself, ready or not; D61); a
- * merge just made counts until git is asked again.
- */
-export function nothingToMerge(settled: Settled | undefined): boolean {
-  return settled?.landed ?? settled?.state === "merged";
-}
-
 /** Whether `conversation` is a session on a branch of its own, which its thread may merge or push. */
 function onOwnBranch(conversation: Conversation | undefined): boolean {
   return conversation?.setup?.type === "session" && conversation.setup.environment.type === "newWorktree";
