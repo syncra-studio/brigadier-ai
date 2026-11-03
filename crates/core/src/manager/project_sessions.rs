@@ -263,7 +263,8 @@ impl SessionManager {
                 "This session has no branch to start a new one from.".into(),
             ));
         }
-        self.check_choice(&orchestrator)?;
+        let mut orchestrator = orchestrator;
+        self.rule_choice(&mut orchestrator)?;
         let id = ConversationId::generate();
         let (prefix, _) = self.branch_prefix_of(Some(&project_id));
         let setup = Setup::from_request(

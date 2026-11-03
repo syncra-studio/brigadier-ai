@@ -807,7 +807,8 @@ async fn a_move_takes_the_fallback_row_the_rules_allow_and_never_another_model()
     );
     assert_eq!(claude.effort.as_deref(), Some("high"));
 
-    // The user's rows replace them, in order: a row the rules refuse gives way to the next.
+    // The user's rows replace them, in order: a row above the cap runs at the cap (D-L38); a row
+    // the rules refuse gives way to the next.
     let table = "| Work | Agent | Model | Effort | Reason |\n|---|---|---|---|---|\n";
     rules(&format!(
         "# My rules\n\n- effort-ceiling: high\n\n{table}\
@@ -817,12 +818,23 @@ async fn a_move_takes_the_fallback_row_the_rules_allow_and_never_another_model()
     let codex = pick(ProviderKind::Codex).unwrap();
     assert_eq!(
         (codex.model.as_deref(), codex.effort.as_deref()),
-        (Some("gpt-test"), Some("medium"))
+        (Some("gpt-test"), Some("high"))
+    );
+    rules(&format!(
+        "# My rules\n\n- forbid for Fallback: gpt-test\n\n{table}\
+         | Fallback | codex | gpt-test | xhigh | Kept out. |\n\
+         | Fallback | codex | default | medium | Mine. |\n"
+    ));
+    let codex = pick(ProviderKind::Codex).unwrap();
+    assert_eq!(
+        (codex.model.as_deref(), codex.effort.as_deref()),
+        (None, Some("medium"))
     );
 
-    // Every row for Codex refused: no model the rows don't name, only the reason.
+    // Every row for Codex refused (a cap and a minimum that can't both be met): no model the
+    // rows don't name, only the reason.
     rules(&format!(
-        "# My rules\n\n- effort-ceiling: high\n\n{table}\
+        "# My rules\n\n- effort-ceiling: high\n- effort-floor codex: xhigh\n\n{table}\
          | Fallback | codex | gpt-test | xhigh | Too much. |\n"
     ));
     let refused = pick(ProviderKind::Codex).unwrap_err();

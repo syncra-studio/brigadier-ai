@@ -2654,9 +2654,9 @@ async fn the_users_rules_bind_the_agent_fallback() {
     flow.stop().await;
 }
 
-/// S38, D34: the fallback takes the first `Fallback` row of the other agent the user's rules
-/// allow, in the routing's order: its first row's effort is over their ceiling, so the next
-/// row's model and effort go on, never the CLI's own default.
+/// S38, D34, D-L38: the fallback takes the first `Fallback` row of the other agent the user's
+/// rules allow, in the routing's order: its first row's effort is over their ceiling, so it goes
+/// on at the ceiling (not refused, not the next row).
 #[tokio::test]
 async fn the_agent_fallback_takes_the_next_fallback_row_the_rules_allow() {
     let log = Log::default();
@@ -2693,14 +2693,15 @@ async fn the_agent_fallback_takes_the_next_fallback_row_the_rules_allow() {
     assert_eq!(on.provider, ProviderKind::Codex);
     assert_eq!(
         (on.model.as_deref(), on.effort.as_deref()),
-        (Some("gpt-test"), Some("medium")),
+        (None, Some("high")),
         "{on:?}"
     );
     flow.stop().await;
 }
 
-/// D34: with no `Fallback` row of another agent the user's rules allow, a session at its limit
-/// waits for the reset rather than moving on a model no row names.
+/// D34: with no `Fallback` row of another agent the user's rules allow (a cap and a minimum
+/// that can't both be met, D-L38), a session at its limit waits for the reset rather than moving
+/// on a model no row names.
 #[tokio::test]
 async fn with_no_fallback_row_the_rules_allow_a_session_waits_for_the_reset() {
     let log = Log::default();
@@ -2715,7 +2716,7 @@ async fn with_no_fallback_row_the_rules_allow_a_session_waits_for_the_reset() {
     .await;
     std::fs::write(
         flow.manager.models_rules_path(),
-        "# My rules\n\n- effort-ceiling: high\n\n\
+        "# My rules\n\n- effort-ceiling codex: high\n- effort-floor for Fallback: xhigh\n\n\
          | Work | Agent | Model | Effort | Reason |\n|---|---|---|---|---|\n\
          | Fallback | codex | default | xhigh | Mine. |\n",
     )

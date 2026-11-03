@@ -8,8 +8,9 @@ const IN_THE_ORDER = "In the order";
 
 // The real Routing page in Chromium over a faked daemon and rules file (S32): who does what from
 // the file's rows over the shipped ones, a kind made My order and edited (effort, a second model,
-// moved up, removed), the rules with the add form (its model, its kind of work, its preview and
-// the kind a clash opens), a hand edit of the file shown on reopening, and under More the models'
+// moved up, removed), the rules added in the user's own words (examples, an error, Brigadier
+// rewriting them, Cancel, what it will save, Add, Undo), a hand edit of the file shown on
+// reopening (with the line under a rule that stops a kind, advice, ×), and under More the models'
 // strength and how a model is picked.
 test("Routing lists the rules file, writes its edits back, and shows a hand edit on reopening", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "routing.html?drive=1", "routing-result", 40000);
@@ -20,7 +21,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   );
   assert.deepEqual((seen.sections as string[]).slice(-3), ["Who does what", "Rules", "More"]);
   assert.equal(seen.sources, "Automatic picks ship with the app. Model strength, below, is rated from release notes and benchmarks, checked daily, and adjusted by how each model did in your sessions.");
-  assert.equal(seen.rulesDescription, "Keep a model away from all work or one kind of work, allow only some models, or cap the effort");
+  assert.equal(seen.rulesDescription, "Things every session must follow, in your own words.");
   // Who does what: the shipped rows (Automatic), the user's order replacing its shipped one, then the user's own kind.
   const kinds = [
     "Architecture and broad changesAutomatic · Strong default for work that needs judgment across a codebase.Opus 5.5 · High",
@@ -31,14 +32,12 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "Computer useAutomatic · Seeing and using apps on screen takes strong judgment.Opus 5.5 · High",
     "FallbackAutomatic · The model a session runs on when it moves to the other agent",
     "Conversation titlesAutomatic · A small model for short text; use available quota, cost tier and suitability among shipped title choices.GPT-6 Luna · Low",
+    "Rule readingAutomatic · Rewrites the rules you type into exact rules and advice; a family word, so it follows newer models.Sonnet 5.5 · Medium",
     "Release notesYour order · GPT-6GPT-6 · Low",
   ];
   assert.deepEqual(seen.kinds, kinds);
-  // Each rule names its model, then where it applies and what it does.
-  const rules = [
-    "Never give Fable workEverywhere · Chats, sessions and workers can't run on it",
-    "Never go above High effortEverywhere · Chats, sessions and workers run at this effort or lower",
-  ];
+  // Each rule is one plain sentence.
+  const rules = ["Never give Fable work", "Never go above High effort"];
   assert.deepEqual(seen.rules, rules);
   assert.equal(seen.openAtStart, 0);
   assert.equal(seen.readsAtOpen, 1);
@@ -86,36 +85,42 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   // Its last model removed, the kind is Automatic again.
   assert.deepEqual(seen.afterRemove, ["Bounded implementation", "Release notes"]);
   assert.equal(seen.modeAfterRemove, "Automatic");
-  // The add form opens on top: a model, then the work it is for; nothing to add until a model is chosen.
-  assert.equal(seen.form, "NeveruseChoose a modelforAny workCancelAdd rule");
+  // Add rule opens one text box on top, with the hint and examples; nothing to add until words are in it.
+  assert.equal(
+    seen.form,
+    "Brigadier rewrites your words into exact rules and shows them before saving.Never go above High effortNever use SonnetOnly use Codex for reviewsCancelAdd",
+  );
   assert.equal(seen.addDisabled, true);
-  assert.equal(seen.headerAddDisabled, true);
-  // Its preview warns of a kind of work the rule would stop, says where to fix it, and opens it.
+  assert.equal(seen.headerAddShown, false);
+  assert.equal(seen.filled, "Never use Sonnet\nNever go above High effort");
+  // Add has Brigadier rewrite the words: a spinner line, the box and its button held.
+  assert.equal(seen.reading, "Rewriting your rules…");
+  assert.deepEqual(seen.readingButton, ["Reading…", true, true]);
+  assert.equal(seen.readsAsked, 1);
+  assert.equal(seen.readError, "Brigadier couldn't make a rule of that: try other words.");
+  assert.equal(seen.keptWords, "gibberish");
+  assert.equal(seen.readingAgain, "Rewriting your rules…");
+  assert.deepEqual(seen.afterCancel, {
+    open: true,
+    words: "never go over high effort and keep sonnet off reviews. prefer codex when claude is busy",
+    note: "",
+  });
+  // What Brigadier will save, before it is saved.
   assert.equal(
-    seen.clash,
-    "“Architecture and broad changes” and “Fusion · Claude consult” use Opus 5.5, so starting them would be refused. Pick another model for them in Who does what, or make this rule for one kind of work.Open Architecture and broad changesOpen Fusion · Claude consult",
+    seen.read,
+    "Brigadier will: Never go above High effortBrigadier will: Never use Sonnet 5.5 for Adversarial reviewSaved as advice: Prefer Codex when Claude is busy",
   );
-  assert.equal(seen.openAfterClash, 0);
-  assert.equal(seen.openedByNote, "Architecture and broad changes");
-  // The Codex consult uses its default, GPT-6 here; Release notes also names GPT-6.
-  assert.equal(
-    seen.preview,
-    "“Fusion · Codex consult” and “Release notes” use GPT-6, so starting them would be refused. Pick another model for them in Who does what, or make this rule for one kind of work.Open Fusion · Codex consultOpen Release notes",
-  );
-  // For one kind of work only, it stops nothing else.
-  assert.equal(
-    seen.scoped,
-    "GPT-6 won't be used for Mechanical changes and search: a worker for Mechanical changes and search that asks for it is refused, quoting this rule.",
-  );
-  // Added: the file gets the rule for that work, the form closes, the new rule comes first and marked, and Undo takes it back.
+  assert.equal(seen.writesBeforeAdd, 7);
+  // Added: the file gets the new rules after the old (one it had already, once), the box closes, Undo takes them back.
   assert.equal(seen.formAfterAdd, false);
   assert.deepEqual(seen.writtenRules, [
     { type: "forbid", names: ["fable"] },
     { type: "effortCeiling", effort: "high" },
-    { type: "forbid", names: ["gpt-6"], work: "Mechanical changes and search" },
+    { type: "forbid", names: ["sonnet"], work: "Adversarial review" },
+    { type: "advice", text: "Prefer Codex when Claude is busy" },
   ]);
-  assert.deepEqual(seen.rulesAfterAdd, ["Don't use GPT-6 for Mechanical changes and searchNewMechanical changes and search only · Its workers can't run on it", ...rules]);
-  assert.deepEqual(seen.toast, ["Rule added", "Undo"]);
+  assert.deepEqual(seen.rulesAfterAdd, [...rules, "Never use Sonnet 5.5 for Adversarial review", "Prefer Codex when Claude is busyadvice"]);
+  assert.deepEqual(seen.toast, ["Rules added", "Undo"]);
   assert.deepEqual(seen.rulesAfterUndo, rules);
   // The file edited by hand shows when the page opens again: an order of two, a rule for one work
   // that keeps a kind's only model out, which its row and Automatic say.
@@ -124,12 +129,20 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     ...kinds.slice(1).map((line) => line.startsWith("Conversation titles") ? line.replace("GPT-6 Luna · Low", "Haiku") : line),
     "DocsYour order · Sonnet 5.5, then GPT-6GPT-6",
   ]);
+  // A rule that stops a kind of work from starting says so, in one line under it.
+  const stopsArchitecture = "Architecture and broad changes can't start: this rule keeps out Opus 5.5.";
+  const stopsReview = "Adversarial review can't start: it needs High, and this rule keeps Opus 5.5 at Medium.";
   assert.deepEqual(seen.rulesAfterHandEdit, [
     ...rules,
-    "Only use GPT-6 on CodexEverywhere · Codex chats, sessions and workers run on nothing else",
-    "Don't use Opus 5.5 for Architecture and broad changesArchitecture and broad changes only · Its workers can't run on it",
-    "Don't use Sonnet 5.5 for DocsDocs only · Its workers can't run on it",
+    "Only use GPT-6 on Codex",
+    `Never use Opus 5.5 for Architecture and broad changes${stopsArchitecture}`,
+    "Never use Sonnet 5.5 for Docs",
+    `Never run Opus 5.5 above Medium${stopsReview}`,
+    "Adversarial review never below High",
+    "Prefer Codex when Claude is busyadvice",
   ]);
+  assert.deepEqual(seen.warnings, [stopsArchitecture, stopsReview]);
+  assert.deepEqual(seen.afterRemoveRule, ["forbid", "effortCeiling", "allow", "forbid", "forbid", "effortCeiling", "effortFloor"]);
   assert.equal(
     seen.skipped,
     "Skipped: Opus 5.5 is kept out by your rules. Choose My order to pick another model.Strong default for work that needs judgment across a codebase.",
@@ -139,7 +152,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "1Named for the workerIf you or the session name a model or effort when the worker starts, that is used.",
     "2Your orderIf not, the worker takes the first model in your order for its kind of work that your rules allow.",
     "3AutomaticWith no order of your own, it takes the first model of the automatic advice that your rules allow.",
-    "4Your rulesLast, your rules check the result: a model they keep out, or an effort above your cap, is refused and the worker doesn't start. Your rules win over everything above.",
+    "4Your rulesLast, your rules check the result: an effort above a cap or below a minimum runs at that limit instead, and a model they keep out is refused, so the worker doesn't start. Your rules win over everything above.",
   ]);
   assert.equal(seen.stepsExample, "For example, Conversation titles: your rules keep GPT-6 Luna out, so Haiku, next in the automatic advice, runs.");  assert.equal(seen.strengthClosed, true);
   assert.deepEqual(seen.strength, [

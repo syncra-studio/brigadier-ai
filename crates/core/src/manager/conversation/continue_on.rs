@@ -66,8 +66,9 @@ impl SessionManager {
             Some(choice) if choice.provider != to => {
                 return Err(format!("that model isn't a {} model", to.label()));
             }
-            Some(choice) => {
-                self.check_choice(&choice).map_err(|err| err.to_string())?;
+            Some(mut choice) => {
+                self.rule_choice(&mut choice)
+                    .map_err(|err| err.to_string())?;
                 choice
             }
             None => self.successor_model(to)?,

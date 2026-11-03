@@ -1102,7 +1102,11 @@ pub const COMMANDS: &[Command] = &[
         name: "models",
         summary: "Models, usage and guidance for picking a worker's model.",
         details: "What each CLI reports, usage and reset times per account, the shipped \
-                  guidance and the user's own rules, in one view.",
+                  guidance, the user's own rules and their advice notes, in one view. A rule \
+                  capping or raising effort (for every model, one agent or one model) moves a \
+                  start's effort to its limit; a start is refused only by a model rule, or when \
+                  a cap and a minimum can't both be met. Advice restricts nothing: weigh it \
+                  when you pick.",
         args: &[],
         available: true,
         schema: include_str!("../schemas/models.schema.json"),
