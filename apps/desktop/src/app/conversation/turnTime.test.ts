@@ -47,5 +47,8 @@ test("a turn shows its worked time, or how long it has waited for the user", () 
   assert.ok(waitsOnCard(card));
   assert.equal(turnTime(card, 40_000), 40_000);
   assert.ok(!waitsOnCard({ ...base, state: "waiting" }));
+  // Its CLI's turn running a blocking ask (Codex, Claude) waits on the card the same (D161, demo12).
+  assert.ok(waitsOnCard({ ...card, state: "working" }));
+  assert.ok(!waitsOnCard({ ...card, state: "done" }));
 });
 

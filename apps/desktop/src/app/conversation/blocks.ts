@@ -359,9 +359,13 @@ export function stoppedAtMs(spans: readonly WorkSpan[]): number | null {
   return stops.length ? Math.max(...stops) : null;
 }
 
-/** Whether a waiting turn waits only for the answer to its question card: it still reads as working. */
+/**
+ * Whether a live turn waits for the answer to its question card: its clock still counts it as
+ * worked, its header reads "Waiting for …" (D161). Its CLI's turn may run meanwhile (a blocking
+ * `brigadier ask`) or not: the same on every CLI.
+ */
 export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boolean {
-  return meta.state === "waiting" && meta.cardWait;
+  return (meta.state === "waiting" || meta.state === "working") && meta.cardWait;
 }
 
 /**
