@@ -20,8 +20,13 @@ function subagentsWait(labels: readonly string[]): StatusHead {
   return { text, tone: "still" };
 }
 
+/** Only paused workers: the user asked for that, nothing is stuck (D196). */
+const PAUSED: StatusHead = { text: "Paused on your request", tone: "still" };
+const pausedOnly = (rows: readonly WorkerRow[]) => rows.length > 0 && rows.every((row) => row.paused);
+
 /** A wait on workers, named by the Workers card's names when it is one. */
 function workersWait(rows: readonly WorkerRow[], all: readonly WorkerRow[]): StatusHead {
+  if (pausedOnly(rows)) return PAUSED;
   const name = rows.length === 1 ? rowNames(all).get(rows[0]!.id) : undefined;
   return { text: name ? `Waiting for ${name}` : workersWaitWords(Math.max(rows.length, 1)), tone: "busy" };
 }
@@ -92,6 +97,8 @@ export function heldWait(view: ThreadView, starts: readonly number[], startedAtM
   const workers = workingWorkerRows(view.workers ?? [], view.turns, starts, endedAtMs, !!view.jobs?.waking);
   const commands = turnCommandTasks(view, view.turns, starts, endedAtMs);
   const subagents = runningSubagentTasks(view, startedAtMs, endedAtMs);
+  // Only paused workers hold it, however many: they say so (D196).
+  if (commands.length + subagents.length === 0 && pausedOnly(workers)) return PAUSED;
   if (workers.length + commands.length + subagents.length !== 1) return null;
   if (workers.length === 1) return workersWait(workers, view.workers ?? []);
   if (commands[0]) return taskWait(commands[0], view.entries);

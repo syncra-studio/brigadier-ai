@@ -796,15 +796,19 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
   return answer === null ? [] : texts.map((_, index) => index).filter((index) => index > answer);
 }
 
+/** The lead's steps a finished block keeps in view. */
+const IN_VIEW: ReadonlySet<string> = new Set(["feedbackOffered", "sessionOffered", "fusionOffered", "moment", "providerTransition", "paused", "resumed", "stopped"]);
+
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
  * and the cards, feedback and session offers that stay in view (decisions, failures, what
- * needs the user), and the dividers of its limits and switches (#506).
+ * needs the user), the dividers of its limits and switches (#506), and its one line per worker
+ * paused, resumed or ended (D150, D195).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "fusionOffered" || step.kind.type === "moment" || step.kind.type === "providerTransition")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => IN_VIEW.has(step.kind.type))) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

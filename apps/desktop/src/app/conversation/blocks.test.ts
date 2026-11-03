@@ -456,6 +456,18 @@ test("the lead's feedback offer stays in view as its card; the user's answer sho
   assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), [offer]);
 });
 
+test("a finished turn keeps its one line per worker paused, resumed or ended in view, on every CLI (D150, D195)", () => {
+  const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
+  const lines = [
+    { type: "paused", taskId: "w1" },
+    { type: "resumed", taskId: "w1" },
+    { type: "stopped", taskId: "w1", reason: "Closed by its session." },
+  ] as const;
+  const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [], orchestratorSteps: lines.map((kind, index) => teamStep(3 + index, kind)) };
+  const kept = sequence(blocksOf([user], replay)[0]!).filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
+  assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind.type) : []), ["paused", "resumed", "stopped"]);
+});
+
 // A session offer saved before its card was taken out (a041169da) shows again, answered or not.
 test("the lead's session offer stays in view as its card; Start as session shows no row", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };

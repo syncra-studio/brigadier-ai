@@ -50,7 +50,7 @@ test("the context card's Workers row names each worker at work by its row, with 
       row("t5", "Readme", { working: false, lastEnd: "stopped" }),
     ]);
     assert.match(few, /Find bar fixes needs you.*Demo of the fixes quiet 34m/);
-    assert.match(few, /1 done · 1 stopped/);
+    assert.match(few, /1 done · 1 ended/);
     assert.doesNotMatch(few, /Settings fixes|rm -rf/);
 
     // Its turn over but its own background commands still running (its tests, a wait on them):

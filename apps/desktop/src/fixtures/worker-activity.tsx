@@ -55,11 +55,11 @@ function Fixture() {
   const [panel, setPanel] = useState<string | null | undefined>();
   useEffect(() => {
     // A waiting worker's Stop on its Workers list row, with nothing opened first (#201).
-    const listStop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="worker-list"] button[aria-label="Stop Check blocked"]')?.click(), 50);
+    const listStop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="worker-list"] button[aria-label="End Check blocked"]')?.click(), 50);
     // Open the strip, as a click on its count does.
     const open = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-expanded]')?.click(), 100);
     // The running worker's own Stop, on its strip row (UI audit M4).
-    const stop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-label="Stop Check active"]')?.click(), 250);
+    const stop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-label="End Check active"]')?.click(), 250);
     let seen: Record<string, unknown> = {};
     const snapshot = setTimeout(() => { seen = {
       thread: Object.fromEntries([...document.querySelectorAll('main > section[data-task]')].map((row) => [row.getAttribute("data-task"), row.textContent])),

@@ -31,6 +31,9 @@ test("between its calls, and whenever it isn't working, a worker says its state"
 test("after a worker's name the line reads lowercase, but for a name it starts with", () => {
   const now = (detail: string, name = "shell") => nowInLine(workerNow(row({ steps: [{ name, detail }] }), NOW));
   assert.equal(now("pnpm build"), "running pnpm build");
+  // Plain words, no shell or markdown bits (D195).
+  assert.equal(now(": > marks.txt; for i in 1 2; do echo $i >> marks.txt; done"), "running a command");
+  assert.equal(nowInLine(workerNow(row({ doing: { type: "said", line: "`marks.txt` has **11** lines" } }), NOW)), "marks.txt has 11 lines");
   assert.equal(now("", "mcp__pencil__batch_design"), "Pencil: batch design");
   assert.equal(nowInLine(workerNow(row({ waiting: [{ kind: "question", what: "rm", card: null }] }), NOW)), "needs you");
 });

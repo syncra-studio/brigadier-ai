@@ -15,7 +15,7 @@ const row = (patch: Partial<WorkerRow> = {}): WorkerRow => {
   };
 };
 
-test("the strip lists only the workers at work or waiting, oldest first; finished ones are the context card's", () => {
+test("the strip lists only the workers at work, waiting or paused, oldest first; finished ones are the context card's", () => {
   const working = row();
   const asks = row({ waiting: [{ kind: "question", what: "rm -rf build", card: null }] });
   const finished = [row({ working: false, lastEnd: "done" }), row({ working: false, lastEnd: "stopped" }), row({ working: false, lastEnd: "failed", gone: true }), row({ working: false, lastEnd: "done", merged: true, ahead: 1 })];
@@ -24,6 +24,11 @@ test("the strip lists only the workers at work or waiting, oldest first; finishe
   assert.equal(view?.working, 1);
   assert.equal(view?.waiting, 1);
   assert.equal(stripWords(view!), "1 worker working · 1 waiting");
+  // A paused one stays, its toggle resuming it (D199).
+  const paused = row({ working: false, lastEnd: "interrupted", paused: true });
+  const held = workersStrip([working, paused], NOW);
+  assert.deepEqual([held?.rows, held?.paused, held && stripWords(held)], [[working.id, paused.id], 1, "1 worker working · 1 paused"]);
+  assert.deepEqual(held?.pausable, [working.id]);
 });
 
 test("with no worker at work the strip is gone", () => {
@@ -31,15 +36,16 @@ test("with no worker at work the strip is gone", () => {
   assert.equal(workersStrip([row({ working: false, lastEnd: "done" }), row({ working: false, lastEnd: "stopped" })], NOW), null);
 });
 
-test("Stop all shows only while a worker's CLI still runs", () => {
-  assert.equal(workersStrip([row()], NOW)?.stoppable, true);
-  // Its CLI gone, its limit still holding: nothing to stop.
-  assert.equal(workersStrip([row({ gone: true, limit: { kind: "usageWindow", resetsAtMs: NOW + 1, window: null } })], NOW)?.stoppable, false);
+test("Pause all shows only while a worker's CLI still runs (D199)", () => {
+  assert.equal(workersStrip([row()], NOW)?.pausable.length, 1);
+  // Its CLI gone, its limit still holding: nothing to pause.
+  assert.equal(workersStrip([row({ gone: true, limit: { kind: "usageWindow", resetsAtMs: NOW + 1, window: null } })], NOW)?.pausable.length, 0);
 });
 
 test("the collapsed strip counts in one line, naming workers once", () => {
-  assert.equal(stripWords({ working: 2, waiting: 0 }), "2 workers working");
-  assert.equal(stripWords({ working: 1, waiting: 1 }), "1 worker working · 1 waiting");
-  assert.equal(stripWords({ working: 0, waiting: 3 }), "3 workers waiting");
+  assert.equal(stripWords({ working: 2, waiting: 0, paused: 0 }), "2 workers working");
+  assert.equal(stripWords({ working: 1, waiting: 1, paused: 0 }), "1 worker working · 1 waiting");
+  assert.equal(stripWords({ working: 0, waiting: 3, paused: 0 }), "3 workers waiting");
+  assert.equal(stripWords({ working: 0, waiting: 0, paused: 2 }), "2 workers paused");
 });
 

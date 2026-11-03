@@ -5,10 +5,10 @@ import { StripRow } from "@/app/conversation/activity/StripRow";
 import { useAction } from "@/app/conversation/useAction";
 import { WorkerGlyph } from "@/components/conversation";
 import { Button } from "@/components/controls";
-import { ChevronRight, StopCircle } from "@/components/icons";
+import { ChevronRight, PauseCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useNow } from "@/hooks/use-now";
-import { stopWorkers } from "@/state/actions";
+import { pauseTask } from "@/state/actions";
 import { useWorkerRows } from "@/state/cliThread";
 
 /** The Workers strip's view, live from the session's worker rows: `null` while it has nothing to show. */
@@ -26,7 +26,7 @@ export function useWorkersStrip(conversationId: string): StripView | null {
 /**
  * The Workers strip, a row of the composer's status slot (THREAD-UX-PLAN.md §3.5,
  * SESSION-FIXES-PLAN.md Q8): while workers run or wait, those only; finished ones are the
- * context card's. A lone worker is its own row; more, collapsed, are counted; open, one row each, and Stop all. Each worker's
+ * context card's. A lone worker is its own row; more, collapsed, are counted; open, one row each, and Pause all (D199). Each worker's
  * progress lives here, not under the thread's live line.
  */
 export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ conversationId, view }) => {
@@ -63,22 +63,22 @@ export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ 
             </span>
           </span>
         </button>
-        {view.stoppable && (
+        {view.pausable.length > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 size="xs"
                 variant="ghost"
-                data-slot="workers-stop-all"
+                data-slot="workers-pause-all"
                 disabled={stop.busy}
-                onClick={() => stop.run(() => stopWorkers(conversationId))}
+                onClick={() => stop.run(() => Promise.all(view.pausable.map(pauseTask)))}
                 className="text-foreground/60 hover:text-foreground"
               >
-                <StopCircle />
-                Stop all
+                <PauseCircle />
+                Pause all
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Stop every worker running or waiting to run</TooltipContent>
+            <TooltipContent side="top">Pause every worker running or waiting to run</TooltipContent>
           </Tooltip>
         )}
       </div>

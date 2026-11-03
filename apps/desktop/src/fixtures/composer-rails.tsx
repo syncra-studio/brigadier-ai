@@ -181,7 +181,7 @@ async function drive() {
   scene("subagents").querySelector<HTMLButtonElement>('[data-slot="workers-strip"] [data-slot="workers-strip-row"]')?.click();
   await frame();
   seen.panel = panelOpened;
-  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="workers-stop-all"]')?.click();
+  scene("subagents").querySelector<HTMLButtonElement>('[data-slot="workers-pause-all"]')?.click();
   await frame();
   seen.calls = calls.toSorted();
   return seen;

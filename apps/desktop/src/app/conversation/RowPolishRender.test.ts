@@ -83,8 +83,8 @@ test("a worker the user stopped reads that they stopped it; one the lead stopped
     const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task } }, orchestrator: null }));
     const text = (reason: string) => ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
       React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason }, atMs: 9000 }))).replace(/<[^>]+>/g, "");
-    assert.equal(text("Stopped by the user"), "You stopped Add QIF exporter after 4s");
-    assert.equal(text("Enough"), "Stopped Add QIF exporter after 4s");
+    assert.equal(text("Stopped by the user"), "You ended Add QIF exporter after 4s");
+    assert.equal(text("Enough"), "Ended Add QIF exporter after 4s");
     // The lead's pause and resume (D7): one plain row each, in the same family.
     const row = (type: "paused" | "resumed") => ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
       React.createElement(TeamStep, { kind: { type, taskId: "t1" }, atMs: 9000 }))).replace(/<[^>]+>/g, "");

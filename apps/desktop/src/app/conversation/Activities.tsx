@@ -38,9 +38,6 @@ const label = (activity: Activity) =>
       ? activity.task.kind === "terminal" ? commandWords(activity.task.label) : activity.task.kind === "agent" ? `Subagent: ${activity.task.label}` : activity.task.label
       : activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name);
 
-/** The cards whose section has shown (D98). */
-const appeared = new Set<string>();
-
 /** No background tasks. */
 const NO_TASKS: readonly BackgroundTask[] = [];
 const NO_ENTRIES: readonly FileEntry[] = [];
@@ -63,11 +60,10 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
     .toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   // Running ones count on the clock every live time shares (D94).
   const now = useTicking(activities.some((activity) => activity.type === "preview" || activity.task.status === "running"));
-  if (activities.length > 0) appeared.add(conversationId);
-  // No section until its first process; from then on it stays, its history with it (D98).
-  if (!appeared.has(conversationId)) return null;
+  // No section while it has no row, never an empty heading (D195); ended rows keep it (D98).
+  if (!activities.length) return null;
   return (
-    <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length} collapsible={activities.length > 0}
+    <SummarySection data-activities foldKey="activities" title="Background" count={activities.length} unfoldOnIncrease={activities.length} collapsible
       action={
         <TooltipIconButton data-slot="background-history-link" tooltip="Background history" aria-label="Background history" size="icon-xs"
           onClick={() => openPanelTab(conversationId, { type: "backgroundHistory" }, "Background history")}>

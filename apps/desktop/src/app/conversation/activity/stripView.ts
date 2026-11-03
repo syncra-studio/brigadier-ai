@@ -1,39 +1,43 @@
-import { rowFinished, rowWaiting } from "@/app/conversation/activity/workerState";
+import { rowOnHand, rowWaiting, workerStateOf } from "@/app/conversation/activity/workerState";
 import type { WorkerRow } from "@/ipc/generated";
+import { isNativeWorker } from "@/state/nativeWorkers";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5): the workers at it. */
 export type StripView = {
-  /** Its rows, by task id: the workers working or waiting, oldest first. */
+  /** Its rows, by task id: the workers working, waiting or paused, oldest first. */
   rows: string[];
   working: number;
   waiting: number;
-  /** Whether Stop all has anything to stop. */
-  stoppable: boolean;
+  paused: number;
+  /** The ones Pause all pauses: at work or waiting, their CLI still there (D199). */
+  pausable: string[];
 };
 
 /**
- * The session's workers the strip is about: only those still at work or waiting (on the user, on
- * a limit), by their rows (`workerStateOf`). Finished ones (done, merged, stopped, failed) leave
- * it at once and stay in the context card. `null` when none are at work, so it hides.
+ * The session's workers the strip is about: only those still at work, waiting (on the user, on
+ * a limit) or paused, by their rows (`workerStateOf`). Finished ones (done, merged, ended,
+ * failed) leave it at once and stay in the context card. `null` when none are, so it hides.
  */
 export function workersStrip(rows: readonly WorkerRow[], now: number): StripView | null {
-  const live = rows.filter((row) => !rowFinished(row, now)).toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.number - b.number);
+  const live = rows.filter((row) => rowOnHand(row, now)).toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.number - b.number);
   if (live.length === 0) return null;
   const waiting = live.filter((row) => rowWaiting(row, now)).length;
+  const paused = live.filter((row) => workerStateOf(row, now).kind === "paused");
   return {
     rows: live.map((row) => row.id),
-    working: live.length - waiting,
+    working: live.length - waiting - paused.length,
     waiting,
-    // The daemon's `stop_workers` stops every worker whose CLI still runs.
-    stoppable: live.some((row) => !row.gone),
+    paused: paused.length,
+    pausable: live.filter((row) => !row.gone && !paused.includes(row) && !isNativeWorker(row)).map((row) => row.id),
   };
 }
 
-/** "2 workers working · 1 waiting": the first count names them, zeros are left out. */
-export function stripWords({ working, waiting }: Pick<StripView, "working" | "waiting">): string {
+/** "2 workers working · 1 waiting · 1 paused": the first count names them, zeros are left out. */
+export function stripWords({ working, waiting, paused }: Pick<StripView, "working" | "waiting" | "paused">): string {
   const counts = [
     [working, "working"],
     [waiting, "waiting"],
+    [paused, "paused"],
   ] as const;
   return counts
     .filter(([count]) => count > 0)

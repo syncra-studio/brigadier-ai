@@ -13,20 +13,27 @@ export function workerNow(row: WorkerRow, now: number): WorkerNow {
   const state = workerStateOf(row, now);
   if (state.kind !== "working") return state;
   const step = (row.steps ?? []).findLast((each) => !isPlumbing(each.name));
-  if (step) return { kind: "working", word: stepWords({ ...step, status: "inProgress" }).doing, step: true };
+  if (step) return { kind: "working", word: callWords(step), step: true };
   const doing = row.doing;
   switch (doing?.type) {
     case "call":
-      return isPlumbing(doing.step.name) ? state : { kind: "working", word: stepWords({ ...doing.step, status: "inProgress" }).doing, step: true };
+      return isPlumbing(doing.step.name) ? state : { kind: "working", word: callWords(doing.step), step: true };
     case "thinking":
       return { kind: "working", word: "Thinking…" };
     case "writing":
       return { kind: "working", word: "Writing…" };
     case "said":
-      return { kind: "working", word: doing.line, step: true };
+      // Plain words: no markdown marks (D195).
+      return { kind: "working", word: doing.line.replace(/`|\*\*|^#+\s+|^[-*]\s+/g, ""), step: true };
     default:
       return state;
   }
+}
+
+/** A call at work in plain words: a compound command's shell bits read "Running a command" (D195). */
+function callWords(step: StepAtWork): string {
+  const words = stepWords({ ...step, status: "inProgress" });
+  return words.kind === "run" && /[;&|<>`$(]/.test(words.object ?? "") ? "Running a command" : words.doing;
 }
 
 /** A worker's state, or what it does: `step` when its words are its call's. */

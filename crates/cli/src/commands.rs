@@ -438,7 +438,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "close",
-        summary: "Stop one of this session's workers for good (the user's \"stop it\").",
+        summary: "End one of this session's workers for good, its work kept on its branch (the user's \"end it\").",
         details: "Stops its CLI and removes it from `brigadier workers`. Unfinished changes \
                   are kept as a commit on its branch.",
         args: &[positional("id", "The worker.")],
@@ -447,7 +447,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "pause",
-        summary: "Pause one of this session's workers.",
+        summary: "Pause one of this session's workers (the user's \"stop it\", \"pause it\").",
         details: "Its turn ends now, as Esc ends it, and its CLI session is kept. What you \
                   send it meanwhile waits for `brigadier resume`; `brigadier wait` doesn't \
                   wait on it.",

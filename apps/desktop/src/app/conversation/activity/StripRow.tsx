@@ -1,6 +1,6 @@
 import { memo, useContext } from "react";
 
-import { StopWorker } from "@/app/conversation/activity/StopWorker";
+import { WorkerControls } from "@/app/conversation/activity/StopWorker";
 import { workerNow } from "@/app/conversation/activity/workerNow";
 import { Counts } from "@/components/shared";
 import { RowTime } from "@/app/conversation/RowTime";
@@ -12,7 +12,8 @@ import { useWorkerRows } from "@/state/cliThread";
 
 /**
  * One worker: `[g] Name · what it does · 1m 2s · +12 −3`, from its row (its CLI's events and git):
- * while it works its call at work, shimmering, else its state. Its Stop while its CLI runs.
+ * while it works its call at work, shimmering, else its state. Its pause/resume and End while
+ * its CLI runs (D199).
  * Opens its thread.
  */
 export const StripRow = memo(function StripRow({ conversationId, taskId }: { conversationId: string; taskId: string }) {
@@ -46,7 +47,7 @@ export const StripRow = memo(function StripRow({ conversationId, taskId }: { con
       </button>
       {/* Level with the first line, however many lines the row has. */}
       <span className="h-row flex shrink-0 items-center">
-        <StopWorker row={row} name={name ?? "this worker"} />
+        <WorkerControls row={row} name={name ?? "this worker"} />
       </span>
       </div>
     </li>

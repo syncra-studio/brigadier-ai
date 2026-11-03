@@ -34,14 +34,14 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.deepEqual(seen.left, ["preview-2"], "what the user stopped left the card");
 });
 
-test("an app's Background row leaves as soon as it ends, failed, finished or stopped, the section staying (D98): no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
+test("an app's Background row leaves as soon as it ends, failed, finished or stopped, its empty section with it (D195): no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
     running: string[]; ended: string[]; section: boolean; restartOrDismiss: number;
   };
   assert.deepEqual(seen.running, ["preview-14", "preview-13", "preview-12", "preview-11"]);
   // A crash, a non-zero exit, a clean exit and a Stop all take their row off at once.
   assert.deepEqual(seen.ended, []);
-  assert.equal(seen.section, true, "once shown, the Background section stays (D98)");
+  assert.equal(seen.section, false, "no empty Background heading (D195)");
   assert.equal(seen.restartOrDismiss, 0);
 });
 

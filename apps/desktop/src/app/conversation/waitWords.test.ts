@@ -114,3 +114,10 @@ test("Claude's foreground `brigadier wait <id>` Bash call names its worker on th
   };
   assert.deepEqual(liveWait(view), { text: "Waiting for Write timed marks", tone: "busy" });
 });
+
+test("a block held only by a paused worker says it's paused on the user's request, on every CLI (D196)", () => {
+  const paused = worker("019a4a8e-0b47-7c3e-9d1f-1234ad1cb8e7", "Write timed marks", { working: false, lastEnd: "interrupted", paused: true });
+  const view: ThreadView = { entries: [], turns: [turn(1000, "done")], workers: [paused] };
+  assert.deepEqual(heldWait(view, [1000], 1000, 1500), { text: "Paused on your request", tone: "still" });
+  assert.deepEqual(heldWait({ ...view, workers: [paused, { ...paused, id: "w2", number: 2 }] }, [1000], 1000, 1500), { text: "Paused on your request", tone: "still" });
+});

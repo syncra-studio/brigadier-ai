@@ -1,6 +1,6 @@
 import { memo, useContext } from "react";
 
-import { lowerFirst, rowFinished, workerStateOf } from "@/app/conversation/activity/workerState";
+import { lowerFirst, rowOnHand, workerStateOf } from "@/app/conversation/activity/workerState";
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
 import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
 import { WorkerGlyph } from "@/components/conversation";
@@ -19,7 +19,7 @@ export const AgentRow = memo(function AgentRow({ row }: { row: WorkerRow }) {
   const { setPanel } = useContext(AgentsPanelContext);
   const now = useNow(30_000);
   const state = workerStateOf(row, now);
-  const stoppable = !row.gone && !rowFinished(row, now);
+  const stoppable = !row.gone && rowOnHand(row, now);
   return (
     <li className="group/row relative flex min-w-0">
       <button
@@ -40,7 +40,7 @@ export const AgentRow = memo(function AgentRow({ row }: { row: WorkerRow }) {
           <RowTime row={row} ago className="text-xs" />
         </span>
       </button>
-      {/* Its Stop on the row, without opening the worker first. */}
+      {/* Its End on the row, without opening the worker first. */}
       {stoppable && (
         <span className="absolute inset-y-0 end-1 hidden items-center group-focus-within/row:flex group-hover/row:flex">
           <StopWorker row={row} name={name ?? row.title} />

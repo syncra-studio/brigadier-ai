@@ -200,10 +200,10 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       );
       break;
     case "stopped": {
-      // The user's own Stop (one worker's, or Stop all) says so on the row; the lead's says why.
+      // The user's own End says so on the row; the lead's says why. Ending reads "Ended" (D199).
       const byUser = kind.reason === USER_STOP_REASON;
       icon = <StopCircle aria-hidden className="size-4 shrink-0" />;
-      line = <>{byUser ? "You stopped" : "Stopped"} <WorkerName taskId={kind.taskId} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
+      line = <>{byUser ? "You ended" : "Ended"} <WorkerName taskId={kind.taskId} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
       detail = kind.reason && !byUser ? <QuietBrief>{kind.reason}</QuietBrief> : undefined;
       break;
     }
