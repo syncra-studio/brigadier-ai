@@ -3678,6 +3678,87 @@ impl SessionManager {
         Ok((merged_input(files, ordered), user))
     }
 
+    /// Card tools accept strings. Save each pasted image as a durable file, then use the
+    /// composer's own paste and mention resolution to prepare the rest of the answer.
+    pub async fn prepare_card_answer(
+        &self,
+        owner: ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+    ) -> Result<String> {
+        for attachment in &attachments {
+            attachment.id.parse::<brigadier_store::BlobHash>()?;
+        }
+        let conv = self.conv(&owner)?;
+        let at = FilesAt::Conversation(&conv);
+        let mut copied = HashMap::new();
+        let mut images = HashMap::new();
+        let mut pastes = Vec::new();
+        for attachment in &attachments {
+            // Fail before giving an answer rather than silently losing a paste.
+            if attachment.pasted {
+                self.core.read_blob_text(attachment.id.clone()).await?;
+                pastes.push(attachment.clone());
+            } else {
+                let file = self.attachment_file(&at, attachment).await.ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "{} could not be saved for the answer",
+                        attachment.name
+                    ))
+                })?;
+                if let Some(n) = attachment.inline {
+                    images.insert(n, file.path.to_string_lossy().into_owned());
+                }
+                copied.insert(attachment.id.clone(), Some(file));
+            }
+        }
+        // Only the authored text is scanned: a marker inside a pasted text stays literal.
+        let mut words = String::new();
+        let mut rest = text.as_str();
+        while let Some(start) = rest.find("[Image #") {
+            words.push_str(&rest[..start]);
+            rest = &rest[start..];
+            let resolved = rest.find(']').and_then(|end| {
+                rest[8..end]
+                    .parse::<u32>()
+                    .ok()
+                    .and_then(|n| images.get(&n))
+                    .map(|path| (end, path))
+            });
+            if let Some((end, path)) = resolved {
+                words.push_str(path);
+                rest = &rest[end + 1..];
+            } else {
+                words.push('[');
+                rest = &rest[1..];
+            }
+        }
+        words.push_str(rest);
+        let (parts, _) = self
+            .message_input(
+                &at,
+                &owner,
+                conv.kind,
+                &words,
+                &pastes,
+                &mentions,
+                &mut copied,
+                &mut Vec::new(),
+                None,
+            )
+            .await?;
+        Ok(parts
+            .into_iter()
+            .filter_map(|part| match part {
+                InputPart::Text(text) => Some(text),
+                InputPart::Skill { path, .. } => Some(format!("\n[Skill: {}]", path.display())),
+                InputPart::Image(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""))
+    }
+
     /// What the user sent one of `owner`'s workers directly, as its CLI takes it: their words,
     /// pastes, attachments and mentions as a session's turn takes them, with the files written
     /// in the worker's `scratch` folder. Every attachment is written (and every paste read)

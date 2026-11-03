@@ -895,6 +895,13 @@ pub enum Request {
         card_id: CardId,
         decision: ApprovalDecision,
     },
+    /// Saves pasted images and resolves composer pastes and mentions for a plain-text card answer.
+    PrepareCardAnswer {
+        conversation_id: ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
+    },
     /// Answers a question card's round: one answer per question, the picked option's label or
     /// the user's own words.
     AnswerQuestion {
@@ -1790,6 +1797,9 @@ pub enum Response {
         note: Option<String>,
     },
     AnswerCard,
+    PrepareCardAnswer {
+        text: String,
+    },
     AnswerQuestion,
     WriteUpFeedback {
         write_up: FeedbackWriteUp,

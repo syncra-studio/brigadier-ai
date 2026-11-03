@@ -364,3 +364,69 @@ async fn the_clis_message_of_a_send_carries_its_request_live_and_read() {
     assert_eq!(read, [vec![request]]);
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn card_answer_saves_images_and_uses_composer_pastes_and_mentions() {
+    use crate::model::Mention;
+    let (flow, _) = flow("card-answer-pastes").await;
+    let bytes = b"pasted image bytes";
+    let mut image = flow
+        .core
+        .add_attachment(
+            "screen.png".into(),
+            "image/png".into(),
+            bytes.to_vec(),
+            false,
+        )
+        .await
+        .unwrap();
+    image.inline = Some(1);
+    let mut paste = flow
+        .core
+        .add_attachment(
+            "Pasted text.txt".into(),
+            "text/plain".into(),
+            b"literal [Image #1] in pasted text".to_vec(),
+            true,
+        )
+        .await
+        .unwrap();
+    paste.inline = Some(1);
+    let text = flow
+        .manager
+        .prepare_card_answer(
+            flow.conversation.clone(),
+            "Before [Image #1] then [Pasted text #1] after [Image #1]".into(),
+            vec![image.clone(), paste],
+            vec![Mention::File {
+                path: "src/main.rs".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    let path = text
+        .strip_prefix("Before ")
+        .unwrap()
+        .split(" then ")
+        .next()
+        .unwrap();
+    assert!(std::path::Path::new(path).is_absolute(), "{path}");
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    assert!(text.contains(&format!("after {path}")), "{text}");
+    assert!(text.contains("[Pasted text #1, pasted here by the user:]\nliteral [Image #1] in pasted text\n[end of pasted text #1]"), "{text}");
+    assert!(text.contains("[mentions the file src/main.rs]"), "{text}");
+    // Missing image bytes are an error before an answer can go to a question tool.
+    image.id = "0".repeat(64);
+    assert!(
+        flow.manager
+            .prepare_card_answer(
+                flow.conversation.clone(),
+                "[Image #1]".into(),
+                vec![image],
+                vec![]
+            )
+            .await
+            .is_err()
+    );
+    flow.stop().await;
+}

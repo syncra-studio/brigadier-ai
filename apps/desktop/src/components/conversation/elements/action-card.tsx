@@ -246,12 +246,16 @@ export function ActionOption({
  */
 export function ActionFreeText({
   children,
+  editor,
   highlighted,
   marker = true,
   style,
   className,
-  ...props
-}: ComponentProps<"input"> & {
+}: {
+  /** The shared composer editor supplied by the card. */
+  editor: ReactNode;
+  style?: CSSProperties;
+  className?: string;
   children?: ReactNode;
   highlighted?: boolean;
   /** The ✎, for the row under numbered answers; a bare field has none. */
@@ -262,7 +266,7 @@ export function ActionFreeText({
       role="presentation"
       style={style}
       className={cn(
-        "text-code flex min-h-8 w-full items-center gap-2 px-2 py-1.5",
+        "text-code flex min-h-8 w-full items-start gap-2 px-2 py-1.5",
         marker && "hover:bg-foreground/5 rounded-2xl transition-colors",
         highlighted && "bg-foreground/5",
         className,
@@ -273,10 +277,7 @@ export function ActionFreeText({
           <Pencil className="size-icon-sm" />
         </span>
       )}
-      <input
-        className="placeholder:text-foreground/50 min-w-0 flex-1 self-center bg-transparent outline-none"
-        {...props}
-      />
+      {editor}
       {children && <div className="flex items-center gap-2 place-self-end">{children}</div>}
     </div>
   );
