@@ -13,13 +13,17 @@ type Look = {
 };
 type States = "unknown" | "cached" | "missingBoth" | "missingAccessibility" | "confirmCapture" | "ready" | "readyCached" | "restarting" | "failed" | "off";
 type Linux = { sections: string[]; rows: string[]; notes: string; setup: string; setupButtons: string[] };
-type Seen = Record<States, Look> & { first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[]; linux: Linux; windowsNoNotes: string; linuxNoNotes: string; windowsCachedNoNotes: string; linuxCachedNoNotes: string; windowsOffNoNotes: string; linuxOffNoNotes: string };
+type Model = { shown: string; disabled: boolean | null };
+type Seen = Record<States, Look> & { model: Model; modelMine: Model; first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[]; linux: Linux; windowsNoNotes: string; linuxNoNotes: string; windowsCachedNoNotes: string; linuxCachedNoNotes: string; windowsOffNoNotes: string; linuxOffNoNotes: string };
 
 // The real page in Chromium over a faked daemon.
 test("computer use settings: enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "computer-use.html?drive=1", "computer-use-result", 15000)) as Seen;
-  assert.deepEqual(seen.sections, ["Enable", "Menu bar", "Permissions", "Setup"]);
-  assert.deepEqual(seen.rows, ["Let sessions use apps on this Mac", "Show in menu bar", "Accessibility", "Screen Recording", "Setup"]);
+  assert.deepEqual(seen.sections, ["Enable", "Model", "Menu bar", "Permissions", "Setup"]);
+  assert.deepEqual(seen.rows, ["Let sessions use apps on this Mac", "Model for computer use", "Show in menu bar", "Accessibility", "Screen Recording", "Setup"]);
+  // The model for computer use: the rules file's "Computer use" row, the shipped one first, then the user's own.
+  assert.deepEqual(seen.model, { shown: "Opus · High", disabled: false });
+  assert.deepEqual(seen.modelMine, { shown: "Gpt-6-luna · Low", disabled: false });
   // Permissions nothing has read yet (no helper has run for this data folder), with computer use
   // on: the page asks the helper once and shows what it holds, "Checking…" meanwhile.
   assert.deepEqual(seen.listingCalls, ["getComputerUse", "checkComputerUse"]);
@@ -78,8 +82,8 @@ test("computer use settings: enable, menu bar, permissions and setup, in every s
   ]);
 
   // Linux (Windows alike): no permissions, menu bar or setup window; what the session allows.
-  assert.deepEqual(seen.linux.sections, ["Enable", "This computer", "Setup"]);
-  assert.deepEqual(seen.linux.rows, ["Let sessions use apps on this computer", "This computer", "Setup"]);
+  assert.deepEqual(seen.linux.sections, ["Enable", "Model", "This computer", "Setup"]);
+  assert.deepEqual(seen.linux.rows, ["Let sessions use apps on this computer", "Model for computer use", "This computer", "Setup"]);
   assert.equal(seen.linux.notes, "Wayland session: apps running under XWayland work in the background.");
   assert.equal(seen.linux.setup, "Ready. Agents can use apps on this computer.");
   assert.deepEqual(seen.linux.setupButtons, []);

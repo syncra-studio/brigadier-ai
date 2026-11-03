@@ -7,7 +7,7 @@ import { useListedModels } from "@/app/settings/routing/pickers";
 import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
 import { rowModelName, workName, type WorkRow } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
-import { Code, Grid, Nodes, PullRequestOpen, Telescope } from "@/components/icons";
+import { Code, Cursor, Grid, Nodes, PullRequestOpen, Telescope } from "@/components/icons";
 import type { ModelRules } from "@/ipc/generated";
 import { joinWords } from "@/lib/routing";
 
@@ -17,6 +17,7 @@ const KIND_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "Bounded implementation": Code,
   "Mechanical changes and search": Telescope,
   "Independent review": PullRequestOpen,
+  "Computer use": Cursor,
 };
 
 /**
