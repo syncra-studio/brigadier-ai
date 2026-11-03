@@ -159,7 +159,7 @@ pub fn insert_units(
         }
         let ends_char = units
             .get(index + 1)
-            .map_or(true, |next| !is_low_surrogate(*next));
+            .is_none_or(|next| !is_low_surrogate(*next));
         if ends_char {
             typed += 1;
             if let Some(progress) = progress {

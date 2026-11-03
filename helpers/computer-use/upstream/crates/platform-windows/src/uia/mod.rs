@@ -29,6 +29,7 @@ use windows::Win32::UI::Accessibility::{
 };
 
 pub(crate) mod click;
+mod dialog_owner;
 pub mod fg_bypass;
 mod menu;
 pub mod scroll;
@@ -151,11 +152,66 @@ pub fn walk_tree_budgeted(
     max_depth: usize,
     budget: &mut WalkBudget,
 ) -> UiaTreeResult {
+    wait_for_chromium_page(hwnd, budget);
     let tree = unsafe { walk_tree_unsafe(hwnd, query, max_depth, budget) };
     if budget.expired() {
         budget.stop_for_timeout();
     }
     tree
+}
+
+/// Chromium builds a window's page accessibility tree only after the first
+/// UI Automation client asks for it. Live (2026-11-02, Windows 11 26300): the
+/// first read of a freshly launched Chrome page listed the address bar and no
+/// page at all. Wait briefly, within the read's budget, for the page document.
+fn wait_for_chromium_page(hwnd: u64, budget: &WalkBudget) {
+    use windows::Win32::UI::Accessibility::{TreeScope_Descendants, UIA_DocumentControlTypeId};
+    if !crate::input::is_chromium_target_window(hwnd) {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let limit = page_wait_limit(budget.time_limit());
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    let Ok(automation) = (unsafe {
+        CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+    }) else {
+        return;
+    };
+    let Ok(root) =
+        (unsafe { automation.ElementFromHandle(windows::Win32::Foundation::HWND(hwnd as *mut _)) })
+    else {
+        return;
+    };
+    let Ok(document) = (unsafe {
+        automation.CreatePropertyCondition(
+            UIA_ControlTypePropertyId,
+            &windows::core::VARIANT::from(UIA_DocumentControlTypeId.0),
+        )
+    }) else {
+        return;
+    };
+    loop {
+        if unsafe { root.FindFirst(TreeScope_Descendants, &document) }.is_ok() {
+            return;
+        }
+        match page_wait_sleep(limit.saturating_sub(started.elapsed())) {
+            Some(pause) => std::thread::sleep(pause),
+            None => return,
+        }
+    }
+}
+
+/// The page wait runs before the walk's own clock starts, so it is bounded by
+/// the caller's `timeout_ms` itself, and never longer than 600 ms.
+fn page_wait_limit(time_limit: Option<std::time::Duration>) -> std::time::Duration {
+    let backstop = std::time::Duration::from_millis(600);
+    time_limit.map_or(backstop, |limit| limit.min(backstop))
+}
+
+/// The next pause between page checks, capped to the time left; `None` once
+/// the wait is used up.
+fn page_wait_sleep(remaining: std::time::Duration) -> Option<std::time::Duration> {
+    (!remaining.is_zero()).then(|| remaining.min(std::time::Duration::from_millis(150)))
 }
 
 unsafe fn walk_tree_unsafe(
@@ -395,8 +451,7 @@ unsafe fn walk_tree_unsafe(
             // the timeout_ms walk budget (because we skipped the hang-prone
             // fallback). Without this the caller sees an empty tree
             // and no error, which is less actionable.
-            let stub = format!(
-                "- Window <SAL class — empty primary UIA tree>\n\
+            let stub = "- Window <SAL class — empty primary UIA tree>\n\
                  (SAL providers don't expose modal-dialog children via \
                  ElementFromHandle, and the desktop-root fallback walk that \
                  would normally find them is known to hang on SAL Subtree \
@@ -404,7 +459,7 @@ unsafe fn walk_tree_unsafe(
                  (a) pixel `click(x, y)` off the screenshot `get_window_state` \
                  returns alongside this tree; \
                  (b) `press_key` with `delivery_mode:\"foreground\"` (Esc / Enter / Y / N).)\n"
-            );
+                .to_string();
             return UiaTreeResult {
                 tree_markdown: stub,
                 nodes: Vec::new(),
@@ -803,6 +858,7 @@ unsafe fn walk_native_level(
 
 /// Project one cached element into `nodes`/`lines`. Returns its control type
 /// and the parent index its descendants should inherit.
+#[allow(clippy::too_many_arguments)] // Lint: upstream signature, kept as is.
 fn emit_cached_node(
     element: &IUIAutomationElement,
     depth: usize,
@@ -956,12 +1012,13 @@ fn read_cached_bool(
     }
 }
 
+/// Center x, center y, and the (left, top, right, bottom) rect when it is meaningful.
+type CenterAndRect = (i32, i32, Option<(i32, i32, i32, i32)>);
+
 /// Read bounding rect as (center_x, center_y, Some((l,t,r,b))). Returns
 /// rect=None when the element has no meaningful BoundingRectangle (offscreen
 /// containers, structure-only elements).
-fn read_cached_bounding_rect_full(
-    element: &IUIAutomationElement,
-) -> (i32, i32, Option<(i32, i32, i32, i32)>) {
+fn read_cached_bounding_rect_full(element: &IUIAutomationElement) -> CenterAndRect {
     unsafe {
         match element.CachedBoundingRectangle() {
             Ok(r) if r.right > r.left && r.bottom > r.top => (
@@ -1146,6 +1203,38 @@ fn render_lines(lines: &[(usize, String)]) -> String {
 
 fn filter_tree(markdown: &str, query: &str) -> String {
     cua_driver_core::window_state_view::filter_tree_markdown(markdown, query)
+}
+
+#[cfg(test)]
+mod chromium_page_wait_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn the_page_wait_never_outlasts_the_callers_timeout() {
+        assert_eq!(
+            page_wait_limit(Some(Duration::from_millis(100))),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            page_wait_limit(Some(Duration::from_secs(5))),
+            Duration::from_millis(600)
+        );
+        assert_eq!(page_wait_limit(None), Duration::from_millis(600));
+    }
+
+    #[test]
+    fn each_pause_fits_in_the_time_left() {
+        assert_eq!(
+            page_wait_sleep(Duration::from_millis(500)),
+            Some(Duration::from_millis(150))
+        );
+        assert_eq!(
+            page_wait_sleep(Duration::from_millis(40)),
+            Some(Duration::from_millis(40))
+        );
+        assert_eq!(page_wait_sleep(Duration::ZERO), None);
+    }
 }
 
 #[cfg(test)]

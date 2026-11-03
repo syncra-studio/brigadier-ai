@@ -209,17 +209,13 @@ fn get_uia() -> Option<IUIAutomation> {
 /// Returns an empty vec on any UIA failure — callers should treat UIA as a
 /// best-effort source and union with `EnumWindows`.
 pub fn enumerate_top_level_windows() -> Vec<WindowInfo> {
-    match run_uia_with_deadline(
+    run_uia_with_deadline(
         "desktop enumeration",
         DESKTOP_CALL_TIMEOUT,
         "Win32-only window list",
         enumerate_top_level_windows_unbounded,
-    ) {
-        Ok(windows) => windows,
-        Err(UiaDeadlineError::Timeout | UiaDeadlineError::Busy | UiaDeadlineError::Unavailable) => {
-            Vec::new()
-        }
-    }
+    )
+    .unwrap_or_default()
 }
 
 fn enumerate_top_level_windows_unbounded() -> Vec<WindowInfo> {

@@ -48,7 +48,7 @@ pub fn build_registry_with_provider(
             launch_browser::cleanup_documents(scope.as_deref());
             task_browser::retire_all(scope.as_deref());
         });
-        return registry;
+        registry
     }
 
     #[cfg(not(target_os = "windows"))]

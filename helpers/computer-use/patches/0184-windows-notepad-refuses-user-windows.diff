@@ -1,0 +1,149 @@
+Why: Refuse a Notepad launch while Notepad shows a window this helper did not open: Windows Notepad keeps all its windows in one process and opens a file as a tab inside a window it already shows (it has no switch for a window of its own), so the file would land in the user's window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Windows the helper's own Notepad launches opened stay reusable.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index dbdd46af1..6b1cc374c 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -2671,6 +2671,24 @@ impl Tool for LaunchAppTool {
+             }));
+         }
+ 
++        let notepad_launch = aumid_for_uwp
++            .as_deref()
++            .or(resolved_target.as_deref())
++            .is_some_and(super::launch_policy::is_notepad_target);
++        if notepad_launch {
++            let foreign =
++                tokio::task::spawn_blocking(super::launch_browser::foreign_notepad_windows)
++                    .await
++                    .unwrap_or_default();
++            if !foreign.is_empty() {
++                let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
++                return ToolResult::error(super::launch_policy::notepad_open_refusal(&titles))
++                    .with_structured(json!({"code": "notepad_open_in_user_window", "launch_confirmed": false, "windows": []}));
++            }
++        }
++        // Every reply from here on, failure or not, records the Notepad
++        // windows this launch opened as the helper's own.
++        let _own_notepad_windows = notepad_launch.then(|| super::launch_browser::OwnNotepadWindows);
+         let fresh_document_path = if urls.is_empty()
+             && extra_args.is_empty()
+             && aumid_for_uwp
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+index 72acf3ba5..a9311f441 100644
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -277,6 +277,58 @@ pub(super) fn create_notepad_document() -> anyhow::Result<std::path::PathBuf> {
+     Ok(path)
+ }
+ 
++/// Notepad windows that this helper's own launches opened. Only these may
++/// receive another launch (see `launch_policy::foreign_notepad_windows`).
++static OWN_NOTEPAD_WINDOWS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
++
++/// Visible top-level Notepad windows (minimized included) with their titles.
++pub(super) fn open_notepad_windows() -> Vec<(u64, String)> {
++    let pids: std::collections::HashSet<_> = crate::win32::list_processes()
++        .into_iter()
++        .filter(|process| super::launch_policy::is_notepad_target(&process.name))
++        .map(|process| process.pid)
++        .collect();
++    if pids.is_empty() {
++        return Vec::new();
++    }
++    crate::win32::list_windows_via_win32(None)
++        .into_iter()
++        .filter(|window| pids.contains(&window.pid))
++        .map(|window| (window.hwnd, window.title))
++        .collect()
++}
++
++/// Open Notepad windows this helper did not open, with their titles.
++pub(super) fn foreign_notepad_windows() -> Vec<(u64, String)> {
++    let open = open_notepad_windows();
++    let ids: Vec<u64> = open.iter().map(|(window, _)| *window).collect();
++    let mut own = OWN_NOTEPAD_WINDOWS.lock().unwrap();
++    own.retain(|window| ids.contains(window));
++    let foreign = super::launch_policy::foreign_notepad_windows(&ids, &own);
++    open.into_iter()
++        .filter(|(window, _)| foreign.contains(window))
++        .collect()
++}
++
++/// Held by a Notepad launch that found no foreign window: when its reply is
++/// built, every Notepad window then open came from this helper's launches.
++pub(super) struct OwnNotepadWindows;
++impl Drop for OwnNotepadWindows {
++    fn drop(&mut self) {
++        record_own_notepad_windows();
++    }
++}
++
++fn record_own_notepad_windows() {
++    let open = open_notepad_windows();
++    let mut own = OWN_NOTEPAD_WINDOWS.lock().unwrap();
++    for (window, _) in open {
++        if !own.contains(&window) && own.len() < 64 {
++            own.push(window);
++        }
++    }
++}
++
+ pub(super) async fn notepad_document_window(
+     filename: String,
+ ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+index 806dbb9e8..2ae98b574 100644
+--- a/crates/platform-windows/src/tools/launch_policy.rs
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -184,6 +184,32 @@ pub(crate) fn is_notepad_target(target: &str) -> bool {
+             .starts_with("microsoft.windowsnotepad_")
+ }
+ 
++/// Windows Notepad keeps every window in one process and opens a file as a
++/// tab in a window it already shows; it has no switch for a window of its own.
++/// The windows this helper did not open belong to the user, so a launch while
++/// one is open is refused rather than sent into it.
++pub(crate) fn foreign_notepad_windows(open: &[u64], own: &[u64]) -> Vec<u64> {
++    open.iter()
++        .copied()
++        .filter(|window| !own.contains(window))
++        .collect()
++}
++
++pub(crate) fn notepad_open_refusal(titles: &[String]) -> String {
++    let named = titles
++        .iter()
++        .filter(|title| !title.is_empty())
++        .map(|title| format!("{title:?}"))
++        .collect::<Vec<_>>()
++        .join(", ");
++    let which = if named.is_empty() {
++        String::new()
++    } else {
++        format!(" ({named})")
++    };
++    format!("No app was launched: Notepad is already open in a window this helper did not open{which}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it would appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
++}
++
+ pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
+     match executable_name(target).as_str() {
+         "chrome" | "msedge" | "brave" | "chromium" | "vivaldi" | "opera" => Some("--new-window"),
+@@ -223,6 +249,17 @@ mod fresh_document_tests {
+         assert!(!is_notepad_target("Notepad++"));
+     }
+     #[test]
++    fn notepad_windows_the_helper_did_not_open_block_a_launch() {
++        assert!(foreign_notepad_windows(&[], &[]).is_empty());
++        assert!(foreign_notepad_windows(&[7, 9], &[7, 9, 11]).is_empty());
++        assert_eq!(foreign_notepad_windows(&[7, 8], &[7]), vec![8]);
++        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()]);
++        assert!(refusal.starts_with("No app was launched"));
++        assert!(refusal.contains("\"notes.txt - Notepad\""));
++        assert!(refusal.contains("close Notepad"));
++        assert!(!notepad_open_refusal(&[String::new()]).contains("()"));
++    }
++    #[test]
+     fn restored_document_titles_cannot_match_the_new_file() {
+         assert!(document_title_matches(
+             "brigadier-cu-123.txt - Notepad",

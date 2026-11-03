@@ -18,8 +18,9 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect, IsWindow,
-    SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND, WM_NCHITTEST,
+    GetAncestor, GetClassNameW, GetDlgCtrlID, GetDlgItem, GetParent, GetWindowRect,
+    GetWindowThreadProcessId, IsWindow, SendMessageTimeoutW, GA_ROOT, SMTO_ABORTIFHUNG, WM_CLOSE,
+    WM_COMMAND, WM_NCHITTEST,
 };
 
 struct ComApartment(bool);
@@ -191,36 +192,39 @@ fn send_command(
     Ok(())
 }
 
-/// Exact IDOK control in a native common dialog. Do this before Invoke:
-/// UIA can reject the disabled dialog's button with UIA_E_ELEMENTNOTENABLED.
-fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<HWND> {
+/// Exact IDOK or IDCANCEL control in a native common dialog, with its id.
+/// Do this before Invoke: UIA can reject the disabled dialog's button with
+/// UIA_E_ELEMENTNOTENABLED, and Invoke on a background dialog's button
+/// activates the dialog in its own thread, which raises it over the user's
+/// window for a few ms. The button's own WM_COMMAND activates nothing.
+fn common_dialog_button(hwnd: HWND, element: &IUIAutomationElement) -> Option<(HWND, i32)> {
     unsafe {
         if element.CurrentControlType().ok()? != UIA_ButtonControlTypeId {
             return None;
         }
-        let button = GetDlgItem(hwnd, 1).ok()?;
-        if !crate::input::action_policy::common_dialog_accept(
-            &class_name(hwnd),
-            &class_name(button),
-            GetDlgCtrlID(button),
-        ) || GetParent(button).ok()? != hwnd
-            || !IsWindowEnabled(button).as_bool()
-        {
-            return None;
-        }
         let native = element.CurrentNativeWindowHandle().ok();
+        let (button, id) = [1, 2].into_iter().find_map(|id| {
+            let button = GetDlgItem(hwnd, id).ok()?;
+            let usable = crate::input::action_policy::common_dialog_command(
+                &class_name(hwnd),
+                &class_name(button),
+                GetDlgCtrlID(button),
+            ) == Some(id)
+                && GetParent(button).ok()? == hwnd
+                && IsWindowEnabled(button).as_bool();
+            let named = native == Some(button)
+                || element.CurrentAutomationId().ok()? == if id == 1 { "1" } else { "2" };
+            (usable && named).then_some((button, id))
+        })?;
         if native == Some(button) {
-            return Some(button);
-        }
-        if element.CurrentAutomationId().ok()?.to_string() != "1" {
-            return None;
+            return Some((button, id));
         }
         let r = element.CurrentBoundingRectangle().ok()?;
         let mut b = windows::Win32::Foundation::RECT::default();
         GetWindowRect(button, &mut b).ok()?;
         let x = r.left + (r.right - r.left) / 2;
         let y = r.top + (r.bottom - r.top) / 2;
-        (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some(button)
+        (x >= b.left && x < b.right && y >= b.top && y < b.bottom).then_some((button, id))
     }
 }
 
@@ -333,7 +337,13 @@ pub(crate) fn retained_click(
     super::windows_enum::run_uia_with_deadline_cancelable(
         "semantic-click", Duration::from_secs(4), "no fallback input",
         move |cancelled| try_click(hwnd, retained.as_ptr(), expand_only, &cancelled),
-    ).map_err(|error| anyhow::anyhow!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error)))?
+    ).map_err(|error| {
+        // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
+        if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
+            super::dialog_owner::restore_hidden_owners();
+        }
+        anyhow::anyhow!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error))
+    })?
 }
 
 /// None means no supported semantic pattern. A failed supported action is terminal.
@@ -351,7 +361,19 @@ fn try_click(
     // Keep target/owner protection alive through native commands and their
     // bounded readback, even if this helper was reached without a window_id.
     let noactivate = crate::input::NoActivateGuard::arm(HWND(hwnd as *mut _));
+    // A background dialog that closes activates its owner, which Windows
+    // raises over the user's window: keep the owner hidden until it is gone.
+    // The token may come from a read of the owner window, which also lists
+    // the dialog's controls: arm on the window the element really lives in.
+    let hidden_owner = (!expand_only).then(|| {
+        let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
+        super::dialog_owner::HiddenOwner::arm(
+            element_root_window(HWND(hwnd as *mut _), &element),
+            cancelled,
+        )
+    });
     let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
+    drop(hidden_owner);
     // Say so when the app took the front during the click (a Save closing
     // its dialog activates the owner), and whether your window got it back.
     if let (Ok(Some(reply)), Some(note)) = (&mut result, noactivate.action_note()) {
@@ -371,6 +393,42 @@ fn try_click(
     result
 }
 
+/// The top-level window holding `element`: its own or its nearest ancestor's
+/// native window, when that belongs to the token window's process.
+/// Falls back to the token window.
+fn element_root_window(token: HWND, element: &IUIAutomationElement) -> HWND {
+    fn process(hwnd: HWND) -> u32 {
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        pid
+    }
+    let native = |e: &IUIAutomationElement| {
+        unsafe { e.CurrentNativeWindowHandle() }
+            .ok()
+            .filter(|h| !h.0.is_null())
+    };
+    let mut found = native(element);
+    if found.is_none() {
+        if let Ok(walker) = automation().and_then(|uia| unsafe { uia.ControlViewWalker() }) {
+            let mut current = element.clone();
+            for _ in 0..16 {
+                let Ok(parent) = (unsafe { walker.GetParentElement(&current) }) else {
+                    break;
+                };
+                found = native(&parent);
+                if found.is_some() {
+                    break;
+                }
+                current = parent;
+            }
+        }
+    }
+    found
+        .map(|h| unsafe { GetAncestor(h, GA_ROOT) })
+        .filter(|root| !root.0.is_null() && process(*root) != 0 && process(*root) == process(token))
+        .unwrap_or(token)
+}
+
 fn try_click_guarded(
     hwnd: u64,
     ptr: usize,
@@ -380,18 +438,25 @@ fn try_click_guarded(
     let element = ManuallyDrop::new(unsafe { IUIAutomationElement::from_raw(ptr as *mut _) });
     let readback = Readback::new(hwnd, Some(ptr));
     if !expand_only {
-        if let Some(button) = common_dialog_button(HWND(hwnd as *mut _), &element) {
+        // The token may come from the owner's read, which lists the dialog's controls.
+        let dialog = element_root_window(HWND(hwnd as *mut _), &element);
+        if let Some((button, id)) = common_dialog_button(dialog, &element) {
+            let readback = Readback::new(dialog.0 as usize as u64, Some(ptr));
             return super::fg_bypass::run_with_uwp_bypass(hwnd as isize, || {
                 ensure_active(cancelled)?;
                 let dispatch = send_command(
-                    HWND(hwnd as *mut _),
+                    dialog,
                     WM_COMMAND,
-                    WPARAM(1),
+                    WPARAM(id as usize),
                     LPARAM(button.0 as isize),
                 );
                 let observed = readback.finish(
                     Some(ptr),
-                    "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)",
+                    if id == 1 {
+                        "Common-dialog IDOK WM_COMMAND (dialog closure does not prove file contents)"
+                    } else {
+                        "Common-dialog IDCANCEL WM_COMMAND"
+                    },
                     ActionTransport::WindowsSendMessage,
                 );
                 if let Err(error) = dispatch {
@@ -503,11 +568,19 @@ fn try_click_guarded(
 /// desktop: an occluding app must not become the click target.
 pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolResult>> {
     match super::windows_enum::run_uia_with_deadline_cancelable(
-        "semantic-point-click", Duration::from_secs(4), "no fallback input",
+        "semantic-point-click",
+        Duration::from_secs(4),
+        "no fallback input",
         move |cancelled| at_point_inner(hwnd, x, y, &cancelled),
     ) {
         Ok(result) => result,
-        Err(error) => Ok(Some(ToolResult::error(format!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error))))),
+        Err(error) => {
+            // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
+            if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
+                super::dialog_owner::restore_hidden_owners();
+            }
+            Ok(Some(ToolResult::error(format!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error)))))
+        }
     }
 }
 fn at_point_inner(

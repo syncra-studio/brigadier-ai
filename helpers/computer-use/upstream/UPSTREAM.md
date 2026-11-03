@@ -213,6 +213,39 @@ Patches applied, in order:
 - `patches/0182-windows-dialog-owner-hand-back-target-only.diff`: Minimize a dialog's root owner to hand the front back only when that owner is one of the target app's own windows, by the same rule that matched the dialog; a dialog owned by another process's window, such as the user's, is never minimized through it.
 
 - `patches/0183-windows-action-note-had-the-front.diff`: Say "had the front", not "took the front", in an input action's reply note: an action that starts while the app's dialog is already in front (a displaced watch) observes it at once, and the app did not take the front during that action.
+
+- `patches/0184-windows-notepad-refuses-user-windows.diff`: Refuse a Notepad launch while Notepad shows a window this helper did not open. Windows Notepad keeps all its windows in one process and opens a file as a tab inside a window it already shows; it has no command-line switch or activation argument for a window of its own. The file would land in the user's window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Windows that the helper's own Notepad launches opened stay reusable.
+
+- `patches/0185-windows-hotkey-confirms-closed-window.diff`: A Windows shortcut that closes its own window (Ctrl+Shift+W in Notepad) says the window closed, instead of an error about a menu that closed with it; a shortcut sent to a window that is gone, or disabled behind its own dialog, says so in plain words.
+
+- `patches/0186-windows-launch-front-never-left.diff`: When Windows reports a launched app's activation but the user's window was in front at every check and at reply time, a launch reply says so instead of calling it unconfirmed.
+
+- `patches/0187-windows-dialog-owner-hidden-while-closing.diff`: A click that closes a target app's background dialog (Save as Cancel or Save) hides the dialog's owner window for the action and shows it again directly under the front window: Windows activates the owner when a modal dialog ends and raises it over the user's window, even with WS_EX_NOACTIVATE set.
+
+- `patches/0188-windows-shortcut-menu-closed-by-its-command.diff`: A Windows shortcut found in a closed menu counts the menu as closed once its flyout window is gone: a command that opens a dialog (Notepad Ctrl+W, "Save changes?") can make the menu header unreadable, and the reply no longer reports the shortcut search as failed after its command ran.
+
+- `patches/0189-windows-settings-refuses-user-window.diff`: Refuse an ms-settings: launch while a Settings window this helper did not open is one the user can see or switch to: Settings has a single window and the launch would change its page. A Settings frame Windows keeps cloaked on no virtual desktop after the user closed it is not the user's. Settings Close waits up to 8 s for the window to go, as Settings hid its frame 2.9 s after WM_CLOSE.
+
+- `patches/0190-windows-launch-broker-event-front-at-reply.diff`: A launch whose only activation evidence is an unattributed ApplicationFrameHost event says whether the user's window was in front at reply time.
+
+- `patches/0191-windows-browser-window-binds-by-exact-title.diff`: Typing into a browser page binds the addressed window when a second launch opened its window at the same place and one page title contains another: the window is the only one with the native bounds holding a page with the visible URL whose title is exactly the native title before " - <browser>".
+
+- `patches/0192-windows-retired-browser-profile-name-ends.diff`: Retiring a task-browser profile passes the new folder name with a terminating NUL: Windows read past the name, the retired folder got stray characters after its nonce, and it was never deleted.
+
+- `patches/0193-windows-chromium-first-read-waits-for-page.diff`: Reading a Chromium window waits briefly, within the read's budget, for its page document: Chromium builds the page accessibility tree only after the first UI Automation client asks, and the first read of a new Chrome page listed only the address bar.
+
+- `patches/0194-windows-dialog-owner-hidden-for-owner-read-token.diff`: Clicking a background dialog's button through a token read from its owner window also hides the owner while the dialog closes: the owner's read lists the dialog's controls, and the click now looks up the window the element really lives in, so the closing dialog no longer raises itself and its owner over the user's window (4 ms, Notepad Save as Cancel).
+
+- `patches/0195-windows-common-dialog-cancel-sends-idcancel.diff`: A click on a common dialog's Cancel button sends the button's own IDCANCEL WM_COMMAND to the dialog, as Save already sends IDOK, and resolves the dialog from the element when the token came from the owner's read: UI Automation Invoke on the background dialog's Win32 button activated the dialog in the app's own thread, which raised it over the user's window for 6 ms.
+
+- `patches/0196-cua-driver-core-clippy-1-98-lints.diff`: Lint-only rewrites in cua-driver-core so `cargo clippy -p platform-windows --all-targets -- -D warnings` passes on toolchain 1.98: `as_chunks` instead of `chunks_exact` with a constant size, an explicit `truncate(false)` (the default) on the Windows history lock file, and one needless borrow. Behaviour is unchanged on every platform.
+
+- `patches/0197-cursor-overlay-clippy-1-98-lints.diff`: Lint-only rewrites in cursor-overlay for the same check: `as_chunks_mut` instead of `chunks_exact_mut` with a constant size, and the Windows theme-store block ends in its value instead of a needless `return`. The macOS and Linux blocks are unchanged.
+
+- `patches/0198-platform-windows-clippy-clean.diff`: platform-windows passes its own clippy with `-D warnings`: clippy's machine-applicable suggestions, `# Safety` docs on two unsafe scroll functions, a type alias, a test-only `cfg` on a helper only tests call, a removed unused duplicate of `tools::build_registry`, and scoped allows (four upstream signatures with eight arguments, and one comparison that keeps its lossy UTF-16 decode to match how the field value was read). Behaviour is unchanged.
+
+- `patches/0199-windows-hidden-owner-restored-at-click-deadline.diff`: A click that times out shows again any owner window it hid: the caller restores what the provider worker hid when the 4 s click deadline passes, and a worker that arms after the deadline hides nothing, so a hung UI Automation call can no longer leave the app's own window hidden.
+
 - `patches/0200-macos-health-accepts-brigadier-bundle.diff`: health_report's bundle check passes for Brigadier's helper app (ai.brigadier.computer-use and the development id), so a correctly set up helper no longer always reads as degraded.
 - `patches/0201-macos-finder-reads-leave-out-desktop.diff`: A window-scoped read of a Finder window leaves out Finder's desktop scroll area, so the user's desktop icons are no longer listed as part of the window.
 - `patches/0202-macos-text-area-click-places-caret.diff`: A token click on a text area or text field that has no press action focuses it and puts its caret at the end of its text, confirmed by reading the caret back, instead of failing with AX error -25206.
@@ -234,6 +267,10 @@ Patches applied, in order:
 
 - `patches/0253-linux-real-input-without-uinput.diff`: Linux background keys and pixel clicks work without /dev/uinput: the virtual pointer and keyboard pair is fed through its own XTEST devices (core events stay on: Xorg's software cursor keeps a no-core master's cursor without a reference, a use-after-free that aborts the server); keys reach the window under the pair's pointer (PointerRoot focus) so no window manager activates it; the focus guard stamps the user's window with a fresh user time so a dialog the app opens later can't take the front, restores an active window the window manager dropped, ignores a stacking list that was empty at capture, and the focus notes of real input stay on a line of their own.
 - `patches/0254-linux-no-clipped-pointer-points.diff`: Linux background clicks and keys never land at a clipped point: a point off the screen (a window partly off it) is refused with that reason instead of reaching whatever sits at the screen edge, the background keyboard parks only on visible points, and a click reply says the focus was restored only when the focus guard found it back.
+
+- `patches/0255-windows-chromium-page-wait-within-timeout.diff`: The Chromium page wait before a window read is bounded by the caller's timeout_ms, at most 600 ms, with each pause capped to the time left: the walk's own clock starts only at the first node, so a 100 ms read waited the full 600 ms.
+
+- `patches/0256-windows-unconfirmed-launch-refusal-says-so.diff`: After a Notepad or Settings launch did not answer within 15 s, a later launch that finds a window of that app refuses with the true reason: the helper cannot confirm it opened that window, because the earlier launch may have opened it after its reply. Before, the refusal said the helper did not open it, which could be false. The window is still never claimed as the helper's own (Notepad and Settings each run one process that also holds the user's windows).
 
 <!-- sync:end -->
 

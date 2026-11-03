@@ -367,6 +367,7 @@ fn search_menu_level(
         anyhow::ensure!(visited.len() < 32, "accelerator menu search limit reached");
         visited.push(element.clone());
         let prior_popups = popups(hwnd);
+        let saw_popup = std::cell::Cell::new(false);
         let opened = state != ExpandCollapseState_Expanded;
         // Remember the pattern before Expand: a failed provider call may still open it.
         let result = (|| -> anyhow::Result<bool> {
@@ -385,6 +386,7 @@ fn search_menu_level(
                     .into_iter()
                     .filter(|p| !prior_popups.contains(p))
                 {
+                    saw_popup.set(true);
                     scopes.push(unsafe { uia.ElementFromHandle(popup) }?);
                 }
                 for child in &scopes {
@@ -423,13 +425,38 @@ fn search_menu_level(
                 }
                 Ok::<(), windows::core::Error>(())
             });
+            // A matched shortcut that closed its own window (Ctrl+Shift+W)
+            // takes the menu with it: there is nothing left to collapse.
+            if matches!(result, Ok(true))
+                && !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(hwnd) }.as_bool()
+            {
+                return Ok(true);
+            }
+            // A matched command closes its menu flyout itself, and a dialog it
+            // opens (Notepad's "Save changes?") can make the menu header's
+            // provider fail: the flyout's own popup window closing confirms it.
+            let unconfirmed = cleanup.is_err()
+                || unsafe { pattern.CurrentExpandCollapseState() }.ok()
+                    != Some(ExpandCollapseState_Collapsed);
+            if matches!(result, Ok(true)) && unconfirmed && saw_popup.get() {
+                for _ in 0..8 {
+                    if popups(hwnd).iter().all(|p| prior_popups.contains(p)) {
+                        return Ok(true);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                }
+            }
             if let Err(error) = cleanup {
+                if matches!(result, Ok(true)) {
+                    anyhow::bail!("the menu command for this shortcut was invoked, but closing its menu could not be confirmed ({error}); read fresh state before retrying");
+                }
                 anyhow::bail!("accelerator menu search result {result:?}; could not confirm menu cleanup: {error}; read fresh state before retrying");
             }
             anyhow::ensure!(
                 unsafe { pattern.CurrentExpandCollapseState() }.ok()
                     == Some(ExpandCollapseState_Collapsed),
-                "could not confirm accelerator menu collapsed; read fresh state before retrying"
+                "{}could not confirm the menu it opened collapsed; read fresh state before retrying",
+                if matches!(result, Ok(true)) { "the menu command for this shortcut was invoked, but " } else { "" }
             );
         }
         if result? {

@@ -277,6 +277,171 @@ pub(super) fn create_notepad_document() -> anyhow::Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// Notepad windows that this helper's own launches opened. Only these may
+/// receive another launch (see `launch_policy::foreign_notepad_windows`).
+static OWN_NOTEPAD_WINDOWS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+/// Set when a Notepad or Settings launch did not answer within its deadline:
+/// Windows may still open its window after the reply, unrecorded, so a window
+/// that a later launch finds cannot be called the user's for sure. Cleared
+/// once no window of that app is open.
+static UNCONFIRMED_NOTEPAD_LAUNCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static UNCONFIRMED_SETTINGS_LAUNCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn note_unconfirmed_launch(notepad: bool, settings: bool) {
+    use std::sync::atomic::Ordering;
+    if notepad {
+        UNCONFIRMED_NOTEPAD_LAUNCH.store(true, Ordering::Release);
+    }
+    if settings {
+        UNCONFIRMED_SETTINGS_LAUNCH.store(true, Ordering::Release);
+    }
+}
+
+pub(super) fn unconfirmed_notepad_launch() -> bool {
+    UNCONFIRMED_NOTEPAD_LAUNCH.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(super) fn unconfirmed_settings_launch() -> bool {
+    UNCONFIRMED_SETTINGS_LAUNCH.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Visible top-level Notepad windows (minimized included) with their titles.
+pub(super) fn open_notepad_windows() -> Vec<(u64, String)> {
+    let pids: std::collections::HashSet<_> = crate::win32::list_processes()
+        .into_iter()
+        .filter(|process| super::launch_policy::is_notepad_target(&process.name))
+        .map(|process| process.pid)
+        .collect();
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    crate::win32::list_windows_via_win32(None)
+        .into_iter()
+        .filter(|window| pids.contains(&window.pid))
+        .map(|window| (window.hwnd, window.title))
+        .collect()
+}
+
+/// Open Notepad windows this helper did not open, with their titles.
+pub(super) fn foreign_notepad_windows() -> Vec<(u64, String)> {
+    let open = open_notepad_windows();
+    let ids: Vec<u64> = open.iter().map(|(window, _)| *window).collect();
+    if ids.is_empty() {
+        // No window left that the unconfirmed launch could have opened.
+        UNCONFIRMED_NOTEPAD_LAUNCH.store(false, std::sync::atomic::Ordering::Release);
+    }
+    let mut own = OWN_NOTEPAD_WINDOWS.lock().unwrap();
+    own.retain(|window| ids.contains(window));
+    let foreign = super::launch_policy::foreign_notepad_windows(&ids, &own);
+    open.into_iter()
+        .filter(|(window, _)| foreign.contains(window))
+        .collect()
+}
+
+/// Held by a Notepad launch that found no foreign window: when its reply is
+/// built, every Notepad window then open came from this helper's launches.
+pub(super) struct OwnNotepadWindows;
+impl Drop for OwnNotepadWindows {
+    fn drop(&mut self) {
+        record_own_notepad_windows();
+    }
+}
+
+fn record_own_notepad_windows() {
+    let open = open_notepad_windows();
+    let mut own = OWN_NOTEPAD_WINDOWS.lock().unwrap();
+    for (window, _) in open {
+        if !own.contains(&window) && own.len() < 64 {
+            own.push(window);
+        }
+    }
+}
+
+/// Settings windows that this helper's own `ms-settings:` launches opened.
+static OWN_SETTINGS_WINDOWS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether the user can see or switch to a window: not cloaked, or cloaked
+/// only because it is on another virtual desktop. Live (2026-11-02, Windows
+/// 11 26300): after the user closed Settings, its frame stayed as a visible,
+/// shell-cloaked window on no virtual desktop while the app was suspended.
+fn user_reachable(hwnd: u64) -> bool {
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
+    let window = HWND(hwnd as *mut _);
+    let mut cloaked = 0u32;
+    let read = unsafe {
+        DwmGetWindowAttribute(
+            window,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    let desktop = (read.is_ok() && cloaked != 0)
+        .then(|| {
+            let _com = Apartment::new();
+            let manager: IVirtualDesktopManager =
+                unsafe { CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_INPROC_SERVER) }
+                    .ok()?;
+            unsafe { manager.GetWindowDesktopId(window) }
+                .ok()
+                .map(|id| id != windows::core::GUID::zeroed())
+        })
+        .flatten();
+    super::launch_policy::user_reachable(read.is_ok(), cloaked != 0, desktop)
+}
+
+/// Top-level Settings windows the user can reach (EnumWindows attributes
+/// each frame to its app).
+fn open_settings_windows() -> Vec<(u64, String)> {
+    let pids: std::collections::HashSet<_> = crate::win32::list_processes()
+        .into_iter()
+        .filter(|process| super::launch_policy::is_settings_process(&process.name))
+        .map(|process| process.pid)
+        .collect();
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    crate::win32::list_windows_via_win32(None)
+        .into_iter()
+        .filter(|window| pids.contains(&window.pid) && user_reachable(window.hwnd))
+        .map(|window| (window.hwnd, window.title))
+        .collect()
+}
+
+/// Open Settings windows this helper did not open, with their titles.
+pub(super) fn foreign_settings_windows() -> Vec<(u64, String)> {
+    let open = open_settings_windows();
+    let ids: Vec<u64> = open.iter().map(|(window, _)| *window).collect();
+    if ids.is_empty() {
+        UNCONFIRMED_SETTINGS_LAUNCH.store(false, std::sync::atomic::Ordering::Release);
+    }
+    let mut own = OWN_SETTINGS_WINDOWS.lock().unwrap();
+    own.retain(|window| ids.contains(window));
+    let foreign = super::launch_policy::foreign_notepad_windows(&ids, &own);
+    open.into_iter()
+        .filter(|(window, _)| foreign.contains(window))
+        .collect()
+}
+
+/// Held by a Settings launch that found no foreign window: when its reply is
+/// built, any Settings window then open came from this helper's launch.
+pub(super) struct OwnSettingsWindows;
+impl Drop for OwnSettingsWindows {
+    fn drop(&mut self) {
+        let open = open_settings_windows();
+        let mut own = OWN_SETTINGS_WINDOWS.lock().unwrap();
+        for (window, _) in open {
+            if !own.contains(&window) && own.len() < 64 {
+                own.push(window);
+            }
+        }
+    }
+}
+
 pub(super) async fn notepad_document_window(
     filename: String,
 ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {

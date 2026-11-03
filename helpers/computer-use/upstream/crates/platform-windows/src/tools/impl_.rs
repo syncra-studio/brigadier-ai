@@ -585,7 +585,8 @@ async fn close_settings_window(args: Value) -> ToolResult {
             return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
                 .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
         }
-        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(2))
+        // Live (2026-11-02, Windows 11 26300): Settings hid its frame 2.9 s after WM_CLOSE.
+        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(8))
     }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
 }
 
@@ -2671,6 +2672,27 @@ impl Tool for LaunchAppTool {
             }));
         }
 
+        let notepad_launch = aumid_for_uwp
+            .as_deref()
+            .or(resolved_target.as_deref())
+            .is_some_and(super::launch_policy::is_notepad_target);
+        if notepad_launch {
+            let foreign =
+                tokio::task::spawn_blocking(super::launch_browser::foreign_notepad_windows)
+                    .await
+                    .unwrap_or_default();
+            if !foreign.is_empty() {
+                let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
+                return ToolResult::error(super::launch_policy::notepad_open_refusal(
+                    &titles,
+                    super::launch_browser::unconfirmed_notepad_launch(),
+                ))
+                    .with_structured(json!({"code": "notepad_open_in_user_window", "launch_confirmed": false, "windows": []}));
+            }
+        }
+        // Every reply from here on, failure or not, records the Notepad
+        // windows this launch opened as the helper's own.
+        let _own_notepad_windows = notepad_launch.then(|| super::launch_browser::OwnNotepadWindows);
         let fresh_document_path = if urls.is_empty()
             && extra_args.is_empty()
             && aumid_for_uwp
@@ -2756,6 +2778,27 @@ impl Tool for LaunchAppTool {
                 (resolved_target.clone(), base_extra)
             }
         };
+
+        let settings_launch =
+            super::launch_policy::is_settings_protocol_launch(target_file_opt.is_some(), &urls);
+        if settings_launch {
+            let foreign =
+                tokio::task::spawn_blocking(super::launch_browser::foreign_settings_windows)
+                    .await
+                    .unwrap_or_default();
+            if !foreign.is_empty() {
+                let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
+                return ToolResult::error(super::launch_policy::settings_open_refusal(
+                    &titles,
+                    super::launch_browser::unconfirmed_settings_launch(),
+                ))
+                    .with_structured(json!({"code": "settings_open_in_user_window", "launch_confirmed": false, "windows": []}));
+            }
+        }
+        // Every reply from here on records the Settings window this launch
+        // opened as the helper's own, like Notepad's above.
+        let _own_settings_windows =
+            settings_launch.then(|| super::launch_browser::OwnSettingsWindows);
 
         let direct_task_manager = if let Some(target) = target_file_opt.as_deref() {
             match super::launch_focus::task_manager_direct_path(target) {
@@ -2858,9 +2901,12 @@ impl Tool for LaunchAppTool {
                     ))
                 }
                 Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
-                Err(_) => return ToolResult::error(format!(
-                    "Packaged-app activation for {aumid:?} did not answer within 15s. Windows may still complete it; cancellation and foreground preservation are unconfirmed. Inspect list_windows before retrying."
-                )),
+                Err(_) => {
+                    super::launch_browser::note_unconfirmed_launch(notepad_launch, settings_launch);
+                    return ToolResult::error(format!(
+                        "Packaged-app activation for {aumid:?} did not answer within 15s. Windows may still complete it; cancellation and foreground preservation are unconfirmed. Inspect list_windows before retrying."
+                    ));
+                }
             }
         } else {
             // Legacy ShellExecuteExW path for plain Win32 apps and for
@@ -3077,6 +3123,7 @@ impl Tool for LaunchAppTool {
                 Ok(Ok(Err(e))) => return ToolResult::error(format!("Failed to launch: {e}")),
                 Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
                 Err(_elapsed) => {
+                    super::launch_browser::note_unconfirmed_launch(notepad_launch, settings_launch);
                     return ToolResult::error(format!(
                         "Launch of {:?} did not answer within 15s. Windows may still \
                      complete it; cancellation and foreground preservation are unconfirmed. \
@@ -3337,7 +3384,7 @@ impl Tool for LaunchAppTool {
             // with (e.g. "gimp-3.exe" → prefix "gimp" matches "gimp-3.2.exe").
             let basename_for_match = target_file_opt
                 .as_deref()
-                .and_then(|t| t.rsplit(|c: char| c == '\\' || c == '/').next())
+                .and_then(|t| t.rsplit(['\\', '/']).next())
                 .unwrap_or("")
                 .to_owned();
             // Known-slow launchers get an extended retry budget. GIMP 3.x in
@@ -3461,7 +3508,7 @@ impl Tool for LaunchAppTool {
             // pick up launcher-stub child processes.
             let stub_basename = target_file_opt
                 .as_deref()
-                .and_then(|t| t.rsplit(|c: char| c == '\\' || c == '/').next())
+                .and_then(|t| t.rsplit(['\\', '/']).next())
                 .unwrap_or("")
                 .to_owned();
             // parent_pid is the launched pid family root — used below to
@@ -5187,7 +5234,7 @@ impl Tool for TypeTextTool {
                 let (cx, cy) = match resolve_onscreen_point_with_scroll(
                     &admitted,
                     hwnd,
-                    idx as usize,
+                    idx,
                     cx,
                     cy,
                     "foreground typing",
@@ -5195,7 +5242,7 @@ impl Tool for TypeTextTool {
                     Ok(point) => point,
                     Err(result) => return result,
                 };
-                Some((idx as usize, (cx, cy)))
+                Some((idx, (cx, cy)))
             } else {
                 None
             };
@@ -5282,7 +5329,7 @@ impl Tool for TypeTextTool {
         // can't confirm (conservative: under-claim rather than false-succeed).
         let text_for_post = text.clone();
         let verify_pid = pid;
-        let verify_idx = elem_idx.map(|i| i as usize);
+        let verify_idx = elem_idx;
         // The provider deadline also covers the characters themselves, so it
         // grows with the text and its requested spacing (each character may
         // also wait for the app), bounded below the daemon's 120 s exchange.
@@ -5938,7 +5985,7 @@ impl Tool for PressKeyTool {
             let (cx, cy) = match resolve_onscreen_point_with_scroll(
                 &admitted,
                 hwnd,
-                idx as usize,
+                idx,
                 cx,
                 cy,
                 "focusing for key delivery",
@@ -6005,7 +6052,7 @@ impl Tool for PressKeyTool {
         if !px_focus && delivery == DeliveryMode::Foreground {
             let focus_target = elem_idx.map(|idx| {
                 let point = admitted.as_ref().map(|element| element.center);
-                (idx as usize, point)
+                (idx, point)
             });
             let send_result = tokio::task::spawn_blocking({
                 let admitted = admitted.clone();
@@ -6314,11 +6361,36 @@ impl Tool for HotkeyTool {
                 }
             })
             .await;
+            let window = windows::Win32::Foundation::HWND(hwnd as isize as *mut _);
+            let gone =
+                || !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(window) }.as_bool();
             return match result {
+                Ok(Ok((true, _))) if gone() => ToolResult::text(format!(
+                    "{key_display_for_result} to pid {raw_pid} (UIA accelerator): confirmed the target window closed."
+                ))
+                .with_structured(json!({"path": "uia", "verified": true, "effect": "confirmed"})),
                 Ok(Ok((true, _))) => unconfirmed_key_result(
                     &format!("{key_display_for_result} to pid {raw_pid}"),
                     "uia",
                 ),
+                Ok(Err(_)) if gone() => ToolResult::error(format!(
+                    "{key_display_for_result} was not confirmed: window {hwnd} no longer exists. \
+                     Call list_windows or get_window_state for the app's current windows."
+                )),
+                Ok(Err(e))
+                    if !unsafe { windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(window) }
+                        .as_bool() =>
+                {
+                    ToolResult::error(format!(
+                        "{key_display_for_result} was not confirmed: window {hwnd} is disabled, usually because \
+                         it is waiting for one of its own dialogs (such as Save as) to close. Finish or \
+                         cancel that dialog first, then retry. ({e})"
+                    ))
+                }
+                Ok(Err(e)) => ToolResult::error(format!(
+                    "{key_display_for_result} was not confirmed: the app's accessibility interface (UI \
+                     Automation) reported a problem while finding or running the shortcut: {e}"
+                )),
                 Ok(Ok((false, scanned))) => ToolResult::error(format!(
                     "hotkey on a modern XAML / UWP target (pid {raw_pid}, hwnd {hwnd}) \
                      could not find a UIA AcceleratorKey or `(Ctrl+X)`-style name hint \
@@ -6328,7 +6400,6 @@ impl Tool for HotkeyTool {
                      No fallback keyboard input was sent. Inspect fresh window state or use \
                      `invoke_menu` with an explicit menu path."
                 )),
-                Ok(Err(e)) => ToolResult::error(format!("hotkey (UIA path): {e}")),
                 Err(e) => ToolResult::error(format!("Task error: {e}")),
             };
         }
@@ -8078,7 +8149,7 @@ impl Tool for DragTool {
                     to_y,
                     duration_ms,
                     steps,
-                    &button,
+                    button,
                 )
             });
             let visual_drag = track_overlay_drag(
@@ -10375,7 +10446,7 @@ impl Tool for DebugWindowInfoTool {
                         if ok.is_ok() && len > 0 {
                             let path = String::from_utf16_lossy(&buf[..len as usize]);
                             let base = path
-                                .rsplit(|c: char| c == '\\' || c == '/')
+                                .rsplit(['\\', '/'])
                                 .next()
                                 .unwrap_or(&path)
                                 .to_ascii_lowercase();
@@ -10531,10 +10602,6 @@ impl Tool for DebugWindowInfoTool {
 }
 
 // ── registry builder ──────────────────────────────────────────────────────────
-
-pub fn build_registry(compat: bool) -> ToolRegistry {
-    build_registry_with_provider(compat, None)
-}
 
 pub fn build_registry_with_provider(
     compat: bool,

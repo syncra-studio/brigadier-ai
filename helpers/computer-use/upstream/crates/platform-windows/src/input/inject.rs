@@ -578,6 +578,20 @@ pub fn window_is_iconic(hwnd: u64) -> bool {
     unsafe { IsIconic(HWND(hwnd as *mut _)).as_bool() }
 }
 
+/// Native posted drags remain available to callers where supported. The
+/// pointer-injection fallback cannot promise to leave the user's cursor alone.
+pub fn inject_drag_screen(
+    _target: u64,
+    _sx0: i32,
+    _sy0: i32,
+    _sx1: i32,
+    _sy1: i32,
+    _steps: usize,
+    _button: &str,
+) -> Result<()> {
+    bail!("background_unavailable: Windows cannot guarantee this synthetic pointer drag without moving your pointer. No drag was sent. Use set_value for an accessible slider or ask the user to drag.")
+}
+
 #[cfg(test)]
 mod iconic_sentinel_tests {
     use super::*;
@@ -627,20 +641,6 @@ mod iconic_sentinel_tests {
         assert!(!point_in_rect(0, 0, 0, 0, 0, 1080));
         assert!(!point_in_rect(0, 0, 0, 0, 1920, -1));
     }
-}
-
-/// Native posted drags remain available to callers where supported. The
-/// pointer-injection fallback cannot promise to leave the user's cursor alone.
-pub fn inject_drag_screen(
-    _target: u64,
-    _sx0: i32,
-    _sy0: i32,
-    _sx1: i32,
-    _sy1: i32,
-    _steps: usize,
-    _button: &str,
-) -> Result<()> {
-    bail!("background_unavailable: Windows cannot guarantee this synthetic pointer drag without moving your pointer. No drag was sent. Use set_value for an accessible slider or ask the user to drag.")
 }
 
 // (Removed inject_key_cloaked / inject_text_cloaked.) The macOS-aligned

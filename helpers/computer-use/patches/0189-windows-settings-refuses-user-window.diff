@@ -1,0 +1,189 @@
+Why: Refuse an ms-settings: launch while a Settings window this helper did not open is one the user can see or switch to: Settings has a single window and the launch would change its page. A Settings frame Windows keeps cloaked on no virtual desktop after the user closed it is not the user's. Settings Close waits up to 8 s for the window to go, as Settings hid its frame 2.9 s after WM_CLOSE.
+
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 0a52ac304..19e8eea4d 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -585,7 +585,8 @@ async fn close_settings_window(args: Value) -> ToolResult {
+             return ToolResult::error(format!("Windows refused the Settings close message: {error}. No close was confirmed."))
+                 .with_structured(json!({"code":"settings_close_failed","effect":"failed"}));
+         }
+-        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(2))
++        // Live (2026-11-02, Windows 11 26300): Settings hid its frame 2.9 s after WM_CLOSE.
++        readback.finish_with_timeout(None, "Settings window WM_CLOSE", ActionTransport::WindowsPostMessage, std::time::Duration::from_secs(8))
+     }).await.unwrap_or_else(|error| ToolResult::error(format!("Settings close result unavailable: {error}; read fresh window state before retrying.")))
+ }
+ 
+@@ -2775,6 +2776,24 @@ impl Tool for LaunchAppTool {
+             }
+         };
+ 
++        let settings_launch =
++            super::launch_policy::is_settings_protocol_launch(target_file_opt.is_some(), &urls);
++        if settings_launch {
++            let foreign =
++                tokio::task::spawn_blocking(super::launch_browser::foreign_settings_windows)
++                    .await
++                    .unwrap_or_default();
++            if !foreign.is_empty() {
++                let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
++                return ToolResult::error(super::launch_policy::settings_open_refusal(&titles))
++                    .with_structured(json!({"code": "settings_open_in_user_window", "launch_confirmed": false, "windows": []}));
++            }
++        }
++        // Every reply from here on records the Settings window this launch
++        // opened as the helper's own, like Notepad's above.
++        let _own_settings_windows =
++            settings_launch.then(|| super::launch_browser::OwnSettingsWindows);
++
+         let direct_task_manager = if let Some(target) = target_file_opt.as_deref() {
+             match super::launch_focus::task_manager_direct_path(target) {
+                 Ok(Some(path)) => {
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+index a9311f441..e12d8a323 100644
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -329,6 +329,85 @@ fn record_own_notepad_windows() {
+     }
+ }
+ 
++/// Settings windows that this helper's own `ms-settings:` launches opened.
++static OWN_SETTINGS_WINDOWS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
++
++/// Whether the user can see or switch to a window: not cloaked, or cloaked
++/// only because it is on another virtual desktop. Live (2026-11-02, Windows
++/// 11 26300): after the user closed Settings, its frame stayed as a visible,
++/// shell-cloaked window on no virtual desktop while the app was suspended.
++fn user_reachable(hwnd: u64) -> bool {
++    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
++    use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
++    let window = HWND(hwnd as *mut _);
++    let mut cloaked = 0u32;
++    let read = unsafe {
++        DwmGetWindowAttribute(
++            window,
++            DWMWA_CLOAKED,
++            &mut cloaked as *mut u32 as *mut _,
++            std::mem::size_of::<u32>() as u32,
++        )
++    };
++    let desktop = (read.is_ok() && cloaked != 0)
++        .then(|| {
++            let _com = Apartment::new();
++            let manager: IVirtualDesktopManager =
++                unsafe { CoCreateInstance(&VirtualDesktopManager, None, CLSCTX_INPROC_SERVER) }
++                    .ok()?;
++            unsafe { manager.GetWindowDesktopId(window) }
++                .ok()
++                .map(|id| id != windows::core::GUID::zeroed())
++        })
++        .flatten();
++    super::launch_policy::user_reachable(read.is_ok(), cloaked != 0, desktop)
++}
++
++/// Top-level Settings windows the user can reach (EnumWindows attributes
++/// each frame to its app).
++fn open_settings_windows() -> Vec<(u64, String)> {
++    let pids: std::collections::HashSet<_> = crate::win32::list_processes()
++        .into_iter()
++        .filter(|process| super::launch_policy::is_settings_process(&process.name))
++        .map(|process| process.pid)
++        .collect();
++    if pids.is_empty() {
++        return Vec::new();
++    }
++    crate::win32::list_windows_via_win32(None)
++        .into_iter()
++        .filter(|window| pids.contains(&window.pid) && user_reachable(window.hwnd))
++        .map(|window| (window.hwnd, window.title))
++        .collect()
++}
++
++/// Open Settings windows this helper did not open, with their titles.
++pub(super) fn foreign_settings_windows() -> Vec<(u64, String)> {
++    let open = open_settings_windows();
++    let ids: Vec<u64> = open.iter().map(|(window, _)| *window).collect();
++    let mut own = OWN_SETTINGS_WINDOWS.lock().unwrap();
++    own.retain(|window| ids.contains(window));
++    let foreign = super::launch_policy::foreign_notepad_windows(&ids, &own);
++    open.into_iter()
++        .filter(|(window, _)| foreign.contains(window))
++        .collect()
++}
++
++/// Held by a Settings launch that found no foreign window: when its reply is
++/// built, any Settings window then open came from this helper's launch.
++pub(super) struct OwnSettingsWindows;
++impl Drop for OwnSettingsWindows {
++    fn drop(&mut self) {
++        let open = open_settings_windows();
++        let mut own = OWN_SETTINGS_WINDOWS.lock().unwrap();
++        for (window, _) in open {
++            if !own.contains(&window) && own.len() < 64 {
++                own.push(window);
++            }
++        }
++    }
++}
++
+ pub(super) async fn notepad_document_window(
+     filename: String,
+ ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
+index 2ae98b574..b879a44c8 100644
+--- a/crates/platform-windows/src/tools/launch_policy.rs
++++ b/crates/platform-windows/src/tools/launch_policy.rs
+@@ -210,6 +210,29 @@ pub(crate) fn notepad_open_refusal(titles: &[String]) -> String {
+     format!("No app was launched: Notepad is already open in a window this helper did not open{which}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it would appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
+ }
+ 
++/// A window counts as the user's open window unless DWM reports it cloaked
++/// and it is on no virtual desktop. Unknown facts count as open.
++pub(crate) fn user_reachable(read: bool, cloaked: bool, on_a_desktop: Option<bool>) -> bool {
++    !read || !cloaked || on_a_desktop != Some(false)
++}
++
++/// Windows Settings has a single window: `ms-settings:` changes the page in
++/// the one already open. One the helper did not open belongs to the user.
++pub(crate) fn settings_open_refusal(titles: &[String]) -> String {
++    let named = titles
++        .iter()
++        .filter(|title| !title.is_empty())
++        .map(|title| format!("{title:?}"))
++        .collect::<Vec<_>>()
++        .join(", ");
++    let which = if named.is_empty() {
++        String::new()
++    } else {
++        format!(" ({named})")
++    };
++    format!("No app was launched: Windows Settings is already open in a window this helper did not open{which}. Settings has only one window, so opening a Settings page would change the page in the user's own Settings window. Ask the user to close Settings first.")
++}
++
+ pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
+     match executable_name(target).as_str() {
+         "chrome" | "msedge" | "brave" | "chromium" | "vivaldi" | "opera" => Some("--new-window"),
+@@ -249,6 +272,23 @@ mod fresh_document_tests {
+         assert!(!is_notepad_target("Notepad++"));
+     }
+     #[test]
++    fn only_a_cloaked_window_on_no_desktop_is_not_the_users() {
++        assert!(user_reachable(true, false, None));
++        assert!(user_reachable(false, true, Some(false)));
++        // Another virtual desktop: the user can switch to it.
++        assert!(user_reachable(true, true, Some(true)));
++        assert!(user_reachable(true, true, None));
++        assert!(!user_reachable(true, true, Some(false)));
++    }
++    #[test]
++    fn settings_windows_the_helper_did_not_open_block_a_launch() {
++        let refusal = settings_open_refusal(&["Settings".into()]);
++        assert!(refusal.starts_with("No app was launched"));
++        assert!(refusal.contains("(\"Settings\")"));
++        assert!(refusal.contains("close Settings"));
++        assert!(!settings_open_refusal(&[String::new()]).contains("()"));
++    }
++    #[test]
+     fn notepad_windows_the_helper_did_not_open_block_a_launch() {
+         assert!(foreign_notepad_windows(&[], &[]).is_empty());
+         assert!(foreign_notepad_windows(&[7, 9], &[7, 9, 11]).is_empty());

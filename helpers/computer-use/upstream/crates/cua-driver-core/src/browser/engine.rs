@@ -2916,7 +2916,9 @@ fn collect_interactive(
             .unwrap_or_default();
         let attr = |key: &str| -> Option<&str> {
             attrs
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .find(|kv| kv[0].eq_ignore_ascii_case(key))
                 .map(|kv| kv[1].as_str())
         };
