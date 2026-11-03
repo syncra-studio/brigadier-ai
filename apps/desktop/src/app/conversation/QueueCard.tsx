@@ -2,6 +2,7 @@ import {
   ArrowCurvedRight,
   ChatCompose,
   DotsHorizontal,
+  Hamburger,
   Pencil,
   Play,
   Stack,
@@ -159,6 +160,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
           return (
             <MessageQueueItem
               key={item.id}
+              data-queue-item-id={item.id}
               dragging={dragging === item.id}
               deciding={!!item.deciding}
               grip={
@@ -170,7 +172,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                     className={cn(ghostButton, "size-full cursor-grab touch-none active:cursor-grabbing")}
                     {...grip(item.id, index)}
                   >
-                    <DotsHorizontal className="size-icon-sm rotate-90" />
+                    <Hamburger className="size-icon-sm" />
                   </button>
                 )
               }
