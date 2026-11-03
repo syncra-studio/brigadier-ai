@@ -42,8 +42,8 @@ test("how its last turn ended: failed (or cut off, or gone without a done end), 
   assert.equal(word({ working: false, lastEnd: "failed" }), "Failed");
   assert.equal(word({ working: false, lastEnd: "interrupted" }), "Failed");
   assert.equal(word({ working: false, lastEnd: null, gone: true }), "Failed");
-  assert.equal(word({ working: false, lastEnd: "stopped" }), "Stopped");
-  assert.equal(word({ working: false, lastEnd: "stopped", gone: true, merged: true }), "Stopped");
+  assert.equal(word({ working: false, lastEnd: "stopped" }), "Ended");
+  assert.equal(word({ working: false, lastEnd: "stopped", gone: true, merged: true }), "Ended");
 });
 
 test("a worker its session paused reads Paused, never Failed, its cut turn whatever it was (O57 item 3)", () => {

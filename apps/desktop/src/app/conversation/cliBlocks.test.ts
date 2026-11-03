@@ -4,9 +4,9 @@ import { test } from "node:test";
 import { cliBlocks, cliThreadTree, exitOf, keptThread, peerWords, stepDetail, stepInTurn, toolItem, wakeWords, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { confirmPending } from "@/state/shownIds";
-import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove, turnTime } from "@/app/conversation/blocks";
+import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove, type SequenceEntry, turnTime } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
-import { turnParts } from "@/app/conversation/workParts";
+import { belowAnswer, turnParts } from "@/app/conversation/workParts";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, Wake } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
@@ -1431,6 +1431,23 @@ test("Brigadier's carry-on, hand-off and /compact are no bubble by the engine's 
   assert.deepEqual(blocks[1]?.compactions.map((each) => each.state), ["done"]);
 });
 
+test("a question a successor asked carrying on by itself waits in its own live turn, not in the request's turn before the seam (D161)", () => {
+  const question = { id: "q1", requestId: "r1", position: 0, createdAtMs: 2500, answer: null, answeredAtMs: null, kind: { type: "orchestrator" } };
+  const blocks = cliBlocks(
+    {
+      entries: [user("u1", "Step 3", 1000), reply1, sent("c1", "Carry on from the hand-off note.", 2000, { by: "brigadier" })],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }, turn("c1", 2000, null, null)],
+    },
+    "conv",
+    { ...NO_BOARD, questions: { q1: question } } as unknown as BoardDigest,
+    true,
+  );
+  assert.deepEqual(
+    blocks.map((block) => [block.key, block.cards.map((card) => card.id), block.cardWait]),
+    [["u1", [], false], ["c1", ["q1"], true]],
+  );
+});
+
 test("a /compact the user typed is their bubble by the engine's note, in a session too", () => {
   const blocks = cliBlocks(
     { entries: [user("u1", "Grow", 1000), reply1, sent("k1", "/compact", 2000, { by: "user" })], turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }] },
@@ -1708,4 +1725,17 @@ test("a message woken for while only a background subagent holds the block goes 
     const blocks = cliBlocks({ entries, turns, background, block: { startedAtMs: 1010 } }, "conv");
     assert.deepEqual(blocks.map((block) => block.key), ["u1"], `${turns.length} turns read`);
   }
+});
+
+test("a worker paused before the answer and resumed and ended after it read in that order around it", () => {
+  const step = (type: "paused" | "resumed" | "stopped", position: number): SequenceEntry =>
+    ({ kind: "orchestrator", steps: [{ kind: { type, taskId: "t1", ...(type === "stopped" && { reason: "Stopped by the user" }) }, position, atMs: position }], position }) as SequenceEntry;
+  const sequence: SequenceEntry[] = [step("paused", 1), { kind: "text", index: 0, messageId: "a1", position: 2 }, step("resumed", 3), step("stopped", 4)];
+  const activity = turnActivity(sequence, false);
+  const parts = turnParts(activity, 0, true, false, () => true);
+  const kinds = (entries: readonly SequenceEntry[] | undefined) => (entries ?? []).map((entry) => entry.kind === "orchestrator" && entry.steps[0]?.kind.type);
+  // Above the answer only what came before it; under it, what came after, in order.
+  assert.deepEqual(kinds(parts[0]?.type === "work" ? parts[0].kept : []), ["paused"]);
+  assert.deepEqual(kinds(belowAnswer(activity, 0, true)), ["resumed", "stopped"]);
+  assert.deepEqual(belowAnswer(activity, 0, false), []);
 });

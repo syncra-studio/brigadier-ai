@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { setupRows, setupStepWords } from "@/app/conversation/activity/setupWords";
+import { setupRows, setupStarting, setupStepWords } from "@/app/conversation/activity/setupWords";
 import { blockSequence, type BoardDigest } from "@/app/conversation/blocks";
 import { cliBlocks, cliThreadTree } from "@/app/conversation/cliBlocks";
-import type { Message, StartStepRecord } from "@/ipc/generated";
+import type { EventEnvelope, Message, RunState, StartStepRecord } from "@/ipc/generated";
+import { applyToBoard, emptyBoard } from "@/state/board";
 
 const record = (step: StartStepRecord["step"], position: number, error: string | null = null): StartStepRecord =>
   ({ step, error, requestId: "m0", position });
@@ -48,4 +49,18 @@ test("a turn still starting, or whose start failed, shows its setup line before 
     const block = tree.nodes.find((node) => node.kind === "block")?.block;
     assert.equal(block?.orchestratorSteps[0]?.kind.type, "setup", run.state);
   }
+});
+
+test("a relaunch mid-turn (a switch) never starts the setup line again", () => {
+  const run = (state: RunState, streamSeq: number, step?: StartStepRecord["step"]): EventEnvelope =>
+    ({ seq: streamSeq, stream: "conversation:c", streamSeq, atMs: streamSeq,
+      event: { type: "runStateChanged", conversationId: "c", state, error: null, requestId: "m0", ...(step && { step }) } });
+  let board = emptyBoard("c");
+  for (const envelope of [run("starting", 3), run("starting", 4, "fetching"), run("starting", 5, "worktree"), run("starting", 6, "cli")]) board = applyToBoard(board, envelope);
+  assert.equal(setupStarting(board), true);
+  board = applyToBoard(board, run("running", 8));
+  assert.equal(setupStarting(board), false);
+  // The CLI started again on another account, the same request still working.
+  board = applyToBoard(board, run("starting", 13));
+  assert.equal(setupStarting(board), false);
 });

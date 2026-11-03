@@ -20,7 +20,7 @@ import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useBlockHold, useLiveWait } from "@/app/conversation/blockHold";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
-import { turnParts, type WorkPart } from "@/app/conversation/workParts";
+import { belowAnswer, turnParts, type WorkPart } from "@/app/conversation/workParts";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -223,6 +223,7 @@ export const RequestBlock: FC = () => {
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
     wait,
+    cardWait: meta.cardWait,
     // Over, its line says what it waits on: its workers, then its commands; a subagent's own row says it runs (D96).
     ...(held && { workers: holding, commands, subagents, named }),
   };
@@ -335,16 +336,23 @@ export const RequestBlock: FC = () => {
         )}
         {liveWork && <TrailingLine activity={liveWork.items} live={status} thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null} answered={answer !== null}
           padded={header || before.length > 0 || answer !== null || parts.some((part) => part.type === "between" || part.items.length > 0 || !!part.kept?.length)} />}
-        {/* A late event's note: a plain short paragraph under the answer, never a new answer. */}
-        {updates.map((index) => (
-          <div
-            key={`update:${index}`}
-            data-slot="answer-update"
-            className="text-foreground mt-activity leading-relaxed wrap-break-word"
-          >
-            <MessagePrimitive.PartByIndex index={index} components={{ Text: UpdateText }} />
-          </div>
-        ))}
+        {/* A late event's note: a plain short paragraph under the answer, never a new answer; a
+            line that stays in view and came after the answer, under it in its order. */}
+        {belowAnswer(activity, answer, done).map((entry) =>
+          entry.kind === "text" ? (
+            <div
+              key={`update:${entry.index}`}
+              data-slot="answer-update"
+              className="text-foreground mt-activity leading-relaxed wrap-break-word"
+            >
+              <MessagePrimitive.PartByIndex index={entry.index} components={{ Text: UpdateText }} />
+            </div>
+          ) : (
+            <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
+              <SequenceEntry entry={entry} streaming={false} />
+            </div>
+          ),
+        )}
       </div>
       </TurnEnded.Provider>
       </StoppedBy.Provider>

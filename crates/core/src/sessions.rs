@@ -1429,6 +1429,7 @@ impl Core {
             queue: board.queue.clone(),
             run: board.run,
             run_request: board.run_request.clone(),
+            run_since: board.run_since,
             head: board.head.as_ref().map(|(head, _)| head.clone()),
             worker_steps: board.worker_steps.clone(),
             orchestrator_steps: board.orchestrator_steps.clone(),

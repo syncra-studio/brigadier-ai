@@ -105,6 +105,8 @@ export type Board = {
   runError: string | null;
   /** The request the running turn serves. */
   runRequest: string | null;
+  /** Where its CLI last began starting in the stream (a launch, or a relaunch at a switch): a start step from it on is this start's. */
+  runSince?: number;
   /** The last message of the branch the thread shows. */
   head: string | null;
   /** The session branch's tip after the thread's last commit seen since the view was read: it moves with each of its commits. */
@@ -448,6 +450,7 @@ export function boardFromView(
     run: view.run,
     runError: keep?.runError ?? null,
     runRequest: view.runRequest,
+    runSince: view.runSince,
     head: view.head,
     threadTip: keep?.threadTip ?? null,
     doing: keep?.doing ?? null,
@@ -584,6 +587,7 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
         ...(event.step && !(board.startSteps ?? []).some((step) => step.position === streamSeq) && {
           startSteps: [...(board.startSteps ?? []), { step: event.step, error: event.error, requestId: event.requestId, position: streamSeq }],
         }),
+        ...(event.state === "starting" && board.run !== "starting" && { runSince: streamSeq }),
         doing: event.state === "running" || event.state === "starting" ? board.doing : null,
         run: event.state,
         runError: event.error,

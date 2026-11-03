@@ -37,7 +37,7 @@ function unmerged(row: WorkerRow): boolean {
 
 /**
  * A worker's state at `now`, the first that holds of: Needs you, Limit until HH:MM, Paused (its
- * session paused it, D7), Fresh context, Quiet Nm, Working, Failed, Stopped, Merged, Done · not
+ * session paused it, D7), Fresh context, Quiet Nm, Working, Failed, Ended, Merged, Done · not
  * merged, Done.
  */
 export function workerStateOf(row: WorkerRow, now: number): WorkerState {
@@ -55,7 +55,8 @@ export function workerStateOf(row: WorkerRow, now: number): WorkerState {
   if (row.lastEnd === "failed" || row.lastEnd === "interrupted" || (row.gone && row.lastEnd !== "done" && row.lastEnd !== "stopped")) {
     return { kind: "failed", word: "Failed" };
   }
-  if (row.lastEnd === "stopped") return { kind: "stopped", word: "Stopped" };
+  // Ended for good, by the user or its session: "Ended", as its thread row and card say (D199).
+  if (row.lastEnd === "stopped") return { kind: "stopped", word: "Ended" };
   if (row.merged) return { kind: "merged", word: "Merged" };
   if (row.lastEnd === "done" && unmerged(row)) return { kind: "doneNotMerged", word: "Done · not merged" };
   return { kind: "done", word: "Done" };

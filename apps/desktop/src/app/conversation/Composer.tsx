@@ -50,7 +50,7 @@ import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { type ModelGroup, ModelSelector } from "@/components/shared";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useActivity } from "@/state/activity";
+import { useActivity, works } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { useOpenTurnStart } from "@/state/cliThread";
 import { useTicking } from "@/app/conversation/requestTime";
@@ -266,8 +266,13 @@ function useWorkingFor(conversationId: string | null): string | null {
   const own = view.conversation?.id === conversationId;
   // Held open by what its turn started, the block still works, from the same start (D24, D94).
   const held = own && !!view.workHeld;
-  const startedAtMs = own && (turnStart !== null || held) ? (view.workFrom ?? turnStart) : turnStart;
-  const open = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false)) || held;
+  // Its CLI started again between two of its turns (a switch) still works: no turn is open then.
+  const live = useActivity((s) => {
+    const activity = conversationId ? s.byConversation[conversationId] : undefined;
+    return !!activity && works(activity);
+  });
+  const startedAtMs = own && (turnStart !== null || held || live) ? (view.workFrom ?? turnStart) : turnStart;
+  const open = live || held;
   const asking = useBoard((s) => {
     const board = s.board;
     if (!conversationId || board?.conversationId !== conversationId) return false;

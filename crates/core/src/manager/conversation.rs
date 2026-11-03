@@ -6388,7 +6388,7 @@ impl SessionManager {
         board
             .start_steps
             .last()
-            .filter(|record| record.position > board.run_since)
+            .filter(|record| record.position >= board.run_since)
             .map(|record| record.step)
     }
 

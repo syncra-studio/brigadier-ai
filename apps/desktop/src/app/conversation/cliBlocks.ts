@@ -606,7 +606,17 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
   const taken = new Map<string, number>();
   for (const item of boardItems(board)) {
     const named = item.requestId === null ? undefined : byRequest.get(item.requestId);
-    const index = named ?? blocks.findLastIndex((block) => block.startedAtMs <= item.atMs);
+    const byTime = blocks.findLastIndex((block) => block.startedAtMs <= item.atMs);
+    // The thread's own question asked in a turn that carries no request (a successor's carry-on
+    // after a seam) is filed under the latest request, whose turn was over: it is the turn that
+    // asked it that waits on it (D161).
+    const askedLater =
+      named !== undefined &&
+      byTime > named &&
+      item.kind === "card" &&
+      board.questions[item.card.id]?.kind.type === "orchestrator" &&
+      (blocks[named]?.endedAtMs ?? Number.POSITIVE_INFINITY) <= item.atMs;
+    const index = named === undefined || askedLater ? byTime : named;
     const block = blocks[index];
     const known = times[index];
     if (!block || !known) continue;

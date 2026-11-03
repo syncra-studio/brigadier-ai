@@ -1,6 +1,6 @@
 import type { FC } from "react";
 
-import { type Names, setupRows, setupStepWords } from "@/app/conversation/activity/setupWords";
+import { type Names, setupRows, setupStarting, setupStepWords } from "@/app/conversation/activity/setupWords";
 import type { SetupSteps } from "@/app/conversation/blocks";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ROW, ThreadActivity } from "@/components/conversation";
@@ -17,7 +17,7 @@ const ICONS = { done: Check, running: Spinner, failed: X } as const;
  */
 export const SetupRow: FC<{ kind: SetupSteps }> = ({ kind }) => {
   const requestId = kind.steps[0]?.requestId ?? null;
-  const starting = useBoard((s) => s.board?.run === "starting" && s.board.runRequest === requestId);
+  const starting = useBoard((s) => !!s.board && setupStarting(s.board) && s.board.runRequest === requestId);
   const conversation = useViewConversation();
   const setup = conversation?.setup;
   const environment = setup?.type === "session" ? setup.environment : null;

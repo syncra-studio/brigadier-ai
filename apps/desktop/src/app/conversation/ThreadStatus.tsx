@@ -25,6 +25,8 @@ export type ThreadStatusProps = {
   named?: StatusHead | null;
   /** What its CLI is blocked on in its open turn, named (`liveWait`, D106). */
   wait?: StatusHead | null;
+  /** Its own question card waits for the answer (D161). */
+  cardWait?: boolean;
 };
 
 /** What a live turn's last line says now, its workers by name; `null` when nothing. */

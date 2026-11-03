@@ -83,7 +83,7 @@ export function workHolds(activity: Activity | undefined): boolean {
 }
 
 /** Its CLI works: its turn is open, or Brigadier hands it a message. */
-const works = (activity: Activity) => activity.turnOpen || activity.run === "starting";
+export const works = (activity: Activity) => activity.turnOpen || activity.run === "starting";
 
 /**
  * Nothing works, and its CLI did not take the turn or its last turn failed or was cut off. A turn

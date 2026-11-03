@@ -119,6 +119,8 @@ test("only a card or a question for the user reads as needing them", () => {
   assert.equal(head(input({ approvals: byId([allowed]) }))?.tone, "busy");
   const question = { id: "q", requestId: "r1", answer: null, answeredAtMs: null } as unknown as Question;
   assert.deepEqual(head(input({ questions: byId([question]) }, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou", waitsOn: "answer" });
+  // A turn of no request of its own (a successor carrying on) waits on the card it asked, not "Thinking" (D161).
+  assert.equal(head(input({ questions: byId([question]) }, { requestIds: [], cardWait: true }))?.waitsOn, "answer");
   // A question in the lead's text: nothing reads as needing them.
   assert.equal(head(input({}, { state: "waiting" })), null);
   // A change ready to land waits for the user once the lead's turn is over.

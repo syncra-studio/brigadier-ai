@@ -67,7 +67,20 @@ export function turnParts(
   live: boolean,
   answers: (index: number) => boolean,
 ): WorkPart[] {
-  // The answer and its update lines are drawn under the parts; the rest that stays in view, in its run.
-  const folded = activity.filter((item) => item.type === "group" || item.entry.kind !== "text" || foldsAway(item.entry, answer));
+  // The answer and what stays in view after it are drawn under the parts; the rest that stays in view, in its run.
+  const below = new Set(belowAnswer(activity, answer, done));
+  const folded = activity.filter((item) => item.type === "group" || (!below.has(item.entry) && (item.entry.kind !== "text" || foldsAway(item.entry, answer))));
   return keepJoinedAnswers(done ? workParts(folded, false, (entry) => !foldsAway(entry, answer)) : workParts(activity, live), done, answers);
+}
+
+/**
+ * What a finished turn shows under its answer, in the order it came: its update lines, and the
+ * lines that stay in view written after the answer (a worker resumed or ended once the thread
+ * replied), never above the reply that came before them.
+ */
+export function belowAnswer(activity: readonly Activity<LeadStep, Entry>[], answer: number | null, done: boolean): Entry[] {
+  if (!done || answer === null) return [];
+  const at = activity.find((item) => item.type === "entry" && item.entry.kind === "text" && item.entry.index === answer);
+  if (at?.type !== "entry") return [];
+  return activity.flatMap((item) => (item.type === "entry" && item.entry.position > at.entry.position && !foldsAway(item.entry, answer) ? [item.entry] : []));
 }

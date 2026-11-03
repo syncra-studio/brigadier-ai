@@ -76,8 +76,8 @@ export function workedBy(turns: readonly ThreadTurn[], atMs: number): number {
 }
 
 /**
- * "Working for 1m 2s" while it works, "Worked for 3m 10s" once finished, "Stopped after 3m 10s"
- * when it was stopped, over a hairline.
+ * "Working for 1m 2s" while it works, "Worked for 3m 10s" once finished, "Ended after 3m 10s"
+ * when it was ended, over a hairline.
  */
 function WorkHeader({ row, turns }: { row: WorkerRow; turns: readonly ThreadTurn[] }) {
   const clock = useNow(60_000);
@@ -87,7 +87,7 @@ function WorkHeader({ row, turns }: { row: WorkerRow; turns: readonly ThreadTurn
   const stopped = workerStateOf(row, clock).kind === "stopped";
   return (
     <div data-slot="worker-work-header" className="text-foreground/50 border-border border-b pb-2 text-sm tabular-nums">
-      {stopped ? `Stopped after ${took}` : done ? `Worked for ${took}` : `Working for ${took}`}
+      {stopped ? `Ended after ${took}` : done ? `Worked for ${took}` : `Working for ${took}`}
     </div>
   );
 }

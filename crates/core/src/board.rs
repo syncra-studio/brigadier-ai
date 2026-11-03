@@ -139,7 +139,8 @@ pub(crate) struct Board {
     pub(crate) run: RunState,
     /// The request the running turn serves.
     pub(crate) run_request: Option<String>,
-    /// Where the active (or last) turn started in the stream: its own steps come after it.
+    /// Where its CLI last began starting in the stream (a turn's launch, or a relaunch mid-turn
+    /// at a switch): this start's steps are from it on.
     pub(crate) run_since: i64,
     /// The requests that settled with their branch ahead of base: the head then, and where
     /// it was recorded.
@@ -470,9 +471,9 @@ impl Board {
                         position: stream_seq,
                     });
                 }
-                let live =
-                    |state: RunState| matches!(state, RunState::Starting | RunState::Running);
-                if live(*state) && !live(self.run) {
+                // A relaunch mid-turn (a switch) starts again too: the first start's steps
+                // stay before it.
+                if *state == RunState::Starting && self.run != RunState::Starting {
                     self.run_since = stream_seq;
                 }
                 self.run = *state;

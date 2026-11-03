@@ -933,6 +933,23 @@ impl SessionManager {
         thread_view::name_providers(&mut view, &owned, current);
         let board = self.core.board(id).await?;
         add_prompts(&mut view.entries, &board, &task.id);
+        // A resume's input shows only what was held for it (the user's note), never the
+        // marker or "Continue where you stopped."; with nothing held, no message.
+        view.entries.retain_mut(|entry| match &mut entry.event {
+            ProviderEvent::Message {
+                role: Role::User,
+                text,
+                ..
+            } => match resume_held(text).map(str::to_owned) {
+                Some(held) if held.is_empty() => false,
+                Some(held) => {
+                    *text = held;
+                    true
+                }
+                None => true,
+            },
+            _ => true,
+        });
         // Its hand-offs to fresh CLI sessions (D14): a divider each, the nudge and the
         // hand-off hidden, as a session's.
         view.seams = super::seam::marks(&record, &mut view.entries);
@@ -965,6 +982,21 @@ impl SessionManager {
         rows.git_read_ms.lock().unwrap().remove(conv);
         rows.sent.lock().unwrap().remove(conv);
     }
+}
+
+/// What was held for a worker in its resume's input `text` (empty when nothing was), or `None`
+/// when it is no resume's: `[Worker resume …]`, then what was held, then "Continue where you
+/// stopped." (`resume_task`); the words alone are a limit's reset going on (quota).
+fn resume_held(text: &str) -> Option<&str> {
+    use super::workers::{RESUME_MARK, RESUME_WORDS};
+    let text = text.trim();
+    let rest = match text.strip_prefix(RESUME_MARK) {
+        Some(rest) => rest.split_once(']')?.1,
+        None if text == RESUME_WORDS => "",
+        None => return None,
+    };
+    let rest = rest.trim();
+    Some(rest.strip_suffix(RESUME_WORDS).unwrap_or(rest).trim())
 }
 
 /// The permission prompts its orchestrator answers in the thread of worker `task` (D48), and
@@ -1054,6 +1086,23 @@ mod tests {
             duration_ms: None,
             turn_id: None,
         }
+    }
+
+    #[test]
+    fn a_resumes_input_shows_only_what_was_held() {
+        let marked = "[Worker resume 5c3eb662-9c41-4ad3-886b-8b41eb526c84]";
+        assert_eq!(
+            resume_held(&format!("{marked}\n\nContinue where you stopped.")),
+            Some("")
+        );
+        assert_eq!(
+            resume_held(&format!(
+                "{marked}\n\nUse tabs.\n\nAnd commit.\n\nContinue where you stopped."
+            )),
+            Some("Use tabs.\n\nAnd commit.")
+        );
+        assert_eq!(resume_held("Continue where you stopped."), Some(""));
+        assert_eq!(resume_held("Please continue where you stopped."), None);
     }
 
     #[test]

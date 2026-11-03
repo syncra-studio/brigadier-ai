@@ -1,4 +1,5 @@
 import type { StartStep, StartStepRecord } from "@/ipc/generated";
+import type { Board } from "@/state/board";
 
 export type Names = { base: string; branch: string; cli: string };
 export type Shown = { step: StartStep; error: string | null; status: "done" | "running" | "failed" };
@@ -32,4 +33,13 @@ export function setupRows(records: readonly StartStepRecord[], starting: boolean
     row.status = row.error !== null ? "failed" : starting && index === rows.length - 1 ? "running" : "done";
   });
   return rows;
+}
+
+/**
+ * The turn still starts with its setup line: its newest start step is this start's, not one from
+ * before a relaunch mid-turn (a switch), which never sets up again.
+ */
+export function setupStarting(board: Pick<Board, "run" | "runRequest" | "runSince" | "startSteps">): boolean {
+  const last = board.startSteps?.at(-1);
+  return board.run === "starting" && !!last && last.requestId === board.runRequest && last.position >= (board.runSince ?? 0);
 }

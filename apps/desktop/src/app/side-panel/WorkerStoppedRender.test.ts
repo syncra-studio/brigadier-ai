@@ -20,7 +20,7 @@ test("a stopped worker's own view says it stopped, and after how long, from its 
       const html = ReactDOMServer.renderToStaticMarkup(React.createElement(WorkerThread, { conversationId: "c", row }));
       return /data-slot="worker-work-header"[^>]*>([^<]*)</.exec(html)?.[1];
     };
-    assert.equal(header({ lastEnd: "stopped" }), "Stopped after 3m 10s");
+    assert.equal(header({ lastEnd: "stopped" }), "Ended after 3m 10s");
     assert.equal(header({ merged: true }), "Worked for 3m 10s");
     // Sent a message 18 minutes after its first turn (an app restart between): only its turns count.
     const { workedMs } = await server.ssrLoadModule("/src/app/side-panel/WorkerThread.tsx");

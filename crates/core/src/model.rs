@@ -1437,6 +1437,10 @@ pub struct ConversationView {
     pub run: RunState,
     /// The request the running turn serves.
     pub run_request: Option<String>,
+    /// Where its CLI last began starting in the stream (a launch, or a relaunch at a switch):
+    /// a start step from it on is this start's.
+    #[serde(default)]
+    pub run_since: i64,
     /// The last message of the branch the thread shows (the newest message until the user
     /// edits, regenerates or switches branches).
     pub head: Option<String>,

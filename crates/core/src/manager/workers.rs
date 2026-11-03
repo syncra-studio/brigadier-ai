@@ -2533,7 +2533,7 @@ impl SessionManager {
             ));
         }
         // The intent and held batch are recorded with the unpause, before anything sends.
-        let marker = format!("[Worker resume {}]", uuid::Uuid::new_v4());
+        let marker = format!("{RESUME_MARK}{}]", uuid::Uuid::new_v4());
         let task = self
             .update_task(&conversation_id, &task_id, |task| {
                 task.state = TaskState::Running;
@@ -3232,6 +3232,9 @@ fn worker_step(
 
 /// What a paused worker hears when it is resumed, or moved on mid-turn (D7).
 pub(crate) const RESUME_WORDS: &str = "Continue where you stopped.";
+
+/// How a resume's input begins: its unique marker, `[Worker resume <uuid>]`.
+pub(crate) const RESUME_MARK: &str = "[Worker resume ";
 
 /// Why its session can't pause or switch the worker this moment: its first launch, or its
 /// hand-off note turn, would go on past the close.

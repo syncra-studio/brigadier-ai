@@ -1,3 +1,4 @@
+import { setupStarting } from "@/app/conversation/activity/setupWords";
 import { brigadierUnshown, isPlumbing } from "@/app/conversation/activity/words";
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
 import { commandsWaitWords, workersWaitWords } from "@/app/conversation/requestTime";
@@ -26,7 +27,7 @@ export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; wai
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "startSteps">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "startSteps" | "runSince">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -37,6 +38,8 @@ export type StatusInput = {
   quotaWait: QuotaWait | null;
   /** What its CLI is blocked on right now, named (`liveWait`, D106): said rather than "Thinking". */
   wait?: StatusHead | null;
+  /** Its own question card waits for the answer, whatever request it is filed under (D161). */
+  cardWait?: boolean;
 };
 
 function quotaWords(resetsAtMs: number | null): string {
@@ -59,13 +62,13 @@ export function commandWords(command: string): string {
 }
 
 /** What only the user can do for these requests, in a few words; `null` when nothing. */
-function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, workers: readonly Task[]): StatusHead | null {
+function needsYou({ board, requestIds, cardWait }: StatusInput, leadRunning: boolean, workers: readonly Task[]): StatusHead | null {
   const ours = (id: string | null) => id !== null && requestIds.includes(id);
   // A call the user must allow: the turn's last row says so, quietly, the card itself asks.
   if (Object.values(board.approvals).some((card) => ours(card.requestId) && card.state.type === "pending")) {
     return { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" };
   }
-  if (Object.values(board.questions).some((card) => ours(card.requestId) && card.answer === null && card.answeredAtMs === null)) {
+  if (cardWait || Object.values(board.questions).some((card) => ours(card.requestId) && card.answer === null && card.answeredAtMs === null)) {
     return { text: "Waiting for your answer", tone: "needsYou", waitsOn: "answer" };
   }
   // The user works in a worker's own session: the request waits until they close it.
@@ -99,7 +102,7 @@ function leadHead({ board, requestIds, thinkingLive, compacting, wait }: StatusI
   if (thinkingLive || compacting || streaming || sending) return null;
   if (board.doing) return { text: board.doing, tone: "busy" };
   // A new session's setup line says how its start goes.
-  if (board.run === "starting" && board.startSteps?.at(-1)?.requestId === runRequest) return null;
+  if (setupStarting(board)) return null;
   return { text: board.run === "starting" ? "Starting" : "Thinking", tone: "busy" };
 }
 

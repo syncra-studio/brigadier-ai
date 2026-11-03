@@ -152,5 +152,23 @@ async fn the_thread_out_of_credits_goes_on_in_its_session_on_another_account() {
             && account.account.as_deref() == Some("acct-b")),
         "{transitions:#?}"
     );
+    // Its CLI started again on the other account: the session's setup isn't said again.
+    let steps: Vec<_> = flow
+        .events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            DomainEvent::RunStateChanged { step, .. } => step,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|step| **step == crate::work::StartStep::Cli)
+            .count(),
+        1,
+        "{steps:?}"
+    );
     flow.stop().await;
 }

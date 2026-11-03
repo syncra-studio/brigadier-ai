@@ -70,6 +70,11 @@ decisions: Array<Decision>, queue: MessageQueue, run: RunState,
  */
 runRequest: string | null, 
 /**
+ * Where its CLI last began starting in the stream (a launch, or a relaunch at a switch):
+ * a start step from it on is this start's.
+ */
+runSince: number, 
+/**
  * The last message of the branch the thread shows (the newest message until the user
  * edits, regenerates or switches branches).
  */
