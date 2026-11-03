@@ -45,6 +45,7 @@ impl Home {
         match provider {
             ProviderKind::Claude => self.0.join(r".local\bin"),
             ProviderKind::Codex => self.0.join(r"AppData\Local\Programs\OpenAI\Codex\bin"),
+            other => unreachable!("no fake installer for {other}"),
         }
     }
 
@@ -139,6 +140,7 @@ fn ops(home: &Home, provider: ProviderKind) -> Ops {
     let agent: Arc<dyn Provider> = match provider {
         ProviderKind::Claude => Arc::new(Claude::new(platform.clone(), env.clone())),
         ProviderKind::Codex => Arc::new(Codex::new(platform.clone(), env.clone())),
+        other => unreachable!("no fake installer for {other}"),
     };
     let opened = home.0.clone();
     Ops {
@@ -224,7 +226,7 @@ async fn stopped(home: &Home, ops: &Ops) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
-    for provider in ProviderKind::ALL {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
         let home = Home::new();
         let ops = ops(&home, provider);
         assert!((ops.status)(provider).await.path.is_none());
@@ -257,7 +259,7 @@ async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
         // Claude Code's folder goes on the user's Path; Codex's installer adds its own.
         let added = match provider {
             ProviderKind::Claude => format!("{}\n", home.bin(provider).display()),
-            ProviderKind::Codex => String::new(),
+            _ => String::new(),
         };
         assert_eq!(home.text("path-added"), added);
         stopped(&home, &ops).await;
@@ -271,7 +273,7 @@ async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_downloads_fail_instead_of_piping_nothing_and_retry_works() {
-    for provider in ProviderKind::ALL {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
         let home = Home::new();
         home.mode("install", "offline");
         let ops = ops(&home, provider);
@@ -351,7 +353,7 @@ async fn an_installer_that_hangs_times_out() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_in_failure_retry_and_connected_before_exit() {
-    for provider in ProviderKind::ALL {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
         let home = Home::new();
         home.install(provider);
         home.mode("login", "quit");
@@ -510,6 +512,7 @@ async fn live_install_up_to_the_sign_in_link() {
     let agent: Arc<dyn Provider> = match provider {
         ProviderKind::Claude => Arc::new(Claude::new(platform.clone(), env.clone())),
         ProviderKind::Codex => Arc::new(Codex::new(platform.clone(), env.clone())),
+        other => unreachable!("no fake installer for {other}"),
     };
     let link = home.join("brigadier-opened-link");
     let _ = std::fs::remove_file(&link);
