@@ -7,6 +7,7 @@ import type {
   CompactionState,
   Decision,
   MachineStep,
+  StartStepRecord,
   MachineStepKind,
   Message,
   ItemStatus,
@@ -152,12 +153,15 @@ export type MachineWords = {
   taskId: string | null;
 };
 
+/** A new session's setup line: the steps its turn reached before its CLI's first output. */
+export type SetupSteps = { type: "setup"; steps: readonly StartStepRecord[] };
+
 /**
  * Something the orchestrator did ("Sent message to …"), or Brigadier decided for the user, in
  * the order it happened.
  */
 export type BlockOrchestratorStep = {
-  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep | SessionSentStep | SessionWaitStep;
+  kind: OrchestratorStepKind | DecidedStep | MachineWords | PeerSentStep | SessionSentStep | SessionWaitStep | SetupSteps;
   position: number;
   /** When the step began (a tool call: when it was first seen). */
   atMs?: number;
@@ -304,6 +308,7 @@ export type BoardDigest = {
   questions: Readonly<Record<string, Question>>;
   orchestratorSteps: readonly OrchestratorStep[];
   machineSteps: readonly MachineStep[];
+  startSteps?: readonly StartStepRecord[] | undefined;
   decisions: readonly Decision[];
   compactions: Readonly<Record<string, Compaction>>;
   /** Messages to and from other sessions, by message id. */
@@ -519,6 +524,18 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       },
       atMs: step.atMs,
     });
+  }
+  // A turn's start steps are one setup line, before all of its CLI's items (`atMs` 0).
+  const setups = new Map<string, StartStepRecord[]>();
+  for (const record of board.startSteps ?? []) {
+    if (record.requestId === null) continue;
+    const steps = setups.get(record.requestId);
+    if (steps) steps.push(record);
+    else setups.set(record.requestId, [record]);
+  }
+  for (const [requestId, steps] of setups) {
+    const position = steps[0]!.position;
+    items.push({ kind: "orchestrator", position, requestId, step: { kind: { type: "setup", steps }, position }, atMs: 0 });
   }
   for (const decision of board.decisions) {
     if (!judgementCall(decision)) continue;

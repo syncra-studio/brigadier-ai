@@ -83,7 +83,7 @@ impl SessionManager {
 
     /// Runs the setup script in the new `worktree` of conversation `id`, its process recorded
     /// under `owner` while it runs, with `env`, until it ends or `cancel` (the user's Stop).
-    /// Returns what the session is told.
+    /// Returns why it failed ("exit 1"), if it did, and what the session is told.
     pub(crate) async fn run_setup_script(
         &self,
         id: &ConversationId,
@@ -91,9 +91,9 @@ impl SessionManager {
         worktree: &Path,
         env: &[(String, String)],
         cancel: CancellationToken,
-    ) -> String {
+    ) -> (Option<String>, String) {
         if cfg!(windows) {
-            return SETUP_LINE.into();
+            return (None, SETUP_LINE.into());
         }
         // A script that isn't marked executable runs with the shell.
         let command = format!(
@@ -131,7 +131,8 @@ impl SessionManager {
         tracing::info!(worktree = %worktree.display(), %status, ms = started.elapsed().as_millis() as u64, "ran the setup script");
         let output = std::mem::take(&mut *end.lock().unwrap_or_else(|p| p.into_inner()));
         let output = self.hide_secrets(id, output).await;
-        setup_ran_line(&status, &tail(&String::from_utf8_lossy(&output)))
+        let line = setup_ran_line(&status, &tail(&String::from_utf8_lossy(&output)));
+        ((status != "exit 0").then_some(status), line)
     }
 }
 

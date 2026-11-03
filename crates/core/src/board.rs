@@ -131,6 +131,8 @@ pub(crate) struct Board {
     pub(crate) orchestrator_steps: Vec<OrchestratorStep>,
     /// Every row about the machine, in stream order.
     pub(crate) machine_steps: Vec<crate::model::MachineStep>,
+    /// Every start step of its turns, in stream order.
+    pub(crate) start_steps: Vec<crate::work::StartStepRecord>,
     pub(crate) compactions: HashMap<String, Compaction>,
     pub(crate) ratings: HashMap<String, Rating>,
     pub(crate) queue: MessageQueue,
@@ -454,8 +456,20 @@ impl Board {
             }
             DomainEvent::QueueChanged { queue, .. } => self.queue = queue.clone(),
             DomainEvent::RunStateChanged {
-                state, request_id, ..
+                state,
+                request_id,
+                step,
+                error,
+                ..
             } => {
+                if let Some(step) = step {
+                    self.start_steps.push(crate::work::StartStepRecord {
+                        step: *step,
+                        error: error.clone(),
+                        request_id: request_id.clone(),
+                        position: stream_seq,
+                    });
+                }
                 let live =
                     |state: RunState| matches!(state, RunState::Starting | RunState::Running);
                 if live(*state) && !live(self.run) {

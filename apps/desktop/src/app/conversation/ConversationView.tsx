@@ -570,6 +570,7 @@ export function ConversationView({
             questions: s.board.questions,
             orchestratorSteps: s.board.orchestratorSteps,
             machineSteps: s.board.machineSteps,
+            startSteps: s.board.startSteps,
             decisions: s.board.decisions,
             compactions: s.board.compactions,
             peerMessages: s.board.peerMessages,

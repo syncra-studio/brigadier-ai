@@ -421,6 +421,8 @@ export type { SourceRebase } from "./SourceRebase";
 export type { SourceScope } from "./SourceScope";
 export type { SourceState } from "./SourceState";
 export type { SourceStatus } from "./SourceStatus";
+export type { StartStep } from "./StartStep";
+export type { StartStepRecord } from "./StartStepRecord";
 export type { StepAtWork } from "./StepAtWork";
 export type { StepTokens } from "./StepTokens";
 export type { StorageReport } from "./StorageReport";

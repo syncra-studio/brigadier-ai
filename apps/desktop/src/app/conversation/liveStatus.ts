@@ -26,7 +26,7 @@ export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; wai
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "startSteps">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -98,6 +98,8 @@ function leadHead({ board, requestIds, thinkingLive, compacting, wait }: StatusI
   if (wait) return wait;
   if (thinkingLive || compacting || streaming || sending) return null;
   if (board.doing) return { text: board.doing, tone: "busy" };
+  // A new session's setup line says how its start goes.
+  if (board.run === "starting" && board.startSteps?.at(-1)?.requestId === runRequest) return null;
   return { text: board.run === "starting" ? "Starting" : "Thinking", tone: "busy" };
 }
 

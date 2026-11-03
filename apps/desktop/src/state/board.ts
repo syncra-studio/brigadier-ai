@@ -18,6 +18,7 @@ import type {
   ErrorKind,
   EventEnvelope,
   MachineStep,
+  StartStepRecord,
   MessageQueue,
   Notice,
   OrchestratorStep,
@@ -91,6 +92,8 @@ export type Board = {
   orchestratorSteps: OrchestratorStep[];
   /** Every row about the machine (waiting for it to cool down, a build paused), in stream order. */
   machineSteps: MachineStep[];
+  /** Every step of starting a new session's turns (fetch, worktree, setup script, CLI), in stream order. */
+  startSteps?: StartStepRecord[];
   /** What was decided on the user's behalf, in stream order. */
   decisions: Decision[];
   /** A Chat's context compactions, by id. */
@@ -437,6 +440,7 @@ export function boardFromView(
     workerSteps: view.workerSteps,
     orchestratorSteps: view.orchestratorSteps,
     machineSteps: view.machineSteps ?? [],
+    startSteps: view.startSteps ?? [],
     decisions: view.decisions,
     compactions: byId(view.compactions),
     ratings: view.ratings,
@@ -577,6 +581,9 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
     case "runStateChanged":
       return {
         ...board,
+        ...(event.step && !(board.startSteps ?? []).some((step) => step.position === streamSeq) && {
+          startSteps: [...(board.startSteps ?? []), { step: event.step, error: event.error, requestId: event.requestId, position: streamSeq }],
+        }),
         doing: event.state === "running" || event.state === "starting" ? board.doing : null,
         run: event.state,
         runError: event.error,

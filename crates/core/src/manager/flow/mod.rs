@@ -2658,6 +2658,8 @@ mod session_dir_tests;
 mod session_messages_tests;
 #[cfg(unix)]
 mod session_states_tests;
+#[cfg(unix)]
+mod start_steps_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod thread_scratch_tests;

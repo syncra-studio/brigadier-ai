@@ -44,8 +44,8 @@ use crate::sessions::McpUpdate;
 use crate::tools::Role;
 use crate::work::{
     ApprovalSubject, ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, CardState,
-    MockupPart, OrchestratorStepKind, PlainWorker, RepoAccess, Route, Task, TaskId, TaskKind,
-    TaskState, TaskWorkspace, WorkerAccess, WorkerStepKind,
+    MockupPart, OrchestratorStepKind, PlainWorker, RepoAccess, Route, StartStep, Task, TaskId,
+    TaskKind, TaskState, TaskWorkspace, WorkerAccess, WorkerStepKind,
 };
 use crate::{Error, Result, now_ms};
 
@@ -1276,7 +1276,11 @@ impl SessionManager {
                 let branch_name = branch.clone();
                 // A new branch starts from the newest base: its remote is fetched first.
                 let fresh = match &start {
-                    None => Some(self.fresh_tip(repo, base).await?),
+                    None => {
+                        self.start_step(conversation_id, StartStep::Fetching, None)
+                            .await;
+                        Some(self.fresh_tip(repo, base).await?)
+                    }
                     Some(_) => None,
                 };
                 let newer = fresh.as_ref().and_then(|(_, gap)| gap.clone());
@@ -1286,6 +1290,8 @@ impl SessionManager {
                     .and_then(|id| self.core.project(id).ok())
                     .map(|project| project.prefs.secret_files)
                     .unwrap_or_default();
+                self.start_step(conversation_id, StartStep::Worktree, None)
+                    .await;
                 let (made, copied, setup) = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
@@ -1484,16 +1490,23 @@ impl SessionManager {
                 return super::prompts::SETUP_LINE.into();
             }
         };
+        self.start_step(id, StartStep::SetupScript, None).await;
         // The user's Stop ends it.
         let stoppable = self.stoppable(id, "setup");
-        self.run_setup_script(
-            id,
-            &super::setup_script::setup_owner(id),
-            worktree,
-            &worker_env(&tmp),
-            stoppable.cancel.clone(),
-        )
-        .await
+        let (failed, line) = self
+            .run_setup_script(
+                id,
+                &super::setup_script::setup_owner(id),
+                worktree,
+                &worker_env(&tmp),
+                stoppable.cancel.clone(),
+            )
+            .await;
+        // A failed script shows on its row; the session goes on.
+        if failed.is_some() {
+            self.start_step(id, StartStep::SetupScript, failed).await;
+        }
+        line
     }
 
     /// The user's attachments the task was given, written into its scratch folder.

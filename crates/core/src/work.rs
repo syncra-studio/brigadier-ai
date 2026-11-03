@@ -1525,6 +1525,32 @@ pub enum RunState {
     Failed,
 }
 
+/// A step of starting a new session's turn before its CLI's first output: a row of the
+/// thread's setup line ("Fetched the latest main", "Created … from main", …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum StartStep {
+    /// Fetching the base's remote.
+    Fetching,
+    /// Making the session's worktree and branch.
+    Worktree,
+    /// Running the repository's setup script.
+    SetupScript,
+    /// Starting the CLI.
+    Cli,
+}
+
+/// A start step reached (or failed, with `error`), as the board keeps it for the thread.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StartStepRecord {
+    pub step: StartStep,
+    pub error: Option<String>,
+    pub request_id: Option<String>,
+    /// Where it happened in the conversation's stream.
+    pub position: i64,
+}
+
 /// What the sidebar shows about a conversation: whether its CLI works, and what waits for the
 /// user. The UI keeps it current from the same events as the board, and the CLI's turns.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

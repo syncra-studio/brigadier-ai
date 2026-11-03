@@ -1197,7 +1197,11 @@ export function cliThreadTree(
       continue;
     }
     // Another session's, taken from the queue, is on its way as that session's (goal 4).
-    blocks.push(onItsWay(message.id, peer ? { kind: "peer", message, text: peerWords(text), earlier: false } : { kind: "message", message, text }, message.createdAtMs, run));
+    const block = onItsWay(message.id, peer ? { kind: "peer", message, text: peerWords(text), earlier: false } : { kind: "message", message, text }, message.createdAtMs, run);
+    // Its new worktree's setup line, while its turn starts or after its start failed.
+    const setup = (board.startSteps ?? []).filter((record) => record.requestId === (message.requestId ?? message.id));
+    if (setup.length > 0) block.orchestratorSteps.push({ kind: { type: "setup", steps: setup }, position: 0 });
+    blocks.push(block);
   }
   for (const entry of sending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs, { state: "running", error: null }));
 

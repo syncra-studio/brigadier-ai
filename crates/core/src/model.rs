@@ -1423,6 +1423,10 @@ pub struct ConversationView {
     /// in the order they happened.
     #[serde(default)]
     pub machine_steps: Vec<MachineStep>,
+    /// Every step of starting a new session's turns (its worktree, its setup script, its CLI),
+    /// in the order they happened.
+    #[serde(default)]
+    pub start_steps: Vec<crate::work::StartStepRecord>,
     #[serde(default)]
     pub thinking: Vec<ThinkingSegment>,
     /// Every compaction of a Chat's context, in the order they happened.
@@ -2334,6 +2338,10 @@ pub enum DomainEvent {
         /// The request the turn serves.
         #[serde(default)]
         request_id: Option<String>,
+        /// The start step reached (`Starting` only); with `error`, the step that failed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        step: Option<crate::work::StartStep>,
     },
     /// A user request started, or its state changed (full snapshot).
     RequestUpdated {

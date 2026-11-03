@@ -15,6 +15,7 @@ import type { Preview } from "./Preview";
 import type { Question } from "./Question";
 import type { Rating } from "./Rating";
 import type { RunState } from "./RunState";
+import type { StartStepRecord } from "./StartStepRecord";
 import type { StreamingMessage } from "./StreamingMessage";
 import type { Task } from "./Task";
 import type { ThinkingSegment } from "./ThinkingSegment";
@@ -50,7 +51,12 @@ orchestratorSteps: Array<OrchestratorStep>,
  * Every row about the machine (waiting for it to cool down, builds paused and resumed),
  * in the order they happened.
  */
-machineSteps: Array<MachineStep>, thinking: Array<ThinkingSegment>, 
+machineSteps: Array<MachineStep>, 
+/**
+ * Every step of starting a new session's turns (its worktree, its setup script, its CLI),
+ * in the order they happened.
+ */
+startSteps: Array<StartStepRecord>, thinking: Array<ThinkingSegment>, 
 /**
  * Every compaction of a Chat's context, in the order they happened.
  */

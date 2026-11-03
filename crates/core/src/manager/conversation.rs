@@ -2788,8 +2788,17 @@ impl SessionManager {
             }
             // The user's message brings back the session's worktree a merge removed
             // (THREAD-PLAN.md Q9), from the base's tip now.
+            // A worktree that couldn't be made ends the turn with why: it never runs in the
+            // scratch folder instead.
             if let Err(err) = self.effective_workspace(&conv.id).await {
                 crate::logging::private_trace!(conv.private_logs, warn, "could not make the session's worktree"; conversation = %conv.id, error = %err);
+                if !self.is_attached(&conv) {
+                    return;
+                }
+                let message = err.to_string();
+                self.fail_start_step(&conv.id, &message).await;
+                self.fail_turn(&conv, users, envelopes, &message).await;
+                return;
             }
             // A note the workspace left (a fresh branch) reaches this turn.
             user_notes.append(&mut conv.state.lock().await.notes);
@@ -2807,6 +2816,11 @@ impl SessionManager {
             Ok(conversation) if session => self.check_joined(&conversation).await,
             _ => Ok(()),
         };
+        // After setting up a worktree, starting the CLI is its setup line's last step.
+        if session && self.reached_start_step(&conv.id).await.is_some() {
+            self.start_step(&conv.id, crate::work::StartStep::Cli, None)
+                .await;
+        }
         let cli = match async {
             joined?;
             self.ensure_cli(&conv).await
@@ -2822,6 +2836,7 @@ impl SessionManager {
                     self.seam_not_started(&conv, successor).await;
                 }
                 let message = err.to_string();
+                self.fail_start_step(&conv.id, &message).await;
                 self.fail_turn(&conv, users, envelopes, &message).await;
                 return;
             }
@@ -6321,11 +6336,67 @@ impl SessionManager {
                     state,
                     error,
                     request_id: request,
+                    step: None,
                 }],
             )
             .await
         {
             crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store the run state"; conversation = %id, error = %err);
+        }
+    }
+
+    /// Records the start step the turn of `id` reached (`Starting` again, with it); with
+    /// `error`, the step that failed. A hand-off's quiet turn shows none.
+    pub(crate) async fn start_step(
+        &self,
+        id: &ConversationId,
+        step: crate::work::StartStep,
+        error: Option<String>,
+    ) {
+        let Ok(conv) = self.conv(id) else { return };
+        let request = {
+            let state = conv.state.lock().await;
+            if state.seam.quiet {
+                return;
+            }
+            state.request.clone()
+        };
+        if let Err(err) = self
+            .core
+            .record_conversation(
+                id,
+                vec![DomainEvent::RunStateChanged {
+                    conversation_id: id.clone(),
+                    state: RunState::Starting,
+                    error,
+                    request_id: request,
+                    step: Some(step),
+                }],
+            )
+            .await
+        {
+            crate::logging::private_trace!(self.tab_chat_logs(id), debug, "could not store the start step"; conversation = %id, error = %err);
+        }
+    }
+
+    /// The start step the turn of `id` still starting last reached, if it reached one.
+    async fn reached_start_step(&self, id: &ConversationId) -> Option<crate::work::StartStep> {
+        let board = self.core.board(id).await.ok()?;
+        if board.run != RunState::Starting {
+            return None;
+        }
+        board
+            .start_steps
+            .last()
+            .filter(|record| record.position > board.run_since)
+            .map(|record| record.step)
+    }
+
+    /// The turn of `id` failed before its CLI's first output: the step it had reached shows
+    /// the failure.
+    async fn fail_start_step(&self, id: &ConversationId, error: &str) {
+        if let Some(step) = self.reached_start_step(id).await {
+            self.start_step(id, step, Some(error.to_owned())).await;
         }
     }
 

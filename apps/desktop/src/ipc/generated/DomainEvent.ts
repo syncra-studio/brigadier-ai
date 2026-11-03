@@ -36,6 +36,7 @@ import type { ReplyHold } from "./ReplyHold";
 import type { RunState } from "./RunState";
 import type { Settings } from "./Settings";
 import type { Setup } from "./Setup";
+import type { StartStep } from "./StartStep";
 import type { StoredOutput } from "./StoredOutput";
 import type { Task } from "./Task";
 import type { TaskId } from "./TaskId";
@@ -59,7 +60,11 @@ phase?: TextPhase, } | { "type": "thinkingDelta", conversationId: ConversationId
 /**
  * The request the turn serves.
  */
-requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, } | { "type": "requestReady", conversationId: ConversationId, requestId: string, head: string, } | { "type": "pullRequestSeen", conversationId: ConversationId, pullRequest: PullRequest | null, } | { "type": "workerStepped", step: WorkerStep, } | { "type": "orchestratorStepped", step: OrchestratorStep, } | { "type": "machineStepped", conversationId: ConversationId, step: MachineStep, } | { "type": "compactionUpdated", compaction: Compaction, } | { "type": "messageRated", 
+requestId: string | null, 
+/**
+ * The start step reached (`Starting` only); with `error`, the step that failed.
+ */
+step?: StartStep, } | { "type": "requestUpdated", request: UserRequest, } | { "type": "requestReady", conversationId: ConversationId, requestId: string, head: string, } | { "type": "pullRequestSeen", conversationId: ConversationId, pullRequest: PullRequest | null, } | { "type": "workerStepped", step: WorkerStep, } | { "type": "orchestratorStepped", step: OrchestratorStep, } | { "type": "machineStepped", conversationId: ConversationId, step: MachineStep, } | { "type": "compactionUpdated", compaction: Compaction, } | { "type": "messageRated", 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */
