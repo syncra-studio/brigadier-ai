@@ -17,10 +17,12 @@ test("Work in offers New worktree (the default), Local checkout and Existing wor
   assert.equal(seen.localHint, "", "no checkout explanation below the composer");
   assert.deepEqual(seen.localRows, [["New worktree", "false"], ["Local checkout", "true"], ["Existing worktree", "false"]]);
   assert.deepEqual((seen.backSetup as { environment: unknown }).environment, { type: "newWorktree", base: "feature-x", branch: null });
-  // Existing worktree (goal 9, D130): the other worktrees, each folder with its branch; the
-  // project's own checkout and a running worker's aren't offered; the pick is the folder.
+  // Existing worktree (goal 9, D130): the other worktrees, each by the session working there or
+  // its folder's name, its branch below (D184); the project's own checkout and a running
+  // worker's aren't offered; the pick is the folder, its pill the same name.
   assert.deepEqual(seen.existingPills, ["Existing worktree", "Pick a worktree"]);
   assert.equal(seen.existingProblem, "Pick the worktree to work in.");
-  assert.deepEqual(seen.worktreeRows, ["/work/todo-app-hotfixhotfix", "~/.brigadier/s/ab12cd34/workfix-login"]);
+  assert.deepEqual(seen.worktreeRows, ["Fix the loginfix-login", "todo-app-hotfixhotfix"]);
+  assert.equal(seen.pickedPill, "Fix the login");
   assert.deepEqual((seen.existingSetup as { environment: unknown }).environment, { type: "existing", path: "/Users/me/.brigadier/s/ab12cd34/work" });
 });

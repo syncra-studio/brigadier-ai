@@ -77,24 +77,29 @@ export function rowWaiting(row: WorkerRow, now: number): boolean {
   return kind === "needsYou" || kind === "limit";
 }
 
-/** How the finished ones ended: done (merged or not), paused and stopped (failed included). */
-export function finishedCounts(rows: readonly WorkerRow[], now: number): { done: number; paused: number; stopped: number } {
-  const counts = { done: 0, paused: 0, stopped: 0 };
+/**
+ * How a finished worker ended in the context card: done (merged or not) or stopped (failed and
+ * paused too); the card reads only working, stopped and done (D185).
+ */
+export function endedWord(kind: WorkerStateKind): "Done" | "Stopped" {
+  return kind === "done" || kind === "doneNotMerged" || kind === "merged" ? "Done" : "Stopped";
+}
+
+/** How the finished ones ended (`endedWord`). */
+export function finishedCounts(rows: readonly WorkerRow[], now: number): { done: number; stopped: number } {
+  const counts = { done: 0, stopped: 0 };
   for (const row of rows) {
     const { kind } = workerStateOf(row, now);
-    if (kind === "done" || kind === "doneNotMerged" || kind === "merged") counts.done += 1;
-    else if (kind === "paused") counts.paused += 1;
-    else if (kind === "stopped" || kind === "failed") counts.stopped += 1;
+    if (FINISHED.has(kind)) counts[endedWord(kind) === "Done" ? "done" : "stopped"] += 1;
   }
   return counts;
 }
 
-/** "1 done · 1 paused · 1 stopped": the finished workers by how they ended, zeros left out. */
+/** "1 done · 1 stopped": the finished workers by how they ended, zeros left out. */
 export function finishedWords(rows: readonly WorkerRow[], now: number): string {
-  const { done, paused, stopped } = finishedCounts(rows, now);
+  const { done, stopped } = finishedCounts(rows, now);
   return [
     [done, "done"],
-    [paused, "paused"],
     [stopped, "stopped"],
   ]
     .filter(([count]) => (count as number) > 0)

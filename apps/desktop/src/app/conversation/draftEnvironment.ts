@@ -1,4 +1,4 @@
-import type { EnvironmentRequest } from "@/ipc/generated";
+import type { Conversation, EnvironmentRequest } from "@/ipc/generated";
 import type { DraftEnvironment } from "@/state/store";
 
 /** What the composer knows when it asks where a new session works. */
@@ -39,4 +39,19 @@ export function environmentRequest(place: DraftPlace): { request: EnvironmentReq
   const base = place.base ?? current;
   if (!base) return loading ? READING : { problem: "Pick the base branch." };
   return { request: { type: "newWorktree", base, branch: place.sessionBranch.trim() || null } };
+}
+
+/** A path as both git and Brigadier may write it: macOS's /private/tmp is /tmp. */
+const samePath = (path: string) => path.replace(/^\/private(?=\/)/, "");
+
+/**
+ * What a worktree is, in a word the user knows (D184): the sessions that work there by title,
+ * else the folder's own name.
+ */
+export function worktreeLabel(path: string, conversations: Readonly<Record<string, Conversation>>): string {
+  const titles = Object.values(conversations)
+    .filter(({ setup }) => setup?.type === "session" && setup.environment.type === "newWorktree" && !!setup.environment.path && samePath(setup.environment.path) === samePath(path))
+    .toSorted((a, b) => a.createdAtMs - b.createdAtMs)
+    .map(({ title }) => title);
+  return titles.length ? titles.join(", ") : (path.split("/").findLast(Boolean) ?? path);
 }

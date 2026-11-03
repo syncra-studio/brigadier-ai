@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { finishedCounts, finishedWords, QUIET_MS, rowNames, workerStateOf } from "@/app/conversation/activity/workerState";
+import { endedWord, finishedCounts, finishedWords, QUIET_MS, rowNames, workerStateOf } from "@/app/conversation/activity/workerState";
 import type { WorkerRow } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 
@@ -59,7 +59,7 @@ test("git says the rest: Merged, Done · not merged (commits ahead or changes), 
   assert.equal(word({ working: false, lastEnd: "done", gone: true }), "Done");
 });
 
-test("the finished ones count as N done · M stopped, failed among the stopped", () => {
+test("the finished ones count as N done · M stopped, failed and paused among the stopped, merged among the done", () => {
   const rows = [
     row({ working: false, lastEnd: "done" }),
     row({ working: false, lastEnd: "done", merged: true }),
@@ -68,9 +68,10 @@ test("the finished ones count as N done · M stopped, failed among the stopped",
     row({ working: false, lastEnd: "failed" }),
     row(),
   ];
-  assert.deepEqual(finishedCounts(rows, NOW), { done: 3, paused: 0, stopped: 2 });
+  assert.deepEqual(finishedCounts(rows, NOW), { done: 3, stopped: 2 });
   assert.equal(finishedWords(rows, NOW), "3 done · 2 stopped");
-  assert.equal(finishedWords([...rows, row({ working: false, lastEnd: "interrupted", paused: true })], NOW), "3 done · 1 paused · 2 stopped");
+  assert.equal(finishedWords([...rows, row({ working: false, lastEnd: "interrupted", paused: true })], NOW), "3 done · 3 stopped");
+  assert.equal(endedWord(workerStateOf(rows[1]!, NOW).kind), "Done");
   assert.equal(finishedWords([row()], NOW), "");
 });
 

@@ -8,6 +8,7 @@ import {
 } from "react";
 
 
+import { worktreeLabel } from "@/app/conversation/draftEnvironment";
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 
 import { PickerRow } from "@/app/conversation/PickerRow";
@@ -329,6 +330,7 @@ function BasePopover({ resolved, existing }: { resolved: ResolvedDraft; existing
   const { info, error, loading } = resolved.repo;
   const picked = existing ? resolved.draft.worktree : resolved.base;
   const repoName = info?.name ?? resolved.project?.name ?? "";
+  const conversations = useApp((s) => s.conversations);
 
   // A row: what is picked, what it shows, and its grey detail.
   const rows = useMemo(() => {
@@ -337,7 +339,7 @@ function BasePopover({ resolved, existing }: { resolved: ResolvedDraft; existing
       // The other worktrees (the folder with its branch); the checkout is Local checkout's.
       return info.branches
         .flatMap(({ name, checkedOutAt, worker }) =>
-          checkedOutAt && checkedOutAt !== info.path && !worker ? [{ key: checkedOutAt, label: shortPath(checkedOutAt), detail: name }] : [],
+          checkedOutAt && checkedOutAt !== info.path && !worker ? [{ key: checkedOutAt, label: worktreeLabel(checkedOutAt, conversations), detail: name }] : [],
         )
         .toSorted((a, b) => a.label.localeCompare(b.label));
     }
@@ -346,9 +348,9 @@ function BasePopover({ resolved, existing }: { resolved: ResolvedDraft; existing
     return info.branches
       .map(({ name }) => ({ key: name, label: name, detail: undefined }))
       .toSorted((a, b) => Number(b.key === current) - Number(a.key === current) || a.key.localeCompare(b.key));
-  }, [info, existing]);
+  }, [info, existing, conversations]);
   const needle = query.trim().toLowerCase();
-  const matches = rows.filter((row) => `${row.label} ${row.detail ?? ""}`.toLowerCase().includes(needle));
+  const matches = rows.filter((row) => `${row.label} ${row.detail ?? ""} ${existing ? row.key : ""}`.toLowerCase().includes(needle));
   const pick = (key: string) => {
     updateDraft(projectId, existing ? { worktree: key } : { base: key });
     setOpen(false);
@@ -369,7 +371,7 @@ function BasePopover({ resolved, existing }: { resolved: ResolvedDraft; existing
           label={existing ? "Worktree" : "Base branch"}
           title={existing ? "Which worktree should this session work in?" : "What branch should this session start from?"}
         >
-          {existing ? (picked ? shortPath(picked) : "Pick a worktree") : (picked ?? (loading ? "…" : "Pick a branch"))}
+          {existing ? (picked ? worktreeLabel(picked, conversations) : "Pick a worktree") : (picked ?? (loading ? "…" : "Pick a branch"))}
         </RailPill>
       </PopoverTrigger>
       <PopoverContent
@@ -420,10 +422,11 @@ function BasePopover({ resolved, existing }: { resolved: ResolvedDraft; existing
               aria-selected={key === picked}
               onPointerMove={() => setIndex(at)}
               onClick={() => pick(key)}
+              title={existing ? shortPath(key) : undefined}
               className={cn(ROW, at === index && ROW_ACTIVE)}
             >
               {existing ? (
-                <MenuRow icon={<Folder />} title={label} detail={detail} />
+                <MenuRow twoLine icon={<Folder />} title={label} detail={detail} />
               ) : (
                 <>
                   <Branch className="text-muted-foreground" />

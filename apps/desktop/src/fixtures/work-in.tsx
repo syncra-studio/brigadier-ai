@@ -15,7 +15,7 @@ import type { ComposerTarget } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
 import { UtilityBar } from "@/app/conversation/UtilityBar";
 import { TooltipProvider } from "@/components/overlays";
-import type { Project, RepoInfo, Request } from "@/ipc/generated";
+import type { Conversation, Project, RepoInfo, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -37,8 +37,14 @@ mockIPC((command, payload) => {
   if (req.method === "getRepoInfo") return { method: req.method, repo };
   return { method: req.method };
 });
+// The session that works in fix-login's folder: its row reads by its title (D184).
+const fixLogin = {
+  id: "s1", title: "Fix the login", createdAtMs: 0, lifecycle: "active",
+  setup: { type: "session", repo: "/work/todo-app", environment: { type: "newWorktree", base: "main", branch: "fix-login", path: "/Users/me/.brigadier/s/ab12cd34/work", start: null } },
+} as unknown as Conversation;
 useApp.setState({
   projects: { p1: project },
+  conversations: { s1: fixLogin },
   selection: { type: "draft", kind: "session", projectId: "p1" },
   connection: { status: "connected", daemon: null, reason: null },
 });
@@ -101,7 +107,8 @@ async function drive(): Promise<Record<string, unknown>> {
   seen.worktreeRows = options().map((each) => each.textContent);
   if (query.get("stop") === "existing") return seen;
   press(options().find((each) => each.textContent?.endsWith("fix-login"))!);
-  await until("the picked worktree", () => pill("Worktree")?.textContent === "~/.brigadier/s/ab12cd34/work");
+  await until("the picked worktree", () => pill("Worktree")?.textContent === "Fix the login");
+  seen.pickedPill = pill("Worktree")?.textContent;
   seen.existingSetup = setup();
   return seen;
 }

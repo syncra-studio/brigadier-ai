@@ -26,12 +26,20 @@ export function useWorkersStrip(conversationId: string): StripView | null {
 /**
  * The Workers strip, a row of the composer's status slot (THREAD-UX-PLAN.md §3.5,
  * SESSION-FIXES-PLAN.md Q8): while workers run or wait, those only; finished ones are the
- * context card's. Collapsed it counts them; open, one row each, and Stop all. Each worker's
+ * context card's. A lone worker is its own row; more, collapsed, are counted; open, one row each, and Stop all. Each worker's
  * progress lives here, not under the thread's live line.
  */
 export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ conversationId, view }) => {
   const [open, setOpen] = useState(false);
   const stop = useAction();
+  // One worker shows as itself: its name, what it does, its Stop (D187); two or more fold into a count.
+  if (view.rows.length === 1) {
+    return (
+      <ul data-slot="workers-strip" className="flex flex-col px-1 py-1">
+        <StripRow conversationId={conversationId} taskId={view.rows[0]!} />
+      </ul>
+    );
+  }
   return (
     <div data-slot="workers-strip" data-state={open ? "open" : "closed"} className="group flex flex-col px-1 py-1">
       <div className="flex min-h-row items-center gap-1">

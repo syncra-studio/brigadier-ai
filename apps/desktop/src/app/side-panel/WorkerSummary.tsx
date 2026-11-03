@@ -3,7 +3,7 @@ import { type FC, useContext } from "react";
 import { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 import { Counts } from "@/components/shared";
 import { nowInLine, workerNow } from "@/app/conversation/activity/workerNow";
-import { finishedWords, rowFinished } from "@/app/conversation/activity/workerState";
+import { endedWord, finishedWords, rowFinished } from "@/app/conversation/activity/workerState";
 import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
 import { showWorkerSource } from "@/app/side-panel/sourceTarget";
 import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conversation";
@@ -30,7 +30,9 @@ const TICK_MS = 30_000;
 const WorkerLineRow: FC<{ conversationId: string; row: WorkerRow; now: number }> = ({ conversationId, row, now }) => {
   const name = useWorkerName(row.id);
   const { setPanel } = useContext(AgentsPanelContext);
-  const state = workerNow(row, now);
+  const live = workerNow(row, now);
+  // A finished one reads only done or stopped here (D185).
+  const state = rowFinished(row, now) ? { kind: live.kind, word: endedWord(live.kind) } : live;
   const stat = row.diff;
   return (
     <SummaryRowButton
