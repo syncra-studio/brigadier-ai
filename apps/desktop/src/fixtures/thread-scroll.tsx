@@ -849,28 +849,6 @@ const steps = {
     }
     return { shown: shownIs("other"), empty, placeholders, rows: rows().length };
   },
-  /** With the capsule above the composer: the gaps are to the capsule's top. */
-  async capsule() {
-    // A shorter window, so its bottom is a real one.
-    $("#thread-scroll-main")!.style.paddingBottom = `${SHRINK_PX}px`;
-    await open("long");
-    // Its last request works on, with what it changed so far: the capsule shows.
-    const before = useBoard.getState().board!;
-    const last = Object.values(before.requests).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1)!;
-    useBoard.setState({ board: { ...before, requests: { ...before.requests, [last.id]: { ...last, state: { type: "working" }, endedAtMs: null } } } });
-    await settle(400);
-    await userScroll(max());
-    await settle(250);
-    const capsule = $('[data-slot="composer-capsule"]');
-    const atBottom = { capsule: capsule !== null, capsuleInStack: capsule ? round(capsule.getBoundingClientRect().top - stackTop()) : null, lastGap: lastGap(), distance: distance() };
-    await userScroll(max() - 200);
-    await settle(250);
-    const above = buttonState();
-    useBoard.setState({ board: before });
-    $("#thread-scroll-main")!.style.paddingBottom = "";
-    await settle(200);
-    return { atBottom, button: above };
-  },
   /** An existing conversation never opened, whose one turn still runs: the bottom. */
   async working() {
     await open("working");

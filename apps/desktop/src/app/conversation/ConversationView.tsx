@@ -58,7 +58,6 @@ import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { ThreadFind } from "@/app/conversation/ThreadFind";
 import { taskRuns } from "@/app/conversation/taskActivity";
 import { AboveComposer } from "@/app/conversation/AboveComposer";
-import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
 import { LoadEarlier } from "@/app/conversation/LoadEarlier";
 import { UserAttachments } from "@/app/conversation/UserAttachments";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -1265,7 +1264,6 @@ const THREAD_COMPONENTS: ThreadComponents = {
   BeforeMessages: LoadEarlier,
   UserAttachments,
   AboveComposer,
-  Capsule: ComposerCapsule,
   Composer: ConversationComposer,
   UserText: UserMessageText,
   PeerMessage: PeerUserMessage,

@@ -81,8 +81,6 @@ export type ThreadComponents = {
   PeerMessage?: ComponentType | undefined;
   /** A user message's text, where the app shows what it mentions. */
   UserText?: ComponentType<TextMessagePartProps> | undefined;
-  /** Floats centred just above the composer, over the thread (the capsule). */
-  Capsule?: ComponentType | undefined;
   Composer: ComponentType<ComposerProps>;
   /** Over the thread's top end: the app's find bar (⌘F). */
   Find?: ComponentType<ThreadOverlayProps> | undefined;
@@ -354,7 +352,7 @@ const ThreadRoot: FC<{
   placeholder: string;
   scrollKey: string | null;
 }> = ({ isEmpty, autoFocus, placeholder, scrollKey }) => {
-  const { Welcome, BeforeMessages, AboveComposer, Capsule, Composer, Find } = useThreadComponents();
+  const { Welcome, BeforeMessages, AboveComposer, Composer, Find } = useThreadComponents();
   const [scroller] = useState(() => new ThreadScroller());
   const { viewport, group, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
     scroller,
@@ -445,7 +443,6 @@ const ThreadRoot: FC<{
               className="group/footer max-w-thread relative mx-auto flex w-full flex-col px-4"
             >
               <ThreadScrollToBottom />
-              {Capsule && <Capsule />}
               <div className="pointer-events-auto flex flex-col gap-4">
                 {/* A new chat has no response to go to (#564). */}
                 {!isEmpty && <LatestResponse />}

@@ -274,12 +274,12 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Composer | `Dictation bar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
 | Composer | `Waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
 | Composer | `Composer hint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
-| Composer menus, rail & queue | `Capsule pill` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
+| Composer menus, rail & queue | `Capsule pill` | — | — | Pen only: the code was removed with the changes pill (D204) |
 | Composer menus, rail & queue | `Step list` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Composer menus, rail & queue | `Run capsule` | — | — | Pen only: the code was removed in cb94ccca9 |
-| Composer menus, rail & queue | `Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
-| Composer menus, rail & queue | `Request capsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
-| Composer menus, rail & queue | `Diff pill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
+| Composer menus, rail & queue | `Capsule` | — | — | Pen only: the code was removed with the changes pill (D204) |
+| Composer menus, rail & queue | `Request capsule` | — | — | Pen only: the code was removed with the changes pill (D204) |
+| Composer menus, rail & queue | `Diff pill` | — | — | Pen only: the code was removed with the changes pill (D204) |
 | Composer menus, rail & queue | `Moved notice` | — | — | Pen only: the code was removed in efa933d5a |
 | Composer menus, rail & queue | `Rail pill` | `app/conversation/RailPill.tsx` | `RailPill` | |
 | Composer menus, rail & queue | `Stand-in pill` | `app/shell/StandInPill.tsx` | `StandInPill` | |

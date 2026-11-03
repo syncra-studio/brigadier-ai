@@ -79,10 +79,6 @@ test("the thread's own work reads like the reference thread: running commands st
   assertMaking(seen.making, "pulse");
   // Shown closed with its image made; one more starting opens it to its place.
   assert.deepEqual(seen.later, ["closed", "open", "Creating 2 images"]);
-
-  // The working request's pill, from its record; a click opens its first file's tab.
-  assert.match(String(seen.pill), /^2 files changed ?\+11 −2$/);
-  assert.equal(seen.pillTab, "src/math.js");
 });
 
 test("an image being made holds its tile's place without pulsing when the user asks for less motion", { timeout: 90000 }, async (t) => {

@@ -51,7 +51,6 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     returnAfterSend: { room: number; distance: number; roomBack: number; lastGap: number; button: boolean };
     sendScrolledUp: { moved: boolean; distance: number; inView: boolean; button: boolean };
     newChat: { userTop: number | null; top: number };
-    capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
     working: { distance: number; rows: number };
     fractionalRows: number[];
     sendBeforeItsTurnIsRead: { t: number; row: string | null; top: number | null; blank: boolean }[];
@@ -134,10 +133,6 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   near(composerGrows.atBottom.lastGap, 32, "last content to the notice");
   near(composerGrows.atBottom.button.aboveStack, 24, "button above the notice");
   assert.equal(composerGrows.shrunk.distance, 0);
-  near(seen.capsule.atBottom.capsuleInStack, 0, "capsule at the top of the footer");
-  assert.equal(seen.capsule.atBottom.capsule, true);
-  near(seen.capsule.atBottom.lastGap, 32, "last content to the capsule");
-  near(seen.capsule.button.aboveStack, 24, "button above the capsule");
 
   // A send: a critically damped spring of about half a second, to 1px above the bottom, puts the
   // turn's end a third of the way down the view (at least 240px), room below it down to the
