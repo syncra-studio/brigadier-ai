@@ -268,7 +268,7 @@ test("Done uses the recorded turn-end unread dot: opening clears it through clos
 test("Inbox mode: Pinned, Active, Working, Snoozed and Done across projects, each row naming its project; a new message brings a done row back; the switch flips to Projects", { timeout: 60000 }, async (t) => {
   type Section = { title: string; open: boolean; rows: { title: string; label: string | null }[] };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?inbox=1", "sessions-result", 30000)) as {
-    sections: Section[]; doneRunning: string; doneAfter: string; firstActive: string; projectsSections: string[]; mode: string; saved: boolean;
+    sections: Section[]; dock: { doneInside: boolean; below: number; between: number }; doneRunning: string; doneAfter: string; firstActive: string; projectsSections: string[]; mode: string; saved: boolean;
   };
   const titles = (section: Section) => section.rows.map((row) => row.title);
   assert.deepEqual(seen.sections.map(({ title, open }) => [title, open]), [
@@ -281,6 +281,10 @@ test("Inbox mode: Pinned, Active, Working, Snoozed and Done across projects, eac
   assert.deepEqual(titles(working), ["Header", "Waiting on a limit", "Lone worker"]);
   assert.deepEqual(titles(snoozed), ["Tidy the docs"]);
   assert.deepEqual(titles(done), ["Fix the login"]);
+  // Done sits at the very bottom of the sidebar, even with a short list above it (D16).
+  assert.ok(seen.dock.doneInside, "Done is in the bottom dock");
+  assert.ok(Math.abs(seen.dock.below) <= 1, `Done's dock ends at the sidebar's bottom (${seen.dock.below}px off)`);
+  assert.ok(Math.abs(seen.dock.between) <= 1, `the list above stretches down to Done (${seen.dock.between}px apart)`);
   // The project's name after each title; a chat has none.
   for (const row of seen.sections.flatMap((section) => section.rows)) {
     assert.equal(row.label, row.title === "Quick question" ? null : "brigadier", row.title);

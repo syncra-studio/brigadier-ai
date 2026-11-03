@@ -9,7 +9,7 @@ import { NameDialog } from "@/app/shell/NameDialog";
 import { useShortcuts } from "@/app/shortcuts";
 import { openSearch } from "@/app/shell/SearchDialog";
 import { Flyout } from "@/app/shell/Flyout";
-import { INBOX_FOLDED, InboxSidebar } from "@/app/shell/InboxSidebar";
+import { INBOX_FOLDED, InboxSidebar, SIDEBAR_LIST } from "@/app/shell/InboxSidebar";
 import { NewChatRow } from "@/app/shell/NewChatRow";
 import { ProjectRow, underSource } from "@/app/shell/ProjectRow";
 import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
@@ -225,109 +225,107 @@ export function AppSidebar() {
         <NewChatRow active={isChatDraft} />
       </NavList>
 
-      <div className="scroll-edge-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pt-1 pb-2">
-        {inboxMode ? (
-          <InboxSidebar
-            activeId={activeId}
-            actions={actions}
-            isOpen={inboxSections.isOpen}
-            setOpen={inboxSections.setOpen}
-            onShown={onShown}
-          />
-        ) : (
-          <>
-            {pinned.length > 0 && (
-              <NavSection
-                title="Pinned"
-                open={sections.isOpen("pinned")}
-                onOpenChange={(open) => sections.setOpen("pinned", open)}
-              >
-                <NavList>
-                  {pinned.map((conversation) => (
-                    <ConversationRow
-                      key={conversation.id}
-                      conversation={conversation}
-                      active={conversation.id === activeId}
-                      actions={actions}
-                    />
-                  ))}
-                </NavList>
-              </NavSection>
-            )}
-
+      {inboxMode ? (
+        <InboxSidebar
+          activeId={activeId}
+          actions={actions}
+          isOpen={inboxSections.isOpen}
+          setOpen={inboxSections.setOpen}
+          onShown={onShown}
+        />
+      ) : (
+        <div className={SIDEBAR_LIST}>
+          {pinned.length > 0 && (
             <NavSection
-              title="Projects"
-              open={sections.isOpen("projects")}
-              onOpenChange={(open) => sections.setOpen("projects", open)}
-              actions={
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <RowAction
-                      aria-label="Add project"
-                      className="size-icon-button-sm"
-                      onClick={() => openAddProject()}
-                    >
-                      <Plus />
-                    </RowAction>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Add project</TooltipContent>
-                </Tooltip>
-              }
+              title="Pinned"
+              open={sections.isOpen("pinned")}
+              onOpenChange={(open) => sections.setOpen("pinned", open)}
             >
               <NavList>
-                {projects.map((project) => (
-                  <ProjectRow
-                    key={project.id}
-                    project={project}
-                    sessions={sessions[project.id] ?? NO_SESSIONS}
-                    activeId={activeId}
-                    drafting={draftProjectId === project.id}
-                    actions={actions}
-                    onSettings={onProjectSettings}
-                    onRemove={setRemoving}
-                  />
-                ))}
-                {catalogLoaded && projects.length === 0 && (
-                  <ProjectsEmptyPrompt />
-                )}
-              </NavList>
-            </NavSection>
-
-            <NavSection
-              title="Chats"
-              open={sections.isOpen("chats")}
-              onOpenChange={(open) => sections.setOpen("chats", open)}
-              actions={
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <RowAction
-                      aria-label="New chat"
-                      className="size-icon-button-sm"
-                      onClick={() => select({ type: "draft", kind: "chat" })}
-                    >
-                      <Plus />
-                    </RowAction>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">New chat</TooltipContent>
-                </Tooltip>
-              }
-            >
-              <NavList>
-                {chats.map((conversation) => (
+                {pinned.map((conversation) => (
                   <ConversationRow
                     key={conversation.id}
                     conversation={conversation}
                     active={conversation.id === activeId}
                     actions={actions}
-                    forked={underSource(conversation, chats)}
                   />
                 ))}
-                {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
               </NavList>
             </NavSection>
-          </>
-        )}
-      </div>
+          )}
+
+          <NavSection
+            title="Projects"
+            open={sections.isOpen("projects")}
+            onOpenChange={(open) => sections.setOpen("projects", open)}
+            actions={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <RowAction
+                    aria-label="Add project"
+                    className="size-icon-button-sm"
+                    onClick={() => openAddProject()}
+                  >
+                    <Plus />
+                  </RowAction>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Add project</TooltipContent>
+              </Tooltip>
+            }
+          >
+            <NavList>
+              {projects.map((project) => (
+                <ProjectRow
+                  key={project.id}
+                  project={project}
+                  sessions={sessions[project.id] ?? NO_SESSIONS}
+                  activeId={activeId}
+                  drafting={draftProjectId === project.id}
+                  actions={actions}
+                  onSettings={onProjectSettings}
+                  onRemove={setRemoving}
+                />
+              ))}
+              {catalogLoaded && projects.length === 0 && (
+                <ProjectsEmptyPrompt />
+              )}
+            </NavList>
+          </NavSection>
+
+          <NavSection
+            title="Chats"
+            open={sections.isOpen("chats")}
+            onOpenChange={(open) => sections.setOpen("chats", open)}
+            actions={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <RowAction
+                    aria-label="New chat"
+                    className="size-icon-button-sm"
+                    onClick={() => select({ type: "draft", kind: "chat" })}
+                  >
+                    <Plus />
+                  </RowAction>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">New chat</TooltipContent>
+              </Tooltip>
+            }
+          >
+            <NavList>
+              {chats.map((conversation) => (
+                <ConversationRow
+                  key={conversation.id}
+                  conversation={conversation}
+                  active={conversation.id === activeId}
+                  actions={actions}
+                  forked={underSource(conversation, chats)}
+                />
+              ))}
+              {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
+            </NavList>
+          </NavSection>
+        </div>
+      )}
 
       {error && (
         <Banner tone="error" text={error} onDismiss={() => setError(null)} />

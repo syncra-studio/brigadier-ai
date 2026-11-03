@@ -589,6 +589,11 @@ function Fixture() {
     if (params.has("inbox")) {
       const timer = setTimeout(async () => {
         const seen: Record<string, unknown> = { sections: sections() };
+        // Done is docked at the sidebar's bottom (D16): the list above stretches down to it, however short.
+        const dock = document.querySelector('[data-slot="inbox-done"]')!.getBoundingClientRect();
+        const list = document.querySelector('[data-sidebar="sidebar"] .scroll-edge-fade')!.getBoundingClientRect();
+        const panel = document.querySelector('[data-slot="sidebar-panel"]')!.getBoundingClientRect();
+        seen.dock = { doneInside: Boolean(document.querySelector('[data-slot="inbox-done"] section')), below: panel.bottom - dock.bottom, between: dock.top - list.bottom };
         // A new message brings the done row back: its turn runs (Working), then ends after it was done.
         useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w2-a", { run: "running", turnOpen: true })]) } }));
         await wait(100);
