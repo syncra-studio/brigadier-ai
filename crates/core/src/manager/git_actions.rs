@@ -582,7 +582,7 @@ impl SessionManager {
     }
 
     /// Shared tool-less transport. The caller's deadline covers startup and the reply; cleanup
-    /// continues independently if closing a CLI takes longer than the remaining budget.
+    /// continues on its own after.
     pub(super) async fn run_writer_until(
         &self,
         choice: &ModelChoice,
@@ -678,16 +678,15 @@ impl SessionManager {
         .await
         .unwrap_or_else(|_| Err(Error::Provider("the message writer took too long".into())));
         let runtime = self.runtime.clone();
-        let (done, cleaned) = tokio::sync::oneshot::channel();
+        // The reply is in: its CLI's close goes on beside the caller, which never waits for it
+        // (a second or more on every CLI, D177).
         self.spawn(async move {
             if let Some(session) = running {
                 session.close().await;
             }
             let _ = runtime.ledger().dispose(&owner).await;
             let _ = tokio::fs::remove_dir_all(&dir).await;
-            let _ = done.send(());
         });
-        let _ = tokio::time::timeout_at(deadline, cleaned).await;
         written
     }
 
