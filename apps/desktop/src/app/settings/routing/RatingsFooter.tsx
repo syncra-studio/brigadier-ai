@@ -23,7 +23,7 @@ function day(date: string): string {
     : parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-/** Model strength's foot: when the ratings were updated and checked, and Refresh models. */
+/** The page header's line: when the ratings were updated and checked, and Refresh models. */
 export function RatingsFooter({
   label,
   registry,
@@ -44,8 +44,8 @@ export function RatingsFooter({
   onRefresh: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3.5 py-3">
-      <span className="text-xs text-muted-foreground min-w-0 flex-1">
+    <div className="flex items-center gap-3">
+      <span className="text-xs text-muted-foreground">
         {registry ? `Ratings updated ${day(registry.updated)}` : "Ratings"}
         {registry?.checkedAtMs != null && ` · checked ${since(registry.checkedAtMs, now)}`}
       </span>

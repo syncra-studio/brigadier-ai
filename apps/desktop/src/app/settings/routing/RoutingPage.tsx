@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { useAction } from "@/app/conversation/useAction";
+import { RatingsFooter } from "@/app/settings/routing/RatingsFooter";
 import { More, MORE_ROWS, type MoreRow } from "@/app/settings/routing/More";
 import { RULES, Rules } from "@/app/settings/routing/Rules";
 import { WHO_DOES_WHAT, WhoDoesWhat } from "@/app/settings/routing/WhoDoesWhat";
@@ -7,10 +9,12 @@ import { SettingsPage } from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
 import { Info } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
+import { request } from "@/ipc/client";
 import type { TaskCategory } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";
-import { useModelRules, useModelRulesRead } from "@/state/modelRules";
-import { useUsageRefresh } from "@/state/usage";
+import { refreshProviders } from "@/state/actions";
+import { loadModelRules, useModelRules, useModelRulesRead } from "@/state/modelRules";
+import { refreshUsage, useUsage, useUsageRefresh } from "@/state/usage";
 
 /** The Routing page's rows, for Settings search; the page renders this copy. */
 export const ROUTING_PAGE_ROWS = {
@@ -18,7 +22,7 @@ export const ROUTING_PAGE_ROWS = {
   rules: RULES,
   strength: MORE_ROWS.strength,
   steps: MORE_ROWS.steps,
-  refresh: { ...MORE_ROWS.refresh, target: MORE_ROWS.strength.label },
+  refresh: MORE_ROWS.refresh,
 } as const;
 
 /**
@@ -34,20 +38,25 @@ export function RoutingPage() {
   const rules = useModelRules((s) => s.view);
   const error = useModelRules((s) => s.error);
   const now = useNow(30_000);
+  const refreshing = useAction();
+  const registry = useUsage((s) => s.view?.registry ?? null);
+  // Accounts that didn't answer in time, from the usage check Refresh runs.
+  const usageError = useUsage((s) => s.refreshError);
   const [more, setMore] = useState<MoreRow>(null);
   const [kind, setKind] = useState<TaskCategory>("review");
   // The kind of work open in Who does what; a rule's note opens one it would stop from starting.
   const [work, setWork] = useState<string | null>(null);
   const openWork = (name: string) => {
-    setWork(name);
+    const displayed = name === "fusion-claude" || name === "fusion-codex" ? "Fusion" : name;
+    setWork(displayed);
     requestAnimationFrame(() =>
-      document.querySelector(`[data-slot="routing-kind"][data-work="${CSS.escape(name)}"]`)?.scrollIntoView({ block: "nearest" }),
+      document.querySelector(`[data-slot="routing-kind"][data-work="${CSS.escape(displayed)}"]`)?.scrollIntoView({ block: "nearest" }),
     );
   };
   // Settings search bringing one of More's rows into view opens it.
   const revealing = useReveal((s) => s.label);
   const asked =
-    revealing === MORE_ROWS.strength.label || revealing === MORE_ROWS.refresh.label
+    revealing === MORE_ROWS.strength.label
       ? "strength"
       : revealing === MORE_ROWS.steps.label
         ? "steps"
@@ -58,12 +67,36 @@ export function RoutingPage() {
       title="Routing"
       description="Which agent, model and effort suit each kind of work. A session follows these when it starts workers; change only what you want to."
       actions={
-        <span className="text-xs text-muted-foreground flex items-center gap-1.5 pt-2.25">
-          <Info aria-hidden className="size-3.25" />
-          Applies to new work only
-        </span>
+        <div className="flex flex-col items-end gap-1.5 pt-2.25">
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Info aria-hidden className="size-3.25" />
+            Applies to new work only
+          </span>
+          <RatingsFooter
+            label={MORE_ROWS.refresh.label}
+            registry={registry}
+            now={now}
+            running={refreshing.busy}
+            busy={refreshing.busy}
+            disabled={refreshing.busy}
+            onRefresh={() =>
+              refreshing.run(async () => {
+                // The live state `brigadier models` shows (each agent's models, every
+                // account's usage), the ratings, then the automatic advice and your file.
+                await Promise.all([refreshProviders(null), request({ method: "checkRegistry" })]);
+                await refreshUsage();
+                await loadModelRules();
+              })
+            }
+          />
+        </div>
       }
     >
+      {(refreshing.error ?? usageError) && (
+        <p role="alert" className="text-destructive text-xs">
+          {refreshing.error ?? usageError}
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-destructive text-xs">
           {error}
@@ -76,7 +109,6 @@ export function RoutingPage() {
         onOpen={setMore}
         category={kind}
         onCategory={setKind}
-        now={now}
         rules={rules}
         groups={groups}
       />

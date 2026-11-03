@@ -124,11 +124,11 @@ test("a row of the agent's default is judged as its default model at that model'
     { provider: "codex", id: "gpt-6", resolved: null, name: "GPT-6", isDefault: true, defaultEffort: "medium" },
     { provider: "codex", id: "gpt-6-luna", resolved: null, name: "GPT-6 Luna", isDefault: false, defaultEffort: "low" },
   ];
-  const review: GuidanceRow = { work: "Independent review", agent: "codex", model: "default", effort: null, reason: "Shipped." };
+  const review: GuidanceRow = { work: "Adversarial review", agent: "codex", model: "default", effort: null, reason: "Shipped." };
   assert.deepEqual(rowChoice(review, listed), { provider: "codex", names: ["gpt-6"], effort: "medium" });
   // A rule that keeps the default model out keeps the row out, so the page never shows it as the pick.
   const rules: ModelRule[] = [{ type: "forbid", names: ["gpt-6"] }];
-  assert.equal(refusingRule(rules, rowChoice(review, listed), "Independent review"), rules[0]);
+  assert.equal(refusingRule(rules, rowChoice(review, listed), "Adversarial review"), rules[0]);
   assert.equal(refusingRule([{ type: "effortCeiling", effort: "low" }], rowChoice(review, listed), null)?.type, "effortCeiling");
   // A named model with no effort starts at its own default effort.
   assert.equal(rowChoice({ ...review, model: "gpt-6-luna" }, listed).effort, "low");

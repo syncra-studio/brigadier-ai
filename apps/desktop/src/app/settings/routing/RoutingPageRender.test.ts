@@ -15,19 +15,22 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   const dump = await renderFixtureLive(t, "routing.html?drive=1", "routing-result", 40000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.equal(
-    seen.note,
+    String(seen.note).replace(/Ratings updated Oct 21 · checked .*? agoRefresh models$/, ""),
     "RoutingWhich agent, model and effort suit each kind of work. A session follows these when it starts workers; change only what you want to.Applies to new work only",
   );
   assert.deepEqual((seen.sections as string[]).slice(-3), ["Who does what", "Rules", "More"]);
+  assert.equal(seen.sources, "Automatic picks ship with the app. Model strength, below, is rated from release notes and benchmarks, checked daily, and adjusted by how each model did in your sessions.");
   assert.equal(seen.rulesDescription, "Keep a model away from all work or one kind of work, allow only some models, or cap the effort");
   // Who does what: the shipped rows (Automatic), the user's order replacing its shipped one, then the user's own kind.
   const kinds = [
     "Architecture and broad changesAutomatic · Strong default for work that needs judgment across a codebase.Opus 5.5 · High",
     "Bounded implementationYour order · Sonnet 5.5Sonnet 5.5 · Medium",
     "Mechanical changes and searchAutomatic · A smaller model fits a bounded task with clear checks.Sonnet 5.5 · Medium",
-    "Independent reviewAutomatic · Codex, a second provider, gives an independent reading.Codex's default · High",
-    // A fusion's consult row in plain words, not its id (#549).
-    "Fusion · Claude consultAutomatic · A fusion's Claude consult: the strongest Claude model.Opus 5.5 · High",
+    "Adversarial reviewAutomatic · A model from the other agent reviews the work",
+    "FusionAutomatic · Both consults answer at once, then their answers merge",
+    "Computer useAutomatic · Seeing and using apps on screen takes strong judgment.Opus 5.5 · High",
+    "FallbackAutomatic · The model a session runs on when it moves to the other agent",
+    "Conversation titlesAutomatic · A small model for short text; use available quota, cost tier and suitability among shipped title choices.GPT-6 Luna · Low",
     "Release notesYour order · GPT-6GPT-6 · Low",
   ];
   assert.deepEqual(seen.kinds, kinds);
@@ -42,7 +45,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   // A shipped kind opened in place: Automatic, the shipped model picked now; My order copies it into the file.
   assert.equal(seen.mode, "Automatic");
   assert.equal(seen.whoPicks, "Who picksAutomatic advice, updated with each releaseAutomaticMy order");
-  assert.equal(seen.shipped, "1Opus 5.5Picked nowHigh effortStrong default for work that needs judgment across a codebase.");
+  assert.equal(seen.shipped, "1Opus 5.5 · HighPicked nowStrong default for work that needs judgment across a codebase.");
   const architecture = {
     work: "Architecture and broad changes",
     agent: "claude",
@@ -94,10 +97,10 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   );
   assert.equal(seen.openAfterClash, 0);
   assert.equal(seen.openedByNote, "Architecture and broad changes");
-  // Independent review runs on Codex's default, GPT-6 here: the daemon refuses it too.
+  // The Codex consult uses its default, GPT-6 here; Release notes also names GPT-6.
   assert.equal(
     seen.preview,
-    "“Independent review” and “Release notes” use GPT-6, so starting them would be refused. Pick another model for them in Who does what, or make this rule for one kind of work.Open Independent reviewOpen Release notes",
+    "“Fusion · Codex consult” and “Release notes” use GPT-6, so starting them would be refused. Pick another model for them in Who does what, or make this rule for one kind of work.Open Fusion · Codex consultOpen Release notes",
   );
   // For one kind of work only, it stops nothing else.
   assert.equal(
@@ -118,7 +121,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   // that keeps a kind's only model out, which its row and Automatic say.
   assert.deepEqual(seen.kindsAfterHandEdit, [
     "Architecture and broad changesAutomatic · Your rules keep Opus 5.5 out, so it can't start",
-    ...kinds.slice(1),
+    ...kinds.slice(1).map((line) => line.startsWith("Conversation titles") ? line.replace("GPT-6 Luna · Low", "Haiku") : line),
     "DocsYour order · Sonnet 5.5, then GPT-6GPT-6",
   ]);
   assert.deepEqual(seen.rulesAfterHandEdit, [
@@ -138,7 +141,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "3AutomaticWith no order of your own, it takes the first model of the automatic advice that your rules allow.",
     "4Your rulesLast, your rules check the result: a model they keep out, or an effort above your cap, is refused and the worker doesn't start. Your rules win over everything above.",
   ]);
-  assert.equal(seen.stepsExample, "For example, Docs: your rules keep Sonnet 5.5 out, so GPT-6, next in your order, runs.");  assert.equal(seen.strengthClosed, true);
+  assert.equal(seen.stepsExample, "For example, Conversation titles: your rules keep GPT-6 Luna out, so Haiku, next in the automatic advice, runs.");  assert.equal(seen.strengthClosed, true);
   assert.deepEqual(seen.strength, [
     "1Opus 5.5Frontier9.1",
     "2GPT-6Frontier9.0",
@@ -169,4 +172,45 @@ test("Routing draws its cards, selects and choices as Settings › General does"
   for (const card of seen.routing.cards) assert.deepEqual(card, seen.general.cards[0]);
   assert.deepEqual(seen.routing.select, seen.general.select);
   assert.deepEqual(seen.routing.chosen, seen.general.chosen);
+});
+
+// Each role keeps its work and agent when edited, and Automatic removes just that kind's overrides.
+test("review, Fusion and Fallback edit their own roles through My order", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "routing.html?drive=roles", "routing-result", 40000);
+  type Row = { work: string; agent: string; model: string; effort: string | null };
+  type Role = { work: string; automatic: string[]; reset: string[]; initial: Row[]; afterEffort: Row[]; afterFirstModel: Row[]; afterSecondEffort: Row[]; afterBothModels: Row[]; afterReset: Row[]; agents: string[]; canReorder: boolean; closedHasModel: boolean; noFallbackBadges: boolean };
+  const seen = JSON.parse(dump) as { roles: Role[]; noEffort: string[]; fallbackOrder: string[]; refreshOpensStrength: boolean; refreshInHeader: boolean };
+  assert.deepEqual(seen.roles.map((role) => role.work), ["Adversarial review", "Fusion", "Fallback"]);
+  const expected = [
+    ["Reviews Claude's workCodex's default · High", "Reviews Codex's workOpus 5.5 · High"],
+    ["Claude consultOpus 5.5 · High", "Codex consultCodex's default · High"],
+    ["Moving to Claude CodeOpus 5.5 · High", "Moving to CodexCodex's default · High"],
+  ];
+  for (const [i, role] of seen.roles.entries()) {
+    const works = role.work === "Fusion" ? ["fusion-claude", "fusion-codex"] : [role.work];
+    const own = (rows: Row[]) => rows.filter((row) => works.includes(row.work));
+    const rest = (rows: Row[]) => rows.filter((row) => !works.includes(row.work));
+    assert.deepEqual(role.automatic, expected[i]);
+    assert.deepEqual(role.reset, expected[i]);
+    assert.equal(role.noFallbackBadges, true);
+    assert.equal(role.closedHasModel, false);
+    assert.equal(role.canReorder, false);
+    assert.deepEqual(role.agents, [i === 0 ? "Codex" : "Claude Code"]);
+    const initial = own(role.initial);
+    assert.equal(initial.length, 2);
+    assert.deepEqual(own(role.afterEffort), [{ ...initial[0], effort: "medium" }, initial[1]]);
+    const first = { ...initial[0], model: i === 0 ? "gpt-6-luna" : "sonnet", effort: null, reason: "Your choice." };
+    assert.deepEqual(own(role.afterFirstModel), [first, initial[1]]);
+    assert.deepEqual(own(role.afterSecondEffort), [first, { ...initial[1], effort: "low" }]);
+    assert.deepEqual(own(role.afterBothModels), [first, { ...initial[1], model: i === 0 ? "sonnet" : "gpt-6-luna", effort: null, reason: "Your choice." }]);
+    assert.deepEqual(own(role.afterReset), []);
+    for (const rows of [role.afterEffort, role.afterFirstModel, role.afterSecondEffort, role.afterBothModels, role.afterReset]) {
+      assert.deepEqual(rest(rows), rest(role.initial), "other kinds stay intact");
+    }
+    assert.ok(role.afterBothModels.every((row) => row.work !== "Fusion"), "Fusion is only a display name");
+  }
+  assert.equal(seen.noEffort[1], "2HaikuNext if GPT-6 Luna can't run");
+  assert.deepEqual(seen.fallbackOrder, ["1Opus 5.5 · HighPicked now", "2Codex's default · HighNext if Opus 5.5 can't run"]);
+  assert.equal(seen.refreshOpensStrength, false);
+  assert.equal(seen.refreshInHeader, true);
 });
