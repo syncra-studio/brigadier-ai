@@ -2997,6 +2997,7 @@ impl ModelRule {
 #[serde(rename_all = "camelCase")]
 pub struct ModelRules {
     pub path: String,
+    pub revision: String,
     /// The automatic guidance, read only: per kind of work, each agent's best-rated model in
     /// rating order; the shipped table's rows for a kind nothing is rated for.
     pub shipped: Vec<GuidanceRow>,

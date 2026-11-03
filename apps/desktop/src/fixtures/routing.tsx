@@ -137,6 +137,7 @@ const research: RankingsRefresh = {
 };
 const read = (): ModelRules => ({
   path: "/Users/me/.brigadier/models.md",
+  revision: JSON.stringify(file),
   shipped: SHIPPED,
   rows: [...file.rows],
   rules: [...file.rules],
@@ -173,6 +174,7 @@ mockIPC((command, payload) => {
       reads += 1;
       return { method: req.method, rules: read() };
     case "setModelRules":
+      if (req.revision !== read().revision) throw new Error("Routing changed since this page was read.");
       writes.push({ rows: req.rows, rules: req.rules });
       file.rows = req.rows;
       file.rules = req.rules;

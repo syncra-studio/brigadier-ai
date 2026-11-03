@@ -738,6 +738,7 @@ pub enum Request {
     /// Settings › Routing's save: the rules file's rows and rules become these, written in the
     /// file's own text format (S32).
     SetModelRules {
+        revision: String,
         rows: Vec<GuidanceRow>,
         rules: Vec<ModelRule>,
     },

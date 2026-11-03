@@ -37,30 +37,65 @@ fn matches(pattern: &str, model: &str) -> bool {
             .split(|c: char| !c.is_alphanumeric())
             .any(|word| word.eq_ignore_ascii_case(pattern))
 }
-fn rows(text: &str) -> Vec<GuidanceRow> {
-    text.lines()
-        .filter_map(|line| {
-            let cells: Vec<_> = line
-                .trim()
-                .trim_matches('|')
-                .split('|')
-                .map(str::trim)
-                .collect();
-            if cells.len() != 5 {
-                return None;
-            }
-            // An agent as the rules file names it: a CLI Brigadier drives.
-            let agent = ProviderKind::parse(cells[1])
-                .filter(|kind| brigadier_providers::adapters::adapter(*kind).is_some())?;
-            Some(GuidanceRow {
+fn table_cells(line: &str) -> Vec<&str> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect()
+}
+fn routing_header(line: &str) -> bool {
+    line.trim_start().starts_with('|')
+        && table_cells(line) == ["Work", "Agent", "Model", "Effort", "Reason"]
+}
+fn table_separator(line: &str) -> bool {
+    line.trim_start().starts_with('|')
+        && table_cells(line).iter().all(|cell| {
+            let dashes = cell.trim_matches(':');
+            dashes.len() >= 3 && dashes.chars().all(|c| c == '-')
+        })
+}
+/// The readable routing rows and their line numbers. Old files may have rows without a header;
+/// a table with another header is prose, even if a cell happens to name an agent.
+fn routing_rows(text: &str) -> Vec<(usize, GuidanceRow)> {
+    let mut lines = text.lines().enumerate().peekable();
+    let mut routing = true;
+    let mut found = Vec::new();
+    while let Some((index, line)) = lines.next() {
+        if !line.trim_start().starts_with('|') {
+            routing = true;
+            continue;
+        }
+        if lines.peek().is_some_and(|(_, next)| table_separator(next)) {
+            routing = routing_header(line);
+            lines.next();
+            continue;
+        }
+        if !routing {
+            continue;
+        }
+        let cells = table_cells(line);
+        if cells.len() != 5 {
+            continue;
+        }
+        let Some(agent) = agent_named(cells[1]) else {
+            continue;
+        };
+        found.push((
+            index,
+            GuidanceRow {
                 work: canonical_work(cells[0]).into(),
                 agent,
                 model: cells[2].into(),
                 effort: (!cells[3].is_empty()).then(|| cells[3].into()),
                 reason: cells[4].into(),
-            })
-        })
-        .collect()
+            },
+        ));
+    }
+    found
+}
+fn rows(text: &str) -> Vec<GuidanceRow> {
+    routing_rows(text).into_iter().map(|(_, row)| row).collect()
 }
 /// The shipped guidance's rows.
 #[cfg(test)]
@@ -390,6 +425,22 @@ impl Policy {
             .work()
             .is_none_or(|scope| work.is_some_and(|work| same_work(scope, work)))
     }
+    /// Rules for any of these scopes, evaluated together (a move must meet both its work and
+    /// Fallback). Erase scopes only after selecting them, so effort bounds share one interval.
+    fn for_works(mut self, works: &[Option<&str>]) -> Self {
+        self.entries
+            .retain(|(_, rule)| works.iter().any(|work| Self::holds(rule, *work)));
+        for (_, rule) in &mut self.entries {
+            match rule {
+                ModelRule::Forbid { work, .. }
+                | ModelRule::Allow { work, .. }
+                | ModelRule::EffortCeiling { work, .. }
+                | ModelRule::EffortFloor { work, .. } => *work = None,
+                ModelRule::Advice { .. } => {}
+            }
+        }
+        self
+    }
     /// The first rule a choice breaks, quoted; effort rules refuse only when they can't be met
     /// (see [`Self::effort`]).
     fn refusal(
@@ -654,8 +705,8 @@ pub(super) fn check_rules(rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<(
     Ok(())
 }
 /// The rules file with its rows and rules replaced, in the same text format: prose and comments
-/// stay where they are, the rules take the place of the first rule line and the table the place
-/// of the first table line (else each goes at the end).
+/// stay where they are, including unrelated tables and rows this version cannot read. The rules
+/// take the place of the first rule line and the table the first readable row (else at the end).
 fn rewrite(text: &str, rows: &[GuidanceRow], rules: &[ModelRule]) -> String {
     let rules_block: Vec<String> = rules
         .iter()
@@ -674,8 +725,28 @@ fn rewrite(text: &str, rows: &[GuidanceRow], rules: &[ModelRule]) -> String {
     }));
     let (mut rules_done, mut table_done) = (false, false);
     let mut out: Vec<String> = Vec::new();
-    for line in text.lines() {
-        if line.trim_start().starts_with('|') {
+    let readable = routing_rows(text);
+    let mut lines = text.lines().enumerate().peekable();
+    while let Some((index, line)) = lines.next() {
+        // Only consume our header and its separator, never an unrelated table's header.
+        if routing_header(line) {
+            if lines.peek().is_some_and(|(_, next)| table_separator(next)) {
+                lines.next();
+            }
+            // Keep the header when unreadable rows remain underneath it.
+            let unreadable = lines
+                .clone()
+                .take_while(|(_, line)| line.trim_start().starts_with('|'))
+                .any(|(index, _)| !readable.iter().any(|(at, _)| *at == index));
+            if !rows.is_empty() || unreadable {
+                out.push(line.to_owned());
+                out.push("| --- | --- | --- | --- | --- |".to_owned());
+                if !table_done {
+                    out.extend(table.iter().skip(1).cloned());
+                    table_done = true;
+                }
+            }
+        } else if readable.iter().any(|(at, _)| *at == index) {
             if !table_done && !rows.is_empty() {
                 out.extend(table.iter().cloned());
             }
@@ -729,6 +800,33 @@ fn editable(path: &std::path::Path, default: &str) -> Result<String> {
     }
     std::fs::read_to_string(path).map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))
 }
+/// A revision covers the whole file, including advice/prose not represented in the page's rows.
+fn rules_revision(text: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(text.as_bytes()))
+}
+fn save_rules(
+    path: &std::path::Path,
+    revision: &str,
+    rows: &[GuidanceRow],
+    rules: &[ModelRule],
+) -> Result<()> {
+    // Serialize the revision check and rename for all saves handled by this daemon.
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    check_rules(rows, rules)?;
+    let current = editable(path, DEFAULT_RULES)?;
+    if rules_revision(&current) != revision {
+        return Err(Error::Invalid("Routing changed since this page was read. Reopen Routing and try again; your changes were not saved.".into()));
+    }
+    let text = rewrite(&current, rows, rules);
+    let io = |e: std::io::Error| Error::Invalid(format!("{}: {e}", path.display()));
+    let staged = path.with_extension("md.saving");
+    std::fs::write(&staged, text).map_err(io)?;
+    std::fs::rename(&staged, path).map_err(io)?;
+    Ok(())
+}
 impl SessionManager {
     pub(super) fn models_rules_path(&self) -> PathBuf {
         if cfg!(test) {
@@ -749,6 +847,7 @@ impl SessionManager {
         let (shipped, suggestions) = self.automatic_view(&text)?;
         Ok(ModelRules {
             path: path.display().to_string(),
+            revision: rules_revision(&text),
             shipped,
             rows: rows(&text),
             rules: Policy::parse(&text)?
@@ -807,14 +906,13 @@ impl SessionManager {
     }
     /// Settings › Routing's save: the file's rows and rules become these, in the file's own text
     /// format, its prose kept (S32).
-    pub fn set_model_rules(&self, rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<ModelRules> {
-        check_rules(rows, rules)?;
-        let path = self.models_rules_path();
-        let text = rewrite(&editable(&path, DEFAULT_RULES)?, rows, rules);
-        let io = |e: std::io::Error| Error::Invalid(format!("{}: {e}", path.display()));
-        let staged = path.with_extension("md.saving");
-        std::fs::write(&staged, text).map_err(io)?;
-        std::fs::rename(&staged, &path).map_err(io)?;
+    pub fn set_model_rules(
+        &self,
+        revision: &str,
+        rows: &[GuidanceRow],
+        rules: &[ModelRule],
+    ) -> Result<ModelRules> {
+        save_rules(&self.models_rules_path(), revision, rows, rules)?;
         self.model_rules()
     }
     /// `brigadier start --work`'s rows: the user's order of that work, else the shipped rows,
@@ -1089,6 +1187,43 @@ impl SessionManager {
             choice.effort = effort;
         }
         choice
+    }
+    /// A quota retry on its own agent follows its work; a move also follows Fallback rules.
+    pub(super) fn ruled_quota_choice(
+        &self,
+        mut choice: crate::model::ModelChoice,
+        work: Option<&str>,
+        moving: bool,
+    ) -> Result<crate::model::ModelChoice> {
+        let mut works = vec![work];
+        if moving {
+            works.push(Some(FALLBACK_WORK));
+        }
+        let policy = self.model_policy()?.for_works(&works);
+        let catalog = self
+            .runtime
+            .overview(choice.provider)
+            .and_then(|o| o.models);
+        let selected = listed(catalog.as_ref(), choice.model.as_deref());
+        let names: Vec<_> = std::iter::once(choice.model.as_deref().unwrap_or("default"))
+            .chain(selected.map(|m| m.id.as_str()))
+            .chain(selected.and_then(|m| m.resolved.as_deref()))
+            .collect();
+        if let Some(reason) = policy.model_refusal(choice.provider, &names, None) {
+            return Err(Error::Invalid(reason));
+        }
+        let judged = choice
+            .effort
+            .as_deref()
+            .or(selected.and_then(|m| m.default_effort.as_deref()));
+        let efforts = selected.map(|m| m.efforts.as_slice()).unwrap_or_default();
+        let effort = policy
+            .effort(choice.provider, &names, judged, efforts, None)
+            .map_err(Error::Invalid)?;
+        if effort.as_deref() != judged {
+            choice.effort = effort;
+        }
+        Ok(choice)
     }
     pub(super) fn rules_models(&self, provider: ProviderKind) -> Result<Option<AllowedModels>> {
         let policy = self.model_policy()?;
@@ -1825,6 +1960,79 @@ mod tests {
                 .is_some()
         );
     }
+    #[test]
+    fn stale_routing_save_keeps_newer_rows_rules_and_advice() {
+        let dir = std::env::temp_dir().join(format!("routing-stale-save-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("models.md");
+        let first = editable(&path, DEFAULT_RULES).unwrap();
+        let revision = rules_revision(&first);
+        let row = GuidanceRow {
+            work: "Docs".into(),
+            agent: ProviderKind::Claude,
+            model: "sonnet".into(),
+            effort: Some("medium".into()),
+            reason: "Mine".into(),
+        };
+        let rules = [
+            ModelRule::Forbid {
+                names: vec!["opus".into()],
+                work: None,
+            },
+            ModelRule::Advice {
+                text: "Use cheap models when busy".into(),
+            },
+        ];
+        save_rules(&path, &revision, &[row], &rules).unwrap();
+        let newer = std::fs::read_to_string(&path).unwrap();
+        let err = save_rules(&path, &revision, &[], &[]).unwrap_err();
+        assert!(err.to_string().contains("Routing changed since"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+        // A hand edit to prose alone also invalidates the page's revision.
+        std::fs::write(&path, format!("{newer}Hand-edited advice.\n")).unwrap();
+        assert!(save_rules(&path, &rules_revision(&newer), &[], &[]).is_err());
+        let current = std::fs::read_to_string(&path).unwrap();
+        save_rules(&path, &rules_revision(&current), &[], &[]).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("Hand-edited advice.")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn advice_with_pipes_is_never_a_routing_row() {
+        let rule = ModelRule::Advice {
+            text: "Prefer cheap models | claude | opus | high | use when busy".into(),
+        };
+        let written = rewrite(DEFAULT_RULES, &[], std::slice::from_ref(&rule));
+        assert!(
+            rows(&written).is_empty(),
+            "advice created routing rows: {:?}",
+            rows(&written)
+        );
+        assert_eq!(Policy::parse(&written).unwrap().entries[0].1, rule);
+    }
+
+    #[test]
+    fn saving_keeps_unrelated_tables_and_unreadable_routing_rows() {
+        let notes = "| Preference | Reason |\n| --- | --- |\n| Cheap | Save quota |\n\n| Name | Provider | Model | Effort | Note |\n| --- | --- | --- | --- | --- |\n| Note | claude | opus | high | Only a note |\n";
+        let future = "| Docs | future-agent | cheap | medium | Keep my future agent |\n";
+        let text = format!(
+            "# Mine\n{notes}\n{TABLE_HEAD}\n{future}| Docs | claude | sonnet | low | Current |\n"
+        );
+        let written = rewrite(&text, &[], &[]);
+        assert!(written.contains(notes), "lost advice notes: {written}");
+        assert!(rows(&written).is_empty(), "notes became routing rows");
+        assert!(
+            written.contains(future),
+            "lost an unreadable user row: {written}"
+        );
+        assert!(!written.contains("| Docs | claude |"));
+        assert_eq!(rewrite(&written, &[], &[]), written);
+    }
+
     #[test]
     fn the_page_writes_the_files_own_format_and_keeps_its_prose() {
         let row = GuidanceRow {

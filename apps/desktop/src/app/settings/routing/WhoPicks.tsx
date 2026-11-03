@@ -31,7 +31,7 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
     const rows = role
       ? works.reduce((saved, work) => withOrder(saved, work, order.filter((found) => found.work === work)), rules.rows)
       : withOrder(rules.rows, row.work, order);
-    return action.run(() => saveModelRules(rows, rules.rules));
+    return action.run(() => saveModelRules(rules, rows, rules.rules));
   };
   const choose = (mode: "automatic" | "order") => {
     if (mode === "automatic") {

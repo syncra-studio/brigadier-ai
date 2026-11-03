@@ -2323,6 +2323,7 @@ async fn models_page_rules_show_in_models_and_refuse_start() {
     let page = flow
         .manager
         .set_model_rules(
+            &flow.manager.model_rules().unwrap().revision,
             &[row.clone(), next.clone()],
             &[
                 crate::ModelRule::Forbid {
@@ -2928,14 +2929,20 @@ async fn a_start_off_the_routing_runs_and_says_so() {
         reason: "Mine.".into(),
     };
     flow.manager
-        .set_model_rules(&[user_row("opus", "high")], &[])
+        .set_model_rules(
+            &flow.manager.model_rules().unwrap().revision,
+            &[user_row("opus", "high")],
+            &[],
+        )
         .unwrap();
     flow.say("Route C.").await;
     flow.until("the start after the change reported", reported(13))
         .await;
     flow.settled().await;
     // Automatic again: no row of the user's, so the shipped one.
-    flow.manager.set_model_rules(&[], &[]).unwrap();
+    flow.manager
+        .set_model_rules(&flow.manager.model_rules().unwrap().revision, &[], &[])
+        .unwrap();
     flow.say("Route D.").await;
     flow.until("the start on Automatic reported", reported(14))
         .await;
@@ -3829,7 +3836,11 @@ async fn a_better_rated_model_is_suggested_and_the_users_order_is_left_unchanged
         reason: "Mine.".into(),
     };
     flow.manager
-        .set_model_rules(std::slice::from_ref(&mine), &[])
+        .set_model_rules(
+            &flow.manager.model_rules().unwrap().revision,
+            std::slice::from_ref(&mine),
+            &[],
+        )
         .unwrap();
     let path = flow.manager.models_rules_path();
     let written = std::fs::read(&path).unwrap();

@@ -27,7 +27,7 @@ const rows = (work: string): GuidanceRow[] => [
   { work, agent: "codex", model: "allowed", effort: null, reason: "" },
 ];
 const example = (shipped: GuidanceRow[], mine: GuidanceRow[] = []) => {
-  const rules: ModelRules = { path: "", shipped, rows: mine, rules: [{ type: "forbid", names: ["blocked"] }], suggestions: [], research: IDLE_RESEARCH };
+  const rules: ModelRules = { path: "", revision: "fixture", shipped, rows: mine, rules: [{ type: "forbid", names: ["blocked"] }], suggestions: [], research: IDLE_RESEARCH };
   const markup = ReactDOMServer.renderToStaticMarkup(React.createElement(StepsList, { rules, groups: [] }));
   return /<p data-slot="routing-steps-example"[^>]*>(.*?)<\/p>/.exec(markup)?.[1];
 };

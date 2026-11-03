@@ -32,7 +32,7 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
   const remove = useAction();
   const models = useListedModels();
   const names = ruleNames(groups);
-  const save = (next: readonly ModelRule[]) => saveModelRules(file?.rows ?? [], next);
+  const save = (next: readonly ModelRule[]) => (file ? saveModelRules(file, file.rows, next) : Promise.resolve());
   const warnings = ruleWarnings(rules, workRows(file), models, names, (row) => rowModelName(groups, row.agent, row.model));
   return (
     <SettingsSection
@@ -173,7 +173,7 @@ function AddBox({
     const known = new Set(file.rules.map(ruleText));
     const next = [...file.rules, ...phase.rules.filter((rule) => !known.has(ruleText(rule)))];
     add.run(async () => {
-      await saveModelRules(file.rows, next);
+      await saveModelRules(file, file.rows, next);
       onSaved(file.rules);
     });
   };
