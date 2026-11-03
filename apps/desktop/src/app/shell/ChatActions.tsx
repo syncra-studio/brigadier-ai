@@ -34,7 +34,7 @@ import {
   snoozeTimes,
   snoozeUntil,
 } from "@/state/actions";
-import { useRowActivity } from "@/state/activity";
+import { useRowMark } from "@/state/tabStates";
 import { askDelete } from "@/state/picking";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -98,7 +98,7 @@ export const ChatActions: FC<{
 
   const asleep = conversation.lifecycle === "hibernated";
   // The row's spinner: it can't sleep while it works (the daemon refuses then too).
-  const working = useRowActivity(id).running || !!conversation.quotaWait;
+  const working = useRowMark(id).look === "working";
   const [picking, setPicking] = useState(false);
 
   const togglePin = () => void setPinned(id, !pinned).catch(fail);
