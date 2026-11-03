@@ -26,9 +26,14 @@ export const FORK_PLACES: readonly { place: ForkPlace; title: string; detail: st
   },
 ];
 
-/** Where a session's fork can work: one in its own worktree forks only into a new worktree, the folder being its own (#648). */
+/**
+ * Where a session's fork can work. One in a worktree forks in that same worktree, on its branch
+ * (D188), once the worktree is made.
+ */
 export function forkPlaces(setup: Setup | null): typeof FORK_PLACES {
-  return setup?.type === "session" && setup.environment.type === "newWorktree" ? FORK_PLACES.filter(({ place }) => place === "newWorktree") : FORK_PLACES;
+  if (setup?.type !== "session" || setup.environment.type !== "newWorktree") return FORK_PLACES;
+  if (!setup.environment.path) return FORK_PLACES.filter(({ place }) => place === "newWorktree");
+  return FORK_PLACES.map((each) => (each.place === "workspace" ? { ...each, detail: "Fork from this message in this worktree, on the same branch" } : each));
 }
 
 /**
@@ -91,7 +96,7 @@ export const ForkPlaces: FC<{ side: "top" | "bottom"; setup: Setup | null; onPic
       Fork session from here
     </DropdownMenuLabel>
     {forkPlaces(setup).map(({ place, title, detail }) => (
-      <DropdownMenuItem key={place} className="items-start gap-3 py-2" onSelect={() => onPick(place)}>
+      <DropdownMenuItem key={place} className="h-auto items-start gap-3 py-2" onSelect={() => onPick(place)}>
         <BranchAlt className="mt-0.5" />
         <span className="flex flex-col gap-0.5">
           <span>{title}</span>

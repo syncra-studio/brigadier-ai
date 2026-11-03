@@ -2,7 +2,7 @@
 //! the background from its own base; sessions of one project work at once without sharing a
 //! file and see each other on the board (no overlap or merge is pushed to them).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::thread_tests::commit_in_workspace;
@@ -423,8 +423,7 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     flow.stop().await;
 }
 
-/// A fork works in its source's checkout beside it (goal 9, D123); a worktree session still
-/// forks only into a new worktree (#648).
+/// A fork works in its source's checkout beside it (goal 9, D123), or on a worktree of its own.
 #[tokio::test]
 async fn a_fork_in_the_same_folder_works_beside_its_source() {
     use crate::model::{EnvironmentRequest, ForkPlace, MessageRole, SetupRequest};
@@ -476,34 +475,6 @@ async fn a_fork_in_the_same_folder_works_beside_its_source() {
         .await
         .unwrap();
     assert_eq!(flow.core.catalog().conversations.len(), before + 1);
-    // A worktree session forks only into a new worktree (#648): refused before making a branch.
-    flow.say("Hello.").await;
-    flow.settled().await;
-    let branches = git(&flow.repo, &["branch", "--list"]);
-    let other_answer = flow
-        .core
-        .all_messages(&flow.conversation)
-        .await
-        .unwrap()
-        .into_iter()
-        .rfind(|message| message.role == MessageRole::Assistant)
-        .unwrap()
-        .id;
-    let refused = flow
-        .manager
-        .fork(
-            flow.conversation.clone(),
-            other_answer,
-            ForkPlace::Workspace,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(
-        refused.to_string(),
-        crate::Error::Invalid(super::super::fork::WORKTREE_FORK.into()).to_string()
-    );
-    assert_eq!(git(&flow.repo, &["branch", "--list"]), branches);
-    assert_eq!(flow.core.catalog().conversations.len(), before + 1);
     // A fork on a worktree of its own remains available.
     let fork = flow
         .manager
@@ -520,13 +491,13 @@ async fn a_fork_in_the_same_folder_works_beside_its_source() {
     flow.stop().await;
 }
 
-/// #648: a session in its own worktree never forks into the user's checkout, even when no
-/// session holds it: "the same folder" is its worktree, which it keeps to itself. It forks into
-/// a new worktree, and the checkout gets no branch.
+/// D188: a session in its own worktree forks "in the same folder" by joining that worktree on
+/// its branch, as a session started there does: no branch is made, and deleting the source
+/// keeps the folder and branch for the fork.
 #[tokio::test]
-async fn a_worktree_session_forks_only_into_a_new_worktree() {
+async fn a_worktree_session_forks_into_its_own_folder() {
     use crate::model::{ForkPlace, MessageRole};
-    let flow = Flow::start("fork-worktree-only", Options::default(), writing(None)).await;
+    let flow = Flow::start("fork-worktree-same", Options::default(), writing(None)).await;
     flow.say("Hello.").await;
     flow.settled().await;
     let answer = flow
@@ -538,35 +509,57 @@ async fn a_worktree_session_forks_only_into_a_new_worktree() {
         .rfind(|message| message.role == MessageRole::Assistant)
         .unwrap()
         .id;
-    let before = flow.core.catalog().conversations.len();
+    let source = flow.core.conversation(&flow.conversation).unwrap();
+    let Some(Setup::Session {
+        environment:
+            Environment::NewWorktree {
+                branch,
+                path: Some(folder),
+                ..
+            },
+        ..
+    }) = source.setup.clone()
+    else {
+        unreachable!()
+    };
     let branches = git(&flow.repo, &["branch", "--list"]);
-    let refused = flow
-        .manager
-        .fork(
-            flow.conversation.clone(),
-            answer.clone(),
-            ForkPlace::Workspace,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(
-        refused.to_string(),
-        crate::Error::Invalid(super::super::fork::WORKTREE_FORK.into()).to_string()
-    );
-    assert_eq!(flow.core.catalog().conversations.len(), before);
-    assert_eq!(git(&flow.repo, &["branch", "--list"]), branches);
     let fork = flow
         .manager
-        .fork(flow.conversation.clone(), answer, ForkPlace::NewWorktree)
+        .fork(flow.conversation.clone(), answer, ForkPlace::Workspace)
         .await
         .unwrap();
-    assert!(matches!(
-        fork.setup,
-        Some(Setup::Session {
-            environment: Environment::NewWorktree { .. },
-            ..
-        })
-    ));
+    let Some(Setup::Session {
+        environment:
+            Environment::NewWorktree {
+                branch: fork_branch,
+                path: Some(fork_folder),
+                ..
+            },
+        ..
+    }) = fork.setup.clone()
+    else {
+        panic!("not in a worktree: {:?}", fork.setup)
+    };
+    assert_eq!((&fork_branch, &fork_folder), (&branch, &folder));
+    assert_eq!(git(&flow.repo, &["branch", "--list"]), branches);
+    assert_eq!(
+        git(Path::new(&folder), &["branch", "--show-current"]),
+        branch
+    );
+    flow.manager.delete(source.id.clone()).await.unwrap();
+    super::eventually("the source to go", || {
+        flow.core.conversation(&source.id).is_err()
+    })
+    .await;
+    flow.manager.cleanup_finished(&source.id).await;
+    assert!(
+        Path::new(&folder).join(".git").is_file(),
+        "the fork's folder stays"
+    );
+    assert_eq!(
+        git(Path::new(&folder), &["branch", "--show-current"]),
+        branch
+    );
     flow.stop().await;
 }
 
