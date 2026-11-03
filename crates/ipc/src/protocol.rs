@@ -689,6 +689,11 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
+    /// A local Markdown image, validated by content and bounded before returning bytes.
+    ReadLocalImage {
+        conversation_id: ConversationId,
+        path: String,
+    },
     /// Stops one of the thread's CLI's background tasks (`task_id`, the CLI's own id), or one
     /// of its worker `worker_id`'s CLI, as the CLI's own Stop does.
     StopBackgroundTask {
@@ -1679,6 +1684,10 @@ pub enum Response {
         outcome: UndoOutcome,
     },
     ReadThreadImage {
+        data: String,
+        mime: String,
+    },
+    ReadLocalImage {
         data: String,
         mime: String,
     },

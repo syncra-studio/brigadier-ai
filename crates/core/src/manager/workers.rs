@@ -1678,6 +1678,7 @@ impl SessionManager {
     }
 
     async fn on_worker_event(&self, live: &Arc<TaskLive>, cli: &Arc<Cli>, event: ProviderEvent) {
+        let event = self.retain_thread_image(&live.conversation_id, event).await;
         let cwd = live.cwd().await;
         self.follow_worker_commands(&live.conversation_id, &live.id, cwd, &event)
             .await;
