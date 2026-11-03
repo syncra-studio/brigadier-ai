@@ -5,8 +5,9 @@ import { createRoot } from "react-dom/client";
 
 import { ComputerUsePage } from "@/app/settings/ComputerUsePage";
 import { TooltipProvider } from "@/components/overlays";
-import type { ComputerSetup, ComputerUseStatus, PermissionState, Request, Settings } from "@/ipc/generated";
+import type { ComputerSetup, ComputerUseStatus, GuidanceRow, ModelRules, PermissionState, Request, Settings } from "@/ipc/generated";
 import { onComputerUse } from "@/state/computerUse";
+import { loadModelRules, useModelRules } from "@/state/modelRules";
 import { useApp } from "@/state/store";
 
 /*
@@ -29,6 +30,10 @@ const status = (
   current = false,
 ): ComputerUseStatus => ({ available: true, platform: "macos", accessibility, screenRecording, current, setup, sessions: [], notes: [] });
 
+// The rules file: the shipped "Computer use" order and nothing of the user's yet.
+const cuRow = (agent: GuidanceRow["agent"], model: string, effort: string | null): GuidanceRow => ({ work: "Computer use", agent, model, effort, reason: "Shipped." });
+const modelRules: ModelRules = { path: "/tmp/models.md", shipped: [cuRow("claude", "opus", "high"), cuRow("codex", "default", "high")], rows: [], rules: [] };
+
 const calls: string[] = [];
 // The first check's answer, held until the fixture has seen the page while it runs.
 let answerCheck: () => void = () => {};
@@ -41,6 +46,11 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
+    // The model row's reads, outside what the page's own calls record.
+    case "getModelRules":
+      return { method: req.method, rules: modelRules };
+    case "getUsage":
+      return { method: req.method };
     case "getComputerUse":
       calls.push(req.method);
       // Never set up: the helper has never run.
@@ -66,6 +76,8 @@ mockIPC((command, payload) => {
       return { method: req.method };
   }
 });
+
+void loadModelRules();
 
 const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => [
   ...root.querySelectorAll<T>(selector),
@@ -96,6 +108,12 @@ function look() {
   };
 }
 
+/** The model row's choice as its pill shows it, and whether it can be opened. */
+function modelLook() {
+  const pill = document.querySelector<HTMLButtonElement>('[data-slot="computer-use-model"]');
+  return { shown: text(pill), disabled: pill?.disabled ?? null };
+}
+
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
@@ -113,6 +131,12 @@ function Fixture() {
         seen.rows = all('[data-slot="settings-row"]').map((element) => element.dataset.setting);
         seen.first = look();
         seen.listingCalls = [...calls];
+        seen.model = modelLook();
+      },
+      // A model the user picked on either page: their own row of the work.
+      () => useModelRules.setState({ view: { ...modelRules, rows: [cuRow("codex", "gpt-6-luna", "low")] } }),
+      () => {
+        seen.modelMine = modelLook();
       },
       () => answerCheck(),
       () => {

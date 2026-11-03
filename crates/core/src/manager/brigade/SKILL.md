@@ -59,7 +59,7 @@ A worker is naked: none of your setup but the project's instruction file, MCP se
 
 ## Pick the model
 
-The user's routing decides each worker's agent, model and effort. Before each `brigadier start`, read `brigadier models`; pass `--work "<Work>"` of the row that fits; that row (the user's, else the shipped) picks all three. If its account is out of quota, pass the agent, model and effort of the same Work's next row the rules allow; never a model or effort the rows don't name.
+The user's routing decides each worker's agent, model and effort. Before each `brigadier start`, read `brigadier models`; pass `--work "<Work>"` of the row that fits (a worker that uses apps: `--work "Computer use" --with computer-use`); that row (the user's, else the shipped) picks all three. If its account is out of quota, pass the agent, model and effort of the same Work's next row the rules allow; never a model or effort the rows don't name.
 
 ## Brief: five lines
 

@@ -11,6 +11,8 @@ Advice only. Edit this table to change the advice. User rows with the same Work 
 | Independent review | claude | opus | high | This provider's reviewer; `--reviewing` takes the row on another provider than the author's. |
 | fusion-claude | claude | opus | high | A fusion's Claude consult: the strongest Claude model. |
 | fusion-codex | codex | default | high | A fusion's Codex consult: the CLI's own default model. |
+| Computer use | claude | opus | high | Seeing and using apps on screen takes strong judgment. |
+| Computer use | codex | default | high | The next choice when the first can't run. |
 | Fallback | claude | opus | high | A session that moves to Claude Code: when it is asked to, or every account of its own agent is at its limit. |
 | Fallback | codex | default | high | A session that moves to Codex: when it is asked to, or every account of its own agent is at its limit. |
 | Conversation titles | codex | luna | low | A small model for short text; use available quota, cost tier and suitability among shipped title choices. |

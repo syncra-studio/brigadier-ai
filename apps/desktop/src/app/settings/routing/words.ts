@@ -57,6 +57,12 @@ export function withOrder(rows: readonly GuidanceRow[], work: string, order: rea
   return [...rest.slice(0, place), ...order, ...rest.slice(place)];
 }
 
+/** A work's order with `row`'s model first, the rest after it in their order (a model already there keeps its effort). */
+export function withFirst(order: readonly GuidanceRow[], row: GuidanceRow): GuidanceRow[] {
+  const same = (other: GuidanceRow) => other.agent === row.agent && other.model === row.model;
+  return [order.find(same) ?? row, ...order.filter((other) => !same(other))];
+}
+
 /**
  * A kind of work as Routing names it: as written, but a fusion's consult row (`fusion-claude`,
  * the name `brigadier start --work` takes) in plain words ("Fusion · Claude consult").
