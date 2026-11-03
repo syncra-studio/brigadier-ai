@@ -416,6 +416,8 @@ function keptToolStep(entry: FileEntry, turn: ThreadTurn | null, background: rea
 export function turnState(turn: Pick<ThreadTurn, "end" | "error">): { state: BlockState; error: string | null } {
   switch (turn.end) {
     case null:
+    // A limit cut it and its work goes on on another account or CLI: never a failure (D180).
+    case "handedOver":
       return { state: "working", error: null };
     case "done":
       return { state: "done", error: null };

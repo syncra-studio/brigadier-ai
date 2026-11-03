@@ -5,6 +5,7 @@ import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
 import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
 import { applyToBoard, emptyBoard } from "@/state/board";
 import { sessionStatus, sidebarIndicators, tabState } from "@/state/tabStates";
+import { turnState } from "@/app/conversation/cliBlocks";
 
 const on = (conversationId: string, event: unknown): EventEnvelope =>
   ({ stream: `conversation:${conversationId}`, event }) as EventEnvelope;
@@ -109,6 +110,17 @@ test("a turn a limit cut while Brigadier switches it to another account or CLI n
   assert.equal(tabState(row("c7"), false), "working");
   applyActivityEvents([on("c7", { type: "runStateChanged", conversationId: "c7", state: "idle" })]);
   assert.equal(tabState(row("c7"), false), "failed", "nowhere to go: the run lets go, failed");
+});
+
+
+test("D180: a turn a limit cut whose work goes on elsewhere stays working in the thread, the row and the tab", () => {
+  applyActivityNews({ conversationId: "c8", entries: [], opened: true });
+  applyActivityNews({ conversationId: "c8", entries: [], ended: "handedOver" });
+  applyActivityEvents([on("c8", { type: "runStateChanged", conversationId: "c8", state: "idle" })]);
+  assert.equal(tabState(row("c8"), false), "working", "even through a run that reads idle mid-switch");
+  assert.deepEqual(turnState({ end: "handedOver", error: "Claude's usage limit was reached." }), { state: "working", error: null }, "no Stopped header, no Try again line");
+  applyActivityNews({ conversationId: "c8", entries: [], ended: "failed" });
+  assert.equal(tabState(row("c8"), false), "failed", "nothing to switch to: it failed");
 });
 
 

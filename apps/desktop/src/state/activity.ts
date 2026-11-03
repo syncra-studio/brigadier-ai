@@ -288,15 +288,17 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
  * into activity, even when its thread has never opened.
  */
 export function applyActivityNews(news: ThreadNews): void {
-  if (!news.opened && !news.ended && news.workers === undefined && news.jobs === undefined) return;
+  // A turn handed over to another account or CLI goes on there: it never ended for the row (D180).
+  const ended = news.ended === "handedOver" ? undefined : news.ended;
+  if (!news.opened && !ended && news.workers === undefined && news.jobs === undefined) return;
   const { byConversation } = activityStore.getState();
   const current = byConversation[news.conversationId] ?? IDLE;
-  const turn: Activity = news.ended
+  const turn: Activity = ended
     ? {
         ...current,
         turnOpen: false,
         turnEndedAtMs: news.turnEndedAtMs ?? Date.now(),
-        ended: news.ended === "failed" || news.ended === "interrupted" ? "failed" : news.ended === "stopped" ? "stopped" : null,
+        ended: ended === "failed" || ended === "interrupted" ? "failed" : ended === "stopped" ? "stopped" : null,
       }
     : news.opened ? { ...current, turnOpen: true, ended: null } : current;
   const workers = news.workers === undefined ? turn : { ...turn, workersWorking: news.workers.some((worker) => worker.working) };

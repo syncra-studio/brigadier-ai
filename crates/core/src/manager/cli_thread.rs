@@ -231,6 +231,15 @@ impl SessionManager {
             | None => Some(conv.carried_turn().await),
             _ => None,
         };
+        // A turn a limit cut whose work goes on elsewhere reads handed over, never failed (D180).
+        let handed_over = match event {
+            Some(ProviderEvent::TurnCompleted { status, .. })
+                if *status != TurnStatus::Completed =>
+            {
+                self.limit_goes_on(conv).await
+            }
+            _ => false,
+        };
         let mut news = Vec::new();
         let mut ended = None;
         let mut opened = false;
@@ -467,6 +476,7 @@ impl SessionManager {
                         live.subagents.clear();
                     }
                     let end = match status {
+                        _ if handed_over => TurnEnd::HandedOver,
                         TurnStatus::Completed if live.error.is_some() => TurnEnd::Failed,
                         TurnStatus::Completed => TurnEnd::Done,
                         TurnStatus::Interrupted => TurnEnd::Stopped,

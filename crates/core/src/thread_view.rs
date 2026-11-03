@@ -367,6 +367,8 @@ pub enum TurnEnd {
     Failed,
     /// The CLI ended mid-turn (it was killed, or Brigadier quit under it).
     Interrupted,
+    /// A limit cut it and its work goes on on another account or CLI: never a failure (D180).
+    HandedOver,
 }
 
 /// A line of `record/turns.jsonl`: a turn's requests once its user message came, and its end.

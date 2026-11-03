@@ -69,6 +69,8 @@ export function EntryView({ entry, sent }: { entry: ThreadEntry; sent: readonly 
       );
     }
     case "error":
+      // A usage limit is no error of its turn: it switches on, or its state says the wait (D180).
+      if (item.error.kind === "usageLimit" && !item.error.willRetry) return null;
       return (
         <ErrorState
           summary={item.error.willRetry ? `${ERROR_TITLES[item.error.kind]}: it tries again on its own.` : `${ERROR_TITLES[item.error.kind]}.`}

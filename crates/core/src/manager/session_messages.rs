@@ -659,6 +659,8 @@ impl SessionManager {
             TurnEnd::Done => EventKind::TurnEnded,
             TurnEnd::Failed => EventKind::Failed,
             TurnEnd::Stopped | TurnEnd::Interrupted => EventKind::Interrupted,
+            // Its work goes on elsewhere: the turn that carries it on ends it.
+            TurnEnd::HandedOver => return None,
         };
         Some(WaitEvent {
             id: short(&session.id.0),
