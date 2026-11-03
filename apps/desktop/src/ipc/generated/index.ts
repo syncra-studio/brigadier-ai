@@ -411,6 +411,7 @@ export type { Setup } from "./Setup";
 export type { SetupRequest } from "./SetupRequest";
 export type { SharedPart } from "./SharedPart";
 export type { SharedUsage } from "./SharedUsage";
+export type { SidebarMode } from "./SidebarMode";
 export type { SitePermission } from "./SitePermission";
 export type { SmokeReport } from "./SmokeReport";
 export type { SourceAction } from "./SourceAction";
