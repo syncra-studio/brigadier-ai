@@ -3673,7 +3673,8 @@ async fn compiler_environment_uses_the_sessions_working_folder_cargo_config() {
         spec.env
             .iter()
             .any(|(key, value)| key == "BRIGADIER_BUILD_RUSTC_WRAPPER"
-                && value == spec.cwd.join("./cache-wrapper").to_str().unwrap())
+                // The launcher resolves the folder (macOS temp folders sit behind a symlink).
+                && value == spec.cwd.canonicalize().unwrap().join("./cache-wrapper").to_str().unwrap())
     );
     flow.stop().await;
 }
