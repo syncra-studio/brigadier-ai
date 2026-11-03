@@ -98,8 +98,9 @@ fn is_heic(bytes: &[u8]) -> bool {
             // The major brand, the minor version, then the compatible brands.
             let branded = kind == b"ftyp"
                 && body.len() >= 8
-                && (body[8..].chunks_exact(4).chain(body[..4].chunks_exact(4)))
-                    .any(|brand| BRANDS.contains(&brand));
+                && (body[8..].as_chunks::<4>().0.iter())
+                    .chain(body[..4].as_chunks::<4>().0)
+                    .any(|brand| BRANDS.contains(&brand.as_slice()));
             if !branded {
                 return false;
             }

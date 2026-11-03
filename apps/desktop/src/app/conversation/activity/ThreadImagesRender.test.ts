@@ -26,5 +26,5 @@ test("an answer's local image and a kept tile show, and what can't be shown says
   assert.deepEqual(seen.relative, unavailable);
   assert.deepEqual(seen["tile-gone"], unavailable);
   // Only absolute local paths reach the daemon, and a file: URL's path is decoded first.
-  assert.deepEqual([...new Set(seen.asked)].sort(), ["/tmp/answer copy.png", "/tmp/answer.png", "/tmp/notes.png", "/tmp/undrawable.png"]);
+  assert.deepEqual([...new Set(seen.asked)].toSorted(), ["/tmp/answer copy.png", "/tmp/answer.png", "/tmp/notes.png", "/tmp/undrawable.png"]);
 });

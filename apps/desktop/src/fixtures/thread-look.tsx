@@ -15,13 +15,16 @@ import { createRoot } from "react-dom/client";
 import { ActivityGroup, type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { stepWords } from "@/app/conversation/activity/words";
 import { MarkdownBlock } from "@/components/conversation";
+import { LinkConversationContext } from "@/components/conversation/file-links";
 import { TooltipProvider } from "@/components/overlays";
 import type { Request } from "@/ipc/generated";
 
 const query = new URLSearchParams(location.search);
+const PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==";
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  if (req.method === "readLocalImage") return { method: req.method, data: PIXEL, mime: "image/png" };
   return { method: req.method };
 });
 
@@ -30,7 +33,7 @@ const steps: { key: string; described: Described }[] = [
   { key: "b", described: { words: stepWords({ name: "Bash", detail: "npm test", status: "completed" }), status: "completed" } },
 ];
 /** A local path: the reply's markdown drops `data:` images. */
-const IMAGE = "/fixture-missing-chart.png";
+const IMAGE = "/fixture-chart.png";
 const FIRST = "The fix is in.";
 const MORE = `${FIRST}\n\n- one item\n\n---\n\n![chart](${IMAGE})\n\nSee [the docs](https://nodejs.org/en).\n\n\`\`\`ts\nconst a = 1;\n\`\`\`\n`;
 
@@ -60,7 +63,9 @@ function Page() {
           <StepRow {...steps[1]!.described} />
         </section>
         <section data-case="reply" className="max-w-thread">
-          <Streaming />
+          <LinkConversationContext.Provider value="fixture">
+            <Streaming />
+          </LinkConversationContext.Provider>
         </section>
       </main>
     </TooltipProvider>

@@ -1,15 +1,11 @@
-import { AssistantRuntimeProvider, ComposerPrimitive, useAui, useAuiState, useExternalStoreRuntime, type ThreadMessage } from "@/components/conversation/kit";
-import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $getRoot, $getSelection, $isRangeSelection, COMMAND_PRIORITY_NORMAL, DROP_COMMAND, KEY_ARROW_UP_COMMAND, KEY_ESCAPE_COMMAND, KEY_ENTER_COMMAND, type LexicalEditor } from "lexical";
-import { mergeRegister } from "@lexical/utils";
-import { type Ref, type RefObject, useContext, useEffect, useEffectEvent, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type Ref, useContext, useEffect, useEffectEvent, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { BlobAttachmentAdapter, ComposerAttachmentsContext, uploading } from "@/app/conversation/attachments";
 import { useComposerDraft } from "@/app/conversation/composerDraft";
+import { ComposerInput } from "@/app/conversation/ComposerInput";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { MentionMemory, Mentions, mentionsIn } from "@/app/conversation/Mentions";
-import ComposerEditor from "@/components/conversation/ComposerEditor";
-import { AttachmentReaderContext } from "@/components/conversation/elements/attachment-tile";
+import { AssistantRuntimeProvider, AttachmentReaderContext, ComposerPrimitive, useAui, useAuiState, useExternalStoreRuntime, type ThreadMessage } from "@/components/conversation";
 import { request } from "@/ipc/client";
 import { readAttachment } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -47,7 +43,7 @@ function CardField({ attachments, memory, ...props }: CardTextEditorProps & { at
   const target = useContext(ComposerTargetContext);
   const conversationId = useBoard((s) => s.board?.conversationId ?? null);
   const aui = useAui();
-  const editorRef = useRef<LexicalEditor | null>(null);
+  const focusRef = useRef<(() => void) | null>(null);
   const focusRequested = useRef(false);
   const text = useAuiState((s) => s.composer.text);
   const changed = useEffectEvent(props.onTyped);
@@ -70,7 +66,7 @@ function CardField({ attachments, memory, ...props }: CardTextEditorProps & { at
   }, [aui, text, ready]);
   useImperativeHandle(props.ref, () => ({
     focus: () => {
-      if (editorRef.current) editorRef.current.focus();
+      if (focusRef.current) focusRef.current();
       else focusRequested.current = true;
     },
     answer: async () => {
@@ -91,58 +87,12 @@ function CardField({ attachments, memory, ...props }: CardTextEditorProps & { at
     {props.draftScope && <CardDraft scope={props.draftScope} attachments={attachments} memory={memory} />}
     <Mentions conversation={target?.conversation ?? null} targets={target?.targets ?? []} />
     <div className="min-w-0 flex-1" onFocus={props.onFocus}>
-      {ready && <ComposerEditor placeholder={props.placeholder} autoFocus={false} card mentions={memory}>
-        <CardKeys editorRef={editorRef} focusRequested={focusRequested} onSubmit={props.onSubmit} onUp={props.onUp} onEscape={props.onEscape} />
-      </ComposerEditor>}
+      {ready && <ComposerInput placeholder={props.placeholder} autoFocus={false} mentions={memory} card={{ focusRef, focusRequested, onSubmit: props.onSubmit, onUp: props.onUp, onEscape: props.onEscape }} />}
     </div>
   </ComposerPrimitive.Unstable_TriggerPopoverRoot>;
 }
 
 function CardDraft({ scope, attachments, memory }: { scope: string; attachments: BlobAttachmentAdapter; memory: MentionMemory }) {
   useComposerDraft(scope, attachments, memory);
-  return null;
-}
-
-/** Mention menus take their keys first. Shift+Enter stays with Lexical's newline handling. */
-function CardKeys({ onSubmit, onUp, onEscape, editorRef, focusRequested }: Pick<CardTextEditorProps, "onSubmit" | "onUp" | "onEscape"> & {
-  editorRef: RefObject<LexicalEditor | null>;
-  focusRequested: RefObject<boolean>;
-}) {
-  const [editor] = useLexicalComposerContext();
-  useLayoutEffect(() => {
-    editorRef.current = editor;
-    if (focusRequested.current) {
-      editor.focus();
-    }
-    return () => { editorRef.current = null; };
-  }, [editor, editorRef, focusRequested]);
-  const submit = useEffectEvent(onSubmit);
-  const up = useEffectEvent(onUp);
-  const escape = useEffectEvent(onEscape);
-  useEffect(() => mergeRegister(
-    editor.registerCommand(DROP_COMMAND, (event) => { event.preventDefault(); return true; }, COMMAND_PRIORITY_NORMAL),
-    editor.registerCommand(KEY_ENTER_COMMAND, (event) => {
-      if (!event || event.isComposing || event.shiftKey) return false;
-      event.preventDefault();
-      submit();
-      return true;
-    }, COMMAND_PRIORITY_NORMAL),
-    editor.registerCommand(KEY_ESCAPE_COMMAND, (event) => {
-      event.preventDefault();
-      escape();
-      return true;
-    }, COMMAND_PRIORITY_NORMAL),
-    editor.registerCommand(KEY_ARROW_UP_COMMAND, (event) => {
-      const selection = $getSelection();
-      if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
-      // Leave a multiline answer only at its start; elsewhere ↑ moves the caret normally.
-      const before = selection.clone();
-      before.anchor.set($getRoot().getKey(), 0, "element");
-      if (before.getTextContent() !== "") return false;
-      event.preventDefault();
-      up();
-      return true;
-    }, COMMAND_PRIORITY_NORMAL),
-  ), [editor]);
   return null;
 }

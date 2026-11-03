@@ -15,18 +15,18 @@ const ComposerEditor = lazy(() =>
  * it doesn't hold up startup), a plain field on the same composer text until it loads.
  */
 export function ComposerInput(props: ComposerInputProps) {
-  const { placeholder, autoFocus } = props;
   return (
     <div className="relative min-w-0">
-      <ComposerField placeholder={placeholder} autoFocus={autoFocus} />
+      <ComposerField {...props} />
     </div>
   );
 }
 
 function ComposerField(props: ComposerInputProps) {
-  const { placeholder, autoFocus } = props;
+  const { placeholder, autoFocus, card } = props;
   return (
-    <Suspense fallback={<ComposerStandIn placeholder={placeholder} autoFocus={autoFocus} />}>
+    // No stand-in for a card: its Enter would send the card's composer, not answer the card.
+    <Suspense fallback={card ? null : <ComposerStandIn placeholder={placeholder} autoFocus={autoFocus} />}>
       <ComposerEditor {...props} />
     </Suspense>
   );

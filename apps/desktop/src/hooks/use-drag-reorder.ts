@@ -2,6 +2,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -12,11 +13,21 @@ type Drag = { id: string; pointer: number; origin: number; at: number; to: numbe
 
 /** A single item, located by identity even when an optimistic or daemon update changed its slot. */
 function moved<T>(items: readonly T[], idOf: (item: T) => string, id: string, to: number): readonly T[] {
-  const item = items.find((item) => idOf(item) === id);
+  const item = items.find((each) => idOf(each) === id);
   if (!item) return items;
-  const rest = items.filter((item) => idOf(item) !== id);
+  const rest = items.filter((each) => idOf(each) !== id);
   rest.splice(to, 0, item);
   return rest;
+}
+
+/** Puts the rows' own styles back. */
+function restore(drag: Drag) {
+  for (const row of drag.rows) {
+    row.element.style.translate = row.translate;
+    row.element.style.transition = row.transition;
+    row.element.style.zIndex = row.zIndex;
+    row.element.style.position = row.position;
+  }
 }
 
 /** Pointer reordering keeps the DOM order and pointer capture stable until release. Rows slide
@@ -48,16 +59,10 @@ export function useDragReorder<T, E extends HTMLElement = HTMLElement>({
   const [pending, setPending] = useState<{ source: readonly T[]; id: string; to: number } | null>(null);
   const shown = pending?.source === items ? moved(items, idOf, pending.id, pending.to) : items;
   const latest = useRef({ items, shown, idOf, onMove });
-  latest.current = { items, shown, idOf, onMove };
+  useLayoutEffect(() => {
+    latest.current = { items, shown, idOf, onMove };
+  });
 
-  const restore = (drag: Drag) => {
-    for (const row of drag.rows) {
-      row.element.style.translate = row.translate;
-      row.element.style.transition = row.transition;
-      row.element.style.zIndex = row.zIndex;
-      row.element.style.position = row.position;
-    }
-  };
   const measure = (drag: Drag) => {
     const list = listRef.current;
     if (!list) return;
@@ -118,17 +123,18 @@ export function useDragReorder<T, E extends HTMLElement = HTMLElement>({
 
   // A live queue can add/remove/reorder rows during a drag. Measure the current identities,
   // never reinsert items[oldIndex] into the updated array (which duplicated another row).
-  useLayoutEffect(() => {
+  const itemsChanged = useEffectEvent((now: readonly T[]) => {
     const drag = active.current;
     if (!drag) return;
-    if (!items.some((item) => idOf(item) === drag.id)) { finish(false); return; }
+    if (!now.some((item) => idOf(item) === drag.id)) { finish(false); return; }
     const grabbed = drag.rows.find((row) => row.id === drag.id);
     const visual = grabbed ? grabbed.start + drag.at - drag.origin : null;
     measure(drag);
     const next = drag.rows.find((row) => row.id === drag.id);
     if (visual !== null && next) drag.origin = drag.at - (visual - next.start);
     paint(drag);
-  }, [items]);
+  });
+  useLayoutEffect(() => itemsChanged(items), [items]);
   useLayoutEffect(() => () => {
     if (active.current) restore(active.current);
   }, []);

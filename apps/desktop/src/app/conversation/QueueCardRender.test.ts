@@ -10,7 +10,7 @@ test("queue drag follows the pointer, slides neighbors, preserves each identity 
   assert.deepEqual(seen.reordered, ["q2", "q3", "q4", "q1", "q5"]);
   assert.deepEqual(seen.moves.map(({ itemId, index }: { itemId: string; index: number }) => ({ itemId, index })), [{ itemId: "q1", index: 3 }]);
   for (const snapshot of [...seen.snapshots, seen.duringUpdate, seen.afterUpdate]) {
-    assert.deepEqual([...snapshot].sort(), ["q1", "q2", "q3", "q4", "q5"], "each queued identity renders exactly once throughout a drag and external reorder");
+    assert.deepEqual([...snapshot].toSorted(), ["q1", "q2", "q3", "q4", "q5"], "each queued identity renders exactly once throughout a drag and external reorder");
   }
   assert.deepEqual(seen.deletes, ["q3"]);
   assert.equal(seen.beforeDelete.length, 5);

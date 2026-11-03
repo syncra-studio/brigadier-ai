@@ -17,6 +17,7 @@ import {
   COMMAND_PRIORITY_NORMAL,
   COPY_COMMAND,
   CUT_COMMAND,
+  DROP_COMMAND,
   type EditorState,
   HISTORY_MERGE_TAG,
   type LexicalNode,
@@ -25,12 +26,13 @@ import {
   KEY_BACKSPACE_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
+  KEY_ESCAPE_COMMAND,
   type LexicalEditor,
   PASTE_COMMAND,
   PASTE_TAG,
   SKIP_DOM_SELECTION_TAG,
 } from "lexical";
-import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { type RefObject, useCallback, useContext, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef } from "react";
 
 import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { WorkerGlyph } from "./elements/worker-glyph";
@@ -97,9 +99,16 @@ export type ComposerInputProps = {
   placeholder: string;
   autoFocus: boolean;
   /** A card uses the same editor and paste handling, with its own answer keys. */
-  card?: boolean;
+  card?: CardFieldKeys;
   mentions?: MentionMemory;
-  children?: React.ReactNode;
+};
+
+export type CardFieldKeys = {
+  onSubmit: () => void;
+  onUp: () => void;
+  onEscape: () => void;
+  focusRef: RefObject<(() => void) | null>;
+  focusRequested: RefObject<boolean>;
 };
 
 /** The rich field's chips: code is a mark there, not a chip. */
@@ -118,10 +127,10 @@ const NO_TARGETS: readonly MentionTarget[] = [];
 export default function ComposerEditor({
   placeholder,
   autoFocus,
-  card = false,
+  card: cardKeys,
   mentions,
-  children,
 }: ComposerInputProps) {
+  const card = cardKeys !== undefined;
   const target = useContext(ComposerTargetContext);
   const memory = mentions ?? target?.mentions ?? null;
   const targets = target?.targets ?? NO_TARGETS;
@@ -180,11 +189,52 @@ export default function ComposerEditor({
       {!card && <ComposerKeys deleted={deleted} deletedPastes={deletedPastes} />}
       <ComposerPaste formatter={formatter} deleted={deleted} deletedPastes={deletedPastes} inlineOnly={card} />
       {!card && <PlanBackspace />}
-      {children}
+      {cardKeys && <CardKeys {...cardKeys} />}
       <InlineSync kind="image" deleted={deleted} />
       <InlineSync kind="paste" deleted={deletedPastes} />
     </ChipComposerInput>
   );
+}
+
+/** Mention menus take their keys first. Shift+Enter stays with Lexical's newline handling. */
+function CardKeys({ onSubmit, onUp, onEscape, focusRef, focusRequested }: CardFieldKeys) {
+  const [editor] = useLexicalComposerContext();
+  useLayoutEffect(() => {
+    focusRef.current = () => editor.focus();
+    if (focusRequested.current) {
+      editor.focus();
+    }
+    return () => { focusRef.current = null; };
+  }, [editor, focusRef, focusRequested]);
+  const submit = useEffectEvent(onSubmit);
+  const up = useEffectEvent(onUp);
+  const escape = useEffectEvent(onEscape);
+  useEffect(() => mergeRegister(
+    editor.registerCommand(DROP_COMMAND, (event) => { event.preventDefault(); return true; }, COMMAND_PRIORITY_NORMAL),
+    editor.registerCommand(KEY_ENTER_COMMAND, (event) => {
+      if (!event || event.isComposing || event.shiftKey) return false;
+      event.preventDefault();
+      submit();
+      return true;
+    }, COMMAND_PRIORITY_NORMAL),
+    editor.registerCommand(KEY_ESCAPE_COMMAND, (event) => {
+      event.preventDefault();
+      escape();
+      return true;
+    }, COMMAND_PRIORITY_NORMAL),
+    editor.registerCommand(KEY_ARROW_UP_COMMAND, (event) => {
+      const selection = $getSelection();
+      if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+      // Leave a multiline answer only at its start; elsewhere ↑ moves the caret normally.
+      const before = selection.clone();
+      before.anchor.set($getRoot().getKey(), 0, "element");
+      if (before.getTextContent() !== "") return false;
+      event.preventDefault();
+      up();
+      return true;
+    }, COMMAND_PRIORITY_NORMAL),
+  ), [editor]);
+  return null;
 }
 
 /** The `@` menu's "Message directly" rows set the To: rather than leave a chip. */

@@ -136,13 +136,13 @@ impl ConvLive {
     }
 
     /// Whether row `id`'s judge still has a say.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::manager) fn judges(&self, id: &str) -> bool {
         self.judging.lock().unwrap().contains(id)
     }
 
     /// Marks the conversation as compacting, as a compaction under way does.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::manager) async fn set_compacting(&self, compacting: bool) {
         self.state.lock().await.compacting = compacting;
     }

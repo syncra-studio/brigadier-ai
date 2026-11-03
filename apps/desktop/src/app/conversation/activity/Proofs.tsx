@@ -43,7 +43,7 @@ export const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefi
         } else if (kind === "recording") {
           shown = <video src={url} controls muted playsInline preload="metadata" aria-label={label} title={label} className={cn(frame, "object-cover object-top")} />;
         } else {
-          const at = images.findIndex((image) => image.url === url);
+          const at = images.findIndex((each) => each.url === url);
           shown = (
             <ImagePreview url={url} name={label} gallery={{ images, index: Math.max(at, 0) }}>
               <button type="button" aria-label={`Open ${label}`} title={label} className={cn(frame, "focus-visible:ring-ring group/proof relative focus-visible:ring-2 focus-visible:outline-none")}>

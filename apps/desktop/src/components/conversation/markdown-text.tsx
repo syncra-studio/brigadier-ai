@@ -89,10 +89,10 @@ export function MarkdownImage({ src, alt, className }: { src?: string | Blob | u
   const source = typeof src === "string" ? src : "";
   const path = localImagePath(source);
   const local = useLocalImage(conversationId, path);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [broken, setBroken] = useState<string | null>(null);
   const direct = /^(?:data:image\/|blob:|https?:\/\/)/i.test(source);
   const url = path ? local.url : direct ? source : null;
-  const unavailable = failed === source || (path ? !!local.error || !conversationId : !direct);
+  const unavailable = broken === source || (path ? !!local.error || !conversationId : !direct);
   if (!url || unavailable) {
     return (
       <span data-slot="markdown-image-placeholder" role="img" aria-label={alt || "Image"} className="bg-foreground/5 text-muted-foreground my-3 flex h-20 w-36 items-center justify-center rounded-lg text-xs">
@@ -103,7 +103,7 @@ export function MarkdownImage({ src, alt, className }: { src?: string | Blob | u
   return (
     <ImagePreview url={url} name={alt || "Image"}>
       <button type="button" aria-label={`View ${alt || "image"}`} className="aui-md-img my-3 block cursor-zoom-in">
-        <img src={url} alt={alt ?? ""} onError={() => setFailed(source)} className={cn("max-h-80 max-w-full rounded-lg", className)} />
+        <img src={url} alt={alt ?? ""} onError={() => setBroken(source)} className={cn("max-h-80 max-w-full rounded-lg", className)} />
       </button>
     </ImagePreview>
   );

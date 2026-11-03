@@ -10,7 +10,7 @@ test("question fields paste image and long-text chips, grow with Shift+Enter, an
     prepared: Extract<Request, { method: "prepareCardAnswer" }>;
     emptyChip: boolean; escapeFocus: boolean; mentionAnswered: boolean; restored: { image: boolean; paste: boolean }; dropIgnored: boolean; failedKept: { image: boolean; paste: boolean }; answersAfterFailure: number;
   };
-  assert.equal(seen.error, undefined, seen.error);
+  assert.equal(seen.error, undefined);
   assert.deepEqual(seen.chips, { image: true, paste: true });
   assert.match(seen.labels, /Image #1/);
   assert.match(seen.labels, /Pasted text #1/);
