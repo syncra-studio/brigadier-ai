@@ -248,6 +248,8 @@ Patches applied, in order:
 
 - `patches/0200-windows-chromium-page-wait-within-timeout.diff`: The Chromium page wait before a window read is bounded by the caller's timeout_ms, at most 600 ms, with each pause capped to the time left: the walk's own clock starts only at the first node, so a 100 ms read waited the full 600 ms.
 
+- `patches/0201-windows-unconfirmed-launch-refusal-says-so.diff`: After a Notepad or Settings launch did not answer within 15 s, a later launch that finds a window of that app refuses with the true reason: the helper cannot confirm it opened that window, because the earlier launch may have opened it after its reply. Before, the refusal said the helper did not open it, which could be false. The window is still never claimed as the helper's own (Notepad and Settings each run one process that also holds the user's windows).
+
 <!-- sync:end -->
 
 ## Notes for v0.36.0

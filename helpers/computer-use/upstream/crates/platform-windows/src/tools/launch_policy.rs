@@ -195,7 +195,18 @@ pub(crate) fn foreign_notepad_windows(open: &[u64], own: &[u64]) -> Vec<u64> {
         .collect()
 }
 
-pub(crate) fn notepad_open_refusal(titles: &[String]) -> String {
+/// Who opened the windows that block a launch, as the refusal states it. An
+/// earlier launch that did not answer in time may still have opened a window
+/// after its reply, so such a window cannot be called the user's for sure.
+fn blocking_window_owner(app: &str, which: &str, unconfirmed_launch: bool) -> String {
+    if unconfirmed_launch {
+        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer in time, so that window may come from it or may be the user's")
+    } else {
+        format!("a window this helper did not open{which}")
+    }
+}
+
+pub(crate) fn notepad_open_refusal(titles: &[String], unconfirmed_launch: bool) -> String {
     let named = titles
         .iter()
         .filter(|title| !title.is_empty())
@@ -207,7 +218,9 @@ pub(crate) fn notepad_open_refusal(titles: &[String]) -> String {
     } else {
         format!(" ({named})")
     };
-    format!("No app was launched: Notepad is already open in a window this helper did not open{which}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it would appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
+    let owner = blocking_window_owner("Notepad", &which, unconfirmed_launch);
+    let would = if unconfirmed_launch { "could" } else { "would" };
+    format!("No app was launched: Notepad is already open in {owner}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it {would} appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
 }
 
 /// A window counts as the user's open window unless DWM reports it cloaked
@@ -218,7 +231,7 @@ pub(crate) fn user_reachable(read: bool, cloaked: bool, on_a_desktop: Option<boo
 
 /// Windows Settings has a single window: `ms-settings:` changes the page in
 /// the one already open. One the helper did not open belongs to the user.
-pub(crate) fn settings_open_refusal(titles: &[String]) -> String {
+pub(crate) fn settings_open_refusal(titles: &[String], unconfirmed_launch: bool) -> String {
     let named = titles
         .iter()
         .filter(|title| !title.is_empty())
@@ -230,7 +243,9 @@ pub(crate) fn settings_open_refusal(titles: &[String]) -> String {
     } else {
         format!(" ({named})")
     };
-    format!("No app was launched: Windows Settings is already open in a window this helper did not open{which}. Settings has only one window, so opening a Settings page would change the page in the user's own Settings window. Ask the user to close Settings first.")
+    let owner = blocking_window_owner("Settings", &which, unconfirmed_launch);
+    let would = if unconfirmed_launch { "could" } else { "would" };
+    format!("No app was launched: Windows Settings is already open in {owner}. Settings has only one window, so opening a Settings page {would} change the page in the user's own Settings window. Ask the user to close Settings first.")
 }
 
 pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
@@ -282,22 +297,37 @@ mod fresh_document_tests {
     }
     #[test]
     fn settings_windows_the_helper_did_not_open_block_a_launch() {
-        let refusal = settings_open_refusal(&["Settings".into()]);
+        let refusal = settings_open_refusal(&["Settings".into()], false);
         assert!(refusal.starts_with("No app was launched"));
         assert!(refusal.contains("(\"Settings\")"));
         assert!(refusal.contains("close Settings"));
-        assert!(!settings_open_refusal(&[String::new()]).contains("()"));
+        assert!(refusal.contains("this helper did not open"));
+        assert!(!settings_open_refusal(&[String::new()], false).contains("()"));
     }
     #[test]
     fn notepad_windows_the_helper_did_not_open_block_a_launch() {
         assert!(foreign_notepad_windows(&[], &[]).is_empty());
         assert!(foreign_notepad_windows(&[7, 9], &[7, 9, 11]).is_empty());
         assert_eq!(foreign_notepad_windows(&[7, 8], &[7]), vec![8]);
-        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()]);
+        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()], false);
         assert!(refusal.starts_with("No app was launched"));
         assert!(refusal.contains("\"notes.txt - Notepad\""));
         assert!(refusal.contains("close Notepad"));
-        assert!(!notepad_open_refusal(&[String::new()]).contains("()"));
+        assert!(refusal.contains("this helper did not open"));
+        assert!(!notepad_open_refusal(&[String::new()], false).contains("()"));
+    }
+    #[test]
+    fn a_window_after_an_unconfirmed_launch_is_not_called_the_users_for_sure() {
+        for refusal in [
+            notepad_open_refusal(&["Untitled - Notepad".into()], true),
+            settings_open_refusal(&["Settings".into()], true),
+        ] {
+            assert!(refusal.starts_with("No app was launched"));
+            assert!(refusal.contains("cannot confirm it opened"));
+            assert!(refusal.contains("did not answer in time"));
+            assert!(!refusal.contains("did not open"));
+            assert!(!refusal.contains("would"));
+        }
     }
     #[test]
     fn restored_document_titles_cannot_match_the_new_file() {

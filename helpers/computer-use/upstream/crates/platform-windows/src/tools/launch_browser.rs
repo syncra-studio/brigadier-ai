@@ -281,6 +281,33 @@ pub(super) fn create_notepad_document() -> anyhow::Result<std::path::PathBuf> {
 /// receive another launch (see `launch_policy::foreign_notepad_windows`).
 static OWN_NOTEPAD_WINDOWS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
+/// Set when a Notepad or Settings launch did not answer within its deadline:
+/// Windows may still open its window after the reply, unrecorded, so a window
+/// that a later launch finds cannot be called the user's for sure. Cleared
+/// once no window of that app is open.
+static UNCONFIRMED_NOTEPAD_LAUNCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static UNCONFIRMED_SETTINGS_LAUNCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn note_unconfirmed_launch(notepad: bool, settings: bool) {
+    use std::sync::atomic::Ordering;
+    if notepad {
+        UNCONFIRMED_NOTEPAD_LAUNCH.store(true, Ordering::Release);
+    }
+    if settings {
+        UNCONFIRMED_SETTINGS_LAUNCH.store(true, Ordering::Release);
+    }
+}
+
+pub(super) fn unconfirmed_notepad_launch() -> bool {
+    UNCONFIRMED_NOTEPAD_LAUNCH.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(super) fn unconfirmed_settings_launch() -> bool {
+    UNCONFIRMED_SETTINGS_LAUNCH.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Visible top-level Notepad windows (minimized included) with their titles.
 pub(super) fn open_notepad_windows() -> Vec<(u64, String)> {
     let pids: std::collections::HashSet<_> = crate::win32::list_processes()
@@ -302,6 +329,10 @@ pub(super) fn open_notepad_windows() -> Vec<(u64, String)> {
 pub(super) fn foreign_notepad_windows() -> Vec<(u64, String)> {
     let open = open_notepad_windows();
     let ids: Vec<u64> = open.iter().map(|(window, _)| *window).collect();
+    if ids.is_empty() {
+        // No window left that the unconfirmed launch could have opened.
+        UNCONFIRMED_NOTEPAD_LAUNCH.store(false, std::sync::atomic::Ordering::Release);
+    }
     let mut own = OWN_NOTEPAD_WINDOWS.lock().unwrap();
     own.retain(|window| ids.contains(window));
     let foreign = super::launch_policy::foreign_notepad_windows(&ids, &own);
@@ -385,6 +416,9 @@ fn open_settings_windows() -> Vec<(u64, String)> {
 pub(super) fn foreign_settings_windows() -> Vec<(u64, String)> {
     let open = open_settings_windows();
     let ids: Vec<u64> = open.iter().map(|(window, _)| *window).collect();
+    if ids.is_empty() {
+        UNCONFIRMED_SETTINGS_LAUNCH.store(false, std::sync::atomic::Ordering::Release);
+    }
     let mut own = OWN_SETTINGS_WINDOWS.lock().unwrap();
     own.retain(|window| ids.contains(window));
     let foreign = super::launch_policy::foreign_notepad_windows(&ids, &own);

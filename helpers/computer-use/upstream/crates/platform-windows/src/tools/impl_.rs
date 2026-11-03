@@ -2683,7 +2683,10 @@ impl Tool for LaunchAppTool {
                     .unwrap_or_default();
             if !foreign.is_empty() {
                 let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
-                return ToolResult::error(super::launch_policy::notepad_open_refusal(&titles))
+                return ToolResult::error(super::launch_policy::notepad_open_refusal(
+                    &titles,
+                    super::launch_browser::unconfirmed_notepad_launch(),
+                ))
                     .with_structured(json!({"code": "notepad_open_in_user_window", "launch_confirmed": false, "windows": []}));
             }
         }
@@ -2785,7 +2788,10 @@ impl Tool for LaunchAppTool {
                     .unwrap_or_default();
             if !foreign.is_empty() {
                 let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
-                return ToolResult::error(super::launch_policy::settings_open_refusal(&titles))
+                return ToolResult::error(super::launch_policy::settings_open_refusal(
+                    &titles,
+                    super::launch_browser::unconfirmed_settings_launch(),
+                ))
                     .with_structured(json!({"code": "settings_open_in_user_window", "launch_confirmed": false, "windows": []}));
             }
         }
@@ -2895,9 +2901,12 @@ impl Tool for LaunchAppTool {
                     ))
                 }
                 Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
-                Err(_) => return ToolResult::error(format!(
-                    "Packaged-app activation for {aumid:?} did not answer within 15s. Windows may still complete it; cancellation and foreground preservation are unconfirmed. Inspect list_windows before retrying."
-                )),
+                Err(_) => {
+                    super::launch_browser::note_unconfirmed_launch(notepad_launch, settings_launch);
+                    return ToolResult::error(format!(
+                        "Packaged-app activation for {aumid:?} did not answer within 15s. Windows may still complete it; cancellation and foreground preservation are unconfirmed. Inspect list_windows before retrying."
+                    ));
+                }
             }
         } else {
             // Legacy ShellExecuteExW path for plain Win32 apps and for
@@ -3114,6 +3123,7 @@ impl Tool for LaunchAppTool {
                 Ok(Ok(Err(e))) => return ToolResult::error(format!("Failed to launch: {e}")),
                 Ok(Err(e)) => return ToolResult::error(format!("Task error: {e}")),
                 Err(_elapsed) => {
+                    super::launch_browser::note_unconfirmed_launch(notepad_launch, settings_launch);
                     return ToolResult::error(format!(
                         "Launch of {:?} did not answer within 15s. Windows may still \
                      complete it; cancellation and foreground preservation are unconfirmed. \
