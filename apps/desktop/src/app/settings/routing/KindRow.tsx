@@ -2,11 +2,12 @@ import type { ComponentType, SVGProps } from "react";
 
 import { NowPick } from "@/app/settings/routing/NowPick";
 import { ROLE_KINDS } from "@/app/settings/routing/roles";
+import { SuggestionLine } from "@/app/settings/routing/SuggestionLine";
 import { WhoPicks } from "@/app/settings/routing/WhoPicks";
 import { OpenChevron } from "@/app/settings/routing/parts";
 import { useListedModels } from "@/app/settings/routing/pickers";
 import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
-import { rowModelName, workName, type WorkRow } from "@/app/settings/routing/words";
+import { rowModelName, suggestionFor, workName, type WorkRow } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Code, Cursor, Grid, Lifesaver, Nodes, PullRequestMerged, PullRequestOpen, Telescope, Text } from "@/components/icons";
 import type { ModelRules } from "@/ipc/generated";
@@ -26,8 +27,9 @@ const KIND_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
 };
 
 /**
- * A kind of work in Who does what: its icon, name and who picks (Automatic with the shipped
- * reason, or your order), the model it starts on now (the first your rules allow); open, Who picks.
+ * A kind of work in Who does what: its icon, name and who picks (Automatic with the reason the
+ * ratings give, or your order), the model it starts on now (the first your rules allow); under
+ * your order, a better-rated model when the ratings found one; open, Who picks.
  */
 export function KindRow({
   row,
@@ -44,6 +46,7 @@ export function KindRow({
 }) {
   const Icon = KIND_ICONS[row.work] ?? Grid;
   const role = ROLE_KINDS[row.work];
+  const suggestion = row.mine.length > 0 ? suggestionFor(rules, row.work) : null;
   const models = useListedModels();
   const name = (found: WorkRow["rows"][number]) => rowModelName(groups, found.agent, found.model);
   const now = row.rows.find((found) => !refusingRule(rules.rules, rowChoice(found, models), row.work));
@@ -62,6 +65,7 @@ export function KindRow({
         {now && !role && <NowPick row={now} groups={groups} />}
         <OpenChevron open={open} />
       </button>
+      {suggestion && <SuggestionLine suggestion={suggestion} row={row} rules={rules} groups={groups} />}
       {open && <WhoPicks row={row} rules={rules} groups={groups} />}
     </div>
   );

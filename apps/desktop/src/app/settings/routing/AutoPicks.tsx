@@ -11,8 +11,9 @@ import { providerOn } from "@/state/providers";
 import { useApp } from "@/state/store";
 
 /**
- * Automatic: the shipped rows of the kind in order, the one picked now marked and the next
- * named, each with its effort; then those your rules keep out, and the shipped reason.
+ * Automatic: the kind's rows in order (each agent's best-rated model, best first; the shipped
+ * rows where nothing is rated), the one picked now marked and the next named, each with its
+ * effort; then those your rules keep out, and the first row's reason.
  */
 export function AutoPicks({ row, rules, groups }: { row: WorkRow; rules: readonly ModelRule[]; groups: readonly ModelGroup[] }) {
   const models = useListedModels();

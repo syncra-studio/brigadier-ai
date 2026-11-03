@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 const ago = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
 
 /** "3 hours ago": how long since a check. */
-function since(ms: number, now: number): string {
+export function since(ms: number, now: number): string {
   const minutes = Math.floor(Math.max(0, now - ms) / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return ago(minutes, "minute");

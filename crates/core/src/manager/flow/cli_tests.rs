@@ -2491,12 +2491,13 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
         seen["row"]["row"],
         json!({ "work": "Review", "source": "user", "picked": ["agent", "model", "effort"] })
     );
-    // No row of the user's: the shipped one.
+    // No row of the user's: the automatic one, from the ratings (Opus 5.5 at its orchestrating
+    // effort).
     assert_eq!(
         worker("shipped"),
-        (json!("claude"), json!("claude-opus-5-5"), json!("high"))
+        (json!("claude"), json!("claude-opus-5-5"), json!("medium"))
     );
-    assert_eq!(seen["shipped"]["row"]["source"], "shipped");
+    assert_eq!(seen["shipped"]["row"]["source"], "ratings");
     // A flag wins over its field only.
     assert_eq!(
         worker("model flag"),
@@ -2614,10 +2615,11 @@ async fn computer_use_workers_take_the_computer_use_row() {
     flow.until("the shipped row's workers reported", reported(2))
         .await;
     flow.settled().await;
+    // The automatic row, from the ratings: Opus 5.5 rates 9 for operate, at medium effort.
     check(
         "shipped",
-        (json!("claude"), json!("claude-opus-5-5"), json!("high")),
-        "shipped",
+        (json!("claude"), json!("claude-opus-5-5"), json!("medium")),
+        "ratings",
     );
 
     // The model picked on either page: the user's row.
@@ -3065,10 +3067,10 @@ async fn an_adversarial_review_runs_on_another_ready_provider_than_the_authors()
         seen["of a codex worker"]["row"]["work"],
         "Adversarial review"
     );
-    // The Claude session's own work, with no id: the Codex row, on Codex's default model.
+    // The Claude session's own work, with no id: the Codex row, its best-rated reviewer.
     assert_eq!(
         picked("of the session by default"),
-        (json!("codex"), Value::Null, json!("high"))
+        (json!("codex"), json!("gpt-6-astra"), json!("high"))
     );
     assert_eq!(
         seen["of the session by default"]["review"]["authors"],
@@ -3790,4 +3792,83 @@ async fn compiler_environment_uses_the_sessions_working_folder_cargo_config() {
                 && value == spec.cwd.canonicalize().unwrap().join("./cache-wrapper").to_str().unwrap())
     );
     flow.stop().await;
+}
+
+/// Settings › Routing's Automatic rows come from the ratings; a user's own order is never
+/// changed by them: a better-rated model is suggested on that row instead (brief L9, L14), and
+/// dismissed, it stays hidden at that rating.
+#[tokio::test]
+async fn a_better_rated_model_is_suggested_and_the_users_order_is_left_unchanged() {
+    let script: Script = Arc::new(|_| Box::pin(async { Reply::text("ok") }));
+    let flow = Flow::start("routing-suggestion", Options::default(), script).await;
+    // The fake Claude lists Opus 5.5 (operate 9) and takes images; the fake Codex doesn't.
+    let page = flow.manager.model_rules().unwrap();
+    let automatic: Vec<_> = page
+        .shipped
+        .iter()
+        .filter(|row| row.work == "Computer use")
+        .map(|row| (row.agent, row.model.as_str()))
+        .collect();
+    // Codex has no model rated for it here: its shipped row stays the next choice.
+    assert_eq!(
+        automatic,
+        [
+            (ProviderKind::Claude, "claude-opus-5-5"),
+            (ProviderKind::Codex, "default")
+        ],
+        "{page:#?}"
+    );
+    assert!(page.suggestions.is_empty());
+
+    // The user's own order for computer use names Codex's Astra (unrated there: 5).
+    let mine = crate::GuidanceRow {
+        work: "Computer use".into(),
+        agent: ProviderKind::Codex,
+        model: "gpt-6-astra".into(),
+        effort: Some("high".into()),
+        reason: "Mine.".into(),
+    };
+    flow.manager
+        .set_model_rules(std::slice::from_ref(&mine), &[])
+        .unwrap();
+    let path = flow.manager.models_rules_path();
+    let written = std::fs::read(&path).unwrap();
+
+    let page = flow.manager.model_rules().unwrap();
+    assert_eq!(page.rows, vec![mine.clone()]);
+    assert_eq!(page.suggestions.len(), 1, "{:#?}", page.suggestions);
+    let suggestion = &page.suggestions[0];
+    assert_eq!(suggestion.work, "Computer use");
+    assert_eq!(
+        (suggestion.row.agent, suggestion.row.model.as_str()),
+        (ProviderKind::Claude, "claude-opus-5-5")
+    );
+    assert_eq!(suggestion.current, "gpt-6-astra");
+    assert!(suggestion.score >= suggestion.current_score + crate::SUGGEST_MARGIN);
+    // A start still takes the user's order, and nothing wrote the file.
+    let rows = flow.manager.work_rows("Computer use").unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.model.as_str())
+            .collect::<Vec<_>>(),
+        ["gpt-6-astra"]
+    );
+    assert_eq!(rows[0].source, "user");
+    assert_eq!(std::fs::read(&path).unwrap(), written);
+
+    // Dismissed: hidden while the rating is the same, the order still as it was.
+    let mut settings = flow.core.settings();
+    settings
+        .dismissed_suggestions
+        .push(crate::DismissedSuggestion {
+            work: suggestion.work.clone(),
+            agent: suggestion.row.agent,
+            model: suggestion.row.model.clone(),
+            score: suggestion.score,
+        });
+    flow.core.update_settings(settings).await.unwrap();
+    let page = flow.manager.model_rules().unwrap();
+    assert!(page.suggestions.is_empty());
+    assert_eq!(page.rows, vec![mine]);
+    assert_eq!(std::fs::read(&path).unwrap(), written);
 }

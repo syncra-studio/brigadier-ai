@@ -1,6 +1,7 @@
 import { KindOfWorkRow } from "@/app/settings/routing/KindOfWorkRow";
 import { LoadingLine } from "@/app/settings/routing/LoadingLine";
 import { MoreRowHead } from "@/app/settings/routing/MoreRowHead";
+import { RESEARCH_ROW, ResearchRow } from "@/app/settings/routing/ResearchRow";
 import { StepsList } from "@/app/settings/routing/StepsList";
 import { StrengthRow } from "@/app/settings/routing/StrengthRow";
 import { rankedFor, strengthFor } from "@/app/settings/routing/words";
@@ -14,6 +15,7 @@ import { useUsage } from "@/state/usage";
 
 /** More's rows, for the page and Settings search. */
 export const MORE_ROWS = {
+  research: RESEARCH_ROW,
   strength: { label: "Model strength", description: "How good each model is at a kind of work, out of 10" },
   steps: {
     label: "How a model is picked",
@@ -30,8 +32,8 @@ export const MORE_ROWS = {
 export type MoreRow = "strength" | "steps" | null;
 
 /**
- * More: Model strength (the models ranked for one kind of work) and How a
- * model is picked, each opening in place.
+ * More: the daily ratings research (its time and last run), Model strength (the models ranked
+ * for one kind of work) and How a model is picked, each opening in place.
  */
 export function More({
   open,
@@ -40,6 +42,7 @@ export function More({
   onCategory,
   rules,
   groups,
+  now,
 }: {
   open: MoreRow;
   onOpen: (row: MoreRow) => void;
@@ -49,6 +52,8 @@ export function More({
   /** The rules file, for How a model is picked's example. */
   rules: ModelRules | null;
   groups: readonly ModelGroup[];
+  /** The clock, for how long ago the research ran. */
+  now: number;
 }) {
   const view = useUsage((s) => s.view);
   const availability = useApp((s) => s.settings);
@@ -64,6 +69,7 @@ export function More({
   return (
     <SettingsSection title="More">
       <SettingsCard inset data-slot="routing-more">
+        <ResearchRow refresh={rules?.research ?? null} now={now} groups={groups} />
         <MoreRowHead
           row={MORE_ROWS.strength}
           icon={<SpeedometerLatencySpeed aria-hidden />}

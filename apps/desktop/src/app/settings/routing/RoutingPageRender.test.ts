@@ -20,7 +20,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "RoutingWhich agent, model and effort suit each kind of work. Changes apply to new work only.Refresh models",
   );
   assert.deepEqual((seen.sections as string[]).slice(-3), ["Who does what", "Rules", "More"]);
-  assert.equal(seen.sources, "Automatic picks ship with the app. Model strength, below, is rated from release notes and benchmarks, checked daily, and adjusted by how each model did in your sessions.");
+  assert.equal(seen.sources, "Automatic uses the best-rated models, from ratings researched every day. Your own order is never changed: a better-rated model only shows up as a suggestion.");
   assert.equal(seen.rulesDescription, "Things every session must follow, in your own words.");
   // Who does what: the shipped rows (Automatic), the user's order replacing its shipped one, then the user's own kind.
   const kinds = [
@@ -37,13 +37,13 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   ];
   assert.deepEqual(seen.kinds, kinds);
   // Each rule is one plain sentence.
-  const rules = ["Never give Fable work", "Never go above High effort"];
+  const rules = ["Never use Fable", "Never go above High effort"];
   assert.deepEqual(seen.rules, rules);
   assert.equal(seen.openAtStart, 0);
   assert.equal(seen.readsAtOpen, 1);
   // A shipped kind opened in place: Automatic, the shipped model picked now; My order copies it into the file.
   assert.equal(seen.mode, "Automatic");
-  assert.equal(seen.whoPicks, "Who picksAutomatic advice, updated with each releaseAutomaticMy order");
+  assert.equal(seen.whoPicks, "Who picksAutomatic: set by the app, always a current modelAutomaticMy order");
   assert.equal(seen.shipped, "1Opus 5.5 · HighPicked nowStrong default for work that needs judgment across a codebase.");
   const architecture = {
     work: "Architecture and broad changes",
@@ -108,7 +108,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   // What Brigadier will save, before it is saved.
   assert.equal(
     seen.read,
-    "Brigadier will: Never go above High effortBrigadier will: Never use Sonnet 5.5 for Adversarial reviewSaved as advice: Prefer Codex when Claude is busy",
+    "Brigadier will: Never go above High effortBrigadier will: Never use Sonnet for Adversarial reviewSaved as advice: Prefer Codex when Claude is busy",
   );
   assert.equal(seen.writesBeforeAdd, 7);
   // Added: the file gets the new rules after the old (one it had already, once), the box closes, Undo takes them back.
@@ -119,7 +119,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     { type: "forbid", names: ["sonnet"], work: "Adversarial review" },
     { type: "advice", text: "Prefer Codex when Claude is busy" },
   ]);
-  assert.deepEqual(seen.rulesAfterAdd, [...rules, "Never use Sonnet 5.5 for Adversarial review", "Prefer Codex when Claude is busyadvice"]);
+  assert.deepEqual(seen.rulesAfterAdd, [...rules, "Never use Sonnet for Adversarial review", "Prefer Codex when Claude is busyadvice"]);
   assert.deepEqual(seen.toast, ["Rules added", "Undo"]);
   assert.deepEqual(seen.rulesAfterUndo, rules);
   // The file edited by hand shows when the page opens again: an order of two, a rule for one work
@@ -131,13 +131,13 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   ]);
   // A rule that stops a kind of work from starting says so, in one line under it.
   const stopsArchitecture = "Architecture and broad changes can't start: this rule keeps out Opus 5.5.";
-  const stopsReview = "Adversarial review can't start: it needs High, and this rule keeps Opus 5.5 at Medium.";
+  const stopsReview = "Reviews Codex's work: it needs High, and this rule keeps Opus at Medium.";
   assert.deepEqual(seen.rulesAfterHandEdit, [
     ...rules,
     "Only use GPT-6 on Codex",
-    `Never use Opus 5.5 for Architecture and broad changes${stopsArchitecture}`,
-    "Never use Sonnet 5.5 for Docs",
-    `Never run Opus 5.5 above Medium${stopsReview}`,
+    `Never use Opus for Architecture and broad changes${stopsArchitecture}`,
+    "Never use Sonnet for Docs",
+    `Never run Opus above Medium${stopsReview}`,
     "Adversarial review never below High",
     "Prefer Codex when Claude is busyadvice",
   ]);
@@ -154,7 +154,22 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "3AutomaticWith no order of your own, it takes the first model of the automatic advice that your rules allow.",
     "4Your rulesLast, your rules check the result: an effort above a cap or below a minimum runs at that limit instead, and a model they keep out is refused, so the worker doesn't start. Your rules win over everything above.",
   ]);
-  assert.equal(seen.stepsExample, "For example, Conversation titles: your rules keep GPT-6 Luna out, so Haiku, next in the automatic advice, runs.");  assert.equal(seen.strengthClosed, true);
+  assert.equal(seen.stepsExample, "For example, Conversation titles: your rules keep GPT-6 Luna out, so Haiku, next in the automatic advice, runs.");
+  assert.equal(seen.strengthClosed, true);
+  // The daily ratings research: when it last ran and on what model.
+  assert.equal(seen.researchRow, "Daily ratings researchLast ran 3 hours ago on Sonnet 5.5 · 1 model re-rated");
+  // A better-rated model for an order of yours is a line on its row; showing it writes nothing.
+  assert.equal(seen.suggestion, "GPT-6 now rates higher for Bounded implementation · 9.0 against Sonnet 5.5's 8.5Use itDismiss");
+  assert.equal(seen.suggestionKinds, 1);
+  // Dismissed: hidden at this rating, and your order is as it was.
+  assert.deepEqual(seen.dismissed, [{ work: "Bounded implementation", agent: "codex", model: "gpt-6", score: 9 }]);
+  assert.equal(seen.suggestionAfterDismiss, 0);
+  assert.equal(seen.writesAfterDismiss, seen.writesBeforeSuggestion);
+  // Its rating changed again: back. Use it puts it first in your order, the one write.
+  assert.equal(seen.suggestionBack, "GPT-6 now rates higher for Bounded implementation · 9.5 against Sonnet 5.5's 8.5Use itDismiss");
+  assert.equal(seen.writesAfterUse, (seen.writesBeforeSuggestion as number) + 1);
+  assert.deepEqual(seen.orderAfterUse, ["codex/gpt-6/high", "claude/sonnet/medium"]);
+  assert.equal(seen.suggestionAfterUse, 0);
   assert.deepEqual(seen.strength, [
     "1Opus 5.5Frontier9.1",
     "2GPT-6Frontier9.0",

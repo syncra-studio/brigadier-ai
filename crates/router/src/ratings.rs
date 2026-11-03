@@ -411,6 +411,41 @@ mod tests {
         );
     }
 
+    /// A model that inherits a family entry (`gpt-6.1-terra` from `gpt-5.6-terra`'s) is
+    /// researched as itself: its patch is accepted and changes it, never the entry's own model.
+    #[test]
+    fn a_patch_for_an_inheriting_model_is_accepted_for_that_model_only() {
+        let mut models = merge(
+            &Registry::bundled(),
+            &[(
+                ProviderKind::Codex,
+                &[info("gpt-6.1-terra", None), info("gpt-5.6-terra", None)],
+            )],
+            &[],
+            &[],
+        );
+        assert_eq!(models[0].status, ModelStatus::Inherited);
+        assert_eq!(models[0].registry_key.as_deref(), Some("codex-terra-5-6"));
+        let before = models[1].clone();
+        let (patches, errors) = validate_patches(
+            &serde_json::json!({"patches":[{"provider":"codex", "model":"gpt-6.1-terra",
+                "sources":["https://example.com/gpt-6.1-terra"], "tier":"strong",
+                "strengths":{"operate":9.5}, "defaultEffort":{"operate":"high"}}]})
+            .to_string(),
+            &models,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        for model in &mut models {
+            for patch in &patches {
+                patch.apply(model);
+            }
+        }
+        assert_eq!(models[0].strengths[&TaskCategory::Operate], 9.5);
+        assert_eq!(models[0].tier, QualityTier::Strong);
+        assert_eq!(models[0].default_effort[&TaskCategory::Operate], "high");
+        assert_eq!(models[1], before);
+    }
+
     #[test]
     fn sourced_unknown_replaces_bounded_note_but_keeps_trial() {
         let note = ResearchNote {

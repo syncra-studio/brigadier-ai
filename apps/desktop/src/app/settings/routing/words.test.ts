@@ -8,12 +8,14 @@ import type { GuidanceRow } from "@/ipc/generated";
 // The words need the model names lib/routing reads through the app's modules: loaded by Vite.
 let server: ViteDevServer;
 let withFirst: typeof Words.withFirst;
+let withDismissed: typeof Words.withDismissed;
+let automaticLine: typeof Words.automaticLine;
 before(async () => {
   const globals = globalThis as Record<string, unknown>;
   globals.document ??= { documentElement: {} };
   globals.getComputedStyle ??= () => ({ getPropertyValue: () => "" });
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ withFirst } = (await server.ssrLoadModule("/src/app/settings/routing/words.ts")) as typeof Words);
+  ({ automaticLine, withFirst, withDismissed } = (await server.ssrLoadModule("/src/app/settings/routing/words.ts")) as typeof Words);
 });
 after(() => server.close());
 
@@ -26,4 +28,22 @@ test("a picked model goes first in the order, the others kept after it", () => {
   // A model already in the order moves up, keeping its effort.
   assert.deepEqual(withFirst(order, row("codex", "default")), [order[1], order[0]]);
   assert.deepEqual(withFirst([], row("claude", "sonnet")), [row("claude", "sonnet")]);
+});
+
+const suggestion = (score: number) => ({ work: "Computer use", row: row("codex", "gpt-6.1-terra", "high"), score, current: "opus", currentScore: 9 });
+
+test("Who picks says the ratings only for a kind they pick", () => {
+  const rated = { ...row("claude", "opus", "high"), work: "Adversarial review", reason: "Rated 9.0 of 10 for this work: Claude Code's best model by the ratings." };
+  const own = { ...row("claude", "sonnet", "medium"), work: "Rule reading", reason: "Rewrites the rules you type into exact rules and advice." };
+  const kind = (found: GuidanceRow) => ({ work: found.work, rows: [found], shipped: [found], mine: [] });
+  assert.equal(automaticLine(kind(rated)), "Automatic: the best-rated models, researched daily");
+  assert.equal(automaticLine(kind(own)), "Automatic: set by the app, always a current model");
+});
+
+// Dismiss keeps one entry per kind of work and model, at the rating it was dismissed at.
+test("a dismissed suggestion is kept once, at its latest rating", () => {
+  const other = { work: "Independent review", agent: "codex" as const, model: "gpt-6-astra", score: 9.5 };
+  const once = withDismissed([other], suggestion(9.6));
+  assert.deepEqual(once, [other, { work: "Computer use", agent: "codex", model: "gpt-6.1-terra", score: 9.6 }]);
+  assert.deepEqual(withDismissed(once, suggestion(9.8)), [other, { work: "Computer use", agent: "codex", model: "gpt-6.1-terra", score: 9.8 }]);
 });

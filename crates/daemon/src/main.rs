@@ -370,6 +370,7 @@ async fn run(
         stopping.clone(),
     ));
     supervisor.spawn(registry::keep_current(daemon.clone(), stopping.clone()));
+    supervisor.spawn(registry::keep_researched(daemon.clone(), stopping.clone()));
     supervisor.spawn(updates::keep_current(daemon.clone(), stopping.clone()));
     tracing::info!("brigadierd ready");
 

@@ -79,17 +79,38 @@ directory. The copy is **not signed yet**: its integrity rests on HTTPS from Git
 checks above. Signing arrives in Phase 10 and will use the same minisign key as the app
 updater.
 
-## On-demand ranking research
+## Daily ratings research
 
-The daemon's `refreshRankings` request returns a job id immediately. It checks the published
-registry first, then uses a strong enabled CLI model with read-only web tools to research the
-live catalog. `getRankingsRefresh` reports progress, sources, changed fields and errors;
-`resetRankings` cancels pending research and removes its overlay. `rankings.changed` tells
-clients to reload model summaries and route previews.
+Once a day the daemon researches the ratings itself. It runs at the time set in Settings ›
+Routing (04:00 local time by default). If the computer was asleep or Brigadier was closed at
+that time, it runs at the next start. When it last ran is kept in `cache/registry/research.json`.
+It checks the published registry first. Then the model with the best `research` rating that
+still has quota (Brigadier's own read of its windows, its own model windows included) reads
+current model cards, release notes and benchmarks with read-only web tools. It answers with one
+JSON object of patches, within 15 minutes. If no model can run, the research is tried again
+within the hour. `getRankingsRefresh` reports the latest job: its state, the model that ran it,
+the changed fields with their sources, the errors, and the kinds of work it found a better model
+for. `resetRankings` cancels a running research and removes its overlay. `rankings.changed`
+tells clients to reload model summaries, Settings › Routing and the research's news.
 
-Sourced patches may change only tier, category strengths, area modifiers and supported category
-default efforts. They identify a provider and concrete model, never a family. They live in
-`cache/registry/overlay.json`, independently of the published cache and ETag, and apply only
-at their host-captured base revision. A newer published or bundled revision supersedes them.
-Invalid or unsourced models keep their previous ratings. Manual rankings, learning, user rules
-and trials for uncurated models continue to apply.
+Sourced patches may change only tier, category strengths (`operate` included, for computer use),
+area modifiers and supported category default efforts. Each names a provider and a concrete
+model of the user's catalogs, never a family key. A model that inherits a family entry (for
+example `gpt-6.1-terra` from `gpt-5.6-terra`'s) is researched and patched as itself, and the
+entry's own model keeps its ratings. A patch with no HTTPS source, an unknown model or an
+out-of-range value is dropped; that model keeps its previous ratings. No vendor's model can raise
+its own vendor's ratings. Accepted patches keep their sources and live in
+`cache/registry/overlay.json`, separately from the published cache and ETag. They apply only at
+their host-captured base revision, so a newer published or bundled revision supersedes them.
+
+Settings › Routing's Automatic picks come from these ratings. For each kind of work, each agent's
+best model takes one row, and the rows go in rating order: architecture by orchestrate and
+design, bounded implementation by implement, review by review, computer use by operate (models
+that take images), fusion consults and fallback by the overall rating. Mechanical changes and
+conversation titles pick among light and standard models only. A kind with nothing rated keeps
+the shipped table (`crates/core/src/manager/models_guidance.md`). The user's own rows in
+`~/.brigadier/models.md` are never changed by the research. When a model rates at least 0.5
+above the first of the user's order for a kind of work, Routing shows a suggestion on that row.
+Use it puts that model first in the order, and that click is the only write. Dismiss hides the
+suggestion until that model's rating changes again. After a research that finds a new suggestion,
+the app shows one toast with View.

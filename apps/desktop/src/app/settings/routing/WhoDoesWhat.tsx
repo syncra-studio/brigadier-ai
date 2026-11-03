@@ -7,7 +7,7 @@ import type { ModelRules } from "@/ipc/generated";
 
 export const WHO_DOES_WHAT = {
   label: "Who does what",
-  description: "Automatic picks ship with the app. Model strength, below, is rated from release notes and benchmarks, checked daily, and adjusted by how each model did in your sessions.",
+  description: "Automatic uses the best-rated models, from ratings researched every day. Your own order is never changed: a better-rated model only shows up as a suggestion.",
 } as const;
 
 /**

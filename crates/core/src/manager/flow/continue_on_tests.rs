@@ -794,18 +794,19 @@ async fn a_move_takes_the_fallback_row_the_rules_allow_and_never_another_model()
     let rules = |text: &str| std::fs::write(flow.manager.models_rules_path(), text).unwrap();
     let pick = |provider| flow.manager.successor_model(provider);
 
-    // The shipped rows: Codex's own default at high, Claude's newest opus at high.
+    // The automatic rows, from the ratings: each agent's strongest model overall, at the
+    // registry's orchestrating effort.
     let codex = pick(ProviderKind::Codex).unwrap();
     assert_eq!(
         (codex.model.as_deref(), codex.effort.as_deref()),
-        (None, Some("high"))
+        (Some("gpt-6-astra"), Some("medium"))
     );
     let claude = pick(ProviderKind::Claude).unwrap();
     assert_eq!(
         claude.model,
         Some(flow.manager.listed_model(ProviderKind::Claude, "opus"))
     );
-    assert_eq!(claude.effort.as_deref(), Some("high"));
+    assert_eq!(claude.effort.as_deref(), Some("medium"));
 
     // The user's rows replace them, in order: a row above the cap runs at the cap (D-L38); a row
     // the rules refuse gives way to the next.

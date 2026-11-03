@@ -71,6 +71,19 @@ impl RefRecords {
         self.with(common, |records| records.branches.keys().cloned().collect())
     }
 
+    /// Forgets everything recorded for `conversation` (its own and its workers' branches, its
+    /// base), in every repository: a deleted session's branches stay deleted, never restored by
+    /// another session's check.
+    pub(crate) fn forget_conversation(&self, conversation: &ConversationId) {
+        let mut repos = self.repos.lock().unwrap_or_else(|p| p.into_inner());
+        for records in repos.values_mut() {
+            records
+                .branches
+                .retain(|_, r| r.conversation != *conversation);
+            records.bases.retain(|_, (owner, _)| owner != conversation);
+        }
+    }
+
     fn with<R>(&self, common: &Path, work: impl FnOnce(&mut RepoRecords) -> R) -> R {
         let mut repos = self.repos.lock().unwrap_or_else(|p| p.into_inner());
         work(repos.entry(common.to_owned()).or_default())

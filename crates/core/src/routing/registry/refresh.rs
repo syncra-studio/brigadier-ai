@@ -31,7 +31,7 @@ pub enum RankingsRefreshState {
 }
 
 /// An accepted model patch and the effective rating fields it changed.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RatingChange {
     /// The CLI provider that lists this model.
@@ -45,7 +45,7 @@ pub struct RatingChange {
 }
 
 /// Refresh progress and findings, with the saved overlay's current applicability.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RankingsRefresh {
     /// The latest job state.
@@ -66,6 +66,10 @@ pub struct RankingsRefresh {
     pub changes: Vec<RatingChange>,
     /// Research failures and reasons individual patches were dropped.
     pub errors: Vec<String>,
+    /// Kinds of work the user ordered for which this research found a better-rated model than
+    /// before it ran (one toast tells of them).
+    #[serde(default)]
+    pub found: Vec<String>,
     /// Whether the saved overlay matches the effective curated revision. Worked out when read,
     /// never saved: overlay.json keeps the job without it.
     #[serde(default)]
@@ -276,6 +280,47 @@ impl RegistryHolder {
         state.running = None;
     }
 
+    /// Records the kinds of work job `id` found a better-rated model for, with the job saved in
+    /// overlay.json when it saved one.
+    pub fn note_found(&self, id: &str, works: Vec<String>) {
+        let mut state = self.state();
+        if state.refresh.job_id.as_deref() != Some(id) {
+            return;
+        }
+        state.refresh.found = works;
+        let job = state.refresh.clone();
+        if let Some(overlay) = state.overlay.as_mut()
+            && overlay.job.job_id.as_deref() == Some(id)
+        {
+            overlay.job = job;
+            let saved = saved_overlay(overlay)
+                .map_err(std::io::Error::other)
+                .and_then(|bytes| self.write_atomic("overlay.json", &bytes));
+            if let Err(error) = saved {
+                tracing::warn!(%error, "the research's findings couldn't be saved");
+            }
+        }
+    }
+
+    /// When the daily ratings research last ran (started), from `research.json`.
+    pub fn research_ran_at(&self) -> Option<i64> {
+        let bytes = std::fs::read(self.dir.join(RESEARCH)).ok()?;
+        serde_json::from_slice::<Ran>(&bytes)
+            .ok()
+            .map(|ran| ran.at_ms)
+    }
+
+    /// Records that the daily ratings research ran at `at_ms`.
+    pub fn note_research_ran(&self, at_ms: i64) -> std::io::Result<()> {
+        let bytes = serde_json::to_vec(&Ran { at_ms }).map_err(std::io::Error::other)?;
+        self.write_atomic(RESEARCH, &bytes)
+    }
+
+    /// Whether a research is admitted and not yet finished.
+    pub fn refresh_running(&self) -> bool {
+        self.state().running.is_some()
+    }
+
     pub fn cancel_refresh(&self) {
         let mut state = self.state();
         if let Some((_, cancel)) = state.running.take() {
@@ -310,6 +355,15 @@ fn saved_overlay(overlay: &Overlay) -> serde_json::Result<Vec<u8>> {
         job.remove("overlayAtMs");
     }
     serde_json::to_vec_pretty(&value)
+}
+
+/// When the daily research last ran, beside the overlay.
+const RESEARCH: &str = "research.json";
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Ran {
+    at_ms: i64,
 }
 
 fn running(state: &super::State, id: &str) -> bool {
