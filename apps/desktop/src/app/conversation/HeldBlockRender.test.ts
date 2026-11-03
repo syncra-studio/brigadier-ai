@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-type Seen = { blocks: number; headers: (string | null)[]; waits: string[][]; steers: string[][] };
+type Seen = { blocks: number; headers: (string | null)[]; waits: string[][]; steers: string[][]; gaps: number[] };
 
 test("messages sent while a block's workers work stay in that one block, which waits for the workers its every turn started until the last finishes", async (t) => {
   const result = JSON.parse(await renderFixturePage(t, "held-block.html", "held-block-result", 10000)) as Record<"bothWork" | "oneWorks" | "done", Seen>;
@@ -18,6 +18,8 @@ test("messages sent while a block's workers work stay in that one block, which w
   assert.match(result.oneWorks.headers[0] ?? "", /^Working for /);
   // One left: named as the Workers card names it (D106).
   assert.deepEqual(result.oneWorks.waits, [["Waiting for Second bug"]]);
+  // The live line sits the rows' 16px gap under what is above it, never tight under it (demo12).
+  assert.deepEqual([result.bothWork.gaps, result.oneWorks.gaps], [[16], [16]]);
   assert.deepEqual(result.done.waits, [[]]);
   // Over: on the clock from its first message to its last turn, the waits for its workers counted.
   assert.equal(result.done.headers[0], "Worked for 5m 2s");

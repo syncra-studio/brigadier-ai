@@ -16,6 +16,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { RETRYING, useBoard } from "@/state/board";
 import { useRevealing } from "@/state/reveal";
 import { KeptScope } from "@/components/conversation";
+import { cn } from "@/lib/utils";
 
 /**
  * The live line of a turn's newest work (`activity`): what it says, whether the work's last
@@ -57,10 +58,15 @@ export function useLiveLine(unjoined: readonly Activity<LeadStep, Entry>[], live
 }
 
 /** The live line under a turn's work and its answer, when no group's row says it. */
-export const TrailingLine: FC<{ activity: readonly Activity<LeadStep, Entry>[]; live: ThreadStatusProps | null; thought: string | null; answered: boolean }> = ({ activity, live, thought, answered }) => {
+export const TrailingLine: FC<{ activity: readonly Activity<LeadStep, Entry>[]; live: ThreadStatusProps | null; thought: string | null; answered: boolean; padded: boolean }> = ({ activity, live, thought, answered, padded }) => {
   const { line, inGroup } = useLiveLine(activity, live, thought, answered);
   if (inGroup || !line) return null;
-  return line.thought && thought !== null ? <ThinkingLine text={thought} /> : <StatusLine head={line} />;
+  // Under anything (a row, a bubble, an answer) the same gap as between rows.
+  return (
+    <div data-slot="trailing-line" className={cn("flex min-w-0 flex-col", padded && "pt-activity")}>
+      {line.thought && thought !== null ? <ThinkingLine text={thought} /> : <StatusLine head={line} />}
+    </div>
+  );
 };
 
 /**

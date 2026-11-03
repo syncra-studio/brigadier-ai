@@ -109,6 +109,13 @@ function seen() {
     waits: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-work-label"], [data-slot="thread-status"], [data-slot="group-live-line"]')]
       .map((line) => line.textContent ?? "").filter((text) => text.startsWith("Waiting"))),
     steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*(?:Yesterday|\d).*$/, "").trim() ?? "")),
+    // The gap over each block's live line, from what shows above it (demo12: one gap everywhere).
+    gaps: blocks.flatMap((block) => {
+      const line = block.querySelector('[data-slot="thread-status"]');
+      let above = line?.closest('[data-slot="trailing-line"]')?.previousElementSibling ?? null;
+      while (above && above.getBoundingClientRect().height === 0) above = above.previousElementSibling;
+      return line && above ? [Math.round(line.getBoundingClientRect().top - above.getBoundingClientRect().bottom)] : [];
+    }),
   };
 }
 

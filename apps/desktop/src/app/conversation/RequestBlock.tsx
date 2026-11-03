@@ -279,7 +279,8 @@ export const RequestBlock: FC = () => {
             <WorkFold open={!foldable || open} clicked={fold.clicked} searched={searched}>
               <div
                 data-slot="request-work"
-                className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}
+                // An empty run pads nothing: the live line under it pads itself.
+                className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && part.items.length > 0 && "pt-activity")}
               >
                 <ActivityItems
                   activity={part.items}
@@ -332,7 +333,8 @@ export const RequestBlock: FC = () => {
             </AnswerDetails.Provider>
           </div>
         )}
-        {liveWork && <TrailingLine activity={liveWork.items} live={status} thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null} answered={answer !== null} />}
+        {liveWork && <TrailingLine activity={liveWork.items} live={status} thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null} answered={answer !== null}
+          padded={header || before.length > 0 || answer !== null || parts.some((part) => part.type === "between" || part.items.length > 0 || !!part.kept?.length)} />}
         {/* A late event's note: a plain short paragraph under the answer, never a new answer. */}
         {updates.map((index) => (
           <div
