@@ -522,25 +522,16 @@ impl SessionManager {
         }
     }
 
-    /// "Title (2)", or the next number free among the source's forks.
+    /// "Fork of ‹title›", numbered "(2)" on when the source has been forked under it before.
     fn fork_title(&self, title: &str) -> String {
-        let base = match title.rsplit_once(" (") {
-            Some((base, number))
-                if number
-                    .strip_suffix(')')
-                    .is_some_and(|n| n.parse::<u32>().is_ok()) =>
-            {
-                base
-            }
-            _ => title,
-        };
+        let base = format!("Fork of {title}");
         let taken = self
             .core
             .catalog()
             .conversations
             .iter()
             .filter_map(|conversation| {
-                let rest = conversation.title.strip_prefix(base)?;
+                let rest = conversation.title.strip_prefix(&base)?;
                 if rest.is_empty() {
                     return Some(1);
                 }
@@ -549,8 +540,10 @@ impl SessionManager {
                     .parse::<u32>()
                     .ok()
             })
-            .max()
-            .unwrap_or(1);
-        format!("{base} ({})", taken.max(1) + 1)
+            .max();
+        match taken {
+            Some(taken) => format!("{base} ({})", taken + 1),
+            None => base,
+        }
     }
 }

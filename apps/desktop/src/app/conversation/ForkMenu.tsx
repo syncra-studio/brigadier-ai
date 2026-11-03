@@ -16,13 +16,13 @@ import { forkConversation } from "@/state/actions";
 export const FORK_PLACES: readonly { place: ForkPlace; title: string; detail: string }[] = [
   {
     place: "workspace",
-    title: "Fork in the same folder",
-    detail: "Fork from this message in this session’s folder",
+    title: "Fork here",
+    detail: "Same folder: keeps working on these files with you",
   },
   {
     place: "newWorktree",
-    title: "Fork in a new worktree",
-    detail: "Fork from this message in a new worktree",
+    title: "Fork to a new worktree",
+    detail: "A separate copy of the files",
   },
 ];
 
@@ -31,9 +31,8 @@ export const FORK_PLACES: readonly { place: ForkPlace; title: string; detail: st
  * (D188), once the worktree is made.
  */
 export function forkPlaces(setup: Setup | null): typeof FORK_PLACES {
-  if (setup?.type !== "session" || setup.environment.type !== "newWorktree") return FORK_PLACES;
-  if (!setup.environment.path) return FORK_PLACES.filter(({ place }) => place === "newWorktree");
-  return FORK_PLACES.map((each) => (each.place === "workspace" ? { ...each, detail: "Fork from this message in this worktree, on the same branch" } : each));
+  if (setup?.type !== "session" || setup.environment.type !== "newWorktree" || setup.environment.path) return FORK_PLACES;
+  return FORK_PLACES.filter(({ place }) => place === "newWorktree");
 }
 
 /**

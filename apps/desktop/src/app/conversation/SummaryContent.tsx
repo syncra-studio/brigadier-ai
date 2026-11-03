@@ -16,6 +16,7 @@ import { gitCommandsKey, mcpKey, usedMcpServers, webUse } from "@/app/conversati
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { AllLinksPopover } from "@/app/conversation/AllLinksPopover";
 import { BranchRow } from "@/app/conversation/BranchRow";
+import { folderSharers } from "@/app/conversation/forks";
 import { PULL_REQUEST_TONES, pullRequestLook } from "@/app/conversation/pullRequestWords";
 import { activePullRequests, activeWaits, completeWait, useTrackedWork, waitingDue } from "@/app/conversation/trackedWork";
 import type { PullRequestStatus } from "@/app/conversation/usePullRequest";
@@ -23,6 +24,7 @@ import { SourceRow } from "@/app/conversation/SourceRow";
 import { hostOf, linksIn, openLink } from "@/app/conversation/summaryLinks";
 import { useKeptScroll } from "@/app/conversation/summaryScroll";
 import {
+  Folder,
   HandRaised,
   Link,
   Paperclip,
@@ -52,7 +54,7 @@ import type {
   WorkerRow,
   WorkerWait,
 } from "@/ipc/generated";
-import { getSessionDiff } from "@/state/actions";
+import { getSessionDiff, openConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread, useSessionMcp, useThreadFact, useWorkerRows } from "@/state/cliThread";
 import { useApp } from "@/state/store";
@@ -477,6 +479,16 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
   </SummaryCard>;
 }
 
+/** "Shares this folder with ‹session›" for each open fork or source working in this session's folder (D211). */
+function SharedFolderRows({ conversation }: { conversation: Conversation }) {
+  const sharers = useApp(useShallow((s) => folderSharers(conversation, s.conversations)));
+  return sharers.map((other) => (
+    <SummaryRowButton key={other.id} data-row="shared-folder" title={other.title} icon={<Folder />} onClick={() => openConversation(other.id)}>
+      Shares this folder with {other.title}
+    </SummaryRowButton>
+  ));
+}
+
 function SessionSummaryContent({
   conversation,
   active,
@@ -515,6 +527,7 @@ function SessionSummaryContent({
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <BranchRow branch={setup.environment.branch} diff={diff} />
+            <SharedFolderRows conversation={conversation} />
 
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />

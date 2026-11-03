@@ -70,8 +70,8 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
   assert.equal(seen.forksAfter, 1);
   // D188: a session in its own worktree forks in that worktree too, on its branch.
   assert.deepEqual(seen.places, {
-    "Fix the login": ["Fork in the same folder", "Fork in a new worktree"],
-    "Tidy the docs": ["Fork in the same folder", "Fork in a new worktree"],
+    "Fix the login": ["Fork here", "Fork to a new worktree"],
+    "Tidy the docs": ["Fork here", "Fork to a new worktree"],
   });
 });
 

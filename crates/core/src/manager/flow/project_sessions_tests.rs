@@ -470,10 +470,12 @@ async fn a_fork_in_the_same_folder_works_beside_its_source() {
         .id;
     let before = flow.core.catalog().conversations.len();
     // Goal 9 (D123): the source still working there doesn't keep its fork out.
-    flow.manager
+    let here = flow
+        .manager
         .fork(local.id.clone(), answer.clone(), ForkPlace::Workspace)
         .await
         .unwrap();
+    assert_eq!(here.title, "Fork of Here");
     assert_eq!(flow.core.catalog().conversations.len(), before + 1);
     // A fork on a worktree of its own remains available.
     let fork = flow
@@ -481,6 +483,7 @@ async fn a_fork_in_the_same_folder_works_beside_its_source() {
         .fork(local.id.clone(), answer, ForkPlace::NewWorktree)
         .await
         .unwrap();
+    assert_eq!(fork.title, "Fork of Here (2)");
     assert!(matches!(
         fork.setup,
         Some(Setup::Session {

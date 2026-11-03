@@ -2,7 +2,7 @@ import { memo, useEffect, useState, type ComponentType, type MouseEvent } from "
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { NavRow } from "@/components/controls/nav-row";
-import { Archive, Pencil, Pin, Trash, Unpin } from "@/components/icons";
+import { Archive, BranchAlt, Pencil, Pin, Trash, Unpin } from "@/components/icons";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { RowAction, RowActionsSlot } from "@/components/shared/row-action";
 import { SessionStatusLabel, SidebarActivityMark, SidebarError } from "@/components/shared/session-status";
@@ -66,11 +66,14 @@ export const ConversationRow = memo(function ConversationRow({
   active,
   actions,
   nested = false,
+  forked = false,
 }: {
   conversation: Conversation;
   active: boolean;
   actions: RowActions;
   nested?: boolean;
+  /** Drawn under its source: a little further in, after the fork icon (D211). */
+  forked?: boolean;
 }) {
   const title = conversation.title;
   const pinned = conversation.pinnedAtMs !== null;
@@ -110,7 +113,8 @@ export const ConversationRow = memo(function ConversationRow({
             className={cn(
               "data-[selected=true]:bg-link/20 data-[selected=true]:text-foreground pe-1.5",
               roomForActions,
-              nested && "ps-8",
+              nested && (forked ? "ps-10" : "ps-8"),
+              !nested && forked && "ps-4",
               !picked && "group-hover/row:bg-foreground/8",
             )}
             onClick={(event) => {
@@ -118,6 +122,7 @@ export const ConversationRow = memo(function ConversationRow({
             }}
           >
             <SidebarError conversationId={conversation.id} />
+            {forked && <BranchAlt aria-label="Fork" className="text-muted-foreground size-icon-sm" />}
             {/* A title too long for its row fades out at the end; beside a state word it ends in "…"
                  instead, so the word never reads as covering it. */}
             <span data-slot="row-title" className={cn("mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap", besideStatus)}>

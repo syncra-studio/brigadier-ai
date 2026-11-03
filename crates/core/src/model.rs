@@ -535,7 +535,7 @@ pub struct Conversation {
     pub setup: Option<Setup>,
     #[serde(default)]
     pub lifecycle: Lifecycle,
-    /// Set for a fork: where it continues from ("Continued from chat").
+    /// Set for a fork: where it continues from ("Forked from ‹source›").
     #[serde(default)]
     pub forked_from: Option<ForkOrigin>,
     /// Set for a side chat: the conversation it sits beside, whose latest messages go along

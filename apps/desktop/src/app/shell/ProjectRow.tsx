@@ -11,6 +11,12 @@ import { select, setProjectExpanded } from "@/state/actions";
 import { exportProjectConventions } from "@/state/brain";
 import { useApp } from "@/state/store";
 
+/** Whether `conversation` is a fork drawn under its source in `list` (D211). */
+export function underSource(conversation: Conversation, list: readonly Conversation[]): boolean {
+  const from = conversation.forkedFrom?.conversationId;
+  return from !== undefined && list.some((other) => other.id === from);
+}
+
 /**
  * A project in the sidebar: its folder and name, folding its sessions away; on hover its menu
  * (New session, Project settings…, Reveal, Export conventions, Remove…) and New session.
@@ -119,6 +125,7 @@ export const ProjectRow = memo(function ProjectRow({
               active={activeId === conversation.id}
               actions={actions}
               nested
+              forked={underSource(conversation, sessions)}
             />
           ))}
           {sessions.length === 0 && <EmptyState as="li" className="ps-8" title="No sessions yet" />}

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { forksUnderSources } from "@/app/conversation/forks";
 import { ChatActions } from "@/app/shell/ChatActions";
 import { TooltipIconButton, NavRow } from "@/components/controls";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
@@ -9,7 +10,7 @@ import { useShortcuts } from "@/app/shortcuts";
 import { openSearch } from "@/app/shell/SearchDialog";
 import { Flyout } from "@/app/shell/Flyout";
 import { NewChatRow } from "@/app/shell/NewChatRow";
-import { ProjectRow } from "@/app/shell/ProjectRow";
+import { ProjectRow, underSource } from "@/app/shell/ProjectRow";
 import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
 import { SidebarHeader } from "@/app/shell/SidebarHeader";
 import {
@@ -83,7 +84,7 @@ function useSections(): Sections {
     const sortedProjects = Object.values(projects).toSorted(
       (a, b) => lastActivity(b) - lastActivity(a),
     );
-    return { pinned, chats, projects: sortedProjects, sessions };
+    return { pinned, chats: forksUnderSources(chats), projects: sortedProjects, sessions };
   }, [projects, conversations]);
   // What the list shows is what is opened next: read ahead so it opens at once.
   useEffect(() => prewarmConversations(conversations), [conversations]);
@@ -109,8 +110,10 @@ function useInboxSections(): Sections {
     const ordered: Record<string, Conversation[]> = {};
     for (const [projectId, list] of Object.entries(sessions)) {
       const first = list.filter((conversation) => needing.has(conversation.id));
-      ordered[projectId] =
-        first.length > 0 ? [...first, ...list.filter((conversation) => !needing.has(conversation.id))] : list;
+      // A fork sits under its source all the same (D211).
+      ordered[projectId] = forksUnderSources(
+        first.length > 0 ? [...first, ...list.filter((conversation) => !needing.has(conversation.id))] : list,
+      );
     }
     return { ...sections, sessions: ordered };
   }, [sections, sessions, ids, needs]);
@@ -295,6 +298,7 @@ export function AppSidebar() {
                 conversation={conversation}
                 active={conversation.id === activeId}
                 actions={actions}
+                forked={underSource(conversation, chats)}
               />
             ))}
             {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
