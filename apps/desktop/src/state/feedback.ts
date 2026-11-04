@@ -13,6 +13,7 @@ import {
   writeUp,
 } from "@/lib/feedbackSend";
 import type { FeedbackDetails, FeedbackKind } from "@/lib/feedbackUrl";
+import { readOrder } from "@/lib/readOrder";
 import { useApp } from "@/state/store";
 import { cliFacts } from "@/lib/providerKinds";
 
@@ -282,44 +283,115 @@ function setOffer(id: string, next: { written?: FeedbackWriteUp | null; sending:
   if (next.sending.phase === "done") forgetWriteUp(id);
 }
 
-/** Where an offer's write-up is kept, so a restart shows it instead of writing it up again. */
-const writeUpKey = (id: string) => `brigadier.feedbackOffer.${id}`;
+/**
+ * Where an offer's write-up is kept, so a restart shows it instead of writing it up again: under
+ * its session, so the write-ups of a session that goes can be found and go with it (#721).
+ */
+const WRITE_UPS = "brigadier.feedbackOffer.";
+const writeUpKey = (conversationId: string, id: string) => `${WRITE_UPS}${conversationId}.${id}`;
+/** Where one was kept before it was kept under its session; moved when its card shows. */
+const oldWriteUpKey = (id: string) => `${WRITE_UPS}${id}`;
+
+/** Each offer drafted in this run, its session by offer id. */
+const offerSessions = new Map<string, string>();
+/** A write-up answering after its session went is not kept. */
+const writeUps = readOrder();
 
 /** The kept write-up (`null`: no writer could run, so its own text goes in one form); `undefined` when none is kept. */
-function keptWriteUp(id: string): FeedbackWriteUp | null | undefined {
+function keptWriteUp(conversationId: string, id: string): FeedbackWriteUp | null | undefined {
   try {
-    const stored = localStorage.getItem(writeUpKey(id));
+    let stored = localStorage.getItem(writeUpKey(conversationId, id));
+    const old = stored === null ? localStorage.getItem(oldWriteUpKey(id)) : null;
+    if (old !== null) {
+      localStorage.setItem(writeUpKey(conversationId, id), old);
+      localStorage.removeItem(oldWriteUpKey(id));
+      stored = old;
+    }
     return stored === null ? undefined : (JSON.parse(stored) as FeedbackWriteUp | null);
   } catch {
     return undefined;
   }
 }
 
-function keepWriteUp(id: string, written: FeedbackWriteUp | null): void {
+function keepWriteUp(conversationId: string, id: string, written: FeedbackWriteUp | null): void {
   try {
-    localStorage.setItem(writeUpKey(id), JSON.stringify(written));
+    localStorage.setItem(writeUpKey(conversationId, id), JSON.stringify(written));
   } catch {
     // Storage can be full or unavailable; a restart then writes it up again.
   }
 }
 
 function forgetWriteUp(id: string): void {
+  const conversationId = offerSessions.get(id);
   try {
-    localStorage.removeItem(writeUpKey(id));
+    if (conversationId !== undefined) localStorage.removeItem(writeUpKey(conversationId, id));
+    localStorage.removeItem(oldWriteUpKey(id));
   } catch {
     // Nothing kept.
   }
 }
 
-/** Writes the offer `id`'s `text` up as reports, once (across restarts too). */
-export function draftOffer(id: string, text: string): void {
+/** The keys of the write-ups kept, each with its session; none from before they were kept under one. */
+function keptWriteUps(): { key: string; conversationId: string; id: string }[] {
+  try {
+    const kept = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(WRITE_UPS)) continue;
+      const rest = key.slice(WRITE_UPS.length);
+      const dot = rest.lastIndexOf(".");
+      if (dot > 0) kept.push({ key, conversationId: rest.slice(0, dot), id: rest.slice(dot + 1) });
+    }
+    return kept;
+  } catch {
+    return [];
+  }
+}
+
+/** Sessions `gone` went (deleted, or their project removed): their write-ups go, kept or under way. */
+function forgetSessions(gone: ReadonlySet<string>): void {
+  const offers = [...offerSessions].filter(([, conversationId]) => gone.has(conversationId)).map(([id]) => id);
+  for (const id of offers) {
+    writeUps.change(id);
+    offerSessions.delete(id);
+  }
+  if (offers.length > 0) {
+    const { ...rest } = useFeedbackOffers.getState();
+    for (const id of offers) delete rest[id];
+    useFeedbackOffers.setState(rest, true);
+  }
+  try {
+    for (const { key, conversationId } of keptWriteUps()) if (gone.has(conversationId)) localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable: nothing to clear.
+  }
+}
+
+// A session's row leaving the catalog is the session gone; an archived one keeps its row. Once
+// the catalog first loads, write-ups of sessions not in it (gone while the app was closed, or a
+// tab's chat, which goes without a word) go too.
+useApp.subscribe((state, before) => {
+  if (!state.catalogLoaded) return;
+  if (!before.catalogLoaded) {
+    forgetSessions(new Set(keptWriteUps().map(({ conversationId }) => conversationId).filter((id) => !state.conversations[id])));
+  } else if (state.conversations !== before.conversations) {
+    const gone = new Set(Object.keys(before.conversations).filter((id) => !state.conversations[id]));
+    if (gone.size > 0) forgetSessions(gone);
+  }
+});
+
+/** Writes the offer `id` of session `conversationId` up as reports from its `text`, once (across restarts too). */
+export function draftOffer(conversationId: string, id: string, text: string): void {
   if (useFeedbackOffers.getState()[id]) return;
-  const kept = keptWriteUp(id);
+  offerSessions.set(id, conversationId);
+  const kept = keptWriteUp(conversationId, id);
   if (kept !== undefined) return setOffer(id, { written: kept, sending: { phase: "write" } });
   setOffer(id, { sending: { phase: "working", step: { step: "writing" } } });
+  const current = writeUps.read(id);
   void writeUp(text).then((written) => {
+    if (!current()) return;
     // Kept even when no writer could run: a finished card never writes again after a restart (D216).
-    keepWriteUp(id, written);
+    keepWriteUp(conversationId, id, written);
     setOffer(id, { written, sending: { phase: "write" } });
   });
 }
@@ -373,6 +445,8 @@ export function openOfferSignIn(id: string): void {
  */
 export function dismissOffer(id: string): void {
   forgetWriteUp(id);
+  // A write-up still under way isn't kept once it ends.
+  writeUps.change(id);
   const phase = useFeedbackOffers.getState()[id]?.sending.phase;
   if (phase === "working") return;
   offersSignIn?.shows.delete(id);

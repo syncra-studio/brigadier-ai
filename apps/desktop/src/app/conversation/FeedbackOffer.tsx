@@ -257,8 +257,8 @@ export function FeedbackOffer({ id, kind, title, body }: { id: string; kind: Fee
   const text = `${title}\n\n${body}`;
   const open = ended && conversationId !== null && said === null;
   useEffect(() => {
-    if (open) draftOffer(id, text);
-  }, [open, id, text]);
+    if (open && conversationId) draftOffer(conversationId, id, text);
+  }, [open, conversationId, id, text]);
   if (!ended || !conversationId || said === false) return null;
   const answerWith = (value: boolean, results?: FeedbackResult[]) =>
     answerFeedbackOffer(conversationId, id, value, results && sentOf(results)).then(() => setAnswer(value));
