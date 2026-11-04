@@ -63,6 +63,9 @@ struct Lease {
 }
 
 const LEASE_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// The largest request body forwarded upstream. Each is one JSON-RPC message; this matches the
+/// largest message Brigadier's own IPC frames carry (`brigadier_ipc::MAX_FRAME_BYTES`).
+const MAX_REQUEST: usize = 16 * 1024 * 1024;
 
 pub struct SessionLease {
     gateway: std::sync::Weak<McpGatewayService>,
@@ -469,6 +472,7 @@ impl McpGatewayService {
         )
         .await
         .map(Some)
+        .map_err(oauth::TokenError::message)
     }
     /// Stop a browser flow without revoking or deleting any saved credentials.
     pub async fn cancel_sign_in(&self, resource: &str) -> CatalogSignIn {
@@ -565,48 +569,111 @@ impl McpGatewayService {
             return Err(StatusCode::UNAUTHORIZED);
         };
         if grant.expires_at <= oauth::now().saturating_add(15) {
-            let Some(refresh) = grant.refresh_token.clone() else {
+            match self
+                .renew(&entry, &mut credentials, resource, grant.clone())
+                .await
+            {
+                Renewal::Renewed(renewed) => grant = renewed,
+                // The token server is out of reach, but the access token has a moment left.
+                Renewal::Kept if grant.expires_at > oauth::now() => {}
+                Renewal::Kept | Renewal::Unsaved => return Err(StatusCode::SERVICE_UNAVAILABLE),
+                Renewal::SignedOut => return Err(StatusCode::UNAUTHORIZED),
+            }
+        }
+        Ok((grant.access_token, credentials.streams.clone()))
+    }
+    /// Renews `grant` with its refresh token, under the resource's lock. Only a grant with no
+    /// refresh token, or one the authorization server refuses, ends the sign-in; an outage
+    /// keeps the stored grant for a later request to renew.
+    async fn renew(
+        &self,
+        entry: &Resource,
+        credentials: &mut Credentials,
+        resource: &str,
+        grant: Grant,
+    ) -> Renewal {
+        let result = match grant.refresh_token.clone() {
+            None => Err(oauth::TokenError::Rejected),
+            Some(refresh) => {
+                oauth::exchange(
+                    &self.client,
+                    resource,
+                    grant,
+                    vec![
+                        ("grant_type", "refresh_token".into()),
+                        ("refresh_token", refresh),
+                    ],
+                )
+                .await
+            }
+        };
+        let grant = match result {
+            Ok(grant) => grant,
+            Err(oauth::TokenError::Unavailable(_)) => return Renewal::Kept,
+            Err(oauth::TokenError::Rejected) => {
                 credentials.grant = None;
                 credentials.state = CatalogSignIn::SignedOut;
                 credentials.streams.cancel();
                 entry.granted.store(false, Ordering::Release);
                 self.prompt_cache.invalidate(resource);
                 let _ = self.store.delete(resource);
-                return Err(StatusCode::UNAUTHORIZED);
-            };
-            let result = oauth::exchange(
-                &self.client,
-                resource,
-                grant,
-                vec![
-                    ("grant_type", "refresh_token".into()),
-                    ("refresh_token", refresh),
-                ],
-            )
-            .await;
-            grant = match result {
-                Ok(grant) => grant,
-                Err(_) => {
-                    credentials.grant = None;
-                    credentials.state = CatalogSignIn::SignedOut;
-                    credentials.streams.cancel();
-                    entry.granted.store(false, Ordering::Release);
-                    self.prompt_cache.invalidate(resource);
-                    let _ = self.store.delete(resource);
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
-            };
-            // Never publish a rotated access token before its corresponding refresh token
-            // has been durably replaced. Hold the authority lock across refresh and commit.
-            credentials.grant = None;
-            credentials.pending = Some(grant.clone());
-            self.store
-                .save(resource, &grant)
-                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-            credentials.grant = credentials.pending.take();
+                return Renewal::SignedOut;
+            }
+        };
+        // Never publish a rotated access token before its corresponding refresh token
+        // has been durably replaced. Hold the authority lock across refresh and commit.
+        credentials.grant = None;
+        credentials.pending = Some(grant.clone());
+        if self.store.save(resource, &grant).is_err() {
+            return Renewal::Unsaved;
         }
-        Ok((grant.access_token, credentials.streams.clone()))
+        credentials.grant = credentials.pending.take();
+        Renewal::Renewed(grant)
     }
+    /// After the upstream refused `rejected` with a 401: the bearer to retry with, renewed
+    /// with the refresh token unless another request already did. None when there is none to
+    /// try; the grant is deleted only when the authorization server refuses it.
+    async fn retry_bearer(
+        &self,
+        resource: &str,
+        rejected: &str,
+        generation: Option<u64>,
+    ) -> Option<(String, CancellationToken)> {
+        let entry = self.resource(resource);
+        let mut credentials = entry.credentials.lock().await;
+        if generation
+            .is_some_and(|generation| entry.grant_generation.load(Ordering::Acquire) != generation)
+            || credentials.pending.is_some()
+        {
+            return None;
+        }
+        let grant = credentials.grant.clone()?;
+        if grant.access_token != rejected {
+            return Some((grant.access_token, credentials.streams.clone()));
+        }
+        match self.renew(&entry, &mut credentials, resource, grant).await {
+            Renewal::Renewed(grant) => Some((grant.access_token, credentials.streams.clone())),
+            Renewal::Kept => {
+                // The next request renews before it uses this grant again.
+                if let Some(grant) = credentials.grant.as_mut() {
+                    grant.expires_at = 0;
+                }
+                None
+            }
+            Renewal::Unsaved | Renewal::SignedOut => None,
+        }
+    }
+}
+
+/// What renewing a grant left.
+enum Renewal {
+    Renewed(Grant),
+    /// No confirmed refusal (an outage, an unknown answer): the grant stays as it was.
+    Kept,
+    /// Renewed, but the rotated grant isn't saved yet: it waits as `pending`.
+    Unsaved,
+    /// Refused, or nothing to renew with: the grant is deleted.
+    SignedOut,
 }
 impl Gateway for McpGatewayService {
     fn endpoint(&self, row_id: &str, resource: &str) -> Option<McpGateway> {
@@ -731,31 +798,45 @@ async fn proxy(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let (parts, body) = request.into_parts();
-    let mut upstream = gateway.client.request(parts.method, &resource);
-    for (name, value) in &parts.headers {
-        if !hop_header(name.as_str())
-            && name != SECRET_HEADER
-            && name != "authorization"
-            && name != "cookie"
-        {
-            upstream = upstream.header(name, value);
+    // Held whole, so a request the upstream refused can go again with a renewed bearer.
+    let body = axum::body::to_bytes(body, MAX_REQUEST)
+        .await
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
+    let send = |bearer: &str| {
+        let mut upstream = gateway.client.request(parts.method.clone(), &resource);
+        for (name, value) in &parts.headers {
+            if !hop_header(name.as_str())
+                && name != SECRET_HEADER
+                && name != "authorization"
+                && name != "cookie"
+            {
+                upstream = upstream.header(name, value);
+            }
+        }
+        upstream.bearer_auth(bearer).body(body.clone()).send()
+    };
+    let mut response = send(&bearer).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let mut cancelled = cancelled;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let retry = gateway
+            .retry_bearer(&resource, &bearer, Some(generation))
+            .await
+            .filter(|_| entry.grant_generation.load(Ordering::Acquire) == generation);
+        if let Some((renewed, renewed_cancelled)) = retry {
+            response = send(&renewed).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+            cancelled = renewed_cancelled;
+            if response.status() == StatusCode::UNAUTHORIZED {
+                // Even a freshly issued bearer is refused: the upstream won't take this grant.
+                gateway
+                    .reject_bearer_for_grant(&resource, &renewed, Some(generation))
+                    .await;
+            }
+        }
+        if response.status() == StatusCode::UNAUTHORIZED {
+            // Forward the upstream 401, including its challenge/body.
+            cancelled = CancellationToken::new();
         }
     }
-    let response = upstream
-        .bearer_auth(&bearer)
-        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
-        .send()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    let cancelled = if response.status() == StatusCode::UNAUTHORIZED {
-        gateway
-            .reject_bearer_for_grant(&resource, &bearer, Some(generation))
-            .await;
-        // Forward the upstream 401, including its challenge/body, after revoking the grant.
-        CancellationToken::new()
-    } else {
-        cancelled
-    };
     let mut downstream = Response::builder().status(response.status());
     for (name, value) in response.headers() {
         if !hop_header(name.as_str()) && name != "set-cookie" && name != SECRET_HEADER {

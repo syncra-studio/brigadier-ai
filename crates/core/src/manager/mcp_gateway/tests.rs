@@ -193,6 +193,12 @@ struct FixtureState {
     prompt_blocked: AtomicBool,
     prompt_release: tokio::sync::Notify,
     prompt_sse: AtomicBool,
+    /// The token endpoint's answer to a refresh instead of a new grant: status, content type
+    /// and body.
+    refresh_failure: Mutex<Option<(u16, &'static str, &'static str)>>,
+    /// The MCP endpoint refuses its next request's bearer, as if the access token had been
+    /// withdrawn early while its refresh token stays good.
+    reject_next: AtomicBool,
 }
 pub(crate) struct Fixture {
     state: Arc<FixtureState>,
@@ -340,9 +346,25 @@ async fn authorize(
 async fn token(
     State(state): State<Arc<FixtureState>>,
     Form(form): Form<HashMap<String, String>>,
-) -> Json<Value> {
+) -> Response<Body> {
     assert_eq!(form["client_id"], "brigadier-fixture-client");
     assert_eq!(form["resource"], format!("{}/mcp", state.origin));
+    if form["grant_type"] == "refresh_token" {
+        let failure = *state.refresh_failure.lock().unwrap();
+        // A revoked grant's refresh token is refused too.
+        let failure = failure.or(state.revoked.load(Ordering::SeqCst).then_some((
+            400,
+            "application/json",
+            r#"{"error":"invalid_grant"}"#,
+        )));
+        if let Some((status, kind, body)) = failure {
+            return Response::builder()
+                .status(status)
+                .header("content-type", kind)
+                .body(Body::from(body))
+                .unwrap();
+        }
+    }
     let rotation = if form["grant_type"] == "authorization_code" {
         assert_eq!(form["code"], "fixture-code");
         assert_eq!(form["redirect_uri"], *state.redirect.lock().unwrap());
@@ -360,6 +382,7 @@ async fn token(
     Json(
         json!({"access_token":format!("access-{rotation}"), "refresh_token":format!("refresh-{rotation}"), "expires_in":3600, "token_type":"Bearer"}),
     )
+    .into_response()
 }
 async fn revoke(
     State(state): State<Arc<FixtureState>>,
@@ -378,6 +401,7 @@ async fn mcp(State(state): State<Arc<FixtureState>>, request: Request<Body>) -> 
         .and_then(|value| value.to_str().ok())
         != Some(token.as_str())
         || state.revoked.load(Ordering::SeqCst)
+        || state.reject_next.swap(false, Ordering::SeqCst)
     {
         return Response::builder()
             .status(401)
@@ -400,7 +424,7 @@ async fn mcp(State(state): State<Arc<FixtureState>>, request: Request<Body>) -> 
         .headers()
         .get("mcp-session-id")
         .map(|value| value.to_str().unwrap().to_owned());
-    let body = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+    let body = axum::body::to_bytes(request.into_body(), 2 * MAX_REQUEST)
         .await
         .unwrap();
     state.seen.lock().unwrap().push((
@@ -1403,4 +1427,220 @@ async fn library_only_refusing_server_requires_native_setup_without_running_nati
         );
     }
     flow.stop().await;
+}
+
+/// Sets the in-memory grant's expiry, so the next request renews it (`0`) or keeps it.
+async fn expire_at(gateway: &McpGatewayService, resource: &str, at: u64) {
+    gateway
+        .resource(resource)
+        .credentials
+        .lock()
+        .await
+        .grant
+        .as_mut()
+        .unwrap()
+        .expires_at = at;
+}
+
+async fn tools_list(endpoint: &McpGateway) -> StatusCode {
+    request(&reqwest::Client::new(), endpoint, reqwest::Method::POST)
+        .json(&json!({"id":1,"method":"tools/list"}))
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+fn stored_refresh(store: &MemoryStore, resource: &str) -> Option<String> {
+    store.load(resource).unwrap()?.refresh_token
+}
+
+#[tokio::test]
+async fn mcp_gateway_refresh_outage_keeps_the_sign_in() {
+    let fixture = Fixture::new().await;
+    let resource = fixture.resource();
+    let store = Arc::new(MemoryStore::default());
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let endpoint = gateway.test_endpoint("row", &resource).unwrap();
+    // A token server that is down, a 400 that names no refused credential, an intermediary's
+    // page and an answer that can't be read say nothing about the stored grant.
+    for failure in [
+        (503, "text/plain", "busy"),
+        (500, "application/json", r#"{"error":"server_error"}"#),
+        (
+            400,
+            "application/json",
+            r#"{"error":"invalid_request","error_description":"try later"}"#,
+        ),
+        (403, "text/html", "<html><body>Forbidden</body></html>"),
+        (400, "application/json", "{not json"),
+        (
+            400,
+            "application/json",
+            r#"{"error":"temporarily_unavailable"}"#,
+        ),
+    ] {
+        *fixture.state.refresh_failure.lock().unwrap() = Some(failure);
+        expire_at(&gateway, &resource, 0).await;
+        assert_eq!(
+            tools_list(&endpoint).await,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{failure:?}"
+        );
+        assert_eq!(gateway.status(&resource).await, CatalogSignIn::SignedIn);
+        assert_eq!(
+            stored_refresh(&store, &resource).as_deref(),
+            Some("refresh-0"),
+            "{failure:?}"
+        );
+    }
+    // An access token with a moment left is still used while the token server is down.
+    expire_at(&gateway, &resource, oauth::now() + 5).await;
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+    *fixture.state.refresh_failure.lock().unwrap() = None;
+
+    // No answer at all: the token endpoint can't be reached.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let unreachable = format!("http://{}/token", closed.local_addr().unwrap());
+    drop(closed);
+    let reachable = {
+        let entry = gateway.resource(&resource);
+        let mut credentials = entry.credentials.lock().await;
+        let grant = credentials.grant.as_mut().unwrap();
+        grant.expires_at = 0;
+        std::mem::replace(&mut grant.token_endpoint, unreachable)
+    };
+    assert_eq!(tools_list(&endpoint).await, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(gateway.status(&resource).await, CatalogSignIn::SignedIn);
+    assert_eq!(
+        stored_refresh(&store, &resource).as_deref(),
+        Some("refresh-0")
+    );
+
+    // Back online: the kept refresh token renews the grant.
+    gateway
+        .resource(&resource)
+        .credentials
+        .lock()
+        .await
+        .grant
+        .as_mut()
+        .unwrap()
+        .token_endpoint = reachable;
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stored_refresh(&store, &resource).as_deref(),
+        Some("refresh-1")
+    );
+}
+
+#[tokio::test]
+async fn mcp_gateway_refused_refresh_signs_out() {
+    for refusal in [
+        (400, r#"{"error":"invalid_grant"}"#),
+        (401, r#"{"error":"invalid_client"}"#),
+        (400, r#"{"error":"unauthorized_client"}"#),
+    ] {
+        let fixture = Fixture::new().await;
+        let resource = fixture.resource();
+        let store = Arc::new(MemoryStore::default());
+        let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+        fixture.signed_in(&gateway).await;
+        let endpoint = gateway.test_endpoint("row", &resource).unwrap();
+        *fixture.state.refresh_failure.lock().unwrap() =
+            Some((refusal.0, "application/json", refusal.1));
+        expire_at(&gateway, &resource, 0).await;
+        assert_eq!(
+            tools_list(&endpoint).await,
+            StatusCode::UNAUTHORIZED,
+            "{refusal:?}"
+        );
+        assert_eq!(gateway.status(&resource).await, CatalogSignIn::SignedOut);
+        assert!(store.load(&resource).unwrap().is_none(), "{refusal:?}");
+    }
+}
+
+#[tokio::test]
+async fn mcp_gateway_upstream_401_renews_and_retries_before_signing_out() {
+    let fixture = Fixture::new().await;
+    let resource = fixture.resource();
+    let store = Arc::new(MemoryStore::default());
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let endpoint = gateway.test_endpoint("row", &resource).unwrap();
+    fixture.state.reject_next.store(true, Ordering::SeqCst);
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(gateway.status(&resource).await, CatalogSignIn::SignedIn);
+    assert_eq!(
+        stored_refresh(&store, &resource).as_deref(),
+        Some("refresh-1")
+    );
+
+    // An outage while renewing after a 401 forwards the 401 but keeps the grant; the next
+    // request renews first.
+    fixture.state.reject_next.store(true, Ordering::SeqCst);
+    *fixture.state.refresh_failure.lock().unwrap() =
+        Some((502, "text/html", "<html>Bad gateway</html>"));
+    assert_eq!(tools_list(&endpoint).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(gateway.status(&resource).await, CatalogSignIn::SignedIn);
+    assert_eq!(
+        stored_refresh(&store, &resource).as_deref(),
+        Some("refresh-1")
+    );
+    *fixture.state.refresh_failure.lock().unwrap() = None;
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn mcp_gateway_prompt_discovery_401_renews_and_keeps_the_sign_in() {
+    let fixture = Fixture::new().await;
+    fixture.set_prompts(&["review"]);
+    let resource = fixture.resource();
+    let store = Arc::new(MemoryStore::default());
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let servers = [prompt_server(&gateway, "row", &resource)];
+    fixture.state.reject_next.store(true, Ordering::SeqCst);
+    assert!(gateway.cached_prompts(&servers).is_empty());
+    gateway.wait_for_prompt_cache().await;
+    assert_eq!(gateway.cached_prompts(&servers)[0].name, "review");
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(gateway.status(&resource).await, CatalogSignIn::SignedIn);
+    assert_eq!(
+        stored_refresh(&store, &resource).as_deref(),
+        Some("refresh-1")
+    );
+}
+
+#[tokio::test]
+async fn mcp_gateway_request_bodies_held_for_a_retry_have_a_limit() {
+    let fixture = Fixture::new().await;
+    let gateway = McpGatewayService::with_store(Arc::new(MemoryStore::default()), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let endpoint = gateway.test_endpoint("row", &fixture.resource()).unwrap();
+    let body = |size: usize| {
+        let head = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"pad":""#;
+        let tail = r#""}}"#;
+        format!("{head}{}{tail}", "x".repeat(size - head.len() - tail.len()))
+    };
+    let client = reqwest::Client::new();
+    for (size, expected) in [
+        (MAX_REQUEST, StatusCode::OK),
+        (MAX_REQUEST + 1, StatusCode::PAYLOAD_TOO_LARGE),
+    ] {
+        let body = body(size);
+        assert_eq!(body.len(), size);
+        let status = request(&client, &endpoint, reqwest::Method::POST)
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, expected, "{size}");
+    }
 }

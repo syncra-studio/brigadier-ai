@@ -236,33 +236,72 @@ struct TokenResponse {
     expires_in: Option<u64>,
     token_type: String,
 }
+/// Why a token request gave no grant.
+pub(super) enum TokenError {
+    /// The authorization server refused the credentials it was given (an RFC 6749 §5.2
+    /// `invalid_grant`, `invalid_client` or `unauthorized_client`): only a new sign-in helps.
+    Rejected,
+    /// Anything else: no answer, a server error, an intermediary's page, an unknown or
+    /// unreadable error. The credentials may still be good; a later request tries again.
+    Unavailable(&'static str),
+}
+impl TokenError {
+    pub(super) fn message(self) -> String {
+        match self {
+            Self::Rejected => "OAuth token request rejected; sign in again",
+            Self::Unavailable(message) => message,
+        }
+        .into()
+    }
+}
+
 pub(super) async fn exchange(
     client: &Client,
     resource: &str,
     mut grant: Grant,
     mut form: Vec<(&str, String)>,
-) -> Result<Grant, String> {
+) -> Result<Grant, TokenError> {
     form.push(("client_id", grant.client_id.clone()));
     form.push(("resource", resource.into()));
     if let Some(secret) = &grant.client_secret {
         form.push(("client_secret", secret.clone()));
     }
+    let endpoint =
+        url(&grant.token_endpoint).map_err(|_| TokenError::Unavailable("Invalid OAuth URL"))?;
     let response = client
-        .post(url(&grant.token_endpoint)?)
+        .post(endpoint)
         .timeout(std::time::Duration::from_secs(30))
         .form(&form)
         .send()
         .await
-        .map_err(|_| "OAuth token request failed")?;
-    if !response.status().is_success() {
-        return Err("OAuth token request rejected; sign in again".into());
+        .map_err(|_| TokenError::Unavailable("OAuth token request failed"))?;
+    let status = response.status();
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        struct ErrorResponse {
+            error: String,
+        }
+        // §5.2 errors come as 400 (401 for a failed client authentication) with a JSON body;
+        // a gateway's 403 page or an unknown code says nothing about the stored credentials.
+        let refused = matches!(status.as_u16(), 400 | 401)
+            && response.json::<ErrorResponse>().await.is_ok_and(|body| {
+                matches!(
+                    body.error.as_str(),
+                    "invalid_grant" | "invalid_client" | "unauthorized_client"
+                )
+            });
+        return Err(if refused {
+            TokenError::Rejected
+        } else {
+            TokenError::Unavailable("OAuth token request failed")
+        });
     }
     let token: TokenResponse = response
         .json()
         .await
-        .map_err(|_| "Invalid OAuth token response")?;
+        .map_err(|_| TokenError::Unavailable("Invalid OAuth token response"))?;
     if token.access_token.is_empty() || !token.token_type.eq_ignore_ascii_case("bearer") {
-        return Err("Invalid OAuth bearer token".into());
+        return Err(TokenError::Unavailable("Invalid OAuth bearer token"));
     }
     grant.access_token = token.access_token;
     if token.refresh_token.is_some() {
