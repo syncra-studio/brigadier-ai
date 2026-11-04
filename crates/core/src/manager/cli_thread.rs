@@ -864,7 +864,7 @@ impl SessionManager {
         let Ok(conv) = self.conv(id) else {
             return false;
         };
-        let live = conv.is_busy().await || self.work_holds(&conv).await;
+        let live = conv.work_under_way().await || self.work_holds(&conv).await;
         let said = {
             let mut blocks = self.work_blocks.lock().unwrap();
             let now = now_ms();

@@ -854,6 +854,17 @@ async fn a_session_whose_last_target_fails_to_launch_goes_back_without_a_loop() 
     let last = view.turns.last().unwrap();
     assert_eq!(last.error_kind, None, "{view:#?}");
     assert_eq!(last.limit, None, "{view:#?}");
+    // What it kept for the next try isn't work: its block closes, or it would read working for good.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let view = bench
+        .flow
+        .manager
+        .thread_view(&bench.flow.conversation)
+        .unwrap();
+    assert!(
+        view.block.is_some_and(|block| block.ended_at_ms.is_some()),
+        "its work block is still open"
+    );
     bench.flow.stop().await;
 }
 

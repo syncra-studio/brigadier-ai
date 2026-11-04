@@ -1012,6 +1012,26 @@ impl ConvLive {
         self.state.lock().await.workspace_reserved = false;
     }
 
+    /// Whether a turn runs, is being handed over, or has messages on their way. What a failed
+    /// start kept for the next try isn't: its request is over, and nothing sends it by itself.
+    pub(super) async fn work_under_way(&self) -> bool {
+        let state = self.state.lock().await;
+        let over = |request: Option<&String>| {
+            request.is_some_and(|request| state.outcomes.contains_key(request))
+        };
+        state.busy
+            || state.unowned_turn
+            || state.hand_over.is_some()
+            || state
+                .inbox
+                .iter()
+                .any(|(_, request)| !over(request.as_ref()))
+            || state
+                .pending
+                .iter()
+                .any(|message| !over(message.request_id.as_ref()))
+    }
+
     pub async fn is_busy(&self) -> bool {
         let state = self.state.lock().await;
         state.busy
