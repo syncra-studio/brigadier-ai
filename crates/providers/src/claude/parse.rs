@@ -1378,6 +1378,7 @@ impl Parser {
                     window,
                     resets_at_ms,
                     kind: LimitKind::UsageWindow,
+                    model: None,
                 }),
                 observed_at_ms: now_ms(),
                 source: QuotaSource::Event,
@@ -1522,6 +1523,7 @@ impl Parser {
             window: self.limit.window.clone(),
             resets_at_ms: self.limit.resets_at_ms,
             kind: LimitKind::UsageWindow,
+            model: None,
         }
     }
 
@@ -1538,6 +1540,7 @@ impl Parser {
                     window: None,
                     resets_at_ms: gateway_reset,
                     kind: LimitKind::UsageWindow,
+                    model: None,
                 }),
             ),
             "rate_limit" if self.limit.rejected || lower.contains("hit your") => {
@@ -2115,6 +2118,7 @@ pub(crate) fn usage_snapshot(answer: &Value) -> QuotaSnapshot {
             window: Some(window.id.clone()),
             resets_at_ms: window.resets_at_ms,
             kind: LimitKind::UsageWindow,
+            model: None,
         });
     QuotaSnapshot {
         provider: ProviderKind::Claude,
@@ -2342,6 +2346,7 @@ mod tests {
                 window: Some("five_hour".to_owned()),
                 resets_at_ms: Some(1_790_223_600_000),
                 kind: LimitKind::UsageWindow,
+                model: None,
             })
         );
         assert_eq!(error.code.as_deref(), Some("rate_limit"));
@@ -2443,6 +2448,7 @@ mod tests {
                 window: Some("seven_day".to_owned()),
                 resets_at_ms: Some(1_791_853_200_000),
                 kind: LimitKind::UsageWindow,
+                model: None,
             })
         );
 

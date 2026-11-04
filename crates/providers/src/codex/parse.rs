@@ -1109,6 +1109,7 @@ impl Parser {
             window: window.map(|window| window.id.clone()),
             resets_at_ms: window.and_then(|window| window.resets_at_ms),
             kind: LimitKind::UsageWindow,
+            model: None,
         }
     }
 }
@@ -1154,6 +1155,7 @@ pub fn quota_read(read: &p::GetAccountRateLimitsResponse) -> QuotaSnapshot {
             window: None,
             resets_at_ms: None,
             kind: LimitKind::SpendControl,
+            model: None,
         });
     }
     quota
@@ -1174,6 +1176,7 @@ pub fn quota_event(update: &p::RateLimitSnapshot) -> QuotaSnapshot {
             window: None,
             resets_at_ms: None,
             kind: LimitKind::SpendControl,
+            model: None,
         });
     }
     QuotaSnapshot {
@@ -1265,6 +1268,7 @@ fn bucket_limit(bucket: &p::RateLimitSnapshot, windows: &[QuotaWindow]) -> Optio
         window: full.map(|window| window.id.clone()),
         resets_at_ms: full.and_then(|window| window.resets_at_ms),
         kind,
+        model: None,
     })
 }
 

@@ -157,6 +157,7 @@ impl SessionManager {
                     window: Some(window),
                     resets_at_ms: Some(resets_at_ms),
                     kind: LimitKind::UsageWindow,
+                    model: None,
                 }),
                 calls_left: after_tool_calls,
                 fired: false,

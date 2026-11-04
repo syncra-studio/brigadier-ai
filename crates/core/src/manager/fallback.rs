@@ -46,6 +46,7 @@ pub(crate) fn verdict(error: &ProviderError) -> ErrorVerdict {
                 window: None,
                 resets_at_ms: None,
                 kind: LimitKind::UsageWindow,
+                model: None,
             }),
         }),
         ErrorKind::Billing => ErrorVerdict::HandOff(AttemptEnd::Limit {
@@ -53,6 +54,7 @@ pub(crate) fn verdict(error: &ProviderError) -> ErrorVerdict {
                 window: None,
                 resets_at_ms: None,
                 kind: LimitKind::Credits,
+                model: None,
             },
         }),
         ErrorKind::Auth | ErrorKind::ContextWindow | ErrorKind::Policy => {

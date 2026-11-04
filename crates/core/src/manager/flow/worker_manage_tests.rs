@@ -109,6 +109,7 @@ async fn bench_with(
                             window: Some("five_hour".into()),
                             resets_at_ms: Some(crate::now_ms() + 60_000),
                             kind: LimitKind::UsageWindow,
+                            model: None,
                         }),
                         ..Reply::default()
                     };

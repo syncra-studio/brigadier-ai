@@ -164,13 +164,15 @@ pub fn heat(used: f64, projected: f64, limited: bool) -> Heat {
 
 /// Whether a window limits this model: provider-wide windows limit every model; a scoped one
 /// names its model by id, by the concrete id an alias resolves to (the registry entry's ids), or
-/// by family word (Claude's `opus`, Codex's `gpt-5.6-luna`).
+/// by family word (Claude's `opus`, Codex's `gpt-5.6-luna`), or by the plan it is of (OpenCode
+/// Go's `opencode-go`, see [`in_plan`]).
 pub fn window_applies(window: &QuotaWindow, model: &MergedModel, registry: &Registry) -> bool {
     let Some(scope) = window.model.as_deref().map(str::trim) else {
         return true;
     };
     if scope.is_empty()
         || scope.eq_ignore_ascii_case(&model.id)
+        || in_plan(scope, &model.id)
         || model
             .resolved
             .as_deref()
@@ -196,6 +198,18 @@ pub fn window_applies(window: &QuotaWindow, model: &MergedModel, registry: &Regi
         .as_deref()
         .is_some_and(|family| family.eq_ignore_ascii_case(scope))
         || (table::words(scope).count() == 1 && table::has_word(&model.id, scope))
+}
+
+/// Whether model `id` is one of plan `scope`'s: OpenCode names a model `<provider>/<model>`,
+/// so a limit of OpenCode Go (`opencode-go`) holds `opencode-go/glm-5.3`, never the free
+/// `opencode/big-pickle` (#688).
+pub fn in_plan(scope: &str, id: &str) -> bool {
+    let scope = scope.trim();
+    !scope.is_empty()
+        && !scope.contains('/')
+        && id
+            .split_once('/')
+            .is_some_and(|(plan, _)| plan.eq_ignore_ascii_case(scope))
 }
 
 /// Where a window is heading, if its samples say enough.
@@ -327,6 +341,54 @@ fn forecast(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// OpenCode Go's limit is a window of the plan's models (`opencode-go`): it limits
+    /// `opencode-go/glm-5.3`, never the free `opencode/big-pickle` nor a model whose id only
+    /// has the word in it (#688).
+    #[test]
+    fn a_plan_window_limits_its_plans_models_only() {
+        let registry = Registry::bundled();
+        let info = |id: &str| brigadier_providers::ModelInfo {
+            id: id.into(),
+            display_name: id.into(),
+            description: String::new(),
+            resolved: None,
+            efforts: Vec::new(),
+            default_effort: None,
+            is_default: false,
+            input_modalities: Vec::new(),
+            fast: None,
+            legacy: false,
+        };
+        let listed = [
+            info("opencode-go/glm-5.3"),
+            info("opencode/big-pickle"),
+            info("openrouter/opencode-go-mini"),
+        ];
+        let merged = crate::merge::merge(
+            &registry,
+            &[(brigadier_providers::ProviderKind::OpenCode, &listed[..])],
+            &[],
+            &[],
+        );
+        let window = QuotaWindow {
+            id: "limit.opencode-go".into(),
+            label: "Usage limit".into(),
+            used_percent: 100.0,
+            resets_at_ms: Some(1_791_370_800_000),
+            window_minutes: None,
+            bucket: None,
+            model: Some("opencode-go".into()),
+        };
+        let held: Vec<bool> = merged
+            .iter()
+            .map(|model| window_applies(&window, model, &registry))
+            .collect();
+        assert_eq!(held, [true, false, false]);
+        assert!(in_plan("OpenCode-Go", "opencode-go/glm-5.3"));
+        assert!(!in_plan("opencode-go/glm-5.3", "opencode-go/glm-5.3"));
+        assert!(!in_plan("opus", "claude-opus-5-5"));
+    }
 
     fn weekly(used_percent: f64) -> QuotaWindow {
         QuotaWindow {

@@ -153,6 +153,7 @@ impl Reply {
                 kind: brigadier_providers::LimitKind::UsageWindow,
                 window: Some("five_hour".into()),
                 resets_at_ms: Some(crate::now_ms() + 60 * 60 * 1000),
+                model: None,
             }),
             ..Self::default()
         }

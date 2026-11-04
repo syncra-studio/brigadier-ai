@@ -41,8 +41,18 @@ export function findModel(groups: readonly ModelGroup[], choice: ModelChoice): M
 export function choiceLabel(groups: readonly ModelGroup[], choice: ModelChoice): string {
   const model = findModel(groups, choice);
   const name = model?.displayName ?? choice.model ?? "Default model";
-  const effort = effortFor(model, choice.effort);
-  return effort ? `${name} · ${effortLabel(effort)}` : name;
+  const word = effortWord(model, effortFor(model, choice.effort));
+  return word ? `${name} · ${word}` : name;
+}
+
+/**
+ * The effort word a model's pill shows: its effort, or Default for a model with efforts that
+ * names no default of its own (OpenCode's, which runs its provider's default); none for a model
+ * without efforts.
+ */
+function effortWord(model: ModelInfo | null, effort: string | null): string | null {
+  if (effort) return effortLabel(effort);
+  return model && model.efforts.length > 0 ? "Default" : null;
 }
 
 /**
@@ -112,6 +122,7 @@ export function ModelSelector({
   const current = findModel(groups, value);
   const defaultModel = findModel(groups, defaultChoice);
   const effort = effortFor(current, value.effort);
+  const word = effortWord(current, effort);
   const name =
     current?.displayName ?? (value.model && value.model !== "default" ? value.model : "Default model");
   const fast = value.fast === true && Boolean(current?.fast);
@@ -165,7 +176,7 @@ export function ModelSelector({
     >
       <PickerButton
         label={label}
-        shown={auto ? [`${id}-name`] : [fast && `${id}-fast`, `${id}-name`, effort && `${id}-effort`]}
+        shown={auto ? [`${id}-name`] : [fast && `${id}-fast`, `${id}-name`, word && `${id}-effort`]}
         disabled={disabled}
         data-slot="model-selector-trigger"
         onKeyDown={openOnArrows(open, setOpen)}
@@ -178,7 +189,7 @@ export function ModelSelector({
             <ProviderGlyph provider={value.provider} className="size-icon-sm shrink-0" />
             {fast && <Bolt id={`${id}-fast`} aria-label="Fast" className="text-foreground" />}
             <span id={`${id}-name`} className="text-foreground truncate">{name}</span>
-            {effort && <span id={`${id}-effort`} className="shrink-0">{effortLabel(effort)}</span>}
+            {word && <span id={`${id}-effort`} className="shrink-0">{word}</span>}
           </>
         )}
         <ChevronDown className="size-icon-xs!" />

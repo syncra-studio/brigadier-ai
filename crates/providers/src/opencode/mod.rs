@@ -793,7 +793,8 @@ impl Provider for OpenCode {
         })
     }
 
-    /// OpenCode reports no usage windows; a limit it meets arrives as an error (D17).
+    /// OpenCode reports no usage windows; a limit it meets arrives as an error (D17). Its read
+    /// knows nothing of that limit, so it lifts none with a reset still to come (#747).
     fn quota(&self) -> BoxFuture<'_, Result<QuotaSnapshot>> {
         Box::pin(async {
             Ok(QuotaSnapshot {
@@ -801,7 +802,7 @@ impl Provider for OpenCode {
                 windows: Vec::new(),
                 limit: None,
                 observed_at_ms: now_ms(),
-                source: QuotaSource::Read,
+                source: QuotaSource::Unavailable,
             })
         })
     }
@@ -1698,6 +1699,28 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// OpenCode's read has no usage to tell: it says so rather than reading as a full one, so
+    /// it lifts no limit a session met that resets later (#747).
+    #[tokio::test]
+    async fn a_quota_read_says_it_knows_nothing() {
+        let root = std::env::temp_dir().join(format!("opencode-quota-{}", uuid::Uuid::new_v4()));
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let opencode = OpenCode::new(
+            platform,
+            Arc::new(CliEnv::from_vars(Vec::<(
+                std::ffi::OsString,
+                std::ffi::OsString,
+            )>::new())),
+        );
+        let read = opencode.quota().await.unwrap();
+        assert_eq!(read.source, QuotaSource::Unavailable);
+        assert!(read.windows.is_empty() && read.limit.is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A replay keeps to the session it prompted: a sub-agent's text and its turn's end are
     /// not the recording's.

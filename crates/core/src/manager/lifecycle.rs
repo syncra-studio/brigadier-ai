@@ -428,12 +428,16 @@ impl SessionManager {
         }
     }
 
-    /// Whether any conversation has a turn in progress, work waiting for one, or a worker
-    /// that hasn't finished: what keeping the computer awake "while agents work" means.
+    /// Whether any conversation has a turn in progress, work waiting for one, its CLI's
+    /// background job still running (any CLI's, #709), or a worker that hasn't finished: what
+    /// keeping the computer awake "while agents work" means, and what keeps the daemon up.
     pub async fn agents_working(&self) -> bool {
         let convs: Vec<_> = self.convs_lock().values().cloned().collect();
         for conv in convs {
-            if conv.is_busy().await || self.has_running_workers(&conv.id).await {
+            if conv.is_busy().await
+                || conv.runs_cli_work().await
+                || self.has_running_workers(&conv.id).await
+            {
                 return true;
             }
         }

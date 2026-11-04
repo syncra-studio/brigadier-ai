@@ -863,7 +863,9 @@ impl ConvLive {
         self.state.lock().await.has_cli_jobs()
     }
 
-    async fn runs_cli_work(&self) -> bool {
+    /// Whether its CLI's work still runs past its turn: a background job (not an app it keeps
+    /// running), or a command still going.
+    pub(super) async fn runs_cli_work(&self) -> bool {
         self.state.lock().await.runs_cli_work()
     }
 
@@ -5135,6 +5137,7 @@ impl SessionManager {
                                 ErrorKind::Auth => brigadier_providers::LimitKind::SpendControl,
                                 _ => brigadier_providers::LimitKind::UsageWindow,
                             },
+                            model: None,
                         }));
                 }
                 if self.seam_on(conv) && super::fallback::model_failed(error) {
@@ -7760,6 +7763,40 @@ mod tests {
             "the note turn the CLI took in runs to its own end"
         );
         assert!(matches!(read_seam(&record).phase, Phase::Nudged { .. }));
+        flow.stop().await;
+    }
+
+    /// A job the thread's CLI keeps running after its turn (OpenCode's, as Claude's) is agents'
+    /// work: the daemon doesn't quit with no app connected while it runs (#709), and keeping
+    /// awake "while agents work" holds; once it ends, nothing works.
+    #[tokio::test]
+    async fn a_background_job_past_its_turn_counts_as_agents_working() {
+        use super::super::flow::{Flow, Options, Reply};
+
+        let flow = Flow::start(
+            "background-job-working",
+            Options {
+                thread: brigadier_providers::ProviderKind::OpenCode,
+                ..Options::default()
+            },
+            Arc::new(|_| Box::pin(async { Reply::text("Started it in the background.") })),
+        )
+        .await;
+        flow.say("Start the job.").await;
+        flow.settled().await;
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.live_cli().await.unwrap();
+        assert!(!flow.manager.agents_working().await);
+        flow.manager
+            .background_jobs(&conv, &cli, vec!["job".into()])
+            .await;
+        assert!(!conv.is_busy().await, "no turn runs");
+        assert!(
+            flow.manager.agents_working().await,
+            "the job runs on after its turn"
+        );
+        flow.manager.background_jobs(&conv, &cli, vec![]).await;
+        assert!(!flow.manager.agents_working().await);
         flow.stop().await;
     }
 
