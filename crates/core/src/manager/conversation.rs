@@ -729,6 +729,12 @@ impl ConvLive {
         )
     }
 
+    /// Whether a turn runs, or a hand-over is still being chosen (one the user stopped is over).
+    pub(super) async fn turn_or_hand_over(&self) -> bool {
+        let state = self.state.lock().await;
+        state.busy || state.hand_over.as_ref().is_some_and(|over| !over.stopped)
+    }
+
     /// Whether the running turn is a hand-off's own ([`seam::SeamLive::quiet`]).
     pub(super) async fn quiet_turn(&self) -> bool {
         let state = self.state.lock().await;
@@ -1250,6 +1256,7 @@ impl SessionManager {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
             }
         }
+        self.end_handed_over_turn(conversation_id).await;
         // No turn runs or waits to run: the next queued message goes; while the block stays
         // open it waits for the next one (D25), and the block's end kicks it then.
         let waiting = conv.kind == ConversationKind::Session
@@ -2629,6 +2636,7 @@ impl SessionManager {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }
         drop(state);
+        self.end_handed_over_turn(&conv.id).await;
     }
 
     /// Starts the next turn if none runs and there is something to say.

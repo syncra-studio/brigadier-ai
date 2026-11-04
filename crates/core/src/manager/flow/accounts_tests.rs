@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use brigadier_providers::ProviderKind;
 
-use super::{Flow, Options, Reply, Script, Turn};
+use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
 use crate::manager::prompts::CONTINUE_ON_ACCOUNT;
 use crate::model::{
     ConversationId, ConversationKind, DomainEvent, ModelChoice, Setup, SetupRequest,
@@ -1669,6 +1669,123 @@ async fn a_limited_turn_works_through_its_hand_over_and_nothing_starts_on_its_cl
     assert_eq!(accounts, [None, None, Some("acct-b")], "{turns:#?}");
     assert!(turns[2].input.contains("Second."), "{turns:#?}");
     assert_eq!(request_states(&flow, &chat).await.len(), 3);
+    flow.stop().await;
+}
+
+/// How the thread's last turn ended, as the app reads it.
+fn last_end(flow: &Flow) -> Option<crate::thread_view::TurnEnd> {
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    view.turns.last()?.end
+}
+
+fn session_file() -> Options {
+    Options {
+        behavior: Arc::new(FakeBehavior {
+            session_file: true,
+            ..FakeBehavior::default()
+        }),
+        ..Options::default()
+    }
+}
+
+/// D180 while it goes on: a turn whose hand-over is still being chosen isn't ended by anything
+/// that settles the requests. Stopped, nothing is coming: it reads stopped at once.
+#[tokio::test]
+async fn a_turn_handed_over_reads_stopped_when_the_user_stops_its_hand_over() {
+    use crate::thread_view::TurnEnd;
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-hand-over-end-stop",
+        session_file(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let chat = flow.conversation.clone();
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    flow.say("First.").await;
+    reached.notified().await;
+    flow.manager.settle_requests(&chat).await;
+    assert_eq!(last_end(&flow), Some(TurnEnd::HandedOver));
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    assert_eq!(last_end(&flow), Some(TurnEnd::Stopped));
+    release.notify_one();
+    flow.stop().await;
+}
+
+/// A thread already on disk, its last turn handed over and nothing left to carry it on, reads
+/// cut off after a restart, with Continue, not working for good.
+#[tokio::test]
+async fn a_turn_handed_over_reads_interrupted_after_a_restart_when_nothing_carries_it_on() {
+    use crate::thread_view::{self, TurnEnd};
+    let log = Log::default();
+    let mut flow = Flow::start(
+        "accounts-hand-over-end-restart",
+        session_file(),
+        logging(&log, |_| Reply::text("Done.")),
+    )
+    .await;
+    flow.say("First.").await;
+    super::eventually("the turn ends", || last_end(&flow) == Some(TurnEnd::Done)).await;
+    flow.settled().await;
+    let dir = flow.manager.session_dir(&flow.conversation).record();
+    let done = thread_view::last_turn(&dir).unwrap();
+    thread_view::append_turn(
+        &dir,
+        &thread_view::TurnRecord {
+            end: Some(TurnEnd::HandedOver),
+            ..done
+        },
+    )
+    .unwrap();
+    assert_eq!(last_end(&flow), Some(TurnEnd::HandedOver));
+    flow.restart().await;
+    assert_eq!(last_end(&flow), Some(TurnEnd::Interrupted));
+    flow.stop().await;
+}
+
+/// A restart in the middle of a hand-over: the turn goes on by itself (D9 a) and ends done.
+#[tokio::test]
+async fn a_hand_over_a_restart_cuts_goes_on_by_itself() {
+    use crate::thread_view::TurnEnd;
+    let log = Log::default();
+    let mut flow = Flow::start(
+        "accounts-hand-over-restart",
+        session_file(),
+        logging(&log, |turn| match &turn.account {
+            None => Reply::limited(),
+            Some(_) => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let chat = flow.conversation.clone();
+    let (reached, release) = hold_hand_over(&flow, &chat);
+    flow.say("First.").await;
+    reached.notified().await;
+    assert_eq!(last_end(&flow), Some(TurnEnd::HandedOver));
+    // Let go only once the quit began: its CLI's close waits for this, and no carry-on starts.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        release.notify_one();
+    });
+    flow.restart().await;
+    super::eventually("the turn goes on and ends", || {
+        last_end(&flow) == Some(TurnEnd::Done)
+    })
+    .await;
+    flow.settled().await;
+    let accounts: Vec<_> = seen(&log).iter().map(|turn| turn.account.clone()).collect();
+    assert_eq!(
+        accounts.last().unwrap().as_deref(),
+        Some("acct-b"),
+        "{accounts:?}"
+    );
     flow.stop().await;
 }
 

@@ -162,6 +162,8 @@ impl SessionManager {
                     .await;
             }
             self.recover_unheard_envelopes(&conversation.id).await;
+            // A hand-over dies with the daemon: its turn reads as it ended, not working for good.
+            self.end_handed_over_turn(&conversation.id).await;
             // What its workers did that it hadn't heard yet (S29).
             if conversation.lifecycle != Lifecycle::Archived {
                 self.recover_worker_events(&conversation.id).await;

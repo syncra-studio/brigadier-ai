@@ -55,7 +55,10 @@ async fn bench(
     let flow = Flow::start(
         name,
         Options {
-            behavior: Arc::new(FakeBehavior::default()),
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
             ..Options::default()
         },
         Arc::new(move |turn| {
@@ -836,6 +839,17 @@ async fn a_session_whose_last_target_fails_to_launch_goes_back_without_a_loop() 
     assert_eq!(bench.setup_model().model.as_deref(), Some(THREAD_MODEL));
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(bench.thread_models(), strings(&[THREAD_MODEL]));
+    // Its turn was handed over and nothing carried it on: it reads failed, not working for good.
+    let view = bench
+        .flow
+        .manager
+        .thread_view(&bench.flow.conversation)
+        .unwrap();
+    assert_eq!(
+        view.turns.last().and_then(|turn| turn.end),
+        Some(crate::thread_view::TurnEnd::Failed),
+        "{view:#?}"
+    );
     bench.flow.stop().await;
 }
 
