@@ -209,38 +209,52 @@ impl Session<'_> {
         if !self.valid() {
             return Err(());
         }
-        let (bearer, cancelled) = self
+        let (mut bearer, mut cancelled) = self
             .gateway
             .bearer(&self.key.resource)
             .await
             .map_err(|_| ())?;
-        if !self.valid() {
-            return Err(());
-        }
-        let mut request = self
-            .gateway
-            .client
-            .post(&self.key.resource)
-            .bearer_auth(&bearer)
-            .header("accept", "application/json, text/event-stream")
-            .timeout(DISCOVERY_TIMEOUT)
-            .json(&message);
-        if let Some(session) = &self.session {
-            request = request.header("mcp-session-id", session);
-        }
-        if let Some(version) = &self.version {
-            request = request.header("mcp-protocol-version", version);
-        }
-        let response = tokio::select! {
-            _ = cancelled.cancelled() => return Err(()),
-            response = request.send() => response.map_err(|_| ())?,
+        let mut renewed = false;
+        let response = loop {
+            if !self.valid() {
+                return Err(());
+            }
+            let mut request = self
+                .gateway
+                .client
+                .post(&self.key.resource)
+                .bearer_auth(&bearer)
+                .header("accept", "application/json, text/event-stream")
+                .timeout(DISCOVERY_TIMEOUT)
+                .json(&message);
+            if let Some(session) = &self.session {
+                request = request.header("mcp-session-id", session);
+            }
+            if let Some(version) = &self.version {
+                request = request.header("mcp-protocol-version", version);
+            }
+            let response = tokio::select! {
+                _ = cancelled.cancelled() => return Err(()),
+                response = request.send() => response.map_err(|_| ())?,
+            };
+            if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+                break response;
+            }
+            if renewed {
+                // Even a freshly issued bearer is refused: the upstream won't take this grant.
+                self.gateway
+                    .reject_bearer_for_grant(&self.key.resource, &bearer, Some(self.key.grant))
+                    .await;
+                return Err(());
+            }
+            // Renewed with the refresh token, or deleted only if the token server refuses it.
+            (bearer, cancelled) = self
+                .gateway
+                .retry_bearer(&self.key.resource, &bearer, Some(self.key.grant))
+                .await
+                .ok_or(())?;
+            renewed = true;
         };
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            self.gateway
-                .reject_bearer_for_grant(&self.key.resource, &bearer, Some(self.key.grant))
-                .await;
-            return Err(());
-        }
         if !response.status().is_success() {
             return Err(());
         }
