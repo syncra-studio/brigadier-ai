@@ -66,15 +66,19 @@ pub fn opening(
     if has_scheme(target) {
         return Opening::Refuse(format!("only a file or folder opens here: {target}"));
     }
-    if !absolute(target, system) || (system == System::Windows && stream_or_device(target)) {
+    let plain = match system {
+        System::Windows => without_verbatim(target),
+        System::Unix => target.into(),
+    };
+    if !absolute(&plain, system) || (system == System::Windows && stream_or_device(&plain)) {
         return Opening::Refuse(format!("not a file or folder path: {target}"));
     }
     if found == Found::Missing {
         return Opening::Refuse(format!("{target} isn't there"));
     }
-    let name = file_name(target);
+    let name = file_name(&plain);
     // A bundle (`Name.app`) is a folder the file manager would run: its type decides first.
-    let launches = [Some(target), resolved]
+    let launches = [Some(plain.as_str()), resolved]
         .into_iter()
         .flatten()
         .any(|path| launches(file_name(path), system, pathext));
@@ -130,6 +134,19 @@ fn absolute(target: &str, system: System) -> bool {
                 && matches!(bytes[2], b'\\' | b'/');
             drive || target.starts_with(r"\\") || target.starts_with("//")
         }
+    }
+}
+
+/// A Windows verbatim path to a drive's file or a share's (`\\?\C:\x`, `\\?\UNC\server\share\x`:
+/// what canonicalizing gives, as a project's folder is stored) as the plain path it names;
+/// any other path as it is, so another `\\?\` path is still a device path.
+fn without_verbatim(target: &str) -> String {
+    if let Some(share) = target.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}");
+    }
+    match target.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.into(),
+        _ => target.into(),
     }
 }
 
@@ -242,6 +259,11 @@ mod tests {
             "run.bat . .",
             "x.psm1",
             "x.msc",
+            "update.msu",
+            "box.wsb",
+            "ext.vsix",
+            "dark.theme",
+            "x.appcontent-ms",
         ] {
             let target = format!(r"C:\Users\me\AppData\Local\Brigadier\cache\open\abc\{name}");
             assert_eq!(
@@ -338,14 +360,40 @@ mod tests {
             r"C:report.pdf",
             r"C:\work\notes.txt:payload.exe",
             r"C:\work\notes.txt:Zone.Identifier",
-            r"\\?\C:\work\report.pdf",
+            r"\\?\C:\work\notes.txt:payload.exe",
+            r"\\?\UNC\server\share\notes.txt:payload.exe",
+            r"\\?\C:",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\report.pdf",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\report.pdf",
             r"\\.\pipe\brigadier",
+            r"\\.\C:\work\report.pdf",
+            "//?/C:/work/report.pdf",
             "/Users/me/report.pdf",
         ] {
             assert!(refused(&windows(target, FILE)), "{target}");
         }
         assert!(refused(&mac("work/report.pdf", FILE)));
         assert!(refused(&windows(r"C:\work\gone.pdf", Found::Missing)));
+    }
+
+    /// A canonical Windows path (`\\?\C:\…`, as a project's folder is stored) is the plain path
+    /// it names: a folder or document opens, a launcher is still only shown.
+    #[test]
+    fn a_canonical_windows_path_is_a_plain_one() {
+        assert_eq!(
+            windows(r"\\?\C:\Development\repo", Found::Directory),
+            Opening::Open
+        );
+        assert_eq!(windows(r"\\?\C:\work\report.pdf", FILE), Opening::Open);
+        assert_eq!(
+            windows(r"\\?\UNC\server\share\report.docx", FILE),
+            Opening::Open
+        );
+        assert_eq!(
+            windows(r"\\?\C:\work\setup.exe", FILE),
+            Opening::Reveal("setup.exe".into())
+        );
+        assert!(revealed(&windows(r"\\?\UNC\server\share\run.bat", FILE)));
     }
 
     /// A bundle is a folder the file manager runs: its type wins over its being a folder.
@@ -393,6 +441,46 @@ mod tests {
         assert_eq!(with("/Users/me/project", Found::Directory), Opening::Open);
         assert!(refused(&with("/Users/me/project/notes.md", FILE)));
         assert!(revealed(&with("/Users/me/project/run.sh", FILE)));
+    }
+
+    /// On a real Windows disk: a launcher named by its 8.3 short name (`PAYLOA~1.SET` for
+    /// `payload.settingcontent-ms`) is judged by its long name; a name with a trailing dot is
+    /// the file it opens; a folder named like a program is only shown; a project folder in its
+    /// canonical form opens.
+    #[cfg(windows)]
+    #[test]
+    fn on_disk_a_short_or_dotted_name_is_judged_by_the_file_it_opens() {
+        let dir =
+            std::env::temp_dir().join(format!("win-issues-w16-opening-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("x.exe")).unwrap();
+        std::fs::write(dir.join("payload.settingcontent-ms"), "<x/>").unwrap();
+        std::fs::write(dir.join("run.bat"), "@echo off").unwrap();
+        std::fs::write(dir.join("notes.txt"), "notes").unwrap();
+        let at = |name: &str| format!(r"{}\{name}", dir.display());
+
+        // 8.3 names may be off on this volume; the long name is checked then.
+        let short = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .find(|entry| entry.file_name() == "payload.settingcontent-ms")
+            .map(|_| at("PAYLOA~1.SET"))
+            .filter(|short| std::fs::metadata(short).is_ok())
+            .unwrap_or_else(|| at("payload.settingcontent-ms"));
+        let outcomes = [
+            (decide(&short, false), "short name"),
+            (decide(&at("run.bat."), false), "trailing dot"),
+            (decide(&at("x.exe"), false), "folder named like a program"),
+        ];
+        let canonical = std::fs::canonicalize(&dir).unwrap();
+        let opens = decide(canonical.to_str().unwrap(), false);
+        let document = decide(&at("notes.txt"), false);
+        std::fs::remove_dir_all(&dir).unwrap();
+        for (outcome, case) in outcomes {
+            assert!(revealed(&outcome), "{case}: {outcome:?}");
+        }
+        assert_eq!(opens, Opening::Open);
+        assert_eq!(document, Opening::Open);
     }
 
     /// The list the app reads is the list the shell reads.

@@ -6,7 +6,7 @@
     "exe", "com", "msi", "msix", "scr", "pif", "vbe", "jse", "wsf", "wsh", "hta", "lnk", "reg", "cpl", "url",
     "msp", "mst", "msixbundle", "appx", "appxbundle", "appinstaller", "appref-ms", "application", "xbap", "gadget", "msc", "inf", "scf", "chm", "hlp",
     "settingcontent-ms", "library-ms", "search-ms", "searchconnector-ms", "website", "diagcab", "sct", "wsc", "ws", "vb", "psm1", "psd1", "ps1xml", "psc1",
-    "jnlp", "rdp", "xll", "iso", "img", "vhd", "vhdx",
+    "jnlp", "rdp", "xll", "iso", "img", "vhd", "vhdx", "msu", "wsb", "vsix", "theme", "themepack", "deskthemepack", "shb", "shs", "appcontent-ms",
     "appimage", "desktop", "run", "deb", "rpm"
   ],
   "scripts": [
