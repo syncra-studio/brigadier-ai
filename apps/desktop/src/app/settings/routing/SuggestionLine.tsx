@@ -1,4 +1,5 @@
 import { useAction } from "@/app/conversation/useAction";
+import { isRoleWork, withRoleModel } from "@/app/settings/routing/roles";
 import { ratingText, rowModelName, type WorkRow, withDismissed, withFirst, withOrder, workName } from "@/app/settings/routing/words";
 import { Button } from "@/components/controls";
 import { Upgrade } from "@/components/icons";
@@ -9,8 +10,8 @@ import { editSettings } from "@/state/settings";
 
 /**
  * A better-rated model for a kind of work the user ordered: "GPT-6.1 Terra now rates higher for
- * Computer use". Use it puts it first in the order (the only thing that changes the order);
- * Dismiss hides it until that model's rating changes again.
+ * Computer use". Use it puts it first in the order, or in a kind of roles replaces that role's
+ * model (the only thing that changes them); Dismiss hides it until that model's rating changes again.
  */
 export function SuggestionLine({
   suggestion,
@@ -25,9 +26,12 @@ export function SuggestionLine({
 }) {
   const action = useAction();
   const name = rowModelName(groups, suggestion.row.agent, suggestion.row.model);
-  const current = rowModelName(groups, row.mine[0]?.agent ?? suggestion.row.agent, suggestion.current);
+  const role = isRoleWork(suggestion.work);
+  const current = rowModelName(groups, role ? suggestion.row.agent : (row.mine[0]?.agent ?? suggestion.row.agent), suggestion.current);
   const use = () =>
-    action.run(() => saveModelRules(rules, withOrder(rules.rows, row.work, withFirst(row.mine, suggestion.row)), rules.rules));
+    action.run(() =>
+      saveModelRules(rules, role ? withRoleModel(rules.rows, suggestion.row) : withOrder(rules.rows, row.work, withFirst(row.mine, suggestion.row)), rules.rules),
+    );
   const dismiss = () =>
     action.run(async () => {
       await editSettings((settings) => ({ ...settings, dismissedSuggestions: withDismissed(settings.dismissedSuggestions, suggestion) }));
@@ -38,7 +42,7 @@ export function SuggestionLine({
       <div className="flex items-center gap-3">
         <Upgrade aria-hidden className="text-link size-icon-sm shrink-0" />
         <span className="text-xs text-foreground min-w-0 flex-1 truncate">
-          {name} now rates higher for {workName(row.work)}
+          {name} now rates higher for {workName(suggestion.work)}
           <span className="text-muted-foreground">
             {" "}
             · {ratingText(suggestion.score)} against {current}'s {ratingText(suggestion.currentScore)}

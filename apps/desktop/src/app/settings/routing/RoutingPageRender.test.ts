@@ -5,6 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 /** A model's line in the picker when it's already in the order. */
 const IN_THE_ORDER = "In the order";
+const opusLine = (work: string) => `Opus 5.5 now rates higher for ${work} · 9.1 against Sonnet 5.5's 8.5Use itDismiss`;
 
 // The real Routing page in Chromium over a faked daemon and rules file (S32): who does what from
 // the file's rows over the shipped ones, a kind made My order and edited (effort, a second model,
@@ -241,4 +242,33 @@ test("review, Fusion and Fallback edit their own roles through My order", { time
   assert.deepEqual(seen.fallbackOrder, ["1Opus 5.5 · HighPicked now", "2Codex's default · HighNext if Opus 5.5 can't run"]);
   assert.equal(seen.refreshOpensStrength, false);
   assert.equal(seen.refreshInHeader, true);
+});
+
+// A role's better model: only the user's click writes it, in that role's row in place.
+test("Use it on a role replaces that role's model, the other role is untouched", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "routing.html?drive=role-suggestions", "routing-result", 30000);
+  const seen = JSON.parse(dump) as Record<string, unknown>;
+  const sonnet = { agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." };
+  const opus = { agent: "claude", model: "opus", effort: "high", reason: "Rated 9.1 of 10 for this work." };
+  const codex = { agent: "codex", model: "default", effort: "high", reason: "Mine." };
+  const notes = { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." };
+  assert.deepEqual(seen.lines, [opusLine("Adversarial review"), opusLine("Fusion · Claude consult")]);
+  assert.equal(seen.writesBefore, 0);
+  assert.deepEqual(seen.afterReview, [
+    { work: "Adversarial review", ...codex },
+    { work: "Adversarial review", ...opus },
+    { work: "fusion-claude", ...sonnet },
+    { work: "fusion-codex", ...codex },
+    notes,
+  ]);
+  assert.deepEqual(seen.linesAfterReview, [opusLine("Fusion · Claude consult")]);
+  assert.deepEqual(seen.afterFusion, [
+    { work: "Adversarial review", ...codex },
+    { work: "Adversarial review", ...opus },
+    { work: "fusion-claude", ...opus },
+    { work: "fusion-codex", ...codex },
+    notes,
+  ]);
+  assert.equal(seen.writes, 2);
+  assert.equal(seen.linesAfterFusion, 0);
 });
