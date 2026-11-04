@@ -772,18 +772,6 @@ impl Session {
                     .map(|()| Response::AnswerQuestion)
                     .map_err(IpcError::from)
             }
-            Request::MergeSession { conversation_id } => {
-                let origin = brigadier_core::work::AnswerOrigin {
-                    input: Some(brigadier_core::work::AnswerInput::Click),
-                    client: self.client.name.clone(),
-                    pid: self.client.pid,
-                };
-                let sessions = self.daemon.sessions.clone();
-                heap(|| sessions.merge_session(&conversation_id, origin))
-                    .await
-                    .map(|text| Response::MergeSession { text })
-                    .map_err(IpcError::from)
-            }
             other => handle_request(&self.daemon, other).await,
         };
         self.respond(id, outcome).await?;
@@ -2378,9 +2366,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::AnswerCard
         }
         // Answered by the connection, which keeps who sent it with the answer.
-        Request::AnswerQuestion { .. } | Request::MergeSession { .. } => {
+        Request::AnswerQuestion { .. } => {
             return Err(IpcError::from(brigadier_core::Error::Invalid(
-                "an answer or a merge click comes through a client's connection".into(),
+                "an answer comes through a client's connection".into(),
             )));
         }
         Request::WriteUpFeedback { text } => Response::WriteUpFeedback {

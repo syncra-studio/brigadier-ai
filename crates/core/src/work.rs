@@ -2010,7 +2010,8 @@ pub enum OrchestratorStepKind {
     },
     /// The user clicked "Merge into main" on the side panel (BUILD-PLAN A4): the thread was
     /// told to merge the session branch into its base. `id` is what a merge on it names as
-    /// `asked_in`.
+    /// `asked_in`. Only older versions recorded it: the button is gone, and a merge comes from
+    /// the user's words. Kept so their logs still read.
     MergeRequested {
         id: String,
         branch: String,

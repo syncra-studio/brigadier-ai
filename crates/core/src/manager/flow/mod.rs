@@ -563,15 +563,6 @@ fn seed_events(jsonl: &str) -> Vec<brigadier_store::NewEvent> {
         .collect()
 }
 
-/// The app's click on "Merge into main", as the daemon records it.
-pub(crate) fn click() -> crate::work::AnswerOrigin {
-    crate::work::AnswerOrigin {
-        input: Some(crate::work::AnswerInput::Click),
-        client: "Brigadier".into(),
-        pid: 4242,
-    }
-}
-
 /// Runs git in `dir` and returns its output; panics when it fails.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let output = crate::test_git_command()

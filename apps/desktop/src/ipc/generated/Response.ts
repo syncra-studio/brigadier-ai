@@ -165,7 +165,7 @@ signedIn: boolean,
 /**
  * The GitHub login, when `gh` could say it.
  */
-login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn, } | { "method": "waitGitHubSignIn" } | { "method": "cancelGitHubSignIn" } | { "method": "answerFeedbackOffer" } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "appAnswer" } | { "method": "browserPaused" } | { "method": "stopTask" } | { "method": "stopWorkers", 
+login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn, } | { "method": "waitGitHubSignIn" } | { "method": "cancelGitHubSignIn" } | { "method": "answerFeedbackOffer" } | { "method": "closeWorkspace", text: string, } | { "method": "appAnswer" } | { "method": "browserPaused" } | { "method": "stopTask" } | { "method": "stopWorkers", 
 /**
  * The tasks stopped, oldest first.
  */

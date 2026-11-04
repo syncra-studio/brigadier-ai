@@ -39,7 +39,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -1004,11 +1004,6 @@ pub enum Request {
         #[ts(optional, as = "Option<Vec<brigadier_core::FeedbackSent>>")]
         results: Vec<brigadier_core::FeedbackSent>,
     },
-    /// The user clicked "Merge into main" on the side panel: the thread is told to merge the
-    /// session branch into its base.
-    MergeSession {
-        conversation_id: ConversationId,
-    },
     /// "Close workspace": removes the session's own worktree, its uncommitted changes kept as
     /// a commit on its branch first. The next change makes a fresh one in the same folder.
     CloseWorkspace {
@@ -1923,10 +1918,6 @@ pub enum Response {
     WaitGitHubSignIn,
     CancelGitHubSignIn,
     AnswerFeedbackOffer,
-    /// What the click set going, for the user.
-    MergeSession {
-        text: String,
-    },
     /// What went and what stayed, for the user.
     CloseWorkspace {
         text: String,

@@ -1,16 +1,15 @@
-//! Merging is the user's act (BUILD-PLAN A3, A4): their click on "Merge into main" or their own
-//! words, as the thread judges them; Brigadier checks no consent. Merge cards are retired: an
-//! upgrade closes open merge cards. The session keeps its workspace through a merge, and an old
-//! post-merge removal is taken back.
+//! Merging is the user's act (BUILD-PLAN A3, A4): their own words, as the thread judges them;
+//! Brigadier checks no consent. Merge cards are retired: an upgrade closes open merge cards. The
+//! session keeps its workspace through a merge, and an old post-merge removal is taken back.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use super::thread_tests::{commit_in_workspace, merge_with_git, on_main};
-use super::{Flow, Options, Reply, Script, Turn, click, git};
+use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{CardId, DomainEvent, Environment, Lifecycle, Setup};
 use crate::now_ms;
-use crate::work::{AnswerInput, OrchestratorStepKind, Question, QuestionKind, RunState};
+use crate::work::{Question, QuestionKind, RunState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -23,7 +22,8 @@ where
 type Log = Arc<Mutex<Vec<String>>>;
 
 /// A session whose thread commits NOTES.md on "Add notes.", says once that it is ready, and
-/// merges with plain git on [merge]. Every thread input and what it did are logged.
+/// merges with plain git when the user says "Merge it.". Every thread input and what it did are
+/// logged.
 async fn session(name: &str) -> (Flow, Log) {
     let log: Log = Arc::default();
     let said = log.clone();
@@ -41,10 +41,6 @@ async fn session(name: &str) -> (Flow, Log) {
                 if turn.input.contains("Ask about the merge.") {
                     return Reply::text("Ready to merge when you are.");
                 }
-                if turn.input.contains("[merge] The user clicked") {
-                    log(format!("merged {}", merge_with_git(&turn)));
-                    return Reply::text("Merged.");
-                }
                 if turn.input.contains("Add more notes.") {
                     let head = commit_in_workspace(&turn, "MORE.md", "more\n", "Add more");
                     log(format!("worked in: {}", turn.cwd.display()));
@@ -54,6 +50,10 @@ async fn session(name: &str) -> (Flow, Log) {
                 if turn.input.contains("Draft it.") {
                     std::fs::write(turn.cwd.join("DRAFT.md"), "draft\n").unwrap();
                     return Reply::text("Drafted, not committed.");
+                }
+                if turn.input.contains("Merge it.") {
+                    log(format!("merged {}", merge_with_git(&turn)));
+                    return Reply::text("Merged.");
                 }
                 // Last: a resumed thread's input may carry the earlier messages too.
                 if turn.input.contains("Add notes.") {
@@ -351,21 +351,15 @@ async fn the_session_diff_uses_a_containing_upstream_but_keeps_a_diverged_local_
     flow.stop().await;
 }
 
-/// The click is recorded with where it came from and the thread merges on its [merge], with
-/// plain git; with nothing left to merge, the button is refused. Nothing was ever put on a
-/// card, and the workspace stays.
+/// The user's words merge: the thread merges with plain git. Nothing was ever put on a card,
+/// and the workspace stays: the next request works in it (BUILD-PLAN A3).
 #[tokio::test]
-async fn a_click_asks_the_thread_to_merge_and_keeps_the_workspace() {
-    let (flow, log) = session("merge-click").await;
+async fn the_users_words_merge_and_the_workspace_stays() {
+    let (flow, log) = session("merge-words").await;
     flow.say("Add notes.").await;
     flow.settled().await;
     let (_, branch) = workspace(&flow);
-    let reply = flow
-        .manager
-        .merge_session(&flow.conversation, click())
-        .await
-        .unwrap();
-    assert!(reply.contains("Merging"), "{reply}");
+    flow.say("Merge it.").await;
     let heard = log.clone();
     flow.until("the thread's merge", move |_| {
         !logged(&heard, "merged ").is_empty()
@@ -379,24 +373,6 @@ async fn a_click_asks_the_thread_to_merge_and_keeps_the_workspace() {
         "no card: {:#?}",
         board.questions
     );
-    let origin = board
-        .orchestrator_steps
-        .iter()
-        .find_map(|step| match &step.kind {
-            OrchestratorStepKind::MergeRequested { origin, .. } => Some(origin.clone()),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(origin.input, Some(AnswerInput::Click));
-    assert_eq!(origin.client, "Brigadier");
-    // With nothing left to merge, the button's request is refused.
-    let nothing = flow
-        .manager
-        .merge_session(&flow.conversation, click())
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(nothing.contains("Nothing to merge"), "{nothing}");
     // The workspace stays, and the next request works in it.
     let (path, _) = workspace(&flow);
     let path = path.expect("the worktree stays");
@@ -731,10 +707,7 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
     let (flow, log) = session("merge-close-fresh").await;
     flow.say("Add notes.").await;
     flow.settled().await;
-    flow.manager
-        .merge_session(&flow.conversation, click())
-        .await
-        .unwrap();
+    flow.say("Merge it.").await;
     let heard = log.clone();
     flow.until("the thread's merge", move |_| {
         !logged(&heard, "merged ").is_empty()
