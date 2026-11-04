@@ -1306,6 +1306,22 @@ impl SessionManager {
             }
             return Err(err);
         }
+        // A turn that ended just before the notes went cleared the mark as it ended; the turn
+        // they started is marked again while it runs. One already over reads reported, and
+        // stays unmarked (#636).
+        if self.task_live(&task).busy().await {
+            let marked = self
+                .update_task_if(
+                    &conversation_id,
+                    &task_id,
+                    |task| task.state == TaskState::Running,
+                    |task| task.mockup_drawing = true,
+                )
+                .await;
+            if let Err(err) = marked {
+                tracing::warn!(task = %task_id, error = %err, "could not mark the mockup's notes turn drawing");
+            }
+        }
         Ok(())
     }
 
