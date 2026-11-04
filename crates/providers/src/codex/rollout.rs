@@ -3,6 +3,8 @@
 //! it under, so its events are the stream's ([`super::parse`]) with the same ids. A turn's end
 //! is `task_complete` or `turn_aborted`; a user message inside a running turn is a steer.
 
+use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde_json::Value;
@@ -33,6 +35,113 @@ pub(crate) fn context_of(value: &Value) -> Option<Option<crate::session_file::Fi
         used_tokens: used,
         window_tokens: info.get("model_context_window").and_then(Value::as_i64),
     }))
+}
+
+/// How much of a rollout's end [`ends_read`] looks at: a turn's own lines are at its end, and
+/// a poll further back than this is no proof, so its command is told as unread.
+const ENDS_READ_TAIL: u64 = 4 * 1024 * 1024;
+
+/// Those of the background commands `items` whose end the model read, as the rollout at `path`
+/// proves: a script the model ran polled that command's process, and the script's output carries
+/// the exit code and the end of what the command printed. Codex's stream says no such thing.
+/// Whatever isn't that proof (no file, an unknown format, a line not written yet) reads as unread.
+///
+/// shortcut: only a poll naming its process by number in a script's `session_id:`, printing its
+/// result as JSON, counts; a poll in a variable or a plain `write_stdin` call proves nothing, and
+/// its model hears the end again. Upgrade if those show up live.
+pub fn ends_read(path: &Path, items: &[String]) -> Vec<String> {
+    let Ok(text) = tail(path, ENDS_READ_TAIL) else {
+        return Vec::new();
+    };
+    let mut ends = HashMap::new();
+    let mut polls = HashMap::new();
+    let mut results = Vec::new();
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+        match str_of(payload, "type") {
+            Some("item_completed") => {
+                let Some(item) = payload.get("item") else {
+                    continue;
+                };
+                if str_of(item, "type") == Some("CommandExecution")
+                    && str_of(item, "id").is_some_and(|id| items.iter().any(|item| item == id))
+                    && let Some(process) = str_of(item, "process_id")
+                {
+                    ends.insert(process.to_owned(), item.clone());
+                }
+            }
+            Some("custom_tool_call") if str_of(payload, "name") == Some("exec") => {
+                if let (Some(call), Some(process)) = (
+                    str_of(payload, "call_id"),
+                    str_of(payload, "input").and_then(polled_process),
+                ) {
+                    polls.insert(call.to_owned(), process.to_owned());
+                }
+            }
+            Some("custom_tool_call_output") => {
+                if let Some(process) = str_of(payload, "call_id").and_then(|call| polls.get(call))
+                    && let Some(output) = payload.get("output")
+                {
+                    results.push((process.clone(), output.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    // A poll's output and its command's end come in either order.
+    results
+        .iter()
+        .filter_map(|(process, output)| ends.get(process).filter(|end| shows_end(output, end)))
+        .filter_map(|end| str_of(end, "id").map(str::to_owned))
+        .collect()
+}
+
+/// The last `limit` bytes of the file at `path`. Its first line may come cut, so unreadable.
+fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let from = file.metadata()?.len().saturating_sub(limit);
+    file.seek(SeekFrom::Start(from))?;
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The one process a code-mode script polls, named by number: `write_stdin({session_id:123,…`.
+fn polled_process(script: &str) -> Option<&str> {
+    if !script.contains("write_stdin") {
+        return None;
+    }
+    let mut named = script.split("session_id:").skip(1);
+    let rest = named.next()?.trim_start();
+    if named.next().is_some() {
+        return None;
+    }
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    (digits > 0).then(|| &rest[..digits])
+}
+
+/// A script's `output` holds a result with the command's exit code and the end of its output.
+/// Part of it may have been read by an earlier poll; none of it, of one that printed, is no proof.
+fn shows_end(output: &Value, end: &Value) -> bool {
+    let printed = str_of(end, "aggregated_output").unwrap_or_default();
+    output.as_array().into_iter().flatten().any(|part| {
+        let Some(result) =
+            str_of(part, "text").and_then(|text| serde_json::from_str::<Value>(text).ok())
+        else {
+            return false;
+        };
+        result
+            .get("exit_code")
+            .is_some_and(|code| Some(code) == end.get("exit_code"))
+            && str_of(&result, "output").is_some_and(|seen| {
+                printed.ends_with(seen) && seen.is_empty() == printed.is_empty()
+            })
+    })
 }
 
 /// The thread the rollout at `path` holds.
@@ -379,6 +488,125 @@ fn file_change(path: &str, change: &Value) -> FileChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A command's end, a poll's script and its output, each as the rollout records them.
+    fn end_line(id: &str, process: &str, printed: &str) -> String {
+        serde_json::json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "CommandExecution", "id": id, "process_id": process, "exit_code": 0,
+            "aggregated_output": printed
+        }}})
+        .to_string()
+    }
+
+    fn poll_lines(call: &str, script: &str, result: &str) -> [String; 2] {
+        [
+            serde_json::json!({"type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": call, "input": script
+            }})
+            .to_string(),
+            serde_json::json!({"type": "response_item", "payload": {
+                "type": "custom_tool_call_output", "call_id": call, "output": [
+                    {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                    {"type": "input_text", "text": result}
+                ]
+            }})
+            .to_string(),
+        ]
+    }
+
+    fn ends_read_of(name: &str, lines: &[String], items: &[&str]) -> Vec<String> {
+        let path = std::env::temp_dir().join(format!(
+            "brigadier-ends-read-{name}-{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let items: Vec<String> = items.iter().map(|item| (*item).to_owned()).collect();
+        let read = ends_read(&path, &items);
+        std::fs::remove_file(&path).unwrap();
+        read
+    }
+
+    const POLL_1: &str = "text(await tools.write_stdin({session_id:111,chars:\"\"}));";
+    const ENDED: &str = r#"{"exit_code":0,"output":"one\n"}"#;
+
+    /// Two commands in a turn: a poll that read the first's end proves nothing of the second's,
+    /// though both ended, and whichever way round its end and output are recorded.
+    #[test]
+    fn a_polled_end_proves_only_its_own_command() {
+        let [call, output] = poll_lines("c1", POLL_1, ENDED);
+        for lines in [
+            [
+                end_line("a", "111", "one\n"),
+                end_line("b", "222", "one\n"),
+                call.clone(),
+                output.clone(),
+            ],
+            [
+                call.clone(),
+                output.clone(),
+                end_line("a", "111", "one\n"),
+                end_line("b", "222", "one\n"),
+            ],
+        ] {
+            assert_eq!(ends_read_of("own", &lines, &["a", "b"]), ["a"]);
+        }
+    }
+
+    #[test]
+    fn a_poll_that_saw_it_running_proves_nothing() {
+        let [call, output] = poll_lines("c1", POLL_1, r#"{"session_id":111,"output":""}"#);
+        let lines = [call, output, end_line("a", "111", "one\n")];
+        assert!(ends_read_of("running", &lines, &["a"]).is_empty());
+    }
+
+    /// The answer's own words can't pass for the proof, nor another command's result for its.
+    #[test]
+    fn only_a_result_of_this_commands_end_is_proof() {
+        for (script, result) in [
+            (POLL_1, r#"{"exit_code":0,"output":"other\n"}"#),
+            (POLL_1, r#"{"exit_code":3,"output":"one\n"}"#),
+            (POLL_1, r#"{"exit_code":0,"output":""}"#),
+            (POLL_1, r#""exit_code":0"#),
+            ("text(await tools.exec_command({cmd:\"echo one\"}));", ENDED),
+            (
+                "for (const s of [1]) await tools.write_stdin({session_id:s});",
+                ENDED,
+            ),
+            (
+                "await tools.write_stdin({session_id:111});await tools.write_stdin({session_id:222});",
+                ENDED,
+            ),
+        ] {
+            let [call, output] = poll_lines("c1", script, result);
+            let lines = [call, output, end_line("a", "111", "one\n")];
+            assert!(
+                ends_read_of("other", &lines, &["a"]).is_empty(),
+                "{script} {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_or_foreign_file_proves_nothing() {
+        let items = ["a".to_owned()];
+        assert!(ends_read(Path::new("/nonexistent/rollout.jsonl"), &items).is_empty());
+        assert!(ends_read_of("foreign", &["not json".into(), "{}".into()], &["a"]).is_empty());
+    }
+
+    /// A poll further back than the read reaches is no proof, and the read stays that small.
+    #[test]
+    fn only_the_files_end_is_read() {
+        let [call, output] = poll_lines("c1", POLL_1, ENDED);
+        let path = std::env::temp_dir().join(format!(
+            "brigadier-ends-read-tail-{}.jsonl",
+            std::process::id()
+        ));
+        let filler = "x".repeat(usize::try_from(ENDS_READ_TAIL).unwrap());
+        let lines = [end_line("a", "111", "one\n"), call, output, filler];
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        assert!(ends_read(&path, &["a".to_owned()]).is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
 
     /// Codex keeps no item of a declined command; Brigadier's word on it stands for it, in
     /// its place, and is no message of the user's (#560). An older word names no command and

@@ -84,6 +84,10 @@ impl SaidStreaming {
 /// Characters of a CLI job's output its message to the thread carries (the end of it).
 const JOB_OUTPUT_TAIL: usize = 4000;
 
+/// How long a turn's end waits on reading its rollout (`drop_ends_read`), which takes
+/// milliseconds on a local disk.
+const ENDS_READ_WAIT: Duration = Duration::from_millis(500);
+
 /// What the thread hears when its CLI ended while jobs of its own still ran (`words`: the
 /// commands known by name; `count`: those it only counted).
 fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
@@ -282,9 +286,11 @@ struct ConvState {
     terminals: HashMap<String, String>,
     /// Codex commands the turn went on from (`terminals`) that ended while it still ran, by
     /// item: their words, end and output's tail. Each is told as a lingering one's is: Codex
-    /// never says it (D177: a `brigadier ask` answered so). One its model did poll to its end
-    /// is told too: Codex doesn't say that poll happened, and an extra word beats a lost answer.
+    /// never says it (D177: a `brigadier ask` answered so). One its model polled to its end
+    /// goes at the turn's end, if its rollout proves that (`drop_ends_read`).
     unread_ends: HashMap<String, (String, String, String)>,
+    /// The CLI's own session file, from its start (Codex's rollout for `drop_ends_read`).
+    session_file: Option<PathBuf>,
     /// The request whose turn left Codex commands running (`lingering`): it works until each
     /// has ended and the thread heard of it. While they run, as while the CLI's own background
     /// jobs do (`background`), the CLI stays up (nothing retires it).
@@ -4824,6 +4830,29 @@ impl SessionManager {
         self.lingering_ended(conv, item, &how, tail).await;
     }
 
+    /// Forgets the unread ends the model did read: Codex's stream can't say a poll saw an end, and
+    /// its rollout can. Only with an unread end to tell, so a turn with none reads nothing. No
+    /// answer, in time or at all, means it's told: an extra word beats a lost answer.
+    async fn drop_ends_read(&self, conv: &Arc<ConvLive>) {
+        let (file, items) = {
+            let state = conv.state.lock().await;
+            let items: Vec<String> = state.unread_ends.keys().cloned().collect();
+            match state.session_file.clone().filter(|_| !items.is_empty()) {
+                Some(file) => (file, items),
+                None => return,
+            }
+        };
+        let reading = tokio::task::spawn_blocking(move || {
+            brigadier_providers::codex::rollout::ends_read(&file, &items)
+        });
+        if let Ok(Ok(read)) = tokio::time::timeout(ENDS_READ_WAIT, reading).await {
+            let mut state = conv.state.lock().await;
+            for item in read {
+                state.unread_ends.remove(&item);
+            }
+        }
+    }
+
     /// A Codex background terminal of the thread's own shell was listed, or left the list
     /// (`/ps`): one that leaves it ends its command as its item's end does (D21).
     async fn terminal_seen(&self, conv: &Arc<ConvLive>, own_shell: bool, task: &BackgroundTask) {
@@ -5300,6 +5329,7 @@ impl SessionManager {
                 ..
             } => {
                 cli.meter.session_started(cli_version.as_deref());
+                conv.state.lock().await.session_file = file.as_ref().map(PathBuf::from);
                 let entry = super::session_dir::LineageEntry {
                     provider: cli.provider,
                     session_id: native_id.clone(),
@@ -5624,6 +5654,9 @@ impl SessionManager {
         }
         if self.finish_thread_stall(conv).await {
             return;
+        }
+        if status == TurnStatus::Completed {
+            self.drop_ends_read(conv).await;
         }
         let (
             limit_hit,

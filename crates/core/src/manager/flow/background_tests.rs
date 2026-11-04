@@ -245,12 +245,45 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
 enum Look {
     Never,
     WhileRunning,
+    /// While it ran, and again as it ended, the look that read its end: Codex says only the first.
+    ToItsEnd,
     AfterItsEnd,
+}
+
+/// A rollout's lines for `cmd-1`, Codex's process 4242, polled once: what that poll's output said.
+fn rollout_of_a_poll(poll_output: &str) -> String {
+    [
+        json!({"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "call-poll",
+            "input": "text(await tools.write_stdin({session_id:4242,chars:\"\"}));"
+        }}),
+        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "CommandExecution", "id": "cmd-1", "process_id": "4242", "exit_code": 0,
+            "aggregated_output": "Which colour?: blue\n"
+        }}}),
+        json!({"type": "response_item", "payload": {
+            "type": "custom_tool_call_output", "call_id": "call-poll",
+            "output": [{"type": "input_text", "text": poll_output}]
+        }}),
+    ]
+    .map(|line| line.to_string())
+    .join("\n")
+}
+
+/// A scratch path for a test's rollout, gone first: a test that wants a file writes it.
+fn scratch_rollout(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("{name}-{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    path
 }
 
 /// A Codex `brigadier ask` the turn went on from, answered while the turn still runs. What each
 /// turn was sent, and the flow's first request.
-async fn a_codex_ask_ending_in_its_turn(name: &str, look: Look) -> (Flow, Vec<String>, String) {
+async fn a_codex_ask_ending_in_its_turn(
+    name: &str,
+    look: Look,
+    file: Option<std::path::PathBuf>,
+) -> (Flow, Vec<String>, String) {
     use brigadier_providers::{
         BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
     };
@@ -264,11 +297,19 @@ async fn a_codex_ask_ending_in_its_turn(name: &str, look: Look) -> (Flow, Vec<St
         },
         script(move |turn| {
             let log = log.clone();
+            let file = file.clone();
             async move {
                 log.lock().unwrap().push(turn.input.clone());
                 if turn.input.contains("finished after your turn") {
                     return Reply::text("Wrote blue.");
                 }
+                let started = ProviderEvent::SessionStarted {
+                    native_id: "thread-1".into(),
+                    model: None,
+                    cwd: None,
+                    cli_version: None,
+                    file: file.map(|file| file.to_string_lossy().into_owned()),
+                };
                 let command = |status, exit_code, output: Option<&str>| ProviderEvent::Command {
                     item_id: "cmd-1".into(),
                     command: "brigadier ask \"Which colour?\"".into(),
@@ -306,6 +347,7 @@ async fn a_codex_ask_ending_in_its_turn(name: &str, look: Look) -> (Flow, Vec<St
                 // As Codex sends them: a terminal's end just before its command's, then its
                 // usage twice for the one call that ends the turn.
                 let mut events = vec![
+                    started,
                     command(ItemStatus::InProgress, None, None),
                     terminal(BackgroundTaskStatus::Running),
                 ];
@@ -320,6 +362,9 @@ async fn a_codex_ask_ending_in_its_turn(name: &str, look: Look) -> (Flow, Vec<St
                     duration_ms: None,
                     kept: None,
                 };
+                if look == Look::ToItsEnd {
+                    events.push(poll.clone());
+                }
                 if look == Look::WhileRunning {
                     events.push(poll.clone());
                     events.push(carry_on(ItemStatus::InProgress, None));
@@ -360,7 +405,7 @@ async fn a_codex_ask_ending_in_its_turn(name: &str, look: Look) -> (Flow, Vec<St
 #[tokio::test]
 async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
     let (flow, inputs, root) =
-        a_codex_ask_ending_in_its_turn("codex-unread-end", Look::Never).await;
+        a_codex_ask_ending_in_its_turn("codex-unread-end", Look::Never, None).await;
     assert!(
         inputs.iter().any(|input| input.contains(
             "[your background command `brigadier ask \"Which colour?\"` finished after your turn · exit 0]"
@@ -380,12 +425,64 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
 #[tokio::test]
 async fn a_codex_ask_polled_while_running_then_answered_is_told_once() {
     let (flow, inputs, _) =
-        a_codex_ask_ending_in_its_turn("codex-polled-early", Look::WhileRunning).await;
-    let told = inputs
+        a_codex_ask_ending_in_its_turn("codex-polled-early", Look::WhileRunning, None).await;
+    assert_eq!(told_of_blue(&inputs), 1, "{inputs:#?}");
+    flow.stop().await;
+}
+
+fn told_of_blue(inputs: &[String]) -> usize {
+    inputs
         .iter()
         .filter(|input| input.contains("finished after your turn") && input.contains("blue"))
-        .count();
-    assert_eq!(told, 1, "{inputs:#?}");
+        .count()
+}
+
+/// One polled to its end: Codex's stream can't say so, its rollout does, so the model that read
+/// its answer there isn't told it again in a hidden turn (seen live: its reply came twice).
+#[tokio::test]
+async fn a_codex_ask_polled_to_its_end_is_not_told_again() {
+    let file = scratch_rollout("codex-polled-to-end");
+    std::fs::write(
+        &file,
+        rollout_of_a_poll(r#"{"exit_code":0,"output":"Which colour?: blue\n"}"#),
+    )
+    .unwrap();
+    let (flow, inputs, _) =
+        a_codex_ask_ending_in_its_turn("codex-polled-to-end", Look::ToItsEnd, Some(file.clone()))
+            .await;
+    assert_eq!(inputs.len(), 1, "{inputs:#?}");
+    flow.stop().await;
+    std::fs::remove_file(file).unwrap();
+}
+
+/// The rollout shows a poll that saw it still running, and the model went on: no proof, so the
+/// answer is told, once.
+#[tokio::test]
+async fn a_codex_ask_whose_rollout_shows_only_an_early_poll_is_told_once() {
+    let file = scratch_rollout("codex-rollout-early");
+    std::fs::write(
+        &file,
+        rollout_of_a_poll(r#"{"session_id":4242,"output":""}"#),
+    )
+    .unwrap();
+    let (flow, inputs, _) = a_codex_ask_ending_in_its_turn(
+        "codex-rollout-early",
+        Look::WhileRunning,
+        Some(file.clone()),
+    )
+    .await;
+    assert_eq!(told_of_blue(&inputs), 1, "{inputs:#?}");
+    flow.stop().await;
+    std::fs::remove_file(file).unwrap();
+}
+
+/// No rollout to read is no proof: the answer is told.
+#[tokio::test]
+async fn a_codex_ask_with_its_rollout_missing_is_told_once() {
+    let file = scratch_rollout("codex-rollout-missing");
+    let (flow, inputs, _) =
+        a_codex_ask_ending_in_its_turn("codex-rollout-missing", Look::ToItsEnd, Some(file)).await;
+    assert_eq!(told_of_blue(&inputs), 1, "{inputs:#?}");
     flow.stop().await;
 }
 
@@ -393,7 +490,7 @@ async fn a_codex_ask_polled_while_running_then_answered_is_told_once() {
 #[tokio::test]
 async fn a_codex_command_looked_in_on_after_its_end_is_not_told_again() {
     let (flow, inputs, _) =
-        a_codex_ask_ending_in_its_turn("codex-looked-after-end", Look::AfterItsEnd).await;
+        a_codex_ask_ending_in_its_turn("codex-looked-after-end", Look::AfterItsEnd, None).await;
     assert_eq!(inputs.len(), 1, "{inputs:#?}");
     flow.stop().await;
 }
