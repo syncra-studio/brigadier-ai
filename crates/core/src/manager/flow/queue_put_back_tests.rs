@@ -115,6 +115,10 @@ async fn a_row_put_back_from_an_edit_keeps_its_slot_unjudged() {
         .await
         .unwrap();
     let edited = send(&flow, "Check the formatting and the lints.", Some(0)).await;
+    assert!(
+        !edited.deciding,
+        "no judge reads it, so it never reads Deciding: {edited:?}"
+    );
     tokio::time::sleep(ANSWER_ACTS).await;
     let queued: Vec<_> = queue_of(&flow)
         .await
