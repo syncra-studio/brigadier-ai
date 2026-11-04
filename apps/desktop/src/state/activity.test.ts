@@ -163,7 +163,7 @@ test("the reconnect snapshot restores live worker activity without a thread view
 
 test("a turn that failed while its work runs reads Working until the block closes, then Failed", () => {
   const working = { look: "working", hover: "Working" };
-  const failed = { look: "error", hover: "Failed" };
+  const failed = { look: "error", amber: true, hover: "Failed" };
   const id = "failed-held";
   applyActivityNews({ conversationId: id, entries: [], opened: true, workers: [workerRow(true)] });
   applyActivityNews({ conversationId: id, entries: [], ended: "failed" });
@@ -179,7 +179,7 @@ test("a turn that failed while its work runs reads Working until the block close
   const held = (tasks: [string, "starting"][]) => fromSnapshot({ conversationId: id, run: "failed", tasks, approvals: [], questions: [] });
   assert.deepEqual(rowMark(rowActivity(held([["t", "starting"]]))), working, "a worker not yet at its CLI holds it too, and a failed run");
   assert.deepEqual(rowMark(rowActivity(held([]))), failed, "nothing runs: red at once");
-  assert.deepEqual(rowMark(rowActivity({ ...held([["t", "starting"]]), approvals: new Set(["a"]) })), { look: "dot", hover: "Needs you · approval" });
+  assert.deepEqual(rowMark(rowActivity({ ...held([["t", "starting"]]), approvals: new Set(["a"]) })), { look: "dot", amber: true, hover: "Needs you · approval" });
 });
 
 test("turn-end timestamps survive snapshots and worker-only news, independent of finished requests", () => {
