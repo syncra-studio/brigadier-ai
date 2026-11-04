@@ -98,6 +98,34 @@ async function open(): Promise<void> {
   await until("the search focused", () => document.activeElement?.matches("[data-slot=model-picker] input"));
 }
 
+/**
+ * The picker opened again as soon as the closing one leaves the page, and `name` pressed the
+ * moment its search first takes the keyboard: before what the closed picker and the new one
+ * still do once opened (#598). Call before what closes it; resolves once the key is sent.
+ */
+function reopenAtOnceAndPress(name: string): Promise<void> {
+  return new Promise((resolve) => {
+    const atOnce = (event: FocusEvent) => {
+      if (!(event.target as Element | null)?.matches?.("[data-slot=model-picker] input")) return;
+      document.removeEventListener("focusin", atOnce);
+      // Once the focus has moved, in this same task.
+      queueMicrotask(() => {
+        key(document.activeElement!, name);
+        resolve();
+      });
+    };
+    const gone = new MutationObserver(() => {
+      if (picker()) return;
+      gone.disconnect();
+      document.addEventListener("focusin", atOnce);
+      const opener = trigger()!;
+      opener.focus();
+      key(opener, "Enter");
+    });
+    gone.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
@@ -109,16 +137,22 @@ async function drive() {
     agent("Codex")!.click();
     await until("Codex's models", () => models().some((row) => row.textContent?.startsWith("GPT-5.5")));
     seen.codex = { line: line(), models: models().map((row) => row.textContent) };
+    // Opened again right as it goes, the first ↓ the moment it opens (below).
+    const reopened = reopenAtOnceAndPress("ArrowDown");
     models()[0]!.click();
     await until("the move asked for", () => asked.length === 1);
-    await until("the picker closed", () => picker() === null);
     seen.asked = asked;
 
     // The keyboard: ↓ from the search to the picked model, ← to its agent, ↓ to the next agent,
     // Space into its models, ← back, → into its models, typing searches, Escape clears the
     // search, then closes.
-    await open();
+    await reopened;
     const keys: [string, string | null][] = [];
+    // The first ↓ came before the closed picker gave the keyboard back and before the new one
+    // put it in its search: once both have had their turn (timers set before this one), it
+    // still is where ↓ took it.
+    await sleep(0);
+    keys.push(["ArrowDown", focused()]);
     // Each key moves the focus or the search: what it saw once it did, not after a fixed wait
     // a loaded machine can overrun.
     const press = async (name: string) => {
@@ -127,7 +161,6 @@ async function drive() {
       await until(`the keyboard to move on ${name}`, () => focused() !== before, 2000).catch(() => null);
       keys.push([name, focused()]);
     };
-    await press("ArrowDown");
     await press("ArrowLeft");
     await press("ArrowDown");
     seen.browsingLine = line();
