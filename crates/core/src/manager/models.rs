@@ -198,11 +198,14 @@ fn rated_picks(
 }
 /// The automatic rows: per kind of work of the shipped table, in its order, the rows its
 /// ratings give (one per agent, best first), then the shipped rows of agents with nothing rated
-/// for it; where nothing is rated at all, the shipped rows.
+/// for it; where nothing is rated at all, the shipped rows. A shipped row `on` says can't run
+/// (its agent switched off, its model made unavailable) is left out (#743), unless that leaves
+/// its kind with no row at all.
 fn automatic(
     shipped: Vec<GuidanceRow>,
     models: &[MergedModel],
     allowed: &dyn Fn(&MergedModel, &str) -> bool,
+    on: &dyn Fn(&GuidanceRow) -> bool,
 ) -> Vec<GuidanceRow> {
     let mut out: Vec<GuidanceRow> = Vec::new();
     for row in &shipped {
@@ -211,21 +214,24 @@ fn automatic(
         }
         let picks = rated_picks(&row.work, models, allowed);
         if picks.is_empty() {
-            out.extend(
-                shipped
-                    .iter()
-                    .filter(|other| same_work(&other.work, &row.work))
-                    .cloned(),
-            );
+            let kind: Vec<GuidanceRow> = shipped
+                .iter()
+                .filter(|other| same_work(&other.work, &row.work))
+                .cloned()
+                .collect();
+            let running: Vec<GuidanceRow> = kind.iter().filter(|row| on(row)).cloned().collect();
+            out.extend(if running.is_empty() { kind } else { running });
             continue;
         }
         let small = pick_rule(&row.work).is_some_and(|(rule, _)| rule.small);
-        // An agent with no rated model for it keeps its shipped row, after the rated ones.
+        // An agent with no rated model for it keeps its shipped row, after the rated ones, when
+        // that row can run: an agent switched off has no pick, and gets no row back either.
         let unrated: Vec<GuidanceRow> = shipped
             .iter()
             .filter(|other| {
                 same_work(&other.work, &row.work)
                     && !picks.iter().any(|pick| pick.provider == other.agent)
+                    && on(other)
             })
             .cloned()
             .collect();
@@ -916,7 +922,9 @@ impl SessionManager {
             }
             Some(self.listed_model(provider, word))
         };
-        let shipped = automatic(rows(GUIDANCE), &models, &allowed);
+        let shipped = automatic(rows(GUIDANCE), &models, &allowed, &|row| {
+            self.row_available(row.agent, &row.model)
+        });
         let found = suggestions(
             &rows(text),
             &registry,
@@ -1141,6 +1149,26 @@ impl SessionManager {
     }
     /// The user's rules, without any line that can't be a rule (named once in the log): what
     /// every start and move is judged by, so one typo leaves the other rules and Fallback on.
+    /// Whether a routing row of `agent` naming `model` can start as Settings › Providers stands:
+    /// the agent switched on, and the model it runs as (a family word's newest listed model,
+    /// `default` the CLI's default) not made unavailable. Settings › Routing judges it the same.
+    pub(super) fn row_available(&self, agent: ProviderKind, model: &str) -> bool {
+        use crate::routing::availability::{model_available, provider_on};
+        let settings = self.core.settings();
+        if !provider_on(&settings, agent) {
+            return false;
+        }
+        let id = if model.trim().is_empty() || model.eq_ignore_ascii_case("default") {
+            let catalog = self.runtime.overview(agent).and_then(|o| o.models);
+            match listed(catalog.as_ref(), None) {
+                Some(default) => default.id.clone(),
+                None => return true,
+            }
+        } else {
+            self.listed_model(agent, model)
+        };
+        model_available(&settings, agent, &id)
+    }
     pub(super) fn model_policy(&self) -> Result<Policy> {
         let policy = Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?);
         note_invalid(&policy.invalid);
@@ -1300,6 +1328,7 @@ impl SessionManager {
         let user = editable(&rules_path, DEFAULT_RULES)?;
         let policy = Policy::parse(&user);
         let shipped = self.automatic_view(&user)?.0;
+        let settings = self.core.settings();
         let mut models = Vec::new();
         for provider in brigadier_providers::adapters::kinds() {
             if let Some(catalog) = self.runtime.overview(provider).and_then(|o| o.models) {
@@ -1307,8 +1336,11 @@ impl SessionManager {
                 for model in catalog.models {
                     models.push(Model {
                         agent: provider,
+                        // Its agent on and the model not made unavailable (#743).
+                        available: crate::routing::availability::model_available(
+                            &settings, provider, &model.id,
+                        ),
                         model: model.id,
-                        available: true,
                         efforts: model.efforts,
                         age_s,
                     });
@@ -1380,7 +1412,6 @@ impl SessionManager {
                 }
             })
             .collect();
-        let settings = self.core.settings();
         let agents = brigadier_providers::adapters::kinds()
             .map(|provider| AgentAccounts {
                 agent: provider,
@@ -1664,12 +1695,42 @@ mod tests {
         (registry, models)
     }
 
+    /// #743: an agent switched off has no rated pick, and its shipped row doesn't come back in
+    /// its place; a kind only that agent's rows name keeps them, so it still exists.
+    #[test]
+    fn automatic_leaves_out_a_switched_off_agent() {
+        let (_, models) = small_catalog();
+        let rows = automatic(
+            rows(GUIDANCE),
+            &models,
+            &|model, _| model.provider != ProviderKind::Claude,
+            &|row| row.agent != ProviderKind::Claude,
+        );
+        let shipped = super::rows(GUIDANCE);
+        let claude_only = |work: &str| {
+            shipped
+                .iter()
+                .filter(|row| same_work(&row.work, work))
+                .all(|row| row.agent == ProviderKind::Claude)
+        };
+        for row in &rows {
+            assert!(
+                row.agent != ProviderKind::Claude || claude_only(&row.work),
+                "{row:?}"
+            );
+        }
+        assert!(rows.iter().any(|row| same_work(&row.work, "fusion-claude")));
+        assert!(
+            rows.iter()
+                .any(|row| same_work(&row.work, "Bounded implementation"))
+        );
+    }
     /// The automatic rows come from the ratings, one per agent in rating order; a kind with
     /// nothing rated keeps the shipped table's rows.
     #[test]
     fn automatic_rows_follow_the_ratings_and_fall_back_to_the_shipped_table() {
         let (_, models) = small_catalog();
-        let rows = automatic(rows(GUIDANCE), &models, &|_, _| true);
+        let rows = automatic(rows(GUIDANCE), &models, &|_, _| true, &|_| true);
         let of = |work: &str| -> Vec<(ProviderKind, String, Option<String>)> {
             rows.iter()
                 .filter(|row| row.work == work)
@@ -1717,9 +1778,12 @@ mod tests {
             .unwrap();
         assert!(!titles.reason.starts_with(RATED_REASON));
         // A model a rule or a switch keeps out gives its place to the agent's next best.
-        let rows = automatic(super::rows(GUIDANCE), &models, &|model, _| {
-            model.id != "eyes"
-        });
+        let rows = automatic(
+            super::rows(GUIDANCE),
+            &models,
+            &|model, _| model.id != "eyes",
+            &|_| true,
+        );
         assert_eq!(
             rows.iter()
                 .filter(|row| row.work == "Computer use")
@@ -1792,7 +1856,7 @@ mod tests {
     #[test]
     fn rule_reading_keeps_its_family_word() {
         let (_, models) = small_catalog();
-        let shipped = automatic(rows(GUIDANCE), &models, &|_, _| true);
+        let shipped = automatic(rows(GUIDANCE), &models, &|_, _| true, &|_| true);
         let reading: Vec<_> = shipped
             .iter()
             .filter(|row| row.work == "Rule reading")

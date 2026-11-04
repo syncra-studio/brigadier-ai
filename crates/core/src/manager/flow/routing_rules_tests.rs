@@ -86,3 +86,145 @@ async fn a_bad_rules_line_leaves_fallback_and_the_other_rules_on() {
     manager.check_rules_file().unwrap();
     flow.stop().await;
 }
+
+/// What a `brigadier start` answered, as the CLI prints it with `--json`.
+fn reply(reply: brigadier_cli::protocol::CliReply) -> serde_json::Value {
+    match reply {
+        brigadier_cli::protocol::CliReply::Ok { output } => output,
+        brigadier_cli::protocol::CliReply::Error { error } => {
+            serde_json::json!({ "error": error })
+        }
+    }
+}
+
+/// #743: an agent switched off, or a model made unavailable, in Settings › Providers takes no
+/// worker a start by its Work picks, and `brigadier models` doesn't list its models as
+/// available; the automatic rows give the switched-off agent no row back. An explicit
+/// `--agent` still takes that agent's own row of the order, its model and effort (D34).
+#[tokio::test]
+async fn a_start_by_work_skips_what_providers_keeps_out_unless_asked_for() {
+    use brigadier_cli::protocol::StartRequest;
+    let flow = Flow::start("routing-switched-off", Options::default(), quiet()).await;
+    let manager = &flow.manager;
+    std::fs::write(
+        manager.models_rules_path(),
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Docs | claude | opus | low | First. |\n| Docs | codex | astra | medium | Next. |\n",
+    )
+    .unwrap();
+    let caller = CliCaller {
+        conversation_id: flow.conversation.clone(),
+        task_id: None,
+        grant: String::new(),
+    };
+    let start = |work: &str, agent: Option<ProviderKind>| StartRequest {
+        title: None,
+        agent,
+        model: None,
+        effort: None,
+        work: Some(work.into()),
+        reviewing: Vec::new(),
+        local: true,
+        repo: None,
+        base: None,
+        permission: None,
+        mcps: Vec::new(),
+        with: Vec::new(),
+        mockup: false,
+        prompt: "Reply once.".into(),
+    };
+    let started = async |work: &str, agent: Option<ProviderKind>| {
+        let seen = reply(
+            manager
+                .cli_start(&caller, start(work, agent))
+                .await
+                .unwrap(),
+        );
+        let worker = &seen["worker"];
+        (
+            worker["agent"].as_str().map(str::to_owned),
+            worker["model"].as_str().map(str::to_owned),
+            worker["effort"].as_str().map(str::to_owned),
+            seen,
+        )
+    };
+    let owned = |agent: &str, model: &str, effort: &str| {
+        (
+            Some(agent.to_owned()),
+            Some(model.to_owned()),
+            Some(effort.to_owned()),
+        )
+    };
+
+    // Claude switched off.
+    let mut settings = flow.core.settings();
+    settings.disabled_providers.push(ProviderKind::Claude);
+    flow.core.update_settings(settings).await.unwrap();
+    let automatic = manager.work_rows("Architecture and broad changes").unwrap();
+    assert!(
+        !automatic.is_empty()
+            && automatic
+                .iter()
+                .all(|row| row.agent != ProviderKind::Claude),
+        "{automatic:#?}"
+    );
+    let models = manager.cli_models(&caller).await.unwrap();
+    for model in &models.models {
+        assert_eq!(
+            model.available,
+            model.agent != ProviderKind::Claude,
+            "{model:?}"
+        );
+    }
+    let (agent, model, effort, seen) = started("Docs", None).await;
+    assert_eq!(
+        (agent, model, effort),
+        owned("codex", "gpt-6-astra", "medium"),
+        "{seen:#}"
+    );
+    let (agent, ..) = started("Architecture and broad changes", None).await;
+    assert_eq!(agent.as_deref(), Some("codex"));
+    // Asked for by name, the agent's own row still starts (D34), off the routing, which says so.
+    let (agent, model, effort, seen) = started("Docs", Some(ProviderKind::Claude)).await;
+    assert_eq!(
+        (agent, model, effort),
+        owned("claude", "claude-opus-5-5", "low"),
+        "{seen:#}"
+    );
+    assert!(
+        seen["offRouting"]
+            .as_str()
+            .is_some_and(|line| line.contains("Codex")),
+        "{seen:#}"
+    );
+
+    // Claude on, its model made unavailable: the same, and the start is on the routing.
+    let mut settings = flow.core.settings();
+    settings.disabled_providers.clear();
+    settings.hidden_models.push(crate::model::ModelRef {
+        provider: ProviderKind::Claude,
+        id: "claude-opus-5-5".into(),
+    });
+    flow.core.update_settings(settings).await.unwrap();
+    let (agent, model, effort, seen) = started("Docs", None).await;
+    assert_eq!(
+        (agent, model, effort),
+        owned("codex", "gpt-6-astra", "medium"),
+        "{seen:#}"
+    );
+    assert!(seen["offRouting"].is_null(), "{seen:#}");
+    let (agent, model, effort, seen) = started("Docs", Some(ProviderKind::Claude)).await;
+    assert_eq!(
+        (agent, model, effort),
+        owned("claude", "claude-opus-5-5", "low"),
+        "{seen:#}"
+    );
+
+    // Nothing the order names can run: refused, saying why, not started on a row kept out.
+    let mut settings = flow.core.settings();
+    settings.disabled_providers.push(ProviderKind::Codex);
+    flow.core.update_settings(settings).await.unwrap();
+    let (agent, .., seen) = started("Docs", None).await;
+    assert_eq!(agent, None);
+    assert_eq!(seen["error"]["code"], "refused", "{seen:#}");
+    flow.stop().await;
+}
