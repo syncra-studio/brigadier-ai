@@ -6,6 +6,7 @@ import { createServer, type ViteDevServer } from "vite";
 import type { RequestOf } from "@/ipc/client";
 import type { FeedbackFiled, FeedbackReport } from "@/ipc/generated";
 import type * as FeedbackModule from "@/state/feedback";
+import type * as StoreModule from "@/state/store";
 
 // The module reads the provider labels from a component file, so Vite loads it.
 type Feedback = typeof FeedbackModule;
@@ -19,13 +20,13 @@ let sendOffer: Feedback["sendOffer"];
 let setFeedbackText: Feedback["setFeedbackText"];
 let useFeedbackOffers: Feedback["useFeedbackOffers"];
 let useFeedbackUi: Feedback["useFeedbackUi"];
-let useApp: typeof import("@/state/store")["useApp"];
+let useApp: (typeof StoreModule)["useApp"];
 
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   ({ closeFeedback, dismissOffer, draftOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
     (await server.ssrLoadModule("/src/state/feedback.ts")) as Feedback);
-  ({ useApp } = (await server.ssrLoadModule("/src/state/store.ts")) as typeof import("@/state/store"));
+  ({ useApp } = (await server.ssrLoadModule("/src/state/store.ts")) as typeof StoreModule);
 });
 
 after(async () => {
