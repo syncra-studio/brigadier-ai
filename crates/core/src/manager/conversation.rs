@@ -702,6 +702,13 @@ pub(crate) struct ConvLive {
     /// message's, given to the session to judge or sent later on its own turn
     /// ([`queue_judging`]).
     frames: std::sync::Mutex<HashMap<String, String>>,
+    /// Work under way that may still start a turn: a turn's end being dealt with, and each next
+    /// turn kicked that hasn't yet started one or found it may not ([`Self::starting`]).
+    starting: Arc<std::sync::atomic::AtomicUsize>,
+    /// Tests: a turn's end pauses here, all else done, right before it kicks the next turn.
+    #[cfg(test)]
+    pub(super) kick_pause:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// Tests: what a limited turn's end waits for before its hand-over is chosen.
     #[cfg(test)]
     pub(super) hand_over_pause:
@@ -710,6 +717,15 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) worker_delivery_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+}
+
+/// One piece of work that may still start a turn ([`ConvLive::starting`]), until dropped.
+pub(super) struct Starting(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for Starting {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl ConvLive {
@@ -793,6 +809,9 @@ impl ConvLive {
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             items: std::sync::Mutex::default(),
             frames: std::sync::Mutex::default(),
+            starting: Arc::default(),
+            #[cfg(test)]
+            kick_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -1173,11 +1192,24 @@ impl ConvLive {
         self.state.lock().await.cli.take()
     }
 
-    /// Whether no turn runs and nothing waits for one.
+    /// Counts work that may still start a turn until the returned guard drops: held from a
+    /// turn's end until the next turn it kicks has started or found it may not, one hand to the
+    /// next, so no moment between them looks idle (#659).
+    pub(super) fn starting(&self) -> Starting {
+        self.starting
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Starting(self.starting.clone())
+    }
+
+    /// Whether no turn runs, nothing waits for one, and nothing under way may still start one.
     #[cfg(test)]
     pub(super) async fn idle(&self) -> bool {
         let state = self.state.lock().await;
-        !state.busy && !state.unowned_turn && state.inbox.is_empty() && state.pending.is_empty()
+        !state.busy
+            && !state.unowned_turn
+            && state.inbox.is_empty()
+            && state.pending.is_empty()
+            && self.starting.load(std::sync::atomic::Ordering::SeqCst) == 0
     }
 
     /// What the driver holds for each request right now.
@@ -2681,7 +2713,12 @@ impl SessionManager {
     pub(crate) fn kick(&self, conv: &Arc<ConvLive>) {
         let manager = self.arc();
         let conv = conv.clone();
-        self.spawn(async move { manager.next_turn(conv).await });
+        // Counted from now, before the caller lets go of its own count.
+        let starting = conv.starting();
+        self.spawn(async move {
+            manager.next_turn(conv).await;
+            drop(starting);
+        });
     }
 
     /// [`Self::kick`], returning once the next turn has started or found it may not (tests).
@@ -5612,6 +5649,8 @@ impl SessionManager {
     }
 
     async fn turn_completed(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, status: TurnStatus) {
+        // Taken before the turn reads as over, and kept until the next turn is kicked.
+        let ending = conv.starting();
         conv.state.lock().await.watchdog.acknowledge();
         // A turn that ended before its CLI said it began starts nothing more.
         conv.state.lock().await.awaiting_start = false;
@@ -5971,10 +6010,20 @@ impl SessionManager {
                 cli.ended.cancelled().await;
                 conv.state.lock().await.closing = false;
                 manager.kick(&conv);
+                drop(ending);
             });
             return;
         }
+        #[cfg(test)]
+        {
+            let pause = conv.kick_pause.lock().unwrap().take();
+            if let Some((reached, release)) = pause {
+                reached.notify_one();
+                release.notified().await;
+            }
+        }
         self.kick(conv);
+        drop(ending);
     }
 
     /// The session's run of model failures is over: the model it started on, where that is

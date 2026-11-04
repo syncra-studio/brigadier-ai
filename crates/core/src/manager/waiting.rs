@@ -408,7 +408,33 @@ mod durable_wake_tests {
         assert_eq!(notices.load(Ordering::SeqCst), 1);
         flow.stop().await;
     }
+    /// A turn's end is not idle while the next turn it kicks may still start one: a notice queued
+    /// then would go in a turn of its own, before the next one the test (or user) starts (#659).
     #[tokio::test]
+    async fn a_turn_end_is_not_idle_until_its_next_turn_has_looked() {
+        let flow = Flow::start(
+            "waiting-turn-end-idle",
+            Options::default(),
+            Arc::new(|_turn| Box::pin(async { Reply::text("Done") })),
+        )
+        .await;
+        let id = flow.conversation.clone();
+        let conv = flow.manager.conv(&id).unwrap();
+        let (reached, release) = (
+            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(tokio::sync::Notify::new()),
+        );
+        *conv.kick_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
+        flow.say("Track an external dependency").await;
+        // The turn is over and its request settled; its next turn isn't kicked yet.
+        reached.notified().await;
+        assert!(!conv.idle().await, "idle before the turn's end kicked its next turn");
+        release.notify_one();
+        flow.idle().await;
+        assert!(conv.idle().await);
+        flow.stop().await;
+    }
+        #[tokio::test]
     async fn overdue_wake_survives_stop_and_restart_and_is_taken_once() {
         let wakes = Arc::new(AtomicUsize::new(0));
         let observed = wakes.clone();
