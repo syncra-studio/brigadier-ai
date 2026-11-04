@@ -32,7 +32,8 @@ import { useToasts } from "@/state/toasts";
  * (RoutingPageRender.test.ts reads it). Without it the page stays as it opens, for screenshots:
  * ?kind=<name> opens a kind, ?more=strength|steps opens a row of More, ?rules=1|2|3|4 shows the
  * Rules section (its rules with a warning and advice; Add rule opened; what Brigadier will save;
- * Brigadier rewriting the words). ?drive=look reads Settings › General's card, select
+ * Brigadier rewriting the words). ?drive=role-suggestions takes the better model offered to a
+ * review role, then to a fusion consult. ?drive=look reads Settings › General's card, select
  * and chosen pill, then Routing's cards, a select and the chosen pill of an opened kind, to
  * #routing-result too.
  */
@@ -89,6 +90,17 @@ const file: { rows: GuidanceRow[]; rules: ModelRule[] } = {
     { type: "effortCeiling", effort: "high" },
   ],
 };
+/** ?drive=role-suggestions: your models for review and Fusion, each Claude role on Sonnet. */
+const roleSuggestions = params.get("drive") === "role-suggestions";
+if (roleSuggestions) {
+  file.rows = [
+    { work: "Adversarial review", agent: "codex", model: "default", effort: "high", reason: "Mine." },
+    { work: "Adversarial review", agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." },
+    { work: "fusion-claude", agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." },
+    { work: "fusion-codex", agent: "codex", model: "default", effort: "high", reason: "Mine." },
+    { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." },
+  ];
+}
 /** ?rules=: the Rules section's screens, over the rules of the approved mockup. */
 const scene = params.get("rules");
 if (scene) {
@@ -114,6 +126,11 @@ const READING_MS = scene === "4" ? 3_600_000 : 900;
 const rated = { score: 9, current: 8.5 };
 /** The daemon's suggestion: only for an order whose first is Sonnet, and not dismissed at this rating. */
 const suggestions = (): RoutingSuggestion[] => {
+  if (roleSuggestions) {
+    return file.rows
+      .filter((row) => row.agent === "claude" && row.model === "sonnet")
+      .map(({ work }) => ({ work, row: { work, agent: "claude", model: "opus", effort: "high", reason: "Rated 9.1 of 10 for this work." }, score: 9.1, current: "sonnet", currentScore: 8.5 }));
+  }
   const first = file.rows.find((row) => row.work === "Bounded implementation");
   const dismissed = useApp
     .getState()
@@ -275,6 +292,26 @@ function Fixture() {
         () => kindButton("Bounded implementation")?.click(),
         () => {
           seen.routing = looks(document, '[data-slot="who-does-what"], [data-slot="routing-rules"], [data-slot="routing-more"]');
+          setResult(JSON.stringify(seen));
+        },
+      ];
+    } else if (roleSuggestions) {
+      const line = (work: string) => document.querySelector(`[data-work="${work}"] [data-slot="routing-suggestion"]`);
+      steps = [
+        () => {
+          seen.lines = all('[data-slot="routing-suggestion"]').map(text);
+          seen.writesBefore = writes.length;
+          button("Use it", line("Adversarial review") ?? document)?.click();
+        },
+        () => {
+          seen.afterReview = [...file.rows];
+          seen.linesAfterReview = all('[data-slot="routing-suggestion"]').map(text);
+          button("Use it", line("Fusion") ?? document)?.click();
+        },
+        () => {
+          seen.afterFusion = [...file.rows];
+          seen.writes = writes.length;
+          seen.linesAfterFusion = all('[data-slot="routing-suggestion"]').length;
           setResult(JSON.stringify(seen));
         },
       ];

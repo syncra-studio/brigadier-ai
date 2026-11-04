@@ -39,6 +39,16 @@ export const ROLE_KINDS: Record<string, RoleKind> = {
   },
 };
 
+/** Whether the daemon reads `work`'s rows as roles (its `by_role`): a suggestion for one is that role's, not a first place. */
+export const isRoleWork = (work: string) => /^(adversarial review|fallback|fusion-.*)$/i.test(work.trim());
+
+/** The user's rows with `row`'s model in the first row of its work and agent, in place; a twin of it later in that role goes. Every other row stays. */
+export function withRoleModel(rows: readonly GuidanceRow[], row: GuidanceRow): GuidanceRow[] {
+  const role = (other: GuidanceRow) => other.work === row.work && other.agent === row.agent;
+  const at = rows.findIndex(role);
+  return rows.flatMap((other, index) => (index === at ? [row] : role(other) && other.model === row.model ? [] : [other]));
+}
+
 const isConsult = (work: string) => work === "fusion-claude" || work === "fusion-codex";
 
 /** The kinds of work with a fusion's consult rows (`fusion-claude`, `fusion-codex`) as one Fusion row, in the place of the first. */

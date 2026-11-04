@@ -246,8 +246,8 @@ fn automatic(
 /// model when it rates at least [`SUGGEST_MARGIN`] above the first of their order, unless they
 /// dismissed it at that rating. Reads `user` only: an order changes when the user takes one.
 /// `listed` gives the listed model a row's model word starts (`default`: the CLI's default). A
-/// kind of roles (review, Fallback, a fusion's consults) has none: its rows are one model per
-/// agent, not an order, so a first place to take doesn't exist.
+/// kind of roles (review, Fallback, a fusion's consults) is one model per agent, not an order: each
+/// agent's first row is compared with that agent's best model, and taking one replaces that row.
 fn suggestions(
     user: &[GuidanceRow],
     registry: &brigadier_router::Registry,
@@ -258,13 +258,11 @@ fn suggestions(
 ) -> Vec<crate::RoutingSuggestion> {
     let mut found = Vec::new();
     for (index, first) in user.iter().enumerate() {
+        let roles = by_role(&first.work);
         if user[..index]
             .iter()
-            .any(|row| same_work(&row.work, &first.work))
+            .any(|row| same_work(&row.work, &first.work) && (!roles || row.agent == first.agent))
         {
-            continue;
-        }
-        if by_role(&first.work) {
             continue;
         }
         let Some((rule, _)) = pick_rule(&first.work) else {
@@ -280,7 +278,10 @@ fn suggestions(
         let Some(current_score) = brigadier_router::picks::score(current, rule.rating) else {
             continue;
         };
-        let Some(best) = rated_picks(&first.work, models, allowed).into_iter().next() else {
+        let Some(best) = rated_picks(&first.work, models, allowed)
+            .into_iter()
+            .find(|pick| !roles || pick.provider == first.agent)
+        else {
             continue;
         };
         let same = models.iter().any(|model| {
@@ -1671,19 +1672,67 @@ mod tests {
 
     /// A better-rated model for a kind of work the user ordered is suggested; the user's rows
     /// are only read. Dismissed at its rating, it stays hidden until that rating changes.
-    /// A kind of roles keeps one model per agent, so the ratings suggest no first place in it,
-    /// under its old name too; its rows still come from the ratings. Rule reading isn't rated:
-    /// it keeps the shipped family word, which follows newer models.
+    /// A role is compared with its own agent's best model only, under a kind's old name too:
+    /// Nova beats Sol on Codex; it also rates above Big, but Big's role is Claude's. A role's
+    /// dismissal is its own. Each agent's first row is the role.
     #[test]
-    fn roles_get_no_suggestion_and_rule_reading_keeps_its_family_word() {
-        let (registry, models) = small_catalog();
+    fn a_role_is_suggested_its_own_agents_better_model() {
+        let (registry, mut models) = small_catalog();
+        let rated = |model: &mut MergedModel, score: f64| {
+            for category in brigadier_router::TaskCategory::ALL {
+                model.strengths.insert(category, score);
+            }
+        };
+        let sol = models.iter_mut().find(|m| m.id == "sol").unwrap();
+        rated(sol, 8.0);
+        let mut nova = sol.clone();
+        nova.id = "nova".into();
+        rated(&mut nova, 9.5);
+        models.push(nova);
+        rated(models.iter_mut().find(|m| m.id == "big").unwrap(), 9.0);
         let listed = |_: ProviderKind, word: &str| Some(word.to_owned());
-        for work in ["Adversarial review", "Independent review", FALLBACK_WORK] {
-            assert!(pick_rule(work).is_some(), "{work}");
-            let mine = rows(&format!("| {work} | codex | sol | high | Mine. |\n"));
+        for work in [
+            "Adversarial review",
+            "Independent review",
+            FALLBACK_WORK,
+            "fusion-codex",
+        ] {
+            let mine = rows(&format!(
+                "| {work} | claude | big | high | Mine. |\n| {work} | codex | sol | high | Mine. |\n| {work} | codex | sol | low | Older. |\n"
+            ));
             let found = suggestions(&mine, &registry, &models, &|_, _| true, &listed, &[]);
-            assert!(found.is_empty(), "{work}: {found:?}");
+            assert_eq!(found.len(), 1, "{work}: {found:?}");
+            assert_eq!(
+                (found[0].row.agent, found[0].row.model.as_str()),
+                (ProviderKind::Codex, "nova"),
+                "{work}"
+            );
+            assert_eq!(
+                (
+                    found[0].current.as_str(),
+                    found[0].current_score,
+                    found[0].score
+                ),
+                ("sol", 8.0, 9.5),
+                "{work}"
+            );
+            let dismissed = [crate::DismissedSuggestion {
+                work: found[0].work.clone(),
+                agent: ProviderKind::Codex,
+                model: "nova".into(),
+                score: 9.5,
+            }];
+            assert!(
+                suggestions(&mine, &registry, &models, &|_, _| true, &listed, &dismissed)
+                    .is_empty(),
+                "{work}"
+            );
         }
+    }
+    /// Rule reading isn't rated: it keeps the shipped family word, which follows newer models.
+    #[test]
+    fn rule_reading_keeps_its_family_word() {
+        let (_, models) = small_catalog();
         let shipped = automatic(rows(GUIDANCE), &models, &|_, _| true);
         let reading: Vec<_> = shipped
             .iter()

@@ -242,3 +242,33 @@ test("review, Fusion and Fallback edit their own roles through My order", { time
   assert.equal(seen.refreshOpensStrength, false);
   assert.equal(seen.refreshInHeader, true);
 });
+
+// A role's better model: only the user's click writes it, in that role's row in place.
+test("Use it on a role replaces that role's model, the other role is untouched", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "routing.html?drive=role-suggestions", "routing-result", 30000);
+  const seen = JSON.parse(dump) as Record<string, unknown>;
+  const sonnet = { agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." };
+  const opus = { agent: "claude", model: "opus", effort: "high", reason: "Rated 9.1 of 10 for this work." };
+  const codex = { agent: "codex", model: "default", effort: "high", reason: "Mine." };
+  const notes = { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." };
+  const line = (work: string) => `Opus 5.5 now rates higher for ${work} · 9.1 against Sonnet 5.5's 8.5Use itDismiss`;
+  assert.deepEqual(seen.lines, [line("Adversarial review"), line("Fusion · Claude consult")]);
+  assert.equal(seen.writesBefore, 0);
+  assert.deepEqual(seen.afterReview, [
+    { work: "Adversarial review", ...codex },
+    { work: "Adversarial review", ...opus },
+    { work: "fusion-claude", ...sonnet },
+    { work: "fusion-codex", ...codex },
+    notes,
+  ]);
+  assert.deepEqual(seen.linesAfterReview, [line("Fusion · Claude consult")]);
+  assert.deepEqual(seen.afterFusion, [
+    { work: "Adversarial review", ...codex },
+    { work: "Adversarial review", ...opus },
+    { work: "fusion-claude", ...opus },
+    { work: "fusion-codex", ...codex },
+    notes,
+  ]);
+  assert.equal(seen.writes, 2);
+  assert.equal(seen.linesAfterFusion, 0);
+});

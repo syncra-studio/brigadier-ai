@@ -187,9 +187,9 @@ export function faded(model: MergedModel): boolean {
   return model.legacy;
 }
 
-/** The suggestion for a kind of work the user ordered: a better-rated model than the first of their order. */
-export function suggestionFor(rules: ModelRules | null, work: string): RoutingSuggestion | null {
-  return rules?.suggestions.find((suggestion) => suggestion.work === work) ?? null;
+/** The suggestions for a kind of work's rows of the user's: one for an order (a better-rated model than its first), one a role for a kind of roles (Fusion's under its consults' names). */
+export function suggestionsFor(rules: ModelRules, row: WorkRow): RoutingSuggestion[] {
+  return rules.suggestions.filter((suggestion) => row.mine.some((mine) => mine.work === suggestion.work));
 }
 
 /** The dismissed suggestions with `suggestion` added: hidden while its model rates what it rates now (one per kind and model). */
