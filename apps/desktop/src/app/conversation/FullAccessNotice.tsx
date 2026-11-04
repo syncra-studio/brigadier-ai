@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/controls";
 import { ShieldExclamation } from "@/components/icons";
@@ -11,8 +11,12 @@ import { useApp } from "@/state/store";
 
 /** Set once it stepped aside after showing: gone in every session, across restarts (D191, D216). */
 const CLOSED = "brigadier.fullAccessNoticeClosed";
-/** "shown": it showed in this run, so stepping aside counts as closing it. */
-const seen = new Set<"shown">();
+/**
+ * The sessions it was seen in this run, by id: on screen while the window could be seen. Only
+ * there does stepping aside count as closing it; drawn in a hidden window, or seen in another
+ * session, it was never seen in this one (#722).
+ */
+const seen = new Set<string>();
 
 /**
  * The "Full access is on" card above the composer, while a session is on Full access: the full
@@ -21,7 +25,8 @@ const seen = new Set<"shown">();
  * rounded like the composer. It steps aside while a question, proposal or approval
  * waits above the composer, so it never pushes that card or the thread's last lines out of
  * view, and while messages wait in the queue, so they stay right under the conversation (#448).
- * Once it has shown and stepped aside it stays gone (demo12), in every session, new ones too, across
+ * Once it has shown in a session (on screen, the window seen) and stepped aside there, it stays
+ * gone (demo12), in every session, new ones too, across
  * restarts (D191, D216); "Don't show again" turns it off in Settings, where turning it back on
  * shows it again.
  */
@@ -32,11 +37,27 @@ export function FullAccessNotice({ conversation, aside = false }: { conversation
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
   const { rows } = useQueueRows(conversation.id);
   const queued = rows.length > 0;
+  const id = conversation.id;
   // Off in Settings: turning it back on shows it again.
   if (!show) localStorage.removeItem(CLOSED);
-  if (show && full && (aside || queued) && seen.has("shown")) localStorage.setItem(CLOSED, "1");
-  if (!show || !full || aside || queued || localStorage.getItem(CLOSED)) return null;
-  seen.add("shown");
+  const shown = show && full && !aside && !queued && !localStorage.getItem(CLOSED);
+  // Seen once it is on screen, not as it draws: after its commit, and only while the window can
+  // be seen (or once it can again).
+  useEffect(() => {
+    if (!shown) return;
+    const mark = () => {
+      if (pageShown()) seen.add(id);
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => document.removeEventListener("visibilitychange", mark);
+  }, [shown, id]);
+  // Stepping aside in a session it was seen in closes it, in every session.
+  const steppedAside = show && full && (aside || queued);
+  useEffect(() => {
+    if (steppedAside && seen.has(id)) localStorage.setItem(CLOSED, "1");
+  }, [steppedAside, id]);
+  if (!shown) return null;
   return (
     <section
       aria-label="Full access is on"
