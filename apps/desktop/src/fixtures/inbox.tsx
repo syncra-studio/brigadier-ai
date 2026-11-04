@@ -16,6 +16,7 @@ import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationActivity, DomainEvent, EventEnvelope, Project, Request } from "@/ipc/generated";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { openSettings } from "@/state/actions";
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { applyEvents, useApp } from "@/state/store";
@@ -154,6 +155,10 @@ async function drive(): Promise<Record<string, unknown>> {
   await until(() => q('[data-slot="row-merged"]', row("hero")) !== null);
   seen.afterMerge = { order: titles(), action: q('[data-slot="archive-merged"]')?.textContent };
 
+  // Failed rows use the same amber mark and count in the pill too.
+  setActivity(activity("flaky", { failed: true }));
+  await wait(50);
+  seen.failedStatus = q('[data-slot="row-status"]', row("flaky"))?.dataset.status;
   // The pill, with a row scrolled out of view; a click brings it in.
   q<HTMLElement>(".h-screen")!.classList.replace("h-screen", "h-120");
   const list = q<HTMLElement>(".scroll-edge-fade")!;
@@ -194,6 +199,49 @@ async function drive(): Promise<Record<string, unknown>> {
   return seen;
 }
 
+/** Reordering another row must refresh the pill even when the amber IDs stay the same. */
+async function driveLayout(): Promise<Record<string, unknown>> {
+  q<HTMLElement>(".h-screen")!.classList.replace("h-screen", "h-120");
+  setActivity(activity("flaky", {}));
+  await wait(150);
+  const list = q<HTMLElement>(".scroll-edge-fade")!;
+  const row = () => q<HTMLElement>('[data-row-id="rate-limit"]')!;
+  row().scrollIntoView({ block: "center" });
+  await wait(150);
+  const inView = () => { const box = row().getBoundingClientRect(), viewport = list.getBoundingClientRect(); return box.top >= viewport.top && box.bottom <= viewport.bottom; };
+  const visibleBefore = inView();
+  const pillBefore = q('[data-slot="need-you-pill"]')?.textContent ?? null;
+  // Same rows, same container size, same amber ID: ten own sends move other rows above it.
+  for (const id of ["greeting", "dev-build", "hero", "stripe", "postgres", "logo", "onboarding", "changelog", "invoices", "flaky"]) userSends(id);
+  await wait(200);
+  const visibleAfter = inView();
+  const pillAfter = q('[data-slot="need-you-pill"]')?.textContent ?? null;
+  q('[data-slot="need-you-pill"]')?.click();
+  await until(inView);
+  return { visibleBefore, pillBefore, visibleAfter, pillAfter, jumped: inView() };
+}
+
+async function driveSettings(): Promise<Record<string, unknown>> {
+  openSettings("general");
+  await until(() => q('[aria-label="Sidebar view"]') !== null);
+  const choice = () => q('[aria-label="Sidebar view"]')!;
+  const active = () => q('[data-state="on"]', choice())?.textContent;
+  const before = active();
+  await fixtureClick([...choice().querySelectorAll("button")].find((button) => button.textContent === "Projects")!);
+  await until(() => active() === "Projects");
+  const projects = useApp.getState().settings.sidebarMode;
+  await fixtureClick([...choice().querySelectorAll("button")].find((button) => button.textContent === "Inbox")!);
+  await until(() => active() === "Inbox");
+  const inbox = useApp.getState().settings.sidebarMode;
+  q<HTMLInputElement>('[aria-label="Search settings"]')!.focus();
+  await fixtureInput({ type: "type", text: "Sidebar view" });
+  await wait(100);
+  const searchResult = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes("Sidebar view") && !button.closest("main"));
+  searchResult?.click();
+  await wait(100);
+  return { before, projects, inbox, writes: requests.filter((request) => request.method === "updateSettings").map((request) => request.settings.sidebarMode), searchResult: searchResult?.textContent, selectedPage: useApp.getState().selection };
+}
+
 function Controls() {
   return (
     <div className="text-muted-foreground flex max-w-md flex-col items-start gap-2 p-6 text-sm">
@@ -217,7 +265,7 @@ function Fixture() {
   const [result, setResult] = useState<string | null>(null);
   useEffect(() => {
     if (!params.has("drive")) return;
-    const timer = setTimeout(() => void drive().then((seen) => setResult(JSON.stringify(seen))), 300);
+    const timer = setTimeout(() => void (params.get("drive") === "layout" ? driveLayout() : params.get("drive") === "settings" ? driveSettings() : drive()).then((seen) => setResult(JSON.stringify(seen))), 300);
     return () => clearTimeout(timer);
   }, []);
   return (

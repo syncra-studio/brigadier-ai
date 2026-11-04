@@ -184,8 +184,8 @@ impl Core {
     }
 
     /// Gives each conversation from before the inbox kept its own order a sort time, once: when
-    /// its transcript's last user message was sent, else (or if earlier, as in a fork) when it
-    /// was created. Recorded, so no later launch reads a transcript for it.
+    /// its recent transcript page's last user message was sent, else (or if earlier, as in a
+    /// fork) when it was created. Recorded, so no later launch reads a transcript for it.
     async fn backfill_last_sent(&self) -> Result<()> {
         let unset: Vec<Conversation> = self
             .catalog()
@@ -195,25 +195,18 @@ impl Core {
             .collect();
         let mut events = Vec::with_capacity(unset.len());
         for conversation in unset {
-            let mut sent = None;
-            let mut before = None;
-            while sent.is_none() {
-                let Ok(page) = self
-                    .list_messages(conversation.id.clone(), before, 100)
-                    .await
-                else {
-                    break;
-                };
-                sent = page
-                    .messages
-                    .iter()
-                    .rfind(|message| message.role == MessageRole::User)
-                    .map(|message| message.created_at_ms);
-                if !page.has_more {
-                    break;
-                }
-                before = page.messages.first().map(|message| message.seq);
-            }
+            // Migration runs before clients can connect. Bound the work to one recent page;
+            // long histories without a recent user message use their creation time.
+            let sent = self
+                .list_messages(conversation.id.clone(), None, 100)
+                .await
+                .ok()
+                .and_then(|page| {
+                    page.messages
+                        .iter()
+                        .rfind(|message| message.role == MessageRole::User)
+                        .map(|message| message.created_at_ms)
+                });
             events.push((
                 streams::CATALOG.into(),
                 DomainEvent::ConversationSent {

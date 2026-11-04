@@ -243,7 +243,8 @@ async fn the_sort_time_fills_once_and_moves_only_for_the_users_send() {
         readers: 1,
     })
     .unwrap();
-    // A real older store has this already; without it the first start clears old conversations.
+    // Stores already migrated to the thread engine carry this marker.
+    // The separate engine migration deletes conversations when it is absent.
     stored(
         &store,
         "catalog",
@@ -427,4 +428,48 @@ async fn the_sort_time_fills_once_and_moves_only_for_the_users_send() {
     let (_daemon, mut client) = start(&dir.0).await;
     assert_eq!(client.sort_time(&id("talked")).await, 100);
     assert_eq!(client.sort_time(&chat).await, moved);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clients_with_the_retired_inbox_commands_are_rejected_at_handshake() {
+    use brigadier_ipc::frame::{FrameReader, FrameWriter};
+    use brigadier_sandbox::IpcEndpoint;
+    use interprocess::local_socket::{
+        GenericFilePath, ToFsName, tokio::Stream, traits::tokio::Stream as _,
+    };
+
+    let dir = scratch();
+    let (_daemon, _client) = start(&dir.0).await;
+    let paths = AppPaths::resolve(dir.0.join("data")).unwrap();
+    let IpcEndpoint::UnixSocket(path) = &paths.ipc_endpoint else {
+        panic!("unix socket")
+    };
+    let stream = Stream::connect(path.clone().to_fs_name::<GenericFilePath>().unwrap())
+        .await
+        .unwrap();
+    let (recv, send) = stream.split();
+    let mut reader = FrameReader::new(recv);
+    let mut writer = FrameWriter::new(send);
+    writer
+        .write(&ClientFrame::Hello {
+            token: std::fs::read_to_string(&paths.token_path)
+                .unwrap()
+                .trim()
+                .to_owned(),
+            protocol: 19, // Last app that sends setDone/snooze and requires those Conversation fields.
+            client: ClientInfo {
+                name: "old-inbox-client".into(),
+                pid: std::process::id(),
+            },
+        })
+        .await
+        .unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(3), reader.read::<ServerFrame>())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        reply.is_none(),
+        "an incompatible old client was welcomed: {reply:?}"
+    );
 }
