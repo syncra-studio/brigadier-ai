@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { FileBrowser } from "@/app/side-panel/FileBrowser";
 import { listFiles, listProjectFiles } from "@/state/actions";
+import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";
 import { activeRow, openFileTab, replaceNewTabWithFile, useSessionTabsOf } from "@/state/sessionTabs";
 import {
@@ -91,6 +92,7 @@ export function ProjectFiles({ projectId, searchRequest, onSearchHandled, replac
  */
 function useWorkspaceFiles(target: WorkspaceTarget, changed: number): FileList | null {
   const key = useCheckoutKey(target);
+  const connected = useApp((s) => s.connection.status === "connected");
   const kept = useCachedEntry(key)?.files;
   const [read, setRead] = useState<{ key: string; list: FileList } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -112,7 +114,7 @@ function useWorkspaceFiles(target: WorkspaceTarget, changed: number): FileList |
     };
     // `changed` asks for a fresh read even though nothing read here depends on it.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [target, key, changed]);
+  }, [target, key, changed, connected]);
   return kept ?? (read?.key === key ? read.list : failed === key ? EMPTY : null);
 }
 

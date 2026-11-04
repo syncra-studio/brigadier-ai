@@ -34,8 +34,9 @@ import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { type ReviewOptions, setReviewOption, useReview } from "@/state/review";
 import { tabTarget } from "@/state/draftTabs";
+import { useApp } from "@/state/store";
 import { useTabRoot } from "@/state/tabRoot";
-import { useCachedEntry, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
+import { onWorkspaceChanged, useCachedEntry, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import { CHAT_TAB, closeTab, REVIEW_TAB, type ReviewTarget, reviewScope, selectTab, sessionTabs } from "@/state/sessionTabs";
 
 /**
@@ -71,6 +72,7 @@ function useReviewDiff(conversationId: string, target: WorkspaceTarget, scope: R
   const place = useCheckoutKey(target);
   const source = useCachedEntry(place)?.source;
   const checkout = target.type === "conversation" ? noted : JSON.stringify([source?.staged, source?.changes]);
+  const connected = useApp((s) => s.connection.status === "connected");
   const view = JSON.stringify([target, scope]);
   // A session moving to its own copy reads another checkout.
   const key = JSON.stringify([view, tick, changeKey, checkout, place]);
@@ -106,7 +108,10 @@ function useReviewDiff(conversationId: string, target: WorkspaceTarget, scope: R
     return () => {
       live = false;
     };
-  }, [key, view]);
+    // A fresh Source read may have the same path/status list but different file contents.
+    // Reconnecting also misses edits made while the watch was gone.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [key, view, source, connected]);
   const same = state.view === view;
   return {
     review: same ? state.review : null,
@@ -143,6 +148,13 @@ export function ReviewTab({
     if (active) setTick(tick + 1);
   }
   const place = useMemo(() => tabTarget(conversationId, checkout), [conversationId, checkout]);
+  useEffect(() => {
+    if (!active) return;
+    const refresh = () => setTick((value) => value + 1);
+    window.addEventListener("focus", refresh);
+    const unsubscribe = onWorkspaceChanged(place, refresh);
+    return () => { window.removeEventListener("focus", refresh); unsubscribe(); };
+  }, [active, place]);
   const root = useTabRoot(conversationId, checkout);
   const opensIn = useMemo(() => ({ checkout, root }), [checkout, root]);
   const { review: fullReview, error, gone, loading } = useReviewDiff(conversationId, place, scope, tick);

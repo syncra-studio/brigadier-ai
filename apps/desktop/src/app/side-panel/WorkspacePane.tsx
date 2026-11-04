@@ -46,11 +46,12 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   const target = useMemo<WorkspaceTarget | null>(() => conversationId ? { type: "conversation", conversationId }
     : projectId ? { type: "project", projectId } : null, [conversationId, projectId]);
   const checkout = useCheckoutKey(target ?? { type: "project", projectId: "" });
+  const connected = useApp((s) => s.connection.status === "connected");
   // What the sidebar would show is read as the session or draft opens, so opening it paints at once.
   const prefetch = useCallback(() => {
     if (enabled && target) prefetchWorkspace(target);
   }, [enabled, target]);
-  useEffect(prefetch, [prefetch, checkout]);
+  useEffect(prefetch, [prefetch, checkout, connected]);
   // How many files Source lists, for its icon, the toggle's dot and the summary card. They follow
   // the checkout whichever view shows, and with the sidebar closed.
   const source = useCachedEntry(checkout)?.source;
@@ -84,7 +85,6 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   const changed = useMemo(() => uncommittedFiles(source), [source]);
   // While it shows, the daemon says when the checkout changes, so the views refresh in place.
   // A new connection forgets the old one's watch, so it is asked again after reconnecting.
-  const connected = useApp((s) => s.connection.status === "connected");
   // A draft's Source has a row for each worktree the user made: read as it opens, after a
   // reconnect, on focus, and when the project's folder says one came or went.
   const draftProject = enabled && connected && !conversationId ? projectId : null;

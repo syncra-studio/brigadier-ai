@@ -9,6 +9,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { FileTabView } from "@/app/side-panel/FileTabView";
+import { ReviewTab } from "@/app/side-panel/ReviewTab";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { useWorkspacePane, WorkspacePane, WorkspacePaneContext, WorkspacePaneToggle } from "@/app/side-panel/WorkspacePane";
 import { SidebarProvider } from "@/components/layout";
@@ -24,10 +26,12 @@ import { openWorkspacePane, setWorkspacePaneOpen } from "@/state/workspacePane";
 
 const id = "freshness-session";
 const draft = new URLSearchParams(location.search).has("draft");
+const audit = new URLSearchParams(location.search).has("audit");
+const auditFiles = new URLSearchParams(location.search).has("auditFiles");
 const file = (path: string): SourceFile => ({ path, status: "modified", oldPath: null });
 let source: SourceState = { branch: "source-tab", remote: null, upstream: null, ahead: 0, behind: 0, staged: [], changes: draft ? [] : [file("a.ts"), file("b.ts"), file("c.ts")], merging: null, rebasing: null };
 let insertions = 380;
-const reads = { source: 0, diff: 0 };
+const reads = { source: 0, diff: 0, review: 0, watches: 0, file: 0, tree: 0 };
 /** How long each coming diff read takes to answer, in order; then at once. */
 const diffDelays: number[] = [];
 /** While set, a source read answers what it saw when it began, only once it is let go. */
@@ -46,6 +50,15 @@ useApp.setState({
 
 function answer(req: Request): unknown {
   switch (req.method) {
+    case "listUserWorktrees": return { method: req.method, paths: [] };
+    case "watchWorkspace":
+      if (req.targets.length) reads.watches++;
+      return { method: req.method, watching: req.targets };
+    case "getReviewDiff":
+    case "getCheckoutReviewDiff":
+      reads.review++;
+      return { method: req.method, review: { scope: req.scope, files: [], insertions: 0, deletions: 0, patch: "", fullFiles: true, commits: [] } };
+
     case "getSourceState":
     case "getProjectSourceState": {
       reads.source++;
@@ -60,7 +73,12 @@ function answer(req: Request): unknown {
         const delay = diffDelays.shift();
         return delay ? new Promise((resolve) => setTimeout(() => resolve(seen), delay)) : seen;
       }
+    case "readFile":
+    case "readCheckoutFile":
+      reads.file++;
+      return { method: req.method, file: { path: req.path, text: "contents", size: 8, truncated: false } };
     case "getWorkspaceTree":
+      reads.tree++;
       return { method: req.method, tree: { files: ["a.ts"], truncated: false, ignored: [], ignoredTruncated: false } };
     case "stageFiles": {
       const paths = req.paths ?? [];
@@ -239,12 +257,55 @@ async function driveDraft(): Promise<Record<string, boolean>> {
   return checks;
 }
 
+async function driveFileRecovery(): Promise<Record<string, boolean>> {
+  setWorkspacePaneOpen(true);
+  openWorkspacePane(draft ? "draft:p" : id, "files");
+  await until(() => reads.file > 0 && reads.tree > 0, 3000);
+  await pause(100);
+  useApp.setState({ connection: { status: "disconnected", daemon: null, reason: null } });
+  await pause(60);
+  const before = { ...reads };
+  useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
+  return {
+    fileRereadsOnReconnect: await until(() => reads.file > before.file),
+    treeRereadsOnReconnect: await until(() => reads.tree > before.tree),
+  };
+}
+
+async function driveRecovery(): Promise<Record<string, boolean>> {
+  const checks: Record<string, boolean> = {};
+  setWorkspacePaneOpen(false);
+  await until(() => reads.source > 0 && reads.review > 0, 3000);
+  await pause(100);
+  const review = reads.review;
+  // Same changed-file list, different contents: SourceState alone cannot identify the diff.
+  focus();
+  checks.reviewRefreshesWithPaneClosed = await until(() => reads.review > review);
+  const before = reads.source;
+  const beforeReview = reads.review;
+  useApp.setState({ connection: { status: "disconnected", daemon: null, reason: null } });
+  await pause(60);
+  source = { ...source, changes: [file("after-reconnect.ts")] };
+  useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
+  checks.closedSourceRereadsOnReconnect = await until(() => reads.source > before);
+  checks.reviewRereadsOnReconnect = await until(() => reads.review > beforeReview);
+  setWorkspacePaneOpen(true);
+  openWorkspacePane(draft ? "draft:p" : id, "source");
+  await until(() => reads.watches > 0);
+  const watched = reads.watches;
+  useApp.setState({ connection: { status: "disconnected", daemon: null, reason: null } });
+  await pause(60);
+  useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
+  checks.watchSetResentOnReconnect = await until(() => reads.watches > watched);
+  return checks;
+}
+
 function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const pane = useWorkspacePane(draft ? null : id, "p", true);
   const [result, setResult] = useState("");
   useEffect(() => {
-    void (draft ? driveDraft() : driveSession())
+    void (auditFiles ? driveFileRecovery() : audit ? driveRecovery() : draft ? driveDraft() : driveSession())
       .then((checks) => setResult(JSON.stringify({ checks })))
       .catch((error: unknown) => setResult(JSON.stringify({ error: String(error), card: card(), groups: groups() })));
   }, []);
@@ -255,6 +316,8 @@ function Fixture() {
           <main className="relative flex min-w-0 flex-1 flex-col">
             <header className="h-titlebar flex items-center justify-end px-2"><WorkspacePaneToggle /></header>
             {!draft && <PinnedSummary conversation={conversation} />}
+            {auditFiles && <FileTabView conversationId={draft ? "draft:p" : id} tab={{ kind: "file", id: "file:a.ts", path: "a.ts", line: null, reveal: 0, preview: false, opener: "chat" }} active />}
+            {audit && <ReviewTab conversationId={draft ? "draft:p" : id} target={{ type: "changes", staged: false }} />}
           </main>
           <WorkspacePane />
         </div>

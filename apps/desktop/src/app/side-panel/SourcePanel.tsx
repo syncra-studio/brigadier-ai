@@ -25,6 +25,7 @@ import type { SourceAction, SourceBranch, SourceFile, SourceGitRun, SourceScope,
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
+import { useApp } from "@/state/store";
 import { noteSourceState } from "@/state/review";
 import { tabsOfTarget } from "@/state/draftTabs";
 import { activeRow, openConflictTab, openFileTab, openReviewTab, useSessionTabsOf } from "@/state/sessionTabs";
@@ -82,6 +83,7 @@ function useSourceState(target: SourceTarget) {
       .catch((error: unknown) => { if (workspaceKey(cacheTarget) === key) setFailure({ key, error: reason(error) }); });
   }, [cacheTarget, conversationId, key]);
   const load = useCallback(() => show(readSource(cacheTarget)), [show, cacheTarget]);
+  const connected = useApp((s) => s.connection.status === "connected");
   // The checkout just moved (a commit, which returns no state; Refresh): no read under way will do.
   const reload = useCallback(() => show(refreshSource(cacheTarget, key)), [show, cacheTarget, key]);
   // A landing, Undo or Reapply changes the checkout at once.
@@ -97,7 +99,9 @@ function useSourceState(target: SourceTarget) {
       unsubscribe();
       window.removeEventListener("focus", load);
     };
-  }, [load, cacheTarget]);
+    // Reinstalling a watch does not report changes made while disconnected.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [load, cacheTarget, connected]);
   // A worktree that can't be read may be gone: its row goes with what git lists.
   const failed = failure?.key === key;
   useEffect(() => {

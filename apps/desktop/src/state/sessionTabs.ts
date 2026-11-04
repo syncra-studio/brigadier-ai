@@ -729,7 +729,10 @@ export function carryDraftTabs(draft: string, conversationId: string, only?: Rea
     for (const tab of moving) {
       const next = followingSession(tab, draftProject(draft));
       renamed.set(tab.id, next.id);
-      if (!moved.some((entry) => entry.id === next.id)) moved.push(next);
+      const duplicate = moved.findIndex((entry) => entry.id === next.id);
+      if (duplicate < 0) moved.push(next);
+      // Keep the view the user was looking at when checkout identities converge.
+      else if (tab.id === from.active) moved[duplicate] = next;
     }
     const tabs = moved.map((tab) => ({ ...tab, opener: tab.opener ? renamed.get(tab.opener) ?? tab.opener : null }));
     const left = from.tabs.filter((tab) => !renamed.has(tab.id));

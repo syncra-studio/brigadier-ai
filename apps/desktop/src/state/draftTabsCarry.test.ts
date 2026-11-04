@@ -223,3 +223,80 @@ test("a terminal tab keeps naming the shell it started with, which goes on runni
   await new Promise((resolve) => setTimeout(resolve));
   assert.deepEqual(closedShells, ["shell-1"]);
 });
+
+
+test("a terminal whose open finishes after carry-over remains open", async () => {
+  const id = newSessionTab(DRAFT, "terminal", null);
+  const ready = deferred();
+  mockIPC(async (_command, payload) => {
+    const req = (payload as { request: { method: string; terminalId?: string } }).request;
+    if (req.method === "closeTerminal") closedShells.push(req.terminalId!);
+    if (req.method === "openTerminal") await ready.promise;
+    return { method: req.method, terminal: { id: "late-shell", cwd: "/project" } };
+  });
+  const { openMainTerminal } = await import("./sessionTabResources");
+  const opening = openMainTerminal(DRAFT, id, 80, 24);
+  carryDraftTabs(DRAFT, NEW_ID);
+  ready.resolve();
+  await opening;
+  assert.deepEqual(closedShells, []);
+  const tab = sessionTabs(NEW_ID).tabs.find((each) => each.id === id)!;
+  assert.equal(tab.kind === "terminal" && tab.cwd, "/project");
+  closeTab(NEW_ID, id);
+  await new Promise((resolve) => setTimeout(resolve));
+  assert.deepEqual(closedShells, ["late-shell"]);
+});
+
+test("colliding Review tabs carry the active view at the first tab's position", () => {
+  openReviewTab(DRAFT, { type: "file", path: "first.ts", staged: false }, undefined, "/wt/one");
+  openReviewTab(DRAFT, { type: "file", path: "active.ts", staged: true }, undefined, "/wt/two");
+  carryDraftTabs(DRAFT, NEW_ID);
+  const { tabs, active } = sessionTabs(NEW_ID);
+  assert.equal(tabs.length, 1);
+  assert.equal(active, tabs[0]!.id);
+  assert.deepEqual(tabs[0]!.kind === "review" && tabs[0]!.target, { type: "file", path: "active.ts", staged: true });
+});
+
+
+test("a revisited draft keeps a closed and reopened file with the same id", async () => {
+  openFileTab(DRAFT, "same.ts");
+  const id = sessionTabs(DRAFT).active;
+  const creating = deferred();
+  daemon.create = () => creating.promise;
+  const sending = send(outgoing, target);
+  useApp.setState({ selection: { type: "draft", kind: "chat" } });
+  useApp.setState({ selection: draftSelection() });
+  closeTab(DRAFT, id);
+  openFileTab(DRAFT, "same.ts", { line: 99 });
+  const revisited = sessionTabs(DRAFT);
+  creating.resolve();
+  await sending;
+  assert.equal(sessionTabs(DRAFT), revisited);
+  assert.equal(sessionTabs(NEW_ID).tabs.length, 0);
+});
+
+test("a chat draft carries its page and terminal into a plain chat", async () => {
+  useApp.setState({ selection: { type: "draft", kind: "chat" } });
+  const owner = "draft:none";
+  newSessionTab(owner, "page", null);
+  newSessionTab(owner, "terminal", null);
+  const before = sessionTabs(owner);
+  mockIPC((_command, payload) => {
+    const req = (payload as { request: { method: string; kind?: string; projectId?: string | null } }).request;
+    if (req.method === "createConversation") {
+      assert.equal(req.kind, "chat");
+      assert.equal(req.projectId, null);
+      return { method: req.method, conversation: { ...made, kind: "chat", projectId: null } };
+    }
+    if (req.method === "sendMessage") return { method: req.method, outcome: { type: "sent", message: sentMessage } };
+    return { method: req.method };
+  });
+  await send(outgoing, { kind: "chat", setup: null });
+  const after = sessionTabs(NEW_ID);
+  assert.deepEqual(after.tabs.map((tab) => tab.id), before.tabs.map((tab) => tab.id));
+  assert.equal(after.active, before.active);
+  assert.equal(sessionTabs(owner).tabs.length, 0);
+  const terminal = after.tabs.find((tab) => tab.kind === "terminal")!;
+  assert.equal(terminal.kind, "terminal");
+  if (terminal.kind === "terminal") assert.deepEqual(shellOwner(NEW_ID, terminal), {});
+});

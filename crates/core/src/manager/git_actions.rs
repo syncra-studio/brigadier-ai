@@ -111,9 +111,8 @@ impl SessionManager {
         }
         // Workers' worktrees are named only in their conversations' streams.
         for conversation in &conversations {
-            let Ok(tasks) = self.core.tasks_unkept(&conversation.id).await else {
-                continue;
-            };
+            // Unknown ownership is not permission to read or mutate a worker's checkout.
+            let tasks = self.core.tasks_unkept(&conversation.id).await?;
             let used: HashSet<PathBuf> = tasks
                 .iter()
                 .filter_map(|task| task.workspace.as_ref()?.worktree.as_deref())

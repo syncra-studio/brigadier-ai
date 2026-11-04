@@ -12,6 +12,11 @@ import { canChat, followTabChats, goneTabChats } from "@/state/tabChats";
 // Lives across ConversationView remounts, but not a real app reload. The stable tab ID is
 // the daemon session ID; its first attachment in this app lifetime replaces the old shell.
 const shells = new Map<string, { terminal: Promise<TerminalInfo>; closed: boolean }>();
+function terminalTabOwner(tabId: string): string | undefined {
+  return Object.entries(useSessionTabs.getState().sessions)
+    .find(([, session]) => session.tabs.some((tab) => tab.id === tabId && tab.kind === "terminal"))?.[0];
+}
+
 export async function openMainTerminal(conversationId: string, tabId: string, cols: number, rows: number): Promise<TerminalInfo> {
   const tab = sessionTabs(conversationId).tabs.find((candidate) => candidate.id === tabId);
   if (tab?.kind !== "terminal") throw new Error("Terminal tab closed");
@@ -22,7 +27,8 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     // An agent's tab shows the shell the daemon started for it, with what it typed there.
     const terminal = request({ method: "openTerminal", ...owner, sessionId: tab.id, ...(isAgentTab(tab) ? {} : { fresh: true }),
       ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows }).then((opened) => {
-        changeSessionTab(conversationId, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: opened.terminal.cwd } : current);
+        const currentOwner = terminalTabOwner(tab.id);
+        if (currentOwner) changeSessionTab(currentOwner, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: opened.terminal.cwd } : current);
         return opened.terminal;
       });
     entry = { terminal, closed: false };
@@ -30,7 +36,7 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     terminal.catch(() => { if (shells.get(tab.id) === entry) shells.delete(tab.id); });
   }
   const terminal = await entry.terminal;
-  if (entry.closed || !sessionTabs(conversationId).tabs.some((current) => current.id === tab.id)) {
+  if (entry.closed || !terminalTabOwner(tab.id)) {
     await request({ method: "closeTerminal", terminalId: terminal.id });
     throw new Error("Terminal tab closed");
   }
@@ -39,7 +45,7 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
   if (started) return terminal;
   // Attach this connection and get current scrollback when its session becomes visible again.
   const attached = await request({ method: "openTerminal", ...owner, sessionId: tab.id, ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows });
-  if (entry.closed || !sessionTabs(conversationId).tabs.some((current) => current.id === tab.id)) {
+  if (entry.closed || !terminalTabOwner(tab.id)) {
     await request({ method: "closeTerminal", terminalId: attached.terminal.id });
     throw new Error("Terminal tab closed");
   }

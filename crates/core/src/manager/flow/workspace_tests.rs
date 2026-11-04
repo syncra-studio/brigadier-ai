@@ -737,3 +737,145 @@ async fn source_state_counts_commits_to_pull_and_to_push() {
     assert_eq!((state.ahead, state.behind), (2, 1));
     flow.stop().await;
 }
+
+/// Unreadable ownership must not turn a listed checkout into a user-owned one.
+#[tokio::test]
+async fn worktree_ownership_fails_closed_on_an_unreadable_stream() {
+    let (flow, target) = flow("unreadable-ownership").await;
+    let WorkspaceTarget::Project { project_id } = target else {
+        unreachable!()
+    };
+    let mine = user_worktree(&flow, "unreadable-mine");
+    flow.core
+        .store()
+        .append(super::seed_events(&format!(
+            r#"{{"stream":"{}","kind":"task.updated","payload":{{}}}}"#,
+            crate::model::streams::conversation(&flow.conversation),
+        )))
+        .await
+        .unwrap();
+    assert!(flow.core.tasks_unkept(&flow.conversation).await.is_err());
+    let result = flow.manager.user_worktrees(&project_id).await;
+    assert!(result.is_err(), "ownership was unreadable, got {result:?}");
+    assert!(
+        flow.manager
+            .worktree_source_state(&project_id, &text(&mine))
+            .await
+            .is_err()
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn worktree_ownership_checks_external_workers_and_symlink_reads() {
+    use crate::work::{ReviewScope, SourceChange};
+    let (flow, project) = flow("external-ownership").await;
+    let WorkspaceTarget::Project { project_id } = project.clone() else {
+        unreachable!()
+    };
+    let worker = user_worktree(&flow, "external-worker");
+    let mine = user_worktree(&flow, "external-mine");
+    let event = serde_json::json!({
+        "stream": crate::model::streams::conversation(&flow.conversation),
+        "kind": "task.updated",
+        "payload": { "type": "taskUpdated", "task": {
+            "id": "external", "conversationId": flow.conversation.0, "number": 1, "position": 0,
+            "title": "External worker", "kind": "implement", "spec": "Work",
+            "access": { "repo": "write", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+            "state": "done", "attachments": [], "createdAtMs": 0, "updatedAtMs": 0,
+            "workspace": { "worktree": text(&worker), "branch": "external-worker", "base": null, "target": "main", "scratch": text(&mine) }
+        }}
+    });
+    flow.core
+        .store()
+        .append(super::seed_events(&event.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        flow.manager.user_worktrees(&project_id).await.unwrap(),
+        [text(&mine)]
+    );
+    let refused = WorkspaceTarget::Worktree {
+        project_id: project_id.clone(),
+        path: text(&worker),
+    };
+    assert!(
+        flow.manager
+            .read_target_file(&refused, "README.md".into())
+            .await
+            .is_err()
+    );
+    assert!(
+        flow.manager
+            .target_review_diff(&refused, ReviewScope::Unstaged, true, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        flow.manager
+            .change_worktree_source(
+                &project_id,
+                &text(&worker),
+                SourceChange::Stage { paths: None }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        flow.manager
+            .commit_worktree_changes(
+                &project_id,
+                &text(&worker),
+                Some("No".into()),
+                true,
+                false,
+                false
+            )
+            .await
+            .is_err()
+    );
+    #[cfg(unix)]
+    {
+        let outside = mine.join("outside-secret.txt");
+        std::fs::write(&outside, "PRIVATE CONTENT SENTINEL").unwrap();
+        std::os::unix::fs::symlink(&outside, flow.repo.join("escape")).unwrap();
+        std::os::unix::fs::symlink(&flow.repo, mine.join("alias")).unwrap();
+        assert!(
+            flow.manager
+                .read_target_file(&project, "escape".into())
+                .await
+                .is_err()
+        );
+        assert!(
+            flow.manager
+                .read_target_file(&project, text(&outside))
+                .await
+                .is_err()
+        );
+        assert!(
+            flow.manager
+                .read_target_file(&project, "../outside-secret.txt".into())
+                .await
+                .is_err()
+        );
+        let review = flow
+            .manager
+            .target_review_diff(&project, ReviewScope::Unstaged, true, false)
+            .await
+            .unwrap();
+        assert!(!review.patch.contains("PRIVATE CONTENT SENTINEL"));
+        // A symlink to another checkout is still that checkout, not a way to name a user worktree.
+        let alias = WorkspaceTarget::Worktree {
+            project_id,
+            path: text(&mine.join("alias")),
+        };
+        assert!(
+            flow.manager
+                .read_target_file(&alias, "README.md".into())
+                .await
+                .is_err()
+        );
+    }
+    flow.stop().await;
+}

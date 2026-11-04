@@ -42,6 +42,7 @@ function useFile(target: WorkspaceTarget, path: string, again: number): Read {
   const [read, setRead] = useState<{ key: string; time: number; read: Read } | null>(null);
   // A session moving to its own copy reads another checkout, so the file is read again there.
   const key = `${useCheckoutKey(target)}:${path}`;
+  const connected = useApp((s) => s.connection.status === "connected");
   useEffect(() => {
     let live = true;
     (target.type === "conversation"
@@ -63,7 +64,9 @@ function useFile(target: WorkspaceTarget, path: string, again: number): Read {
     return () => {
       live = false;
     };
-  }, [target, path, key, again]);
+    // Edits made while disconnected do not arrive through the replacement watch.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [target, path, key, again, connected]);
   // A read of another file must not show under this one's name.
   return read?.key === key ? read.read : { state: "loading" };
 }
