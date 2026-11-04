@@ -668,6 +668,9 @@ pub(crate) struct FakeBehavior {
     /// The next worker's provider events wait until released, while its launch may already
     /// publish Running and send its first input. Models a delayed SessionStarted pump.
     pub hold_worker_events: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// The next turn's send signals the first as it is called, and waits for the second before
+    /// the CLI is asked anything: a turn that is taken and still on its way.
+    pub hold_send_entry: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// The next turn's send signals the first once the CLI took its input, and waits for the
     /// second before its turn starts.
     pub hold_send: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
@@ -1247,6 +1250,11 @@ impl ProviderSession for FakeSession {
 
     fn send(&self, input: TurnInput) -> BoxFuture<'_, brigadier_providers::Result<()>> {
         Box::pin(async move {
+            let held = self.behavior.hold_send_entry.lock().unwrap().take();
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
+            }
             if self
                 .behavior
                 .refuse_sends

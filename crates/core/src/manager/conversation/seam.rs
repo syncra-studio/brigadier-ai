@@ -37,6 +37,21 @@ use crate::now_ms;
 use crate::work::RunState;
 use crate::work::{CardState, InjectionKind};
 
+/// Where the one ask to fix a hand-off note is, on its way to its turn's end.
+#[derive(Default, Clone, Copy, PartialEq)]
+enum FixTurn {
+    #[default]
+    None,
+    /// Taken for a turn; its send hasn't begun.
+    Taken,
+    /// Its send is out, `started`: a turn started meanwhile.
+    Sending { started: bool },
+    /// The CLI took it; its turn hasn't started.
+    Sent,
+    /// Its turn runs.
+    Started,
+}
+
 /// The seam's in-memory part of a conversation's state.
 #[derive(Default)]
 pub(super) struct SeamLive {
@@ -54,6 +69,9 @@ pub(super) struct SeamLive {
     hold_timer: u64,
     /// The session was asked to fix its note this many times (goal 13).
     fixes: u32,
+    fix_turn: FixTurn,
+    /// The turns the CLI's stream started and hasn't ended.
+    turns_open: u32,
     hold_armed: bool,
     /// The session id the next CLI starts under (a successor's, reserved in `seam.json`).
     pub(super) reserved: Option<String>,
@@ -68,6 +86,61 @@ pub(super) struct SeamLive {
     /// The running turn is the hand-off's own (the note's ask, a carry-on with no request): the
     /// tab, the sidebar and the composer keep the user's work idle through it (core-goals D193).
     pub(super) quiet: bool,
+}
+
+impl SeamLive {
+    /// The fix ask's send begins.
+    pub(super) fn fix_sending(&mut self) {
+        if self.fix_turn == FixTurn::Taken {
+            self.fix_turn = FixTurn::Sending { started: false };
+        }
+    }
+
+    /// The CLI took the fix ask. A turn that both started and ended while its send was out
+    /// wasn't its own: no model's turn is over before its send returns.
+    pub(super) fn fix_sent(&mut self) {
+        if let FixTurn::Sending { started } = self.fix_turn {
+            self.fix_turn = if started && self.turns_open > 0 {
+                FixTurn::Started
+            } else {
+                FixTurn::Sent
+            };
+        }
+    }
+
+    /// The CLI's stream started a turn.
+    pub(super) fn turn_began(&mut self) {
+        self.turns_open += 1;
+        match self.fix_turn {
+            FixTurn::Sending { .. } => self.fix_turn = FixTurn::Sending { started: true },
+            FixTurn::Sent => self.fix_turn = FixTurn::Started,
+            FixTurn::None | FixTurn::Taken | FixTurn::Started => {}
+        }
+    }
+
+    /// The CLI's stream ended a turn: the fix ask's, once none that started is left open.
+    fn turn_ended(&mut self) {
+        self.turns_open = self.turns_open.saturating_sub(1);
+        if self.fix_turn == FixTurn::Started && self.turns_open == 0 {
+            self.fix_turn = FixTurn::None;
+        }
+    }
+
+    /// The fix ask is on its way, or its turn runs.
+    pub(super) fn fix_on_its_way(&self) -> bool {
+        self.fix_turn != FixTurn::None
+    }
+
+    /// The fix ask never reached the CLI.
+    pub(super) fn fix_not_sent(&mut self) {
+        self.fix_turn = FixTurn::None;
+    }
+
+    /// The CLI is gone, with the turns it had running.
+    pub(super) fn cli_gone(&mut self) {
+        self.fix_turn = FixTurn::None;
+        self.turns_open = 0;
+    }
 }
 
 /// A successor about to start: its seam, how its predecessor ended and what it carries.
@@ -292,6 +365,9 @@ impl SessionManager {
     pub(super) fn take_due_nudge(state: &mut super::ConvState) -> Option<Envelope> {
         let text = state.seam.nudge_due.take()?;
         state.seam.seen = true;
+        if state.seam.fixes > 0 {
+            state.seam.fix_turn = FixTurn::Taken;
+        }
         Some(Envelope {
             kind: InjectionKind::Seam,
             label: NOTE_ASK.into(),
@@ -324,6 +400,7 @@ impl SessionManager {
     /// closes the seam, and past the threshold with none sent yet, one is due. Answers whether
     /// the seam closed (the next turn then retires the CLI).
     pub(super) async fn seam_turn_end(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>) -> bool {
+        conv.state.lock().await.seam.turn_ended();
         let file = self.read_seam_of(&conv.id).await;
         match file.phase {
             Phase::Nudged { at_ms, .. } => {
@@ -345,6 +422,12 @@ impl SessionManager {
                 let written = note.is_file();
                 if !(written || seen || force) {
                     // The nudge is still on its way into the CLI: its own turn takes it.
+                    self.arm_seam_hold(conv).await;
+                    return false;
+                }
+                // Another turn's end (a nudge steered in late started its own) with the fix ask
+                // on its way, or its turn running: that turn's own end checks the note.
+                if !force && why == NO_NOTE && conv.state.lock().await.seam.fix_on_its_way() {
                     self.arm_seam_hold(conv).await;
                     return false;
                 }
@@ -471,6 +554,7 @@ impl SessionManager {
         state.seam.seen = false;
         state.seam.force = false;
         state.seam.fixes = 0;
+        state.seam.fix_not_sent();
         // A fix still due belongs to the generation that ended, never to its successor.
         state.seam.nudge_due = None;
         state.seam.hold_armed = false;
