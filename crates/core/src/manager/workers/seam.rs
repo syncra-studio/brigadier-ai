@@ -394,6 +394,7 @@ impl SessionManager {
                     None => Some(end.death.as_deref().unwrap_or(NO_NOTE)),
                 },
                 check: &check,
+                replayed: &[],
                 entries: &[],
                 blobs: &at,
             });

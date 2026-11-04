@@ -555,6 +555,7 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
         start_path: &record.join("handoff/1-start.md"),
         death: None,
         check: "Hand-off check: the ledger has no open items.",
+        replayed: &[],
         entries: &entries,
         blobs: flow.core.store().blobs().root(),
     });

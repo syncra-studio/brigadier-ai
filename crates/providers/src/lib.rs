@@ -53,7 +53,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-pub use looked::only_looks;
+pub use looked::{only_looks, only_reads_skills};
 pub use model::*;
 pub use redact::{REDACTED, Redactor, env_file_values};
 

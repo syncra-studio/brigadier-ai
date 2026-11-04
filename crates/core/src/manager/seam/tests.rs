@@ -74,6 +74,7 @@ fn boot_tail(
         start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
         death,
         check: "Hand-off check: the ledger has no open items.",
+        replayed: &[],
         entries,
         blobs: Path::new("/nowhere"),
     })
@@ -742,6 +743,7 @@ fn a_note_with_gaps_or_none_fails_the_check_and_its_line_carries_what_is_left_ou
         start_path: &start_path(&record, 1),
         death: None,
         check: &passed.line(),
+        replayed: &[],
         entries: &[],
         blobs: &record,
     });
@@ -855,6 +857,7 @@ fn the_map_names_a_moved_codex_rollout_where_it_is_now() {
         start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
         death: None,
         check: "Hand-off check: the ledger has no open items.",
+        replayed: &[],
         entries: &entries,
         blobs: Path::new("/nowhere"),
     });
@@ -864,4 +867,130 @@ fn the_map_names_a_moved_codex_rollout_where_it_is_now() {
         "{text}"
     );
     assert!(!text.contains(&recorded.display().to_string()), "{text}");
+}
+
+/// A move to another CLI's hand-off of `entries`, given which seams' first inputs were re-sends.
+fn boot_replayed(entries: &[FileEntry], replayed: &[u32]) -> String {
+    bootstrap(&Boot {
+        n: 2,
+        tail: TailBudget {
+            reason: Reason::Quota,
+            hot_tokens: Some(200_000),
+            target_window: Some(272_000),
+        },
+        key: "abcd1234",
+        folder: Path::new("/s/abcd1234"),
+        lineage: &[],
+        note_path: Path::new("/s/abcd1234/record/handoff/2.md"),
+        note: Some("Next: request four."),
+        start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
+        death: None,
+        check: "Hand-off check: the ledger has no open items.",
+        replayed,
+        entries,
+        blobs: Path::new("/nowhere"),
+    })
+}
+
+/// Seam `n`'s successor's first message: its hand-off, then `message`.
+fn successor_start(n: u32, message: &str) -> String {
+    format!(
+        "{}\nThe earlier hand-off.\n{HANDOFF_END}\n\n{message}",
+        handoff_line(n, "abcd1234")
+    )
+}
+
+/// A usage limit's move gives the successor the message the old CLI had again; seam.json
+/// records that re-send, and the next hand-off quotes the message once (#611).
+#[test]
+fn a_message_the_seam_re_sent_is_quoted_once() {
+    let six = "Do these six things: one, two, three, four, five, six.";
+    let entries = vec![
+        message("u0", Role::User, six),
+        message(
+            "a0",
+            Role::Assistant,
+            "Committing, then on to the approval-card lag.",
+        ),
+        message("u1", Role::User, &successor_start(1, six)),
+        message("a1", Role::Assistant, "Picking up request four."),
+    ];
+    let text = boot_replayed(&entries, &[1]);
+    assert_eq!(text.matches(six).count(), 1, "{text}");
+    assert!(shown(&text).contains(&0), "{text}");
+    assert!(!shown(&text).contains(&2), "{text}");
+    assert!(
+        spans(&text)
+            .iter()
+            .all(|(from, to)| !(*from..=*to).contains(&2)),
+        "{text}"
+    );
+    assert!(text.contains("Picking up request four."), "{text}");
+}
+
+/// The same words sent twice are two requests ("Run the tests" after more edits), and a
+/// successor's first message the seam record shows no re-send of is the user's own: both kept.
+#[test]
+fn the_same_words_sent_again_by_the_user_are_kept_each_time() {
+    let again = "Run the tests";
+    let entries = vec![
+        message("u0", Role::User, again),
+        message("a0", Role::Assistant, "Edited the parser."),
+        message("u1", Role::User, again),
+        message("a1", Role::Assistant, "Edited the lexer."),
+        message("u2", Role::User, &successor_start(1, again)),
+        message("a2", Role::Assistant, "Running them."),
+    ];
+    let text = boot_replayed(&entries, &[]);
+    assert_eq!(text.matches(&format!("]\n{again}")).count(), 3, "{text}");
+    for at in [0, 2, 4] {
+        assert!(shown(&text).contains(&at), "#{at}: {text}");
+    }
+}
+
+fn command(id: &str, command: &str, output: &str) -> FileEntry {
+    FileEntry {
+        event: ProviderEvent::Command {
+            item_id: id.into(),
+            command: command.into(),
+            cwd: None,
+            status: brigadier_providers::ItemStatus::Completed,
+            exit_code: Some(0),
+            output: Some(output.into()),
+            duration_ms: None,
+            kept: None,
+        },
+        ..message(id, Role::User, "")
+    }
+}
+
+/// A command that only read a skill file keeps its command, which reads it again, but not the
+/// skill's text; a read mixed with anything else keeps its output (#611).
+#[test]
+fn a_skill_read_alone_keeps_its_command_but_not_the_skill() {
+    let skill = "sed -n '1,200p' /home/u/.codex/skills/impeccable/SKILL.md";
+    let other = "cat /home/u/.codex/skills/computer-use/SKILL.md";
+    let entries = vec![
+        message("u0", Role::User, "Polish the page."),
+        command("c0", other, "SKILL TEXT: Setup"),
+        message("a0", Role::Assistant, "Read the skill."),
+        message("u1", Role::User, "Now the cards."),
+        command("c1", skill, "SKILL TEXT: The loop for every run"),
+        command("c2", &format!("{skill} && git status"), "MIXED OUTPUT ONE"),
+        command("c3", &format!("{other} src/page.rs"), "MIXED OUTPUT TWO"),
+        message("a1", Role::Assistant, "Working on the cards."),
+    ];
+    let text = boot_replayed(&entries, &[]);
+    assert!(!text.contains("SKILL TEXT"), "{text}");
+    for command in [skill, other] {
+        assert!(
+            text.contains(&format!(
+                "Ran `{command}` (exit 0)\n[a skill file's text, left out: this command reads it \
+                 again]"
+            )),
+            "{command}: {text}"
+        );
+    }
+    assert!(text.contains("MIXED OUTPUT ONE"), "{text}");
+    assert!(text.contains("MIXED OUTPUT TWO"), "{text}");
 }

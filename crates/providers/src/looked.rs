@@ -372,6 +372,51 @@ pub fn only_looks(command: &str) -> bool {
     looked
 }
 
+/// Whether `command` does nothing but read skill files (`SKILL.md`): `cd` steps and reads by
+/// `cat`, `nl`, `head` or `sed -n` of skill files only, each narrowed at most by a `sed`,
+/// `head`, `tail` or `nl` stage. A read chained with anything else, or of any other file, is no
+/// skill read: its output is the work's own (#611).
+pub fn only_reads_skills(command: &str) -> bool {
+    if !only_looks(command) {
+        return false;
+    }
+    let skill = |path: &str| {
+        path.rsplit(['/', '\\'])
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
+    };
+    let mut read = false;
+    for step in split_top(command, true) {
+        let stages = split_top(&step, false);
+        let names: Vec<String> = stages
+            .iter()
+            .filter_map(|stage| {
+                let words = loose_words(stage)?;
+                let first = words.first()?;
+                Some(first.rsplit('/').next().unwrap_or(first).to_owned())
+            })
+            .collect();
+        if names.len() != stages.len() {
+            return false;
+        }
+        match names.split_first() {
+            Some((first, [])) if first == "cd" => continue,
+            Some((first, rest))
+                if matches!(first.as_str(), "cat" | "nl" | "head" | "sed")
+                    && rest
+                        .iter()
+                        .all(|name| matches!(name.as_str(), "sed" | "head" | "tail" | "nl")) => {}
+            _ => return false,
+        }
+        let (reads, searches) = shell_looked(&step, "");
+        if reads.is_empty() || !searches.is_empty() || !reads.iter().all(|read| skill(&read.path)) {
+            return false;
+        }
+        read = true;
+    }
+    read
+}
+
 /// Whether `command` holds `c` outside quotes.
 fn has_unquoted(command: &str, c: char) -> bool {
     let mut quote: Option<char> = None;
@@ -666,5 +711,31 @@ mod tests {
             ]
         );
         assert_eq!(shell_looked("cargo test && echo ok", "").0, []);
+    }
+
+    /// A command that does nothing but read skill files is a skill read (#611); a read chained
+    /// with anything else, or of any other file, is not.
+    #[test]
+    fn only_a_read_of_skill_files_alone_is_a_skill_read() {
+        for command in [
+            "sed -n '1,200p' /home/u/.codex/skills/impeccable/SKILL.md",
+            "cat /home/u/.claude/skills/computer-use/SKILL.md",
+            "cd /home/u/.codex/skills/a && cat SKILL.md && sed -n '40,90p' ../b/SKILL.md",
+            "nl -ba skills/review/SKILL.md | sed -n '1,80p'",
+        ] {
+            assert!(only_reads_skills(command), "{command}");
+        }
+        for command in [
+            "sed -n '1,200p' /home/u/.codex/skills/impeccable/SKILL.md && cargo test",
+            "cat skills/a/SKILL.md src/lib.rs",
+            "cat skills/a/SKILL.md; git status",
+            "cat skills/a/SKILL.md | grep Setup",
+            "rg -n Setup skills/a/SKILL.md",
+            "cat skills/a/SKILL.md > copy.md",
+            "sed -n '1,80p' src/SKILL.rs",
+            "cd skills/a",
+        ] {
+            assert!(!only_reads_skills(command), "{command}");
+        }
     }
 }
