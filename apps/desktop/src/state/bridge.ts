@@ -34,7 +34,7 @@ import { applyConnectEvents, loadConnect } from "@/state/connect";
 import { applyUsageEvents } from "@/state/usage";
 import { applyRatingsEvents, checkResearchNews } from "@/state/ratingsNews";
 import { onDictationDisconnected, onDictationUpdate } from "@/state/dictation";
-import { openFeedback } from "@/state/feedback";
+import { applyFeedbackEvents, openFeedback } from "@/state/feedback";
 import { emitCleanProgress, openUninstall } from "@/state/storage";
 import { emitTerminalOutput } from "@/state/terminalPlaces";
 
@@ -58,6 +58,7 @@ function flush() {
   applyRatingsEvents(batch);
   applyUpdateEvents(batch);
   applyConnectEvents(batch);
+  applyFeedbackEvents(batch);
   noteFlush(started, batch.map(({ event }) => event.type));
   for (const { atMs, event } of batch) {
     markApplied(atMs, event.type === "probe" ? event.burstId : null);

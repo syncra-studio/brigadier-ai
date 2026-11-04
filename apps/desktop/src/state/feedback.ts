@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 
 import { openUrl, request, systemName } from "@/ipc/client";
-import type { FeedbackWriteUp } from "@/ipc/generated";
+import type { EventEnvelope, FeedbackWriteUp } from "@/ipc/generated";
 import {
   type FeedbackResult,
   type FeedbackStep,
@@ -367,17 +367,25 @@ function forgetSessions(gone: ReadonlySet<string>): void {
   }
 }
 
-// A session's row leaving the catalog is the session gone; an archived one keeps its row. Once
-// the catalog first loads, write-ups of sessions not in it (gone while the app was closed, or a
-// tab's chat, which goes without a word) go too.
+/**
+ * A session the daemon says is being deleted, or was, is gone for good (removing its project
+ * deletes it first, the same way): its write-ups go. Not a row merely leaving the catalog: a
+ * delete takes the row away at once and brings it back if the delete fails.
+ */
+export function applyFeedbackEvents(batch: readonly EventEnvelope[]): void {
+  const gone = new Set(
+    batch.flatMap(({ event }) =>
+      event.type === "conversationDeleting" || event.type === "conversationDeleted" ? [event.id] : [],
+    ),
+  );
+  if (gone.size > 0) forgetSessions(gone);
+}
+
+// Once the catalog first loads, write-ups of sessions not in it go: deleted while the app was
+// closed, or a tab's chat, which goes without a word. An archived one keeps its row.
 useApp.subscribe((state, before) => {
-  if (!state.catalogLoaded) return;
-  if (!before.catalogLoaded) {
-    forgetSessions(new Set(keptWriteUps().map(({ conversationId }) => conversationId).filter((id) => !state.conversations[id])));
-  } else if (state.conversations !== before.conversations) {
-    const gone = new Set(Object.keys(before.conversations).filter((id) => !state.conversations[id]));
-    if (gone.size > 0) forgetSessions(gone);
-  }
+  if (!state.catalogLoaded || before.catalogLoaded) return;
+  forgetSessions(new Set(keptWriteUps().map(({ conversationId }) => conversationId).filter((id) => !state.conversations[id])));
 });
 
 /** Writes the offer `id` of session `conversationId` up as reports from its `text`, once (across restarts too). */

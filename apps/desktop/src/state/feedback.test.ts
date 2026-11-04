@@ -4,7 +4,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { createServer, type ViteDevServer } from "vite";
 
 import type { RequestOf } from "@/ipc/client";
-import type { FeedbackFiled, FeedbackReport } from "@/ipc/generated";
+import type { EventEnvelope, FeedbackFiled, FeedbackReport } from "@/ipc/generated";
 import type * as FeedbackModule from "@/state/feedback";
 import type * as StoreModule from "@/state/store";
 
@@ -13,6 +13,7 @@ type Feedback = typeof FeedbackModule;
 let server: ViteDevServer;
 let closeFeedback: Feedback["closeFeedback"];
 let dismissOffer: Feedback["dismissOffer"];
+let applyFeedbackEvents: Feedback["applyFeedbackEvents"];
 let draftOffer: Feedback["draftOffer"];
 let openFeedback: Feedback["openFeedback"];
 let sendFromDialog: Feedback["sendFromDialog"];
@@ -24,7 +25,7 @@ let useApp: (typeof StoreModule)["useApp"];
 
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ closeFeedback, dismissOffer, draftOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
+  ({ applyFeedbackEvents, closeFeedback, dismissOffer, draftOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
     (await server.ssrLoadModule("/src/state/feedback.ts")) as Feedback);
   ({ useApp } = (await server.ssrLoadModule("/src/state/store.ts")) as typeof StoreModule);
 });
@@ -356,6 +357,8 @@ function memoryStorage() {
 }
 
 const sessions = (...ids: string[]) => Object.fromEntries(ids.map((id) => [id, { id } as never]));
+/** The daemon's word that session `id` is being deleted, as the bridge hands it on. */
+const deleting = (id: string) => [{ stream: "catalog", atMs: 1, event: { type: "conversationDeleting", id } } as EventEnvelope];
 
 // #721: a card never acted on kept its write-up for good once its session was deleted.
 test("a deleted session's unsent write-ups go with it; another session's stay", async () => {
@@ -366,6 +369,7 @@ test("a deleted session's unsent write-ups go with it; another session's stay", 
     draftOffer("kept-b", "offer-b", "Hangs");
     await until(() => stored.size === 2);
     useApp.setState({ conversations: sessions("kept-b") });
+    applyFeedbackEvents(deleting("gone-a"));
     assert.deepEqual([...stored.keys()], ["brigadier.feedbackOffer.kept-b.offer-b"]);
     assert.equal(useFeedbackOffers.getState()["offer-a"], undefined);
   } finally {
@@ -382,6 +386,7 @@ test("a write-up that finishes after its session was deleted isn't kept", async 
     draftOffer("deleted-while-writing", "late", "Spins");
     await until(() => wrote.length === 1);
     useApp.setState({ conversations: sessions() });
+    applyFeedbackEvents(deleting("deleted-while-writing"));
     release();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(stored.size, 0);
@@ -401,6 +406,22 @@ test("once the catalog loads, write-ups of sessions not in it go; one kept befor
     useApp.setState({ catalogLoaded: false, conversations: sessions() });
     useApp.setState({ catalogLoaded: true, conversations: sessions("still-here") });
     assert.deepEqual([...stored.keys()].toSorted(), ["brigadier.feedbackOffer.o3", "brigadier.feedbackOffer.still-here.o2"]);
+  } finally {
+    restore();
+  }
+});
+
+// A delete takes the row away at once and brings it back when it fails; a catalog read replaces the rows.
+test("a session whose row leaves and comes back keeps its write-up", async () => {
+  const { stored, restore } = memoryStorage();
+  try {
+    useApp.setState({ catalogLoaded: true, conversations: sessions("delete-failed") });
+    draftOffer("delete-failed", "offer-c", "Spins");
+    await until(() => stored.size === 1);
+    useApp.setState({ conversations: sessions() });
+    useApp.setState({ conversations: sessions("delete-failed") });
+    assert.deepEqual([...stored.keys()], ["brigadier.feedbackOffer.delete-failed.offer-c"]);
+    assert.equal(useFeedbackOffers.getState()["offer-c"]?.sending.phase, "write");
   } finally {
     restore();
   }
