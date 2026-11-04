@@ -320,7 +320,15 @@ fn a_rule_quoting_brigadiers_own_request_is_refused_and_the_users_own_words_kept
          #5, scope session)",
     );
     record.add("Learned: the [Brigadier] hand-off request came at 214k tokens");
+    // The user's own rules about Brigadier, naming it or even its mark, are the user's.
+    record.add("Rule from the user: Brigadier's sidebar stays compact (message #7, scope app)");
+    record.add(
+        "Rule from the user: \"Never display the [Brigadier] maintenance messages\" (message \
+         #9, scope app)",
+    );
     let ledger = record.ledger();
     assert!(ledger.contains("Finish the step you are on, then stop for my review"));
     assert!(ledger.contains("Learned: the [Brigadier] hand-off request"));
+    assert!(ledger.contains("Brigadier's sidebar stays compact"));
+    assert!(ledger.contains("Never display the [Brigadier] maintenance messages"));
 }
