@@ -1094,7 +1094,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
         ));
     }
     // The user's rules and advice notes always show: the 25-line cut takes guidance rows.
-    let mut tail = vec!["Your rules (~/.brigadier/models.md):".to_owned()];
+    let mut tail = vec![format!("Your rules ({}):", output.rules_path)];
     for rule in &output.rules {
         tail.push(format!("  {}", rule.rule));
     }
@@ -1206,9 +1206,14 @@ mod tests {
             }],
             guidance: vec![],
             rules: vec![],
+            rules_path: "/tmp/dev-data/models.md".into(),
             advice: vec![],
         };
         let text = models(&output);
+        assert!(
+            text.contains("Your rules (/tmp/dev-data/models.md):"),
+            "{text}"
+        );
         // The worker count leads, so the 25-line cut never hides it (run2-D31).
         assert_eq!(
             text.lines().nth(1),
@@ -1246,6 +1251,7 @@ mod tests {
             rules: vec![crate::models::Rule {
                 rule: "effort-ceiling opus: medium".into(),
             }],
+            rules_path: "/Users/me/.brigadier/models.md".into(),
             advice: vec!["prefer Codex when Claude is busy".into()],
         };
         let text = models(&output);

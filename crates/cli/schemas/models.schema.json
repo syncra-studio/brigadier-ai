@@ -9,7 +9,8 @@
     "switchProviders",
     "accounts",
     "guidance",
-    "rules"
+    "rules",
+    "rulesPath"
   ],
   "additionalProperties": false,
   "properties": {
@@ -247,6 +248,10 @@
           }
         }
       }
+    },
+    "rulesPath": {
+      "description": "The file those rules are in: the user's own to edit, not an app-internal path.",
+      "type": "string"
     },
     "advice": {
       "description": "The user's advice notes from their rules file: words to weigh when picking a model. Advice only; it restricts no start.",
