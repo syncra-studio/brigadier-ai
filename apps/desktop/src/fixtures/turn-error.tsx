@@ -75,13 +75,16 @@ async function drive() {
   if (!row) throw new Error("No error row rendered");
   const block = row.closest<HTMLElement>('[data-role="assistant"]')!;
   const header = block.querySelector<HTMLElement>('[data-slot="request-work-label"]');
+  const summary = row.querySelector('[data-slot="error-state-summary"]');
   const details = row.querySelector<HTMLElement>('[data-slot="error-state-details"]');
   const seen: Record<string, unknown> = {
     header: header?.textContent ?? null,
     headerDestructive: !!header && red(header),
     rows: block.querySelectorAll('[data-slot="error-state"]').length,
-    destructive: red(row) || [...row.querySelectorAll("*")].some(red),
-    summary: row.querySelector('[data-slot="error-state-summary"]')?.textContent ?? null,
+    // Only the sentence takes the error colour.
+    destructive: red(row) || [...row.querySelectorAll('*:not([data-slot="error-state-summary"])')].some(red),
+    summaryRed: !!summary && red(summary),
+    summary: summary?.textContent ?? null,
     unboxed: unboxed(row),
     detailsOpen: details ? details.getAttribute("aria-expanded") === "true" : null,
     rawShownBefore: document.body.innerText.includes("Internal server error"),

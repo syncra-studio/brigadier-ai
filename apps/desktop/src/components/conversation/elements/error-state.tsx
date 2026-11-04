@@ -9,8 +9,8 @@ import { cn } from "@/lib/utils";
 /**
  * What went wrong with a turn or a worker's step, said calmly: one quiet line of the thread, never
  * a card, with Try again where trying again exists and Details opening the error's own words (with
- * Copy) under it. Never red: a stopped turn is part of the thread, not an alarm. While it retries
- * it becomes a shimmering "Retrying" line.
+ * Copy) under it. Only its sentence is red: a stopped turn is part of the thread, not an alarm.
+ * While it retries it becomes a shimmering "Retrying" line.
  */
 
 export type ErrorStateProps = Omit<ComponentProps<"div">, "children" | "role" | "title"> & {
@@ -55,7 +55,7 @@ export function ErrorState({ summary, details, retrying = false, onRetry, retryL
       {...props}
     >
       <div className={cn(ROW, "flex-wrap")}>
-        <p data-slot="error-state-summary" className="min-w-0">
+        <p data-slot="error-state-summary" className="text-destructive min-w-0">
           {summary}
         </p>
         {onRetry && (
