@@ -785,8 +785,16 @@ fn a_death_without_a_note_keeps_the_users_latest_message_open() {
     let entries = vec![
         message("u0", Role::User, "Earlier, done."),
         message("a0", Role::Assistant, "Done."),
-        message("u1", Role::User, "Six requests: one, two, three, four, five, six."),
-        message("a1", Role::Assistant, "Committing, then on to the approval-card lag."),
+        message(
+            "u1",
+            Role::User,
+            "Six requests: one, two, three, four, five, six.",
+        ),
+        message(
+            "a1",
+            Role::Assistant,
+            "Committing, then on to the approval-card lag.",
+        ),
     ];
     let quota = TailBudget {
         reason: Reason::Quota,
@@ -806,4 +814,54 @@ fn a_death_without_a_note_keeps_the_users_latest_message_open() {
     // With a note, the note and the ledger's check say what is open.
     let text = boot_tail(&entries, Some("Next: request four (L3)."), None, quota);
     assert!(!text.contains("treat the user's latest message"), "{text}");
+}
+
+/// Codex moves an archived session's rollout to `archived_sessions/`: the Map names the file
+/// where it is now, not where the CLI first said it was (#613).
+#[test]
+fn the_map_names_a_moved_codex_rollout_where_it_is_now() {
+    let home = std::env::temp_dir().join(format!("win-issues-w14-codex-{}", uuid::Uuid::new_v4()));
+    let recorded = home
+        .join("sessions")
+        .join("2026")
+        .join("10")
+        .join("24")
+        .join("rollout-01a16f93.jsonl");
+    let archived = home
+        .join("archived_sessions")
+        .join("rollout-01a16f93.jsonl");
+    std::fs::create_dir_all(archived.parent().unwrap()).unwrap();
+    std::fs::write(&archived, "").unwrap();
+    let lineage = [crate::manager::session_dir::LineageEntry {
+        provider: ProviderKind::Codex,
+        session_id: "01a16f93".into(),
+        file: Some(recorded.display().to_string()),
+        started_at: 0,
+        forgotten: false,
+    }];
+    let entries = vec![message("u1", Role::User, "Go on.")];
+    let text = bootstrap(&Boot {
+        n: 2,
+        tail: TailBudget {
+            reason: Reason::Request,
+            hot_tokens: None,
+            target_window: None,
+        },
+        key: "abcd1234",
+        folder: Path::new("/s/abcd1234"),
+        lineage: &lineage,
+        note_path: Path::new("/s/abcd1234/record/handoff/2.md"),
+        note: None,
+        start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
+        death: None,
+        check: "Hand-off check: the ledger has no open items.",
+        entries: &entries,
+        blobs: Path::new("/nowhere"),
+    });
+    let _ = std::fs::remove_dir_all(&home);
+    assert!(
+        text.contains(&format!("01a16f93 ({})", archived.display())),
+        "{text}"
+    );
+    assert!(!text.contains(&recorded.display().to_string()), "{text}");
 }

@@ -656,14 +656,16 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     out.push_str(&format!("- This hand-off: {}\n", boot.start_path.display()));
     out.push_str("- Earlier CLI sessions, oldest first:\n");
     for session in boot.lineage {
+        // Where the file is now: a CLI may have moved it since (Codex archives, #613).
+        // `lineage.json` keeps what the CLI said; every reader locates it the same way.
+        let file = session.file.as_deref().map(|file| {
+            brigadier_providers::session_file::locate(session.provider, Path::new(file))
+        });
         out.push_str(&format!(
             "  - {} {}{}\n",
             session.provider.label(),
             session.session_id,
-            session
-                .file
-                .as_deref()
-                .map(|file| format!(" ({file})"))
+            file.map(|file| format!(" ({})", file.display()))
                 .unwrap_or_default()
         ));
     }
