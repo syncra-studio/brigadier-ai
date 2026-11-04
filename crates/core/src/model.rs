@@ -3020,11 +3020,11 @@ pub struct ModelRules {
 pub struct RoutingSuggestion {
     /// The kind of work, as the rules file's Work.
     pub work: String,
-    /// The row Use it puts first in the order.
+    /// The row Use it puts first in the order, or in a kind of roles swaps in for that role's.
     pub row: GuidanceRow,
     /// Its rating for the kind of work, 0–10.
     pub score: f64,
-    /// The first of the user's order, as the file names it, and its rating.
+    /// The first of the user's order, or the role's model, as the file names it, and its rating.
     pub current: String,
     pub current_score: f64,
 }
