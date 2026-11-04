@@ -349,18 +349,13 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
         loop {
-            let (mut line, cut) = match read_line(&mut reader, STDERR_LINE_MAX).await {
+            let (line, cut) = match read_line(&mut reader, STDERR_LINE_MAX).await {
                 Ok(Read::Line(line)) => (line, false),
                 // Its start is enough for an error report; the rest is dropped.
-                Ok(Read::TooLong(mut line)) => {
-                    line.push_str(" …");
-                    (line, true)
-                }
+                Ok(Read::TooLong(line)) => (line, true),
                 Ok(Read::End) | Err(_) => break,
             };
-            if let Some(redactor) = &redactor {
-                redactor.redact_in_place(&mut line);
-            }
+            let line = stderr_line(line, cut, redactor.as_deref());
             if private_logs {
                 tracing::debug!(pid, stderr = "tab chat", "cli stderr");
             } else {
@@ -567,6 +562,7 @@ async fn read_line<R: AsyncBufRead + Unpin>(reader: &mut R, max: usize) -> std::
             let room = max - line.len();
             line.extend_from_slice(&available[..room]);
             reader.consume(room);
+            without_cut_char(&mut line);
             return Ok(Read::TooLong(text(line)));
         }
         line.extend_from_slice(&available[..take]);
@@ -595,6 +591,42 @@ async fn skip_line<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<b
         let len = available.len();
         reader.consume(len);
     }
+}
+
+/// Drops a character the limit cut in two from the end of `bytes`: decoded, it would end in a
+/// replacement character, and a secret cut there would no longer read as the start of one.
+fn without_cut_char(bytes: &mut Vec<u8>) {
+    let from = bytes.len().saturating_sub(3);
+    let Some(lead) = (from..bytes.len())
+        .rev()
+        .find(|at| bytes[*at] & 0xC0 != 0x80)
+    else {
+        return;
+    };
+    let width = match bytes[lead] {
+        byte if byte >= 0xF0 => 4,
+        byte if byte >= 0xE0 => 3,
+        byte if byte >= 0xC0 => 2,
+        _ => 1,
+    };
+    if bytes.len() - lead < width {
+        bytes.truncate(lead);
+    }
+}
+
+/// A stderr line as it is logged and kept, its secrets redacted. One cut at the limit also loses
+/// the tail that could be the start of a secret: the rest of that secret, which would have
+/// redacted it, was dropped with the rest of the line.
+fn stderr_line(line: String, cut: bool, redactor: Option<&Redactor>) -> String {
+    let mut line = match redactor {
+        Some(redactor) if cut => redactor.push(&mut String::new(), &line).into_owned(),
+        Some(redactor) => redactor.redact(&line).into_owned(),
+        None => line,
+    };
+    if cut {
+        line.push_str(" …");
+    }
+    line
 }
 
 fn text(bytes: Vec<u8>) -> String {
@@ -940,6 +972,60 @@ mod tests {
         let all = all(&mut lines).await;
         assert_eq!(all.len(), 100);
         assert_eq!(queued.bytes.load(Ordering::Acquire), 0);
+    }
+
+    /// A secret cut at the stderr line limit shows no part of itself: the rest of it, which
+    /// would have matched, is dropped with the rest of the line, so the tail that could start
+    /// one goes too. A whole one before the cut is redacted as on any line.
+    #[test]
+    fn a_secret_cut_with_a_long_stderr_line_shows_no_part_of_it() {
+        let redactor = Redactor::new(["supersecret-token"]);
+        assert_eq!(
+            stderr_line(
+                "a supersecret-token b supersecret-tok".into(),
+                true,
+                Some(&redactor)
+            ),
+            "a [redacted] b  …"
+        );
+        assert_eq!(
+            stderr_line(
+                "a supersecret-token b supers".into(),
+                false,
+                Some(&redactor)
+            ),
+            "a [redacted] b supers"
+        );
+        assert_eq!(stderr_line("plain".into(), true, None), "plain …");
+    }
+
+    /// The limit can fall inside a character: that character is dropped rather than read as a
+    /// replacement character, which would hide the start of a secret cut there.
+    #[tokio::test]
+    async fn a_character_cut_by_the_limit_is_dropped() {
+        let input = "login passwörd-123 rest\n".as_bytes().to_vec();
+        // "login passw" and the first byte of "ö".
+        let mut reader = BufReader::with_capacity(5, std::io::Cursor::new(input));
+        let Read::TooLong(line) = read_line(&mut reader, 12).await.unwrap() else {
+            panic!("the line was not cut");
+        };
+        assert_eq!(line, "login passw");
+        let redactor = Redactor::new(["passwörd-123"]);
+        assert_eq!(stderr_line(line, true, Some(&redactor)), "login  …");
+
+        for (bytes, kept) in [
+            (&b"ab\xc3"[..], &b"ab"[..]),
+            (b"ab\xe2\x82", b"ab"),
+            (b"ab\xf0\x9f\x98", b"ab"),
+            (b"ab\xc3\xa9", b"ab\xc3\xa9"),
+            (b"ab\xe2\x82\xac", b"ab\xe2\x82\xac"),
+            (b"abc", b"abc"),
+            (b"", b""),
+        ] {
+            let mut cut = bytes.to_vec();
+            without_cut_char(&mut cut);
+            assert_eq!(cut, kept, "{bytes:?}");
+        }
     }
 
     /// A CLI that runs for a minute and never reads its input.
