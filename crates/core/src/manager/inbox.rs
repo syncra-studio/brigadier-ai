@@ -1,100 +1,34 @@
-//! The inbox's auto-done sweep: a conversation idle for 3 days, or whose branch's pull request
-//! merged, is marked done. It runs in the hibernation timer and adds no GitHub polling: the
-//! pull request is the one the board last saw.
+//! What the inbox reads from the boards. It adds no GitHub polling: a pull request is the one the
+//! board last saw.
 
 use crate::board::Board;
-use crate::model::{Conversation, Lifecycle};
-use crate::now_ms;
-use crate::thread_view::CliTurn;
-use crate::work::{PullRequestState, RunState};
+use crate::model::{ConversationId, Lifecycle};
+use crate::work::PullRequestState;
 
 use super::SessionManager;
 
-/// How long a conversation stays idle before it is marked done.
-const IDLE_FOR_DONE_MS: i64 = 3 * 24 * 60 * 60 * 1000;
-
-/// The sweep runs every this many hibernation ticks (a minute each), so each conversation is
-/// read at most once every 10 minutes.
-pub(super) const SWEEP_EVERY_TICKS: u32 = 10;
-
-/// Whether the sweep marks `conversation` done now, with `board` its board, `turn` where its
-/// CLI's turn stands, and `decided_at_ms` when it was last marked done or brought back (0:
-/// never).
-fn auto_done(
-    conversation: &Conversation,
-    board: &Board,
-    turn: CliTurn,
-    decided_at_ms: i64,
-    now: i64,
-) -> bool {
-    let last_end = turn
-        .turn_ended_at_ms
-        .unwrap_or(0)
-        .max(conversation.created_at_ms);
-    // Done, or brought back by hand: that stands until the thread does something after it.
-    if decided_at_ms >= last_end {
-        return false;
-    }
-    if let Some(activity) = board.activity(&conversation.id, turn)
-        && (activity.turn_open
-            || matches!(activity.run, RunState::Starting | RunState::Running)
-            || !activity.tasks.is_empty()
-            || !activity.approvals.is_empty()
-            || !activity.questions.is_empty()
-            || !activity.sign_ins.is_empty())
-    {
-        return false;
-    }
-    let merged = board
+/// Whether `board`'s pull request was last seen merged: its row's Merged chip.
+fn pull_request_merged(board: &Board) -> bool {
+    board
         .pull_request
         .as_ref()
-        .is_some_and(|pr| pr.state == PullRequestState::Merged);
-    // A merge marks it done once; brought back after, only 3 idle days do again.
-    (merged && decided_at_ms == 0)
-        || now - conversation.updated_at_ms.max(last_end) >= IDLE_FOR_DONE_MS
+        .is_some_and(|pr| pr.state == PullRequestState::Merged)
 }
 
 impl SessionManager {
-    /// Marks done each listed conversation idle for 3 days or whose pull request merged, while
-    /// nothing of it runs or waits for the user.
-    pub(super) async fn sweep_done(&self) {
-        let now = now_ms();
-        for conversation in self.core.visible_catalog().conversations {
-            if conversation.lifecycle == Lifecycle::Archived
-                || conversation.side_of.is_some()
-                || conversation.tab_chat.is_some()
+    /// The open sessions whose pull request merged.
+    pub async fn merged_sessions(&self) -> Vec<ConversationId> {
+        let mut merged = Vec::new();
+        for tab in self.core.visible_catalog().conversations {
+            if tab.is_tab()
+                && tab.lifecycle != Lifecycle::Archived
+                && let Ok(board) = self.core.board(&tab.id).await
+                && pull_request_merged(&board)
             {
-                continue;
-            }
-            let id = conversation.id.clone();
-            if let Ok(conv) = self.conv(&id)
-                && (conv.is_busy().await || conv.has_cli_jobs().await)
-            {
-                continue;
-            }
-            let turn = self.cli_turn(&id);
-            // A chat has no pull request: its board is read only once it could be idle long
-            // enough.
-            let idle_from = conversation
-                .updated_at_ms
-                .max(turn.turn_ended_at_ms.unwrap_or(0));
-            if conversation.project_id.is_none() && now - idle_from < IDLE_FOR_DONE_MS {
-                continue;
-            }
-            let Ok(board) = self.core.board(&id).await else {
-                continue;
-            };
-            if auto_done(
-                &conversation,
-                &board,
-                turn,
-                self.core.done_decided_at(&id),
-                now,
-            ) && let Err(err) = self.core.set_done(id.clone(), true).await
-            {
-                tracing::debug!(conversation = %id, error = %err, "could not mark done");
+                merged.push(tab.id);
             }
         }
+        merged
     }
 }
 
@@ -102,141 +36,13 @@ impl SessionManager {
 mod tests {
     use std::path::PathBuf;
 
+    use brigadier_store::{NewEvent, Store, StoreConfig, StreamPage};
+
     use super::*;
     use crate::Core;
-    use crate::model::{ConversationId, ConversationKind};
+    use crate::model::{ConversationKind, DomainEvent, Lifecycle, streams};
     use crate::sessions::Origin;
-    use crate::work::{Approval, ApprovalSubject, CardId, CardState, PullRequest};
-
-    const NOW: i64 = 10 * IDLE_FOR_DONE_MS;
-
-    fn conversation(updated_at_ms: i64) -> Conversation {
-        serde_json::from_value(serde_json::json!({
-            "id": "c1", "kind": "session", "projectId": "p", "title": "t",
-            "pinnedAtMs": null, "createdAtMs": 1, "updatedAtMs": updated_at_ms
-        }))
-        .unwrap()
-    }
-
-    fn ended(at_ms: i64) -> CliTurn {
-        CliTurn {
-            open: false,
-            last_end: None,
-            turn_ended_at_ms: Some(at_ms),
-        }
-    }
-
-    fn with_pr(state: PullRequestState) -> Board {
-        let pr: PullRequest = serde_json::from_value(serde_json::json!({
-            "number": 7, "title": "t", "url": "u", "state": "open"
-        }))
-        .unwrap();
-        Board {
-            pull_request: Some(Box::new(PullRequest { state, ..pr })),
-            ..Board::default()
-        }
-    }
-
-    #[test]
-    fn the_inbox_sweep_marks_3_idle_days_and_a_merged_pr_done() {
-        let recent = NOW - 60_000;
-        let old = NOW - IDLE_FOR_DONE_MS;
-        let idle = conversation(old);
-        assert!(auto_done(&idle, &Board::default(), ended(old), 0, NOW));
-        assert!(
-            !auto_done(&idle, &Board::default(), ended(recent), 0, NOW),
-            "counted from the last turn end too"
-        );
-        assert!(!auto_done(
-            &conversation(recent),
-            &Board::default(),
-            ended(old),
-            0,
-            NOW
-        ));
-        let busy = conversation(recent);
-        assert!(auto_done(
-            &busy,
-            &with_pr(PullRequestState::Merged),
-            ended(recent),
-            0,
-            NOW
-        ));
-        for state in [PullRequestState::Closed, PullRequestState::Open] {
-            assert!(
-                !auto_done(&busy, &with_pr(state), ended(recent), 0, NOW),
-                "{state:?} is not merged"
-            );
-        }
-    }
-
-    #[test]
-    fn the_inbox_sweep_leaves_a_working_or_waiting_session() {
-        let old = NOW - IDLE_FOR_DONE_MS;
-        let idle = conversation(old);
-        let open = CliTurn {
-            open: true,
-            ..ended(old)
-        };
-        assert!(!auto_done(&idle, &Board::default(), open, 0, NOW));
-        let running = Board {
-            run: RunState::Running,
-            ..with_pr(PullRequestState::Merged)
-        };
-        assert!(!auto_done(&idle, &running, ended(old), 0, NOW));
-        let mut asking = with_pr(PullRequestState::Merged);
-        let approval = CardId("a1".into());
-        asking.approvals.insert(
-            approval.clone(),
-            Approval {
-                id: approval,
-                conversation_id: idle.id.clone(),
-                task_id: None,
-                request_id: None,
-                position: 1,
-                subject: ApprovalSubject::Action {
-                    action: "deploy".into(),
-                    details: String::new(),
-                },
-                state: CardState::Pending,
-                created_at_ms: old,
-                resolved_at_ms: None,
-            },
-        );
-        assert!(!auto_done(&idle, &asking, ended(old), 0, NOW));
-    }
-
-    #[test]
-    fn the_inbox_sweep_respects_a_choice_until_the_thread_moves_on() {
-        let old = NOW - 2 * IDLE_FOR_DONE_MS;
-        let idle = conversation(old);
-        let merged = with_pr(PullRequestState::Merged);
-        // Done, or brought back by hand, with nothing after it: left alone.
-        assert!(!auto_done(
-            &idle,
-            &Board::default(),
-            ended(old),
-            old + 1,
-            NOW
-        ));
-        assert!(!auto_done(&idle, &merged, ended(old), old + 1, NOW));
-        // A turn after it ended 3 days ago: done again; the merge alone doesn't.
-        assert!(auto_done(
-            &idle,
-            &Board::default(),
-            ended(old + 2),
-            old + 1,
-            NOW
-        ));
-        let later = NOW - 60_000;
-        assert!(!auto_done(
-            &conversation(later),
-            &merged,
-            ended(later),
-            old,
-            NOW
-        ));
-    }
+    use crate::work::PullRequest;
 
     /// A folder in the temp directory, removed when dropped.
     struct Temp(PathBuf);
@@ -247,56 +53,241 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn inbox_done_snooze_and_seen_survive_a_reload() {
+    fn store() -> (Temp, Store) {
         let dir =
             Temp(std::env::temp_dir().join(format!("brigadier-inbox-{}", uuid::Uuid::now_v7())));
-        let store = brigadier_store::Store::open(brigadier_store::StoreConfig {
+        let store = Store::open(StoreConfig {
             db_path: dir.0.join("test.db"),
             blobs_dir: dir.0.join("blobs"),
             readers: 1,
         })
         .unwrap();
+        (dir, store)
+    }
+
+    async fn chat(core: &Core) -> ConversationId {
+        core.create_conversation(
+            ConversationId::generate(),
+            ConversationKind::Chat,
+            None,
+            None,
+            None,
+            Origin::default(),
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    fn sent(core: &Core, id: &ConversationId) -> Option<i64> {
+        core.conversation(id).unwrap().last_sent_at_ms
+    }
+
+    #[test]
+    fn only_a_merged_pull_request_earns_the_chip() {
+        let with = |state| {
+            let pr: PullRequest = serde_json::from_value(serde_json::json!({
+                "number": 7, "title": "t", "url": "u", "state": "open"
+            }))
+            .unwrap();
+            Board {
+                pull_request: Some(Box::new(PullRequest { state, ..pr })),
+                ..Board::default()
+            }
+        };
+        assert!(pull_request_merged(&with(PullRequestState::Merged)));
+        assert!(!pull_request_merged(&with(PullRequestState::Open)));
+        assert!(!pull_request_merged(&with(PullRequestState::Closed)));
+        assert!(!pull_request_merged(&Board::default()));
+    }
+
+    #[tokio::test]
+    async fn only_the_users_send_moves_the_sort_time_and_it_survives_a_reload() {
+        let (_dir, store) = store();
         let core = Core::load(store.clone()).await.unwrap();
-        let id = core
-            .create_conversation(
-                ConversationId::generate(),
-                ConversationKind::Chat,
-                None,
-                None,
-                None,
-                Origin::default(),
-            )
+        let id = chat(&core).await;
+        let created = core.conversation(&id).unwrap().created_at_ms;
+        assert_eq!(sent(&core, &id), Some(created), "its creation until then");
+
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
+        // Everything else that touches the row: a message appended by a turn or a queue, a
+        // finish, a rename, a pin, sleep, wake, archive and restore.
+        core.append_message(id.clone(), "from a queue".into())
             .await
-            .unwrap()
-            .id;
-        assert_eq!(core.done_decided_at(&id), 0);
-        let done = core.set_done(id.clone(), true).await.unwrap();
-        assert!(done.done_at_ms.is_some());
-        let decided = core.done_decided_at(&id);
-        assert!(decided > 0);
-        core.snooze(id.clone(), Some(5_000)).await.unwrap();
-        core.mark_seen(id.clone(), 40).await.unwrap();
-        let seen = core.mark_seen(id.clone(), 30).await.unwrap();
-        assert_eq!(seen.seen_at_ms, Some(40), "seen only moves forward");
+            .unwrap();
+        core.record(vec![(
+            streams::conversation(&id),
+            DomainEvent::RequestFinished {
+                conversation_id: id.clone(),
+                request_id: "r".into(),
+            },
+        )])
+        .await
+        .unwrap();
+        core.rename_conversation(id.clone(), "Renamed".into())
+            .await
+            .unwrap();
+        core.set_pinned(id.clone(), true).await.unwrap();
+        core.set_pinned(id.clone(), false).await.unwrap();
+        for lifecycle in [
+            Lifecycle::Hibernated,
+            Lifecycle::Active,
+            Lifecycle::Archived,
+            Lifecycle::Active,
+        ] {
+            core.set_lifecycle(id.clone(), lifecycle).await.unwrap();
+        }
+        assert_eq!(sent(&core, &id), Some(created), "none of those moved it");
 
-        let reloaded = Core::load(store.clone()).await.unwrap();
-        let conversation = reloaded.conversation(&id).unwrap();
-        assert_eq!(conversation.done_at_ms, done.done_at_ms);
-        assert_eq!(conversation.snoozed_until_ms, Some(5_000));
-        assert!(conversation.snoozed_at_ms.is_some());
-        assert_eq!(conversation.seen_at_ms, Some(40));
-        assert_eq!(reloaded.done_decided_at(&id), decided);
+        core.mark_user_sent(id.clone()).await.unwrap();
+        let moved = sent(&core, &id).unwrap();
+        assert!(moved > created, "the user's message moves it");
 
-        reloaded.set_done(id.clone(), false).await.unwrap();
-        reloaded.snooze(id.clone(), None).await.unwrap();
         let reloaded = Core::load(store).await.unwrap();
-        let conversation = reloaded.conversation(&id).unwrap();
-        assert_eq!(conversation.done_at_ms, None);
-        assert_eq!(conversation.snoozed_until_ms, None);
-        assert!(
-            reloaded.done_decided_at(&id) >= decided,
-            "bringing it back is a choice the sweep respects too"
+        assert_eq!(sent(&reloaded, &id), Some(moved));
+    }
+
+    /// Stores an event as an older Brigadier wrote it.
+    async fn stored_as_old(store: &Store, stream: String, kind: &str, event: serde_json::Value) {
+        store
+            .append(vec![NewEvent::new(stream, kind, 5, &event).unwrap()])
+            .await
+            .unwrap();
+    }
+
+    /// A chat as an older Brigadier stored it: fields since removed, and no sort time.
+    async fn old_chat(store: &Store, id: &ConversationId) {
+        stored_as_old(
+            store,
+            streams::CATALOG.into(),
+            "conversation.created",
+            serde_json::json!({ "type": "conversationCreated", "conversation": {
+                "id": id, "kind": "chat", "projectId": null, "title": "Old", "pinnedAtMs": null,
+                "createdAtMs": 7, "updatedAtMs": 7, "doneAtMs": 5, "snoozedUntilMs": 9,
+                "snoozedAtMs": 5
+            }}),
+        )
+        .await;
+    }
+
+    async fn old_message(store: &Store, id: &ConversationId, role: &str, at_ms: i64) {
+        stored_as_old(
+            store,
+            streams::conversation(id),
+            "message.appended",
+            serde_json::json!({ "type": "messageAppended", "message": {
+                "id": format!("m{at_ms}"), "conversationId": id, "seq": 0, "role": role,
+                "text": "words", "blob": null, "createdAtMs": at_ms
+            }}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn old_done_and_snoozed_rows_load_back_in_the_list_with_a_sort_time() {
+        let (_dir, store) = store();
+        let (bare, talked, forked) = (
+            ConversationId::generate(),
+            ConversationId::generate(),
+            ConversationId::generate(),
         );
+        for id in [&bare, &talked, &forked] {
+            old_chat(&store, id).await;
+            stored_as_old(
+                &store,
+                streams::CATALOG.into(),
+                "conversation.done",
+                serde_json::json!({ "type": "conversationDone", "id": id, "doneAtMs": 5 }),
+            )
+            .await;
+            stored_as_old(
+                &store,
+                streams::CATALOG.into(),
+                "conversation.snoozed",
+                serde_json::json!({
+                    "type": "conversationSnoozed", "id": id, "untilMs": 9, "atMs": 5
+                }),
+            )
+            .await;
+        }
+        old_message(&store, &talked, "user", 100).await;
+        old_message(&store, &talked, "peer", 200).await;
+        old_message(&store, &talked, "assistant", 300).await;
+        // Copied from its source, from before it was created.
+        old_message(&store, &forked, "user", 3).await;
+
+        let core = Core::load(store.clone()).await.unwrap();
+        assert_eq!(sent(&core, &bare), Some(7), "no message: its created time");
+        assert_eq!(
+            sent(&core, &talked),
+            Some(100),
+            "the user's, not the others'"
+        );
+        assert_eq!(sent(&core, &forked), Some(7), "never before it was created");
+
+        // Written once: the next launch reads and writes nothing for it.
+        let catalog = || {
+            store.read_stream(
+                streams::CATALOG.into(),
+                StreamPage {
+                    limit: 1000,
+                    ..StreamPage::default()
+                },
+            )
+        };
+        let events = catalog().await.unwrap().len();
+        let reloaded = Core::load(store.clone()).await.unwrap();
+        assert_eq!(catalog().await.unwrap().len(), events);
+        assert_eq!(sent(&reloaded, &talked), Some(100));
+    }
+
+    #[tokio::test]
+    async fn a_long_history_falls_back_to_creation_instead_of_scanning_every_page() {
+        let (_dir, store) = store();
+        let id = ConversationId::generate();
+        old_chat(&store, &id).await;
+        old_message(&store, &id, "user", 100).await;
+        for at in 101..=201 {
+            old_message(&store, &id, "assistant", at).await;
+        }
+        let core = Core::load(store).await.unwrap();
+        assert_eq!(
+            sent(&core, &id),
+            Some(7),
+            "only a cheap recent page is read"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "manual large-store startup measurement"]
+    async fn measure_large_inbox_fill() {
+        let (_dir, store) = store();
+        for n in 0..200 {
+            let id = ConversationId(format!("large-{n}"));
+            old_chat(&store, &id).await;
+            let events = (0..2000)
+                .map(|m| {
+                    let event = serde_json::json!({"type": "messageAppended", "message": {
+                        "id": format!("m{m}"), "conversationId": id, "seq": 0,
+                        "role": "assistant", "text": "x".repeat(512), "blob": null,
+                        "createdAtMs": m
+                    }});
+                    NewEvent::new(streams::conversation(&id), "message.appended", m, &event)
+                        .unwrap()
+                })
+                .collect();
+            store.append(events).await.unwrap();
+        }
+        let started = std::time::Instant::now();
+        let core = Core::load(store.clone()).await.unwrap();
+        eprintln!(
+            "FIRST_LOAD_200_ROWS_400000_MESSAGES_MS={}",
+            started.elapsed().as_millis()
+        );
+        assert_eq!(core.catalog().conversations.len(), 200);
+        let started = std::time::Instant::now();
+        Core::load(store).await.unwrap();
+        eprintln!("SECOND_LOAD_MS={}", started.elapsed().as_millis());
     }
 }

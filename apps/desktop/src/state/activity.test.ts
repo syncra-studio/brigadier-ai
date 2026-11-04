@@ -47,7 +47,7 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.equal(row("c4").awaiting, null, "a worker's server");
   applyActivityEvents([servers(null, [{ name: "linear", status: "needs-auth" }])]);
   assert.equal(row("c4").awaiting, "signIn");
-  assert.deepEqual(rowMark(row("c4")), { look: "dot", hover: "Needs you · sign-in" });
+  assert.deepEqual(rowMark(row("c4")), { look: "dot", amber: true, hover: "Needs you · sign-in" });
   applyActivityEvents([servers(null, [{ name: "linear", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
 });
@@ -91,7 +91,7 @@ test("a stopped turn is named through reconnect and clears when another turn ope
 test("a failed or cut-off last turn reads Failed until the next turn opens; a failed run too", () => {
   applyActivityNews({ conversationId: "c5", entries: [], opened: true });
   applyActivityNews({ conversationId: "c5", entries: [], ended: "interrupted" });
-  assert.deepEqual(rowMark(row("c5")), { look: "error", hover: "Failed" });
+  assert.deepEqual(rowMark(row("c5")), { look: "error", amber: true, hover: "Failed" });
   applyActivityNews({ conversationId: "c5", entries: [], opened: true });
   assert.equal(row("c5").awaiting, null);
   applyActivityNews({ conversationId: "c5", entries: [], ended: "done" });
@@ -153,8 +153,8 @@ test("the reconnect snapshot restores live worker activity without a thread view
   useActivity.setState({ byConversation: { snapshot } });
   assert.equal(row("snapshot").running, true);
   assert.equal(tabState(row("snapshot"), false, false, true), "working");
-  assert.deepEqual(rowMark(rowActivity({ ...snapshot, questions: new Set(["q"]) })), { look: "dot", hover: "Needs you · question" });
-  assert.deepEqual(rowMark(rowActivity({ ...snapshot, approvals: new Set(["a"]) })), { look: "dot", hover: "Needs you · approval" });
+  assert.deepEqual(rowMark(rowActivity({ ...snapshot, questions: new Set(["q"]) })), { look: "dot", amber: true, hover: "Needs you · question" });
+  assert.deepEqual(rowMark(rowActivity({ ...snapshot, approvals: new Set(["a"]) })), { look: "dot", amber: true, hover: "Needs you · approval" });
   // A sign-in doesn't hold the turn: while it works, it spins.
   assert.deepEqual(rowMark(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) })), { look: "working", hover: "Working" });
   assert.equal(rowActivity({ ...snapshot, workersWorking: false }).running, false);

@@ -1305,7 +1305,12 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
         },
         Request::GetSettledTabs => {
             let (tabs, landed) = sessions.tab_marks().await;
-            Response::GetSettledTabs { tabs, landed }
+            let merged = sessions.merged_sessions().await;
+            Response::GetSettledTabs {
+                tabs,
+                landed,
+                merged,
+            }
         }
         Request::GetMergeUndo {
             conversation_id,
@@ -1318,6 +1323,13 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
         },
         _ => unreachable!("only tab requests come here"),
     })
+}
+
+/// The user's message went out: its inbox row moves up. The message stands if this fails.
+async fn mark_user_sent(core: &Core, id: ConversationId) {
+    if let Err(err) = core.mark_user_sent(id).await {
+        tracing::warn!(error = %err, "could not record when the user last sent");
+    }
 }
 
 /// A sent message's outcome, as the app reads it.
@@ -1484,21 +1496,23 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             } else {
                 text
             };
-            Response::SendMessage {
-                outcome: send_outcome(
-                    heap(|| {
-                        sessions.send_message(
-                            conversation_id,
-                            text,
-                            attachments,
-                            mentions,
-                            steer,
-                            queue_index,
-                        )
-                    })
-                    .await?,
-                ),
-            }
+            let outcome = heap(|| async {
+                let sent = conversation_id.clone();
+                let outcome = sessions
+                    .send_message(
+                        conversation_id,
+                        text,
+                        attachments,
+                        mentions,
+                        steer,
+                        queue_index,
+                    )
+                    .await?;
+                mark_user_sent(core, sent).await;
+                Ok::<_, brigadier_core::Error>(send_outcome(outcome))
+            })
+            .await?;
+            Response::SendMessage { outcome }
         }
         Request::EditQueued {
             conversation_id,
@@ -1938,7 +1952,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             text,
             attachments,
         } => {
-            heap(|| sessions.edit_message(conversation_id, message_id, text, attachments)).await?;
+            heap(|| async {
+                let sent = conversation_id.clone();
+                sessions
+                    .edit_message(conversation_id, message_id, text, attachments)
+                    .await?;
+                mark_user_sent(core, sent).await;
+                Ok::<_, brigadier_core::Error>(())
+            })
+            .await?;
             Response::EditMessage
         }
         Request::Regenerate {
@@ -2425,12 +2447,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::SetPinned { id, pinned } => Response::SetPinned {
             conversation: Box::new(heap(|| core.set_pinned(id, pinned)).await?),
-        },
-        Request::SetDone { id, done } => Response::SetDone {
-            conversation: Box::new(heap(|| core.set_done(id, done)).await?),
-        },
-        Request::Snooze { id, until_ms } => Response::Snooze {
-            conversation: Box::new(heap(|| core.snooze(id, until_ms)).await?),
         },
         Request::MarkSeen { id, at_ms } => Response::MarkSeen {
             conversation: Box::new(heap(|| core.mark_seen(id, at_ms)).await?),

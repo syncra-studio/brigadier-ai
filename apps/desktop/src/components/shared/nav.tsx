@@ -29,12 +29,18 @@ export function NavSection({
   open = true,
   onOpenChange,
   actions,
+  steadyActions = false,
+  steadyChevron = false,
   children,
 }: {
   title?: string | undefined;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   actions?: ReactNode;
+  /** Its actions show without a hover. */
+  steadyActions?: boolean;
+  /** Its chevron shows without a hover. */
+  steadyChevron?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
@@ -55,9 +61,8 @@ export function NavSection({
                 aria-hidden
                 className={cn(
                   "ease-standard size-icon-sm shrink-0 transition-[rotate,opacity] duration-150 motion-reduce:transition-none",
-                  open
-                    ? "opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100"
-                    : "-rotate-90",
+                  !open && "-rotate-90",
+                  open && !steadyChevron && "opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100",
                 )}
               />
             </button>
@@ -67,7 +72,7 @@ export function NavSection({
             </h2>
           )}
           {actions && (
-            <div className="ms-auto flex shrink-0 items-center gap-0.5 opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100">
+            <div className={cn("ms-auto flex shrink-0 items-center gap-0.5", !steadyActions && "opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100")}>
               {actions}
             </div>
           )}

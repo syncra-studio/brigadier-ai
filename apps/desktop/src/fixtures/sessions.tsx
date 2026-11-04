@@ -109,14 +109,6 @@ if (params.has("neverRan")) conversations.push(session("never-ran", "Never ran",
 if (params.has("pinned")) conversations.find((each) => each.id === "w1-b")!.pinnedAtMs = 1;
 for (const each of conversations) each.seenAtMs = params.has("unread") ? 0 : 100;
 if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
-// Inbox mode: one row done, one snoozed, one pinned, and a chat, which has no project to name.
-if (params.has("inbox")) {
-  const set = (id: string, extra: Partial<Conversation>) => Object.assign(conversations.find((each) => each.id === id)!, extra);
-  set("w2-a", { doneAtMs: 50 });
-  set("w3-a", { snoozedUntilMs: Date.now() + 3_600_000, snoozedAtMs: 50 });
-  set("w1-b", { pinnedAtMs: 1 });
-  conversations.push(session("chat-1", "Quick question", 20, { kind: "chat", projectId: null }));
-}
 useApp.setState({
   catalogLoaded: true,
   connection: { status: "connected", daemon: null, reason: null },
@@ -125,8 +117,8 @@ useApp.setState({
   conversations: Object.fromEntries(conversations.map((each) => [each.id, each])),
   selection: params.has("manual") ? { type: "conversation", id: "w1-a" } : { type: "none" },
 });
-// These pages read the Projects layout; the inbox page starts in Inbox, as everyone does (D8).
-useApp.setState((state) => ({ settings: { ...state.settings, sidebarMode: params.has("inbox") ? "inbox" : "projects" } }));
+// These pages read the Projects layout (the Inbox has its own fixture, inbox.tsx).
+useApp.setState((state) => ({ settings: { ...state.settings, sidebarMode: "projects" } }));
 const activity = (id: string, extra: Partial<ConversationActivity>): [string, ReturnType<typeof fromSnapshot>] =>
   [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], ...extra })];
 useActivity.setState({
@@ -191,7 +183,7 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
       status: status?.dataset.status ?? null,
       tip: status?.title || null,
       active: button.dataset.active === "true",
-      mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-unread"]') ? "unread" : null,
+      mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-unread"]') ? "unread" : status?.querySelector('[data-slot="status-amber"]') ? "amber" : null,
       error: !!button.querySelector('[data-slot="status-error"]'),
       plain: status ? plainStatus(status) : true,
       words: wordsOf(button),
@@ -239,15 +231,6 @@ const cut = (title: string) => {
 };
 
 /** The sidebar's sections as shown: title, folded or not, and each row's title and project label. */
-const sections = () => [...document.querySelectorAll<HTMLElement>("section")].map((section) => ({
-  title: section.querySelector("button[aria-expanded]")?.textContent?.trim(),
-  open: section.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded") === "true",
-  rows: [...section.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].map((title) => ({
-    title: title.firstChild?.textContent?.trim(),
-    label: title.querySelector('[data-slot="row-label"]')?.textContent ?? null,
-  })),
-}));
-
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
 const tooltipText = () => {
@@ -522,7 +505,7 @@ function Fixture() {
           envelope("conversation:question", { type: "questionUpdated", question: answered("q", "question", "Use blue") }),
           envelope("conversation:question-approval", { type: "questionUpdated", question: answered("qa", "question-approval", "Skipped") }),
         ]);
-        await until(() => questionRow("question")?.status === "working" && questionRow("question-approval")?.status === "dot");
+        await until(() => questionRow("question")?.status === "working" && questionRow("question-approval")?.status === "amber");
         setResult(JSON.stringify({ before, opened, after: [questionRow("question"), questionRow("question-approval")] }));
       })();
       return;
@@ -535,7 +518,7 @@ function Fixture() {
           useApp.setState({ selection: { type: "none" } });
           const row = [...document.querySelectorAll<HTMLElement>('[data-slot="row-status"]')].find((status) => status.closest("button")?.querySelector('[data-slot="row-title"]')?.textContent === conversation.title)!;
           await until(() => row.closest("button")?.dataset.active !== "true");
-          const beforeMark = row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : null;
+          const beforeMark = row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : row.querySelector('[data-slot="status-amber"]') ? "amber" : null;
           const unread = row.querySelector<HTMLElement>('[data-slot="status-unread"]');
           const spinner = row.querySelector<HTMLElement>('[data-slot="status-spinner"]');
           const error = row.closest("button")?.querySelector<HTMLElement>('[data-slot="status-error"]');
@@ -543,13 +526,11 @@ function Fixture() {
             unreadSize: unread?.getBoundingClientRect().width ?? null, unreadSlot: unread?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerSize: spinner ? Number.parseFloat(getComputedStyle(spinner).width) : null, spinnerSlot: spinner?.parentElement?.getBoundingClientRect().width ?? null,
             spinnerDuration: spinner ? getComputedStyle(spinner).animationDuration : null,
-            errorSize: error?.querySelector("svg")?.getBoundingClientRect().width ?? null, errorSlot: error?.getBoundingClientRect().width ?? null,
-            leadingError: error ? error.compareDocumentPosition(row.closest("button")!.querySelector('[data-slot="row-title"]')!) & Node.DOCUMENT_POSITION_FOLLOWING : null,
           };
           useApp.setState({ selection: { type: "conversation", id: conversation.id } });
           await until(() => document.querySelector('[data-tab-id="chat"] .session-tab-title')?.textContent === conversation.title);
           const tab = document.querySelector<HTMLElement>('[data-tab-id="chat"] [role="tab"]')!;
-          // The tab's marks are the sidebar row's own: its spinner or unread dot, its error glyph.
+          // The tab keeps its own marks: a spinner or dot at its end, an error glyph first.
           const slot = tab.parentElement!;
           const mark = slot.querySelector<HTMLElement>('[data-slot="status-spinner"], [data-slot="status-unread"]')?.parentElement;
           // The open row's own state, read again: in front of the user it may have changed.
@@ -583,40 +564,6 @@ function Fixture() {
           projectHeader: { text: header.textContent?.trim(), icons: header.querySelectorAll("svg").length },
           sessions: [...list.querySelectorAll('[data-slot="row-title"]')].map((title) => title.textContent?.trim()),
         }));
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-    if (params.has("inbox")) {
-      const timer = setTimeout(async () => {
-        const seen: Record<string, unknown> = { sections: sections() };
-        // Done is docked at the sidebar's bottom (D16): the list above stretches down to it, however short.
-        const dock = document.querySelector('[data-slot="inbox-done"]')!.getBoundingClientRect();
-        const list = document.querySelector('[data-sidebar="sidebar"] .scroll-edge-fade')!.getBoundingClientRect();
-        const panel = document.querySelector('[data-slot="sidebar-panel"]')!.getBoundingClientRect();
-        seen.dock = { doneInside: Boolean(document.querySelector('[data-slot="inbox-done"] section')), below: panel.bottom - dock.bottom, between: dock.top - list.bottom };
-        // A snooze due in half a second: the row comes back then, not at the next minute's look.
-        const wakesAt = Date.now() + 500;
-        const snoozedRow = () => sections().find((section) => section.rows.some((row) => row.title === "Tidy the docs"))?.title;
-        useApp.setState((state) => ({ conversations: { ...state.conversations, "w3-a": { ...state.conversations["w3-a"]!, snoozedUntilMs: wakesAt } } }));
-        await wait(100);
-        seen.beforeWake = snoozedRow();
-        await until(() => snoozedRow() === "Active");
-        seen.wokeLateMs = Date.now() - wakesAt;
-        // A new message brings the done row back: its turn runs (Working), then ends after it was done.
-        useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w2-a", { run: "running", turnOpen: true })]) } }));
-        await wait(100);
-        seen.doneRunning = sections().find((section) => section.rows.some((row) => row.title === "Fix the login"))?.title;
-        useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w2-a", { turnEndedAtMs: Date.now() })]) } }));
-        await wait(2500);
-        seen.doneAfter = sections().find((section) => section.rows.some((row) => row.title === "Fix the login"))?.title;
-        seen.firstActive = sections().find((section) => section.title === "Active")?.rows[0]?.title;
-        // The switch flips to Projects, and the choice goes to the daemon.
-        document.querySelector<HTMLButtonElement>('button[aria-label="Projects view"]')!.click();
-        await until(() => Boolean(document.querySelector('button[aria-label="Add project"]')));
-        seen.projectsSections = sections().map((section) => section.title);
-        seen.mode = useApp.getState().settings.sidebarMode;
-        seen.saved = requests.includes("updateSettings");
-        setResult(JSON.stringify(seen));
       }, 300);
       return () => clearTimeout(timer);
     }

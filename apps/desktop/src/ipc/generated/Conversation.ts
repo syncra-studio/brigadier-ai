@@ -58,18 +58,10 @@ peerAtMs?: number,
  */
 finishedAtMs?: number, 
 /**
- * When it was marked done (by the user, or after 3 idle days or a merged pull request);
- * absent when not done. The inbox reads it against later activity.
+ * When the user last sent it a message, its creation until then: the inbox's order. Agent
+ * turns, other sessions, sleep, wake, renames and finishes never change it.
  */
-doneAtMs?: number, 
-/**
- * When its snooze ends; absent when not snoozed.
- */
-snoozedUntilMs?: number, 
-/**
- * When it was last snoozed or woken by hand.
- */
-snoozedAtMs?: number, 
+lastSentAtMs?: number, 
 /**
  * How far its replies were seen: the finish time last seen in any window (its row's
  * unread dot).

@@ -39,7 +39,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -1124,16 +1124,6 @@ pub enum Request {
         id: ConversationId,
         pinned: bool,
     },
-    /// Marks a conversation done, or brings it back.
-    SetDone {
-        id: ConversationId,
-        done: bool,
-    },
-    /// Snoozes a conversation until `until_ms`, or wakes it (`null`).
-    Snooze {
-        id: ConversationId,
-        until_ms: Option<i64>,
-    },
     /// A conversation's replies were seen up to `at_ms`.
     MarkSeen {
         id: ConversationId,
@@ -1508,6 +1498,8 @@ pub enum Response {
         /// Open sessions with nothing left to merge: no commit beyond their base or its
         /// upstream, nothing uncommitted (D61). Settled or not.
         landed: Vec<ConversationId>,
+        /// Open sessions whose pull request the board last saw merged.
+        merged: Vec<ConversationId>,
     },
     GetMergeUndo {
         /// None: never reverted.
@@ -1933,12 +1925,6 @@ pub enum Response {
         conversation: Box<Conversation>,
     },
     SetPinned {
-        conversation: Box<Conversation>,
-    },
-    SetDone {
-        conversation: Box<Conversation>,
-    },
-    Snooze {
         conversation: Box<Conversation>,
     },
     MarkSeen {
