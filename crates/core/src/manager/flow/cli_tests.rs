@@ -575,6 +575,16 @@ async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
         .await;
         flow.settled().await;
         let task = flow.core.tasks(&flow.conversation).await.unwrap().remove(0);
+        // Its turn's report reads git in its worktree after it reads reported: disposing of the
+        // worktree under that read can outlast the kills of what runs there.
+        flow.until("its report is over", |_| {
+            !flow
+                .manager
+                .tasks_lock()
+                .get(&task.id)
+                .is_some_and(|live| live.reporting.load(std::sync::atomic::Ordering::SeqCst))
+        })
+        .await;
         let workspace = task.workspace.as_ref().unwrap();
         let path = std::path::Path::new(workspace.worktree.as_ref().unwrap());
         let branch = workspace.branch.as_ref().unwrap();
@@ -587,11 +597,13 @@ async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
             }
             "close" => {
                 flow.say("Close it.").await;
+                // Marked closed only once its disposal is over; it reads final before that.
                 flow.until("worker closed", |board| {
                     board
                         .tasks
                         .get(&task.id)
-                        .is_some_and(|task| task.state.is_final())
+                        .and_then(|task| task.plain.as_ref())
+                        .is_some_and(|plain| plain.closed)
                 })
                 .await;
                 flow.idle().await;
