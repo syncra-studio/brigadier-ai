@@ -249,6 +249,8 @@ impl SessionManager {
         if caller.task_id.is_some() {
             return Ok(refused("refused: a worker can't start workers of its own"));
         }
+        // #762: a start the thread asks for stops on a rules line that can't be read, naming it.
+        self.check_rules_file()?;
         if let Some(agent) = start.agent
             && brigadier_providers::adapters::adapter(agent).is_none()
         {
@@ -331,7 +333,18 @@ impl SessionManager {
         let row = match work.as_deref() {
             None => None,
             Some(work) => {
-                let rows = self.work_rows(work)?;
+                let mut rows = self.work_rows(work)?;
+                // #743: the automatic rows leave out an agent switched off in Settings ›
+                // Providers; `--agent` naming it still takes its shipped row (D34). An order of
+                // the user's own is theirs as written.
+                if let Some(agent) = start.agent
+                    && !rows
+                        .iter()
+                        .any(|row| row.agent == agent || row.source == "user")
+                    && let Some(row) = self.shipped_row(work, agent)
+                {
+                    rows.push(row);
+                }
                 let mut order: Vec<&Guidance> = rows.iter().collect();
                 if let Some(authors) = &review {
                     order.retain(|row| start.agent.is_none_or(|agent| agent == row.agent));
@@ -341,11 +354,30 @@ impl SessionManager {
                     // and effort, before another agent's.
                     order.sort_by_key(|row| row.agent != agent);
                 }
-                // None fits now: the order's first, still the `--agent` one (D34).
-                let first = order.first().map(|row| (*row).clone());
+                // #743: a row whose agent is switched off, or whose model is made unavailable,
+                // in Settings › Providers is never picked for the start. With `--agent` the
+                // worker runs on that agent whatever the row's (D34: its own row, else another
+                // row's effort only), and `--model` replaces the row's model.
+                let settings = self.core.settings();
+                let usable = |row: &Guidance| {
+                    start.agent.is_some()
+                        || if start.model.is_some() {
+                            crate::routing::availability::provider_on(&settings, row.agent)
+                        } else {
+                            self.row_available(row.agent, &row.model)
+                        }
+                };
+                // None fits now: the order's first that can run, still the `--agent` one (D34).
+                let first = order
+                    .iter()
+                    .find(|row| usable(row))
+                    .map(|row| (*row).clone());
                 let mut fit = None;
                 for row in order {
                     let provider = row.agent;
+                    if !usable(row) {
+                        continue;
+                    }
                     // A row whose CLI has no signed-in account can't run: the next row takes it.
                     if !self.runtime.provider_signed_in(provider) {
                         continue;
@@ -378,8 +410,15 @@ impl SessionManager {
                         break;
                     }
                 }
-                match fit.or(first).or_else(|| rows.into_iter().next()) {
+                let last = || rows.iter().find(|row| usable(row)).cloned();
+                match fit.or(first).or_else(last) {
                     Some(row) => Some(row),
+                    None if !rows.is_empty() => {
+                        return Ok(refused(format!(
+                            "refused: every row of the work \"{work}\" names an agent or a model \
+                             switched off in Settings › Providers; switch one on, or give --agent"
+                        )));
+                    }
                     None => {
                         return Ok(CliReply::error(
                             ErrorCode::NotFound,
@@ -580,6 +619,10 @@ impl SessionManager {
         }
         let (mut first, mut named) = (None, None);
         for row in &rows {
+            // A row Settings › Providers keeps out is not what the routing picks (#743).
+            if !self.row_available(row.agent, &row.model) {
+                continue;
+            }
             let model = (row.model != "default").then(|| self.listed_model(row.agent, &row.model));
             if self
                 .model_refusal(
@@ -1853,6 +1896,8 @@ impl SessionManager {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
+        // #762: a switch the thread asks for stops on a rules line that can't be read.
+        self.check_rules_file()?;
         if let Some(agent) = agent
             && brigadier_providers::adapters::adapter(agent).is_none()
         {

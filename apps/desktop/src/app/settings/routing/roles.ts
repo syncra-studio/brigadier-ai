@@ -1,4 +1,4 @@
-import type { WorkRow } from "@/app/settings/routing/words";
+import { sameWork, type WorkRow } from "@/app/settings/routing/words";
 import type { GuidanceRow, ProviderKind } from "@/ipc/generated";
 import { cliFacts } from "@/lib/providerKinds";
 
@@ -44,12 +44,12 @@ export const isRoleWork = (work: string) => /^(adversarial review|fallback|fusio
 
 /** The user's rows with `row`'s model in the first row of its work and agent, in place; a twin of it later in that role goes. Every other row stays. */
 export function withRoleModel(rows: readonly GuidanceRow[], row: GuidanceRow): GuidanceRow[] {
-  const role = (mine: GuidanceRow) => mine.work === row.work && mine.agent === row.agent;
+  const role = (mine: GuidanceRow) => sameWork(mine.work, row.work) && mine.agent === row.agent;
   const at = rows.findIndex(role);
   return rows.flatMap((mine, index) => (index === at ? [row] : role(mine) && mine.model === row.model ? [] : [mine]));
 }
 
-const isConsult = (work: string) => work === "fusion-claude" || work === "fusion-codex";
+const isConsult = (work: string) => sameWork(work, "fusion-claude") || sameWork(work, "fusion-codex");
 
 /** The kinds of work with a fusion's consult rows (`fusion-claude`, `fusion-codex`) as one Fusion row, in the place of the first. */
 export function withFusion(rows: readonly WorkRow[]): WorkRow[] {

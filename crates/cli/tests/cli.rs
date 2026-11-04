@@ -237,7 +237,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     you: false,
                     logged_in: true,
                     age_s: None,
-                    fit: "out until 14:10".into(),
+                    fit: "out until 2026-11-09 14:10 UTC (in 4d)".into(),
                     usage: vec![],
                     place: None,
                     why: "at its limit until 14:10".into(),
@@ -249,6 +249,7 @@ fn sample(request: &CliRequest) -> CliReply {
             }],
             rules_path: "/Users/me/.brigadier/models.md".into(),
             advice: vec!["prefer Codex when Claude is busy".into()],
+            invalid_rules: vec!["line 7: - effort-ceiling: hgih".into()],
         }),
         CliRequest::Sessions { all } => CliReply::ok(&SessionsOutput {
             project: (!all).then(|| "brigadier-ai".into()),

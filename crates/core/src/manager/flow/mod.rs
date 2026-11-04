@@ -2629,6 +2629,8 @@ mod open_in_app_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod records_tests;
+// The rules file and routing, read through the manager without a CLI turn: every platform.
+mod routing_rules_tests;
 #[cfg(unix)]
 mod scope_tests;
 #[cfg(unix)]

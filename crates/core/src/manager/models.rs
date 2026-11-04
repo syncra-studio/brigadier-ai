@@ -116,7 +116,10 @@ fn guidance(shipped: Vec<GuidanceRow>, user: &str) -> Vec<Guidance> {
     let user = rows(user);
     let mut merged: Vec<Guidance> = Vec::new();
     for row in &shipped {
-        let mut mine = user.iter().filter(|mine| mine.work == row.work).peekable();
+        let mut mine = user
+            .iter()
+            .filter(|mine| same_work(&mine.work, &row.work))
+            .peekable();
         if mine.peek().is_none() {
             let source = if row.reason.starts_with(RATED_REASON) {
                 "ratings"
@@ -124,12 +127,12 @@ fn guidance(shipped: Vec<GuidanceRow>, user: &str) -> Vec<Guidance> {
                 "shipped"
             };
             merged.push(shown(row.clone(), source));
-        } else if !merged.iter().any(|old| old.work == row.work) {
+        } else if !merged.iter().any(|old| same_work(&old.work, &row.work)) {
             merged.extend(mine.map(|mine| shown(mine.clone(), "user")));
         }
     }
     for row in &user {
-        if !shipped.iter().any(|old| old.work == row.work) {
+        if !shipped.iter().any(|old| same_work(&old.work, &row.work)) {
             merged.push(shown(row.clone(), "user"));
         }
     }
@@ -195,11 +198,14 @@ fn rated_picks(
 }
 /// The automatic rows: per kind of work of the shipped table, in its order, the rows its
 /// ratings give (one per agent, best first), then the shipped rows of agents with nothing rated
-/// for it; where nothing is rated at all, the shipped rows.
+/// for it; where nothing is rated at all, the shipped rows. A shipped row `on` says can't run
+/// (its agent switched off, its model made unavailable) is left out (#743), unless that leaves
+/// its kind with no row at all.
 fn automatic(
     shipped: Vec<GuidanceRow>,
     models: &[MergedModel],
     allowed: &dyn Fn(&MergedModel, &str) -> bool,
+    on: &dyn Fn(&GuidanceRow) -> bool,
 ) -> Vec<GuidanceRow> {
     let mut out: Vec<GuidanceRow> = Vec::new();
     for row in &shipped {
@@ -208,21 +214,24 @@ fn automatic(
         }
         let picks = rated_picks(&row.work, models, allowed);
         if picks.is_empty() {
-            out.extend(
-                shipped
-                    .iter()
-                    .filter(|other| same_work(&other.work, &row.work))
-                    .cloned(),
-            );
+            let kind: Vec<GuidanceRow> = shipped
+                .iter()
+                .filter(|other| same_work(&other.work, &row.work))
+                .cloned()
+                .collect();
+            let running: Vec<GuidanceRow> = kind.iter().filter(|row| on(row)).cloned().collect();
+            out.extend(if running.is_empty() { kind } else { running });
             continue;
         }
         let small = pick_rule(&row.work).is_some_and(|(rule, _)| rule.small);
-        // An agent with no rated model for it keeps its shipped row, after the rated ones.
+        // An agent with no rated model for it keeps its shipped row, after the rated ones, when
+        // that row can run: an agent switched off has no pick, and gets no row back either.
         let unrated: Vec<GuidanceRow> = shipped
             .iter()
             .filter(|other| {
                 same_work(&other.work, &row.work)
                     && !picks.iter().any(|pick| pick.provider == other.agent)
+                    && on(other)
             })
             .cloned()
             .collect();
@@ -410,14 +419,33 @@ fn effort_target(
 }
 pub(super) struct Policy {
     entries: Vec<(String, ModelRule)>,
+    /// The lines that read as a rule but can't be one (an effort no level is), each
+    /// `line N: text`. They hold nothing; the other rules still do (#762).
+    invalid: Vec<String>,
 }
 impl Policy {
-    fn parse(text: &str) -> Result<Self> {
+    /// The file's rules. A line that can't be a rule is left out and kept in [`Self::invalid`]:
+    /// one typo must not empty the Fallback rows or refuse every move (#762).
+    fn parse(text: &str) -> Self {
         let mut entries = Vec::new();
-        for line in text.lines() {
-            entries.extend(directive(line)?);
+        let mut invalid = Vec::new();
+        for (index, line) in text.lines().enumerate() {
+            match directive(line) {
+                Ok(found) => entries.extend(found),
+                Err(_) => invalid.push(format!("line {}: {}", index + 1, line.trim())),
+            }
         }
-        Ok(Self { entries })
+        Self { entries, invalid }
+    }
+    /// The rules, or the error the first line that can't be a rule makes: what an explicit
+    /// start or model change answers, so the user hears of it.
+    fn checked(self) -> Result<Self> {
+        match self.invalid.first() {
+            Some(line) => Err(Error::Invalid(format!(
+                "invalid model rule in your rules file, {line}: fix or remove it in Settings › Routing"
+            ))),
+            None => Ok(self),
+        }
     }
     /// Whether a rule holds for a start of `work`: a rule for one kind of work judges only a
     /// start for that work.
@@ -851,7 +879,7 @@ impl SessionManager {
             revision: rules_revision(&text),
             shipped,
             rows: rows(&text),
-            rules: Policy::parse(&text)?
+            rules: Policy::parse(&text)
                 .entries
                 .into_iter()
                 .map(|(_, rule)| rule)
@@ -873,7 +901,7 @@ impl SessionManager {
     ) -> Result<(Vec<GuidanceRow>, Vec<crate::RoutingSuggestion>)> {
         let (registry, models) = self.rated_models();
         let settings = self.core.settings();
-        let policy = Policy::parse(text)?;
+        let policy = Policy::parse(text);
         let allowed = |model: &MergedModel, work: &str| {
             let names: Vec<&str> = std::iter::once(model.id.as_str())
                 .chain(model.resolved.as_deref())
@@ -894,7 +922,9 @@ impl SessionManager {
             }
             Some(self.listed_model(provider, word))
         };
-        let shipped = automatic(rows(GUIDANCE), &models, &allowed);
+        let shipped = automatic(rows(GUIDANCE), &models, &allowed, &|row| {
+            self.row_available(row.agent, &row.model)
+        });
         let found = suggestions(
             &rows(text),
             &registry,
@@ -936,6 +966,14 @@ impl SessionManager {
             .into_iter()
             .filter(|row| same_work(&row.work, work))
             .collect())
+    }
+    /// The shipped table's row of `agent` for `work`: what `brigadier start --agent` takes as
+    /// that agent's own row (D34) when the automatic rows left it out, its agent switched off
+    /// or its model made unavailable (#743).
+    pub(super) fn shipped_row(&self, work: &str, agent: ProviderKind) -> Option<Guidance> {
+        guidance(rows(GUIDANCE), "")
+            .into_iter()
+            .find(|row| row.agent == agent && same_work(&row.work, work))
     }
     /// Conversation titles use normal Work rows, scoped rules, model switches and account
     /// routing. Shipped rows name small families; never widen them to a default/strong model.
@@ -1117,8 +1155,41 @@ impl SessionManager {
         let catalog = self.runtime.overview(provider).and_then(|o| o.models);
         runs_as(catalog.as_ref(), model, effort)
     }
+    /// Whether a routing row of `agent` naming `model` can start as Settings › Providers stands:
+    /// the agent switched on, and the model it runs as (a family word's newest listed model,
+    /// `default` the CLI's default) not made unavailable. Settings › Routing judges it the same.
+    pub(super) fn row_available(&self, agent: ProviderKind, model: &str) -> bool {
+        use crate::routing::availability::{model_available, provider_on};
+        let settings = self.core.settings();
+        if !provider_on(&settings, agent) {
+            return false;
+        }
+        let catalog = self.runtime.overview(agent).and_then(|o| o.models);
+        // The catalog's own id: what Providers records a model made unavailable as.
+        let id = if model.trim().is_empty() || model.eq_ignore_ascii_case("default") {
+            match listed(catalog.as_ref(), None) {
+                Some(default) => default.id.clone(),
+                None => return true,
+            }
+        } else {
+            let name = self.listed_model(agent, model);
+            listed(catalog.as_ref(), Some(&name)).map_or(name, |entry| entry.id.clone())
+        };
+        model_available(&settings, agent, &id)
+    }
+    /// The user's rules, without any line that can't be a rule (named once in the log): what
+    /// every start and move is judged by, so one typo leaves the other rules and Fallback on.
     pub(super) fn model_policy(&self) -> Result<Policy> {
+        let policy = Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?);
+        note_invalid(&policy.invalid);
+        Ok(policy)
+    }
+    /// Refuses an explicit action (a start, a switch, a model change, a move the user asks for)
+    /// while a line of the rules file can't be a rule, naming it (#762).
+    pub(super) fn check_rules_file(&self) -> Result<()> {
         Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?)
+            .checked()
+            .map(|_| ())
     }
     /// The rule that refuses a choice, quoted; `work`, the kind of work a start is for.
     pub(super) fn model_refusal(
@@ -1265,8 +1336,9 @@ impl SessionManager {
         let now = now_ms();
         let rules_path = self.models_rules_path();
         let user = editable(&rules_path, DEFAULT_RULES)?;
-        let policy = Policy::parse(&user)?;
+        let policy = Policy::parse(&user);
         let shipped = self.automatic_view(&user)?.0;
+        let settings = self.core.settings();
         let mut models = Vec::new();
         for provider in brigadier_providers::adapters::kinds() {
             if let Some(catalog) = self.runtime.overview(provider).and_then(|o| o.models) {
@@ -1274,8 +1346,11 @@ impl SessionManager {
                 for model in catalog.models {
                     models.push(Model {
                         agent: provider,
+                        // Its agent on and the model not made unavailable (#743).
+                        available: crate::routing::availability::model_available(
+                            &settings, provider, &model.id,
+                        ),
                         model: model.id,
-                        available: true,
                         efforts: model.efforts,
                         age_s,
                     });
@@ -1326,6 +1401,7 @@ impl SessionManager {
                         .as_ref()
                         .and_then(|q| q.limit.as_ref())
                         .map(|l| l.resets_at_ms),
+                    now,
                 );
                 let why = a.reason.as_ref().map_or_else(
                     || "not ordered yet".into(),
@@ -1346,7 +1422,6 @@ impl SessionManager {
                 }
             })
             .collect();
-        let settings = self.core.settings();
         let agents = brigadier_providers::adapters::kinds()
             .map(|provider| AgentAccounts {
                 agent: provider,
@@ -1368,20 +1443,34 @@ impl SessionManager {
                 .map(|(rule, _)| Rule { rule })
                 .collect(),
             rules_path: rules_path.display().to_string(),
+            invalid_rules: policy.invalid,
         })
+    }
+}
+/// Logs the rules file's lines that can't be a rule once per change of them, not at every check.
+fn note_invalid(invalid: &[String]) {
+    static NOTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
+    if noted.as_slice() != invalid {
+        if !invalid.is_empty() {
+            tracing::warn!(lines = ?invalid, "rules file lines that can't be a rule are ignored");
+        }
+        *noted = invalid.to_vec();
+    }
+}
+/// How long from `now` until `at`, in a few letters: `40m`, `5h`, `3d`.
+fn within(at: i64, now: i64) -> String {
+    let minutes = ((at - now).max(0) + 59_999) / 60_000;
+    match minutes {
+        m if m < 60 => format!("{m}m"),
+        m if m < 48 * 60 => format!("{}h", m / 60),
+        m => format!("{}d", m / (24 * 60)),
     }
 }
 /// Why an account stands where it does in its agent's order, in words.
 fn order_words(reason: &crate::accounts::OrderReason, now: i64) -> String {
     use crate::accounts::OrderReason;
-    let within = |at: i64| {
-        let minutes = ((at - now).max(0) + 59_999) / 60_000;
-        match minutes {
-            m if m < 60 => format!("{m}m"),
-            m if m < 48 * 60 => format!("{}h", m / 60),
-            m => format!("{}d", m / (24 * 60)),
-        }
-    };
+    let within = |at: i64| within(at, now);
     match reason {
         OrderReason::Picked => "picked with Use".into(),
         OrderReason::ResetsSooner { resets_at_ms } => {
@@ -1400,7 +1489,9 @@ fn order_words(reason: &crate::accounts::OrderReason, now: i64) -> String {
         OrderReason::SignedOut => "not signed in".into(),
     }
 }
-fn fit(windows: &[Usage], limited: Option<Option<i64>>) -> String {
+/// An account's fit in a word: `ok`, `tight`, `out`, `unknown`, or out until a reset, given
+/// with its date and how far away it is (a weekly window can be days out: #764).
+fn fit(windows: &[Usage], limited: Option<Option<i64>>, now: i64) -> String {
     if matches!(limited, Some(None)) {
         return "out".into();
     }
@@ -1411,11 +1502,11 @@ fn fit(windows: &[Usage], limited: Option<Option<i64>>) -> String {
             .filter_map(|w| w.resets_at_ms)
             .max()
     }) {
-        return format!(
-            "out until {:02}:{:02} UTC",
-            (at / 3_600_000).rem_euclid(24),
-            (at / 60_000).rem_euclid(60)
+        let when = jiff::Timestamp::from_millisecond(at).map_or_else(
+            |_| format!("{at} ms"),
+            |at| at.strftime("%Y-%m-%d %H:%M UTC").to_string(),
         );
+        return format!("out until {when} (in {})", within(at, now));
     }
     if windows.iter().any(|w| w.pooled && (w.used_percent >= 97.0)) {
         "out".into()
@@ -1614,12 +1705,42 @@ mod tests {
         (registry, models)
     }
 
+    /// #743: an agent switched off has no rated pick, and its shipped row doesn't come back in
+    /// its place; a kind only that agent's rows name keeps them, so it still exists.
+    #[test]
+    fn automatic_leaves_out_a_switched_off_agent() {
+        let (_, models) = small_catalog();
+        let rows = automatic(
+            rows(GUIDANCE),
+            &models,
+            &|model, _| model.provider != ProviderKind::Claude,
+            &|row| row.agent != ProviderKind::Claude,
+        );
+        let shipped = super::rows(GUIDANCE);
+        let claude_only = |work: &str| {
+            shipped
+                .iter()
+                .filter(|row| same_work(&row.work, work))
+                .all(|row| row.agent == ProviderKind::Claude)
+        };
+        for row in &rows {
+            assert!(
+                row.agent != ProviderKind::Claude || claude_only(&row.work),
+                "{row:?}"
+            );
+        }
+        assert!(rows.iter().any(|row| same_work(&row.work, "fusion-claude")));
+        assert!(
+            rows.iter()
+                .any(|row| same_work(&row.work, "Bounded implementation"))
+        );
+    }
     /// The automatic rows come from the ratings, one per agent in rating order; a kind with
     /// nothing rated keeps the shipped table's rows.
     #[test]
     fn automatic_rows_follow_the_ratings_and_fall_back_to_the_shipped_table() {
         let (_, models) = small_catalog();
-        let rows = automatic(rows(GUIDANCE), &models, &|_, _| true);
+        let rows = automatic(rows(GUIDANCE), &models, &|_, _| true, &|_| true);
         let of = |work: &str| -> Vec<(ProviderKind, String, Option<String>)> {
             rows.iter()
                 .filter(|row| row.work == work)
@@ -1667,9 +1788,12 @@ mod tests {
             .unwrap();
         assert!(!titles.reason.starts_with(RATED_REASON));
         // A model a rule or a switch keeps out gives its place to the agent's next best.
-        let rows = automatic(super::rows(GUIDANCE), &models, &|model, _| {
-            model.id != "eyes"
-        });
+        let rows = automatic(
+            super::rows(GUIDANCE),
+            &models,
+            &|model, _| model.id != "eyes",
+            &|_| true,
+        );
         assert_eq!(
             rows.iter()
                 .filter(|row| row.work == "Computer use")
@@ -1742,7 +1866,7 @@ mod tests {
     #[test]
     fn rule_reading_keeps_its_family_word() {
         let (_, models) = small_catalog();
-        let shipped = automatic(rows(GUIDANCE), &models, &|_, _| true);
+        let shipped = automatic(rows(GUIDANCE), &models, &|_, _| true, &|_| true);
         let reading: Vec<_> = shipped
             .iter()
             .filter(|row| row.work == "Rule reading")
@@ -1813,6 +1937,73 @@ mod tests {
         assert_eq!(row.model, "sonnet");
         assert_eq!(row.source, "user");
     }
+    /// #763: a hand-written `fallback` is the shipped `Fallback`, whatever its letter case: the
+    /// user's order replaces the shipped rows in their place instead of landing after them.
+    #[test]
+    fn guidance_user_rows_replace_shipped_rows_whatever_the_case() {
+        let shipped = rows(GUIDANCE);
+        let user = "| fallback | codex | sol | | Mine. |\n| BOUNDED implementation | claude | sonnet | low | Mine. |\n";
+        let merged = guidance(shipped.clone(), user);
+        for work in [FALLBACK_WORK, "Bounded implementation"] {
+            let of: Vec<_> = merged
+                .iter()
+                .filter(|row| same_work(&row.work, work))
+                .collect();
+            assert_eq!(of.len(), 1, "{work}: only the user's row, {merged:#?}");
+            assert_eq!(of[0].source, "user");
+        }
+        // Each kind once, in the shipped order: neither user kind went to the end.
+        let kinds = |works: Vec<String>| {
+            works
+                .into_iter()
+                .fold(Vec::<String>::new(), |mut kinds, work| {
+                    if !kinds.iter().any(|kind| same_work(kind, &work)) {
+                        kinds.push(work.to_ascii_lowercase());
+                    }
+                    kinds
+                })
+        };
+        assert_eq!(
+            kinds(merged.into_iter().map(|row| row.work).collect()),
+            kinds(shipped.into_iter().map(|row| row.work).collect()),
+        );
+    }
+    /// #762: a line that can't be a rule is left out and named; the rules around it still hold,
+    /// and only an explicit action (`checked`) stops on it.
+    #[test]
+    fn policy_keeps_good_lines_and_reports_a_bad_one() {
+        let policy = Policy::parse(
+            "# Mine
+- forbid: fable
+- effort-ceiling: hgih
+- effort-ceiling: high
+",
+        );
+        assert_eq!(policy.invalid, ["line 3: - effort-ceiling: hgih"]);
+        assert_eq!(policy.entries.len(), 2);
+        assert!(
+            policy
+                .refusal(ProviderKind::Claude, &["claude-fable-5-1"], None, None)
+                .is_some()
+        );
+        assert_eq!(
+            policy.effort(ProviderKind::Claude, &["opus"], Some("max"), &[], None),
+            Ok(Some("high".into()))
+        );
+        let refused = policy.checked().err().unwrap().to_string();
+        assert!(
+            refused.contains("line 3: - effort-ceiling: hgih"),
+            "{refused}"
+        );
+        assert!(
+            Policy::parse(
+                "- forbid: fable
+"
+            )
+            .checked()
+            .is_ok()
+        );
+    }
     #[test]
     fn the_old_review_name_reads_as_adversarial_review() {
         let old = "Independent review";
@@ -1835,8 +2026,7 @@ mod tests {
 
         let policy = Policy::parse(&format!(
             "- forbid for {old}: sonnet\n- effort-ceiling for {old}: medium\n"
-        ))
-        .unwrap();
+        ));
         for (_, rule) in &policy.entries {
             assert_eq!(rule.work(), Some(current));
         }
@@ -1893,8 +2083,7 @@ mod tests {
     fn a_rule_for_one_kind_of_work_judges_only_its_starts() {
         let policy = Policy::parse(
             "- forbid for Adversarial review: sonnet\n- effort-ceiling for Docs: low\n",
-        )
-        .unwrap();
+        );
         assert_eq!(policy.entries[0].0, "forbid for Adversarial review: sonnet");
         assert_eq!(
             policy.entries[0].1,
@@ -1944,7 +2133,7 @@ mod tests {
     }
     #[test]
     fn shipped_default_has_no_rules() {
-        let policy = Policy::parse(DEFAULT_RULES).unwrap();
+        let policy = Policy::parse(DEFAULT_RULES);
         assert!(policy.entries.is_empty());
         for provider in brigadier_providers::adapters::kinds() {
             assert!(!policy.restricts_models(provider));
@@ -1962,7 +2151,7 @@ mod tests {
     }
     #[test]
     fn user_rules_are_displayed_and_quote_the_rule() {
-        let policy = Policy::parse("- forbid: fable\n- effort-ceiling: high\n").unwrap();
+        let policy = Policy::parse("- forbid: fable\n- effort-ceiling: high\n");
         assert_eq!(policy.entries[0].0, "forbid: fable");
         assert!(
             policy
@@ -1972,7 +2161,6 @@ mod tests {
         );
         assert!(
             Policy::parse("")
-                .unwrap()
                 .refusal(
                     ProviderKind::Claude,
                     &["claude-fable-5-1"],
@@ -1985,7 +2173,7 @@ mod tests {
             policy.effort(ProviderKind::Codex, &[], Some("xhigh"), &[], None),
             Ok(Some("high".into()))
         );
-        let policy = Policy::parse("- allow claude: opus, sonnet").unwrap();
+        let policy = Policy::parse("- allow claude: opus, sonnet");
         assert!(
             policy
                 .refusal(ProviderKind::Codex, &["other"], None, None)
@@ -2002,13 +2190,11 @@ mod tests {
         let names = ["opus", "claude-opus-5-5"];
         assert!(
             Policy::parse("- allow claude: claude-opus-5-5")
-                .unwrap()
                 .refusal(ProviderKind::Claude, &names, None, None)
                 .is_none()
         );
         assert!(
             Policy::parse("- forbid: fable")
-                .unwrap()
                 .refusal(
                     ProviderKind::Claude,
                     &["opus", "claude-fable-5-1"],
@@ -2070,7 +2256,7 @@ mod tests {
             "advice created routing rows: {:?}",
             rows(&written)
         );
-        assert_eq!(Policy::parse(&written).unwrap().entries[0].1, rule);
+        assert_eq!(Policy::parse(&written).entries[0].1, rule);
     }
 
     #[test]
@@ -2134,7 +2320,7 @@ mod tests {
             )
         );
         // Read back, it is what was written; written again, it is the same text.
-        let policy = Policy::parse(&written).unwrap();
+        let policy = Policy::parse(&written);
         assert_eq!(
             policy
                 .entries
@@ -2208,7 +2394,7 @@ mod tests {
     }
     #[test]
     fn an_effort_cap_for_one_model_moves_only_that_model() {
-        let policy = Policy::parse("- effort-ceiling opus: medium\n").unwrap();
+        let policy = Policy::parse("- effort-ceiling opus: medium\n");
         assert_eq!(
             policy.entries[0].1,
             ModelRule::EffortCeiling {
@@ -2250,7 +2436,7 @@ mod tests {
     }
     #[test]
     fn an_effort_cap_for_one_agent_moves_only_that_agent() {
-        let policy = Policy::parse("- effort-ceiling codex: high\n").unwrap();
+        let policy = Policy::parse("- effort-ceiling codex: high\n");
         assert_eq!(
             policy.entries[0].1,
             ModelRule::EffortCeiling {
@@ -2275,8 +2461,7 @@ mod tests {
             Ok(Some("max".into()))
         );
         // The lowest cap that holds wins.
-        let policy =
-            Policy::parse("- effort-ceiling: xhigh\n- effort-ceiling codex: high\n").unwrap();
+        let policy = Policy::parse("- effort-ceiling: xhigh\n- effort-ceiling codex: high\n");
         assert_eq!(
             effort(&policy, ProviderKind::Codex, &[], Some("max"), None),
             Ok(Some("high".into()))
@@ -2288,7 +2473,7 @@ mod tests {
     }
     #[test]
     fn a_minimum_effort_brings_less_up() {
-        let policy = Policy::parse("- effort-floor for Adversarial review: high\n").unwrap();
+        let policy = Policy::parse("- effort-floor for Adversarial review: high\n");
         assert_eq!(
             policy.entries[0].1,
             ModelRule::EffortFloor {
@@ -2341,7 +2526,7 @@ mod tests {
             ),
             Ok(Some("max".into()))
         );
-        let capped = Policy::parse("- effort-ceiling: low\n").unwrap();
+        let capped = Policy::parse("- effort-ceiling: low\n");
         let only_high: Vec<String> = ["high", "max"].map(String::from).to_vec();
         assert!(
             capped
@@ -2361,8 +2546,7 @@ mod tests {
     fn effort_rules_adjust_and_refuse_only_when_two_cannot_both_be_met() {
         let policy = Policy::parse(
             "- effort-ceiling opus: medium\n- effort-floor for Adversarial review: high\n",
-        )
-        .unwrap();
+        );
         let opus = ["opus", "claude-opus-5-5"];
         // Each alone moves the effort.
         assert_eq!(
@@ -2433,7 +2617,7 @@ mod tests {
         assert!(written.ends_with(
             "- effort-floor for Adversarial review: high\n- effort-ceiling opus: medium\n- effort-ceiling claude for Docs: high\n- advice: prefer Codex when Claude is busy: it is faster\n"
         ), "{written}");
-        let policy = Policy::parse(&written).unwrap();
+        let policy = Policy::parse(&written);
         assert_eq!(
             policy
                 .entries
@@ -2450,7 +2634,7 @@ mod tests {
         for provider in brigadier_providers::adapters::kinds() {
             assert!(!policy.restricts_models(provider));
         }
-        let only_advice = Policy::parse("- advice: never use fable\n").unwrap();
+        let only_advice = Policy::parse("- advice: never use fable\n");
         assert!(
             only_advice
                 .refusal(
@@ -2496,7 +2680,7 @@ mod tests {
     fn an_old_rules_file_reads_as_it_did() {
         // The shape of a file from before the new rules: prose, a scoped ceiling, notes with colons.
         let old = "# My model rules\n\nEffort levels: none, minimal, low.\nA rule may name one Work (`forbid for Docs: sonnet`).\n- forbid: fable\n- allow claude: opus, sonnet\n- effort-ceiling: high\n- effort-ceiling for Independent review: medium\nnote: keep it cheap\n";
-        let policy = Policy::parse(old).unwrap();
+        let policy = Policy::parse(old);
         assert_eq!(
             policy
                 .entries
@@ -2545,7 +2729,7 @@ mod tests {
             r#"{"type":"effortCeiling","effort":"high"}"#
         );
         // The shipped prose holds no directive.
-        assert!(Policy::parse(DEFAULT_RULES).unwrap().entries.is_empty());
+        assert!(Policy::parse(DEFAULT_RULES).entries.is_empty());
     }
     #[test]
     fn fit_and_runway_respect_pooled_and_scoped_windows() {
@@ -2559,19 +2743,52 @@ mod tests {
             runway_ms: None,
             estimate_rough: false,
         };
-        assert_eq!(fit(&[], None), "unknown");
-        assert_eq!(fit(&[], Some(None)), "out");
-        assert_eq!(fit(&[window.clone()], None), "ok");
+        let now = 0;
+        assert_eq!(fit(&[], None, now), "unknown");
+        assert_eq!(fit(&[], Some(None), now), "out");
+        assert_eq!(fit(&[window.clone()], None, now), "ok");
         window.runway_ms = Some(1000);
-        assert_eq!(fit(&[window.clone()], None), "tight");
+        assert_eq!(fit(&[window.clone()], None, now), "tight");
         window.used_percent = 100.0;
-        assert_eq!(fit(&[window.clone()], None), "out until 01:00 UTC");
+        assert_eq!(
+            fit(&[window.clone()], None, now),
+            "out until 1970-01-01 01:00 UTC (in 1h)"
+        );
         window.pooled = false;
         assert_eq!(
-            fit(&[window.clone()], None),
+            fit(&[window.clone()], None, now),
             "ok",
             "a scoped window does not exhaust every model"
         );
-        assert_eq!(fit(&[window], Some(Some(3_600_000))), "out until 01:00 UTC");
+        assert_eq!(
+            fit(&[window], Some(Some(3_600_000)), now),
+            "out until 1970-01-01 01:00 UTC (in 1h)"
+        );
+    }
+    /// #764: a weekly window out for days names its reset's date and how far away it is, so a
+    /// thread choosing a worker's account can't take it for hours away.
+    #[test]
+    fn fit_dates_a_reset_days_away() {
+        // 2026-11-04 14:00 UTC; the reset five days later at 07:00.
+        let now = 1_793_800_800_000;
+        let reset = now + 4 * 86_400_000 + 17 * 3_600_000;
+        let window = Usage {
+            window: "seven_day".into(),
+            used_percent: 100.0,
+            resets_at_ms: Some(reset),
+            model: None,
+            bucket: None,
+            pooled: true,
+            runway_ms: None,
+            estimate_rough: false,
+        };
+        assert_eq!(
+            fit(&[window], None, now),
+            "out until 2026-11-09 07:00 UTC (in 4d)"
+        );
+        assert_eq!(
+            fit(&[], Some(Some(now + 3 * 3_600_000)), now),
+            "out until 2026-11-04 17:00 UTC (in 3h)"
+        );
     }
 }
