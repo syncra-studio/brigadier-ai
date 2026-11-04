@@ -20,10 +20,10 @@ use brigadier_core::{
     ConflictFile, ConnectView, ContinueWhen, ConventionsExport, Conversation, ConversationActivity,
     ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
     FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
-    ForkPlace, GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches,
-    MessagePage, MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst,
-    Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage,
-    Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
+    ForkPlace, GitHubSignIn, GitState, GuidanceRow, Mention, Message, MessageMatches, MessagePage,
+    MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst, Project,
+    ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating,
+    RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
     SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TrackedPullRequest, TrackedWork,
@@ -156,13 +156,6 @@ pub enum Request {
     GetActivity,
     /// The open tabs that are ready or merged (their tab and workspace row states).
     GetSettledTabs,
-    /// What became of a session's merge on its base since it merged: when it was reverted,
-    /// and redone after that (the Changes card's "Undone on main · ‹time›"), and whether it is
-    /// pushed.
-    GetMergeUndo {
-        conversation_id: ConversationId,
-        merge_commit: String,
-    },
     /// Creates a project. With `repo` (a repository's top-level folder, from the native
     /// picker or typed), an empty `name` names it after the folder.
     CreateProject {
@@ -1548,13 +1541,6 @@ pub enum Response {
         landed: Vec<ConversationId>,
         /// Open sessions whose pull request the board last saw merged.
         merged: Vec<ConversationId>,
-    },
-    GetMergeUndo {
-        /// None: never reverted.
-        undo: Option<MergeUndo>,
-        /// The merge is on its base's upstream: pushed since, if it was made on this Mac.
-        #[serde(default)]
-        pushed: bool,
     },
     CreateProject {
         project: Box<Project>,

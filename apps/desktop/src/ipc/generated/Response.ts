@@ -40,7 +40,6 @@ import type { GitHubSignIn } from "./GitHubSignIn";
 import type { GitState } from "./GitState";
 import type { KeepAwakeStatus } from "./KeepAwakeStatus";
 import type { LifecycleOutcome } from "./LifecycleOutcome";
-import type { MergeUndo } from "./MergeUndo";
 import type { Message } from "./Message";
 import type { MessageMatches } from "./MessageMatches";
 import type { MessagePage } from "./MessagePage";
@@ -111,15 +110,7 @@ landed: Array<ConversationId>,
 /**
  * Open sessions whose pull request the board last saw merged.
  */
-merged: Array<ConversationId>, } | { "method": "getMergeUndo", 
-/**
- * None: never reverted.
- */
-undo: MergeUndo | null, 
-/**
- * The merge is on its base's upstream: pushed since, if it was made on this Mac.
- */
-pushed: boolean, } | { "method": "createProject", project: Project, } | { "method": "updateProject", project: Project, } | { "method": "setFolderTrust", report: FolderTrustReport, } | { "method": "getBrain", overview: BrainOverview, } | { "method": "queryBrain", answer: BrainAnswer, } | { "method": "getBrainGraph", graph: BrainGraph, } | { "method": "exportConventions", export: ConventionsExport, } | { "method": "rebuildIndex" } | { "method": "getRepoInfo", repo: RepoInfo, } | { "method": "listCliCommands", commands: Array<CliCommand>, } | { "method": "findProjects", candidates: Array<ProjectCandidate>, } | { "method": "findRepos", repos: Array<RepoSuggestion>, } | { "method": "browseFolders", listing: FolderListing, } | { "method": "checkFolder", check: FolderCheck, } | { "method": "addProject", project: Project, } | { "method": "cloneProject", project: Project, } | { "method": "listFiles", 
+merged: Array<ConversationId>, } | { "method": "createProject", project: Project, } | { "method": "updateProject", project: Project, } | { "method": "setFolderTrust", report: FolderTrustReport, } | { "method": "getBrain", overview: BrainOverview, } | { "method": "queryBrain", answer: BrainAnswer, } | { "method": "getBrainGraph", graph: BrainGraph, } | { "method": "exportConventions", export: ConventionsExport, } | { "method": "rebuildIndex" } | { "method": "getRepoInfo", repo: RepoInfo, } | { "method": "listCliCommands", commands: Array<CliCommand>, } | { "method": "findProjects", candidates: Array<ProjectCandidate>, } | { "method": "findRepos", repos: Array<RepoSuggestion>, } | { "method": "browseFolders", listing: FolderListing, } | { "method": "checkFolder", check: FolderCheck, } | { "method": "addProject", project: Project, } | { "method": "cloneProject", project: Project, } | { "method": "listFiles", 
 /**
  * Paths relative to the checkout's root, tracked and untracked (not ignored).
  */

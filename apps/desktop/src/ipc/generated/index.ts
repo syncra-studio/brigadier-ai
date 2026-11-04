@@ -236,7 +236,6 @@ export type { McpServerState } from "./McpServerState";
 export type { McpStatus } from "./McpStatus";
 export type { Mention } from "./Mention";
 export type { MergeCondition } from "./MergeCondition";
-export type { MergeUndo } from "./MergeUndo";
 export type { MergedModel } from "./MergedModel";
 export type { MergedTurnChanges } from "./MergedTurnChanges";
 export type { MergedUpstream } from "./MergedUpstream";
