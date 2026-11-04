@@ -2945,6 +2945,15 @@ impl SessionManager {
                 std::mem::take(&mut state.off_failed_model),
             )
         };
+        // A turn that never reached its CLI leaves what its CLI took marked so for the next try:
+        // that one mustn't hand it over as new, and do real work twice.
+        let still_landed = async || {
+            let mut state = conv.state.lock().await;
+            state.continuing.clone_from(&landed);
+            state.continuing_envelopes.clone_from(&landed_envelopes);
+            state.after_limit = after_limit;
+            state.off_failed_model = off_failed_model;
+        };
         // What the resumed session already holds isn't read again: it carries on with it.
         let unread: Vec<(Envelope, Option<String>)> = envelopes
             .iter()
@@ -2976,6 +2985,7 @@ impl SessionManager {
         {
             Ok(input) => input,
             Err(error) => {
+                still_landed().await;
                 self.fail_turn(&conv, users, envelopes, &error.to_string())
                     .await;
                 return;
@@ -2983,10 +2993,19 @@ impl SessionManager {
         };
         if unsent.len() < users.len() || unread.len() < envelopes.len() {
             let stalled = conv.state.lock().await.watchdog.take_carry_note();
+            // A session started anew holds nothing of its own: it reads what was asked, as begun.
+            let began: Vec<&str> = users
+                .iter()
+                .filter(|message| landed.contains(&message.id))
+                .map(|message| message.text.as_str())
+                .collect();
+            let began = (reseed && !began.is_empty()).then(|| prompts::began_earlier(&began));
             prepend_said(
                 &mut input,
                 &mut user,
-                if stalled {
+                if let Some(began) = &began {
+                    began
+                } else if stalled {
                     watchdog::CARRY_ON
                 } else if after_limit {
                     prompts::CONTINUE_AFTER_LIMIT
@@ -3015,12 +3034,13 @@ impl SessionManager {
                         self.seam_not_started(&conv, successor).await;
                     }
                     let message = format!("Could not write the hand-off: {err}");
+                    still_landed().await;
                     self.fail_turn(&conv, users, envelopes, &message).await;
                     return;
                 }
             }
         } else if reseed {
-            let transcript = self.reseed_text(&conv.id, &users).await;
+            let transcript = self.reseed_text(&conv.id, &unsent).await;
             if !transcript.is_empty() {
                 prepend_said(&mut input, &mut user, &transcript);
             }
@@ -3056,6 +3076,7 @@ impl SessionManager {
                 self.seam_not_started(&conv, successor).await;
             }
             let message = format!("The CLI did not take the turn: {err}");
+            still_landed().await;
             self.turn_could_not_start(&conv, users, envelopes, &message)
                 .await;
             return;

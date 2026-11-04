@@ -47,6 +47,26 @@ async fn bench(
     failing: &[&str],
     request: Option<StartRequest>,
 ) -> Bench {
+    bench_on(
+        ProviderKind::Claude,
+        name,
+        rows,
+        switch_providers,
+        failing,
+        request,
+    )
+    .await
+}
+
+/// [`bench`], its thread on the CLI `thread`.
+async fn bench_on(
+    thread: ProviderKind,
+    name: &str,
+    rows: &[(&str, &str, &str)],
+    switch_providers: bool,
+    failing: &[&str],
+    request: Option<StartRequest>,
+) -> Bench {
     let names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(
         failing.iter().map(|model| (*model).to_owned()).collect(),
     ));
@@ -59,6 +79,7 @@ async fn bench(
                 session_file: true,
                 ..FakeBehavior::default()
             }),
+            thread,
             ..Options::default()
         },
         Arc::new(move |turn| {
@@ -910,6 +931,132 @@ async fn a_workers_word_wakes_a_session_whose_start_failed() {
     })
     .await;
     bench.flow.stop().await;
+}
+
+const EVERY_CLI: [(ProviderKind, &str); 3] = [
+    (ProviderKind::Claude, "claude"),
+    (ProviderKind::Codex, "codex"),
+    (ProviderKind::OpenCode, "opencode"),
+];
+
+impl Bench {
+    /// A worker's word for the thread, waited for until a turn of the thread carried it.
+    async fn workers_word(&self) {
+        let worker = crate::work::TaskId("t-word".into());
+        self.flow.manager.worker_event(
+            &self.flow.conversation,
+            &worker,
+            None,
+            crate::manager::plain_workers::event(
+                &worker,
+                brigadier_cli::protocol::EventKind::TurnEnded,
+            ),
+        );
+        let threads = self.threads.clone();
+        super::eventually("the worker's word to reach the thread", || {
+            threads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|turn| turn.input.contains("[worker events wn-"))
+        })
+        .await;
+    }
+
+    /// The thread's turns that were given the user's message as something to do.
+    fn sent_as_new(&self, words: &str) -> usize {
+        self.threads
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|turn| turn.input.contains(words) && !turn.input.contains("began on it"))
+            .count()
+    }
+}
+
+/// The CLI began the turn, so it took the message (it may have started workers already); the
+/// switch's target then fails to start. A later turn doesn't hand it the message as new: real
+/// work would run twice. It still reads what was asked, as what it already began.
+#[tokio::test]
+async fn a_message_its_cli_took_is_not_sent_again_after_a_failed_start() {
+    for (thread, agent) in EVERY_CLI {
+        let bench = bench_on(
+            thread,
+            &format!("capacity-took-{agent}"),
+            &[("Fallback", agent, "next-model")],
+            true,
+            &[],
+            None,
+        )
+        .await;
+        let model = bench.setup_model().model.unwrap_or_default();
+        bench.fail(&[&model]);
+        bench
+            .flow
+            .behavior
+            .fail_start_models
+            .lock()
+            .unwrap()
+            .push("next-model".into());
+        bench.flow.say("Go on with it.").await;
+        bench.until_failed().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            1,
+            "{agent}: its first turn"
+        );
+        bench.fail(&[]);
+        bench.workers_word().await;
+        bench.flow.settled().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            1,
+            "{agent}: sent again as new"
+        );
+        bench.flow.stop().await;
+    }
+}
+
+/// The start failed before its CLI ever had the message: the next turn delivers it, so it isn't
+/// lost.
+#[tokio::test]
+async fn a_message_its_cli_never_had_goes_with_the_next_turn_after_a_failed_start() {
+    for (thread, agent) in EVERY_CLI {
+        let bench = bench_on(
+            thread,
+            &format!("capacity-never-{agent}"),
+            &[],
+            true,
+            &[],
+            None,
+        )
+        .await;
+        bench
+            .flow
+            .behavior
+            .fail_starts
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        bench.flow.say("Go on with it.").await;
+        bench.until_failed().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            0,
+            "{agent}: no CLI had it"
+        );
+        bench
+            .flow
+            .behavior
+            .fail_starts
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        bench.workers_word().await;
+        bench.flow.settled().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            1,
+            "{agent}: delivered once"
+        );
+        bench.flow.stop().await;
+    }
 }
 
 /// "Another agent when all are out" off: its only other row is another agent's, so it stays.
