@@ -1061,6 +1061,8 @@ impl SessionManager {
                     if let Some(outputs) = outputs {
                         task.outputs = outputs;
                     }
+                    // Whatever drew the mockup is over; later turns are other work (#636).
+                    task.mockup_drawing = false;
                 },
             )
             .await;
@@ -1283,9 +1285,25 @@ impl SessionManager {
                 text.push_str(&format!("\n- {}", file.path.display()));
             }
         }
-        self.send_plain(&task, text).await?;
-        self.update_task(&conversation_id, &task_id, |task| task.rework_rounds += 1)
-            .await?;
+        // A new version, drawn by the turn the notes start: marked before they go, so that
+        // turn's end, however soon, is what clears it, never a mark made after it (#636).
+        self.update_task(&conversation_id, &task_id, |task| {
+            task.rework_rounds += 1;
+            task.mockup_drawing = true;
+        })
+        .await?;
+        if let Err(err) = self.send_plain(&task, text).await {
+            let undone = self
+                .update_task(&conversation_id, &task_id, |task| {
+                    task.rework_rounds = task.rework_rounds.saturating_sub(1);
+                    task.mockup_drawing = false;
+                })
+                .await;
+            if let Err(undo) = undone {
+                tracing::warn!(task = %task_id, error = %undo, "could not take back the mockup's new version");
+            }
+            return Err(err);
+        }
         Ok(())
     }
 

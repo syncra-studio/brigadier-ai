@@ -912,6 +912,12 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mockup: Option<MockupPart>,
+    /// A mockup's worker draws it now: from its start, and from each round of the user's notes
+    /// (`rework_rounds`), until that turn ends. Its later turns from `brigadier send` are other
+    /// work, and its Mockup tab doesn't read building through them (#636).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub mockup_drawing: bool,
     /// It makes designs or images (design files, a mockup, generated images): routing files
     /// it as design work (see `manager::workers::category`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
