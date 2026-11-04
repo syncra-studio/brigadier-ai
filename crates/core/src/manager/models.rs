@@ -1329,6 +1329,7 @@ impl SessionManager {
                         .as_ref()
                         .and_then(|q| q.limit.as_ref())
                         .map(|l| l.resets_at_ms),
+                    now,
                 );
                 let why = a.reason.as_ref().map_or_else(
                     || "not ordered yet".into(),
@@ -1374,17 +1375,19 @@ impl SessionManager {
         })
     }
 }
+/// How long from `now` until `at`, in a few letters: `40m`, `5h`, `3d`.
+fn within(at: i64, now: i64) -> String {
+    let minutes = ((at - now).max(0) + 59_999) / 60_000;
+    match minutes {
+        m if m < 60 => format!("{m}m"),
+        m if m < 48 * 60 => format!("{}h", m / 60),
+        m => format!("{}d", m / (24 * 60)),
+    }
+}
 /// Why an account stands where it does in its agent's order, in words.
 fn order_words(reason: &crate::accounts::OrderReason, now: i64) -> String {
     use crate::accounts::OrderReason;
-    let within = |at: i64| {
-        let minutes = ((at - now).max(0) + 59_999) / 60_000;
-        match minutes {
-            m if m < 60 => format!("{m}m"),
-            m if m < 48 * 60 => format!("{}h", m / 60),
-            m => format!("{}d", m / (24 * 60)),
-        }
-    };
+    let within = |at: i64| within(at, now);
     match reason {
         OrderReason::Picked => "picked with Use".into(),
         OrderReason::ResetsSooner { resets_at_ms } => {
@@ -1403,7 +1406,9 @@ fn order_words(reason: &crate::accounts::OrderReason, now: i64) -> String {
         OrderReason::SignedOut => "not signed in".into(),
     }
 }
-fn fit(windows: &[Usage], limited: Option<Option<i64>>) -> String {
+/// An account's fit in a word: `ok`, `tight`, `out`, `unknown`, or out until a reset, given
+/// with its date and how far away it is (a weekly window can be days out: #764).
+fn fit(windows: &[Usage], limited: Option<Option<i64>>, now: i64) -> String {
     if matches!(limited, Some(None)) {
         return "out".into();
     }
@@ -1414,11 +1419,11 @@ fn fit(windows: &[Usage], limited: Option<Option<i64>>) -> String {
             .filter_map(|w| w.resets_at_ms)
             .max()
     }) {
-        return format!(
-            "out until {:02}:{:02} UTC",
-            (at / 3_600_000).rem_euclid(24),
-            (at / 60_000).rem_euclid(60)
+        let when = jiff::Timestamp::from_millisecond(at).map_or_else(
+            |_| format!("{at} ms"),
+            |at| at.strftime("%Y-%m-%d %H:%M UTC").to_string(),
         );
+        return format!("out until {when} (in {})", within(at, now));
     }
     if windows.iter().any(|w| w.pooled && (w.used_percent >= 97.0)) {
         "out".into()
@@ -2593,19 +2598,52 @@ mod tests {
             runway_ms: None,
             estimate_rough: false,
         };
-        assert_eq!(fit(&[], None), "unknown");
-        assert_eq!(fit(&[], Some(None)), "out");
-        assert_eq!(fit(&[window.clone()], None), "ok");
+        let now = 0;
+        assert_eq!(fit(&[], None, now), "unknown");
+        assert_eq!(fit(&[], Some(None), now), "out");
+        assert_eq!(fit(&[window.clone()], None, now), "ok");
         window.runway_ms = Some(1000);
-        assert_eq!(fit(&[window.clone()], None), "tight");
+        assert_eq!(fit(&[window.clone()], None, now), "tight");
         window.used_percent = 100.0;
-        assert_eq!(fit(&[window.clone()], None), "out until 01:00 UTC");
+        assert_eq!(
+            fit(&[window.clone()], None, now),
+            "out until 1970-01-01 01:00 UTC (in 1h)"
+        );
         window.pooled = false;
         assert_eq!(
-            fit(&[window.clone()], None),
+            fit(&[window.clone()], None, now),
             "ok",
             "a scoped window does not exhaust every model"
         );
-        assert_eq!(fit(&[window], Some(Some(3_600_000))), "out until 01:00 UTC");
+        assert_eq!(
+            fit(&[window], Some(Some(3_600_000)), now),
+            "out until 1970-01-01 01:00 UTC (in 1h)"
+        );
+    }
+    /// #764: a weekly window out for days names its reset's date and how far away it is, so a
+    /// thread choosing a worker's account can't take it for hours away.
+    #[test]
+    fn fit_dates_a_reset_days_away() {
+        // 2026-11-04 14:00 UTC; the reset five days later at 07:00.
+        let now = 1_793_800_800_000;
+        let reset = now + 4 * 86_400_000 + 17 * 3_600_000;
+        let window = Usage {
+            window: "seven_day".into(),
+            used_percent: 100.0,
+            resets_at_ms: Some(reset),
+            model: None,
+            bucket: None,
+            pooled: true,
+            runway_ms: None,
+            estimate_rough: false,
+        };
+        assert_eq!(
+            fit(&[window], None, now),
+            "out until 2026-11-09 07:00 UTC (in 4d)"
+        );
+        assert_eq!(
+            fit(&[], Some(Some(now + 3 * 3_600_000)), now),
+            "out until 2026-11-04 17:00 UTC (in 3h)"
+        );
     }
 }
