@@ -240,13 +240,18 @@ export function ImageTile({
   );
 }
 
-/** A file attachment: an icon tile, the name, and a second line (its kind, or an action). */
+/**
+ * A file attachment: an icon tile, the name, and a second line (its kind, or an action). With
+ * `onOpen`, the card is one button; `children` (a remove button) stay outside it.
+ */
 export function FileTile({
   name,
   mime,
   title,
   detail,
   icon,
+  onOpen,
+  openLabel,
   className,
   children,
 }: {
@@ -257,18 +262,15 @@ export function FileTile({
   detail: ReactNode;
   /** Replaces the kind icon (e.g. a spinner while storing). */
   icon?: ReactNode;
+  /** What a click on the card does; without it, the card is plain. */
+  onOpen?: (() => void) | undefined;
+  /** The card's button's name, for `onOpen`. */
+  openLabel?: string | undefined;
   className?: string;
   children?: ReactNode;
 }) {
-  return (
-    <div
-      data-slot="attachment-file"
-      title={fileName(name)}
-      className={cn(
-        "group/tile border-border w-attachment-card relative flex shrink-0 items-center gap-2 rounded-xl border p-1.5 pe-7",
-        className,
-      )}
-    >
+  const parts = (
+    <>
       <span className="bg-background text-muted-foreground size-control-lg flex shrink-0 items-center justify-center rounded-lg">
         {icon ?? <AttachmentIcon mime={mime} className="size-icon-md" />}
       </span>
@@ -276,6 +278,30 @@ export function FileTile({
         <span className="truncate text-sm">{title ?? fileName(name)}</span>
         <span className="text-muted-foreground truncate text-xs">{detail}</span>
       </span>
+    </>
+  );
+  return (
+    <div
+      data-slot="attachment-file"
+      title={fileName(name)}
+      className={cn(
+        "group/tile border-border w-attachment-card relative flex shrink-0 items-center rounded-xl border",
+        !onOpen && "gap-2 p-1.5 pe-7",
+        className,
+      )}
+    >
+      {onOpen ? (
+        <button
+          type="button"
+          aria-label={openLabel}
+          onClick={onOpen}
+          className="hover:bg-foreground/8 focus-visible:ring-ring flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-xl p-1.5 pe-7 focus-visible:ring-2 focus-visible:outline-none"
+        >
+          {parts}
+        </button>
+      ) : (
+        parts
+      )}
       {children}
     </div>
   );
