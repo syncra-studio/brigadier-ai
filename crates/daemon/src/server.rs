@@ -2082,7 +2082,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             image,
         } => {
             let (data, mime) = sessions.thread_image(&conversation_id, &image)?;
-            Response::ReadThreadImage { data, mime }
+            Response::ReadSessionFileImage { data, mime }
         }
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,

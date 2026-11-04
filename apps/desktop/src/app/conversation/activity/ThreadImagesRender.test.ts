@@ -18,6 +18,9 @@ test("an answer's local image and a kept tile show, and what can't be shown says
   // A tile whose source was deleted reads the session's copy, as a tile and as a proof.
   const { text: _tile, ...tile } = seen.tile!;
   assert.deepEqual(tile, drawn);
+  // A tile whose image is in the session file reads it from there.
+  const { text: _inFile, ...inFile } = seen["tile-in-file"]!;
+  assert.deepEqual(inFile, drawn);
   assert.equal(seen.proof!.drawn, 1);
   assert.equal(seen.proof!.broken, 0);
   // Refused, undrawable, not absolute, and a tile with no copy: no broken-image icon.
