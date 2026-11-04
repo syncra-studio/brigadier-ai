@@ -1670,6 +1670,25 @@ test("a turn handed over for any reason goes on in its block: one block closed W
   }
 });
 
+test("after a hand-over, missing request ids join Brigadier's own carry-on but never a message shown as the user's", () => {
+  const cut = { ...turn("u1", 1000, 1164, "handedOver", "Failed to authenticate"), errorKind: "auth" as const, requests: ["r1"] };
+  const first: FileEntry[] = [user("u1", "Did you merge?", 1000, { said: { by: "user" }, requests: ["r1"] }), at({ type: "turnCompleted" } as ProviderEvent, 1164)];
+  const later = [{ ...turn("n1", 7000, 8000, "done"), requests: [] }];
+  // Brigadier's carry-on is noted with no request of its own (as the real record has it), its turn read or not.
+  const carry = [...first, user("n1", "[Your last turn stopped early. Carry on from where you stopped.]", 7000, { said: { by: "brigadier" } })];
+  for (const turns of [[cut], [cut, ...later]]) assert.deepEqual(cliBlocks({ entries: carry, turns }, "conv").map((block) => block.key), ["u1"]);
+  // A message with no note of the engine's, or noted as the user's with no request, is a new block.
+  for (const said of [undefined, { by: "user" as const }]) {
+    const fresh = [...first, user("n1", "Something else", 7000, { ...(said && { said }) })];
+    for (const turns of [[cut], [cut, ...later]]) {
+      const blocks = cliBlocks({ entries: fresh, turns }, "conv");
+      assert.deepEqual(blocks.map((block) => block.key), ["u1", "n1"], JSON.stringify([said, turns.length]));
+      assert.deepEqual(blocks[0]!.steers, []);
+      assert.equal(blocks[0]!.state, "done");
+    }
+  }
+});
+
 test("a follow-up the user steers during a usage limit's switch goes on in the cut turn's block: one block, the switch's carry-on with it, never stopped (screen pass, every CLI)", () => {
   const FOLLOW = "Also, at the very end reply FOLLOW too.";
   const cut = { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit" as const, requests: ["r1"] };

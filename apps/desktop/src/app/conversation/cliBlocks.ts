@@ -714,16 +714,19 @@ export function cliBlocks(
   // turn (goal 1), with what the user steered into it meanwhile (D25; seen live). Its requests,
   // else the ones the engine noted it sent: one naming none of the cut turn's, a message the user
   // sent anew, opens its own.
-  const carriesOn = (requests: readonly string[] = []) => {
+  const carriesOn = (requests: readonly string[] = [], shown = false) => {
     const before = view.turns[turn - 1];
-    if (before?.end !== "handedOver" && before?.errorKind !== "usageLimit" && !before?.limit) return false;
+    const limited = before?.errorKind === "usageLimit" || !!before?.limit;
+    if (!limited && before?.end !== "handedOver") return false;
     const named = view.turns[turn]?.requests.length ? view.turns[turn]!.requests : requests;
-    return named.length === 0 || named.some((request) => before.requests.includes(request));
+    // Brigadier's own carry-on names no request; a message shown as the user's, naming none, is no proof.
+    if (named.length === 0) return limited || !shown;
+    return named.some((request) => before!.requests.includes(request));
   };
   // While its turn runs, a turn begun while the block before held goes on in it (D24, D113):
   // the daemon's `joins` may come only once the turn is judged or over.
-  const goesOn = (each: Block | null, requests?: readonly string[]): each is Block =>
-    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || carriesOn(requests) || (view.turns[turn]?.end == null && holds(each)));
+  const goesOn = (each: Block | null, requests?: readonly string[], shown?: boolean): each is Block =>
+    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || carriesOn(requests, shown) || (view.turns[turn]?.end == null && holds(each)));
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
@@ -923,7 +926,7 @@ export function cliBlocks(
       const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs);
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
-      if (goesOn(block, entry.requests ?? [])) {
+      if (goesOn(block, entry.requests ?? [], true)) {
         join(block, position, entry.atMs);
         // One the block already shows (a switch's carry-on sends it again) shows once.
         const ids = [block.user?.kind === "message" ? block.user.message.id : null, ...block.steers.map((steer) => steer.message.id)];
