@@ -28,7 +28,7 @@ test("a mockup's screenshots come in their numbers' order, other images after th
 test("the newest mockup pairs each screen with its live capture and side-by-side", () => {
   assert.equal(mockupOf({ t1: task(1, {}) }), null);
   const older = task(1, { mockup: { type: "builds" }, outputs: [ref("mockup-1.png")] });
-  const built = task(3, { mockup: { type: "builds" }, state: "running", reworkRounds: 1,
+  const built = task(3, { mockup: { type: "builds" }, state: "running", reworkRounds: 1, mockupDrawing: true,
     outputs: [ref("mockup-1.png"), ref("mockup-2.png")] });
   let mockup = mockupOf({ t1: older, t3: built })!;
   assert.equal(mockup.task.id, "t3");
@@ -63,7 +63,8 @@ test("notes' revision is there once the worker is done with new screenshots, or 
   const sent = { version: 1, shots: ["hash-mockup-1.png"] };
   const at = (change: Partial<Task>) => mockupOf({ t1: task(1, { mockup: { type: "builds" }, outputs: shots, ...change }) })!;
   assert.equal(revisedSince(at({}), sent), false, "not sent back yet");
-  assert.equal(revisedSince(at({ state: "running", reworkRounds: 1 }), sent), false, "still working");
+  assert.equal(revisedSince(at({ state: "running", reworkRounds: 1, mockupDrawing: true }), sent), false, "still drawing");
+  assert.equal(revisedSince(at({ state: "running", reworkRounds: 1 }), sent), true, "done drawing, now on other work");
   assert.equal(revisedSince(at({ reworkRounds: 1 }), sent), true, "done with the same screenshots");
   assert.equal(revisedSince(at({ outputs: [ref("mockup-1b.png")] }), sent), true, "new screenshots");
 });
@@ -74,6 +75,16 @@ test("the screenshots notes went on keep their screens when the revision drops o
   assert.deepEqual(sent.screens, [1, 2]);
   const after = mockupOf({ t1: task(1, { mockup: { type: "builds" }, outputs: [{ ...ref("mockup-2.png"), id: "hash-mockup-2-v2" }], reworkRounds: 1 }) })!;
   assert.deepEqual(earlierShots(after, sent).map((shot) => [shot.screen, shot.ref.id]), [[1, "hash-mockup-1.png"], [2, "hash-mockup-2.png"]]);
+});
+
+test("a mockup's worker on other work after delivering its screens isn't building it (issue 636)", () => {
+  const delivered = task(1, { mockup: { type: "builds" }, state: "running", outputs: [ref("mockup-1.png")] });
+  const mockup = mockupOf({ t1: delivered })!;
+  assert.equal(mockup.status, "ready", "no spinner on the Mockup tab (mockupBusy)");
+  assert.equal(takesNotes(mockup), true, "its worker still takes notes");
+  assert.equal(mockupOf({ t1: { ...delivered, mockupDrawing: true } })!.status, "building", "a round of notes draws it again");
+  // Stored before the field: its first turn, with nothing drawn yet, still reads building.
+  assert.equal(mockupOf({ t1: { ...delivered, outputs: [] } })!.status, "building");
 });
 
 const notesTakenAt = (state: Task["state"]) =>

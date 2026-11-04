@@ -138,7 +138,8 @@ presses Try again (recorded, never sent) and writes JSON into `#turn-error-resul
 `/fixtures/notice-dismiss.html` is the notices tray alone with an account notice (D51). `drive=1` presses
 its ×, draws the tray anew from a fresh read (as switching back to the session does), then says the
 problem again as a new notice, and writes JSON into `#notice-dismiss-result`; a stand-in daemon keeps the
-dismissal. `NoticeDismissRender.test.ts` checks it. This entry is absent from the production build.
+dismissal. With `failed=1` the session's run failed with no request, said by the daemon as a notice
+(#639): one row, whose × holds through a fresh read. `NoticeDismissRender.test.ts` checks it. This entry is absent from the production build.
 
 # The Full access line
 

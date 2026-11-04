@@ -534,6 +534,8 @@ impl SessionManager {
             subject: None,
             target: None,
             end_state: None,
+            // A mockup's worker draws it from its start.
+            mockup_drawing: mockup == Some(MockupPart::Builds),
             mockup,
             design: false,
             plan: None,

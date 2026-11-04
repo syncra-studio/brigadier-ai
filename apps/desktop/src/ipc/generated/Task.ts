@@ -85,6 +85,12 @@ endState?: string,
  */
 mockup?: MockupPart, 
 /**
+ * A mockup's worker draws it now: from its start, and from each round of the user's notes
+ * (`rework_rounds`), until that turn ends. Its later turns from `brigadier send` are other
+ * work, and its Mockup tab doesn't read building through them (#636).
+ */
+mockupDrawing?: boolean, 
+/**
  * The plan this one reviews.
  */
 plan: CardId | null, attachments: Array<AttachmentRef>, workspace: TaskWorkspace | null, report: Report | null, 

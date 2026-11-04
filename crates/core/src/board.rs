@@ -19,6 +19,9 @@ use crate::work::{
 /// Notices kept per conversation.
 const NOTICES_KEPT: usize = 20;
 
+/// What a failed run says when its change carried no words.
+pub(crate) const RUN_FAILED: &str = "The model stopped with an error.";
+
 /// Event kinds the board is folded from (everything on a conversation stream but messages).
 pub(crate) const KINDS: &[&str] = &[
     "conversation.run",
@@ -157,6 +160,10 @@ pub(crate) struct Board {
     pub(crate) streaming: Option<StreamingMessage>,
     pub(crate) thinking: Vec<crate::model::ThinkingSegment>,
     pub(crate) notices: Vec<Notice>,
+    /// The words of a failed run that names no request when no notice says them: the daemon
+    /// says every such failure as a notice (a dismissal of which persists, D51), and one stored
+    /// before it did is given its notice when the board is first read (#639).
+    pub(crate) unsaid_failure: Option<String>,
     /// What was decided on the user's behalf, in stream order.
     pub(crate) decisions: Vec<Decision>,
     /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
@@ -478,6 +485,10 @@ impl Board {
                 }
                 self.run = *state;
                 self.run_request.clone_from(request_id);
+                // The notice of a failure comes just before its run's change.
+                self.unsaid_failure = (*state == RunState::Failed && request_id.is_none())
+                    .then(|| error.clone().unwrap_or_else(|| RUN_FAILED.to_owned()))
+                    .filter(|error| !self.notices.iter().any(|notice| &notice.text == error));
                 if *state != RunState::Running {
                     self.streaming = None;
                 }
@@ -719,6 +730,9 @@ impl Board {
                 self.head = Some((head.clone(), stream_seq));
             }
             DomainEvent::ConversationNotice { notice, .. } => {
+                if self.unsaid_failure.as_ref() == Some(&notice.text) {
+                    self.unsaid_failure = None;
+                }
                 self.notices.push(notice.clone());
                 if self.notices.len() > NOTICES_KEPT {
                     self.notices.remove(0);

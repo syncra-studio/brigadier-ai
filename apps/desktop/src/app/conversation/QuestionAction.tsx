@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { create } from "zustand";
 
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
-import { multiPicks, questionRound, uncommittedCard } from "@/app/conversation/cards/questionRound";
+import { multiPicks, optionCode, questionRound, uncommittedCard } from "@/app/conversation/cards/questionRound";
 import { ChoiceCard } from "@/app/conversation/ChoiceCard";
 import { StepCounter } from "@/app/conversation/StepCounter";
 import { useAction } from "@/app/conversation/useAction";
@@ -179,6 +179,7 @@ export function QuestionAction({
         label: option.label,
         description: option.description && <CodeSpans text={option.description} />,
         recommended: item.recommended === index,
+        copy: optionCode(option.label, option.description),
       }))}
       kept={lit[at] ?? (picked >= 0 ? picked : null)}
       multiple={

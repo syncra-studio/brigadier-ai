@@ -110,3 +110,9 @@ export function codeParts(text: string): { text: string; code: boolean }[] {
     .map((part, index) => ({ text: part, code: index % 2 === 1 }))
     .filter((part) => part.text !== "");
 }
+
+/** What an answer's copy button copies: the `code` spans its words name (a command), one a line; none without. */
+export function optionCode(...texts: readonly (string | null | undefined)[]): string | undefined {
+  const code = texts.flatMap((text) => (text ? codeParts(text).filter((part) => part.code).map((part) => part.text) : []));
+  return code.length > 0 ? code.join("\n") : undefined;
+}

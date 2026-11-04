@@ -2633,6 +2633,15 @@ mod routing_rules_tests;
 mod queue_put_back_tests;
 // Try again after a failed launch (#660), with the flow's in-process fakes: every platform.
 mod retry_launch_tests;
+// A mockup reads drawing only while a turn draws it (#636), with the flow's in-process fakes: every
+// platform.
+mod mockup_drawing_tests;
+// A failed run no request names is a notice whose dismissal persists (#639), with the flow's
+// in-process fakes: every platform.
+mod run_failure_notice_tests;
+// A limit that switches to another CLI ends its turn handed over, not failed (#614), with the
+// flow's in-process fakes: every platform.
+mod limit_switch_tests;
 #[cfg(unix)]
 mod scope_tests;
 #[cfg(unix)]

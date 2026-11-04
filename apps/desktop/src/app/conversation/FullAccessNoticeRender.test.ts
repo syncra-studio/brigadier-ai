@@ -52,3 +52,22 @@ test("the Full access card steps aside while messages wait in the queue, and sta
   ) as { before: boolean; rail: boolean; withQueue: boolean; after: boolean };
   assert.deepEqual(seen, { before: true, rail: true, withQueue: false, after: false });
 });
+
+test("the Full access card counts as seen only in a session where it was on screen while the window could be seen (issue 722)", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "full-access-seen.html", "full-access-seen-result", 10000)) as Record<string, unknown>;
+  assert.equal(seen.error, undefined, String(seen.error));
+  assert.deepEqual(seen, {
+    // Drawn in a hidden window and stepped aside: still there once the window shows.
+    hiddenDrawn: true,
+    hiddenAfter: true,
+    // Seen in A, aside in B where it never showed: A still shows it.
+    aShown: true,
+    bAside: false,
+    closedByB: false,
+    aAgain: true,
+    // Seen in A and stepped aside there: gone in every session (D191, D216).
+    closed: true,
+    aAfter: false,
+    cAfter: false,
+  });
+});

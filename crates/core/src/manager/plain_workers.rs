@@ -1061,6 +1061,8 @@ impl SessionManager {
                     if let Some(outputs) = outputs {
                         task.outputs = outputs;
                     }
+                    // Whatever drew the mockup is over; later turns are other work (#636).
+                    task.mockup_drawing = false;
                 },
             )
             .await;
@@ -1173,6 +1175,8 @@ impl SessionManager {
                         if !t.state.is_final() {
                             t.state = TaskState::Reported;
                             t.blocked_reason = None;
+                            // Its turn is over, as a cut-off one's is (#636).
+                            t.mockup_drawing = false;
                         }
                     })
                     .await;
@@ -1283,9 +1287,41 @@ impl SessionManager {
                 text.push_str(&format!("\n- {}", file.path.display()));
             }
         }
-        self.send_plain(&task, text).await?;
-        self.update_task(&conversation_id, &task_id, |task| task.rework_rounds += 1)
-            .await?;
+        // A new version, drawn by the turn the notes start: marked before they go, so that
+        // turn's end, however soon, is what clears it, never a mark made after it (#636).
+        self.update_task(&conversation_id, &task_id, |task| {
+            task.rework_rounds += 1;
+            task.mockup_drawing = true;
+        })
+        .await?;
+        if let Err(err) = self.send_plain(&task, text).await {
+            let undone = self
+                .update_task(&conversation_id, &task_id, |task| {
+                    task.rework_rounds = task.rework_rounds.saturating_sub(1);
+                    task.mockup_drawing = false;
+                })
+                .await;
+            if let Err(undo) = undone {
+                tracing::warn!(task = %task_id, error = %undo, "could not take back the mockup's new version");
+            }
+            return Err(err);
+        }
+        // A turn that ended just before the notes went cleared the mark as it ended; the turn
+        // they started is marked again while it runs. One already over reads reported, and
+        // stays unmarked (#636).
+        if self.task_live(&task).busy().await {
+            let marked = self
+                .update_task_if(
+                    &conversation_id,
+                    &task_id,
+                    |task| task.state == TaskState::Running,
+                    |task| task.mockup_drawing = true,
+                )
+                .await;
+            if let Err(err) = marked {
+                tracing::warn!(task = %task_id, error = %err, "could not mark the mockup's notes turn drawing");
+            }
+        }
         Ok(())
     }
 

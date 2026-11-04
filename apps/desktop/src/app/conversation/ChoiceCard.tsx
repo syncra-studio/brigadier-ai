@@ -13,6 +13,7 @@ import { CardTextEditor, type CardTextHandle } from "@/app/conversation/CardText
 import { CardDictate } from "@/app/conversation/CardDictate";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
 import { ActionCard, ActionCardQuestion, ActionFreeText, ActionOption, actionButton, staggered } from "@/components/conversation";
+import { CopyButton } from "@/components/shared";
 import type { AnswerInput } from "@/ipc/generated";
 import { pageShown } from "@/lib/pageHidden";
 import { cancelDictation, dictationOwner, registerInserter } from "@/state/dictation";
@@ -75,7 +76,8 @@ export function ChoiceCard({
   detail?: ReactNode;
   /** Between the question and the answers (the files asked about). */
   extra?: ReactNode;
-  choices: { label: string; description?: ReactNode; recommended?: boolean }[];
+  /** `copy`: what the answer's copy button copies (a command it names), beside its button (#663). */
+  choices: { label: string; description?: ReactNode; recommended?: boolean; copy?: string | undefined }[];
   /** The answer lit when the card was last shown, before the user went elsewhere. */
   kept?: number | null | undefined;
   /** What the free-text row holds at first (an answer typed before paging back). */
@@ -273,22 +275,40 @@ export function ChoiceCard({
               aria-label="Answers"
               className="flex flex-col gap-1"
             >
-              {choices.map((choice, index) => (
-                <ActionOption
-                  key={choice.label}
-                  role={multiple ? "checkbox" : "radio"}
-                  aria-checked={multiple ? marked.includes(index) : index === highlight}
-                  number={index + 1}
-                  label={choice.label}
-                  description={choice.description ?? undefined}
-                  recommended={choice.recommended}
-                  highlighted={index === highlight}
-                  chosen={index === chosen || (!!multiple && marked.includes(index))}
-                  disabled={busy || preparing}
-                  onClick={(event) => commit(index, clickInput(event))}
-                  {...row(index + 2)}
-                />
-              ))}
+              {choices.map((choice, index) => {
+                const option = (
+                  <ActionOption
+                    key={choice.label}
+                    role={multiple ? "checkbox" : "radio"}
+                    aria-checked={multiple ? marked.includes(index) : index === highlight}
+                    number={index + 1}
+                    label={choice.label}
+                    description={choice.description ?? undefined}
+                    recommended={choice.recommended}
+                    highlighted={index === highlight}
+                    chosen={index === chosen || (!!multiple && marked.includes(index))}
+                    disabled={busy || preparing}
+                    onClick={(event) => commit(index, clickInput(event))}
+                    {...row(index + 2)}
+                  />
+                );
+                if (!choice.copy) return option;
+                // Its command copies from a button of its own, beside the answer's: copying
+                // never picks the answer (#663).
+                return (
+                  <div key={choice.label} data-slot="action-option-row" className="flex min-w-0 items-start gap-1">
+                    <div className="min-w-0 flex-1">{option}</div>
+                    <CopyButton
+                      data-slot="action-option-copy"
+                      text={choice.copy}
+                      tooltip="Copy command"
+                      copiedDuration={1500}
+                      look="ghost"
+                      className="mt-1.5 shrink-0"
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
           <ActionFreeText

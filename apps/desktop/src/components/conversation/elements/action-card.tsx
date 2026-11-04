@@ -71,7 +71,8 @@ export function ActionCardQuestion({
 }) {
   return (
     <div className="flex items-start justify-between gap-2 ps-4 pe-3 pt-4 pb-2">
-      <div role="alert" aria-atomic="true" className="flex min-w-0 flex-1 flex-col gap-1">
+      {/* Its words can be selected and copied: a command it names, say (#663). */}
+      <div role="alert" aria-atomic="true" data-selectable className="flex min-w-0 flex-1 flex-col gap-1">
         {kind && (
           <p data-slot="action-card-kind" className="text-foreground/65 text-code leading-5">
             {kind}

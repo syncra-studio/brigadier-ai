@@ -73,6 +73,11 @@ impl SessionManager {
             request
         };
         let _ = self.clear_provider_transition(&conv.id).await;
+        // Said once: by the failed request when there is one, else as a notice (#639).
+        if request.is_none() {
+            self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, message)
+                .await;
+        }
         self.set_run_for(
             &conv.id,
             crate::work::RunState::Failed,

@@ -43,7 +43,7 @@ export const QuestionCardView = memo(function QuestionCardView({ cardId }: { car
         <ChevronRightAlt aria-hidden className={CHEVRON} />
       </CollapsibleTrigger>
       <CollapsibleContent className={OPENS}>
-        <dl className="flex flex-col gap-3 pt-2 pb-1 text-sm">
+        <dl data-selectable className="flex flex-col gap-3 pt-2 pb-1 text-sm">
           {round.map((item, index) => (
             <div key={index} className="flex flex-col gap-1">
               <dt className="text-foreground/60 wrap-anywhere [&_.aui-md>:first-child]:mt-0 [&_.aui-md>:last-child]:mb-0"><MarkdownBlock text={item.text} /></dt>

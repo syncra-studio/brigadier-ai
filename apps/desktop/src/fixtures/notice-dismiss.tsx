@@ -3,7 +3,9 @@
  * drawn anew from a fresh read of the conversation, the way switching to another view and back
  * (or an app restart) draws it; then the problem really happens again. `?drive=1` writes what it
  * saw into `#notice-dismiss-result`. No daemon: a stand-in keeps the conversation's notices and
- * says each change to the board as the daemon's events would.
+ * says each change to the board as the daemon's events would. `?failed=1`: instead, the session's
+ * run failed with no request, which the daemon says as a notice (#639), and the drive dismisses
+ * it and reads the session again.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -17,8 +19,12 @@ const ID = "notice-session";
 const ACCOUNT =
   "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access";
 
+const params = new URLSearchParams(location.search);
+const FAILED = params.has("failed");
+const ENDED = "The CLI session ended unexpectedly.";
+
 /** What the daemon keeps of the conversation's notices, and what it was asked. */
-let stored: Notice[] = [{ level: "warning", text: ACCOUNT, atMs: Date.now() - 60_000 }];
+let stored: Notice[] = [{ level: "warning", text: FAILED ? ENDED : ACCOUNT, atMs: Date.now() - 60_000 }];
 const calls: Request[] = [];
 let seq = 0;
 
@@ -39,9 +45,9 @@ mockIPC((command, payload) => {
   return { method: req.method };
 });
 
-/** The conversation's board as a fresh read of it gives. */
+/** The conversation's board as a fresh read of it gives: a failed run's words come only with its event. */
 function read(): void {
-  useBoard.setState({ board: { ...emptyBoard(ID), loaded: true, notices: stored } });
+  useBoard.setState({ board: { ...emptyBoard(ID), loaded: true, notices: stored, ...(FAILED && { run: "failed" as const, runRequest: null }) } });
 }
 
 const root = createRoot(document.getElementById("root")!);
@@ -58,10 +64,32 @@ function draw(drawn: number): void {
 }
 
 read();
+// The failure as it happened: its run's change carried its words.
+if (FAILED) useBoard.setState((s) => ({ board: s.board && { ...s.board, runError: ENDED } }));
 draw(0);
 
 const pause = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms));
 const shown = () => [...document.querySelectorAll('[aria-label="Notices"] li[data-level] [data-slot="notice-text"]')].map((item) => item.textContent);
+/** Every row of the tray, whatever it is. */
+const rows = () => [...document.querySelectorAll('[aria-label="Notices"] li [data-slot="notice-text"]')].map((item) => item.textContent);
+
+async function driveFailed() {
+  for (let tries = 0; tries < 50 && rows().length === 0; tries += 1) await pause();
+  const seen: Record<string, unknown> = { before: rows() };
+  document.querySelector<HTMLButtonElement>('[aria-label="Notices"] li[data-level] button')?.click();
+  await pause();
+  seen.dismissed = rows();
+  // Drawn anew from a fresh read, as on switching back to the session or a restart.
+  read();
+  draw(1);
+  await pause(300);
+  seen.reread = rows();
+  seen.dismissCalls = calls.filter((call) => call.method === "dismissNotice").length;
+  const result = document.createElement("pre");
+  result.id = "notice-dismiss-result";
+  result.textContent = JSON.stringify(seen);
+  document.body.append(result);
+}
 
 async function drive() {
   for (let tries = 0; tries < 50 && shown().length === 0; tries += 1) await pause();
@@ -87,4 +115,4 @@ async function drive() {
   document.body.append(result);
 }
 
-if (new URLSearchParams(location.search).has("drive")) void drive();
+if (params.has("drive")) void (FAILED ? driveFailed() : drive());

@@ -240,6 +240,9 @@ impl SessionManager {
                                 if plain {
                                     t.state = TaskState::Reported;
                                     t.blocked_reason = None;
+                                    // Its turn is over: its next message draws no mockup
+                                    // (#636).
+                                    t.mockup_drawing = false;
                                 } else {
                                     t.state = TaskState::Paused;
                                     t.blocked_reason =
