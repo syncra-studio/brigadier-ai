@@ -108,7 +108,7 @@ async fn a_start_by_work_skips_what_providers_keeps_out_unless_asked_for() {
     let manager = &flow.manager;
     std::fs::write(
         manager.models_rules_path(),
-        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Docs | claude | opus | low | First. |\n| Docs | codex | astra | medium | Next. |\n",
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Docs | claude | opus | low | First. |\n| Docs | codex | astra | medium | Next. |\n| Notes | claude | opus | low | Only. |\n",
     )
     .unwrap();
     let caller = CliCaller {
@@ -183,6 +183,23 @@ async fn a_start_by_work_skips_what_providers_keeps_out_unless_asked_for() {
     );
     let (agent, ..) = started("Architecture and broad changes", None).await;
     assert_eq!(agent.as_deref(), Some("codex"));
+    // The automatic rows left Claude's out, yet `--agent claude` still takes Claude's own row of
+    // that kind, its model and effort (D34), not Claude's default at Codex's effort.
+    let (agent, model, effort, seen) =
+        started("Architecture and broad changes", Some(ProviderKind::Claude)).await;
+    assert_eq!(
+        (agent, model, effort),
+        owned("claude", "claude-opus-5-5", "high"),
+        "{seen:#}"
+    );
+    // A kind whose only row is Claude's still starts on the agent asked for, at the row's
+    // effort: that row's agent being off doesn't matter when another agent runs it.
+    let (agent, _, effort, seen) = started("Notes", Some(ProviderKind::Codex)).await;
+    assert_eq!(
+        (agent.as_deref(), effort.as_deref()),
+        (Some("codex"), Some("low")),
+        "{seen:#}"
+    );
     // Asked for by name, the agent's own row still starts (D34), off the routing, which says so.
     let (agent, model, effort, seen) = started("Docs", Some(ProviderKind::Claude)).await;
     assert_eq!(
@@ -226,5 +243,11 @@ async fn a_start_by_work_skips_what_providers_keeps_out_unless_asked_for() {
     let (agent, .., seen) = started("Docs", None).await;
     assert_eq!(agent, None);
     assert_eq!(seen["error"]["code"], "refused", "{seen:#}");
+    assert_eq!(
+        seen["error"]["message"],
+        "refused: every row of the work \"Docs\" names an agent or a model switched off in \
+         Settings › Providers; switch one on, or give --agent",
+        "{seen:#}"
+    );
     flow.stop().await;
 }

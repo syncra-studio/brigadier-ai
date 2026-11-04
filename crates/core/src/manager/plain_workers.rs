@@ -333,7 +333,18 @@ impl SessionManager {
         let row = match work.as_deref() {
             None => None,
             Some(work) => {
-                let rows = self.work_rows(work)?;
+                let mut rows = self.work_rows(work)?;
+                // #743: the automatic rows leave out an agent switched off in Settings ›
+                // Providers; `--agent` naming it still takes its shipped row (D34). An order of
+                // the user's own is theirs as written.
+                if let Some(agent) = start.agent
+                    && !rows
+                        .iter()
+                        .any(|row| row.agent == agent || row.source == "user")
+                    && let Some(row) = self.shipped_row(work, agent)
+                {
+                    rows.push(row);
+                }
                 let mut order: Vec<&Guidance> = rows.iter().collect();
                 if let Some(authors) = &review {
                     order.retain(|row| start.agent.is_none_or(|agent| agent == row.agent));
@@ -344,11 +355,12 @@ impl SessionManager {
                     order.sort_by_key(|row| row.agent != agent);
                 }
                 // #743: a row whose agent is switched off, or whose model is made unavailable,
-                // in Settings › Providers is never picked for the start; `--agent` naming that
-                // agent still takes its row (D34), and `--model` replaces the row's model.
+                // in Settings › Providers is never picked for the start. With `--agent` the
+                // worker runs on that agent whatever the row's (D34: its own row, else another
+                // row's effort only), and `--model` replaces the row's model.
                 let settings = self.core.settings();
                 let usable = |row: &Guidance| {
-                    start.agent == Some(row.agent)
+                    start.agent.is_some()
                         || if start.model.is_some() {
                             crate::routing::availability::provider_on(&settings, row.agent)
                         } else {
@@ -403,7 +415,8 @@ impl SessionManager {
                     Some(row) => Some(row),
                     None if !rows.is_empty() => {
                         return Ok(refused(format!(
-                            "refused: every row of the work \"{work}\" names an agent or a model                              switched off in Settings › Providers; switch one on, or give --agent"
+                            "refused: every row of the work \"{work}\" names an agent or a model \
+                             switched off in Settings › Providers; switch one on, or give --agent"
                         )));
                     }
                     None => {

@@ -2580,7 +2580,6 @@ mod agent_tools_tests;
 #[cfg(unix)]
 mod answer_tests;
 mod app_state_tests;
-// The rules file and routing, read through the manager without a CLI turn: every platform.
 #[cfg(unix)]
 mod auto_merge_tests;
 #[cfg(unix)]
@@ -2630,6 +2629,7 @@ mod open_in_app_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod records_tests;
+// The rules file and routing, read through the manager without a CLI turn: every platform.
 mod routing_rules_tests;
 #[cfg(unix)]
 mod scope_tests;

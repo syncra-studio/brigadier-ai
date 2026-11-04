@@ -967,6 +967,14 @@ impl SessionManager {
             .filter(|row| same_work(&row.work, work))
             .collect())
     }
+    /// The shipped table's row of `agent` for `work`: what `brigadier start --agent` takes as
+    /// that agent's own row (D34) when the automatic rows left it out, its agent switched off
+    /// or its model made unavailable (#743).
+    pub(super) fn shipped_row(&self, work: &str, agent: ProviderKind) -> Option<Guidance> {
+        guidance(rows(GUIDANCE), "")
+            .into_iter()
+            .find(|row| row.agent == agent && same_work(&row.work, work))
+    }
     /// Conversation titles use normal Work rows, scoped rules, model switches and account
     /// routing. Shipped rows name small families; never widen them to a default/strong model.
     /// The registry's tier and short-text rating are qualitative cost/suitability advice, not
@@ -1147,8 +1155,6 @@ impl SessionManager {
         let catalog = self.runtime.overview(provider).and_then(|o| o.models);
         runs_as(catalog.as_ref(), model, effort)
     }
-    /// The user's rules, without any line that can't be a rule (named once in the log): what
-    /// every start and move is judged by, so one typo leaves the other rules and Fallback on.
     /// Whether a routing row of `agent` naming `model` can start as Settings › Providers stands:
     /// the agent switched on, and the model it runs as (a family word's newest listed model,
     /// `default` the CLI's default) not made unavailable. Settings › Routing judges it the same.
@@ -1171,6 +1177,8 @@ impl SessionManager {
         };
         model_available(&settings, agent, &id)
     }
+    /// The user's rules, without any line that can't be a rule (named once in the log): what
+    /// every start and move is judged by, so one typo leaves the other rules and Fallback on.
     pub(super) fn model_policy(&self) -> Result<Policy> {
         let policy = Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?);
         note_invalid(&policy.invalid);
