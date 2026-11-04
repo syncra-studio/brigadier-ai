@@ -2167,28 +2167,21 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
-    /// Takes the Deciding mark off queued messages `item_ids`: those still queued wait there for
-    /// their turn. Returns those whose mark changed.
+    /// Takes the Deciding mark off queued message `only`, or off them all: those still queued
+    /// wait there for their turn. Nothing to write when no such row reads Deciding.
     pub(crate) async fn settle_queued(
         &self,
         id: &ConversationId,
-        item_ids: &[String],
-    ) -> Result<Vec<String>> {
-        let board = self.board(id).await?;
-        let changed: Vec<String> = board
-            .queue
-            .items
-            .iter()
-            .filter(|item| item.deciding && item_ids.contains(&item.id))
-            .map(|item| item.id.clone())
-            .collect();
-        if changed.is_empty() {
-            return Ok(changed);
+        only: Option<&str>,
+    ) -> Result<()> {
+        let marked =
+            |item: &QueuedMessage| item.deciding && only.is_none_or(|only| item.id == only);
+        if !self.board(id).await?.queue.items.iter().any(marked) {
+            return Ok(());
         }
-        let settled = changed.clone();
-        self.change_queue(id, move |queue| {
+        self.change_queue(id, |queue| {
             for item in &mut queue.items {
-                if settled.contains(&item.id) {
+                if marked(item) {
                     item.deciding = false;
                     item.held_by = None;
                 }
@@ -2196,7 +2189,7 @@ impl Core {
             Ok(())
         })
         .await?;
-        Ok(changed)
+        Ok(())
     }
 
     /// The user's "Run here" on a message the session offered as a new session: the offer goes

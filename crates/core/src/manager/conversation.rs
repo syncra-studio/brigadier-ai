@@ -1568,7 +1568,7 @@ impl SessionManager {
         conv.drop_judgment(&item_id);
         let steered = self.steer_routed(&conv, &item_id, routing).await;
         // Kept queued (a seam, a compaction): the user's now, no longer Deciding.
-        self.end_deciding(&conv, &item_id).await;
+        self.end_deciding(&conv.id, Some(item_id)).await;
         steered
     }
 

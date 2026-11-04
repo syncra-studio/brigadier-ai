@@ -226,6 +226,37 @@ async fn a_row_reads_deciding_until_its_judge_answers() {
     }
 }
 
+/// The write that ends Deciding fails (storage refuses it): it's tried again until the row stops
+/// reading Deciding, with nothing else touching the row.
+#[tokio::test]
+async fn a_failed_write_never_leaves_deciding_on_a_row() {
+    let judge = Arc::new(Semaphore::new(0));
+    let behavior = Arc::new(FakeBehavior::default());
+    *behavior.judge.lock().unwrap() = Some("WAITS");
+    *behavior.judge_gate.lock().unwrap() = Some(judge.clone());
+    let (flow, _answers, gate, item) =
+        send_with("queue-failed-settle", ProviderKind::Claude, behavior).await;
+    let db = rusqlite::Connection::open(flow.dir.join("data").join("brigadier.db")).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER refuse_queue BEFORE INSERT ON events WHEN NEW.kind = 'queue.changed'
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+    judge.add_permits(1);
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually("the judge to answer", || !conv.is_judging()).await;
+    tokio::time::sleep(ANSWER_ACTS).await;
+    assert!(
+        row(&flow, &item).await.unwrap().deciding,
+        "the write failed"
+    );
+    db.execute_batch("DROP TRIGGER refuse_queue;").unwrap();
+    until_decided(&flow, &item).await;
+    gate.notify_one();
+    flow.settled().await;
+    flow.stop().await;
+}
+
 /// A restart ends what the stop caught Deciding: no judge outlives it.
 #[tokio::test]
 async fn a_restart_ends_deciding() {
