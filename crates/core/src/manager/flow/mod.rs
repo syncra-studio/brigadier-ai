@@ -2636,6 +2636,9 @@ mod retry_launch_tests;
 // A mockup reads drawing only while a turn draws it (#636), with the flow's in-process fakes: every
 // platform.
 mod mockup_drawing_tests;
+// A failed run no request names is a notice whose dismissal persists (#639), with the flow's
+// in-process fakes: every platform.
+mod run_failure_notice_tests;
 #[cfg(unix)]
 mod scope_tests;
 #[cfg(unix)]

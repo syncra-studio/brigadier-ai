@@ -4743,6 +4743,11 @@ impl SessionManager {
                     tracing::warn!(conversation = %conv.id, error = %err, "could not mark the turn interrupted");
                 }
             }
+            // A turn no request names says it as a notice, as `fail_turn` does (#639).
+            if failed.is_none() {
+                self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, error)
+                    .await;
+            }
             self.set_run_for(&conv.id, RunState::Failed, Some(error.into()), failed)
                 .await;
         } else if !closing {

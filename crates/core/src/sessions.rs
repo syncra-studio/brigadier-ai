@@ -2325,7 +2325,25 @@ impl Core {
         }
         let board = self.load_board(id).await?;
         boards.insert(id.clone(), board.clone());
-        Ok(board)
+        drop(boards);
+        // A failed run stored before every such failure was said as a notice gets its notice
+        // now, once: dismissing it then persists like any other (#639).
+        let Some(text) = board.unsaid_failure.clone() else {
+            return Ok(board);
+        };
+        let event = DomainEvent::ConversationNotice {
+            conversation_id: id.clone(),
+            notice: crate::model::Notice {
+                level: brigadier_providers::NoticeLevel::Warning,
+                text,
+                at_ms: now_ms(),
+            },
+        };
+        if let Err(err) = self.record_conversation(id, vec![event]).await {
+            tracing::warn!(conversation = %id, error = %err, "could not say a failed run as a notice");
+            return Ok(board);
+        }
+        Ok(self.boards.lock().await.get(id).cloned().unwrap_or(board))
     }
 
     /// The tasks a conversation the catalog no longer has left in its stream, read without
