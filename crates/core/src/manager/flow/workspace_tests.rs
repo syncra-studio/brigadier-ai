@@ -746,6 +746,11 @@ async fn worktree_ownership_fails_closed_on_an_unreadable_stream() {
         unreachable!()
     };
     let mine = user_worktree(&flow, "unreadable-mine");
+    // A remembered answer must not outlive the stream going unreadable.
+    assert_eq!(
+        flow.manager.user_worktrees(&project_id).await.unwrap(),
+        [text(&mine)]
+    );
     flow.core
         .store()
         .append(super::seed_events(&format!(
@@ -766,15 +771,8 @@ async fn worktree_ownership_fails_closed_on_an_unreadable_stream() {
     flow.stop().await;
 }
 
-#[tokio::test]
-async fn worktree_ownership_checks_external_workers_and_symlink_reads() {
-    use crate::work::{ReviewScope, SourceChange};
-    let (flow, project) = flow("external-ownership").await;
-    let WorkspaceTarget::Project { project_id } = project.clone() else {
-        unreachable!()
-    };
-    let worker = user_worktree(&flow, "external-worker");
-    let mine = user_worktree(&flow, "external-mine");
+/// Records a worker on `worker`, as a CLI's task update names it on the conversation's stream.
+async fn record_external_worker(flow: &Flow, worker: &Path, scratch: &Path) {
     let event = serde_json::json!({
         "stream": crate::model::streams::conversation(&flow.conversation),
         "kind": "task.updated",
@@ -784,7 +782,7 @@ async fn worktree_ownership_checks_external_workers_and_symlink_reads() {
             "access": { "repo": "write", "network": false, "unsandboxed": false },
             "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
             "state": "done", "attachments": [], "createdAtMs": 0, "updatedAtMs": 0,
-            "workspace": { "worktree": text(&worker), "branch": "external-worker", "base": null, "target": "main", "scratch": text(&mine) }
+            "workspace": { "worktree": text(worker), "branch": "external-worker", "base": null, "target": "main", "scratch": text(scratch) }
         }}
     });
     flow.core
@@ -792,6 +790,58 @@ async fn worktree_ownership_checks_external_workers_and_symlink_reads() {
         .append(super::seed_events(&event.to_string()))
         .await
         .unwrap();
+}
+
+/// The remembered lookup lasts only as long as the stream: a worker recorded a moment after it
+/// is refused on the very next look, and a conversation that is gone leaves nothing behind.
+#[tokio::test]
+async fn worktree_ownership_refuses_a_worker_recorded_after_a_cached_lookup() {
+    let (flow, target) = flow("cached-ownership").await;
+    let WorkspaceTarget::Project { project_id } = target else {
+        unreachable!()
+    };
+    let worker = user_worktree(&flow, "cached-worker");
+    let mine = user_worktree(&flow, "cached-mine");
+    let listed = flow.manager.user_worktrees(&project_id).await.unwrap();
+    assert!(listed.contains(&text(&worker)) && listed.contains(&text(&mine)));
+    assert!(
+        flow.core
+            .remembered_task_worktrees()
+            .contains(&flow.conversation)
+    );
+    flow.manager
+        .worktree_source_state(&project_id, &text(&worker))
+        .await
+        .unwrap();
+
+    record_external_worker(&flow, &worker, &mine).await;
+
+    assert_eq!(
+        flow.manager.user_worktrees(&project_id).await.unwrap(),
+        [text(&mine)]
+    );
+    assert!(
+        flow.manager
+            .worktree_source_state(&project_id, &text(&worker))
+            .await
+            .is_err()
+    );
+
+    flow.core.forget_task_worktrees(&[]);
+    assert!(flow.core.remembered_task_worktrees().is_empty());
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn worktree_ownership_checks_external_workers_and_symlink_reads() {
+    use crate::work::{ReviewScope, SourceChange};
+    let (flow, project) = flow("external-ownership").await;
+    let WorkspaceTarget::Project { project_id } = project.clone() else {
+        unreachable!()
+    };
+    let worker = user_worktree(&flow, "external-worker");
+    let mine = user_worktree(&flow, "external-mine");
+    record_external_worker(&flow, &worker, &mine).await;
     assert_eq!(
         flow.manager.user_worktrees(&project_id).await.unwrap(),
         [text(&mine)]

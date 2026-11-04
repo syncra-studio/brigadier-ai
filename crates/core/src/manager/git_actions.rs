@@ -85,7 +85,8 @@ impl SessionManager {
     /// without the project's folder and what Brigadier's sessions and workers use. In the
     /// order git lists them, each path with its links resolved. This runs on every draft open
     /// and every worktree read: git's list comes first, so a project with no worktree outside
-    /// Brigadier's own folder reads no board.
+    /// Brigadier's own folder reads no board, and only a stream that changed since the last
+    /// look is folded again ([`crate::sessions::Core::task_worktrees`]).
     pub async fn user_worktrees(&self, project: &ProjectId) -> Result<Vec<String>> {
         let folder = self.project_checkout(project)?;
         let sessions_dir = canonical_path(&self.runtime.platform().paths().sessions_dir);
@@ -104,6 +105,7 @@ impl SessionManager {
         })
         .await?;
         let conversations = self.core.catalog().conversations;
+        self.core.forget_task_worktrees(&conversations);
         let sessions = session_checkouts(&conversations);
         candidates.retain(|path| !sessions.contains(path));
         if candidates.is_empty() {
@@ -112,10 +114,10 @@ impl SessionManager {
         // Workers' worktrees are named only in their conversations' streams.
         for conversation in &conversations {
             // Unknown ownership is not permission to read or mutate a worker's checkout.
-            let tasks = self.core.tasks_unkept(&conversation.id).await?;
-            let used: HashSet<PathBuf> = tasks
+            let paths = self.core.task_worktrees(&conversation.id).await?;
+            // Resolved on each look, not remembered: a link can change under a path.
+            let used: HashSet<PathBuf> = paths
                 .iter()
-                .filter_map(|task| task.workspace.as_ref()?.worktree.as_deref())
                 .map(|path| canonical_path(Path::new(path)))
                 .collect();
             candidates.retain(|path| !used.contains(path));
