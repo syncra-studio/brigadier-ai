@@ -99,7 +99,11 @@ apps are not refused as a group. Windows Notepad keeps all its windows in one
 process, opens every file as a tab in a window it already shows and has no way
 to open one in a window of its own, so a Notepad launch is refused while the
 user has a Notepad window open (in front or not) and the reply says this is a
-lasting limitation, not a temporary failure. The driver's uiAccess worker, `cua-driver-uia`,
+lasting limitation, not a temporary failure. When a Notepad or Settings launch
+did not answer within 15 s, Windows may still open its window later; nothing
+ties that window to the launch (each app runs all its windows, the user's too,
+in one process), so the helper never treats it as its own, and later launches
+of that app are refused, saying why, until no window of it is open. The driver's uiAccess worker, `cua-driver-uia`,
 is vendored but not built or shipped. Another limitation is input in a pure
 Wayland session without XWayland on Linux (the
 driver's experimental Wayland backend stays off). `cu-testkit`, and so
