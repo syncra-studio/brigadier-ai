@@ -12,7 +12,8 @@ pub struct Command {
     pub args: &'static [Arg],
     /// Built in this version; the others say so and exit 4.
     pub available: bool,
-    /// The checked-in schema of its `--json` output (`schemas/<name>.schema.json`).
+    /// The checked-in schema of its `--json` output (`schemas/<name>.schema.json`; `state`
+    /// prints what `context` does, so it shares that one).
     pub schema: &'static str,
 }
 
@@ -169,7 +170,7 @@ pub const COMMANDS: &[Command] = &[
                   opens them.",
         args: &[],
         available: true,
-        schema: include_str!("../schemas/state.schema.json"),
+        schema: include_str!("../schemas/context.schema.json"),
     },
     Command {
         name: "context",
