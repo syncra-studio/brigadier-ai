@@ -317,7 +317,7 @@ function Fixture() {
       await until(() => runtime.thread.composer.getState().text, "the file's mention in the composer");
       seen.draftComposer = runtime.thread.composer.getState().text; seen.draftMention = [...mentions.known()]; click("Source");
 
-      await until(() => pane() === "source" && document.querySelector('[data-slot="own-copy-note"]'), "the draft's Source");
+      await until(() => pane() === "source" && document.querySelector('[aria-label="Commit message"]'), "the draft's Source");
       seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]');
       seen.dotOnSource = !!document.querySelector('[data-slot="source-changes-dot"]');
@@ -326,20 +326,20 @@ function Fixture() {
       await until(() => pane() === null, "the right sidebar to close on Source");
       seen.closedSource = pane(); click("Right sidebar");
 
-      await until(() => pane() === "source" && document.querySelector('[data-slot="own-copy-note"]'), "Source to reopen");
+      await until(() => pane() === "source" && document.querySelector('[aria-label="Commit message"]'), "Source to reopen");
       projectChanged = true;
       emitWorkspaceChanged({ type: "project", projectId: "project" });
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
-      seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
-      // Work in the local checkout: the draft's Source works on the project folder itself.
+      seen.worktreeNote = !!document.querySelector('[data-slot="own-copy-note"]');
+      // Working in the local checkout, its Source is the same.
       updateDraft("project", { environment: "localCheckout" });
 
-      await until(() => !document.querySelector('[data-slot="own-copy-note"]') && document.querySelector('[aria-label="Commit message"]'), "the local draft's Source");
+      await until(() => document.querySelector('[aria-label="Commit message"]'), "the local draft's Source");
       seen.localSource = buttons('[data-slot="source-panel"]'); seen.localCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       updateDraft("project", { environment: "newWorktree" });
 
-      await until(() => document.querySelector('[data-slot="own-copy-note"]'), "the worktree draft's Source again");
-      // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
+      await until(() => document.querySelector('[aria-label="Commit message"]'), "the worktree draft's Source again");
+      // ⇧⌘F shows Search with its field taking the keyboard, Replace beside it in a draft too.
       key("KeyF", { metaKey: true, shiftKey: true });
       useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
 

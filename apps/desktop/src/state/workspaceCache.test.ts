@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { Conversation, Environment, Project } from "@/ipc/generated";
-import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, prefetchWorkspace, readFiles, readSource, remembered, workspaceKey } from "./workspaceCache";
+import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, onWorkspaceChanged, prefetchWorkspace, readFiles, readSource, readUserWorktrees, refreshSource, remembered, watchTargets, workspaceKey } from "./workspaceCache";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { useApp } from "@/state/store";
@@ -59,7 +59,7 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, "window");
 });
 const target = { type: "conversation", conversationId: "s" } as const;
-const source = { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [], merging: null, rebasing: null };
+const source = { branch: "main", remote: null, upstream: null, ahead: 0, behind: 0, staged: [], changes: [], merging: null, rebasing: null };
 
 test("archive and restore at the same path discard the earlier generation; ordinary updates keep it", () => {
   const initial = workspaceKey(target);
@@ -207,4 +207,63 @@ test("a read that fails after a mutation began reads again, and one that fails a
   const alone = readSource(target);
   replies[2]!.reject(new Error("no checkout"));
   await assert.rejects(alone, /no checkout/);
+});
+
+const worktreeTarget = { type: "worktree", projectId: "p", path: "/w/one" } as const;
+
+test("each worktree has its own key, apart from its project's folder", () => {
+  const projects = project("/a");
+  const one = checkoutKey(worktreeTarget, {}, projects);
+  assert.notEqual(one, checkoutKey({ type: "project", projectId: "p" }, {}, projects));
+  assert.notEqual(one, checkoutKey({ ...worktreeTarget, path: "/w/two" }, {}, projects));
+});
+
+test("a worktree is read through its own call, and a read begun before a change is made again", async () => {
+  const replies: ((value: unknown) => void)[] = [];
+  const asked: unknown[] = [];
+  mockIPC((_command, args) => {
+    asked.push((args as { request: unknown }).request);
+    return new Promise((resolve) => { replies.push(resolve); });
+  });
+  const reading = readSource(worktreeTarget);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(asked, [{ method: "getWorktreeSourceState", projectId: "p", path: "/w/one" }]);
+  // A stage or discard answers while it is on its way; nothing else says so.
+  const changed = { ...source, branch: "after" };
+  keepSource(worktreeTarget, changed);
+  replies[0]!({ method: "getWorktreeSourceState", state: { ...source, branch: "before" } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(cachedWorkspace(worktreeTarget)?.source, changed, "the old read isn't kept");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  replies[1]!({ method: "getWorktreeSourceState", state: changed });
+  assert.equal((await reading).branch, "after", "nor handed to whoever holds its promise");
+  const refreshed = refreshSource(worktreeTarget);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  replies[2]!({ method: "getWorktreeSourceState", state: { ...source, branch: "refreshed" } });
+  assert.equal((await refreshed).branch, "refreshed");
+});
+
+test("a change names its target: a worktree's listener hears its own and no other checkout's", () => {
+  let heard = 0;
+  const stop = onWorkspaceChanged(worktreeTarget, () => { heard++; });
+  emitWorkspaceChanged({ type: "project", projectId: "p" });
+  emitWorkspaceChanged({ ...worktreeTarget, path: "/w/two" });
+  assert.equal(heard, 0);
+  emitWorkspaceChanged(worktreeTarget);
+  assert.equal(heard, 1);
+  stop();
+});
+
+test("the watched set is what the sidebar shows: a draft's worktree rows only on Source", () => {
+  const folder = { type: "project", projectId: "p" } as const;
+  assert.deepEqual(watchTargets(null, ["/w/one"], true), [], "a closed sidebar watches nothing");
+  assert.deepEqual(watchTargets(folder, undefined, true), [folder]);
+  assert.deepEqual(watchTargets(folder, ["/w/one"], false), [folder]);
+  assert.deepEqual(watchTargets(folder, ["/w/one"], true), [folder, worktreeTarget]);
+  assert.deepEqual(watchTargets(target, ["/w/one"], true), [target]);
+});
+
+test("which worktrees the user made is read from the daemon", async () => {
+  mockIPC(() => ({ method: "listUserWorktrees", paths: ["/w/one"] }));
+  assert.deepEqual(await readUserWorktrees("p"), ["/w/one"]);
 });

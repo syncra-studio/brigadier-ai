@@ -4,10 +4,14 @@ import type { Conversation, Project, SourceState, WorkspaceFolder } from "@/ipc/
 import { request } from "@/ipc/client";
 import { useApp } from "@/state/store";
 
-/** Whose files the right sidebar shows: a session's checkout, or a draft's project folder. */
+/**
+ * Whose files the right sidebar shows: a session's checkout, a draft's project folder, or a
+ * worktree of that project the user made (the daemon checks its path on every call).
+ */
 export type WorkspaceTarget =
   | { type: "conversation"; conversationId: string }
-  | { type: "project"; projectId: string };
+  | { type: "project"; projectId: string }
+  | { type: "worktree"; projectId: string; path: string };
 
 /** A checkout's files, and (from the right sidebar's read) what it ignores: folders end in `/`. */
 export type FileList = { files: string[]; truncated: boolean; ignored?: string[] };
@@ -17,8 +21,8 @@ export type WorkspaceEntry = { files?: FileList; source?: SourceState };
 
 type CacheState = { entries: Record<string, WorkspaceEntry>; order: readonly string[] };
 
-/** How many checkouts are kept: the open one and the few visited just before it. */
-export const CHECKOUTS_KEPT = 4;
+/** How many checkouts are kept: the open one, its worktree rows and the few visited just before it. */
+export const CHECKOUTS_KEPT = 8;
 /** Total retained payload budget, measured as UTF-16 JSON bytes. */
 export const CACHE_BYTES = 8 * 1024 * 1024;
 
@@ -30,6 +34,7 @@ export function checkoutKey(target: WorkspaceTarget, conversations: Record<strin
   if (target.type === "project") {
     return JSON.stringify(["project", target.projectId, projects[target.projectId]?.repos.map((repo) => repo.path)]);
   }
+  if (target.type === "worktree") return JSON.stringify(["worktree", target.projectId, target.path]);
   const conversation = conversations[target.conversationId];
   const environment = conversation?.setup?.type === "session" ? conversation.setup.environment : null;
   const checkout = environment?.type === "newWorktree" ? environment.path ?? "repo" : "local";
@@ -171,7 +176,9 @@ export function readSource(target: WorkspaceTarget): Promise<SourceState> {
       try {
         const { state } = target.type === "conversation"
           ? await request({ method: "getSourceState", conversationId: target.conversationId })
-          : await request({ method: "getProjectSourceState", projectId: target.projectId });
+          : target.type === "project"
+            ? await request({ method: "getProjectSourceState", projectId: target.projectId })
+            : await request({ method: "getWorktreeSourceState", projectId: target.projectId, path: target.path });
         if (stale()) continue;
         if (workspaceKey(target) === key) remember(key, { source: state });
         return state;
@@ -219,9 +226,14 @@ export async function readFolder(target: WorkspaceTarget, path: string): Promise
 }
 
 function sameTarget(a: WorkspaceTarget, b: WorkspaceTarget): boolean {
-  return a.type === "conversation"
-    ? b.type === "conversation" && a.conversationId === b.conversationId
-    : b.type === "project" && a.projectId === b.projectId;
+  switch (a.type) {
+    case "conversation":
+      return b.type === "conversation" && a.conversationId === b.conversationId;
+    case "project":
+      return b.type === "project" && a.projectId === b.projectId;
+    case "worktree":
+      return b.type === "worktree" && a.projectId === b.projectId && a.path === b.path;
+  }
 }
 
 const changeListeners = new Set<(target: WorkspaceTarget) => void>();
@@ -246,9 +258,35 @@ export function emitWorkspaceChanged(target: WorkspaceTarget): void {
   for (const listener of changeListeners) listener(target);
 }
 
-/** Watches a target's checkout while the right sidebar shows it; null stops. */
-export function watchWorkspace(target: WorkspaceTarget | null): void {
-  request({ method: "watchWorkspace", target }).catch((error: unknown) => {
-    console.error("watching the checkout failed", error);
+/** Watches these checkouts while the right sidebar shows them, in place of the last ones; none stops. */
+export function watchWorkspaces(targets: readonly WorkspaceTarget[]): void {
+  request({ method: "watchWorkspace", targets: [...targets] }).catch((error: unknown) => {
+    console.error("watching the checkouts failed", error);
+  });
+}
+
+/** What the right sidebar shows, so what it watches: its checkout, and on Source a draft's worktree rows. */
+export function watchTargets(target: WorkspaceTarget | null, worktrees: readonly string[] | undefined, onSource: boolean): WorkspaceTarget[] {
+  if (!target) return [];
+  if (target.type !== "project" || !onSource) return [target];
+  return [target, ...(worktrees ?? []).map((path) => ({ type: "worktree", projectId: target.projectId, path }) as const)];
+}
+
+/** Each project's worktrees the user made, as last read. */
+const useUserWorktreeLists = create<Record<string, readonly string[]>>()(() => ({}));
+
+/** The worktrees of the project the user made, once read: its Source shows a row for each. */
+export function useUserWorktrees(projectId: string | null): readonly string[] | undefined {
+  return useUserWorktreeLists((lists) => (projectId ? lists[projectId] : undefined));
+}
+
+/** Reads which worktrees the user made; rows come and go with what git lists. An unchanged list keeps its identity. */
+export function readUserWorktrees(projectId: string): Promise<readonly string[]> {
+  return once(`worktrees:${projectId}`, async () => {
+    const { paths } = await request({ method: "listUserWorktrees", projectId });
+    const kept = useUserWorktreeLists.getState()[projectId];
+    if (sameList(kept, paths)) return kept!;
+    useUserWorktreeLists.setState({ [projectId]: paths });
+    return paths;
   });
 }

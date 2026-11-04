@@ -61,7 +61,7 @@ query: string | null, } | { "method": "getWorkspaceTree", target: WorkspaceTarge
 /**
  * Relative to the checkout's root.
  */
-path: string, } | { "method": "watchWorkspace", target: WorkspaceTarget | null, } | { "method": "startSearch", target: WorkspaceTarget, query: SearchQuery, } | { "method": "cancelSearch", id: number, } | { "method": "replaceInFiles", target: WorkspaceTarget, query: SearchQuery, replacement: string, files: Array<ReplaceFile>, } | { "method": "readFile", conversationId: ConversationId, 
+path: string, } | { "method": "watchWorkspace", targets: Array<WorkspaceTarget>, } | { "method": "startSearch", target: WorkspaceTarget, query: SearchQuery, } | { "method": "cancelSearch", id: number, } | { "method": "replaceInFiles", target: WorkspaceTarget, query: SearchQuery, replacement: string, files: Array<ReplaceFile>, } | { "method": "readFile", conversationId: ConversationId, 
 /**
  * Relative to the checkout's root.
  */
@@ -115,7 +115,11 @@ amend?: boolean, } | { "method": "pushChanges", conversationId: ConversationId, 
 /**
  * Rewrites the last commit instead (a blank message keeps its own).
  */
-amend?: boolean, } | { "method": "listSourceBranches", target: WorkspaceTarget, } | { "method": "sourceAction", target: WorkspaceTarget, action: SourceAction, } | { "method": "getSourceGitOutput", target: WorkspaceTarget, } | { "method": "getConflictFile", target: WorkspaceTarget, path: string, } | { "method": "writeCommitMessage", target: WorkspaceTarget, } | { "method": "answerCard", conversationId: ConversationId, cardId: CardId, decision: ApprovalDecision, } | { "method": "prepareCardAnswer", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, } | { "method": "answerQuestion", conversationId: ConversationId, cardId: CardId, answers: Array<string>, 
+amend?: boolean, } | { "method": "listUserWorktrees", projectId: ProjectId, } | { "method": "getWorktreeSourceState", projectId: ProjectId, path: string, } | { "method": "changeWorktreeSource", projectId: ProjectId, path: string, change: SourceChange, } | { "method": "commitWorktreeChanges", projectId: ProjectId, path: string, message: string | null, includeUnstaged: boolean, push: boolean, 
+/**
+ * Rewrites the last commit instead (a blank message keeps its own).
+ */
+amend?: boolean, } | { "method": "listSourceBranches", target: WorkspaceTarget, } | { "method": "sourceAction", target: WorkspaceTarget, action: SourceAction, } | { "method": "getSourceGitOutput", target: WorkspaceTarget, } | { "method": "getConflictFile", target: WorkspaceTarget, path: string, } | { "method": "writeCommitMessage", target: WorkspaceTarget, includeUnstaged?: boolean, } | { "method": "answerCard", conversationId: ConversationId, cardId: CardId, decision: ApprovalDecision, } | { "method": "prepareCardAnswer", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, } | { "method": "answerQuestion", conversationId: ConversationId, cardId: CardId, answers: Array<string>, 
 /**
  * How the user gave the answer, kept with it.
  */

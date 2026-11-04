@@ -28,19 +28,23 @@ const SETTLE: Duration = Duration::from_millis(250);
 const POLL: Duration = Duration::from_secs(10);
 
 impl SessionManager {
-    /// The folder a target's checkout is in: a session's, or a project's folder.
-    pub(super) fn workspace_dir(&self, target: &WorkspaceTarget) -> Result<PathBuf> {
+    /// The folder a target's checkout is in: a session's, a project's folder, or a worktree the
+    /// user made.
+    pub(super) async fn workspace_dir(&self, target: &WorkspaceTarget) -> Result<PathBuf> {
         match target {
             WorkspaceTarget::Conversation { conversation_id } => {
                 self.checkout_dir(conversation_id).map(PathBuf::from)
             }
             WorkspaceTarget::Project { project_id } => self.project_checkout(project_id),
+            WorkspaceTarget::Worktree { project_id, path } => {
+                self.user_worktree(project_id, path).await
+            }
         }
     }
 
     /// A checkout's files and what it ignores, for the right sidebar's tree.
     pub async fn workspace_tree(&self, target: &WorkspaceTarget) -> Result<WorkspaceTree> {
-        let dir = self.workspace_dir(target)?;
+        let dir = self.workspace_dir(target).await?;
         let git = self.git.clone();
         blocking(move || {
             let repo = git.open(&dir).map_err(git_error)?;
@@ -63,7 +67,7 @@ impl SessionManager {
         target: &WorkspaceTarget,
         path: String,
     ) -> Result<WorkspaceFolder> {
-        let dir = self.workspace_dir(target)?;
+        let dir = self.workspace_dir(target).await?;
         let git = self.git.clone();
         blocking(move || {
             let root = git.open(&dir).map_err(git_error)?.root().to_path_buf();
@@ -77,7 +81,7 @@ impl SessionManager {
     /// build's output) doesn't count. A checkout that can't be watched is read again every
     /// so often instead.
     pub async fn watch_workspace(&self, target: &WorkspaceTarget) -> Result<WorkspaceWatch> {
-        let dir = self.workspace_dir(target)?;
+        let dir = self.workspace_dir(target).await?;
         let git = self.git.clone();
         let (root, status_files, ignored) = blocking(move || {
             let repo = git.open(&dir).map_err(git_error)?;
@@ -95,6 +99,57 @@ impl SessionManager {
             Some((ignored, repo.status_files().ok()?))
         };
         Ok(WorkspaceWatch::start(root, status_files, ignored, reread))
+    }
+
+    /// Makes `targets` the whole set `watches` holds, in place of what it held. A target that
+    /// can't be watched (a worktree just removed) is left out and the others still run. Returns
+    /// the ones that run.
+    pub async fn watch_workspaces(
+        &self,
+        watches: &mut WorkspaceWatches,
+        targets: Vec<WorkspaceTarget>,
+    ) -> Vec<WorkspaceTarget> {
+        // Started afresh: a session's target may have moved to another checkout.
+        watches.0.clear();
+        for target in targets {
+            if watches.0.iter().any(|(watched, _)| *watched == target) {
+                continue;
+            }
+            match self.watch_workspace(&target).await {
+                Ok(watch) => watches.0.push((target, watch)),
+                Err(err) => tracing::warn!(%err, ?target, "watching a checkout failed"),
+            }
+        }
+        watches.0.iter().map(|(target, _)| target.clone()).collect()
+    }
+}
+
+/// The checkouts a connection's right sidebar shows, each watched while it shows.
+#[derive(Default)]
+pub struct WorkspaceWatches(Vec<(WorkspaceTarget, WorkspaceWatch)>);
+
+impl WorkspaceWatches {
+    /// The next target whose checkout changed; pending forever while none is watched. An ended
+    /// watch leaves the set. Safe to drop and call again: a change stays till it is taken.
+    pub async fn next_change(&mut self) -> WorkspaceTarget {
+        std::future::poll_fn(|cx| {
+            let mut changed = None;
+            self.0.retain_mut(|(target, watch)| {
+                if changed.is_some() {
+                    return true;
+                }
+                match watch.changes.poll_recv(cx) {
+                    std::task::Poll::Ready(Some(())) => {
+                        changed = Some(target.clone());
+                        true
+                    }
+                    std::task::Poll::Ready(None) => false,
+                    std::task::Poll::Pending => true,
+                }
+            });
+            changed.map_or(std::task::Poll::Pending, std::task::Poll::Ready)
+        })
+        .await
     }
 }
 
@@ -393,6 +448,17 @@ impl ChangeFilter {
         let Ok(relative) = path.strip_prefix(&self.root) else {
             return false;
         };
+        // A linked worktree made or removed: the list of checkouts changed.
+        if let [
+            Component::Normal(git),
+            Component::Normal(worktrees),
+            Component::Normal(_),
+        ] = relative.components().collect::<Vec<_>>()[..]
+            && git == ".git"
+            && worktrees == "worktrees"
+        {
+            return true;
+        }
         let in_git = relative
             .components()
             .any(|part| part == Component::Normal(".git".as_ref()));
@@ -438,6 +504,9 @@ mod tests {
             (vec!["/repo/target/debug/build"], false),
             (vec!["/repo/web/node_modules/x/index.js"], false),
             (vec!["/repo/.git/objects/ab/cdef"], false),
+            // A worktree made or removed counts, what happens inside its git folder doesn't.
+            (vec!["/repo/.git/worktrees/mine"], true),
+            (vec!["/repo/.git/worktrees/mine/index"], false),
             (vec!["/repo/.git/index.lock"], false),
             (vec!["/elsewhere/file"], false),
             (vec!["/repo/target/x", "/repo/README.md"], true),

@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * Icons from Codicons (CC BY 4.0, see THIRD_PARTY_NOTICES.md): the right sidebar's views and
- * Search's options, except the locally drawn SourceControlGlyph. Current colour, at the
- * text's size unless the caller sizes them.
+ * Search's options, except the locally drawn SourceControlGlyph, SyncGlyph and PublishGlyph.
+ * Current colour, at the text's size unless the caller sizes them.
  */
 
 type GlyphProps = SVGProps<SVGSVGElement>;
@@ -14,6 +14,22 @@ type GlyphProps = SVGProps<SVGSVGElement>;
 export const FilesGlyph: FC<GlyphProps> = ({ className, ...props }) => (
   <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden className={cn("size-icon-text", className)} {...props}>
     <path d="M7.5 22.5H17.595C17.07 23.4 16.11 24 15 24H7.5C4.185 24 1.5 21.315 1.5 18V6C1.5 4.89 2.1 3.93 3 3.405V18C3 20.475 5.025 22.5 7.5 22.5ZM21 8.121V18C21 19.6545 19.6545 21 18 21H7.5C5.8455 21 4.5 19.6545 4.5 18V3C4.5 1.3455 5.8455 0 7.5 0H12.879C13.4715 0 14.0505 0.24 14.4705 0.6585L20.3415 6.5295C20.766 6.954 21 7.5195 21 8.121ZM13.5 6.75C13.5 7.164 13.8375 7.5 14.25 7.5H19.1895L13.5 1.8105V6.75ZM19.5 18V9H14.25C13.0095 9 12 7.9905 12 6.75V1.5H7.5C6.672 1.5 6 2.1735 6 3V18C6 18.8265 6.672 19.5 7.5 19.5H18C18.828 19.5 19.5 18.8265 19.5 18Z" />
+  </svg>
+);
+
+/** Sync Changes: two arrows in a circle. */
+export const SyncGlyph: FC<GlyphProps> = ({ className, ...props }) => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("size-icon-text", className)} {...props}>
+    <path d="M13.5 8a5.5 5.5 0 0 0-9.6-3.6L2.5 6M2.5 2.5V6H6" />
+    <path d="M2.5 8a5.5 5.5 0 0 0 9.6 3.6l1.4-1.6M13.5 13.5V10H10" />
+  </svg>
+);
+
+/** Publish Branch: a cloud with an arrow going up into it. */
+export const PublishGlyph: FC<GlyphProps> = ({ className, ...props }) => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden className={cn("size-icon-text", className)} {...props}>
+    <path d="M4.5 12H4a3 3 0 0 1-.4-5.97A4.5 4.5 0 0 1 12.3 6.1 3 3 0 0 1 12 12h-.5" />
+    <path d="M8 14V8M5.75 10 8 7.75 10.25 10" />
   </svg>
 );
 

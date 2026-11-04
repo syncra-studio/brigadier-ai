@@ -94,20 +94,23 @@ impl SessionManager {
             })
     }
 
-    /// The checkout a Source panel acts on: a session's own (it must exist), or a project's
-    /// folder before its session starts.
-    fn source_dir(&self, target: &WorkspaceTarget) -> Result<PathBuf> {
+    /// The checkout a Source panel acts on: a session's own (it must exist), a project's
+    /// folder before its session starts, or a worktree the user made.
+    async fn source_dir(&self, target: &WorkspaceTarget) -> Result<PathBuf> {
         match target {
             WorkspaceTarget::Conversation { conversation_id } => {
                 self.checkout(conversation_id).map(|(path, _)| path)
             }
             WorkspaceTarget::Project { project_id } => self.project_checkout(project_id),
+            WorkspaceTarget::Worktree { project_id, path } => {
+                self.user_worktree(project_id, path).await
+            }
         }
     }
 
     /// The branches to merge from or switch to: local ones, then remote ones, newest first.
     pub async fn source_branches(&self, target: &WorkspaceTarget) -> Result<Vec<SourceBranch>> {
-        let path = self.source_dir(target)?;
+        let path = self.source_dir(target).await?;
         let git = self.git.clone();
         blocking(move || {
             let repo = git.open(&path).map_err(git_error)?;
@@ -153,9 +156,9 @@ impl SessionManager {
         }
         let _fence = match target {
             WorkspaceTarget::Conversation { conversation_id } => Some(self.enter(conversation_id)?),
-            WorkspaceTarget::Project { .. } => None,
+            WorkspaceTarget::Project { .. } | WorkspaceTarget::Worktree { .. } => None,
         };
-        let path = self.source_dir(target)?;
+        let path = self.source_dir(target).await?;
         let merged = match (target, &action) {
             (
                 WorkspaceTarget::Conversation { conversation_id },
@@ -264,7 +267,7 @@ impl SessionManager {
 
     /// The checkout's Git Output: the git commands the panel ran there, oldest first.
     pub async fn source_git_output(&self, target: &WorkspaceTarget) -> Result<Vec<SourceGitRun>> {
-        let path = self.source_dir(target)?;
+        let path = self.source_dir(target).await?;
         let output = self
             .source_output
             .0
@@ -331,6 +334,10 @@ impl SessionManager {
                 }
             }
             WorkspaceTarget::Project { .. } => checkout.to_owned(),
+            // Sessions name the project's folder as their repository, not this worktree.
+            WorkspaceTarget::Worktree { project_id, .. } => self
+                .project_checkout(project_id)
+                .unwrap_or_else(|_| checkout.to_owned()),
         };
         let own_repo = canonical(&own_repo);
         let mut branches = Vec::new();
@@ -384,7 +391,7 @@ impl SessionManager {
         target: &WorkspaceTarget,
         path: String,
     ) -> Result<ConflictFile> {
-        let dir = self.source_dir(target)?;
+        let dir = self.source_dir(target).await?;
         let git = self.git.clone();
         blocking(move || {
             let repo = git.open(&dir).map_err(git_error)?;
@@ -431,15 +438,16 @@ impl SessionManager {
         .await
     }
 
-    /// A commit message for what is staged, written into the panel's box without
-    /// committing; with it, why the user's chosen model didn't write it, when it didn't.
+    /// A commit message for what is staged (with `include_unstaged`, every change), written into
+    /// the panel's box without committing; with it, why the user's chosen model didn't write it, when it didn't.
     pub async fn write_source_message(
         &self,
         target: &WorkspaceTarget,
+        include_unstaged: bool,
     ) -> Result<(String, Option<String>)> {
         self.admit()?;
-        let path = self.source_dir(target)?;
-        let patch = self.pending_patch(&path, false).await?;
+        let path = self.source_dir(target).await?;
+        let patch = self.pending_patch(&path, include_unstaged).await?;
         let (message, note) = self.write_commit_message(&path, &patch).await?;
         let message = if self.core.settings().omit_ai_coauthors {
             brigadier_git::strip_ai_coauthors(&message)

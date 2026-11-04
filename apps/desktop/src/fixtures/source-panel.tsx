@@ -15,6 +15,7 @@ import type { Request, SourceBranch, SourceFile, SourceState } from "@/ipc/gener
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
+import { setStageAll, useStageAll } from "@/app/side-panel/sourceTarget";
 import { emitWorkspaceChanged } from "@/state/workspaceCache";
 
 const id = "source-panel-fixture";
@@ -25,7 +26,7 @@ let state: SourceState = {
   branch,
   remote: "origin",
   upstream: null,
-  ahead: 2,
+  ahead: 2, behind: 0,
   staged: [file("src/cart/tax.ts", "added")],
   changes: [file("notes.txt", "untracked"), file("README.md", "modified")],
   merging: null,
@@ -67,7 +68,7 @@ mockIPC((command, args) => {
       state = { ...state, staged: [...state.staged, file("src/cart/total.ts", "modified")], changes: [] };
       return { method: req.method, state };
     case "commitChanges":
-      state = { ...state, staged: [], merging: null, ahead: 4 };
+      state = { ...state, staged: [], changes: req.includeUnstaged ? [] : state.changes, merging: null, ahead: state.upstream ? 0 : 4 };
       return { method: req.method, outcome: { commit: "abc", message: req.message ?? "", branch, pushed: false, note: null } };
     default:
       return { method: req.method };
@@ -143,6 +144,10 @@ const openSub = (name: string) => {
 };
 const closeMenus = () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 
+const main = () => document.querySelector<HTMLButtonElement>('[data-slot="source-main-button"]')!;
+// Open, not closing: its way out is an animation.
+const dialog = () => document.querySelector('[data-slot="stage-all-dialog"][data-state="open"]');
+
 function Fixture() {
   const [result, setResult] = useState("");
   const [shown, setShown] = useState(true);
@@ -212,8 +217,8 @@ function Fixture() {
       seen.committed = calls.find((call) => call.method === "commitChanges");
 
       // A merge aborted elsewhere takes git's message out of the box with it.
-      // Committed with nothing left: the box goes until something changes.
-      await until(() => !document.querySelector('[aria-label="Commit message"]'));
+      // Committed with nothing left: the box is off until something changes.
+      await until(() => box().disabled);
       state = { ...state, changes: [file("src/cart/total.ts", "conflicted")], merging: { incoming: "feature", message: "Merge branch 'feature'" } };
       emitWorkspaceChanged({ type: "conversation", conversationId: id });
       await until(() => document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')?.value === "Merge branch 'feature'");
@@ -231,21 +236,86 @@ function Fixture() {
       await until(() => !!document.querySelector('[aria-label="Commit message"]'));
       seen.keptMessage = box().value;
 
-      // Nothing left to commit, the change committed on the branch: no box, no Commit, the branch stays (#490).
-      state = { ...state, staged: [], changes: [], merging: null, ahead: 1 };
-      emitWorkspaceChanged({ type: "conversation", conversationId: id });
+      // Nothing to commit: the box and the button still show. With no upstream, the button publishes.
+      setStageAll("ask");
+      const change = (next: Partial<SourceState>) => {
+        state = { ...state, ...next };
+        emitWorkspaceChanged({ type: "conversation", conversationId: id });
+      };
+      change({ staged: [], changes: [], merging: null, ahead: 1 });
       await until(() => text(document.querySelector('[data-slot="source-panel"]')).includes("Nothing to commit"));
       seen.clean = {
-        box: !!document.querySelector('[aria-label="Commit message"]'),
-        commit: !!button("Commit Actions"),
+        boxOff: box().disabled,
+        main: text(main()),
+        mainOff: main().disabled,
         branch: text(document.querySelector('[data-slot="source-branch"]')),
         empty: all('[data-slot="source-panel"] p').map(text).filter((line) => line.startsWith("Nothing") || line.startsWith("The changes")),
+        check: button("Commit")?.disabled,
       };
-      // A file changes: the box is back.
-      state = { ...state, changes: [file("README.md", "modified")] };
-      emitWorkspaceChanged({ type: "conversation", conversationId: id });
-      await until(() => !!document.querySelector('[aria-label="Commit message"]'));
-      seen.changedAgain = { box: true, commit: text(commitButton()) };
+      // Commits both ways: Sync Changes, down then up.
+      change({ upstream: "origin/session", ahead: 2, behind: 1 });
+      await until(() => text(main()).startsWith("Sync"));
+      seen.sync = text(main());
+      // Level with its upstream: a disabled Commit.
+      change({ ahead: 0, behind: 0 });
+      await until(() => text(main()) === "Commit");
+      seen.level = { main: text(main()), off: main().disabled };
+
+      // A change, none staged: Commit asks, in Cursor's words; Escape leaves it unanswered.
+      const commits = () => calls.filter((call) => call.method === "commitChanges");
+      const dirty = () => change({ changes: [file("README.md", "modified")] });
+      dirty();
+      await until(() => !main().disabled);
+      main().click();
+      await until(() => !!dialog());
+      seen.stagePrompt = { words: text(dialog()!.querySelector("p")), buttons: all("button", dialog()!).map(text), focused: text(document.activeElement) };
+      const before = commits().length;
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      await until(() => !dialog());
+      seen.escaped = { commits: commits().length - before, choice: useStageAll.getState().choice };
+      const answer = async (word: string) => {
+        main().click();
+        await until(() => !!dialog());
+        (all("button", dialog()!).find((one) => text(one) === word) as HTMLButtonElement).click();
+        await until(() => !dialog());
+      };
+      // Yes: this once, everything.
+      await answer("Yes");
+      await until(() => commits().length === before + 1);
+      seen.yes = { includeUnstaged: (commits().at(-1) as { includeUnstaged: boolean }).includeUnstaged, choice: useStageAll.getState().choice };
+      await until(() => text(document.querySelector('[data-slot="source-panel"]')).includes("Nothing to commit"));
+      dirty();
+      await until(() => !main().disabled);
+      // Always: remembered, and asked no more.
+      await answer("Always");
+      await until(() => commits().length === before + 2);
+      seen.always = useStageAll.getState().choice;
+      await until(() => text(document.querySelector('[data-slot="source-panel"]')).includes("Nothing to commit"));
+      dirty();
+      await until(() => !main().disabled);
+      main().click();
+      await until(() => commits().length === before + 3);
+      seen.alwaysAsks = !!dialog();
+      await until(() => text(document.querySelector('[data-slot="source-panel"]')).includes("Nothing to commit"));
+      // Never: no commit, and Commit stays off till something is staged.
+      setStageAll("ask");
+      dirty();
+      await until(() => !main().disabled);
+      await answer("Never");
+      await until(() => main().disabled);
+      seen.never = { commits: commits().length - before, choice: useStageAll.getState().choice, off: main().disabled };
+      change({ staged: [file("src/a.ts", "modified")] });
+      await until(() => !main().disabled);
+      seen.neverStaged = text(main());
+      change({ staged: [] });
+      await until(() => main().disabled);
+      // The way back, in More Actions, only while there is one.
+      openMenu(button("More Actions"));
+      await until(() => menuItems().length > 0);
+      seen.wayBack = menuItems().filter((item) => item.startsWith("Ask Before"));
+      (all('[role="menu"] [role="menuitem"]').find((item) => text(item).startsWith("Ask Before")) as HTMLElement).click();
+      await until(() => !main().disabled);
+      seen.back = useStageAll.getState().choice;
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen, body: document.body.textContent?.slice(0, 2000) })));
   }, []);

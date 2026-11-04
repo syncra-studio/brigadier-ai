@@ -39,7 +39,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -283,10 +283,11 @@ pub enum Request {
         /// Relative to the checkout's root.
         path: String,
     },
-    /// Watches a checkout for this connection, in place of the one it watched before (none
-    /// stops watching): `WorkspaceChanged` frames say when to read it again.
+    /// Watches these checkouts for this connection, in place of those it watched before (none
+    /// stops watching): `WorkspaceChanged` frames say which to read again. One that can't be
+    /// watched leaves the others running.
     WatchWorkspace {
-        target: Option<WorkspaceTarget>,
+        targets: Vec<WorkspaceTarget>,
     },
     /// Searches a checkout for this connection, stopping the search it ran before: `Search`
     /// frames with the returned id bring the results.
@@ -861,15 +862,43 @@ pub enum Request {
         project_id: ProjectId,
     },
     /// Stages, unstages or discards changes in a project's folder, from the Source pane of a
-    /// session not started yet that will work in that folder.
+    /// session not started yet.
     ChangeProjectSource {
         project_id: ProjectId,
         change: SourceChange,
     },
     /// The user's commit in a project's folder, from the Source pane of a session not started
-    /// yet that will work in that folder; as [`Request::CommitChanges`] otherwise.
+    /// yet; as [`Request::CommitChanges`] otherwise.
     CommitProjectChanges {
         project_id: ProjectId,
+        message: Option<String>,
+        include_unstaged: bool,
+        push: bool,
+        /// Rewrites the last commit instead (a blank message keeps its own).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        amend: Option<bool>,
+    },
+    /// The worktrees of a project's repository the user made themselves: not its folder, and
+    /// nothing a session or worker uses.
+    ListUserWorktrees {
+        project_id: ProjectId,
+    },
+    /// A worktree's staged and unstaged files; the path must be one of [`Request::ListUserWorktrees`].
+    GetWorktreeSourceState {
+        project_id: ProjectId,
+        path: String,
+    },
+    /// Stages, unstages or discards changes in a worktree the user made.
+    ChangeWorktreeSource {
+        project_id: ProjectId,
+        path: String,
+        change: SourceChange,
+    },
+    /// The user's commit in a worktree they made; as [`Request::CommitChanges`] otherwise.
+    CommitWorktreeChanges {
+        project_id: ProjectId,
+        path: String,
         message: Option<String>,
         include_unstaged: bool,
         push: bool,
@@ -897,9 +926,13 @@ pub enum Request {
         target: WorkspaceTarget,
         path: String,
     },
-    /// A commit message for what is staged, written for the Source panel's box.
+    /// A commit message for what is staged (with `include_unstaged`, every change), written for
+    /// the Source panel's box.
     WriteCommitMessage {
         target: WorkspaceTarget,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        include_unstaged: Option<bool>,
     },
     /// Answers an approval card.
     AnswerCard {
@@ -1786,8 +1819,8 @@ pub enum Response {
         folder: WorkspaceFolder,
     },
     WatchWorkspace {
-        /// Whether a watch runs now (false when stopped, or the target has no checkout).
-        watching: bool,
+        /// The targets watched now: those asked for that can be.
+        watching: Vec<WorkspaceTarget>,
     },
     StartSearch {
         id: u32,
@@ -1803,6 +1836,18 @@ pub enum Response {
         state: SourceState,
     },
     CommitProjectChanges {
+        outcome: CommitOutcome,
+    },
+    ListUserWorktrees {
+        paths: Vec<String>,
+    },
+    GetWorktreeSourceState {
+        state: SourceState,
+    },
+    ChangeWorktreeSource {
+        state: SourceState,
+    },
+    CommitWorktreeChanges {
         outcome: CommitOutcome,
     },
     ListSourceBranches {

@@ -2316,7 +2316,19 @@ impl Core {
     /// The tasks a conversation the catalog no longer has left in its stream, read without
     /// keeping its board.
     pub(crate) async fn deleted_tasks(&self, id: &ConversationId) -> Result<Vec<Task>> {
+        self.tasks_unkept(id).await
+    }
+
+    /// A conversation's tasks as its stream has them, without loading its board for good or
+    /// waiting on the boards' lock: for a look across every conversation.
+    pub(crate) async fn tasks_unkept(&self, id: &ConversationId) -> Result<Vec<Task>> {
         Ok(self.load_board(id).await?.sorted_tasks())
+    }
+
+    /// The conversations whose boards are kept loaded.
+    #[cfg(test)]
+    pub(crate) async fn kept_boards(&self) -> HashSet<ConversationId> {
+        self.boards.lock().await.keys().cloned().collect()
     }
 
     /// Folds a conversation's stream into its board, newest page first.

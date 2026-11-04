@@ -17,7 +17,7 @@ import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspace
 import { useCheckoutChanges } from "@/state/board";
 import { useCliThread, useThreadFact } from "@/state/cliThread";
 import { useApp } from "@/state/store";
-import { onWorkspaceChanged, prefetchWorkspace, readSource, refreshSource, uncommittedFiles, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
+import { onWorkspaceChanged, prefetchWorkspace, readSource, readUserWorktrees, refreshSource, uncommittedFiles, useCachedEntry, useCheckoutKey, useUserWorktrees, watchTargets, watchWorkspaces, type WorkspaceTarget } from "@/state/workspaceCache";
 
 
 export function useWorkspacePane(conversationId: string | null, projectId: string | null, enabled: boolean) {
@@ -85,14 +85,32 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   // While it shows, the daemon says when the checkout changes, so the views refresh in place.
   // A new connection forgets the old one's watch, so it is asked again after reconnecting.
   const connected = useApp((s) => s.connection.status === "connected");
+  // A draft's Source has a row for each worktree the user made: read as it opens, after a
+  // reconnect, on focus, and when the project's folder says one came or went.
+  const draftProject = enabled && connected && !conversationId ? projectId : null;
+  const worktrees = useUserWorktrees(draftProject);
+  useEffect(() => {
+    if (!draftProject) return;
+    const read = () => { readUserWorktrees(draftProject).catch(() => undefined); };
+    read();
+    window.addEventListener("focus", read);
+    const unsubscribe = onWorkspaceChanged({ type: "project", projectId: draftProject }, read);
+    return () => {
+      window.removeEventListener("focus", read);
+      unsubscribe();
+    };
+  }, [draftProject]);
   const watching = enabled && open && connected ? target : null;
-  // It is asked again when the session moves to another checkout (its own copy made or gone).
-  const watch = useCallback(() => {
-    if (!watching) return;
-    watchWorkspace(watching);
-    return () => watchWorkspace(null);
-  }, [watching]);
-  useEffect(watch, [watch, checkout]);
+  // The whole set, asked again when it changes: a row came or went, the view changed, a reconnect
+  // (`connected` above), or the session moved to another checkout (its own copy made or gone).
+  const watched = JSON.stringify(watchTargets(watching, worktrees, active === "source"));
+  useEffect(() => {
+    const targets = JSON.parse(watched) as WorkspaceTarget[];
+    if (targets.length === 0) return;
+    watchWorkspaces(targets);
+    return () => watchWorkspaces([]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [watched, checkout]);
   const mac = useApp((s) => s.info?.platform === "macos");
   // A native browser page has its own first responder. DOM focus alone cannot take the
   // keyboard back from it when a menu key opens the sidebar's filter or focuses a view.
@@ -191,7 +209,7 @@ export function WorkspacePane() {
   useEffect(() => {
     if (!focusRequest) return;
     document.getElementById("workspace-pane-content")
-      ?.querySelector<HTMLElement>('input, textarea, button, [tabindex="0"]')?.focus({ preventScroll: true });
+      ?.querySelector<HTMLElement>('input:not(:disabled), textarea:not(:disabled), button:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true });
   }, [focusRequest]);
   if (!pane?.enabled) return null;
   return (

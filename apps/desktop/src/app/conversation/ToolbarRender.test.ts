@@ -36,7 +36,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.dotInSearch, true, "with changes in Source out of view, the right sidebar's toggle has a dot");
   assert.equal(seen.dotOnSource, false, "on Source, no dot");
   assert.equal(seen.searchKeyFocus, "Search", "with its field taking the keyboard");
-  assert.equal(seen.draftSearchReplace, false, "a draft making its own copy has no Replace");
+  assert.equal(seen.draftSearchReplace, true, "Replace works before a session, whichever way it will start");
   for (const field of ["dockClosedSlide", "dockOpenSlide"]) {
     assert.deepEqual(seen[field], { transitionProperty: "width", transitionDuration: "0.3s", sidebarEase: true, reducedMotion: true },
       `${field}: the right sidebar stays in the page and its width slides on the left sidebar's spring, and not with reduced motion`);
@@ -65,14 +65,14 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.match(String(seen.draftTree), /src.*package\.json/);
   assert.equal(seen.draftComposer, "@package.json ");
   assert.deepEqual(seen.draftMention, [{ type: "file", path: "package.json" }]);
-  // A new worktree (the default) makes its own copy, so the draft's project folder only reads.
-  assert.ok(!(seen.draftSource as string[]).some((label) => /Stage|Discard/.test(label ?? "")), "a draft only reads");
-  assert.equal(seen.draftCommitBox, false);
-  assert.equal(seen.draftNote, true);
+  // Before a session, Source works on the project folder whichever way it will start, with no note.
+  assert.ok((seen.draftSource as string[]).includes("Stage All Changes"), "a draft stages in the project folder");
+  assert.equal(seen.draftCommitBox, true);
+  assert.equal(seen.draftNote, false);
   assert.equal(seen.closedSource, null);
-  assert.match(String(seen.worktreeNote), /own copy/, "reopened, it still says why");
-  assert.ok(!(seen.worktreeSource as string[]).some((label) => /Stage|Discard/.test(label ?? "")));
-  assert.equal(seen.worktreeCommitBox, false);
+  assert.equal(seen.worktreeNote, false);
+  assert.ok((seen.worktreeSource as string[]).includes("Stage All Changes"));
+  assert.equal(seen.worktreeCommitBox, true);
   // Working in the local checkout, the draft's Source stages and commits in the project folder.
   assert.ok((seen.localSource as string[]).includes("Stage All Changes"), "a local draft stages in the project folder");
   assert.equal(seen.localCommitBox, true);

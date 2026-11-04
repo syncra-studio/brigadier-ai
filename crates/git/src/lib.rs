@@ -497,6 +497,8 @@ pub struct RemoteState {
     pub upstream: Option<String>,
     /// Commits not pushed yet: ahead of its upstream, or on no remote branch at all.
     pub ahead: u32,
+    /// Commits on its upstream not pulled yet, as last fetched.
+    pub behind: u32,
 }
 
 /// A local branch against its upstream ([`Repo::upstream_gap`]).

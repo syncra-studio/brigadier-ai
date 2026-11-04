@@ -4,6 +4,7 @@ import type { ProjectId } from "./ProjectId";
 
 /**
  * Whose checkout the right sidebar shows: a session's (its worktree, or the repository while
- * that doesn't exist yet), or a project's folder before its session starts.
+ * that doesn't exist yet), a project's folder before its session starts, or a worktree of that
+ * project the user made themselves. The daemon checks a worktree's path on every call.
  */
-export type WorkspaceTarget = { "type": "conversation", conversationId: ConversationId, } | { "type": "project", projectId: ProjectId, };
+export type WorkspaceTarget = { "type": "conversation", conversationId: ConversationId, } | { "type": "project", projectId: ProjectId, } | { "type": "worktree", projectId: ProjectId, path: string, };

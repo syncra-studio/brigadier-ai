@@ -1,9 +1,10 @@
 /**
- * A worker's changes in Source: its +N −N in the context card opens the right sidebar's Source on
- * them (the row itself still opens its panel); the switch under Source's title goes back to the
- * session's checkout and on to another worker; a worker's files are read only, each opening its
- * part of the worker's diff in the Review tab. A worker that is gone (the daemon no longer finds
- * it, or it leaves the rows) closes its Review tab and leaves the session's scope, with no error.
+ * A session's Source with workers: a stacked row for its checkout ("This session") and one for
+ * each worker, in place of a switch. A worker's +N −N in the context card opens the right
+ * sidebar's Source with its row open (the row in the card still opens its panel); a worker's files
+ * are read only, each opening its part of the worker's diff in the Review tab. A worker that is
+ * gone (the daemon no longer finds it, or it leaves the list) closes its Review tab and loses its
+ * row, with no error. Without workers there are no rows.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -38,7 +39,7 @@ useCliThread.setState({
   },
 });
 const parent: SourceState = {
-  branch: "brigadier/session", remote: "origin", upstream: null, ahead: 0,
+  branch: "brigadier/session", remote: "origin", upstream: null, ahead: 0, behind: 0,
   staged: [], changes: [{ path: "notes.txt", oldPath: null, status: "modified" }], merging: null, rebasing: null,
 };
 const SOURCES: Record<string, WorkerSource> = {
@@ -96,92 +97,81 @@ function until(check: () => boolean, timeoutMs = 4000): Promise<void> {
 
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
 const all = (selector: string, root: ParentNode = document) => [...root.querySelectorAll(selector)];
-const panel = () => document.querySelector('[data-slot="source-panel"]');
-const scope = () => panel()?.getAttribute("data-scope") ?? "session";
-const groups = () =>
-  all('[data-slot="source-panel"] section[aria-label]').map(
-    (group) => text(group.querySelector("header > button")) + text(group.querySelector("header > span:last-child")),
-  );
-const openMenu = (trigger: Element | null) => {
-  (trigger as HTMLElement | null)?.focus();
-  trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-};
-const menuItem = (name: RegExp) =>
-  all('[role="menu"][data-state="open"] [role^="menuitem"]').find((item) => name.test(text(item))) as HTMLElement | undefined;
-const pick = async (name: RegExp) => {
-  openMenu(document.querySelector('[data-slot="source-scope"]'));
-  await until(() => !!menuItem(name));
-  const items = all('[role="menu"][data-state="open"] [role^="menuitem"]').map(text);
-  menuItem(name)!.click();
-  return items;
-};
-
+const rowNames = () => all('[data-slot="source-row-name"]').map(text);
+const panelOf = (name: string) => all('[data-slot="source-panel"]').find((one) => text(one.querySelector('[data-slot="source-row-name"]')) === name) as HTMLElement | undefined;
+const groupsOf = (name: string) =>
+  all("section[aria-label]", panelOf(name)).map((group) => text(group.querySelector("header > button")) + text(group.querySelector("header > span:last-child")));
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     void (async () => {
-      // The session's own checkout first, with the switch over it.
-      await until(() => groups().length === 1);
-      seen.start = { scope: scope(), switch: text(document.querySelector('[data-slot="source-scope"]')), groups: groups() };
+      // The session's checkout first and open, a row for each worker folded; no switch.
+      await until(() => groupsOf("This session").length === 1);
+      seen.start = {
+        rows: rowNames(),
+        groups: groupsOf("This session"),
+        folded: [groupsOf("Cart fixes"), groupsOf("Readme fixes")],
+        title: text(document.querySelector('[data-slot="source-rows"] [data-slot="source-title"]')),
+        titleActions: all('[data-slot="source-title"] button').length,
+        switcher: !!document.querySelector('[data-slot="source-scope"]'),
+      };
 
-      // (a) The row opens the worker's panel; its +N −N opens Source on the worker's changes.
+      // (a) The row opens the worker's panel; its +N −N opens Source with the worker's row open.
       const rows = all('[data-slot="workers-summary-worker"]');
       (rows[0] as HTMLElement).click();
       seen.rowOpens = [...panels];
       const changes = all('[data-slot="workers-summary-changes"]') as HTMLButtonElement[];
       seen.counts = changes.map((button) => [text(button), button.getAttribute("aria-label")]);
       changes[0]!.click();
-      await until(() => scope() === "worker" && groups().length === 1);
+      await until(() => groupsOf("Cart fixes").length === 1);
       const pane = useWorkspacePaneState.getState();
+      const worker = panelOf("Cart fixes")!;
       seen.opened = {
         pane: { open: pane.open, tab: pane.tabs[id] },
-        asked: calls.filter((call) => call.method === "getWorkerSource").map((call) => call.method === "getWorkerSource" && call.taskId),
-        switch: text(document.querySelector('[data-slot="source-scope"]')),
-        branch: text(document.querySelector('[data-slot="source-branch"]')),
-        groups: groups(),
-        files: all('[data-slot="source-panel"] li').map(text),
+        asked: [...new Set(calls.filter((call) => call.method === "getWorkerSource").map((call) => call.method === "getWorkerSource" && call.taskId))],
+        branch: text(worker.querySelector('[data-slot="source-row-branch"]')),
+        branchTitle: worker.querySelector('[data-slot="source-row-branch"]')?.getAttribute("title"),
+        scope: worker.getAttribute("data-scope"),
+        groups: groupsOf("Cart fixes"),
+        files: all("li", worker).map(text),
+        request: useSourceScopes.getState()[id] ?? null,
       };
 
       // (c) Read only: no message box, Commit, More Actions, or a row's stage and discard.
       seen.readOnly = {
-        box: !!document.querySelector('[aria-label="Commit message"]'),
-        buttons: all('[data-slot="source-panel"] button .sr-only').map(text),
+        box: !!worker.querySelector('[aria-label="Commit message"]'),
+        buttons: all("button .sr-only", worker).map(text),
       };
       // A file opens its part of the worker's diff in the Review tab.
-      (all('[data-slot="source-panel"] li button')[0] as HTMLButtonElement).click();
+      (all("li button", worker)[0] as HTMLButtonElement).click();
       const opened = sessionTabs(id);
       seen.review = opened.tabs.find((tab) => tab.id === opened.active);
 
-      // (b) Back to the session's checkout, then to the other worker.
-      seen.menu = await pick(/^This session/);
-      await until(() => scope() === "session" && groups().length === 1);
-      seen.parent = { switch: text(document.querySelector('[data-slot="source-scope"]')), groups: groups(), box: !!document.querySelector('[aria-label="Commit message"]') };
-      await pick(/^Readme fixes/);
-      await until(() => scope() === "worker" && groups().join() === "Changes1");
-      seen.other = { switch: text(document.querySelector('[data-slot="source-scope"]')), files: all('[data-slot="source-panel"] li').map(text) };
+      // The session's row still commits; another worker's opens too.
+      seen.parent = { box: !!panelOf("This session")!.querySelector('[aria-label="Commit message"]') };
+      (panelOf("Readme fixes")!.querySelector("button[aria-expanded]") as HTMLButtonElement).click();
+      await until(() => groupsOf("Readme fixes").length === 1);
+      seen.other = { files: all("li", panelOf("Readme fixes")).map(text) };
 
-      // Gone: its Review tab closes, and Source goes back to the session's checkout, quietly.
+      // Gone: its Review tab closes, and its row goes on Refresh, quietly.
       gone.add("t2");
-      (all('[data-slot="source-panel"] li button')[0] as HTMLButtonElement).click();
+      (all("li button", panelOf("Readme fixes"))[0] as HTMLButtonElement).click();
       await until(() => calls.some((call) => call.method === "getReviewDiff" && call.scope.type === "worker" && call.scope.taskId === "t2"));
       await until(() => !sessionTabs(id).tabs.some((tab) => tab.id === REVIEW_TAB));
       seen.reviewGone = { active: sessionTabs(id).active, error: text(document.querySelector('[data-slot="review-tab"] .text-destructive')) };
-      (all('[data-slot="source-panel"] button').find((button) => text(button) === "Refresh") as HTMLButtonElement).click();
-      await until(() => scope() === "session" && groups().length === 1);
+      (all("button", panelOf("Readme fixes")).find((button) => text(button) === "Refresh") as HTMLButtonElement).click();
+      await until(() => !panelOf("Readme fixes"));
       seen.sourceGone = {
-        switch: text(document.querySelector('[data-slot="source-scope"]')),
-        scope: useSourceScopes.getState()[id] ?? null,
-        error: text(document.querySelector('[data-slot="source-panel"] .text-destructive')),
+        rows: rowNames(),
+        error: text(document.querySelector('[data-slot="source-rows"] p.text-destructive')),
       };
-      // A worker that leaves the rows (closed, its worktree gone) leaves the session's scope too.
-      await pick(/^Cart fixes/);
-      await until(() => scope() === "worker" && groups().join() === "Changes2");
+      // With no worker left in the list: one checkout, no rows, the branch under Commit.
       useCliThread.setState((state) => ({
-        views: { ...state.views, [id]: { ...state.views[id]!, workers: state.views[id]!.workers!.map((worker) => worker.id === "t1" ? { ...worker, diff: null } : worker) } },
+        views: { ...state.views, [id]: { ...state.views[id]!, workers: state.views[id]!.workers!.map((one) => ({ ...one, diff: null })) } },
       }));
-      await until(() => scope() === "session" && groups().length === 1);
-      seen.closedGone = { switch: text(document.querySelector('[data-slot="source-scope"]')), scope: useSourceScopes.getState()[id] ?? null };
+      await until(() => !document.querySelector('[data-slot="source-rows"]'));
+      seen.noRows = { rows: rowNames(), branch: text(document.querySelector('[data-slot="source-branch"]')) };
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen, body: document.body.textContent?.slice(0, 2000) })));
   }, []);

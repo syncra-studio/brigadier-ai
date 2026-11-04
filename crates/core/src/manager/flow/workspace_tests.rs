@@ -88,7 +88,7 @@ async fn the_tree_lists_ignored_entries_and_every_kind_of_change() {
 
     let project_id = match &target {
         WorkspaceTarget::Project { project_id } => project_id.clone(),
-        WorkspaceTarget::Conversation { .. } => unreachable!(),
+        _ => unreachable!(),
     };
     let state = flow
         .manager
@@ -280,5 +280,379 @@ async fn the_watch_hears_files_and_staging_but_not_ignored_folders() {
         "the switched-to branch moved"
     );
     drop(watch);
+    flow.stop().await;
+}
+
+/// A worktree of the project in a scratch folder, on a new branch of its own.
+fn user_worktree(flow: &Flow, name: &str) -> PathBuf {
+    let path = std::env::temp_dir()
+        .join(format!("user-worktree-{}", uuid::Uuid::new_v4()))
+        .join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    git(
+        &flow.repo,
+        &["worktree", "add", "-q", "-b", name, path.to_str().unwrap()],
+    );
+    path.canonicalize().unwrap()
+}
+
+fn text(path: &Path) -> String {
+    path.to_str().unwrap().to_owned()
+}
+
+/// The session's own worktree, once it has one.
+async fn session_worktree(flow: &Flow) -> PathBuf {
+    flow.say("Hi.").await;
+    flow.settled().await;
+    match flow.core.conversation(&flow.conversation).unwrap().setup {
+        Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    path: Some(path), ..
+                },
+            ..
+        }) => PathBuf::from(path),
+        other => panic!("a session with a worktree, not {other:?}"),
+    }
+}
+
+/// The user's worktrees are listed, and one's discard and commit leave every other checkout as
+/// it was: the other worktree, and the project's folder.
+#[tokio::test]
+async fn a_worktree_targets_discard_and_commit_stay_in_that_worktree() {
+    use crate::work::{SourceChange, SourceScope};
+
+    let (flow, target) = flow("worktree-target").await;
+    let WorkspaceTarget::Project { project_id } = target else {
+        unreachable!()
+    };
+    let session = session_worktree(&flow).await;
+    let (one, other) = (
+        user_worktree(&flow, "mine-one"),
+        user_worktree(&flow, "mine-other"),
+    );
+    let listed = flow.manager.user_worktrees(&project_id).await.unwrap();
+    assert_eq!(listed, [text(&one), text(&other)], "not {session:?}");
+
+    for checkout in [&one, &other, &flow.repo] {
+        std::fs::write(checkout.join("README.md"), "# Mine\n").unwrap();
+        std::fs::write(checkout.join("new.txt"), "new\n").unwrap();
+    }
+    let status = |path: &Path| git(path, &["status", "--porcelain"]);
+    let (other_before, folder_before) = (status(&other), status(&flow.repo));
+    let heads = || {
+        (
+            git(&other, &["rev-parse", "HEAD"]),
+            git(&flow.repo, &["rev-parse", "HEAD"]),
+        )
+    };
+    let heads_before = heads();
+
+    let state = flow
+        .manager
+        .worktree_source_state(&project_id, &text(&one))
+        .await
+        .unwrap();
+    assert_eq!(state.branch.as_deref(), Some("mine-one"));
+    assert_eq!(statuses(&state.changes).len(), 2);
+
+    let state = flow
+        .manager
+        .change_worktree_source(
+            &project_id,
+            &text(&one),
+            SourceChange::Discard {
+                scope: SourceScope::Unstaged,
+                paths: Some(vec!["README.md".into()]),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        statuses(&state.changes),
+        [("new.txt".to_owned(), SourceStatus::Untracked)]
+    );
+    assert_eq!(status(&other), other_before, "the other worktree");
+    assert_eq!(status(&flow.repo), folder_before, "the project's folder");
+
+    // Nothing staged: Commit's "stage all" takes this checkout's changes, and only its.
+    let outcome = flow
+        .manager
+        .commit_worktree_changes(
+            &project_id,
+            &text(&one),
+            Some("Add new".into()),
+            true,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.branch, "mine-one");
+    assert_eq!(status(&one), "");
+    assert_eq!(git(&one, &["log", "-1", "--format=%s"]), "Add new");
+    assert_eq!(status(&other), other_before, "the other worktree");
+    assert_eq!(status(&flow.repo), folder_before, "the project's folder");
+    assert_eq!(heads(), heads_before);
+    flow.stop().await;
+}
+
+/// The one resolver refuses, on every call, what isn't a worktree the user made: a session's
+/// worktree, a worker's, the project's folder, and a folder that is no worktree of it.
+#[tokio::test]
+async fn a_worktree_target_refuses_what_brigadier_uses_and_what_is_not_listed() {
+    use crate::work::{SourceAction, SourceChange};
+
+    let (flow, target) = flow("worktree-refused").await;
+    let WorkspaceTarget::Project { project_id } = target else {
+        unreachable!()
+    };
+    let session = session_worktree(&flow).await;
+    std::fs::write(session.join("kept.txt"), "kept\n").unwrap();
+    // Where a worker's worktree is: Brigadier's own folder, whichever board names it.
+    let sessions_dir = flow.manager.runtime.platform().paths().sessions_dir.clone();
+    let worker = sessions_dir.join("worker-check").join("work");
+    std::fs::create_dir_all(worker.parent().unwrap()).unwrap();
+    git(
+        &flow.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worker-check",
+            worker.to_str().unwrap(),
+        ],
+    );
+    let stray = std::env::temp_dir().join(format!("not-a-worktree-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&stray).unwrap();
+
+    let refused = [
+        text(&session),
+        // The same folder by another way to it: a link resolves to what it leads to.
+        format!(
+            "{}/../{}",
+            session.display(),
+            session.file_name().unwrap().display()
+        ),
+        text(&worker),
+        text(&flow.repo),
+        text(&stray),
+        "relative/path".to_owned(),
+    ];
+    let manager = &flow.manager;
+    assert!(
+        manager
+            .user_worktrees(&project_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for path in refused {
+        let refused = |err: crate::Error| {
+            assert!(
+                err.to_string().contains("not a worktree you made"),
+                "{path}: {err}"
+            );
+        };
+        let target = WorkspaceTarget::Worktree {
+            project_id: project_id.clone(),
+            path: path.clone(),
+        };
+        refused(
+            manager
+                .worktree_source_state(&project_id, &path)
+                .await
+                .unwrap_err(),
+        );
+        refused(
+            manager
+                .change_worktree_source(&project_id, &path, SourceChange::Stage { paths: None })
+                .await
+                .unwrap_err(),
+        );
+        refused(
+            manager
+                .commit_worktree_changes(&project_id, &path, Some("No".into()), true, false, false)
+                .await
+                .unwrap_err(),
+        );
+        refused(
+            manager
+                .write_source_message(&target, true)
+                .await
+                .unwrap_err(),
+        );
+        refused(
+            manager
+                .source_action(&target, SourceAction::Fetch)
+                .await
+                .unwrap_err(),
+        );
+        refused(manager.source_branches(&target).await.unwrap_err());
+        refused(manager.workspace_tree(&target).await.unwrap_err());
+        assert!(manager.watch_workspace(&target).await.is_err());
+    }
+    assert_eq!(
+        git(&session, &["status", "--porcelain"]),
+        "?? kept.txt",
+        "the session's worktree is as it was"
+    );
+    flow.stop().await;
+}
+
+/// Listing worktrees runs on every draft open and worktree read: with nothing outside Brigadier's
+/// own folder it reads no board, and with a candidate it reads streams without keeping boards.
+#[tokio::test]
+async fn listing_worktrees_keeps_no_boards() {
+    let (flow, target) = flow("worktree-boards").await;
+    let WorkspaceTarget::Project { project_id } = target else {
+        unreachable!()
+    };
+    let session = session_worktree(&flow).await;
+    // A conversation nothing has opened since the daemon started: its board isn't loaded.
+    let idle = flow
+        .manager
+        .create_conversation(
+            crate::model::ConversationKind::Chat,
+            None,
+            Some("Idle".into()),
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+    let kept = flow.core.kept_boards().await;
+    assert!(!kept.contains(&idle), "the check needs a board not loaded");
+
+    assert!(
+        flow.manager
+            .user_worktrees(&project_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "only {session:?}, which is the session's"
+    );
+    assert_eq!(flow.core.kept_boards().await, kept, "no candidates");
+
+    let mine = user_worktree(&flow, "mine-boards");
+    assert_eq!(
+        flow.manager.user_worktrees(&project_id).await.unwrap(),
+        [text(&mine)]
+    );
+    assert_eq!(flow.core.kept_boards().await, kept, "a candidate");
+    flow.stop().await;
+}
+
+/// The next change the set says within a while, if any.
+async fn next_target(
+    watches: &mut crate::manager::workspace::WorkspaceWatches,
+    within: Duration,
+) -> Option<WorkspaceTarget> {
+    tokio::time::timeout(within, watches.next_change())
+        .await
+        .ok()
+}
+
+/// A connection watches a set of targets: each change names its target, a request replaces the
+/// whole set, one that can't be watched leaves the others running, and a removed one says nothing.
+#[tokio::test]
+async fn the_watch_set_names_its_targets_and_is_replaced_whole() {
+    let (flow, folder) = flow("watch-set").await;
+    let project_id = match &folder {
+        WorkspaceTarget::Project { project_id } => project_id.clone(),
+        WorkspaceTarget::Conversation { .. } | WorkspaceTarget::Worktree { .. } => unreachable!(),
+    };
+    let path = user_worktree(&flow, "watched");
+    let worktree = WorkspaceTarget::Worktree {
+        project_id: project_id.clone(),
+        path: text(&path),
+    };
+    let gone = WorkspaceTarget::Worktree {
+        project_id: project_id.clone(),
+        path: "/not/a/worktree".to_owned(),
+    };
+    let said = Duration::from_secs(10);
+    let quiet = Duration::from_millis(800);
+    let mut watches = crate::manager::workspace::WorkspaceWatches::default();
+
+    let watching = flow
+        .manager
+        .watch_workspaces(
+            &mut watches,
+            vec![folder.clone(), gone.clone(), worktree.clone()],
+        )
+        .await;
+    assert_eq!(
+        watching,
+        [folder.clone(), worktree.clone()],
+        "the failed one alone is left out"
+    );
+    // The watchers take a moment to start; their first events may be of the start.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    while next_target(&mut watches, quiet).await.is_some() {}
+
+    std::fs::write(path.join("in-worktree.txt"), "x\n").unwrap();
+    assert_eq!(
+        next_target(&mut watches, said).await,
+        Some(worktree.clone())
+    );
+    while next_target(&mut watches, quiet).await.is_some() {}
+    std::fs::write(flow.repo.join("in-folder.txt"), "x\n").unwrap();
+    assert_eq!(next_target(&mut watches, said).await, Some(folder.clone()));
+    while next_target(&mut watches, quiet).await.is_some() {}
+
+    // The worktree's row went: only the folder is said from now on.
+    let watching = flow
+        .manager
+        .watch_workspaces(&mut watches, vec![folder.clone()])
+        .await;
+    assert_eq!(watching, std::slice::from_ref(&folder));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    while next_target(&mut watches, quiet).await.is_some() {}
+    std::fs::write(path.join("in-worktree-again.txt"), "x\n").unwrap();
+    assert_eq!(next_target(&mut watches, quiet).await, None);
+
+    let watching = flow
+        .manager
+        .watch_workspaces(&mut watches, Vec::new())
+        .await;
+    assert!(watching.is_empty());
+    std::fs::write(flow.repo.join("in-folder-again.txt"), "x\n").unwrap();
+    assert_eq!(
+        next_target(&mut watches, quiet).await,
+        None,
+        "none stops watching"
+    );
+    flow.stop().await;
+}
+
+/// The Source panel's Sync Changes counts both ways, against the upstream as last fetched.
+#[tokio::test]
+async fn source_state_counts_commits_to_pull_and_to_push() {
+    let (flow, target) = flow("source-behind").await;
+    let WorkspaceTarget::Project { project_id } = target else {
+        unreachable!()
+    };
+    let repo = &flow.repo;
+    let origin = std::env::temp_dir().join(format!("source-behind-{}", uuid::Uuid::new_v4()));
+    let init = crate::test_git_command()
+        .args(["init", "-q", "--bare", origin.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
+    let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(repo, &["commit", "-q", "--allow-empty", "-m", "Theirs"]);
+    git(repo, &["push", "-q", "-u", "origin", &branch]);
+    git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    git(repo, &["commit", "-q", "--allow-empty", "-m", "Mine one"]);
+    git(repo, &["commit", "-q", "--allow-empty", "-m", "Mine two"]);
+    let state = flow
+        .manager
+        .project_source_state(&project_id)
+        .await
+        .unwrap();
+    assert_eq!((state.ahead, state.behind), (2, 1));
     flow.stop().await;
 }

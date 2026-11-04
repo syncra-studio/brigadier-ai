@@ -2099,12 +2099,22 @@ impl Repo {
             )?)?,
             (None, None) => "0".to_owned(),
         };
+        let behind = match &upstream {
+            Some(upstream) => parse::line(&self.cmd(
+                &["rev-list", "--count", &format!("{tip}..{upstream}"), "--"],
+                true,
+            )?)?,
+            None => "0".to_owned(),
+        };
+        let count = |text: String| {
+            text.parse()
+                .map_err(|_| Error::Parse("invalid commit count".into()))
+        };
         Ok(RemoteState {
             remote,
             upstream,
-            ahead: ahead
-                .parse()
-                .map_err(|_| Error::Parse("invalid commit count".into()))?,
+            ahead: count(ahead)?,
+            behind: count(behind)?,
         })
     }
 

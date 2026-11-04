@@ -21,6 +21,10 @@ remote: string | null, upstream: string | null,
  */
 ahead: number, 
 /**
+ * Commits on its upstream not pulled yet, as last fetched.
+ */
+behind: number, 
+/**
  * The index against HEAD, sorted by path.
  */
 staged: Array<SourceFile>, 

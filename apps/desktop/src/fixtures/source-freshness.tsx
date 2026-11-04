@@ -25,7 +25,7 @@ import { openWorkspacePane, setWorkspacePaneOpen } from "@/state/workspacePane";
 const id = "freshness-session";
 const draft = new URLSearchParams(location.search).has("draft");
 const file = (path: string): SourceFile => ({ path, status: "modified", oldPath: null });
-let source: SourceState = { branch: "source-tab", remote: null, upstream: null, ahead: 0, staged: [], changes: draft ? [] : [file("a.ts"), file("b.ts"), file("c.ts")], merging: null, rebasing: null };
+let source: SourceState = { branch: "source-tab", remote: null, upstream: null, ahead: 0, behind: 0, staged: [], changes: draft ? [] : [file("a.ts"), file("b.ts"), file("c.ts")], merging: null, rebasing: null };
 let insertions = 380;
 const reads = { source: 0, diff: 0 };
 /** How long each coming diff read takes to answer, in order; then at once. */

@@ -1,4 +1,4 @@
-import type { CommitHow, Picking } from "@/app/side-panel/sourceTarget";
+import { type CommitHow, type Picking, setStageAll, useStageAll } from "@/app/side-panel/sourceTarget";
 import { DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "@/components/overlays";
 import type { SourceState } from "@/ipc/generated";
 
@@ -37,6 +37,7 @@ export function SourceMoreMenu({
   onDropStash: () => void;
   onShowGitOutput: () => void;
 }) {
+  const stageAll = useStageAll((s) => s.choice);
   return (
     <DropdownMenuContent align="end">
       <DropdownMenuItem onSelect={onPull}>Pull</DropdownMenuItem>
@@ -132,6 +133,8 @@ export function SourceMoreMenu({
         </DropdownMenuSubContent>
       </DropdownMenuSub>
       <DropdownMenuSeparator />
+      {/* The way back from "Always" or "Never" in Commit's prompt; only then is there one. */}
+      {stageAll !== "ask" && <DropdownMenuItem onSelect={() => setStageAll("ask")}>Ask Before Staging All on Commit</DropdownMenuItem>}
       <DropdownMenuItem onSelect={onShowGitOutput}>Show Git Output</DropdownMenuItem>
     </DropdownMenuContent>
   );
