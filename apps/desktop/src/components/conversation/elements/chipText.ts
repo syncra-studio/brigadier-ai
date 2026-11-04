@@ -54,6 +54,11 @@ export function pastedTextLabel(n: number | null): string {
   return n === null ? "Pasted text" : `Pasted text #${n}`;
 }
 
+/** What the read-only reader calls what it shows: a pasted text as above, an attached file by its own name. */
+export function readerTitle(n: number | null, paste: { name: string; pasted: boolean } | null): string {
+  return paste && !paste.pasted ? paste.name : pastedTextLabel(n);
+}
+
 /** The chip for text `n` pasted into the text, which stands for `[Pasted text #n]`. */
 export function pasteChip(n: number): Unstable_TriggerItem {
   return { id: `${PASTE_CHIP}:${n}`, type: PASTE_CHIP, label: pastedTextLabel(n) };

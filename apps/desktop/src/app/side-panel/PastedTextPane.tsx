@@ -1,4 +1,4 @@
-import { pastedTextLabel, PastedTextView } from "@/components/conversation";
+import { PastedTextView, readerTitle } from "@/components/conversation";
 import { FileDocument, X } from "@/components/icons";
 import type { AttachmentRef } from "@/ipc/generated";
 
@@ -15,7 +15,7 @@ export function PastedTextPane({
   paste: AttachmentRef | null;
   onClose: () => void;
 }) {
-  const label = pastedTextLabel(n);
+  const label = readerTitle(n, paste);
   return (
     <div role="region" aria-label={label} data-slot="pasted-text-pane" className="bg-background absolute inset-0 flex flex-col">
       <div className="flex shrink-0 items-center px-2 pt-1.5">

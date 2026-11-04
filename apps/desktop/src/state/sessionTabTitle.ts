@@ -1,4 +1,4 @@
-import { pastedTextLabel } from "@/components/conversation/elements/chipText";
+import { readerTitle } from "@/components/conversation/elements/chipText";
 import { type SessionTab, sideChatName } from "@/state/sessionTabs";
 
 function baseName(path: string): string {
@@ -25,7 +25,7 @@ export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "page") return tab.title || "Untitled page";
   if (tab.kind === "mockup") return "Mockup";
   if (tab.kind === "panel") return tab.title;
-  if (tab.kind === "pasted") return pastedTextLabel(tab.n);
+  if (tab.kind === "pasted") return readerTitle(tab.n, tab.paste);
   if (tab.kind === "conflict") {
     return tab.view === "compare" ? `${baseName(tab.path)}: Current Changes ↔ Incoming Changes`
       : tab.view === "merge" ? `Merging: ${baseName(tab.path)}` : baseName(tab.path);
