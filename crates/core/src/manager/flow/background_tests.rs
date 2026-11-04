@@ -273,7 +273,7 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
                     duration_ms: None,
                     kept: None,
                 };
-                let terminal = ProviderEvent::BackgroundTask {
+                let terminal = |status| ProviderEvent::BackgroundTask {
                     task: BackgroundTask {
                         command: None,
                         provider: None,
@@ -281,7 +281,7 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
                         item_id: Some("cmd-1".into()),
                         kind: BackgroundTaskKind::Terminal,
                         label: "brigadier ask".into(),
-                        status: BackgroundTaskStatus::Running,
+                        status,
                         started_at_ms: 1,
                         ended_at_ms: None,
                         output_file: None,
@@ -289,9 +289,11 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
                         last_line: None,
                     },
                 };
+                // As the provider sends them: a terminal's end just before its command's.
                 for event in [
                     command(ItemStatus::InProgress, None, None),
-                    terminal,
+                    terminal(BackgroundTaskStatus::Running),
+                    terminal(BackgroundTaskStatus::Completed),
                     command(
                         ItemStatus::Completed,
                         Some(0),

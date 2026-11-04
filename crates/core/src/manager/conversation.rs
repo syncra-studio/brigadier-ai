@@ -4795,11 +4795,14 @@ impl SessionManager {
                 return;
             }
             let words = state.command_words.remove(item);
+            let terminals = state.terminals.len();
+            state.terminals.retain(|_, of| of != item);
+            let in_background = state.terminals.len() < terminals;
             if !state.lingering.contains_key(item) {
                 state.persistent_commands.remove(item);
                 if let Some(words) = words
                     && state.busy
-                    && state.terminals.values().any(|of| of == item)
+                    && in_background
                 {
                     state
                         .unread_ends
@@ -4825,12 +4828,14 @@ impl SessionManager {
                 }
                 return;
             }
-            let Some(item) = state.terminals.remove(&task.id) else {
+            let Some(item) = state.terminals.get(&task.id).cloned() else {
                 return;
             };
+            // Its command's end comes next, and asks whether it ran in the background: kept.
             if !state.lingering.contains_key(&item) {
                 return;
             }
+            state.terminals.remove(&task.id);
             item
         };
         let (manager, conv) = (self.arc(), conv.clone());
