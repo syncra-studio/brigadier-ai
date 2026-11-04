@@ -1,5 +1,5 @@
 import { useAui, useAuiState } from "@/components/conversation";
-import { type FC, useContext, useEffect, useRef, useState } from "react";
+import { type FC, type RefObject, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
@@ -23,6 +23,36 @@ export function quoted(text: string): string {
   return text.trim().split("\n").map((line) => `> ${line}`.trimEnd()).join("\n");
 }
 
+/**
+ * What a quote says, however the composer's Markdown writes it: its text comes back with a marker
+ * per line, escapes and emphasis markers, and a line of its own for a blank between paragraphs.
+ */
+function quoteWords(text: string): string {
+  return text.replace(/[\s>\\*_~`\ue000-\uf8ff]/gu, "");
+}
+
+/** What all the quotes in the composer's Markdown say, one after the other. */
+function quotesIn(markdown: string): string {
+  return markdown.split("\n").filter((line) => line.startsWith(">")).map(quoteWords).join("");
+}
+
+/** Text added to the chat, marked in the answer, and what its quote says. */
+type Mark = { range: Range; words: string };
+
+/**
+ * The marks whose quote `quotes` (see `quotesIn`) no longer has. Each takes its own place in it,
+ * longest first: a quote inside a longer one, or the same one twice, needs a place of its own.
+ */
+function unquoted(marks: readonly Mark[], quotes: string): Mark[] {
+  let left = quotes;
+  return marks.toSorted((a, b) => b.words.length - a.words.length).filter(({ words }) => {
+    const at = words ? left.indexOf(words) : -1;
+    if (at < 0) return true;
+    left = `${left.slice(0, at)}\n${left.slice(at + words.length)}`;
+    return false;
+  });
+}
+
 /** The highlight registry, where the webview has one. */
 function annotations(): Highlight | null {
   if (typeof CSS === "undefined" || !("highlights" in CSS) || typeof Highlight === "undefined") return null;
@@ -32,6 +62,14 @@ function annotations(): Highlight | null {
     CSS.highlights.set(ANNOTATION, highlight);
   }
   return highlight;
+}
+
+/** Takes `gone` (all of them by default) off the page and out of `marks`; the colour goes with the window's last mark. */
+function unmark(marks: RefObject<Mark[]>, gone: readonly Mark[] = marks.current): void {
+  const highlight = annotations();
+  for (const { range } of gone) highlight?.delete(range);
+  marks.current = marks.current.filter((mark) => !gone.includes(mark));
+  if (!highlight?.size) showHighlight(ANNOTATION, false);
 }
 
 /**
@@ -49,9 +87,10 @@ type Shown = { range: Range; text: string; x: number; y: number };
 
 /**
  * Over text selected in one of the thread's answers, a pill: "Add to chat" quotes it into the
- * composer and keeps it marked in the answer; "Ask in side chat" (in a session) opens a side
- * chat to ask about it. It follows the selection, hides while the pointer is down, on a scroll
- * and once the selection goes, and never shows for the composer's own text.
+ * composer and marks it in the answer, until its quote leaves the composer (deleted, emptied or
+ * sent) or a click in the thread takes every mark off; "Ask in side chat" (in a session) opens a
+ * side chat to ask about it. It follows the selection, hides while the pointer is down, on a
+ * scroll and once the selection goes, and never shows for the composer's own text.
  */
 export const SelectionPill: FC = () => {
   const aui = useAui();
@@ -60,7 +99,9 @@ export const SelectionPill: FC = () => {
   const pill = useRef<HTMLDivElement>(null);
   const [shown, setShown] = useState<Shown | null>(null);
   const [width, setWidth] = useState(0);
-  const empty = useAuiState((s) => s.composer.text.trim() === "");
+  const quotes = useAuiState((s) => quotesIn(s.composer.text));
+  // This pill's own: a side-by-side chat's marks share the registry and stay.
+  const marks = useRef<Mark[]>([]);
 
   useEffect(() => {
     let frame = 0;
@@ -92,11 +133,20 @@ export const SelectionPill: FC = () => {
       down = false;
       read();
     };
+    // A click in the thread, outside the composer. Not a press: a drag selects what may be added
+    // next, and leaves a selection where a click leaves none.
+    const clicked = (event: MouseEvent) => {
+      const { target } = event;
+      const inThread = target instanceof Element && anchor.current?.closest(".aui-thread-root")?.contains(target);
+      if (!inThread || target.closest(".aui-composer-root") || !document.getSelection()?.isCollapsed) return;
+      unmark(marks);
+    };
     // A scroll outside the pill moves the text away from it.
     const scrolled = () => setShown(null);
     document.addEventListener("selectionchange", read);
     document.addEventListener("pointerdown", press, true);
     document.addEventListener("pointerup", release, true);
+    document.addEventListener("click", clicked, true);
     document.addEventListener("keyup", read, true);
     document.addEventListener("scroll", scrolled, true);
     return () => {
@@ -104,17 +154,17 @@ export const SelectionPill: FC = () => {
       document.removeEventListener("selectionchange", read);
       document.removeEventListener("pointerdown", press, true);
       document.removeEventListener("pointerup", release, true);
+      document.removeEventListener("click", clicked, true);
       document.removeEventListener("keyup", read, true);
       document.removeEventListener("scroll", scrolled, true);
+      unmark(marks);
     };
   }, []);
 
-  // Sent (the composer emptied): what it quoted is no longer marked.
+  // A quote gone from the composer (deleted, emptied, or sent with the rest): its mark goes too.
   useEffect(() => {
-    if (!empty) return;
-    annotations()?.clear();
-    showHighlight(ANNOTATION, false);
-  }, [empty]);
+    unmark(marks, unquoted(marks.current, quotes));
+  }, [quotes]);
 
   useEffect(() => {
     if (shown && pill.current) setWidth(pill.current.offsetWidth);
@@ -129,6 +179,7 @@ export const SelectionPill: FC = () => {
     const current = composer.getState().text;
     const quote = quoted(shown.text);
     composer.setText(current.trim() ? `${current.trimEnd()}\n\n${quote}\n\n` : `${quote}\n\n`);
+    marks.current.push({ range: shown.range, words: quoteWords(shown.text) });
     annotations()?.add(shown.range);
     showHighlight(ANNOTATION, true);
     document.getSelection()?.removeAllRanges();

@@ -205,10 +205,13 @@ test("messages that fail to load say so above the composer, and Retry loads them
   assert.ok(seen.after.rows > 0, `${seen.after.rows} messages after Retry`);
 });
 
-test("text selected in an answer gets a pill: Add to chat quotes it into the composer and keeps it marked; Ask in side chat opens one with it", { timeout: 120000 }, async (t) => {
+test("text selected in an answer gets a pill: Add to chat quotes it into the composer and marks it until its quote goes, a click in the thread or a send; Ask in side chat opens one with it", { timeout: 120000 }, async (t) => {
+  type Field = { marks: string[]; quotes: string[]; other: string[] };
   const seen = await drive<{
     pills: number; placed: { bottomGap: number; centre: number } | null; buttons: (string | null)[]; composer: string | null; focusedOwn: boolean; marked: number;
     afterAdd: { pill: boolean; collapsed: boolean | null }; sideChat: string[]; draft: string | null;
+    composerClick: Field; dragged: Field; twoAdded: Field; typed: Field; emptied: Field; blockGone: Field; deleted: Field;
+    threadClick: { before: Field; after: Field }; sent: { before: Field; after: Field; field: string | null };
   }>(t, "drive=select&kind=session");
   // 8px above the selection, centred on it.
   assert.ok(seen.placed && Math.abs(seen.placed.bottomGap - 8) <= 1 && Math.abs(seen.placed.centre) <= 1, JSON.stringify(seen.placed));
@@ -217,6 +220,29 @@ test("text selected in an answer gets a pill: Add to chat quotes it into the com
   assert.equal(seen.focusedOwn, true);
   assert.equal(seen.marked, 1);
   assert.deepEqual(seen.afterAdd, { pill: false, collapsed: true });
+  const rounding = "Rounding", tests = "The snak", asked = ["Is this right?"];
+  // A click in the composer, a drag selecting more and the pill's button clear no mark.
+  assert.deepEqual(seen.composerClick, { marks: [rounding], quotes: [rounding], other: [] });
+  assert.deepEqual(seen.dragged, { marks: [rounding], quotes: [rounding], other: [] });
+  assert.deepEqual(seen.twoAdded, { marks: [rounding, tests], quotes: [rounding, tests], other: [] });
+  // Typed text beside them has the field's Markdown read back: formatted words still match.
+  assert.deepEqual(seen.typed, { marks: [rounding, tests], quotes: [rounding, tests], other: asked });
+  // An emptied quote block counts as removed, and drops only its own mark.
+  assert.deepEqual(seen.emptied, { marks: [tests], quotes: ["", tests], other: asked });
+  assert.deepEqual(seen.blockGone, { marks: [tests], quotes: [tests], other: asked });
+  // The last quote deleted with other text left: the composer isn't empty, nothing is marked.
+  assert.deepEqual(seen.deleted, { marks: [], quotes: [], other: asked });
+  // A click in the thread takes every mark off and leaves the composer.
+  assert.deepEqual(seen.threadClick, {
+    before: { marks: [rounding, tests], quotes: [rounding, tests], other: asked },
+    after: { marks: [], quotes: [rounding, tests], other: asked },
+  });
+  // Sent: the composer empties and nothing is marked.
+  assert.deepEqual(seen.sent, {
+    before: { marks: [rounding], quotes: [rounding, tests, rounding], other: asked },
+    after: { marks: [], quotes: [], other: [] },
+    field: "",
+  });
   // One side chat of this session (its tab asks for it again as it opens).
   assert.equal(seen.pills, 1);
   assert.deepEqual([...new Set(seen.sideChat)], ["openSideChat work-blocks"]);
