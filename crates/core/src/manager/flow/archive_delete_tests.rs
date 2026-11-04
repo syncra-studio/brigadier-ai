@@ -159,7 +159,7 @@ async fn retention(delete_directly: bool) {
     let output_dir = PathBuf::from(&task.workspace.as_ref().unwrap().scratch).join("outputs");
     std::fs::create_dir_all(&output_dir).unwrap();
     std::fs::write(output_dir.join("deliverable.txt"), "worker deliverable").unwrap();
-    // Give the worker the same kind of snapshot namespace as the parent's Changes cards.
+    // Give the worker the same kind of snapshot namespace as the parent's turn snapshots.
     let worker_id = ConversationId(task.id.0.clone());
     let worker_refs = format!("refs/brigadier/s/{worker_id}/");
     git(

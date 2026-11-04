@@ -1418,11 +1418,11 @@ fn answered_beside(request: &Request) -> bool {
 }
 
 /// Reads of a checkout or a diff: git and the disk, a few hundred milliseconds each on a big
-/// repository, and the side panels and the Changes card ask for several on every change while
-/// a session works. In the connection's turn they held up a message sent meanwhile, a Stop and
-/// every event for seconds (#491). They are answered in turn with each other, so an older
-/// read's answer never comes after a newer one's, beside the connection's other requests;
-/// their git takes no locks, so a write beside them still goes.
+/// repository, and the side panels ask for several on every change while a session works. In
+/// the connection's turn they held up a message sent meanwhile, a Stop and every event for
+/// seconds (#491). They are answered in turn with each other, so an older read's answer never
+/// comes after a newer one's, beside the connection's other requests; their git takes no locks,
+/// so a write beside them still goes.
 fn read_beside(request: &Request) -> bool {
     matches!(
         request,
@@ -3245,9 +3245,9 @@ mod tests {
     }
 
     /// #491: a message sent while a session works showed nowhere for seconds. Its send waited
-    /// in the connection's turn behind the side panels' and the Changes card's reads of the
-    /// checkout (12 of them held a request 2.1 s on an idle Mac). Those reads go beside; the
-    /// send, a Stop and the queue's changes stay in turn.
+    /// in the connection's turn behind the side panels' reads of the checkout (12 of them held a
+    /// request 2.1 s on an idle Mac). Those reads go beside; the send, a Stop and the queue's
+    /// changes stay in turn.
     #[test]
     fn a_checkouts_reads_hold_up_no_send() {
         let id = || ConversationId("c1".into());

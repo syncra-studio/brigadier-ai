@@ -158,7 +158,7 @@ async fn the_session_diff_counts_commits_whose_sum_changes_nothing() {
 }
 
 /// A worktree session's diff counts what its worktree holds that its base lacks, uncommitted
-/// and new files too, as its Changes card does: `brigadier sessions` reads it (#552).
+/// and new files too: `brigadier sessions` reads it (#552).
 #[tokio::test]
 async fn the_session_diff_counts_uncommitted_work() {
     let (flow, _log) = session("merge-uncommitted").await;
