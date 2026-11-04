@@ -50,9 +50,13 @@ function NeedYouPill({ list, ids }: { list: RefObject<HTMLDivElement | null>; id
     element.addEventListener("scroll", measure, { passive: true });
     const resized = new ResizeObserver(measure);
     resized.observe(element);
+    // A send, pin or archive can move an amber row without changing its ID or the viewport.
+    const changed = new MutationObserver(measure);
+    changed.observe(element, { childList: true, subtree: true, characterData: true });
     return () => {
       element.removeEventListener("scroll", measure);
       resized.disconnect();
+      changed.disconnect();
     };
   }, [list, key]);
   const next = hidden.below[0] ?? hidden.above.at(-1);

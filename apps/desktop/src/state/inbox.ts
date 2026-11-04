@@ -17,7 +17,7 @@ export function sortTime(conversation: Conversation): number {
   return conversation.lastSentAtMs ?? conversation.createdAtMs;
 }
 
-/** Every listed row in its section and order; a fork stays under its source. */
+/** Every listed row in its section and order; Open includes forks in last-send order. */
 export function inboxLists(conversations: readonly Conversation[]): Inbox {
   const listed = conversations.filter((conversation) => !conversation.sideOf);
   const archived = listed.filter((conversation) => conversation.lifecycle === "archived");
@@ -28,13 +28,11 @@ export function inboxLists(conversations: readonly Conversation[]): Inbox {
         .filter((conversation) => conversation.pinnedAtMs !== null)
         .toSorted((a, b) => (b.pinnedAtMs ?? 0) - (a.pinnedAtMs ?? 0)),
     ),
-    open: forksUnderSources(
-      live
-        .filter((conversation) => conversation.pinnedAtMs === null)
-        .toSorted((a, b) => sortTime(b) - sortTime(a) || b.id.localeCompare(a.id)),
-    ),
-    // As Settings › Archived lists them.
-    archived: archived.toSorted((a, b) => b.updatedAtMs - a.updatedAtMs),
+    open: live
+      .filter((conversation) => conversation.pinnedAtMs === null)
+      .toSorted((a, b) => sortTime(b) - sortTime(a) || b.id.localeCompare(a.id)),
+    // A late finish or rename must not reorder archived rows either.
+    archived: archived.toSorted((a, b) => sortTime(b) - sortTime(a) || b.id.localeCompare(a.id)),
   };
 }
 

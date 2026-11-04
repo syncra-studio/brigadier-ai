@@ -11,7 +11,7 @@ type Seen = {
   archiveAction: { text: string; opacity: string };
   start: string[]; afterTurnStart: string[]; afterTurnEnd: string[]; afterRename: string[]; afterSend: string[];
   afterMerge: { order: string[]; action: string };
-  pill: string | null; outOfView: Record<string, boolean>; firstJump: boolean; secondJump: boolean;
+  failedStatus: string; pill: string | null; outOfView: Record<string, boolean>; firstJump: boolean; secondJump: boolean;
   archived: string[]; actionAfter: string | null;
   toggleInbox: string; toggleProjects: string; mode: string; saved: boolean;
   projectsSections: string[]; projectsPill: boolean; projectsAction: boolean; projectsLabels: number;
@@ -50,6 +50,7 @@ test("Inbox: Pinned, Open and a folded Archived; rows stay put through a turn an
 
   // The pill counts every amber row while one is out of view; each click brings the next one in.
   assert.deepEqual(seen.outOfView, { "rate-limit": true, flaky: true });
+  assert.equal(seen.failedStatus, "amber");
   assert.equal(seen.pill, "2 need you");
   assert.equal(seen.firstJump, true, "the next one down");
   assert.equal(seen.secondJump, true, "then the one after");
@@ -67,4 +68,23 @@ test("Inbox: Pinned, Open and a folded Archived; rows stay put through a turn an
   assert.equal(seen.projectsPill, false);
   assert.equal(seen.projectsAction, false);
   assert.equal(seen.projectsLabels, 0);
+});
+
+test("the attention pill follows layout changes even when the amber IDs do not change", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "inbox.html?drive=layout", "inbox-result", 45000));
+  assert.equal(seen.visibleBefore, true);
+  assert.equal(seen.pillBefore, null);
+  assert.equal(seen.visibleAfter, false);
+  assert.equal(seen.pillAfter, "1 needs you");
+  assert.equal(seen.jumped, true);
+});
+
+test("Settings pictures share the sidebar choice and the setting appears in search", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "inbox.html?drive=settings", "inbox-result", 45000));
+  assert.equal(seen.before, "Inbox");
+  assert.equal(seen.projects, "projects");
+  assert.equal(seen.inbox, "inbox");
+  assert.deepEqual(seen.writes, ["projects", "inbox"]);
+  assert.match(seen.searchResult, /Sidebar view/);
+  assert.equal(seen.selectedPage.page, "general");
 });

@@ -241,4 +241,53 @@ mod tests {
         assert_eq!(catalog().await.unwrap().len(), events);
         assert_eq!(sent(&reloaded, &talked), Some(100));
     }
+
+    #[tokio::test]
+    async fn a_long_history_falls_back_to_creation_instead_of_scanning_every_page() {
+        let (_dir, store) = store();
+        let id = ConversationId::generate();
+        old_chat(&store, &id).await;
+        old_message(&store, &id, "user", 100).await;
+        for at in 101..=201 {
+            old_message(&store, &id, "assistant", at).await;
+        }
+        let core = Core::load(store).await.unwrap();
+        assert_eq!(
+            sent(&core, &id),
+            Some(7),
+            "only a cheap recent page is read"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "manual large-store startup measurement"]
+    async fn measure_large_inbox_fill() {
+        let (_dir, store) = store();
+        for n in 0..200 {
+            let id = ConversationId(format!("large-{n}"));
+            old_chat(&store, &id).await;
+            let events = (0..2000)
+                .map(|m| {
+                    let event = serde_json::json!({"type": "messageAppended", "message": {
+                        "id": format!("m{m}"), "conversationId": id, "seq": 0,
+                        "role": "assistant", "text": "x".repeat(512), "blob": null,
+                        "createdAtMs": m
+                    }});
+                    NewEvent::new(streams::conversation(&id), "message.appended", m, &event)
+                        .unwrap()
+                })
+                .collect();
+            store.append(events).await.unwrap();
+        }
+        let started = std::time::Instant::now();
+        let core = Core::load(store.clone()).await.unwrap();
+        eprintln!(
+            "FIRST_LOAD_200_ROWS_400000_MESSAGES_MS={}",
+            started.elapsed().as_millis()
+        );
+        assert_eq!(core.catalog().conversations.len(), 200);
+        let started = std::time::Instant::now();
+        Core::load(store).await.unwrap();
+        eprintln!("SECOND_LOAD_MS={}", started.elapsed().as_millis());
+    }
 }
