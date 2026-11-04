@@ -550,3 +550,103 @@ async fn a_newer_daemon_is_left_running_and_the_app_says_to_update() {
     stop(bridge);
     daemon.cleanup();
 }
+
+/// An older daemon that agrees to quit and stays: the app keeps saying it is blocked, and how
+/// to clear it, through every later attempt, never falling back to a plain "disconnected".
+#[tokio::test]
+async fn the_app_stays_blocked_while_an_older_daemon_keeps_running() {
+    let daemon = OtherDaemon::start("lingers");
+    let launcher = Launcher::fake(daemon.platform.clone(), crate::launcher::Launched::running);
+    let bridge = bridge_for(&daemon, launcher, quick_waits());
+    // Every hello is answered as an older daemon that agrees to quit and is still running:
+    // this test's own process.
+    let lingering = async {
+        loop {
+            let mut old = daemon.next().await;
+            old.writer
+                .write(&ServerFrame::ProtocolMismatch {
+                    daemon: daemon_info(PROTOCOL_VERSION - 1, std::process::id()),
+                })
+                .await
+                .unwrap();
+            let Some((id, _)) = next_request(&mut old).await else {
+                continue;
+            };
+            old.writer
+                .write(&ServerFrame::Response {
+                    id,
+                    result: Outcome::Ok {
+                        value: Box::new(Response::Shutdown),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+    };
+    let watched = async {
+        let first = blocked_reason(&bridge).await;
+        // Several attempts: each waits 400 ms for the exit, then 200 ms.
+        let until = tokio::time::Instant::now() + Duration::from_millis(2_500);
+        while tokio::time::Instant::now() < until {
+            let status = bridge.inner.status.lock().unwrap().clone();
+            assert!(
+                matches!(&status, Some(BridgeEvent::Blocked { reason }) if *reason == first),
+                "no longer blocked: {status:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::select! {
+        () = watched => {}
+        () = lingering => unreachable!(),
+    }
+    stop(bridge);
+    daemon.cleanup();
+}
+
+/// A quit asked while an older daemon is being asked to quit launches no daemon after it.
+#[tokio::test]
+async fn a_quit_while_an_older_daemon_goes_launches_none() {
+    let daemon = OtherDaemon::start("quitting");
+    let launches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let launcher = Launcher::fake(daemon.platform.clone(), {
+        let launches = launches.clone();
+        move || {
+            launches.fetch_add(1, Ordering::AcqRel);
+            crate::launcher::Launched::running()
+        }
+    });
+    let bridge = bridge_for(&daemon, launcher, Waits::default());
+    let mut old = daemon.next().await;
+    old.writer
+        .write(&ServerFrame::ProtocolMismatch {
+            daemon: daemon_info(PROTOCOL_VERSION - 1, GONE_PID),
+        })
+        .await
+        .unwrap();
+    let (id, _) = next_request(&mut old).await.unwrap();
+    // The user quits while the older daemon drains.
+    let quitting = tokio::spawn({
+        let bridge = bridge.clone();
+        async move { bridge.shutdown_daemon(Duration::from_secs(5)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    old.writer
+        .write(&ServerFrame::Response {
+            id,
+            result: Outcome::Ok {
+                value: Box::new(Response::Shutdown),
+            },
+        })
+        .await
+        .unwrap();
+    drop(old);
+    assert!(!quitting.await.unwrap(), "no daemon of its own to stop");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        launches.load(Ordering::Acquire),
+        0,
+        "launched while quitting"
+    );
+    daemon.cleanup();
+}

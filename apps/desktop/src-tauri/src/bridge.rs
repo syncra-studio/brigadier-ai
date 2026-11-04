@@ -409,7 +409,9 @@ impl Bridge {
                 daemon,
                 last_seq,
             }) => return Ok((connection, daemon, last_seq)),
-            Ok(Hello::Mismatch { connection, daemon }) => self.replace(connection, daemon).await?,
+            Ok(Hello::Mismatch { connection, daemon }) => {
+                self.replace(connection, daemon, blocked).await?
+            }
             Err(brigadier_ipc::Error::Rejected) if blocked => {
                 return Err(Unreachable::Blocked(locked_out()));
             }
@@ -430,7 +432,7 @@ impl Bridge {
                     last_seq,
                 }) => return Ok((connection, daemon, last_seq)),
                 Ok(Hello::Mismatch { connection, daemon }) => {
-                    self.replace(connection, daemon).await?;
+                    self.replace(connection, daemon, blocked).await?;
                     return Err(Unreachable::Retry(
                         "an engine of another version quit; starting this one".into(),
                     ));
@@ -455,11 +457,14 @@ impl Bridge {
     /// A daemon of another protocol version answered the hello on `connection`. An older one
     /// (an update landed while it ran) is asked to quit as Quit asks, and waited for, both
     /// within [`Waits`]; once it is gone this app launches its own. A newer one is left
-    /// running: this app is out of date.
+    /// running: this app is out of date. `blocked`: the app already says it is blocked, which
+    /// this attempt leaves standing until it ends otherwise. A quit asked meanwhile launches
+    /// nothing after it.
     async fn replace(
         &self,
         mut connection: Connection,
         daemon: DaemonInfo,
+        blocked: bool,
     ) -> Result<(), Unreachable> {
         let DaemonInfo {
             version,
@@ -475,11 +480,13 @@ impl Bridge {
             )));
         }
         tracing::info!(pid, %version, protocol, "asking an older brigadierd to quit");
-        self.emit(BridgeEvent::Disconnected {
-            reason: format!(
-                "An older Brigadier engine (version {version}) is running; asking it to quit"
-            ),
-        });
+        if !blocked {
+            self.emit(BridgeEvent::Disconnected {
+                reason: format!(
+                    "An older Brigadier engine (version {version}) is running; asking it to quit"
+                ),
+            });
+        }
         let waits = self.inner.waits;
         let asked = async {
             connection
@@ -526,6 +533,9 @@ impl Bridge {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         tracing::info!(pid, "the older brigadierd quit");
+        if self.inner.stopping.load(Ordering::Acquire) {
+            return Err(Unreachable::Retry("Brigadier is quitting".into()));
+        }
         Ok(())
     }
 
