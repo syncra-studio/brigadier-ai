@@ -1,5 +1,6 @@
 import { createContext, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { gitCommandsKey } from "@/app/conversation/cliFacts";
 import { TooltipIconButton } from "@/components/controls";
 import { PaneViewTabs } from "@/app/side-panel/PaneViewTabs";
 import { FilesTab } from "@/app/side-panel/FilesTab";
@@ -14,9 +15,9 @@ import { browserFocus } from "@/ipc/client";
 import { CHAT_TAB, openFileTab, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
 import { useCheckoutChanges } from "@/state/board";
-import { useCliThread } from "@/state/cliThread";
+import { useCliThread, useThreadFact } from "@/state/cliThread";
 import { useApp } from "@/state/store";
-import { onWorkspaceChanged, prefetchWorkspace, readSource, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
+import { onWorkspaceChanged, prefetchWorkspace, readSource, refreshSource, uncommittedFiles, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
 
 
 export function useWorkspacePane(conversationId: string | null, projectId: string | null, enabled: boolean) {
@@ -50,21 +51,37 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     if (enabled && target) prefetchWorkspace(target);
   }, [enabled, target]);
   useEffect(prefetch, [prefetch, checkout]);
-  // How many files Source lists, for its icon and the toggle's dot. While the sidebar is closed
-  // nothing watches the checkout: what the board says changed it reads Source again.
+  // How many files Source lists, for its icon, the toggle's dot and the summary card. They follow
+  // the checkout whichever view shows, and with the sidebar closed.
   const source = useCachedEntry(checkout)?.source;
-  const moved = useCheckoutChanges(conversationId ?? "");
-  // A CLI turn that starts or ends may have changed it.
+  const landed = useCheckoutChanges(conversationId ?? "");
+  // A CLI turn that starts or ends, or a git command of its thread, may have changed it.
   const edited = useCliThread((s) => {
     const turns = conversationId ? s.views[conversationId]?.turns : undefined;
     return turns ? `${turns.length}:${turns.at(-1)?.end ?? ""}` : "";
   });
-  const closed = enabled && !open && target?.type === "conversation" ? target : null;
-  const reread = useCallback(() => {
-    if (closed) readSource(closed).catch(() => undefined);
-  }, [closed]);
-  useEffect(reread, [reread, moved, edited]);
-  const changed = useMemo(() => source ? new Set([...source.staged, ...source.changes].map((file) => file.path)).size : 0, [source]);
+  const git = useThreadFact(conversationId, gitCommandsKey);
+  const moves = `${landed}\n${edited}\n${git}`;
+  const reading = enabled ? target : null;
+  // Opening a checkout is the prefetch's read: only a move in the one already open reads here.
+  const lastMoves = useRef({ checkout, moves });
+  useEffect(() => {
+    const movedHere = lastMoves.current.checkout === checkout && lastMoves.current.moves !== moves;
+    lastMoves.current = { checkout, moves };
+    if (movedHere && reading) refreshSource(reading).catch(() => undefined);
+  }, [checkout, moves, reading]);
+  useEffect(() => {
+    if (!reading) return;
+    const read = () => { readSource(reading).catch(() => undefined); };
+    // What changed while the user was in another app, and what the watch or a view says changed.
+    window.addEventListener("focus", read);
+    const unsubscribe = onWorkspaceChanged(reading, read);
+    return () => {
+      window.removeEventListener("focus", read);
+      unsubscribe();
+    };
+  }, [reading]);
+  const changed = useMemo(() => uncommittedFiles(source), [source]);
   // While it shows, the daemon says when the checkout changes, so the views refresh in place.
   // A new connection forgets the old one's watch, so it is asked again after reconnecting.
   const connected = useApp((s) => s.connection.status === "connected");
@@ -76,10 +93,6 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     return () => watchWorkspace(null);
   }, [watching]);
   useEffect(watch, [watch, checkout]);
-  useEffect(() => {
-    if (!watching) return;
-    return onWorkspaceChanged(watching, () => { readSource(watching).catch(() => undefined); });
-  }, [watching]);
   const mac = useApp((s) => s.info?.platform === "macos");
   // A native browser page has its own first responder. DOM focus alone cannot take the
   // keyboard back from it when a menu key opens the sidebar's filter or focuses a view.
@@ -159,7 +172,7 @@ export function WorkspacePane() {
     };
   }, [open]);
   // It slides open and closed as the sidebar does, pushing the content aside. Its contents stay
-  // through the closing slide, then go, so a closed sidebar reads and refreshes nothing.
+  // through the closing slide, then go, so a closed sidebar's views read and refresh nothing.
   const column = useRef<HTMLElement>(null);
   const [shown, setShown] = useState(open);
   if (open && !shown) setShown(true);

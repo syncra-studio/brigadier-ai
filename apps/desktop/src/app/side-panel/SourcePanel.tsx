@@ -19,7 +19,7 @@ import {
 import { TooltipIconButton, Button } from "@/components/controls";
 import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/overlays";
 import { request } from "@/ipc/client";
-import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
+import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, refreshSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import type { SourceAction, SourceBranch, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -71,8 +71,8 @@ function useSourceState(target: SourceTarget) {
   const state = kept ?? (read?.key === key ? read.state : null);
   const [failure, setFailure] = useState<{ key: string; error: string } | null>(null);
   const changeKey = useCheckoutChanges(conversationId ?? "");
-  const load = useCallback(() => {
-    readSource(cacheTarget)
+  const show = useCallback((reading: Promise<SourceState>) => {
+    reading
       .then((next) => {
         if (workspaceKey(cacheTarget) !== key) return;
         setRead({ key, state: next });
@@ -81,6 +81,9 @@ function useSourceState(target: SourceTarget) {
       })
       .catch((error: unknown) => { if (workspaceKey(cacheTarget) === key) setFailure({ key, error: reason(error) }); });
   }, [cacheTarget, conversationId, key]);
+  const load = useCallback(() => show(readSource(cacheTarget)), [show, cacheTarget]);
+  // The checkout just moved (a commit, which returns no state; Refresh): no read under way will do.
+  const reload = useCallback(() => show(refreshSource(cacheTarget, key)), [show, cacheTarget, key]);
   // A landing, Undo or Reapply changes the checkout at once.
   useEffect(() => {
     if (changeKey) load();
@@ -102,7 +105,7 @@ function useSourceState(target: SourceTarget) {
     setFailure(null);
     if (conversationId) noteSourceState(conversationId, next);
   };
-  return { state, error: failure?.key === key ? failure.error : null, set, load, cacheTarget };
+  return { state, error: failure?.key === key ? failure.error : null, set, reload, cacheTarget };
 }
 
 type Discarding = { scope: SourceScope; files: SourceFile[] };
@@ -124,7 +127,7 @@ type Naming = { kind: "create"; from: string | null } | { kind: "rename" };
 
 /** `scopeSwitch`, under the title, switches a session's Source to one of its workers' changes. */
 export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; scopeSwitch?: ReactNode }) {
-  const { state, error, set, load, cacheTarget } = useSourceState(target);
+  const { state, error, set, reload, cacheTarget } = useSourceState(target);
   const conversationId = sessionOf(target);
   const readOnly = target.type === "project" && target.readOnly;
   const calls = sourceCalls(target);
@@ -324,7 +327,7 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
         readOnly={readOnly}
         locked={locked}
         onCommit={() => commitRef.current?.("commit")}
-        onRefresh={load}
+        onRefresh={reload}
         moreMenu={
           <SourceMoreMenu
             state={state}
@@ -392,7 +395,7 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
               staging={busy}
               commitRef={commitRef}
               onCommitting={setCommitting}
-              onCommitted={load}
+              onCommitted={reload}
               onSync={sync}
               onContinueRebase={continueRebase}
               onBranch={canCheckout ? () => pick("checkout") : null}

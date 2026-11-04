@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { Conversation, Environment, Project } from "@/ipc/generated";
-import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, readFiles, readSource, remembered, workspaceKey } from "./workspaceCache";
+import { cachedWorkspace, checkoutKey, emitWorkspaceChanged, keepSource, prefetchWorkspace, readFiles, readSource, remembered, workspaceKey } from "./workspaceCache";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { useApp } from "@/state/store";
@@ -161,3 +161,50 @@ for (const kind of ["files", "source"] as const) {
     }
   });
 }
+
+const sourceReply = (branch: string) => ({ method: "getSourceState", state: { ...source, branch } });
+const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("opening a target with a cached source still reads it again", async () => {
+  const asked: string[] = [];
+  mockIPC((_, payload) => {
+    const { method } = (payload as { request: { method: string } }).request;
+    asked.push(method);
+    return method === "getSourceState" ? sourceReply("fresh") : tree([]);
+  });
+  await readFiles(target);
+  keepSource(target, source);
+  asked.length = 0;
+  prefetchWorkspace(target);
+  await settled();
+  assert.deepEqual(asked, ["getSourceState"]);
+  assert.equal(cachedWorkspace(target)?.source?.branch, "fresh");
+});
+
+test("a read begun before a mutation can't publish over it, to the cache or to whoever holds its promise", async () => {
+  const replies: ((value: unknown) => void)[] = [];
+  mockIPC(() => new Promise((resolve) => { replies.push(resolve); }));
+  const held = readSource(target);
+  keepSource(target, { ...source, branch: "mutated" });
+  replies[0]!(sourceReply("old"));
+  await settled();
+  assert.equal(cachedWorkspace(target)?.source?.branch, "mutated", "the old answer isn't kept");
+  assert.equal(replies.length, 2, "it reads again, with no watcher event to ask for it");
+  replies[1]!(sourceReply("newer"));
+  assert.equal((await held).branch, "newer", "the holder never sees the old answer");
+  assert.equal(cachedWorkspace(target)?.source?.branch, "newer");
+});
+
+test("a read that fails after a mutation began reads again, and one that fails alone still fails", async () => {
+  const replies: { resolve: (value: unknown) => void; reject: (error: unknown) => void }[] = [];
+  mockIPC(() => new Promise((resolve, reject) => { replies.push({ resolve, reject }); }));
+  const held = readSource(target);
+  keepSource(target, { ...source, branch: "mutated" });
+  replies[0]!.reject(new Error("too early"));
+  await settled();
+  replies[1]!.resolve(sourceReply("newer"));
+  assert.equal((await held).branch, "newer");
+  const alone = readSource(target);
+  replies[2]!.reject(new Error("no checkout"));
+  await assert.rejects(alone, /no checkout/);
+});
