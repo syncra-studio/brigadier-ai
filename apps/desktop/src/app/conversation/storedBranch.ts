@@ -2,7 +2,7 @@ import type { BoardDigest, ThreadNode } from "@/app/conversation/blocks";
 import { cliThreadTree } from "@/app/conversation/cliBlocks";
 import type { Conversation, ThreadView } from "@/ipc/generated";
 import { loadConversation } from "@/state/actions";
-import { loadThreadView, useCliThread } from "@/state/cliThread";
+import { holdThreadView, loadThreadView, useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 
 /** A message on a thread's shown branch, as the thread reads it: its words, and for an answer its id. */
@@ -25,13 +25,21 @@ const EMPTY_DIGEST: BoardDigest = {
  */
 export async function storedBranch(conversation: Conversation): Promise<BranchMessage[]> {
   const id = conversation.id;
-  await Promise.all([
-    useApp.getState().threads[id] ? null : loadConversation(id),
-    useCliThread.getState().views[id] ? null : loadThreadView(id),
-  ]);
+  // Its thread is kept until both reads are in, however many others land meanwhile.
+  const letGo = holdThreadView(id);
+  let view: ThreadView;
+  try {
+    await Promise.all([
+      useApp.getState().threads[id] ? null : loadConversation(id),
+      useCliThread.getState().views[id] ? null : loadThreadView(id),
+    ]);
+    view = useCliThread.getState().views[id] ?? EMPTY_VIEW;
+  } finally {
+    letGo();
+  }
   const thread = useApp.getState().threads[id];
   const tree = cliThreadTree(
-    useCliThread.getState().views[id] ?? EMPTY_VIEW,
+    view,
     id,
     thread?.items ?? [],
     thread?.fullText ?? {},

@@ -557,15 +557,24 @@ export function useThreadView(conversationId: string | null): ThreadView | null 
   useEffect(() => {
     if (!conversationId) return;
     // Kept while it shows; last used when it stops showing.
-    const letGo = hold(onScreen, conversationId);
-    touch(used, conversationId);
+    const letGo = holdThreadView(conversationId);
     if (!useCliThread.getState().views[conversationId]) void loadThreadView(conversationId);
-    return () => {
-      touch(used, conversationId);
-      letGo();
-    };
+    return letGo;
   }, [conversationId]);
   return view;
+}
+
+/**
+ * Keeps session `conversationId`'s thread until the returned function lets it go, as one on
+ * screen is kept: while it shows, or while something that read it still uses it (#760).
+ */
+export function holdThreadView(conversationId: string): () => void {
+  const letGo = hold(onScreen, conversationId);
+  touch(used, conversationId);
+  return () => {
+    touch(used, conversationId);
+    letGo();
+  };
 }
 
 const NO_FILE_ENTRIES: readonly FileEntry[] = [];
@@ -625,6 +634,15 @@ export function useSubagentRow(conversationId: string | null, panel: string | nu
     const view = conversationId && of && of.owner !== conversationId ? s.views[of.owner] : undefined;
     return view && of ? subagentRow(conversationId!, of.owner, view, of.callId) : null;
   });
+  // A worker's subagent is found in that worker's thread: kept while its panel is open, its
+  // Details page too, and read again if it was dropped (#760).
+  const of = subagentPanelOf(panel);
+  const owner = conversationId && of && of.owner !== conversationId ? of.owner : null;
+  useHeldWorkerThread(owner);
+  const ownerRead = useWorkerThreads((s) => (owner ? !!s.views[owner] : true));
+  useEffect(() => {
+    if (owner && !ownerRead && conversationId) loadWorkerThread(conversationId, owner).catch(() => undefined);
+  }, [conversationId, owner, ownerRead]);
   return lead ?? worker;
 }
 

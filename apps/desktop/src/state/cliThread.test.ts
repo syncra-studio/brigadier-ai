@@ -7,6 +7,7 @@ import { turnCommands } from "@/app/conversation/turnCommands";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
 import {
   applyThreadNews,
+  holdThreadView,
   holdWorkerThread,
   KEPT_THREADS,
   KEPT_WORKER_THREADS,
@@ -646,6 +647,23 @@ test("a worker's read under way when its thread is dropped doesn't bring it back
     assert.deepEqual(Object.keys(useWorkerThreads.getState().views), ["wn-9"]);
   } finally {
     release?.();
+    clearMocks();
+  }
+});
+
+// Copy as Markdown reads a session's thread and its messages, then builds from both.
+test("a thread held by what read it stays however many others land meanwhile; let go, it can be dropped", async () => {
+  threadDaemon();
+  useCliThread.setState({ views: {} });
+  try {
+    const letGo = holdThreadView("copied");
+    await loadThreadView("copied");
+    for (let index = 0; index < 30; index++) await loadThreadView(`other-${index}`);
+    assert.ok(useCliThread.getState().views["copied"], "held, it stays");
+    letGo();
+    for (let index = 30; index < 30 + KEPT_THREADS; index++) await loadThreadView(`other-${index}`);
+    assert.equal(useCliThread.getState().views["copied"], undefined, "let go, the least recently used goes");
+  } finally {
     clearMocks();
   }
 });
