@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
-import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+
+import { applyActivityEvents, applyActivityNews, fromSnapshot, loadActivity, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
 import { applyToBoard, emptyBoard } from "@/state/board";
 import { rowMark, tabState } from "@/state/tabStates";
 import { turnState } from "@/app/conversation/cliBlocks";
@@ -241,4 +243,58 @@ test("a session put to sleep closes its turn and shows no spinner (D10)", () => 
   applyActivityEvents([on("c9", { type: "runStateChanged", conversationId: "c9", state: "hibernated" })]);
   assert.equal(useActivity.getState().byConversation.c9?.turnOpen, false);
   assert.deepEqual(row("c9"), { running: false, awaiting: null, workers: 0 });
+});
+
+/** The daemon's activity snapshots, each held until the test lets it answer (#758). */
+function heldSnapshots() {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const answers: ((activity: unknown[]) => void)[] = [];
+  mockIPC((_command, payload) => {
+    const { request } = payload as { request: { method: string } };
+    if (request.method !== "getActivity") throw new Error(`unexpected ${request.method}`);
+    return new Promise((resolve) => answers.push((activity) => resolve({ method: "getActivity", activity })));
+  });
+  return answers;
+}
+
+const snapshotOf = (conversationId: string, turnOpen: boolean, approvals: string[] = []) =>
+  ({ conversationId, run: "idle", turnOpen, tasks: [], approvals, questions: [], signIns: [] });
+
+const approval = (conversationId: string, id: string, pending: boolean) =>
+  on(conversationId, {
+    type: "approvalUpdated",
+    approval: { id, conversationId, taskId: null, subject: { type: "cli" }, state: pending ? { type: "pending" } : { type: "approved" } },
+  });
+
+test("a snapshot read while a turn ended doesn't bring its spinner back, nor an answered approval", async () => {
+  const answers = heldSnapshots();
+  try {
+    applyActivityNews({ conversationId: "late", entries: [], opened: true });
+    applyActivityEvents([approval("late", "a1", true)]);
+    const loading = loadActivity();
+    // The snapshot is taken before the turn ends and the approval is answered; it lands after.
+    applyActivityNews({ conversationId: "late", entries: [], ended: "done" });
+    applyActivityEvents([approval("late", "a1", false)]);
+    answers.shift()!([snapshotOf("late", true, ["a1"])]);
+    await loading;
+    assert.equal(useActivity.getState().byConversation.late?.turnOpen, false);
+    assert.deepEqual(row("late"), { running: false, awaiting: null, workers: 0 });
+  } finally {
+    clearMocks();
+  }
+});
+
+test("of two snapshot reads answering in reverse order, the newer one stands", async () => {
+  const answers = heldSnapshots();
+  try {
+    const older = loadActivity();
+    const newer = loadActivity();
+    answers[1]!([snapshotOf("reorder", false)]);
+    await newer;
+    answers[0]!([snapshotOf("reorder", true)]);
+    await older;
+    assert.equal(useActivity.getState().byConversation.reorder?.turnOpen, false);
+  } finally {
+    clearMocks();
+  }
 });
