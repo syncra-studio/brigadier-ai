@@ -515,6 +515,18 @@ fn death_line(why: &str) -> String {
     )
 }
 
+/// With no note, the ledger alone may be behind the work (a generation the limit killed
+/// mid-request): the user's latest message, `#at`, stays open until the work shows it done
+/// (#609).
+fn latest_open_line(at: usize, key: &str) -> String {
+    format!(
+        "With no note, the ledger may be behind the work: treat the user's latest message \
+         (#{at}, `brigadier brain read {key} {at} {at}`) as open, every request in it, until \
+         `git status`, `git log` and the transcript show each one done, and bring up what is \
+         left as open items."
+    )
+}
+
 /// What a successor's hand-off is made of.
 pub(crate) struct Boot<'a> {
     /// The seam.
@@ -543,6 +555,13 @@ pub(crate) struct Boot<'a> {
 /// for everything left out (§9.5 L2), but no ledger sections: the decisions and the rest are a
 /// `brigadier context` away like everything else (D13).
 pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
+    // No note: the user's latest message stays open whatever the ledger says (#609).
+    let latest_open = boot
+        .note
+        .is_none()
+        .then(|| boot.entries.iter().rposition(said_by_user))
+        .flatten()
+        .map(|at| latest_open_line(at, boot.key));
     if boot.tail.reason == Reason::Size {
         let mut out = format!(
             "{}\n{}\n",
@@ -561,6 +580,9 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
             }
         }
         out.push_str(&format!("\n{}\n", boot.check));
+        if let Some(line) = &latest_open {
+            out.push_str(&format!("{line}\n"));
+        }
         let mut out = out.replace(HANDOFF_END, QUOTED_END);
         out.push_str(&format!("\n{HANDOFF_END}"));
         return out;
@@ -660,6 +682,9 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         out.push('\n');
     }
     out.push_str(&format!("\n{}\n", boot.check));
+    if let Some(line) = &latest_open {
+        out.push_str(&format!("{line}\n"));
+    }
 
     // Every message of the user's, verbatim: the first and the latest always, the rest
     // newest first within the budget, shown oldest first.

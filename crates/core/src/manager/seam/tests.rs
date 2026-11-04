@@ -776,3 +776,34 @@ fn the_nudge_carries_the_open_items_and_rules_and_the_hand_off_its_workers() {
         format!("hand-off\n## Workers\nID    STATE\nab12  working\n\n{end}")
     );
 }
+
+/// A generation the limit killed mid-request wrote no note, and its ledger may never have opened
+/// the work: the hand-off keeps the user's latest message open rather than "no open items"
+/// (#609), on a move to another CLI and on the same CLI alike.
+#[test]
+fn a_death_without_a_note_keeps_the_users_latest_message_open() {
+    let entries = vec![
+        message("u0", Role::User, "Earlier, done."),
+        message("a0", Role::Assistant, "Done."),
+        message("u1", Role::User, "Six requests: one, two, three, four, five, six."),
+        message("a1", Role::Assistant, "Committing, then on to the approval-card lag."),
+    ];
+    let quota = TailBudget {
+        reason: Reason::Quota,
+        hot_tokens: Some(200_000),
+        target_window: Some(272_000),
+    };
+    let size = TailBudget {
+        reason: Reason::Size,
+        hot_tokens: None,
+        target_window: None,
+    };
+    let open = "treat the user's latest message (#2, `brigadier brain read abcd1234 2 2`) as open";
+    for tail in [quota, size] {
+        let text = boot_tail(&entries, None, Some("usage limit on Claude"), tail);
+        assert!(text.contains(open), "{text}");
+    }
+    // With a note, the note and the ledger's check say what is open.
+    let text = boot_tail(&entries, Some("Next: request four (L3)."), None, quota);
+    assert!(!text.contains("treat the user's latest message"), "{text}");
+}
