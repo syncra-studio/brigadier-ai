@@ -7,7 +7,7 @@ import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import type { MentionMemory } from "@/app/conversation/Mentions";
 import { markersIn } from "@/app/conversation/inlineImages";
 import type { AttachmentRef, Mention } from "@/ipc/generated";
-import { type DraftMention, loadDraft, saveDraft } from "@/state/drafts";
+import { type DraftMention, keepPulled, loadDraft, saveDraft } from "@/state/drafts";
 
 /** How long the composer rests before its draft is kept. */
 const DRAFT_SAVE_MS = 400;
@@ -110,6 +110,20 @@ function mentionsAt(text: string, entries: Iterable<[string, Mention]>): DraftMe
   return found.toSorted((a, b) => a.at - b.at);
 }
 
+/** What of the composer's state tells an emptied draft from one handed to a send. */
+export type ComposerHolding = { text: string; attachments: readonly unknown[]; submission?: unknown };
+
+/**
+ * Lets the queued message pulled out to edit into `scope`'s composer go once the user emptied
+ * it: its To: comes back no more, and another worker can be messaged (#720). A composer handed
+ * to a send still waiting for its uploads is empty too, but that send takes the slot (or brings
+ * it back with the message, refused): it stays.
+ */
+export function letPulledGo(scope: string, state: ComposerHolding): void {
+  if (state.text.trim() !== "" || state.attachments.length > 0 || state.submission !== undefined) return;
+  keepPulled(scope, null);
+}
+
 /**
  * Keeps the composer's draft for `scope` (see state/drafts): restores it when the composer
  * opens empty, and saves text, stored attachments and mentions once typing rests and when it
@@ -154,6 +168,7 @@ export function useComposerDraft(
   const keep = useCallback(() => {
     const state = aui.composer().getState();
     saveDraft(scope, state.text, attachments.draftRefs(state.text, state.attachments), mentionsAt(state.text, memory.entries()));
+    letPulledGo(scope, state);
   }, [aui, attachments, memory, scope]);
 
   // Once typing rests; an emptied composer (sent or cleared) lets the draft go at once.

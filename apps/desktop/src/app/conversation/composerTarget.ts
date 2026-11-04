@@ -4,33 +4,33 @@ import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import type { ResolvedDraft } from "@/app/conversation/draftSetup";
 import type { MentionMemory, MentionTarget } from "@/app/conversation/Mentions";
 import type { Conversation, Mention } from "@/ipc/generated";
+import { keepPulled, pulledOf, type PulledDraft } from "@/state/drafts";
 
 /**
  * Queued messages pulled into the composer to edit ("Edit message"), by conversation: the slot
  * each goes back to when sent, its mentions, and the worker it was for, if one. Taken by the
- * next send in that conversation; kept while the user is elsewhere, as the draft is.
+ * next send in that conversation; kept while the user is elsewhere and over a restart, as the
+ * draft is (state/drafts), and let go with the draft when the user empties it.
  */
 export class PulledSlot {
-  private slots = new Map<string, { index: number; mentions: Mention[]; worker: string | null }>();
-
   set(conversationId: string, index: number, mentions: Mention[], worker: string | null = null): void {
-    this.slots.set(conversationId, { index, mentions, worker });
+    keepPulled(conversationId, { index, mentions, worker });
   }
 
   /** The worker the pulled message was for, if one. */
   worker(conversationId: string | null): string | null {
-    return (conversationId !== null && this.slots.get(conversationId)?.worker) || null;
+    return (conversationId !== null && pulledOf(conversationId)?.worker) || null;
   }
 
   /** Whether a queued message of `conversationId` is pulled out to edit. */
   holds(conversationId: string | null): boolean {
-    return conversationId !== null && this.slots.has(conversationId);
+    return conversationId !== null && pulledOf(conversationId) !== null;
   }
 
-  take(conversationId: string | null): { index: number; mentions: Mention[]; worker: string | null } | null {
+  take(conversationId: string | null): PulledDraft | null {
     if (conversationId === null) return null;
-    const slot = this.slots.get(conversationId) ?? null;
-    this.slots.delete(conversationId);
+    const slot = pulledOf(conversationId);
+    keepPulled(conversationId, null);
     return slot;
   }
 }

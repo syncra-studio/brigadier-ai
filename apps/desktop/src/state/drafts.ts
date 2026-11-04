@@ -85,6 +85,7 @@ export function saveDraft(
   for (const [evicted, draft] of oldest) {
     delete drafts[evicted];
     if (draft.attachments.length > 0) pin(evicted, []);
+    keepPulled(evicted, null);
   }
   writeAll(drafts);
   if (!sameAttachments(before?.attachments ?? [], attachments)) pin(scope, attachments);
@@ -96,8 +97,45 @@ export function saveDraft(
  */
 export function forgetDraft(scope: string): void {
   gone.add(scope);
+  keepPulled(scope, null);
   const drafts = readAll();
   if (!(scope in drafts)) return;
   delete drafts[scope];
   writeAll(drafts);
+}
+
+/**
+ * A queued message pulled into the composer to edit ("Edit message"): the slot it goes back to
+ * when sent, its mentions, and the worker it was for, if one. Kept beside the draft that holds
+ * its words, so a restart brings back its To: and its place in the queue with them (#672, #673).
+ */
+export type PulledDraft = { index: number; mentions: Mention[]; worker: string | null };
+
+const PULLED_KEY = "brigadier.pulled";
+
+function readPulled(): Record<string, PulledDraft> {
+  try {
+    const stored = localStorage.getItem(PULLED_KEY);
+    return stored ? (JSON.parse(stored) as Record<string, PulledDraft>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The queued message pulled out to edit into `scope`'s draft, if one. */
+export function pulledOf(scope: string): PulledDraft | null {
+  return readPulled()[scope] ?? null;
+}
+
+/** Keeps (or, with null, lets go) the queued message pulled out to edit into `scope`'s draft. */
+export function keepPulled(scope: string, pulled: PulledDraft | null): void {
+  const all = readPulled();
+  if (pulled === null && !(scope in all)) return;
+  if (pulled === null) delete all[scope];
+  else all[scope] = pulled;
+  try {
+    localStorage.setItem(PULLED_KEY, JSON.stringify(all));
+  } catch {
+    // Storage can be full or unavailable; the slot just isn't kept, as a draft isn't.
+  }
 }

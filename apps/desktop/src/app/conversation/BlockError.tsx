@@ -12,7 +12,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ErrorState, useAui, useAuiState } from "@/components/conversation";
 import type { ThreadTurn, UserRequest } from "@/ipc/generated";
-import { continueOn, resume, send, updateSetup } from "@/state/actions";
+import { continueOn, regenerate, resume, send, updateSetup } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
 import { cliFacts } from "@/lib/providerKinds";
@@ -67,7 +67,9 @@ const TRY_AGAIN = "Try again.";
 /**
  * The block's error: one quiet line, the error's own words under Details, and Try again where it
  * can be: a Chat answers again; a session's last turn gets "Try again." sent as the user's
- * message, the way the composer sends it. An overnight run's turn has none: the run goes on.
+ * message, the way the composer sends it, unless its CLI never began it (its launch failed):
+ * then the request is answered again, so the user's own prompt stays and the retry is its turn
+ * (#660). An overnight run's turn has none: the run goes on.
  */
 export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boolean }> = ({ meta, live, quotaCovered = false }) => {
   const failed = useAuiState((s) => {
@@ -82,6 +84,10 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
   const latest = useAuiState((s) => s.message.isLast);
   const conversation = useViewConversation();
   const next = useCliThread((s) => (conversation ? s.views[conversation.id]?.nextModel ?? null : null));
+  // Its CLI's thread is read and has no turn of it: the CLI never began it.
+  const viewRead = useCliThread((s) => (conversation ? s.views[conversation.id] !== undefined : false));
+  const begun = useBlockTurn(meta, (turn) => turn !== undefined);
+  const neverBegun = viewRead && !begun;
   const groups = useModelGroups();
   const aui = useAui();
   const action = useAction();
@@ -105,6 +111,12 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
     if (!meta.session) return meta.rework ? () => aui.message().reload() : undefined;
     if (!latest || !conversation || conversation.lifecycle === "archived" || action.busy) return undefined;
     const to = conversation.id;
+    // Its launch failed: its own message goes again, once, as its request's turn (#660). "Try
+    // again." would join it as a message of its own, and its bubble would be the only one.
+    if (neverBegun && meta.rework) {
+      const request = meta.requestId;
+      return () => action.run(() => regenerate(to, request));
+    }
     return () => action.run(() => send({ text: TRY_AGAIN, attachments: [], mentions: [] }, undefined, { to }));
   })();
   // Its model declined it: one quiet line, and one click goes on with the next model the
