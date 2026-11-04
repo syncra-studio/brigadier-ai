@@ -22,6 +22,11 @@ pub struct ModelsOutput {
     /// The user's advice notes from the rules file: words to weigh when picking, never a rule.
     #[serde(default)]
     pub advice: Vec<String>,
+    /// Lines of the rules file that read as a rule but can't be one (an effort no level is),
+    /// each `line N: text`. They hold nothing; the other rules still do, and an explicit start or
+    /// model change is refused until the line is fixed.
+    #[serde(default)]
+    pub invalid_rules: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

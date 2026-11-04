@@ -71,7 +71,12 @@ impl SessionManager {
                     .map_err(|err| err.to_string())?;
                 choice
             }
-            None => self.successor_model(to)?,
+            None => {
+                // #762: a move asked for stops on a rules line that can't be read; an automatic
+                // move keeps going on the rules that can.
+                self.check_rules_file().map_err(|err| err.to_string())?;
+                self.successor_model(to)?
+            }
         };
         if file.phase != Phase::Live {
             return Err("its context is being handed over already: ask again once the new session has started".into());

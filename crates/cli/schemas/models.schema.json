@@ -259,6 +259,13 @@
       "items": {
         "type": "string"
       }
+    },
+    "invalidRules": {
+      "description": "Lines of the rules file that read as a rule but can't be one, each 'line N: text'. They hold nothing; the other rules still do, and an explicit start or model change is refused until the line is fixed.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

@@ -249,6 +249,8 @@ impl SessionManager {
         if caller.task_id.is_some() {
             return Ok(refused("refused: a worker can't start workers of its own"));
         }
+        // #762: a start the thread asks for stops on a rules line that can't be read, naming it.
+        self.check_rules_file()?;
         if let Some(agent) = start.agent
             && brigadier_providers::adapters::adapter(agent).is_none()
         {
@@ -1853,6 +1855,8 @@ impl SessionManager {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
+        // #762: a switch the thread asks for stops on a rules line that can't be read.
+        self.check_rules_file()?;
         if let Some(agent) = agent
             && brigadier_providers::adapters::adapter(agent).is_none()
         {
