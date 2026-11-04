@@ -31,6 +31,31 @@ function iconOf(origin: string): Promise<string | null> {
   return found;
 }
 
+/** A near-black mark on clear (`rgba`, its pixels; GitHub's), which the dark thread would hide. */
+export function darkMark(rgba: ArrayLike<number>): boolean {
+  let seen = false;
+  for (let at = 0; at < rgba.length; at += 4) {
+    if (rgba[at + 3]! < 40) continue;
+    if (Math.max(rgba[at]!, rgba[at + 1]!, rgba[at + 2]!) > 60) return false;
+    seen = true;
+  }
+  return seen;
+}
+
+/** Whether a loaded icon is a {@link darkMark}; one the browser won't let be read is left as it is. */
+export function imageIsDarkMark(image: HTMLImageElement): boolean {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 32;
+  const context = canvas.getContext("2d");
+  if (!context) return false;
+  try {
+    context.drawImage(image, 0, 0, 32, 32);
+    return darkMark(context.getImageData(0, 0, 32, 32).data);
+  } catch {
+    return false;
+  }
+}
+
 /** The site's icon as a `data:` URL, once known; `null` meanwhile and when it has none. */
 export function useSiteIcon(href: string | undefined): string | null {
   const origin = href ? httpsOrigin(href) : null;
