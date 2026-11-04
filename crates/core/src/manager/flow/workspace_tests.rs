@@ -412,8 +412,12 @@ async fn a_worktree_targets_discard_and_commit_stay_in_that_worktree() {
         user_worktree(&flow, "mine-one"),
         user_worktree(&flow, "mine-other"),
     );
-    let listed = flow.manager.user_worktrees(&project_id).await.unwrap();
-    assert_eq!(listed, [text(&one), text(&other)], "not {session:?}");
+    let mut listed = flow.manager.user_worktrees(&project_id).await.unwrap();
+    // Git lists by path, and these two sit in folders with random names.
+    listed.sort();
+    let mut expected = [text(&one), text(&other)];
+    expected.sort();
+    assert_eq!(listed, expected, "not {session:?}");
 
     for checkout in [&one, &other, &flow.repo] {
         std::fs::write(checkout.join("README.md"), "# Mine\n").unwrap();
