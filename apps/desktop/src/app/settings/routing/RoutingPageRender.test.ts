@@ -252,13 +252,28 @@ test("Use it on a role replaces that role's model, the other role is untouched",
   const opus = { agent: "claude", model: "opus", effort: "high", reason: "Rated 9.1 of 10 for this work." };
   const codex = { agent: "codex", model: "default", effort: "high", reason: "Mine." };
   const notes = { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." };
+  const fallback = { work: "fallback", agent: "codex", model: "gpt-6", effort: "low", reason: "Mine." };
   assert.deepEqual(seen.lines, [opusLine("Adversarial review"), opusLine("Fusion · Claude consult")]);
+  // A row written `fallback` is the shipped Fallback, in its place (#763), not a kind of its own.
+  assert.deepEqual(seen.kinds, [
+    "Architecture and broad changesAutomatic · Strong default for work that needs judgment across a codebase.Opus 5.5 · High",
+    "Bounded implementationAutomatic · The CLI default suits a well specified coding task.Codex's default · High",
+    "Mechanical changes and searchAutomatic · A smaller model fits a bounded task with clear checks.Sonnet 5.5 · Medium",
+    "Adversarial reviewYour order · A model from the other agent reviews the work",
+    "FusionYour order · Both consults answer at once, then their answers merge",
+    "Computer useAutomatic · Seeing and using apps on screen takes strong judgment.Opus 5.5 · High",
+    "FallbackYour order · The model a session runs on when it moves to the other agent",
+    "Conversation titlesAutomatic · A small model for short text; use available quota, cost tier and suitability among shipped title choices.GPT-6 Luna · Low",
+    "Rule readingAutomatic · Rewrites the rules you type into exact rules and advice.Sonnet 5.5 · Medium",
+    "Release notesYour order · GPT-6GPT-6 · Low",
+  ]);
   assert.equal(seen.writesBefore, 0);
   assert.deepEqual(seen.afterReview, [
     { work: "Adversarial review", ...codex },
     { work: "Adversarial review", ...opus },
     { work: "fusion-claude", ...sonnet },
     { work: "fusion-codex", ...codex },
+    fallback,
     notes,
   ]);
   assert.deepEqual(seen.linesAfterReview, [opusLine("Fusion · Claude consult")]);
@@ -267,6 +282,7 @@ test("Use it on a role replaces that role's model, the other role is untouched",
     { work: "Adversarial review", ...opus },
     { work: "fusion-claude", ...opus },
     { work: "fusion-codex", ...codex },
+    fallback,
     notes,
   ]);
   assert.equal(seen.writes, 2);

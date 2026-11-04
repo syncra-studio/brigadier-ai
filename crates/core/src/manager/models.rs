@@ -116,7 +116,10 @@ fn guidance(shipped: Vec<GuidanceRow>, user: &str) -> Vec<Guidance> {
     let user = rows(user);
     let mut merged: Vec<Guidance> = Vec::new();
     for row in &shipped {
-        let mut mine = user.iter().filter(|mine| mine.work == row.work).peekable();
+        let mut mine = user
+            .iter()
+            .filter(|mine| same_work(&mine.work, &row.work))
+            .peekable();
         if mine.peek().is_none() {
             let source = if row.reason.starts_with(RATED_REASON) {
                 "ratings"
@@ -124,12 +127,12 @@ fn guidance(shipped: Vec<GuidanceRow>, user: &str) -> Vec<Guidance> {
                 "shipped"
             };
             merged.push(shown(row.clone(), source));
-        } else if !merged.iter().any(|old| old.work == row.work) {
+        } else if !merged.iter().any(|old| same_work(&old.work, &row.work)) {
             merged.extend(mine.map(|mine| shown(mine.clone(), "user")));
         }
     }
     for row in &user {
-        if !shipped.iter().any(|old| old.work == row.work) {
+        if !shipped.iter().any(|old| same_work(&old.work, &row.work)) {
             merged.push(shown(row.clone(), "user"));
         }
     }
@@ -1812,6 +1815,37 @@ mod tests {
             .unwrap();
         assert_eq!(row.model, "sonnet");
         assert_eq!(row.source, "user");
+    }
+    /// #763: a hand-written `fallback` is the shipped `Fallback`, whatever its letter case: the
+    /// user's order replaces the shipped rows in their place instead of landing after them.
+    #[test]
+    fn guidance_user_rows_replace_shipped_rows_whatever_the_case() {
+        let shipped = rows(GUIDANCE);
+        let user = "| fallback | codex | sol | | Mine. |\n| BOUNDED implementation | claude | sonnet | low | Mine. |\n";
+        let merged = guidance(shipped.clone(), user);
+        for work in [FALLBACK_WORK, "Bounded implementation"] {
+            let of: Vec<_> = merged
+                .iter()
+                .filter(|row| same_work(&row.work, work))
+                .collect();
+            assert_eq!(of.len(), 1, "{work}: only the user's row, {merged:#?}");
+            assert_eq!(of[0].source, "user");
+        }
+        // Each kind once, in the shipped order: neither user kind went to the end.
+        let kinds = |works: Vec<String>| {
+            works
+                .into_iter()
+                .fold(Vec::<String>::new(), |mut kinds, work| {
+                    if !kinds.iter().any(|kind| same_work(kind, &work)) {
+                        kinds.push(work.to_ascii_lowercase());
+                    }
+                    kinds
+                })
+        };
+        assert_eq!(
+            kinds(merged.into_iter().map(|row| row.work).collect()),
+            kinds(shipped.into_iter().map(|row| row.work).collect()),
+        );
     }
     #[test]
     fn the_old_review_name_reads_as_adversarial_review() {

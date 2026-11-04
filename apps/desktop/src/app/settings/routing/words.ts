@@ -41,13 +41,20 @@ export const ROUTED_KINDS: readonly TaskCategory[] = [
  */
 export type WorkRow = { work: string; rows: GuidanceRow[]; shipped: GuidanceRow[]; mine: GuidanceRow[] };
 
-/** The kinds of work: the shipped ones in order, each in force as the user's order if they set one; then the user's own kinds. */
+/** Whether two Work cells name the same kind of work, whatever their letter case (the daemon's `same_work`). */
+export const sameWork = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * The kinds of work: the shipped ones in order, each in force as the user's order if they set one
+ * (`fallback` is `Fallback`, named as shipped); then the user's own kinds.
+ */
 export function workRows(rules: ModelRules | null): WorkRow[] {
   if (!rules) return [];
-  const works = [...new Set([...rules.shipped, ...rules.rows].map((row) => row.work))];
+  const works: string[] = [];
+  for (const { work } of [...rules.shipped, ...rules.rows]) if (!works.some((kind) => sameWork(kind, work))) works.push(work);
   return works.map((work) => {
-    const shipped = rules.shipped.filter((row) => row.work === work);
-    const mine = rules.rows.filter((row) => row.work === work);
+    const shipped = rules.shipped.filter((row) => sameWork(row.work, work));
+    const mine = rules.rows.filter((row) => sameWork(row.work, work));
     return { work, rows: mine.length > 0 ? mine : shipped, shipped, mine };
   });
 }
@@ -61,9 +68,9 @@ export function automaticLine(row: WorkRow): string {
 
 /** The user's rows with `work`'s order replaced by `order`, in the place of its first row (a new kind's last; empty drops it). */
 export function withOrder(rows: readonly GuidanceRow[], work: string, order: readonly GuidanceRow[]): GuidanceRow[] {
-  const at = rows.findIndex((row) => row.work === work);
-  const rest = rows.filter((row) => row.work !== work);
-  const place = at < 0 ? rest.length : rows.slice(0, at).filter((row) => row.work !== work).length;
+  const at = rows.findIndex((row) => sameWork(row.work, work));
+  const rest = rows.filter((row) => !sameWork(row.work, work));
+  const place = at < 0 ? rest.length : rows.slice(0, at).filter((row) => !sameWork(row.work, work)).length;
   return [...rest.slice(0, place), ...order, ...rest.slice(place)];
 }
 
@@ -189,13 +196,13 @@ export function faded(model: MergedModel): boolean {
 
 /** The suggestions for a kind of work's rows of the user's: one for an order (a better-rated model than its first), one a role for a kind of roles (Fusion's under its consults' names). */
 export function suggestionsFor(rules: ModelRules, row: WorkRow): RoutingSuggestion[] {
-  return rules.suggestions.filter((suggestion) => row.mine.some((mine) => mine.work === suggestion.work));
+  return rules.suggestions.filter((suggestion) => row.mine.some((mine) => sameWork(mine.work, suggestion.work)));
 }
 
 /** The dismissed suggestions with `suggestion` added: hidden while its model rates what it rates now (one per kind and model). */
 export function withDismissed(dismissed: readonly DismissedSuggestion[], suggestion: RoutingSuggestion): DismissedSuggestion[] {
   const { work, row, score } = suggestion;
-  const same = (gone: DismissedSuggestion) => gone.work === work && gone.agent === row.agent && gone.model.toLowerCase() === row.model.toLowerCase();
+  const same = (gone: DismissedSuggestion) => sameWork(gone.work, work) && gone.agent === row.agent && gone.model.toLowerCase() === row.model.toLowerCase();
   return [...dismissed.filter((gone) => !same(gone)), { work, agent: row.agent, model: row.model, score }];
 }
 

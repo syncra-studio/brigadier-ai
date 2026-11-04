@@ -90,7 +90,7 @@ const file: { rows: GuidanceRow[]; rules: ModelRule[] } = {
     { type: "effortCeiling", effort: "high" },
   ],
 };
-/** ?drive=role-suggestions: your models for review and Fusion, each Claude role on Sonnet. */
+/** ?drive=role-suggestions: your models for review and Fusion, each Claude role on Sonnet; a Fallback row written in lower case. */
 const roleSuggestions = params.get("drive") === "role-suggestions";
 if (roleSuggestions) {
   file.rows = [
@@ -98,6 +98,7 @@ if (roleSuggestions) {
     { work: "Adversarial review", agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." },
     { work: "fusion-claude", agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." },
     { work: "fusion-codex", agent: "codex", model: "default", effort: "high", reason: "Mine." },
+    { work: "fallback", agent: "codex", model: "gpt-6", effort: "low", reason: "Mine." },
     { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." },
   ];
 }
@@ -301,6 +302,7 @@ function Fixture() {
       steps = [
         () => {
           seen.lines = all('[data-slot="routing-suggestion"]').map(text);
+          seen.kinds = kinds();
           seen.writesBefore = writes.length;
           button("Use it", roleSuggestionLine("Adversarial review") ?? document)?.click();
         },
