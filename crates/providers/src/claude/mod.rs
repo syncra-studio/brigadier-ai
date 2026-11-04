@@ -1715,6 +1715,7 @@ impl Provider for Claude {
                     ledger: Some(ledger.clone()),
                     sweep_dir: spec.sweep_dir.clone(),
                     keeps_detached: spec.keeps_detached,
+                    ..process::Options::default()
                 },
             )?;
             ledger

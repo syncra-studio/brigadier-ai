@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,6 +27,7 @@ use brigadier_sandbox::{Platform, SpawnSpec};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
 use crate::model::Artifact;
 use crate::record::{Direction, Recorder};
@@ -39,6 +41,10 @@ const STDERR_TAIL_LINES: usize = 40;
 const REAP_WAIT: Duration = Duration::from_secs(2);
 /// How often the tracker walks the CLI's process tree.
 const TRACK_EVERY: Duration = Duration::from_secs(1);
+/// How long one write to the CLI's stdin may take, waiting for the one before it included. Both
+/// CLIs read their input all along, so a write that takes longer meets a CLI that stopped
+/// reading: it is ended rather than left to hold Stop and close forever (#755).
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Process groups no CLI's folder sweep ends: the daemon's previews, which a worker starts in
 /// its own folder through Brigadier and which outlive its CLI. Group ids are system-wide, so one
@@ -78,12 +84,63 @@ pub struct CliProcess {
     started_at_ms: Option<f64>,
     platform: Arc<dyn Platform>,
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
+    write_timeout: Duration,
     exit: watch::Receiver<Option<Exit>>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     /// How many lines it has written to stderr.
     stderr_lines: watch::Receiver<u64>,
     recorder: Option<Arc<Recorder>>,
     tree: Arc<Tree>,
+    fault: Arc<Fault>,
+}
+
+/// Ends a CLI whose stdio protocol can no longer be trusted: a line to its stdin was cut short
+/// (#755), or it printed a line too long to read (#769). Its stderr tail says why, so the
+/// session's exit reports it, and its process tree is killed, which ends its stdout: the
+/// adapter's read loop then ends the session and whatever turn it ran.
+struct Fault {
+    private_logs: bool,
+    pid: u32,
+    platform: Arc<dyn Platform>,
+    exit: watch::Receiver<Option<Exit>>,
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    ended: AtomicBool,
+}
+
+impl Fault {
+    fn end(&self, reason: &str) {
+        if self.ended.swap(true, Ordering::AcqRel) || self.exit.borrow().is_some() {
+            return;
+        }
+        tracing::warn!(pid = self.pid, reason, "ending a cli whose stdio broke");
+        push_tail(
+            &self.stderr_tail,
+            format!("Brigadier ended the CLI: {reason}."),
+        );
+        if let Err(err) = self.platform.processes().kill_tree(self.pid) {
+            crate::logging::private_trace!(self.private_logs, warn, "could not kill the cli process tree"; pid = self.pid, error = %err);
+        }
+    }
+}
+
+/// Ends the CLI ([`Fault`]) when dropped armed: a write cut short by its time limit, or by its
+/// caller dropping it, may have sent part of a line, and the CLI reads the next one appended.
+struct Unfinished<'a>(Option<&'a Fault>);
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        if let Some(fault) = self.0.take() {
+            fault.end("a line to its input was cut short");
+        }
+    }
+}
+
+fn push_tail(tail: &Mutex<VecDeque<String>>, line: String) {
+    let mut tail = lock(tail);
+    if tail.len() == STDERR_TAIL_LINES {
+        tail.pop_front();
+    }
+    tail.push_back(line);
 }
 
 /// What else a spawned CLI process is wired to.
@@ -105,6 +162,9 @@ pub struct Options {
     /// What its commands leave running outlives it: nothing below it is tracked, recorded or
     /// ended but its own process group (S31).
     pub keeps_detached: bool,
+    /// How long one write to its stdin may take before the CLI is ended; `None` is
+    /// [`WRITE_TIMEOUT`].
+    pub write_timeout: Option<Duration>,
 }
 
 /// The processes seen below the CLI, by pid, with their start times.
@@ -219,6 +279,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
         ledger,
         sweep_dir,
         keeps_detached,
+        write_timeout,
     } = options;
     let private_logs = private_logs || ledger.as_ref().is_some_and(|ledger| ledger.private_logs());
     let mut command = tokio::process::Command::from(platform.processes().piped_command(spec));
@@ -262,12 +323,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
             } else {
                 tracing::debug!(pid, stderr = %line, "cli stderr");
             }
-            let mut tail = tail.lock().unwrap_or_else(|p| p.into_inner());
-            if tail.len() == STDERR_TAIL_LINES {
-                tail.pop_front();
-            }
-            tail.push_back(line);
-            drop(tail);
+            push_tail(&tail, line);
             stderr_count.send_modify(|count| *count += 1);
         }
     });
@@ -319,6 +375,14 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
         exit_tx.send_replace(Some(Exit { code, signal }));
     });
 
+    let fault = Arc::new(Fault {
+        private_logs,
+        pid,
+        platform: platform.clone(),
+        exit: exit.clone(),
+        stderr_tail: stderr_tail.clone(),
+        ended: AtomicBool::new(false),
+    });
     Ok(Spawned {
         process: Arc::new(CliProcess {
             private_logs,
@@ -326,11 +390,13 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
             started_at_ms,
             platform,
             stdin: tokio::sync::Mutex::new(stdin),
+            write_timeout: write_timeout.unwrap_or(WRITE_TIMEOUT),
             exit,
             stderr_tail,
             stderr_lines,
             recorder,
             tree,
+            fault,
         }),
         stdout: lines,
     })
@@ -353,22 +419,46 @@ impl CliProcess {
         self.exit.borrow().is_none()
     }
 
-    /// Writes one line (a newline is appended) to the CLI's stdin.
+    /// Writes one line (a newline is appended) to the CLI's stdin, within the write time limit
+    /// ([`Options::write_timeout`]), waiting for an earlier write included. A write that runs
+    /// out of time, or is dropped partway, ends the CLI ([`Fault`]): part of a line may be in the
+    /// pipe already, and the CLI would read the next line appended to it (#755).
     pub async fn write_line(&self, line: &str) -> Result<()> {
-        let mut stdin = self.stdin.lock().await;
+        let deadline = Instant::now() + self.write_timeout;
+        // An earlier write holds stdin; it ends the CLI if it outlasts its own limit, which
+        // comes before this one's.
+        let Ok(mut stdin) = tokio::time::timeout_at(deadline, self.stdin.lock()).await else {
+            return Err(Error::Timeout("the CLI to read its input"));
+        };
         let pipe = stdin.as_mut().ok_or(Error::Closed)?;
         let mut bytes = Vec::with_capacity(line.len() + 1);
         bytes.extend_from_slice(line.as_bytes());
         bytes.push(b'\n');
-        if let Err(err) = pipe.write_all(&bytes).await {
-            *stdin = None;
-            return Err(if err.kind() == std::io::ErrorKind::BrokenPipe {
-                Error::Closed
-            } else {
-                err.into()
-            });
+        let mut unfinished = Unfinished(Some(&self.fault));
+        let written = async {
+            pipe.write_all(&bytes).await?;
+            pipe.flush().await
+        };
+        let written = tokio::time::timeout_at(deadline, written).await;
+        match written {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                // The pipe broke: the CLI is gone or going, and reads nothing more.
+                unfinished.0 = None;
+                *stdin = None;
+                return Err(if err.kind() == std::io::ErrorKind::BrokenPipe {
+                    Error::Closed
+                } else {
+                    err.into()
+                });
+            }
+            Err(_) => {
+                *stdin = None;
+                drop(unfinished);
+                return Err(Error::Timeout("the CLI to read its input"));
+            }
         }
-        pipe.flush().await?;
+        unfinished.0 = None;
         if let Some(recorder) = &self.recorder {
             recorder.record(Direction::In, line);
         }
@@ -407,14 +497,18 @@ impl CliProcess {
 
     /// Ends the process: closes stdin (both CLIs exit on EOF), waits up to `grace`, then kills
     /// its process tree and waits for the reap. Every process it started ends with it (see the
-    /// module docs). Bounded by `grace` plus [`REAP_WAIT`].
+    /// module docs). Bounded by `grace` plus [`REAP_WAIT`]: a write the CLI doesn't read, which
+    /// holds stdin open, holds it no longer than `grace` (#755).
     pub async fn shutdown(&self, grace: Duration) -> Exit {
+        let deadline = Instant::now() + grace;
         // What runs right now, including what started since the last walk, is ended with it.
         if self.is_running() {
             self.tree.scan();
         }
-        self.stdin.lock().await.take();
-        if let Ok(exit) = tokio::time::timeout(grace, self.exited()).await {
+        if let Ok(mut stdin) = tokio::time::timeout_at(deadline, self.stdin.lock()).await {
+            stdin.take();
+        }
+        if let Ok(exit) = tokio::time::timeout_at(deadline, self.exited()).await {
             return exit;
         }
         tracing::info!(
@@ -522,13 +616,121 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CLI that runs for a minute and never reads its input.
+    fn deaf() -> SpawnSpec {
+        if cfg!(windows) {
+            SpawnSpec::new("ping").arg("-n").arg("60").arg("127.0.0.1")
+        } else {
+            SpawnSpec::new("sleep").arg("60")
+        }
+    }
+
+    fn scratch(name: &str) -> (PathBuf, Arc<dyn Platform>) {
+        let root = std::env::temp_dir().join(format!("brigadier-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        (root, platform)
+    }
+
+    /// More than any pipe buffer holds, as a pasted image is.
+    fn big_line() -> String {
+        "x".repeat(16 * 1024 * 1024)
+    }
+
+    /// #755: a write the CLI never reads holds stdin. Stop's interrupt, the next write, doesn't
+    /// queue behind it forever: both give up within the write limit, and the CLI is ended with
+    /// the reason in its stderr tail, with no shutdown asked for.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_write_the_cli_never_reads_ends_it_within_the_limit() {
+        let (root, platform) = scratch("deaf-write");
+        let Spawned {
+            process,
+            stdout: _stdout,
+        } = spawn(
+            platform,
+            &deaf(),
+            Options {
+                write_timeout: Some(Duration::from_millis(500)),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        let writer = tokio::spawn({
+            let process = process.clone();
+            async move { process.write_line(&big_line()).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let interrupt = tokio::time::timeout(
+            Duration::from_secs(20),
+            process.write_line(r#"{"type":"control_request","request":{"subtype":"interrupt"}}"#),
+        )
+        .await
+        .expect("the interrupt waited forever behind a write the CLI doesn't read");
+        assert!(interrupt.is_err(), "{interrupt:?}");
+        let written = tokio::time::timeout(Duration::from_secs(20), writer)
+            .await
+            .expect("the write the CLI doesn't read never gave up")
+            .unwrap();
+        assert!(matches!(written, Err(Error::Timeout(_))), "{written:?}");
+        tokio::time::timeout(Duration::from_secs(20), process.exited())
+            .await
+            .expect("the CLI was not ended");
+        let tail = process.stderr_tail().unwrap_or_default();
+        assert!(tail.contains("cut short"), "{tail}");
+        // Ended: what is written next fails at once.
+        assert!(matches!(process.write_line("{}").await, Err(Error::Closed)));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// #755: shutdown is bounded by its grace even while a write the CLI doesn't read holds
+    /// stdin (with a write limit longer than the grace).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shutdown_does_not_wait_for_a_stuck_write() {
+        let (root, platform) = scratch("deaf-shutdown");
+        let Spawned {
+            process,
+            stdout: _stdout,
+        } = spawn(
+            platform,
+            &deaf(),
+            Options {
+                write_timeout: Some(Duration::from_secs(300)),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        let writer = tokio::spawn({
+            let process = process.clone();
+            async move { process.write_line(&big_line()).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            process.shutdown(Duration::from_millis(500)),
+        )
+        .await
+        .expect("shutdown waited for the stuck write");
+        assert!(!process.is_running());
+        // The kill broke the pipe under the write.
+        let written = tokio::time::timeout(Duration::from_secs(20), writer)
+            .await
+            .expect("the write outlived the CLI")
+            .unwrap();
+        assert!(written.is_err(), "{written:?}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     /// Two CLIs started in one folder (a session's Claude workers share theirs): ending one
     /// ends only what runs in its own swept folder, never the other CLI. Sweeping the shared
     /// folder instead is exactly what killed the other workers at every landing.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn ending_a_cli_spares_another_in_the_same_folder() {
         let root = std::env::temp_dir().join(format!("brigadier-sweep-{}", uuid::Uuid::new_v4()));
@@ -580,6 +782,7 @@ mod tests {
 
     /// A spared group (a worker's preview, run by the daemon in the worker's folder) outlives
     /// the sweep of that folder when the worker's CLI ends; once no longer spared, it doesn't.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_folder_sweep_spares_a_spared_group() {
         let root = std::env::temp_dir().join(format!("brigadier-spare-{}", uuid::Uuid::new_v4()));

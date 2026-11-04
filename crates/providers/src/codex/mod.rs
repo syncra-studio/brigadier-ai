@@ -686,6 +686,7 @@ impl Codex {
                 ledger,
                 sweep_dir: session.and_then(|session| session.sweep_dir.clone()),
                 keeps_detached: session.is_some_and(|session| session.keeps_detached),
+                ..process::Options::default()
             },
         )?;
         Ok((Arc::new(Rpc::new(process)), stdout))
@@ -5317,5 +5318,140 @@ for line in sys.stdin:
             )
             .unwrap();
         }
+    }
+
+    /// A Codex app-server stand-in that prints `lines`, then runs a minute without reading its
+    /// input: a batch file on Windows, a shell script elsewhere.
+    fn deaf_app_server(dir: &Path, lines: &[String]) -> brigadier_sandbox::SpawnSpec {
+        if cfg!(windows) {
+            let path = dir.join("app-server.cmd");
+            let mut script = String::from("@echo off\r\n");
+            for line in lines {
+                script.push_str(&format!("echo {line}\r\n"));
+            }
+            script.push_str("ping -n 60 127.0.0.1 >nul\r\n");
+            std::fs::write(&path, script).unwrap();
+            brigadier_sandbox::SpawnSpec::new(&path)
+        } else {
+            let path = dir.join("app-server.sh");
+            let mut script = String::new();
+            for line in lines {
+                script.push_str(&format!("printf '%s\n' '{line}'\n"));
+            }
+            script.push_str("sleep 60\n");
+            std::fs::write(&path, script).unwrap();
+            brigadier_sandbox::SpawnSpec::new("sh").arg(path.display().to_string())
+        }
+    }
+
+    /// A session on `spec`'s process, its turn running once the process says so, and the
+    /// events it sends.
+    fn deaf_session(
+        scratch: &Path,
+        spec: &brigadier_sandbox::SpawnSpec,
+        options: process::Options,
+    ) -> (CodexSession, mpsc::Receiver<ProviderEvent>) {
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(scratch.join("data")),
+        })
+        .unwrap();
+        let process::Spawned { process, stdout } = process::spawn(platform, spec, options).unwrap();
+        let rpc = Arc::new(Rpc::new(process));
+        let (events_tx, events) = mpsc::channel(EVENTS);
+        let shared = Arc::new(Shared {
+            approvals: Mutex::new(HashMap::new()),
+            turn_id: Mutex::new(None),
+            commands: Mutex::default(),
+            terminals: Mutex::default(),
+            compact_asked: AtomicBool::new(false),
+            events: Events::new(events_tx, None),
+            thread: Mutex::new(Some("t".into())),
+            own_mcp: HashSet::new(),
+            mcp_listing: AtomicBool::new(false),
+            mcp_relist: Mutex::new(McpRelist::default()),
+        });
+        tokio::spawn(read_loop(
+            rpc.clone(),
+            stdout,
+            shared.clone(),
+            HashSet::new(),
+        ));
+        let session = CodexSession {
+            context_window: None,
+            thread_id: "t".into(),
+            ephemeral: true,
+            compacts: false,
+            rpc,
+            shared,
+            access: Access::Ask,
+            tools: ToolSet::Thread,
+            writable_roots: Vec::new(),
+            effort: None,
+            cwd: scratch.to_path_buf(),
+            model: "gpt-6.1-sol".into(),
+            thread_effort: None,
+            plan: Mutex::new(None),
+        };
+        (session, events)
+    }
+
+    const TURN_STARTED: &str = r#"{"method":"turn/started","params":{"threadId":"t","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#;
+
+    /// The stderr tail the session's exit reports, once it ends.
+    async fn exit_tail(events: &mut mpsc::Receiver<ProviderEvent>) -> String {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match events.recv().await {
+                    Some(ProviderEvent::Exited { stderr_tail, .. }) => {
+                        break stderr_tail.unwrap_or_default();
+                    }
+                    Some(_) => {}
+                    None => panic!("the events ended without an exit"),
+                }
+            }
+        })
+        .await
+        .expect("the session never ended")
+    }
+
+    /// #755: Stop alone recovers a session whose CLI stopped reading its input partway through
+    /// a message (a pasted image): the interrupt gives up within the write limit instead of
+    /// queuing forever behind that write, and the CLI is ended, which ends the session and its
+    /// turn. No shutdown is asked for.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stop_recovers_a_cli_that_stopped_reading_its_input() {
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-deaf-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let spec = deaf_app_server(&scratch, &[TURN_STARTED.to_owned()]);
+        let (session, mut events) = deaf_session(
+            &scratch,
+            &spec,
+            process::Options {
+                write_timeout: Some(Duration::from_millis(500)),
+                ..process::Options::default()
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while session.turn_id().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the turn never started");
+        let pasting = tokio::spawn({
+            let rpc = session.rpc.clone();
+            async move { rpc.process.write_line(&"x".repeat(16 << 20)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let stopped = tokio::time::timeout(Duration::from_secs(20), session.interrupt())
+            .await
+            .expect("Stop waited forever behind a write the CLI doesn't read");
+        assert!(stopped.is_err(), "{stopped:?}");
+        let tail = exit_tail(&mut events).await;
+        assert!(tail.contains("cut short"), "{tail}");
+        assert!(session.turn_id().is_none(), "the turn still runs");
+        assert!(pasting.await.unwrap().is_err());
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 }
