@@ -184,6 +184,17 @@ impl Runtime {
                 .await
                 .map_err(|err| Error::Invalid(format!("capturing the login environment: {err}")))?
         };
+        // A faked runtime's sessions read their compiler setup from their own folder, whatever
+        // launcher the shell running the tests has set.
+        #[cfg(test)]
+        let env =
+            if fakes.is_some() {
+                CliEnv::from_vars(env.vars().into_iter().filter(|(name, _)| {
+                    name != "RUSTC_WRAPPER" && name != "CARGO_BUILD_RUSTC_WRAPPER"
+                }))
+            } else {
+                env
+            };
         let env = Arc::new(env);
         choose_agent_paths(&env, &core.settings());
         let data_dir = platform.paths().data_dir.clone();

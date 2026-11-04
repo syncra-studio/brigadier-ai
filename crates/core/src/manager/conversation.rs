@@ -3013,6 +3013,7 @@ impl SessionManager {
             state.awaiting_start = true;
             state.transition_send_accepted = false;
             state.transition_turn_started = false;
+            state.seam.fix_sending();
         }
         if let Err(err) = cli.session.send(input).await {
             conv.state.lock().await.awaiting_start = false;
@@ -3024,7 +3025,11 @@ impl SessionManager {
                 .await;
             return;
         }
-        conv.state.lock().await.transition_send_accepted = true;
+        {
+            let mut state = conv.state.lock().await;
+            state.transition_send_accepted = true;
+            state.seam.fix_sent();
+        }
         self.confirm_provider_transition(&conv, &cli).await;
         if let Some(successor) = successor {
             self.seam_started(&conv, &cli, successor).await;
@@ -3053,6 +3058,9 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             state.busy = false;
             state.compacting = false;
+            if asked_note {
+                state.seam.fix_not_sent();
+            }
             let failed = state.request.take();
             // A cut-off turn going on by itself that never began reads interrupted again, with
             // Continue, which sends what this sent once more (D9 a).
@@ -4516,6 +4524,7 @@ impl SessionManager {
             // of those still running, in the request they served.
             let background = state.background.take_if(|jobs| jobs.of(&cli));
             state.unowned_turn = false;
+            state.seam.cli_gone();
             state.terminals.clear();
             let mut words: Vec<String> = std::mem::take(&mut state.lingering)
                 .into_values()
@@ -5238,6 +5247,7 @@ impl SessionManager {
                 };
                 let (started, nets) = {
                     let mut state = conv.state.lock().await;
+                    state.seam.turn_began();
                     state.landed = true;
                     // A cut-off turn going on by itself has begun: it ends as any turn does.
                     state.auto_resume = None;
@@ -5590,7 +5600,8 @@ impl SessionManager {
             state.busy = false;
             state.unowned_turn = false;
             state.compacting = false;
-            state.seam.quiet = false;
+            // A fix ask still on its way is the hand-off's own turn, as quiet as it was.
+            state.seam.quiet = state.seam.quiet && state.seam.fix_on_its_way();
             state.last_activity_ms = now_ms();
             state.replying_for.clear();
             let ended = match status {
@@ -5955,6 +5966,7 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             state.busy = false;
             state.awaiting_start = false;
+            state.seam.fix_not_sent();
             // Back in front, kept so under the inbox's lock.
             self.keep_carried(&conv.id, &envelopes).await;
             let mut inbox = envelopes;
@@ -7346,6 +7358,211 @@ mod tests {
             Some("it was still working a minute after a message came")
         );
         flow.stop().await;
+    }
+
+    /// When the end of a turn that isn't the fix ask's comes, in [`a_fix_ask_keeps_its_seam_open`].
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum StrayEnd {
+        /// The fix ask is taken and its send not yet asking the CLI.
+        BeforeSend,
+        /// The CLI took the fix ask and its turn hasn't started.
+        SendAccepted,
+        /// The fix ask's turn runs, and hasn't ended.
+        FixRunning,
+    }
+
+    /// Replays a nudge steered in just after a turn's last look for steers: it starts a turn of
+    /// its own, whose note is on disk when the earlier turn's end is handled. That arms the fix
+    /// ask, then the nudge turn ends with the ask on its way. Answers what went wrong.
+    async fn stray_end_while_a_fix_is_on_its_way(when: StrayEnd) -> Vec<String> {
+        use super::super::flow::{FakeBehavior, Flow, Options, Reply};
+        use super::super::seam::{Phase, SeamConfig, SeamFile, note_path, read_seam, write_seam};
+        use brigadier_providers::ProviderKind;
+
+        fn completed() -> ProviderEvent {
+            ProviderEvent::TurnCompleted {
+                turn_id: None,
+                status: TurnStatus::Completed,
+                duration_ms: None,
+                usage: None,
+            }
+        }
+        let started = || ProviderEvent::TurnStarted { turn_id: None };
+
+        let inputs = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let note: Arc<std::sync::Mutex<Option<std::path::PathBuf>>> = Arc::default();
+        let fix_reached = Arc::new(tokio::sync::Notify::new());
+        let fix_goes = Arc::new(tokio::sync::Notify::new());
+        let (seen, at, reached, goes) = (
+            inputs.clone(),
+            note.clone(),
+            fix_reached.clone(),
+            fix_goes.clone(),
+        );
+        let flow = Flow::start(
+            "seam-stray-end",
+            Options {
+                thread: ProviderKind::Codex,
+                behavior: Arc::new(FakeBehavior {
+                    take_in_steers: true,
+                    ..FakeBehavior::default()
+                }),
+                ..Options::default()
+            },
+            Arc::new(move |turn| {
+                let (seen, at, reached, goes) =
+                    (seen.clone(), at.clone(), reached.clone(), goes.clone());
+                Box::pin(async move {
+                    seen.lock().unwrap().push(turn.input.clone());
+                    if turn.input.contains("Hand-off check: your hand-off note at") {
+                        reached.notify_one();
+                        goes.notified().await;
+                        let path = at.lock().unwrap().clone().unwrap();
+                        let text = std::fs::read_to_string(&path).unwrap();
+                        std::fs::write(&path, format!("{text}\nCarrying L3 and L4.")).unwrap();
+                        return Reply::text("Fixed.");
+                    }
+                    Reply::text("Answered.")
+                })
+            }),
+        )
+        .await;
+        flow.say("Start.").await;
+        flow.settled().await;
+        *flow.manager.seam.lock().unwrap() = SeamConfig {
+            tokens: 60_000,
+            hold: Duration::from_secs(60),
+            long: None,
+            tokens_set: false,
+        };
+        let conv = flow.manager.conv(&flow.conversation).unwrap();
+        let cli = conv.live_cli().await.unwrap();
+        let record = flow.manager.session_dir(&conv.id).record();
+        std::fs::create_dir_all(&record).unwrap();
+        std::fs::write(
+            record.join("ledger.md"),
+            "- L3 · 11-01 21:02 · gen 1 · Open: question for the user, which port?\n\
+             - L4 · 11-01 21:03 · gen 1 · Open: promise to rerun the flaky test\n",
+        )
+        .unwrap();
+        let file = SeamFile {
+            phase: Phase::Nudged {
+                at_ms: now_ms(),
+                tokens: 70_000,
+                predecessor: Some(cli.session.native_id()),
+            },
+            ..SeamFile::default()
+        };
+        // The nudge's own turn wrote this, leaving the open items out.
+        let path = note_path(&record, file.generation);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "Doing now: growing.").unwrap();
+        *note.lock().unwrap() = Some(path);
+        write_seam(&record, &file).unwrap();
+        conv.state.lock().await.seam.held = true;
+
+        let send_reached = Arc::new(tokio::sync::Notify::new());
+        let send_goes = Arc::new(tokio::sync::Notify::new());
+        let hold = Some((send_reached.clone(), send_goes.clone()));
+        match when {
+            StrayEnd::BeforeSend => *flow.behavior.hold_send_entry.lock().unwrap() = hold,
+            StrayEnd::SendAccepted => *flow.behavior.hold_send.lock().unwrap() = hold,
+            StrayEnd::FixRunning => {}
+        }
+        let event = |event| flow.manager.on_conversation_event(&conv, &cli, event);
+        // The earlier turn, ended: its end arms the fix, and the next turn takes it.
+        event(started()).await;
+        if when == StrayEnd::FixRunning {
+            // The nudge's own turn was heard of first, and outlasts the fix's start.
+            event(started()).await;
+            event(completed()).await;
+            tokio::time::timeout(crate::test_patience(), fix_reached.notified())
+                .await
+                .expect("the fix ask's turn ran");
+            tokio::time::timeout(crate::test_patience(), async {
+                while !conv.state.lock().await.landed {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the fix ask's turn started");
+        } else {
+            event(completed()).await;
+            tokio::time::timeout(crate::test_patience(), send_reached.notified())
+                .await
+                .expect("the fix ask was on its way");
+            event(started()).await;
+        }
+        // The nudge's own turn ends. It isn't the one the fix ask started.
+        event(completed()).await;
+        let mut wrong = Vec::new();
+        if !matches!(read_seam(&record).phase, Phase::Nudged { .. }) {
+            wrong.push(format!(
+                "{when:?}: the seam closed with the fix ask on its way: {:?}",
+                read_seam(&record).phase
+            ));
+            // What closing it goes on to do, before the ask gets further.
+            tokio::time::timeout(crate::test_patience(), async {
+                loop {
+                    let retired = !conv
+                        .state
+                        .lock()
+                        .await
+                        .cli
+                        .as_ref()
+                        .is_some_and(|now| Arc::ptr_eq(now, &cli));
+                    if retired {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the closed seam retired its CLI");
+        }
+        send_goes.notify_one();
+        fix_goes.notify_one();
+        tokio::time::timeout(crate::test_patience(), async {
+            while read_seam(&record).generation != 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the successor started");
+        flow.settled().await;
+        let inputs = inputs.lock().unwrap().clone();
+        let fixes = inputs
+            .iter()
+            .filter(|input| input.contains("Hand-off check: your hand-off note at"))
+            .count();
+        if fixes != 1 {
+            wrong.push(format!("{when:?}: the CLI was asked to fix {fixes} times"));
+        }
+        let successor = inputs
+            .iter()
+            .find(|input| input.starts_with(crate::thread_view::HANDOFF_MARK));
+        if !successor.is_some_and(|start| start.contains("Carrying L3 and L4.")) {
+            wrong.push(format!(
+                "{when:?}: the successor started without the fixed note: {successor:?}"
+            ));
+        }
+        flow.stop().await;
+        wrong
+    }
+
+    /// Goal 13 (core-goals D9): the end of a turn that isn't the fix ask's never closes the seam
+    /// while the ask is on its way, or the CLI is retired before it hears the ask.
+    #[tokio::test]
+    async fn a_fix_ask_keeps_its_seam_open_until_its_own_turn_ends() {
+        let mut wrong = Vec::new();
+        for when in [
+            StrayEnd::BeforeSend,
+            StrayEnd::SendAccepted,
+            StrayEnd::FixRunning,
+        ] {
+            wrong.extend(stray_end_while_a_fix_is_on_its_way(when).await);
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     #[tokio::test]
