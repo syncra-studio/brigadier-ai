@@ -61,6 +61,24 @@ class Client:
                 return value["result"]
 
 
+def turn_outcome(turn):
+    """How an app-server turn ended (`turn/completed`'s `turn`): `done`, `stopped` or `failed`,
+    and its error text. Read as the app reads it (crates/providers/src/codex/parse.rs): a status a
+    newer Codex added is a failure only when it says why; `turn.error` is `{message,
+    codexErrorInfo, additionalDetails}`."""
+    status, error = turn.get("status"), turn.get("error")
+    if isinstance(error, dict):
+        text = " ".join(str(part) for part in (error.get("message"), error.get("additionalDetails")) if part)
+        text = text or json.dumps(error)
+    else:
+        text = str(error) if error else None
+    if status == "interrupted":
+        return "stopped", text
+    if status == "failed" or (status not in ("completed", "inProgress") and error):
+        return "failed", text
+    return "done", text
+
+
 def send(run, name, text, fault=None):
     run.tick()
     battery.log(name)
@@ -90,12 +108,10 @@ def send(run, name, text, fault=None):
         index += 1
         params = event.get("params") or {}
         if event.get("method") == "turn/completed" and (params.get("turn") or {}).get("id") == turn["id"]:
-            status = params["turn"]["status"]
-            step["settled"] = status == "completed"
-            step["outcome"] = {"completed": "done", "interrupted": "stopped"}.get(status, "failed")
-            error = params["turn"].get("error")
+            step["outcome"], error = turn_outcome(params["turn"])
+            step["settled"] = step["outcome"] == "done"
             if error:
-                step["error"] = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+                step["error"] = error
             break
     events = client.events[start:]
     answer = [event["params"]["item"]["text"] for event in events if event.get("method") == "item/completed"

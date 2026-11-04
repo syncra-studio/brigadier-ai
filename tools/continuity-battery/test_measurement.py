@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 # Before battery: it puts tools/bench, which has its own nightly.py, first on the path.
 import nightly
 import battery
+import codex_transport
 import plain
 from plain import PlainBattery
 import scoring
@@ -269,6 +270,56 @@ class MeasurementTests(unittest.TestCase):
                 statuses[arm] = {row["status"] for row in report["arms"] if row["block"] == "recall"}
         self.assertEqual(statuses, {"seam": {"incomplete"}, "plain": {"incomplete"},
                                     "zed": {"complete"}, "summary": {"skipped"}})
+
+    def test_a_codex_turn_end_reads_as_the_app_reads_it(self):
+        # A real app-server turn end (Codex 0.164), then the shapes the app's own parser reads
+        # (crates/providers/src/codex/parse.rs, a_newer_codexs_turn_completed_still_ends_the_turn).
+        lines = (FIXTURES / "versions/codex-0.164.0/lifecycle.jsonl").read_text().splitlines()
+        recorded = next(json.loads(json.loads(line)["line"]) for line in lines
+                        if '\\"method\\":\\"turn/completed\\"' in line)["params"]["turn"]
+        self.assertEqual(codex_transport.turn_outcome(recorded), ("done", None))
+        broke = {"message": "it broke", "codexErrorInfo": "badRequest"}
+        cases = [
+            ({"status": "completed", "error": None}, ("done", None)),
+            ({"status": "inProgress", "error": None}, ("done", None)),
+            ({"status": "interrupted", "error": None}, ("stopped", None)),
+            ({"status": "failed", "error": broke}, ("failed", "it broke")),
+            ({"status": "failed", "error": {"message": "Usage limit reached.", "additionalDetails": "resets at 5pm",
+                                            "codexErrorInfo": {"usageLimitExceeded": {}}}},
+             ("failed", "Usage limit reached. resets at 5pm")),
+            # A status a newer Codex added: failed only when it says why.
+            ({"status": "paused", "error": None}, ("done", None)),
+            ({"status": "cancelledByPolicy", "error": broke}, ("failed", "it broke")),
+        ]
+        for turn, want in cases:
+            with self.subTest(turn=turn):
+                self.assertEqual(codex_transport.turn_outcome(turn), want)
+
+    def test_a_failed_codex_turn_keeps_its_error_and_makes_the_cell_incomplete(self):
+        failed = {"id": "turn-1", "status": "failed", "error": {"message": LIMIT, "codexErrorInfo": "usageLimitExceeded"}}
+
+        class FakeClient:
+            deadline = 0
+
+            def __init__(self):
+                self.events = []
+
+            def call(self, method, params):
+                return {"turn": {"id": "turn-1", "status": "inProgress"}}
+
+            def next(self):
+                self.events += [{"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "partial"}}},
+                                {"method": "turn/completed", "params": {"threadId": "thread-1", "turn": failed}}]
+
+        run = SimpleNamespace(args=SimpleNamespace(turn_timeout=1), deadline=time.monotonic() + 30, native_id="thread-1",
+                              codex_client=FakeClient(), steps=[], errors=[], raw_events=[], native_sessions={},
+                              tick=Mock(), native_path=Mock(return_value=None))
+        step = codex_transport.send(run, "probe", "What were the facts?")
+        self.assertEqual((step["outcome"], step["settled"], step["error"]), ("failed", False, LIMIT))
+        self.assertEqual(run.errors, [f"cli: probe: Codex turn failed: {LIMIT}"])
+        result = {"steps": run.steps, "items": {}, "errors": run.errors}
+        self.assertEqual(scoring.exit_status(result), 2)
+        self.assertIn("incomplete: probe ended failed", result["errors"])
 
 
 if __name__ == "__main__":
