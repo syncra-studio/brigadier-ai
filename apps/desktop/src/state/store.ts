@@ -101,7 +101,8 @@ export function emptyDraft(projectId: string | null): DraftSetup {
 }
 
 export type ConnectionState = {
-  status: "connecting" | "connected" | "disconnected";
+  /** `blocked`: a core of another version runs and this app can't use it (`reason` says how to clear it). */
+  status: "connecting" | "connected" | "disconnected" | "blocked";
   daemon: DaemonInfo | null;
   reason: string | null;
 };

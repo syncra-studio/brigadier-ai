@@ -21,6 +21,7 @@ import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
 import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
 import { applyEvents, useApp } from "@/state/store";
+import { toast } from "@/state/toasts";
 import { startBrowserOptions } from "@/state/links";
 import { startMenuBar } from "@/state/menuBar";
 import { emitPageChanged } from "@/state/pageChanges";
@@ -129,6 +130,14 @@ function onBridgeEvent(message: BridgeEvent) {
           reason: message.reason,
         },
       }));
+      break;
+    case "blocked":
+      onDictationDisconnected();
+      useApp.setState((state) => ({
+        connection: { status: "blocked", daemon: state.connection.daemon, reason: message.reason },
+      }));
+      // The badge says it in a few words; this says what runs and how to clear it.
+      toast(message.reason, { tone: "error" });
       break;
     case "lagged":
       void resync().catch((error: unknown) => {

@@ -18,8 +18,8 @@ pub mod transport;
 
 pub use token::Token;
 pub use transport::{
-    Accepted, Connection, Listener, Pending, RawStream, Reader, Writer, connect, connect_blocking,
-    connect_to, encode_frame, read_frame_blocking,
+    Accepted, Connection, Hello, Listener, Pending, RawStream, Reader, Writer, connect,
+    connect_blocking, connect_to, encode_frame, hello, read_frame_blocking,
 };
 
 /// Largest frame accepted in either direction.
@@ -37,6 +37,14 @@ pub enum Error {
     Unauthorized(&'static str),
     #[error("protocol: {0}")]
     Protocol(&'static str),
+    /// The daemon closed the connection without answering the hello: a wrong token, or a
+    /// daemon from before [`protocol::ServerFrame::ProtocolMismatch`] speaking another
+    /// protocol version.
+    #[error("the daemon closed the connection without answering the hello")]
+    Rejected,
+    /// The daemon speaks another protocol version (`protocol` of its [`protocol::DaemonInfo`]).
+    #[error("the daemon (version {}) speaks protocol {}, this build {}", .0.version, .0.protocol, protocol::PROTOCOL_VERSION)]
+    ProtocolMismatch(Box<protocol::DaemonInfo>),
     #[error(transparent)]
     Platform(#[from] brigadier_sandbox::Error),
 }

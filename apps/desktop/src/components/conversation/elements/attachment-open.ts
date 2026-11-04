@@ -1,4 +1,5 @@
 import { openArtifact } from "@/ipc/client";
+import launchTypes from "@/lib/launchTypes.json" with { type: "json" };
 import type { AttachmentRef } from "@/ipc/generated";
 import { toast } from "@/state/toasts";
 
@@ -9,19 +10,12 @@ import { toast } from "@/state/toasts";
 /**
  * What the default app would run instead of showing, or can't be read as text: apps, installers,
  * compiled scripts and the links that start something. A blob is copied without an execute bit,
- * but these launch without one or ask to.
+ * but these launch without one or ask to. The shell refuses them too (`opening.rs`), from the same list.
  */
-const LAUNCHES = new Set([
-  "app", "command", "tool", "terminal", "workflow", "wflow", "action", "pkg", "mpkg", "dmg", "scpt", "scptd", "osascript", "osax",
-  "prefpane", "saver", "qlgenerator", "kext", "mobileconfig", "shortcut", "widget", "plugin", "bundle", "webloc", "inetloc", "fileloc", "jar", "pyc",
-  "exe", "com", "msi", "msix", "scr", "pif", "vbe", "jse", "wsf", "wsh", "hta", "lnk", "reg", "cpl", "url",
-  "appimage", "desktop", "run", "deb", "rpm",
-]);
+const LAUNCHES = new Set(launchTypes.launches);
 
 /** Source text that runs when launched: the reader shows it and never runs it, whatever its type says (browsers often give none). */
-const SCRIPTS = new Set([
-  "sh", "bash", "zsh", "csh", "tcsh", "ksh", "fish", "py", "pyw", "rb", "pl", "php", "lua", "tcl", "js", "mjs", "cjs", "ps1", "bat", "cmd", "vbs", "applescript",
-]);
+const SCRIPTS = new Set(launchTypes.scripts);
 
 function extensionOf(name: string): string {
   const bare = name.replace(/[.\s]+$/, "");

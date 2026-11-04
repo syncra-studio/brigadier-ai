@@ -2225,6 +2225,14 @@ pub enum ServerFrame {
         daemon: DaemonInfo,
         last_seq: i64,
     },
+    /// The answer to a hello with the right token but another protocol version: who this
+    /// daemon is, so an app of another version can tell it from a dead one. On that
+    /// connection the daemon then takes only [`Request::Shutdown`], acknowledged as for Quit,
+    /// so a newer app can ask an older daemon to quit (#771). Its shape, and the shutdown
+    /// request's, stay as they are in every later version.
+    ProtocolMismatch {
+        daemon: DaemonInfo,
+    },
     Response {
         id: u32,
         result: Outcome,

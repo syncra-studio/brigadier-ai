@@ -56,7 +56,6 @@ export function TopBar({
   children?: ReactNode;
 }) {
   const { project, title, lifecycle, session } = useTitle();
-  const connection = useApp((s) => s.connection.status);
 
   return (
     // In the titlebar strip, above the page surface. It starts clear of Back, Forward and the
@@ -68,15 +67,25 @@ export function TopBar({
     >
       <ThreadTitle project={project} title={title} session={session} archived={lifecycle === "archived"} onRename={onRename} />
 
-      {connection !== "connected" && (
-        <Badge variant="warning" role="status">
-          {connection === "connecting"
-            ? "Connecting to core…"
-            : "Reconnecting to core…"}
-        </Badge>
-      )}
+      <CoreBadge />
       {children}
     </header>
+  );
+}
+
+/**
+ * The core's connection while it isn't up: connecting, reconnecting, or blocked by a core of
+ * another version, whose reason (what runs and how to clear it) shows on hover.
+ */
+export function CoreBadge({ className }: { className?: string }) {
+  const { status, reason } = useApp(useShallow((s) => ({ status: s.connection.status, reason: s.connection.reason })));
+  if (status === "connected") return null;
+  const words =
+    status === "blocked" ? "Core of another version is running" : status === "connecting" ? "Connecting to core…" : "Reconnecting to core…";
+  return (
+    <Badge variant="warning" role="status" className={className} title={status === "blocked" ? (reason ?? undefined) : undefined}>
+      {words}
+    </Badge>
   );
 }
 

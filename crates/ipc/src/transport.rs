@@ -121,12 +121,20 @@ pub enum Accepted {
         grant: String,
         connection: Connection,
     },
+    /// A token holder speaking another protocol version (`protocol`): an app of another
+    /// version. The daemon answers with [`ServerFrame::ProtocolMismatch`] and takes nothing
+    /// but a shutdown on it, so the app is not left waiting on a daemon it can't reach.
+    Mismatched {
+        connection: Connection,
+        client: ClientInfo,
+        protocol: u32,
+    },
 }
 
 impl Pending {
-    /// Reads the first frame within [`AUTH_TIMEOUT`]. A hello must carry the token and the
-    /// protocol version; a hook's or a command's frame carries a grant the caller checks. Any
-    /// failure drops the connection without a reply.
+    /// Reads the first frame within [`AUTH_TIMEOUT`]. A hello must carry the token; one of
+    /// another protocol version is [`Accepted::Mismatched`]. A hook's or a command's frame
+    /// carries a grant the caller checks. Any failure drops the connection without a reply.
     ///
     /// The first frame is read unbuffered, so nothing the peer sent after it is lost when a
     /// hook's raw output follows it.
@@ -144,13 +152,17 @@ impl Pending {
                 if !token.matches(&presented) {
                     return Err(Error::Unauthorized("wrong token"));
                 }
-                if protocol != PROTOCOL_VERSION {
-                    return Err(Error::Unauthorized("unsupported protocol version"));
-                }
                 if peer_confined(&stream) {
                     return Err(Error::Unauthorized(
                         "a sandboxed process presented the token",
                     ));
+                }
+                if protocol != PROTOCOL_VERSION {
+                    return Ok(Accepted::Mismatched {
+                        connection: Connection::new(stream),
+                        client,
+                        protocol,
+                    });
                 }
                 Ok(Accepted::Client {
                     connection: Connection::new(stream),
@@ -273,6 +285,34 @@ pub async fn connect_to(
     paths: &AppPaths,
     client: ClientInfo,
 ) -> Result<(Connection, DaemonInfo, i64), Error> {
+    match hello(paths, client).await? {
+        Hello::Welcome {
+            connection,
+            daemon,
+            last_seq,
+        } => Ok((connection, daemon, last_seq)),
+        Hello::Mismatch { daemon, .. } => Err(Error::ProtocolMismatch(Box::new(daemon))),
+    }
+}
+
+/// How a daemon answered a hello.
+pub enum Hello {
+    /// It took this client: the connection is ready for requests.
+    Welcome {
+        connection: Connection,
+        daemon: DaemonInfo,
+        last_seq: i64,
+    },
+    /// It speaks another protocol version; the connection takes only a shutdown request.
+    Mismatch {
+        connection: Connection,
+        daemon: DaemonInfo,
+    },
+}
+
+/// Connects to the daemon of the data directory `paths` describes and says hello with its
+/// token. A daemon that closes without answering is [`Error::Rejected`].
+pub async fn hello(paths: &AppPaths, client: ClientInfo) -> Result<Hello, Error> {
     let token = Token::read(&paths.token_path)?;
     let stream = Stream::connect(endpoint_name(&paths.ipc_endpoint)?).await?;
     let mut connection = Connection::new(stream);
@@ -288,9 +328,16 @@ pub async fn connect_to(
         .await
         .map_err(|_| Error::Unauthorized("daemon did not answer the hello"))??;
     match welcome {
-        Some(ServerFrame::Welcome { daemon, last_seq }) => Ok((connection, daemon, last_seq)),
+        Some(ServerFrame::Welcome { daemon, last_seq }) => Ok(Hello::Welcome {
+            connection,
+            daemon,
+            last_seq,
+        }),
+        Some(ServerFrame::ProtocolMismatch { daemon }) => {
+            Ok(Hello::Mismatch { connection, daemon })
+        }
         Some(_) => Err(Error::Protocol("expected welcome")),
-        None => Err(Error::Unauthorized("daemon rejected the hello")),
+        None => Err(Error::Rejected),
     }
 }
 
@@ -325,5 +372,209 @@ fn remove_stale_socket(path: &std::path::Path) -> io::Result<()> {
         )),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brigadier_sandbox::PlatformOptions;
+
+    /// A data directory of its own, with a published token and a bound endpoint.
+    struct Daemon {
+        dir: std::path::PathBuf,
+        platform: std::sync::Arc<dyn Platform>,
+        token: Token,
+        listener: Listener,
+    }
+
+    impl Daemon {
+        fn start(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("win-issues-w10-ipc-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let platform = brigadier_sandbox::native(PlatformOptions {
+                data_dir: Some(dir.clone()),
+            })
+            .unwrap();
+            platform
+                .private_fs()
+                .create_private_dir(&platform.paths().run_dir)
+                .unwrap();
+            let token = Token::generate().unwrap();
+            token
+                .publish(&*platform, &platform.paths().token_path)
+                .unwrap();
+            let listener = Listener::bind(&*platform).unwrap();
+            Self {
+                dir,
+                platform,
+                token,
+                listener,
+            }
+        }
+
+        fn info(&self, protocol: u32) -> DaemonInfo {
+            DaemonInfo {
+                version: "0.0.1-old".into(),
+                protocol,
+                pid: 7,
+                platform: "test".into(),
+                started_at_ms: 0,
+                data_dir: self.dir.display().to_string(),
+            }
+        }
+    }
+
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+            if let Some(dir) = self.platform.paths().socket_dir() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    fn client() -> ClientInfo {
+        ClientInfo {
+            name: "test".into(),
+            pid: std::process::id(),
+        }
+    }
+
+    /// Says hello as an app of protocol `protocol` with `token`, and reads the answer.
+    async fn hello_as(paths: &AppPaths, token: &str, protocol: u32) -> Option<ServerFrame> {
+        let (paths, token) = (paths.clone(), token.to_owned());
+        tokio::task::spawn_blocking(move || {
+            let mut stream = connect_blocking(
+                &paths,
+                &ClientFrame::Hello {
+                    token,
+                    protocol,
+                    client: client(),
+                },
+            )
+            .unwrap();
+            read_frame_blocking::<ServerFrame>(&mut stream).unwrap_or(None)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// An app of another version that holds the token is told who the daemon is, not dropped
+    /// unanswered (#771); one without the token still gets nothing.
+    #[tokio::test]
+    async fn a_hello_of_another_protocol_with_the_token_is_answered() {
+        let daemon = Daemon::start("mismatch");
+        let paths = daemon.platform.paths().clone();
+        let newer = PROTOCOL_VERSION + 1;
+        let asking = tokio::spawn({
+            let (paths, token) = (paths.clone(), daemon.token.as_str().to_owned());
+            async move { hello_as(&paths, &token, newer).await }
+        });
+        let accepted = daemon
+            .listener
+            .accept()
+            .await
+            .unwrap()
+            .handshake(&daemon.token)
+            .await;
+        let Ok(Accepted::Mismatched {
+            mut connection,
+            protocol,
+            ..
+        }) = accepted
+        else {
+            panic!("a token holder of protocol {newer} was not told apart");
+        };
+        assert_eq!(protocol, newer);
+        let info = daemon.info(PROTOCOL_VERSION);
+        connection
+            .writer
+            .write(&ServerFrame::ProtocolMismatch {
+                daemon: info.clone(),
+            })
+            .await
+            .unwrap();
+        let Some(ServerFrame::ProtocolMismatch { daemon: told }) = asking.await.unwrap() else {
+            panic!("no answer");
+        };
+        assert_eq!(told, info);
+
+        let asking = tokio::spawn({
+            let paths = paths.clone();
+            async move { hello_as(&paths, "not the token", newer).await }
+        });
+        let accepted = daemon
+            .listener
+            .accept()
+            .await
+            .unwrap()
+            .handshake(&daemon.token)
+            .await;
+        assert!(matches!(accepted, Err(Error::Unauthorized("wrong token"))));
+        drop(accepted);
+        assert!(asking.await.unwrap().is_none());
+    }
+
+    /// The app hears a daemon of another protocol as such, and one that closes without a word
+    /// as rejected, never as a daemon that isn't there.
+    #[tokio::test]
+    async fn hello_tells_a_mismatch_and_a_silent_close_apart() {
+        let daemon = Daemon::start("hello");
+        let paths = daemon.platform.paths().clone();
+        let older = daemon.info(PROTOCOL_VERSION - 1);
+        let answering = tokio::spawn({
+            let paths = paths.clone();
+            async move { hello(&paths, client()).await }
+        });
+        // A daemon of this change's kind answers an app of another protocol.
+        let pending = daemon.listener.accept().await.unwrap();
+        let Ok(Accepted::Client { mut connection, .. }) = pending.handshake(&daemon.token).await
+        else {
+            panic!("expected the app's hello");
+        };
+        connection
+            .writer
+            .write(&ServerFrame::ProtocolMismatch {
+                daemon: older.clone(),
+            })
+            .await
+            .unwrap();
+        match answering.await.unwrap() {
+            Ok(Hello::Mismatch { daemon, .. }) => assert_eq!(daemon, older),
+            Ok(Hello::Welcome { .. }) => panic!("welcomed"),
+            Err(err) => panic!("{err}"),
+        }
+
+        let answering = tokio::spawn({
+            let paths = paths.clone();
+            async move { connect_to(&paths, client()).await.map(|_| ()) }
+        });
+        let pending = daemon.listener.accept().await.unwrap();
+        let Ok(Accepted::Client { mut connection, .. }) = pending.handshake(&daemon.token).await
+        else {
+            panic!("expected the app's hello");
+        };
+        connection
+            .writer
+            .write(&ServerFrame::ProtocolMismatch {
+                daemon: older.clone(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            answering.await.unwrap(),
+            Err(Error::ProtocolMismatch(daemon)) if *daemon == older
+        ));
+
+        // A daemon from before it drops the hello unanswered.
+        let answering = tokio::spawn({
+            let paths = paths.clone();
+            async move { hello(&paths, client()).await.map(|_| ()) }
+        });
+        let pending = daemon.listener.accept().await.unwrap();
+        drop(pending.handshake(&daemon.token).await);
+        assert!(matches!(answering.await.unwrap(), Err(Error::Rejected)));
     }
 }
