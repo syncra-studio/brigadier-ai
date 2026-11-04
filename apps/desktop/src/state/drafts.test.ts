@@ -6,7 +6,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { RequestOf } from "@/ipc/client";
 import type { AttachmentRef } from "@/ipc/generated";
 import { draftRefs } from "@/lib/inlineImages";
-import { loadDraft, NEW_CHAT_SCOPE, saveDraft } from "@/state/drafts";
+import { forgetDraft, loadDraft, NEW_CHAT_SCOPE, saveDraft } from "@/state/drafts";
 
 const image: AttachmentRef = { id: "image", name: "shot.png", mime: "image/png", bytes: 4, pasted: false, inline: 0 };
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -116,4 +116,97 @@ test("a refused direct message is kept whole apart with its worker, its #1 image
   assert.equal(heldDraft(held!.scope), null);
   assert.deepEqual(useHeldDirect.getState().held, []);
   assert.deepEqual(pins.at(-1), { method: "pinDraftAttachments", scope: held!.scope, attachments: [] });
+});
+
+/** Lets the composer's timers run. */
+const rest = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+test("a pulled worker draft keeps its slot, mentions and worker across a restart, until sent (issues 672, 673)", async () => {
+  const { PulledSlot } = await import("@/app/conversation/composerTarget");
+  const mentions = [{ type: "task", id: "task-live" } as const];
+  new PulledSlot().set("session", 1, [...mentions], "task-live");
+  saveDraft("session", "for the importer", [], []);
+  // The app starts again: only what was kept is known.
+  const restarted = new PulledSlot();
+  assert.equal(loadDraft("session")?.text, "for the importer");
+  assert.equal(restarted.worker("session"), "task-live");
+  assert.equal(restarted.holds("session"), true);
+  // The send takes it, back to its slot; nothing is left for the next one.
+  assert.deepEqual(restarted.take("session"), { index: 1, mentions, worker: "task-live" });
+  assert.equal(new PulledSlot().holds("session"), false);
+});
+
+test("emptying a pulled draft lets its slot and To: go; forgetting its conversation too (issue 720)", async () => {
+  const { PulledSlot } = await import("@/app/conversation/composerTarget");
+  const { letPulledGo } = await import("@/app/conversation/composerDraft");
+  const pulled = new PulledSlot();
+  pulled.set("session", 0, [], "task-live");
+  // Still words, or an attachment: it is still being edited.
+  letPulledGo("session", { text: "for the", attachments: [] });
+  letPulledGo("session", { text: "", attachments: [image] });
+  assert.equal(pulled.worker("session"), "task-live");
+  letPulledGo("session", { text: " \n", attachments: [] });
+  assert.equal(pulled.holds("session"), false);
+  assert.equal(pulled.worker("session"), null);
+  pulled.set("deleted", 2, [], null);
+  forgetDraft("deleted");
+  assert.equal(pulled.holds("deleted"), false);
+});
+
+test("a pulled message sent while its attachment still uploads keeps its slot for that send (issue 720)", async () => {
+  const { PulledSlot } = await import("@/app/conversation/composerTarget");
+  const { letPulledGo } = await import("@/app/conversation/composerDraft");
+  const pulled = new PulledSlot();
+  let upload!: () => void;
+  const uploaded = new Promise<void>((resolve) => { upload = resolve; });
+  const taken: (number | null)[] = [];
+  const runtime = new ExternalStoreRuntimeCore({
+    messages: [],
+    // The view's submit: a pulled message goes back to its slot.
+    onNew: async () => { taken.push(pulled.take("session")?.index ?? null); },
+    adapters: {
+      attachments: {
+        accept: "*",
+        add: async ({ file }) => ({ id: "upload", type: "file", name: file.name, contentType: file.type, file, status: { type: "requires-action", reason: "composer-send" } }),
+        remove: async () => {},
+        send: async (attachment) => {
+          await uploaded;
+          return { ...attachment, status: { type: "complete" }, content: [] };
+        },
+      },
+    },
+  });
+  const composer = runtime.threads.getMainThreadRuntimeCore().composer;
+  // The composer's draft keeping as `useComposerDraft` does it: once its text or attachments
+  // change, at once when they are gone.
+  const keep = () => {
+    saveDraft("session", composer.text, [], []);
+    letPulledGo("session", composer);
+  };
+  let held = "";
+  const unsubscribe = composer.subscribe(() => {
+    const now = `${composer.text}|${composer.attachments.map((attachment) => attachment.id).join()}`;
+    if (now === held) return;
+    held = now;
+    setTimeout(keep, 0);
+  });
+  try {
+    pulled.set("session", 1, [], null);
+    composer.setText("for the importer");
+    await composer.addAttachment(new File(["notes"], "notes.txt", { type: "text/plain" }));
+    const sending = composer.send();
+    await rest();
+    // Handed to the send, the composer is empty while the upload finishes, and was kept so.
+    assert.equal(composer.text, "");
+    assert.notEqual(composer.submission, undefined);
+    assert.equal(loadDraft("session"), null);
+    assert.equal(pulled.holds("session"), true);
+    upload();
+    await sending;
+    await rest();
+    assert.deepEqual(taken, [1]);
+    assert.equal(pulled.holds("session"), false);
+  } finally {
+    unsubscribe();
+  }
 });
