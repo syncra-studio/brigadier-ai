@@ -44,7 +44,7 @@ impl SessionManager {
     /// when they end, which the store counts ([`brigadier_store::Store::writes_admitted`]).
     pub async fn busy_for_maintenance(&self) -> Option<&'static str> {
         if self.agents_working().await {
-            return Some("a turn or a worker");
+            return Some("a turn, a worker or a background job");
         }
         if !self.brain_work().is_empty() {
             return Some("Brain work");

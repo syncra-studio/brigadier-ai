@@ -1,5 +1,5 @@
 //! The daemon quits on its own once nobody uses it: no app has been connected for
-//! [`IDLE_EXIT`] and nothing runs (no turn or worker, Brain job, index scan, download,
+//! [`IDLE_EXIT`] and nothing runs (no turn, worker or CLI background job, Brain job, index scan, download,
 //! terminal or dictation, and keeping awake isn't set to "Always"). The daemon keeps running
 //! when the window closes so that unattended work goes on (PLAN.md §3), but once that work is
 //! done and the app is gone (quit, or crashed), nothing would ever end it. An app that went
@@ -23,7 +23,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(60);
 pub async fn running(daemon: &Daemon) -> Vec<String> {
     let mut running = Vec::new();
     if daemon.sessions.agents_working().await {
-        running.push("a turn or a worker".to_owned());
+        running.push("a turn, a worker or a background job".to_owned());
     }
     running.extend(daemon.sessions.brain_work());
     match daemon.terminals.count() {
