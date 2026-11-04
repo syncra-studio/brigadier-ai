@@ -33,7 +33,7 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { request } from "@/ipc/client";
 import { isNativeWorker, type NativeWorker, subagentPanel } from "@/state/nativeWorkers";
-import { loadWorkerThread, useCliThread, useWorkerThreads } from "@/state/cliThread";
+import { loadWorkerThread, useCliThread, useHeldWorkerThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
  * A worker's thread, read only: its own CLI's session files (`workerThread`), with its brief and
@@ -98,6 +98,7 @@ function WorkHeader({ row, turns }: { row: WorkerRow; turns: readonly ThreadTurn
  */
 function useWorkerThread(conversationId: string, row: WorkerRow): { view: ThreadView | null; error: string | null } {
   const view = useWorkerThreads((s) => s.views[row.id] ?? null);
+  useHeldWorkerThread(row.id);
   const [error, setError] = useState<string | null>(null);
   // Any change of its row (an event of its CLI, a wait, its git) reads it again.
   const changed = JSON.stringify(row);
@@ -145,6 +146,7 @@ function NativeWorkerThread({ conversationId, row }: { conversationId: string; r
   const { callId, owner } = row.native;
   // A worker's own subagent: its entries are in that worker's thread (`workerThread`).
   const ofWorker = owner !== conversationId;
+  useHeldWorkerThread(ofWorker ? owner : null);
   const [polled, setPolled] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A string, so a change of the parent's thread that is not the subagent's repaints nothing.

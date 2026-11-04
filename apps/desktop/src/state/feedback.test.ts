@@ -4,14 +4,16 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { createServer, type ViteDevServer } from "vite";
 
 import type { RequestOf } from "@/ipc/client";
-import type { FeedbackFiled, FeedbackReport } from "@/ipc/generated";
+import type { EventEnvelope, FeedbackFiled, FeedbackReport } from "@/ipc/generated";
 import type * as FeedbackModule from "@/state/feedback";
+import type * as StoreModule from "@/state/store";
 
 // The module reads the provider labels from a component file, so Vite loads it.
 type Feedback = typeof FeedbackModule;
 let server: ViteDevServer;
 let closeFeedback: Feedback["closeFeedback"];
 let dismissOffer: Feedback["dismissOffer"];
+let applyFeedbackEvents: Feedback["applyFeedbackEvents"];
 let draftOffer: Feedback["draftOffer"];
 let openFeedback: Feedback["openFeedback"];
 let sendFromDialog: Feedback["sendFromDialog"];
@@ -19,11 +21,13 @@ let sendOffer: Feedback["sendOffer"];
 let setFeedbackText: Feedback["setFeedbackText"];
 let useFeedbackOffers: Feedback["useFeedbackOffers"];
 let useFeedbackUi: Feedback["useFeedbackUi"];
+let useApp: (typeof StoreModule)["useApp"];
 
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ closeFeedback, dismissOffer, draftOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
+  ({ applyFeedbackEvents, closeFeedback, dismissOffer, draftOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
     (await server.ssrLoadModule("/src/state/feedback.ts")) as Feedback);
+  ({ useApp } = (await server.ssrLoadModule("/src/state/store.ts")) as typeof StoreModule);
 });
 
 after(async () => {
@@ -55,6 +59,8 @@ let account: () => Promise<boolean> | boolean;
 let signIns: string[];
 /** When the faked sign-in's wait answers (GitHub said yes). */
 let signedIn: Promise<void>;
+/** When the faked write-ups answer. */
+let writing: Promise<void>;
 
 const filed = (number: number): FeedbackFiled => ({ outcome: "filed", number, url: `https://github.com/syncra-studio/brigadier-ai/issues/${number}` });
 const refused: FeedbackFiled = { outcome: "failed", reason: "HTTP 502: Bad gateway" };
@@ -67,6 +73,7 @@ beforeEach(() => {
   account = () => true;
   signIns = [];
   signedIn = Promise.resolve();
+  writing = Promise.resolve();
   useFeedbackUi.setState({ open: false, draft: null, text: "", sending: { phase: "write" }, account: { signedIn: true, login: "someone" } });
   useFeedbackOffers.setState({}, true);
   mockIPC(async (command, payload) => {
@@ -102,6 +109,7 @@ beforeEach(() => {
     }
     if (request.method === "writeUpFeedback") {
       wrote.push(request.text);
+      await writing;
       return { method: "writeUpFeedback", writeUp: { reports: request.text.split(". ").map(report), searched: true } };
     }
     asked.push(request.items);
@@ -303,10 +311,10 @@ test("an offer's write-up is kept across a restart", async () => {
     value: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value), removeItem: (key: string) => stored.delete(key) },
   });
   try {
-    draftOffer("kept", "Spins. Hangs");
+    draftOffer("c1", "kept", "Spins. Hangs");
     await until(() => useFeedbackOffers.getState()["kept"]?.sending.phase === "write");
     useFeedbackOffers.setState({}, true);
-    draftOffer("kept", "Spins. Hangs");
+    draftOffer("c1", "kept", "Spins. Hangs");
     const offer = useFeedbackOffers.getState()["kept"];
     assert.equal(offer?.sending.phase, "write");
     assert.deepEqual(offer?.written?.reports.map((each) => each.title), ["Spins", "Hangs"]);
@@ -315,11 +323,106 @@ test("an offer's write-up is kept across a restart", async () => {
     assert.equal(stored.size, 0);
     // One no writer could run for is kept too: its own text in one form, not written again.
     stored.set("brigadier.feedbackOffer.plain", "null");
-    draftOffer("plain", "Hangs");
+    draftOffer("c1", "plain", "Hangs");
+    assert.deepEqual([...stored.keys()], ["brigadier.feedbackOffer.c1.plain"], "one kept before its session was named moves under it");
     assert.deepEqual(useFeedbackOffers.getState()["plain"], { written: null, sending: { phase: "write" } });
     assert.deepEqual(wrote, ["Spins. Hangs"]);
   } finally {
     if (storage) Object.defineProperty(globalThis, "localStorage", storage);
     else Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});
+
+/** A local storage in memory for the test, as the page has it; `restore` puts the real one back. */
+function memoryStorage() {
+  const stored = new Map<string, string>();
+  const storage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+      key: (index: number) => [...stored.keys()][index] ?? null,
+      get length() {
+        return stored.size;
+      },
+    },
+  });
+  const restore = () => {
+    if (storage) Object.defineProperty(globalThis, "localStorage", storage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  };
+  return { stored, restore };
+}
+
+const sessions = (...ids: string[]) => Object.fromEntries(ids.map((id) => [id, { id } as never]));
+/** The daemon's word that session `id` is being deleted, as the bridge hands it on. */
+const deleting = (id: string) => [{ stream: "catalog", atMs: 1, event: { type: "conversationDeleting", id } } as EventEnvelope];
+
+// #721: a card never acted on kept its write-up for good once its session was deleted.
+test("a deleted session's unsent write-ups go with it; another session's stay", async () => {
+  const { stored, restore } = memoryStorage();
+  try {
+    useApp.setState({ catalogLoaded: true, conversations: sessions("gone-a", "kept-b") });
+    draftOffer("gone-a", "offer-a", "Spins");
+    draftOffer("kept-b", "offer-b", "Hangs");
+    await until(() => stored.size === 2);
+    useApp.setState({ conversations: sessions("kept-b") });
+    applyFeedbackEvents(deleting("gone-a"));
+    assert.deepEqual([...stored.keys()], ["brigadier.feedbackOffer.kept-b.offer-b"]);
+    assert.equal(useFeedbackOffers.getState()["offer-a"], undefined);
+  } finally {
+    restore();
+  }
+});
+
+test("a write-up that finishes after its session was deleted isn't kept", async () => {
+  const { stored, restore } = memoryStorage();
+  let release!: () => void;
+  writing = new Promise((resolve) => (release = resolve));
+  try {
+    useApp.setState({ catalogLoaded: true, conversations: sessions("deleted-while-writing") });
+    draftOffer("deleted-while-writing", "late", "Spins");
+    await until(() => wrote.length === 1);
+    useApp.setState({ conversations: sessions() });
+    applyFeedbackEvents(deleting("deleted-while-writing"));
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(stored.size, 0);
+    assert.equal(useFeedbackOffers.getState()["late"], undefined);
+  } finally {
+    release();
+    restore();
+  }
+});
+
+test("once the catalog loads, write-ups of sessions not in it go; one kept before they were named stays", () => {
+  const { stored, restore } = memoryStorage();
+  try {
+    stored.set("brigadier.feedbackOffer.closed-gone.o1", "null");
+    stored.set("brigadier.feedbackOffer.still-here.o2", "null");
+    stored.set("brigadier.feedbackOffer.o3", "null");
+    useApp.setState({ catalogLoaded: false, conversations: sessions() });
+    useApp.setState({ catalogLoaded: true, conversations: sessions("still-here") });
+    assert.deepEqual([...stored.keys()].toSorted(), ["brigadier.feedbackOffer.o3", "brigadier.feedbackOffer.still-here.o2"]);
+  } finally {
+    restore();
+  }
+});
+
+// A delete takes the row away at once and brings it back when it fails; a catalog read replaces the rows.
+test("a session whose row leaves and comes back keeps its write-up", async () => {
+  const { stored, restore } = memoryStorage();
+  try {
+    useApp.setState({ catalogLoaded: true, conversations: sessions("delete-failed") });
+    draftOffer("delete-failed", "offer-c", "Spins");
+    await until(() => stored.size === 1);
+    useApp.setState({ conversations: sessions() });
+    useApp.setState({ conversations: sessions("delete-failed") });
+    assert.deepEqual([...stored.keys()], ["brigadier.feedbackOffer.delete-failed.offer-c"]);
+    assert.equal(useFeedbackOffers.getState()["offer-c"]?.sending.phase, "write");
+  } finally {
+    restore();
   }
 });

@@ -9,6 +9,7 @@ import type {
   TaskState,
   ThreadNews,
 } from "@/ipc/generated";
+import { readOrder } from "@/lib/readOrder";
 import { forOrchestrator } from "@/state/board";
 import { type Stop, stopsOf, useStopping } from "@/state/stopping";
 
@@ -191,14 +192,40 @@ export function fromSnapshot(activity: ConversationActivity): Activity {
   };
 }
 
-/** Reads every conversation's activity again (after connecting or missing events). */
+/** What changed activity while a snapshot was read: events, or a piece of thread news. */
+type Heard = { events: readonly EventEnvelope[] } | { news: ThreadNews };
+
+/** The snapshot reads under way, each with what was heard since it was asked for (#758). */
+const snapshotReads = new Set<Heard[]>();
+/** Overlapping snapshot reads: one answering after a newer one was asked for is not applied. */
+const snapshotOrder = readOrder<"activity">();
+
+function heard(change: Heard): void {
+  for (const read of snapshotReads) read.push(change);
+}
+
+/**
+ * Reads every conversation's activity again (after connecting, missing events, or the window
+ * showing). What was heard while it was read is applied again on top of it, in the order heard: a
+ * turn that ended meanwhile stays ended, an approval answered meanwhile stays answered.
+ */
 export async function loadActivity(): Promise<void> {
-  const { activity } = await request({ method: "getActivity" });
-  activityStore.setState({
-    byConversation: Object.fromEntries(
+  const current = snapshotOrder.read("activity");
+  const since: Heard[] = [];
+  snapshotReads.add(since);
+  try {
+    const { activity } = await request({ method: "getActivity" });
+    if (!current()) return;
+    let byConversation: Record<string, Activity> = Object.fromEntries(
       activity.map((entry) => [entry.conversationId, fromSnapshot(entry)]),
-    ),
-  });
+    );
+    for (const change of since) {
+      byConversation = ("events" in change ? foldEvents(byConversation, change.events) : foldNews(byConversation, change.news)) ?? byConversation;
+    }
+    activityStore.setState({ byConversation });
+  } finally {
+    snapshotReads.delete(since);
+  }
 }
 
 function toggled(set: ReadonlySet<string>, id: string, on: boolean): ReadonlySet<string> {
@@ -270,8 +297,15 @@ function conversationOf({ event }: EventEnvelope): string | null {
 
 /** Folds a batch of events into the conversations' activity. */
 export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
+  if (!batch.some((envelope) => conversationOf(envelope))) return;
+  heard({ events: batch });
+  const changed = foldEvents(activityStore.getState().byConversation, batch);
+  if (changed) activityStore.setState({ byConversation: changed });
+}
+
+/** `byConversation` with `batch` folded in; `null` when nothing changed. */
+function foldEvents(byConversation: Record<string, Activity>, batch: readonly EventEnvelope[]): Record<string, Activity> | null {
   let changed: Record<string, Activity> | null = null;
-  const { byConversation } = activityStore.getState();
   for (const envelope of batch) {
     const id = conversationOf(envelope);
     if (!id) continue;
@@ -282,7 +316,7 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
       changed[id] = next;
     }
   }
-  if (changed) activityStore.setState({ byConversation: changed });
+  return changed;
 }
 
 /**
@@ -290,10 +324,20 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
  * into activity, even when its thread has never opened.
  */
 export function applyActivityNews(news: ThreadNews): void {
-  // A turn handed over to another account or CLI goes on there: it never ended for the row (D180).
-  const ended = news.ended === "handedOver" ? undefined : news.ended;
-  if (!news.opened && !ended && news.workers === undefined && news.jobs === undefined) return;
-  const { byConversation } = activityStore.getState();
+  if (!news.opened && !endedOf(news) && news.workers === undefined && news.jobs === undefined) return;
+  // Applied again on a snapshot read meanwhile, a turn's end keeps the time it was heard at.
+  const stamped = endedOf(news) && news.turnEndedAtMs === undefined ? { ...news, turnEndedAtMs: Date.now() } : news;
+  heard({ news: stamped });
+  const changed = foldNews(activityStore.getState().byConversation, stamped);
+  if (changed) activityStore.setState({ byConversation: changed });
+}
+
+/** A turn handed over to another account or CLI goes on there: it never ended for the row (D180). */
+const endedOf = (news: ThreadNews) => (news.ended === "handedOver" ? undefined : news.ended);
+
+/** `byConversation` with `news` folded in; `null` when nothing changed. */
+function foldNews(byConversation: Record<string, Activity>, news: ThreadNews): Record<string, Activity> | null {
+  const ended = endedOf(news);
   const current = byConversation[news.conversationId] ?? IDLE;
   const turn: Activity = ended
     ? {
@@ -306,8 +350,8 @@ export function applyActivityNews(news: ThreadNews): void {
   const workers = news.workers === undefined ? turn : { ...turn, workersWorking: news.workers.some((worker) => worker.working) };
   const next = news.jobs === undefined ? workers : { ...workers, commandsWorking: !!news.jobs.holding?.length || !!news.jobs.waking || !!news.jobs.subagents };
   if (next.turnOpen === current.turnOpen && next.ended === current.ended && next.workersWorking === current.workersWorking
-    && next.commandsWorking === current.commandsWorking && next.turnEndedAtMs === current.turnEndedAtMs) return;
-  activityStore.setState({ byConversation: { ...byConversation, [news.conversationId]: next } });
+    && next.commandsWorking === current.commandsWorking && next.turnEndedAtMs === current.turnEndedAtMs) return null;
+  return { ...byConversation, [news.conversationId]: next };
 }
 
 /**
