@@ -3051,7 +3051,14 @@ impl SessionManager {
         {
             crate::logging::private_trace!(conv.private_logs, warn, "could not set the CLI's plan mode"; conversation = %conv.id, error = %err);
         }
-        if only_typed_notes && unsent.is_empty() && users.is_empty() && !unread.is_empty() {
+        // A successor's first input is its hand-off, whatever notes go with it: the thread shows
+        // its turn and finds its seam by it.
+        if only_typed_notes
+            && unsent.is_empty()
+            && users.is_empty()
+            && !unread.is_empty()
+            && successor.is_none()
+        {
             let kinds: Vec<_> = unread.iter().map(|(envelope, _)| envelope.kind).collect();
             // All prepends are complete. Bind the exact input that is actually sent, never
             // a genuine user's message mixed with daemon notes.
