@@ -464,12 +464,29 @@ async fn clients_with_the_retired_inbox_commands_are_rejected_at_handshake() {
         })
         .await
         .unwrap();
+    // It is told the daemon's version (#771), never welcomed.
     let reply = tokio::time::timeout(Duration::from_secs(3), reader.read::<ServerFrame>())
         .await
         .unwrap()
         .unwrap();
     assert!(
-        reply.is_none(),
+        matches!(&reply, Some(ServerFrame::ProtocolMismatch { daemon }) if daemon.protocol != 19),
         "an incompatible old client was welcomed: {reply:?}"
+    );
+    // A retired inbox command is not served: the connection closes unanswered.
+    writer
+        .write(&json!({
+            "type": "request", "id": 1,
+            "request": { "method": "setDone", "id": "c1", "done": true }
+        }))
+        .await
+        .unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(3), reader.read::<Value>())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        reply.is_none(),
+        "an incompatible old client was answered: {reply:?}"
     );
 }
