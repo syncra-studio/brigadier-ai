@@ -28,11 +28,7 @@ const LOCK: &str = ".brigadier.lock";
 
 /// `$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`.
 pub(super) fn file(env: &CliEnv) -> Option<PathBuf> {
-    env.var("CODEX_HOME")
-        .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| env.home().map(|home| home.join(".codex")))
-        .map(|dir| dir.join("config.toml"))
+    super::home(env).map(|dir| dir.join("config.toml"))
 }
 
 const KEY: &str = "trust_level";
