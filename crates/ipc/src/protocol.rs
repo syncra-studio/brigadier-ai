@@ -1301,10 +1301,12 @@ pub enum Request {
     RefreshProviders {
         #[serde(default)]
         provider: Option<ProviderKind>,
+        /// The app's regular usage tick: reads each provider's quota, with a whole check only for
+        /// one due it. A field, not a request of its own: a daemon from before it ignores the
+        /// field and checks whole, where an unknown request would drop the app's connection.
+        #[serde(default)]
+        usage_only: bool,
     },
-    /// The app's regular usage tick: reads each provider's quota in the background, with a whole
-    /// check only for one that is due it; results arrive as `providerChecked`.
-    RefreshUsage,
     /// Whether `path` is `provider`'s own CLI, before the user's choice of it is saved in
     /// `agentPaths`: answers its version, or fails with what is wrong in plain words.
     CheckAgentPath {
@@ -2032,7 +2034,6 @@ pub enum Response {
         view: ProvidersView,
     },
     RefreshProviders,
-    RefreshUsage,
     CheckAgentPath {
         version: String,
     },
@@ -2474,6 +2475,16 @@ impl From<PageError> for IpcError {
             message: err.to_string(),
         }
     }
+}
+
+/// `usageOnly` is safe to send to a daemon from before it: what a request's type doesn't know is
+/// ignored, where an unknown request fails the frame and drops the connection.
+#[test]
+fn a_request_with_a_field_it_does_not_know_still_reads() {
+    let known = r#"{"type":"request","id":1,"request":{"method":"getProviders","usageOnly":true}}"#;
+    assert!(serde_json::from_str::<ClientFrame>(known).is_ok());
+    let unknown = r#"{"type":"request","id":1,"request":{"method":"neverHeardOfIt"}}"#;
+    assert!(serde_json::from_str::<ClientFrame>(unknown).is_err());
 }
 
 #[cfg(test)]

@@ -94,6 +94,8 @@ struct State {
     refreshing: HashSet<ProviderKind>,
     /// Providers asked to be checked while their check ran: checked once more after it.
     again: HashSet<ProviderKind>,
+    /// Those whose last read of the model list failed: due a whole check at the next usage tick.
+    models_unread: HashSet<ProviderKind>,
     /// Counts the refreshes asked for ([`Runtime::refresh_all`]).
     generation: u32,
     /// The generation each provider's last finished check began in.
@@ -873,17 +875,21 @@ impl Runtime {
 
     /// Keeps usage fresh for the app's regular tick, in the background. A whole check starts
     /// CLIs for login and models, so a provider only gets one once its last is
-    /// [`FULL_CHECK_EVERY_MS`] old, or while it is signed out, so signing in shows; else just
-    /// its quota is read, and a CLI with no usage to read starts nothing.
+    /// [`FULL_CHECK_EVERY_MS`] old, while it is signed out, so signing in shows, or while it has
+    /// no model list or its last read failed, so Routing isn't left without one; else just its
+    /// quota is read, and a CLI with no usage to read starts nothing.
     pub fn refresh_usage(self: &Arc<Self>) {
         let now = now_ms();
         for kind in adapters::kinds() {
-            let current = self.overview(kind).is_some_and(|overview| {
-                overview.status.is_some_and(|status| status.logged_in)
-                    && overview
-                        .checked_at_ms
-                        .is_some_and(|at| now - at < FULL_CHECK_EVERY_MS)
-            });
+            let unread = self.state().models_unread.contains(&kind);
+            let current = !unread
+                && self.overview(kind).is_some_and(|overview| {
+                    overview.models.is_some()
+                        && overview.status.is_some_and(|status| status.logged_in)
+                        && overview
+                            .checked_at_ms
+                            .is_some_and(|at| now - at < FULL_CHECK_EVERY_MS)
+                });
             if current {
                 let runtime = self.clone();
                 self.spawn(async move { runtime.read_quota(kind).await });
@@ -1038,9 +1044,13 @@ impl Runtime {
             let mut with_models = overview.clone();
             match &models {
                 Ok(catalog) => {
+                    self.state().models_unread.remove(&kind);
                     self.adopt_models(&lead, catalog.clone()).await;
                 }
-                Err(err) => with_models.error = Some(format!("models: {err}")),
+                Err(err) => {
+                    self.state().models_unread.insert(kind);
+                    with_models.error = Some(format!("models: {err}"));
+                }
             }
             // The lead may have moved meanwhile: its list is the one shown now.
             with_models.models = self.overview(kind).and_then(|now| now.models);
@@ -1118,6 +1128,7 @@ impl Runtime {
             };
             match provider.models().await {
                 Ok(catalog) => {
+                    runtime.state().models_unread.remove(&kind);
                     if runtime.adopt_models(&lead, catalog).await
                         && let Some(overview) = runtime.overview(kind)
                     {
@@ -1125,6 +1136,7 @@ impl Runtime {
                     }
                 }
                 Err(err) => {
+                    runtime.state().models_unread.insert(kind);
                     tracing::warn!(provider = %kind, error = %err, "could not read the models of the account in use")
                 }
             }
