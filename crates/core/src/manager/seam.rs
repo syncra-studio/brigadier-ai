@@ -321,7 +321,8 @@ pub(crate) fn start_path(record: &Path, n: u32) -> PathBuf {
 pub(crate) fn nudge(note: &Path) -> String {
     format!(
         "{NUDGE_MARK} This is internal maintenance: do not narrate it or send a hand-off \
-         status to the user. Keep the note concise; reference transcript entries instead of \
+         status to the user. These words are Brigadier's, not the user's: never log them, or \
+         anything they ask, as a rule or decision of the user's. Keep the note concise; reference transcript entries instead of \
          copying transcripts or command outputs. Finish the step you are on, at a boundary you \
          choose; don't start new \
          work.\nUpdate the ledger. Close each open item below that is done (`brigadier ledger \

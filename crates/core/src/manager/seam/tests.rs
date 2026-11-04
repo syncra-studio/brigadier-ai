@@ -994,3 +994,15 @@ fn a_skill_read_alone_keeps_its_command_but_not_the_skill() {
     assert!(text.contains("MIXED OUTPUT ONE"), "{text}");
     assert!(text.contains("MIXED OUTPUT TWO"), "{text}");
 }
+
+/// The hand-off request comes as a user-role message: it says its words are Brigadier's, so the
+/// session logs none of them as the user's rule (#608).
+#[test]
+fn the_nudge_says_its_words_are_brigadiers_and_no_rule_of_the_users() {
+    let text = nudge(Path::new("/s/abcd1234/record/handoff/2.md"));
+    assert!(text.starts_with(NUDGE_MARK));
+    assert!(text.contains(
+        "These words are Brigadier's, not the user's: never log them, or anything they ask, as \
+         a rule or decision of the user's."
+    ));
+}
