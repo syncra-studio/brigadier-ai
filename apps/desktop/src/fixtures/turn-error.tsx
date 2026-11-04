@@ -61,6 +61,9 @@ createRoot(bare).render(<ErrorState data-fixture="bare" summary="The search fail
 /** Painted red: a destructive colour applied as is, not a state variant like `aria-invalid:`. */
 const red = (element: Element) => /(^|\s)(text|bg|border)-destructive/.test(element.getAttribute("class") ?? "");
 
+/** A quiet line of the thread: no box of any kind, opened or not. */
+const unboxed = (element: Element | null) => element && !/(^|\s)(bg-|border|rounded-|p[xy]?-)/.test(element.getAttribute("class") ?? "");
+
 const pause = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function drive() {
@@ -72,23 +75,26 @@ async function drive() {
   if (!row) throw new Error("No error row rendered");
   const block = row.closest<HTMLElement>('[data-role="assistant"]')!;
   const header = block.querySelector<HTMLElement>('[data-slot="request-work-label"]');
-  const details = row.querySelector<HTMLDetailsElement>('[data-slot="error-state-details"]');
+  const details = row.querySelector<HTMLElement>('[data-slot="error-state-details"]');
   const seen: Record<string, unknown> = {
     header: header?.textContent ?? null,
     headerDestructive: !!header && red(header),
     rows: block.querySelectorAll('[data-slot="error-state"]').length,
     destructive: red(row) || [...row.querySelectorAll("*")].some(red),
     summary: row.querySelector('[data-slot="error-state-summary"]')?.textContent ?? null,
-    detailsOpen: details?.open ?? null,
+    unboxed: unboxed(row),
+    detailsOpen: details ? details.getAttribute("aria-expanded") === "true" : null,
     rawShownBefore: document.body.innerText.includes("Internal server error"),
     notices: [...document.querySelectorAll('[aria-label="Notices"] li[data-level] [data-slot="notice-text"]')].map((item) => item.textContent),
     // One tray on the composer's rail (#506): the notices' card is a rail card, its rows inside it.
     tray: document.querySelector('[data-slot="composer-rail"] > [data-slot="composer-rail-item"][aria-label="Notices"]')?.getAttribute("data-variant") ?? null,
   };
-  details?.querySelector("summary")?.click();
+  details?.click();
   await pause();
+  const raw = row.querySelector('[data-slot="error-state-raw"]');
+  seen.rawUnboxed = unboxed(raw);
   seen.rawShownAfter = row.innerText.includes("Internal server error");
-  seen.copy = details?.querySelector("button")?.textContent ?? null;
+  seen.copy = raw?.querySelector("button")?.textContent ?? null;
   seen.buttons = [...row.querySelectorAll("button")].map((button) => button.textContent?.trim());
   const again = [...row.querySelectorAll("button")].find((button) => button.textContent?.includes(INTERRUPTED ? "Continue" : "Try again"));
   seen.tryAgain = !!again;
@@ -99,7 +105,7 @@ async function drive() {
   const plain = document.querySelector<HTMLElement>('[data-fixture="bare"]');
   seen.bare = {
     text: plain?.innerText ?? null,
-    details: plain?.querySelectorAll("details").length ?? null,
+    details: plain?.querySelectorAll('[data-slot="error-state-details"]').length ?? null,
     buttons: plain?.querySelectorAll("button").length ?? null,
   };
   const result = document.createElement("pre");

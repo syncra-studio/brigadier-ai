@@ -1,16 +1,16 @@
-import type { ComponentProps } from "react";
+import { type ComponentProps, useState } from "react";
 
+import { CHEVRON, ROW, ROW_TOGGLE } from "@/components/conversation/elements/activity-row";
 import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
-import { Button } from "@/components/controls/button";
-import { Check, ChevronRight, Copy, Regenerate, Warning } from "@/components/icons";
+import { Check, ChevronRight, Copy, Regenerate } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 
 /**
- * What went wrong with a turn or a worker's step, said calmly: one plain line, the error's own
- * words folded under Details (with Copy), and Try again where trying again exists. Never red: a
- * stopped turn is part of the thread, not an alarm. While it retries it becomes a shimmering
- * "Retrying" line.
+ * What went wrong with a turn or a worker's step, said calmly: one quiet line of the thread, never
+ * a card, with Try again where trying again exists and Details opening the error's own words (with
+ * Copy) under it. Never red: a stopped turn is part of the thread, not an alarm. While it retries
+ * it becomes a shimmering "Retrying" line.
  */
 
 export type ErrorStateProps = Omit<ComponentProps<"div">, "children" | "role" | "title"> & {
@@ -27,6 +27,7 @@ export type ErrorStateProps = Omit<ComponentProps<"div">, "children" | "role" | 
 
 export function ErrorState({ summary, details, retrying = false, onRetry, retryLabel = "Try again", className, ...props }: ErrorStateProps) {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
+  const [open, setOpen] = useState(false);
   if (retrying) {
     return (
       <div
@@ -50,48 +51,46 @@ export function ErrorState({ summary, details, retrying = false, onRetry, retryL
       data-slot="error-state"
       key="error"
       role="status"
-      className={cn(
-        "fade-in animate-in bg-muted text-foreground rounded-control flex w-full flex-col gap-1 px-3 py-2 text-sm duration-300 motion-reduce:animate-none",
-        className,
-      )}
+      className={cn("fade-in animate-in flex w-full min-w-0 flex-col gap-1 duration-300 motion-reduce:animate-none", className)}
       {...props}
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <Warning aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
-        <p data-slot="error-state-summary" className="min-w-0 flex-1 leading-snug">
+      <div className={cn(ROW, "flex-wrap")}>
+        <p data-slot="error-state-summary" className="min-w-0">
           {summary}
         </p>
         {onRetry && (
-          <Button variant="outline" size="xs" onClick={onRetry} className="ms-auto">
-            <Regenerate aria-hidden />
+          <button type="button" onClick={onRetry} className="text-link hover:text-link/80 shrink-0">
             {retryLabel}
-          </Button>
+          </button>
+        )}
+        {text && (
+          <button
+            type="button"
+            data-slot="error-state-details"
+            data-state={open ? "open" : "closed"}
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+            className={cn(ROW_TOGGLE, "flex shrink-0 items-center gap-1.5")}
+          >
+            Details
+            <ChevronRight aria-hidden className={CHEVRON} />
+          </button>
         )}
       </div>
-      {text && (
-        <details data-slot="error-state-details" className="group/details ps-6.5">
-          {/* Folds like a report's Details: its word and a quiet chevron, never the browser's marker. */}
-          <summary className="text-muted-foreground hover:text-foreground rounded-control flex w-fit cursor-pointer list-none items-center gap-0.5 text-xs [&::-webkit-details-marker]:hidden">
-            Details
-            <ChevronRight
-              aria-hidden
-              className="size-chevron shrink-0 transition-[rotate] duration-150 ease-standard group-open/details:rotate-90 motion-reduce:transition-none"
-            />
-          </summary>
-          <div className="bg-background/60 rounded-control relative mt-1.5">
-            <pre className="text-muted-foreground max-h-60 overflow-y-auto py-2 ps-2.5 pe-9 font-mono text-xs leading-snug whitespace-pre-wrap wrap-anywhere">
-              {text}
-            </pre>
-            <TooltipIconButton
-              tooltip={isCopied ? "Copied" : "Copy"}
-              size="icon-xs"
-              className="text-muted-foreground absolute end-1 top-1"
-              onClick={() => copyToClipboard(text)}
-            >
-              {isCopied ? <Check /> : <Copy />}
-            </TooltipIconButton>
-          </div>
-        </details>
+      {text && open && (
+        <div data-slot="error-state-raw" className="relative">
+          <pre className="text-foreground/60 max-h-60 overflow-y-auto pe-9 font-mono text-xs leading-snug whitespace-pre-wrap wrap-anywhere">
+            {text}
+          </pre>
+          <TooltipIconButton
+            tooltip={isCopied ? "Copied" : "Copy"}
+            size="icon-xs"
+            className="text-muted-foreground absolute end-1 top-0"
+            onClick={() => copyToClipboard(text)}
+          >
+            {isCopied ? <Check /> : <Copy />}
+          </TooltipIconButton>
+        </div>
       )}
     </div>
   );

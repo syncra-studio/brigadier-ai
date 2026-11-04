@@ -123,7 +123,7 @@ function seen() {
     waits: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-work-label"], [data-slot="thread-status"], [data-slot="group-live-line"]')]
       .map((line) => line.textContent ?? "").filter((text) => text.startsWith("Waiting"))),
     errors: blocks.map((block) => !!block.querySelector('[data-slot="error-state"]')),
-    buttons: blocks.map((block) => [...block.querySelectorAll('[data-slot="error-state"] button')].filter((button) => !button.closest("details")).map((button) => button.textContent ?? "")),
+    buttons: blocks.map((block) => [...block.querySelectorAll('[data-slot="error-state"] button:not([data-slot="error-state-details"])')].map((button) => button.textContent ?? "")),
     steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*(?:Yesterday|\d).*$/, "").trim() ?? "")),
     // The gap over each block's live line, from what shows above it (demo12: one gap everywhere).
     gaps: blocks.flatMap((block) => {
