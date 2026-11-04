@@ -1474,9 +1474,23 @@ fn end_in_dir(
     if left.is_empty() {
         Ok(())
     } else {
+        // By program name only: their arguments may hold what no error should repeat.
+        let named: Vec<String> = left
+            .iter()
+            .map(|pid| {
+                let line = processes.command_line(*pid);
+                let name = line
+                    .as_ref()
+                    .and_then(|line| line.first())
+                    .and_then(|program| Path::new(program).file_name())
+                    .map_or_else(|| "?".into(), |name| name.to_string_lossy());
+                format!("{pid} {name}")
+            })
+            .collect();
         Err(format!(
-            "processes still running in {}: {left:?}",
-            dir.display()
+            "processes still running in {}: {}",
+            dir.display(),
+            named.join(", ")
         ))
     }
 }

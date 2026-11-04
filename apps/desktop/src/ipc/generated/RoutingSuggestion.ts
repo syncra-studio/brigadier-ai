@@ -11,7 +11,7 @@ export type RoutingSuggestion = {
  */
 work: string, 
 /**
- * The row Use it puts first in the order.
+ * The row Use it puts first in the order, or in a kind of roles swaps in for that role's.
  */
 row: GuidanceRow, 
 /**
@@ -19,6 +19,6 @@ row: GuidanceRow,
  */
 score: number, 
 /**
- * The first of the user's order, as the file names it, and its rating.
+ * The first of the user's order, or the role's model, as the file names it, and its rating.
  */
 current: string, currentScore: number, };

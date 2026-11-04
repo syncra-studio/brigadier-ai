@@ -84,6 +84,8 @@ function Page() {
 
 async function drive() {
   await pause(600);
+  // On a slow machine the composer mounts after the header; its first read must not be before that.
+  while (!placeholder()) await pause(50);
   // Read together, every 350 ms for about 3 s: across a few ticks, at different points of each.
   const reads: [string | null, string | null][] = [];
   for (let i = 0; i < 9; i++) {

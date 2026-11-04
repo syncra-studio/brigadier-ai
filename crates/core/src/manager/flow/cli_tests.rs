@@ -575,6 +575,16 @@ async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
         .await;
         flow.settled().await;
         let task = flow.core.tasks(&flow.conversation).await.unwrap().remove(0);
+        // Its turn's report reads git in its worktree after it reads reported: disposing of the
+        // worktree under that read can outlast the kills of what runs there.
+        flow.until("its report is over", |_| {
+            !flow
+                .manager
+                .tasks_lock()
+                .get(&task.id)
+                .is_some_and(|live| live.reporting.load(std::sync::atomic::Ordering::SeqCst))
+        })
+        .await;
         let workspace = task.workspace.as_ref().unwrap();
         let path = std::path::Path::new(workspace.worktree.as_ref().unwrap());
         let branch = workspace.branch.as_ref().unwrap();
@@ -587,11 +597,13 @@ async fn closing_a_finished_worker_keeps_its_untracked_file_on_its_branch() {
             }
             "close" => {
                 flow.say("Close it.").await;
+                // Marked closed only once its disposal is over; it reads final before that.
                 flow.until("worker closed", |board| {
                     board
                         .tasks
                         .get(&task.id)
-                        .is_some_and(|task| task.state.is_final())
+                        .and_then(|task| task.plain.as_ref())
+                        .is_some_and(|plain| plain.closed)
                 })
                 .await;
                 flow.idle().await;
@@ -2323,6 +2335,7 @@ async fn models_page_rules_show_in_models_and_refuse_start() {
     let page = flow
         .manager
         .set_model_rules(
+            &flow.manager.model_rules().unwrap().revision,
             &[row.clone(), next.clone()],
             &[
                 crate::ModelRule::Forbid {
@@ -2468,7 +2481,7 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
     .unwrap();
     flow.say("Start by work.").await;
     flow.until("the started workers reported", |b| {
-        b.tasks.len() == 6
+        b.tasks.len() == 7
             && b.tasks
                 .values()
                 .all(|t| t.state == crate::work::TaskState::Reported)
@@ -2513,13 +2526,11 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
         (json!("claude"), Value::Null, json!("medium"))
     );
     assert_eq!(seen["agent flag"]["row"]["picked"], json!(["effort"]));
-    // The rules judge what results.
-    assert_eq!(seen["effort flag"]["error"]["code"], "refused");
-    assert!(
-        seen["effort flag"]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("\"effort-ceiling: high\"")
+    // The rules judge what results: an effort above the cap starts at the cap (D-L38).
+    assert_eq!(
+        worker("effort flag"),
+        (json!("codex"), json!("gpt-6-astra"), json!("high")),
+        "{seen:#?}"
     );
     assert_eq!(seen["unknown"]["error"]["code"], "not-found");
     // The work's order: its first row is kept out by the rule for that work, so the next starts.
@@ -2785,7 +2796,7 @@ async fn a_start_off_the_routing_runs_and_says_so() {
     std::fs::write(
         flow.manager.models_rules_path(),
         format!(
-            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Independent review | codex | astra | high | Other. |\n| Independent review | claude | opus | high | Own. |\n| Bounded implementation | codex | astra |  | Its default effort. |\n| Fallback | codex | default | medium | Its default model. |\n| Fallback | claude | sonnet | low | Next. |\n"
+            "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| {WORK} | codex | astra | medium | First. |\n| {WORK} | claude | sonnet | low | Next. |\n| Adversarial review | codex | astra | high | Other. |\n| Adversarial review | claude | opus | high | Own. |\n| Bounded implementation | codex | astra |  | Its default effort. |\n| Fallback | codex | default | medium | Its default model. |\n| Fallback | claude | sonnet | low | Next. |\n"
         ),
     )
     .unwrap();
@@ -2930,14 +2941,20 @@ async fn a_start_off_the_routing_runs_and_says_so() {
         reason: "Mine.".into(),
     };
     flow.manager
-        .set_model_rules(&[user_row("opus", "high")], &[])
+        .set_model_rules(
+            &flow.manager.model_rules().unwrap().revision,
+            &[user_row("opus", "high")],
+            &[],
+        )
         .unwrap();
     flow.say("Route C.").await;
     flow.until("the start after the change reported", reported(13))
         .await;
     flow.settled().await;
     // Automatic again: no row of the user's, so the shipped one.
-    flow.manager.set_model_rules(&[], &[]).unwrap();
+    flow.manager
+        .set_model_rules(&flow.manager.model_rules().unwrap().revision, &[], &[])
+        .unwrap();
     flow.say("Route D.").await;
     flow.until("the start on Automatic reported", reported(14))
         .await;
@@ -2970,12 +2987,12 @@ async fn a_start_off_the_routing_runs_and_says_so() {
     flow.stop().await;
 }
 
-/// An independent review (harness D22): `--reviewing` names whose work it is (a worker, or
-/// `session`, the default for the work "Independent review"); the reviewer runs on another
+/// An adversarial review (harness D22): `--reviewing` names whose work it is (a worker, or
+/// `session`, the default for the work "Adversarial review"); the reviewer runs on another
 /// provider than the authors' whose row the rules allow and whose model is free now, else a
 /// fresh session of the authors' provider. Its brief ends with where the authors' facts are.
 #[tokio::test]
-async fn an_independent_review_runs_on_another_ready_provider_than_the_authors() {
+async fn an_adversarial_review_runs_on_another_ready_provider_than_the_authors() {
     let answers = Answers::default();
     let seen = answers.clone();
     let script: Script = Arc::new(move |turn| {
@@ -3006,7 +3023,7 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
                 starts.push((
                     "of the session by default",
                     StartRequest {
-                        work: Some("independent review".into()),
+                        work: Some("adversarial review".into()),
                         ..review(&[])
                     },
                 ));
@@ -3067,7 +3084,7 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
     );
     assert_eq!(
         seen["of a codex worker"]["row"]["work"],
-        "Independent review"
+        "Adversarial review"
     );
     // The Claude session's own work, with no id: the Codex row, its best-rated reviewer.
     assert_eq!(
@@ -3111,7 +3128,7 @@ async fn an_independent_review_runs_on_another_ready_provider_than_the_authors()
     // A model's own window used up: the next row on another provider whose model is free.
     std::fs::write(
         flow.manager.models_rules_path(),
-        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Independent review | codex | gpt-6-astra | high | One. |\n| Independent review | codex | gpt-6-luna | high | Two. |\n| Independent review | claude | opus | high | Three. |\n",
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Adversarial review | codex | gpt-6-astra | high | One. |\n| Adversarial review | codex | gpt-6-luna | high | Two. |\n| Adversarial review | claude | opus | high | Three. |\n",
     )
     .unwrap();
     let now = crate::now_ms();
@@ -3831,7 +3848,11 @@ async fn a_better_rated_model_is_suggested_and_the_users_order_is_left_unchanged
         reason: "Mine.".into(),
     };
     flow.manager
-        .set_model_rules(std::slice::from_ref(&mine), &[])
+        .set_model_rules(
+            &flow.manager.model_rules().unwrap().revision,
+            std::slice::from_ref(&mine),
+            &[],
+        )
         .unwrap();
     let path = flow.manager.models_rules_path();
     let written = std::fs::read(&path).unwrap();

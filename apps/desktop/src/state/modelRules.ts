@@ -40,7 +40,13 @@ export function useModelRulesRead(once = false): void {
 }
 
 /** Writes the rows and rules to the file; what the daemon read back replaces the view. */
-export async function saveModelRules(rows: readonly GuidanceRow[], rules: readonly ModelRule[]): Promise<void> {
-  const { rules: next } = await request({ method: "setModelRules", rows: [...rows], rules: [...rules] });
+export async function saveModelRules(file: ModelRules, rows: readonly GuidanceRow[], rules: readonly ModelRule[]): Promise<void> {
+  const { rules: next } = await request({ method: "setModelRules", revision: file.revision, rows: [...rows], rules: [...rules] });
   useModelRules.setState({ view: next, error: null });
+}
+
+/** Has a model rewrite rules typed in the user's own words into exact rules and advice notes; nothing is saved. */
+export async function readModelRules(text: string): Promise<ModelRule[]> {
+  const { rules } = await request({ method: "readModelRules", text });
+  return rules;
 }

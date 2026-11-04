@@ -2057,8 +2057,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetModelRules => Response::GetModelRules {
             rules: sessions.model_rules()?,
         },
-        Request::SetModelRules { rows, rules } => Response::SetModelRules {
-            rules: sessions.set_model_rules(&rows, &rules)?,
+        Request::SetModelRules {
+            revision,
+            rows,
+            rules,
+        } => Response::SetModelRules {
+            rules: sessions.set_model_rules(&revision, &rows, &rules)?,
+        },
+        Request::ReadModelRules { text } => Response::ReadModelRules {
+            rules: heap(|| sessions.read_rules(&text)).await?,
         },
         Request::DontResume { conversation_id } => {
             heap(|| sessions.dont_resume(&conversation_id)).await?;

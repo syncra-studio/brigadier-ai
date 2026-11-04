@@ -20,7 +20,7 @@ import { select } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 localStorage.clear();
-const rules: ModelRules = { path: "/tmp/models.md", shipped: [], rows: [], rules: [{ type: "effortCeiling", effort: "high" }], suggestions: [], research: IDLE_RESEARCH };
+const rules: ModelRules = { path: "/tmp/models.md", revision: "fixture", shipped: [], rows: [], rules: [{ type: "effortCeiling", effort: "high" }], suggestions: [], research: IDLE_RESEARCH };
 const efforts = { efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" };
 let created = 0;
 mockIPC((command, payload) => {

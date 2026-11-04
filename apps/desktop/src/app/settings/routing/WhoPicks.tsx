@@ -2,9 +2,11 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { AutoPicks } from "@/app/settings/routing/AutoPicks";
+import { RolePicks } from "@/app/settings/routing/RolePicks";
+import { ROLE_KINDS } from "@/app/settings/routing/roles";
 import { OrderList } from "@/app/settings/routing/OrderList";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
-import { withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
+import { automaticLine, withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Segmented } from "@/components/controls";
 import type { GuidanceRow, ModelRules } from "@/ipc/generated";
@@ -21,9 +23,15 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
   // My order with nothing to start it from (a kind of your own): an empty order, Add model there to fill it.
   const [starting, setStarting] = useState(false);
   const name = workName(row.work);
+  const role = ROLE_KINDS[row.work];
   const save = (order: GuidanceRow[]) => {
     setStarting(false);
-    return action.run(() => saveModelRules(withOrder(rules.rows, row.work, order), rules.rules));
+    // Fusion is one display row but keeps its two work names in the rules file.
+    const works = [...new Set([...row.shipped, ...row.mine].map((found) => found.work))];
+    const rows = role
+      ? works.reduce((saved, work) => withOrder(saved, work, order.filter((found) => found.work === work)), rules.rows)
+      : withOrder(rules.rows, row.work, order);
+    return action.run(() => saveModelRules(rules, rows, rules.rules));
   };
   const choose = (mode: "automatic" | "order") => {
     if (mode === "automatic") {
@@ -31,7 +39,7 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
       // Automatic drops your order (a kind of your own goes with it).
       return row.mine.length > 0 ? save([]) : undefined;
     }
-    if (row.shipped.length > 0) return save(row.shipped.map((shipped) => ({ ...shipped })));
+    if (row.shipped.length > 0) return save((role ? row.rows : row.shipped).map((shipped) => ({ ...shipped })));
     setStarting(true);
   };
   const ordering = row.mine.length > 0 || starting;
@@ -42,7 +50,7 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
           truncate
           quiet
           title="Who picks"
-          line={ordering ? "Your order: the first model your rules allow takes it" : "Automatic: the best-rated models, researched daily"}
+          line={ordering ? (role ? "Your models for each role" : "Your order: the first model your rules allow takes it") : automaticLine(row)}
         />
         <Segmented
           label={`How ${name} picks a model`}
@@ -55,7 +63,9 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
           onChange={choose}
         />
       </div>
-      {ordering ? (
+      {role ? (
+        <RolePicks row={row} kind={role} groups={groups} rules={rules.rules} onSave={ordering ? save : undefined} />
+      ) : ordering ? (
         <OrderList work={row.work} order={row.mine} rules={rules.rules} groups={groups} onSave={save} />
       ) : (
         <AutoPicks row={row} rules={rules.rules} groups={groups} />

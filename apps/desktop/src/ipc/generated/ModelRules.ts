@@ -8,7 +8,7 @@ import type { RoutingSuggestion } from "./RoutingSuggestion";
  * Settings › Routing (S32): the user's rules file, `~/.brigadier/models.md`, read as rows and
  * rules, beside the automatic guidance it overrides.
  */
-export type ModelRules = { path: string, 
+export type ModelRules = { path: string, revision: string, 
 /**
  * The automatic guidance, read only: per kind of work, each agent's best-rated model in
  * rating order; the shipped table's rows for a kind nothing is rated for.

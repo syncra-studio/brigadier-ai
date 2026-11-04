@@ -24,13 +24,16 @@ import { useToasts } from "@/state/toasts";
 
 /*
  * ?drive=1 reads who does what and the rules from the fixture's rules file, opens a shipped kind
- * and makes it My order, changes its effort, adds a model, moves it up and removes both, adds a
- * rule (a clash whose note opens the kind, its preview, for one kind of work, Add, Undo), edits
- * the file by hand and opens the page again (an order, a rule for one work), then opens How a model is picked
+ * and makes it My order, changes its effort, adds a model, moves it up and removes both, adds
+ * rules in its own words (examples fill the box, an error, Brigadier rewriting them, Cancel,
+ * what it will save, Add, Undo), edits the file by hand and opens the page again (an order, rules
+ * for one work, a cap and a minimum that stop a kind, advice), then opens How a model is picked
  * through search and presses Refresh models, writing what it saw (and what the page wrote to the file) to #routing-result
  * (RoutingPageRender.test.ts reads it). Without it the page stays as it opens, for screenshots:
- * ?kind=<name> opens a kind, ?more=strength|steps opens a row of More, ?rule=1|2|3 shows a rule
- * being added (a draft, its preview, added). ?drive=look reads Settings › General's card, select
+ * ?kind=<name> opens a kind, ?more=strength|steps opens a row of More, ?rules=1|2|3|4 shows the
+ * Rules section (its rules with a warning and advice; Add rule opened; what Brigadier will save;
+ * Brigadier rewriting the words). ?drive=role-suggestions takes the better model offered to a
+ * review role, then to a fusion consult. ?drive=look reads Settings › General's card, select
  * and chosen pill, then Routing's cards, a select and the chosen pill of an opened kind, to
  * #routing-result too.
  */
@@ -62,8 +65,18 @@ const SHIPPED: GuidanceRow[] = [
   { work: "Architecture and broad changes", agent: "claude", model: "opus", effort: "high", reason: "Strong default for work that needs judgment across a codebase." },
   { work: "Bounded implementation", agent: "codex", model: "default", effort: "high", reason: "The CLI default suits a well specified coding task." },
   { work: "Mechanical changes and search", agent: "claude", model: "sonnet", effort: "medium", reason: "A smaller model fits a bounded task with clear checks." },
-  { work: "Independent review", agent: "codex", model: "default", effort: "high", reason: "Codex, a second provider, gives an independent reading." },
+  { work: "Adversarial review", agent: "codex", model: "default", effort: "high", reason: "This provider's reviewer; `--reviewing` takes the row on another provider than the author's." },
+  { work: "Adversarial review", agent: "claude", model: "opus", effort: "high", reason: "This provider's reviewer; `--reviewing` takes the row on another provider than the author's." },
   { work: "fusion-claude", agent: "claude", model: "opus", effort: "high", reason: "A fusion's Claude consult: the strongest Claude model." },
+  { work: "fusion-codex", agent: "codex", model: "default", effort: "high", reason: "A fusion's Codex consult: the CLI's own default model." },
+  { work: "Computer use", agent: "claude", model: "opus", effort: "high", reason: "Seeing and using apps on screen takes strong judgment." },
+  { work: "Computer use", agent: "codex", model: "default", effort: "high", reason: "The next choice when the first can't run." },
+  { work: "Fallback", agent: "claude", model: "opus", effort: "high", reason: "A session that moves to Claude Code: when it is asked to, or every account of its own agent is at its limit." },
+  { work: "Fallback", agent: "codex", model: "default", effort: "high", reason: "A session that moves to Codex: when it is asked to, or every account of its own agent is at its limit." },
+  { work: "Conversation titles", agent: "codex", model: "luna", effort: "low", reason: "A small model for short text; use available quota, cost tier and suitability among shipped title choices." },
+  { work: "Conversation titles", agent: "claude", model: "haiku", effort: null, reason: "A small model for short text; use available quota, cost tier and suitability among shipped title choices." },
+  { work: "Rule reading", agent: "claude", model: "sonnet", effort: "medium", reason: "Rewrites the rules you type into exact rules and advice." },
+  { work: "Rule reading", agent: "codex", model: "default", effort: "medium", reason: "The next choice when the first can't run." },
 ];
 
 /** The fixture's rules file: the user's rows (one over a shipped row, one of their own) and rules. */
@@ -77,10 +90,47 @@ const file: { rows: GuidanceRow[]; rules: ModelRule[] } = {
     { type: "effortCeiling", effort: "high" },
   ],
 };
+/** ?drive=role-suggestions: your models for review and Fusion, each Claude role on Sonnet. */
+const roleSuggestions = params.get("drive") === "role-suggestions";
+if (roleSuggestions) {
+  file.rows = [
+    { work: "Adversarial review", agent: "codex", model: "default", effort: "high", reason: "Mine." },
+    { work: "Adversarial review", agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." },
+    { work: "fusion-claude", agent: "claude", model: "sonnet", effort: "medium", reason: "Mine." },
+    { work: "fusion-codex", agent: "codex", model: "default", effort: "high", reason: "Mine." },
+    { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." },
+  ];
+}
+/** ?rules=: the Rules section's screens, over the rules of the approved mockup. */
+const scene = params.get("rules");
+if (scene) {
+  file.rules = [
+    { type: "forbid", names: ["fable"] },
+    { type: "effortCeiling", effort: "high" },
+    { type: "effortCeiling", effort: "medium", model: "opus" },
+    { type: "effortFloor", effort: "high", work: "Adversarial review" },
+    // Before Add, the list doesn't hold the advice the box is about to save (as the mockup shows).
+    ...(scene === "3" || scene === "4" ? [] : [{ type: "advice" as const, text: "Prefer Codex when Claude is busy" }]),
+  ];
+}
+/** The words the screens and the drive type, and what the faked Rule reading makes of them. */
+const TYPED = "never go over high effort and keep sonnet off reviews. prefer codex when claude is busy";
+const READ: ModelRule[] = [
+  { type: "effortCeiling", effort: "high" },
+  { type: "forbid", names: ["sonnet"], work: "Adversarial review" },
+  { type: "advice", text: "Prefer Codex when Claude is busy" },
+];
+/** How long the faked Rule reading takes; scene 4 never ends, to show it rewriting. */
+const READING_MS = scene === "4" ? 3_600_000 : 900;
 /** The ratings' view of Bounded implementation: GPT-6 rates above the Sonnet 5.5 the user put first. */
 const rated = { score: 9, current: 8.5 };
 /** The daemon's suggestion: only for an order whose first is Sonnet, and not dismissed at this rating. */
 const suggestions = (): RoutingSuggestion[] => {
+  if (roleSuggestions) {
+    return file.rows
+      .filter((row) => row.agent === "claude" && row.model === "sonnet")
+      .map(({ work }) => ({ work, row: { work, agent: "claude", model: "opus", effort: "high", reason: "Rated 9.1 of 10 for this work." }, score: 9.1, current: "sonnet", currentScore: 8.5 }));
+  }
   const first = file.rows.find((row) => row.work === "Bounded implementation");
   const dismissed = useApp
     .getState()
@@ -104,6 +154,7 @@ const research: RankingsRefresh = {
 };
 const read = (): ModelRules => ({
   path: "/Users/me/.brigadier/models.md",
+  revision: JSON.stringify(file),
   shipped: SHIPPED,
   rows: [...file.rows],
   rules: [...file.rules],
@@ -131,7 +182,7 @@ mockIPC((command, payload) => {
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     case "getUsage":
-      return { method: req.method, usage: { ...usageView(), models: [...usageView().models, unrated] } };
+      return { method: req.method, usage: { ...usageView(), registry: { ...usageView().registry, updated: "2026-10-21", checkedAtMs: Date.now() - 3 * 3_600_000 - 600_000 }, models: [...usageView().models, unrated] } };
     case "refreshAccounts":
       return { method: req.method, generation: 0 };
     case "checkRegistry":
@@ -140,10 +191,21 @@ mockIPC((command, payload) => {
       reads += 1;
       return { method: req.method, rules: read() };
     case "setModelRules":
+      if (req.revision !== read().revision) throw new Error("Routing changed since this page was read.");
       writes.push({ rows: req.rows, rules: req.rules });
       file.rows = req.rows;
       file.rules = req.rules;
       return { method: req.method, rules: read() };
+    case "readModelRules":
+      return new Promise((resolve, reject) =>
+        setTimeout(
+          () =>
+            req.text.includes("gibberish")
+              ? reject({ code: "invalid", message: "Brigadier couldn't make a rule of that: try other words." })
+              : resolve({ method: req.method, rules: READ }),
+          READING_MS,
+        ),
+      );
     default:
       return { method: req.method };
   }
@@ -169,34 +231,37 @@ const menuItem = (name: string) =>
 const kindButton = (name: string) =>
   all<HTMLButtonElement>('[data-slot="routing-kind"] > button').find((element) => text(element).startsWith(name));
 const openKind = () => document.querySelector('[data-slot="routing-kind"][data-open]');
+const roleRoot = () => openKind()?.querySelector('[data-slot="role-picks"]') ?? document;
+const roleOrder = () => all('[data-slot="ranked-place"]', roleRoot());
 const kinds = () => all('[data-slot="routing-kind"] > button').map(text);
 const ruleRows = () => all('[data-slot="routing-rule"]').map(text);
 const form = () => document.querySelector('[data-slot="routing-rule-form"]');
-const note = () => text(form()?.querySelector('[role="status"], [role="alert"]'));
+const box = () => form()?.querySelector("textarea") ?? null;
+/** Types `words` into the rule box as a user would (React reads the native input event). */
+const type = (words: string) => {
+  const area = box();
+  if (!area) return;
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(area, words);
+  area.dispatchEvent(new Event("input", { bubbles: true }));
+};
+const note = () => text(form()?.querySelector('[role="status"], [role="alert"], [data-slot="routing-rule-read"]'));
 const lastWrite = () => writes.at(-1);
-/** Picks `item` from the menu `trigger` opens: one step presses, the next picks. */
-const pick = (trigger: string, item: string): (() => void)[] => [
-  () => press(button(trigger)),
-  () => menuItem(item)?.click(),
-];
 /** The open model picker's agent row, by its name. */
 const agentRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-agent"]').find((row) => text(row) === name);
 /** The open model picker's model rows: name, then line. */
 const modelRows = () => all('[data-slot="model-picker-model"]').map(text);
 const modelRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-model"]').find((row) => text(row).startsWith(name));
-/** Picks `agent`'s `model` in the model picker `trigger` opens: open, browse the agent, pick. */
-const pickModel = (trigger: string, agent: string, model: string): (() => void)[] => [
-  () => button(trigger)?.click(),
-  () => agentRow(agent)?.click(),
-  () => modelRow(model)?.click(),
-];
+/** The steps that show the Rules section at `stage`, for screenshots. */
+const roleSuggestionLine = (work: string) => document.querySelector(`[data-work="${work}"] [data-slot="routing-suggestion"]`);
 
-/** The steps that show a rule being added, up to `stage`, for screenshots. */
 function ruleSteps(stage: string): (() => void)[] {
-  const steps: (() => void)[] = [() => (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.click()];
+  const steps: (() => void)[] = [() => document.querySelector('[data-slot="routing-rules"]')?.closest("section")?.scrollIntoView({ block: "start" })];
   if (stage === "1") return steps;
-  steps.push(...pickModel("The model the rule is about", "Codex", "GPT-6"));
-  if (stage === "3") steps.push(() => button("Add rule", form() ?? document)?.click());
+  steps.push(() => (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.click());
+  if (stage === "2") return steps;
+  steps.push(() => type(TYPED), () => button("Add", form() ?? document)?.click());
+  // Stage 3 waits for the reading to end; stage 4's never does.
+  if (stage === "3") steps.push(() => {}, () => {}, () => {}, () => {});
   return steps;
 }
 
@@ -216,7 +281,7 @@ function Fixture() {
           if (more === "strength") revealSetting(ROUTING_PAGE_ROWS.strength.label);
           if (more === "steps") revealSetting(ROUTING_PAGE_ROWS.steps.label);
         },
-        ...(params.has("rule") ? ruleSteps(params.get("rule") ?? "") : []),
+        ...(scene ? ruleSteps(scene) : []),
       ];
     } else if (look) {
       steps = [
@@ -232,11 +297,100 @@ function Fixture() {
           setResult(JSON.stringify(seen));
         },
       ];
+    } else if (roleSuggestions) {
+      steps = [
+        () => {
+          seen.lines = all('[data-slot="routing-suggestion"]').map(text);
+          seen.writesBefore = writes.length;
+          button("Use it", roleSuggestionLine("Adversarial review") ?? document)?.click();
+        },
+        () => {
+          seen.afterReview = [...file.rows];
+          seen.linesAfterReview = all('[data-slot="routing-suggestion"]').map(text);
+          button("Use it", roleSuggestionLine("Fusion") ?? document)?.click();
+        },
+        () => {
+          seen.afterFusion = [...file.rows];
+          seen.writes = writes.length;
+          seen.linesAfterFusion = all('[data-slot="routing-suggestion"]').length;
+          setResult(JSON.stringify(seen));
+        },
+      ];
+    } else if (params.get("drive") === "roles") {
+      const roles = ["Adversarial review", "Fusion", "Fallback"];
+      seen.roles = [];
+      steps = roles.flatMap((work) => {
+        const record: Record<string, unknown> = { work };
+        return [
+          () => kindButton(work)?.click(),
+          () => {
+            record.closedHasModel = Boolean(kindButton(work)?.querySelector('[data-slot="now-pick"]'));
+            record.automatic = all('[data-slot="role-pick"]', roleRoot()).map(text);
+            record.note = text(roleRoot().querySelector("p"));
+            record.noFallbackBadges = !roleRoot().textContent?.includes("Picked now") && !roleRoot().textContent?.includes("Next if");
+            button("My order", openKind() ?? document)?.click();
+          },
+          () => {
+            record.initial = lastWrite()?.rows;
+            record.canReorder = Boolean(roleRoot().querySelector('button[aria-label^="Move "]'));
+            const trigger = roleOrder()[0]?.querySelector('button[aria-label$=": effort"]');
+            press(trigger);
+          },
+          () => menuItem("Medium")?.click(),
+          () => {
+            record.afterEffort = lastWrite()?.rows;
+            press(roleOrder()[0]?.querySelector('button[aria-label$=": actions"]'));
+          },
+          () => menuItem("Change model")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+          () => {
+            record.agents = all('[data-slot="model-picker-agent"]').map(text);
+            modelRow(work === "Adversarial review" ? "GPT-6 Luna" : "Sonnet 5.5")?.click();
+          },
+          () => {
+            record.afterFirstModel = lastWrite()?.rows;
+            press(roleOrder()[1]?.querySelector('button[aria-label$=": effort"]'));
+          },
+          () => menuItem("Low")?.click(),
+          () => {
+            record.afterSecondEffort = lastWrite()?.rows;
+            press(roleOrder()[1]?.querySelector('button[aria-label$=": actions"]'));
+          },
+          () => menuItem("Change model")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+          () => modelRow(work === "Adversarial review" ? "Sonnet 5.5" : "GPT-6 Luna")?.click(),
+          () => {
+            record.afterBothModels = lastWrite()?.rows;
+            record.labelsAfterEdit = roleOrder().map(text);
+            button("Automatic", openKind() ?? document)?.click();
+          },
+          () => {
+            record.afterReset = lastWrite()?.rows;
+            record.reset = all('[data-slot="role-pick"]', roleRoot()).map(text);
+            (seen.roles as unknown[]).push(record);
+          },
+        ];
+      });
+      steps.push(
+        () => kindButton("Conversation titles")?.click(),
+        () => {
+          seen.noEffort = all('[data-slot="auto-pick"]', openKind() ?? document).map(text);
+          kindButton("Computer use")?.click();
+        },
+        () => {
+          seen.fallbackOrder = all('[data-slot="auto-pick"]', openKind() ?? document).map(text);
+          revealSetting(ROUTING_PAGE_ROWS.refresh.label);
+        },
+        () => {
+          seen.refreshOpensStrength = Boolean(document.querySelector('[data-slot="model-strength"]'));
+          seen.refreshInHeader = Boolean(document.querySelector('header [data-setting="Refresh models"]'));
+          setResult(JSON.stringify(seen));
+        },
+      );
     } else {
       steps = [
         () => {
           seen.note = text(document.querySelector('[data-slot="settings-page"] header'));
           seen.sections = all("section h2").map(text);
+          seen.sources = text(document.querySelector('[data-slot="who-does-what"]')?.closest("section")?.querySelector("p"));
           seen.rulesDescription = text(document.querySelector('[data-slot="routing-rules"]')?.closest("section")?.querySelector("p"));
           seen.kinds = kinds();
           seen.rules = ruleRows();
@@ -328,27 +482,48 @@ function Fixture() {
         },
         () => {
           seen.form = text(form());
-          seen.addDisabled = button("Add rule", form() ?? document)?.disabled;
-          seen.headerAddDisabled = (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.disabled;
+          seen.addDisabled = button("Add", form() ?? document)?.disabled;
+          seen.headerAddShown = Boolean(document.querySelector('[data-slot="add-rule"]'));
+          button("Never use Sonnet", form() ?? document)?.click();
         },
-        ...pickModel("The model the rule is about", "Claude Code", "Opus 5.5"),
+        () => button("Never go above High effort", form() ?? document)?.click(),
         () => {
-          seen.clash = note();
-          seen.openAfterClash = all('[data-slot="routing-kind"][data-open]').length;
-          button("Open Architecture and broad changes", form() ?? document)?.click();
+          // Examples fill the box, one a line.
+          seen.filled = box()?.value;
+          type("gibberish");
+        },
+        () => button("Add", form() ?? document)?.click(),
+        () => {
+          seen.reading = note();
+          seen.readingButton = [text(button("Reading…", form() ?? document)), button("Reading…", form() ?? document)?.disabled, box()?.disabled];
+          seen.readsAsked = asked.filter((method) => method === "readModelRules").length;
+        },
+        () => {},
+        () => {},
+        () => {
+          // An error is one plain line; the words stay to change.
+          seen.readError = note();
+          seen.keptWords = box()?.value;
+          type(TYPED);
+        },
+        () => button("Add", form() ?? document)?.click(),
+        () => {
+          seen.readingAgain = note();
+          button("Cancel", form() ?? document)?.click();
         },
         () => {
-          // The note opens the kind it names in Who does what.
-          seen.openedByNote = openKind()?.getAttribute("data-work");
+          // Cancel while it rewrites stops waiting and keeps the words.
+          seen.afterCancel = { open: Boolean(form()), words: box()?.value, note: note() };
+          button("Add", form() ?? document)?.click();
         },
-        ...pickModel("The model the rule is about", "Codex", "GPT-6"),
+        () => {},
+        () => {},
+        () => {},
         () => {
-          seen.preview = note();
-        },
-        ...pick("The work the rule is for", "Mechanical changes and search"),
-        () => {
-          seen.scoped = note();
-          button("Add rule", form() ?? document)?.click();
+          // A reply to the cancelled reading changed nothing; this one shows what Brigadier will save.
+          seen.read = note();
+          seen.writesBeforeAdd = writes.length;
+          button("Add", form() ?? document)?.click();
         },
         () => {
           seen.formAfterAdd = Boolean(form());
@@ -366,18 +541,30 @@ function Fixture() {
             { work: "Docs", agent: "claude", model: "sonnet", effort: "low", reason: "Hand edit." },
             { work: "Docs", agent: "codex", model: "gpt-6", effort: null, reason: "Hand edit." },
           ];
-          file.rules = [...file.rules, { type: "allow", agent: "codex", names: ["gpt-6"] }, { type: "forbid", names: ["opus"], work: "Architecture and broad changes" }, { type: "forbid", names: ["sonnet"], work: "Docs" }];
+          file.rules = [
+            ...file.rules,
+            { type: "allow", agent: "codex", names: ["gpt-6"] },
+            { type: "forbid", names: ["opus"], work: "Architecture and broad changes" },
+            { type: "forbid", names: ["sonnet"], work: "Docs" },
+            { type: "effortCeiling", effort: "medium", model: "opus" },
+            { type: "effortFloor", effort: "high", work: "Adversarial review" },
+            { type: "advice", text: "Prefer Codex when Claude is busy" },
+          ];
           openSettings("general");
         },
         () => openSettings("routing"),
         () => {
           seen.kindsAfterHandEdit = kinds();
           seen.rulesAfterHandEdit = ruleRows();
+          seen.warnings = all('[data-slot="routing-rule-warning"]').map(text);
+          // × removes a rule.
+          button("Remove “Prefer Codex when Claude is busy”")?.click();
           kindButton("Architecture and broad changes")?.click();
         },
         () => {
           // Your rule for that work keeps the shipped model out: Automatic says so.
           seen.skipped = text(openKind()?.querySelector('[data-slot="auto-picks"]'));
+          seen.afterRemoveRule = lastWrite()?.rules.map((rule) => rule.type);
           revealSetting(ROUTING_PAGE_ROWS.steps.label);
         },
         () => {
