@@ -37,7 +37,7 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.match(String(seen.patternError), /valid regular expression/);
   assert.equal(seen.cleared, true, "a cleared query clears the results");
   assert.equal(seen.waitingReplace, false, "no Replace before the session's own copy exists");
-  assert.match(String(seen.waitingNote), /own copy/);
+  assert.equal(seen.waitingNote, null, "no note about it");
   assert.ok(Number(seen.manyDrawn) < 100, `only the rows in view are drawn, not 1,800: ${String(seen.manyDrawn)}`);
   assert.equal(seen.tabStops, 1, "one row takes Tab");
   assert.equal(seen.down, "src/many-0.ts:1", "down goes to the file's first line");
@@ -58,4 +58,12 @@ test("Search streams grouped results, opens a line, asks again on its options, r
   assert.equal(seen.metaBackspaceFocus, "src/many-297.ts");
   assert.equal(seen.manyConfirm, "Replace 1,485 matches in 297 files?");
   assert.equal(seen.manyReplaced, 297, "Replace all takes every file, drawn or not");
+  assert.equal(seen.draftReplace, true, "a draft replaces straight away");
+  assert.equal(seen.clearWhenEmpty, true, "nothing to clear");
+  assert.equal(seen.draftRefreshed, "3 results in 2 files", "Refresh finds again, a dismissed file too");
+  assert.equal(seen.draftCollapsed, true, "Collapse all leaves the files");
+  assert.equal(seen.draftExpanded, true, "Expand all brings the lines back");
+  assert.equal(seen.detailsAtFirst, false, "files to include and exclude start closed");
+  assert.equal(seen.detailsRemembered, true, "open stays open when the view opens again");
+  assert.deepEqual(seen.draftCleared, ["", "", ""], "Clear empties the fields");
 });

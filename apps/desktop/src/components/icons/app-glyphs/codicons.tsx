@@ -79,6 +79,13 @@ export const CollapseAllGlyph: FC<GlyphProps> = ({ className, ...props }) => (
   </svg>
 );
 
+/** Clear: lines of text with a cross. */
+export const ClearAllGlyph: FC<GlyphProps> = ({ className, ...props }) => (
+  <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden className={cn("size-icon-text", className)} {...props}>
+    <path d="M10 12.6l.7.7 1.6-1.6 1.6 1.6.8-.7L13 11l1.7-1.6-.8-.8-1.6 1.7-1.6-1.6-.7.7 1.6 1.6-1.6 1.6zM1 4h14V3H1v1zm0 3h14V6H1v1zm8 2.5V9H1v1h8v-.5zM9 13v-1H1v1h8z" />
+  </svg>
+);
+
 /** More: three dots. */
 export const MoreGlyph: FC<GlyphProps> = ({ className, ...props }) => (
   <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden className={cn("size-icon-text", className)} {...props}>

@@ -18,7 +18,7 @@ export type ProjectDraftPaneProps = {
 /**
  * Files, Search and Source before a session starts: its project folder. A draft has no tabs, so
  * a file goes into the message as `@path`. A session that will work on its own worktree only
- * reads Source and Search there; one in the local checkout works on them.
+ * reads Source there; one in the local checkout works on it. Search and Replace always work.
  */
 export function ProjectDraftPane({ projectId, tab, searchRequest, onSearchHandled }: ProjectDraftPaneProps) {
   const aui = useAui();
@@ -36,7 +36,7 @@ export function ProjectDraftPane({ projectId, tab, searchRequest, onSearchHandle
   return tab === "files" ? (
     <ProjectFiles projectId={projectId} searchRequest={searchRequest} onSearchHandled={onSearchHandled} onOpen={mention} />
   ) : tab === "search" ? (
-    <SearchPanel target={searchTarget} onOpen={mention} readOnly={readOnly} />
+    <SearchPanel target={searchTarget} onOpen={mention} />
   ) : (
     <SourcePanel target={{ type: "project", projectId, readOnly }} />
   );
