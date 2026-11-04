@@ -25,6 +25,14 @@ const ENDED: readonly TaskState[] = ["rejected", "stopped", "failed"];
 /** Over: the worker is gone and takes no message (`TaskState::is_final`). */
 const FINAL: readonly TaskState[] = ["landed", "done", ...ENDED];
 
+/**
+ * Its worker draws the mockup now: the first turn, or a round of the user's notes, until that
+ * turn ends. A later turn of the same worker on other work doesn't (#636). A task stored before
+ * `mockupDrawing` existed reads drawing only while its first turn has no screenshot yet.
+ */
+const drawing = (task: Task, shots: readonly ArtifactRef[]) =>
+  WORKING.includes(task.state) && (task.mockupDrawing === true || shots.length === 0);
+
 /** The number in `<prefix>-N.<image ext>`, or null. */
 export function shotNumber(name: string, prefix: string): number | null {
   const match = new RegExp(`^${prefix}-(\\d+)\\.(png|jpe?g|webp|gif)$`, "i").exec(name);
@@ -78,7 +86,7 @@ export function mockupOf(tasks: Readonly<Record<string, Task>>): Mockup | null {
   const status: MockupStatus = matching && WORKING.includes(matching.state) ? "matching"
     : matching && live.length ? "compared"
       : matching && !ENDED.includes(matching.state) ? "matching"
-        : WORKING.includes(task.state) ? "building"
+        : drawing(task, shots) ? "building"
           : ENDED.includes(task.state) && !shots.length ? "stopped" : "ready";
   return { task, matching, version: task.reworkRounds + 1, status, shots, pairs };
 }
@@ -88,7 +96,7 @@ export function mockupOf(tasks: Readonly<Record<string, Task>>): Mockup | null {
  * made new ones, or was sent back and is done again, even with the same ones.
  */
 export function revisedSince(mockup: Mockup, sent: { version: number; shots: readonly string[] }): boolean {
-  if (WORKING.includes(mockup.task.state)) return false;
+  if (drawing(mockup.task, mockup.shots)) return false;
   return mockup.shots.map((ref) => ref.id).join() !== sent.shots.join() || mockup.version > sent.version;
 }
 
