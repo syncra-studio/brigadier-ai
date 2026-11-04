@@ -2382,13 +2382,13 @@ impl Core {
     }
 
     /// The conversations whose worktrees are remembered.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn remembered_task_worktrees(&self) -> HashSet<ConversationId> {
         self.task_worktrees_seen().keys().cloned().collect()
     }
 
     /// The conversations whose boards are kept loaded.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn kept_boards(&self) -> HashSet<ConversationId> {
         self.boards.lock().await.keys().cloned().collect()
     }
