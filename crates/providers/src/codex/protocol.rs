@@ -564,6 +564,9 @@ pub enum CodexErrorInfo {
         #[serde(rename = "turnKind")]
         turn_kind: NonSteerableTurnKind,
     },
+    /// A kind these bindings don't know yet, from a newer Codex.
+    #[serde(untagged)]
+    Unknown(::serde_json::Value),
 }
 ///`CollabAgentState`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -6936,6 +6939,8 @@ pub enum TurnStatus {
     Failed,
     #[serde(rename = "inProgress")]
     InProgress,
+    #[serde(rename = "unknown", other)]
+    Unknown,
 }
 impl ::std::fmt::Display for TurnStatus {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
@@ -6944,6 +6949,7 @@ impl ::std::fmt::Display for TurnStatus {
             Self::Interrupted => f.write_str("interrupted"),
             Self::Failed => f.write_str("failed"),
             Self::InProgress => f.write_str("inProgress"),
+            Self::Unknown => f.write_str("unknown"),
         }
     }
 }
@@ -6955,6 +6961,7 @@ impl ::std::str::FromStr for TurnStatus {
             "interrupted" => Ok(Self::Interrupted),
             "failed" => Ok(Self::Failed),
             "inProgress" => Ok(Self::InProgress),
+            "unknown" => Ok(Self::Unknown),
             _ => Err("invalid value".into()),
         }
     }

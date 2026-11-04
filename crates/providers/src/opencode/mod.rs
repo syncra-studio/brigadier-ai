@@ -856,6 +856,7 @@ impl Provider for OpenCode {
                         ledger: Some(ledger.clone()),
                         sweep_dir: spec.sweep_dir.clone(),
                         keeps_detached: spec.keeps_detached,
+                        ..process::Options::default()
                     },
                     recorder,
                 )
@@ -1252,7 +1253,15 @@ impl Server {
         let process::Spawned {
             process,
             mut stdout,
-        } = process::spawn(platform, &spec, options)?;
+        } = process::spawn(
+            platform,
+            &spec,
+            // Past its first line (where it listens), its stdout is logs.
+            process::Options {
+                stdout_is_log: true,
+                ..options
+            },
+        )?;
         let first = tokio::time::timeout(START_TIMEOUT, stdout.recv()).await;
         // What it prints later (its logs) is read and dropped, so it never blocks on a full pipe.
         tokio::spawn(async move { while stdout.recv().await.is_some() {} });

@@ -673,7 +673,7 @@ impl Codex {
         recorder: Option<Arc<Recorder>>,
         ledger: Option<Arc<dyn Ledger>>,
         private_logs: bool,
-    ) -> Result<(Arc<Rpc>, mpsc::Receiver<String>)> {
+    ) -> Result<(Arc<Rpc>, process::Lines)> {
         let spec = self.server_spec(&self.binary()?, cwd, session);
         let redactor = session.and_then(|session| session.redactor.clone());
         let process::Spawned { process, stdout } = process::spawn(
@@ -686,6 +686,7 @@ impl Codex {
                 ledger,
                 sweep_dir: session.and_then(|session| session.sweep_dir.clone()),
                 keeps_detached: session.is_some_and(|session| session.keeps_detached),
+                ..process::Options::default()
             },
         )?;
         Ok((Arc::new(Rpc::new(process)), stdout))
@@ -731,7 +732,7 @@ impl Codex {
     /// Initializes the app-server `rpc` reads from `stdout`, runs `work`, then shuts it down.
     async fn control_on<T>(
         rpc: Arc<Rpc>,
-        stdout: mpsc::Receiver<String>,
+        stdout: process::Lines,
         work: impl AsyncFnOnce(&Rpc) -> Result<T>,
     ) -> Result<T> {
         let reader = tokio::spawn(control_reader(rpc.clone(), stdout));
@@ -1170,7 +1171,7 @@ fn terminal_servers(
 }
 
 /// Serves a control app-server's output: only responses matter.
-async fn control_reader(rpc: Arc<Rpc>, mut stdout: mpsc::Receiver<String>) {
+async fn control_reader(rpc: Arc<Rpc>, mut stdout: process::Lines) {
     let mut parser = Parser::live().with_private_logs(rpc.process.private_logs());
     while let Some(line) = stdout.recv().await {
         for output in parser.feed(&line) {
@@ -3377,7 +3378,7 @@ async fn withdraw_questions(shared: &Shared, rpc_id: Option<&Value>) {
 /// tool calls run without asking.
 async fn read_loop(
     rpc: Arc<Rpc>,
-    mut stdout: mpsc::Receiver<String>,
+    mut stdout: process::Lines,
     shared: Arc<Shared>,
     trusted: HashSet<String>,
 ) {
@@ -5317,5 +5318,191 @@ for line in sys.stdin:
             )
             .unwrap();
         }
+    }
+
+    /// A Codex app-server stand-in that prints `lines`, then runs a minute without reading its
+    /// input: a batch file on Windows, a shell script elsewhere.
+    fn deaf_app_server(dir: &Path, lines: &[&[u8]]) -> brigadier_sandbox::SpawnSpec {
+        let mut script = Vec::new();
+        if cfg!(windows) {
+            script.extend(b"@echo off\r\n");
+            for line in lines {
+                script.extend(b"echo ");
+                script.extend(*line);
+                script.extend(b"\r\n");
+            }
+            script.extend(b"ping -n 60 127.0.0.1 >nul\r\n");
+            let path = dir.join("app-server.cmd");
+            std::fs::write(&path, script).unwrap();
+            brigadier_sandbox::SpawnSpec::new(&path)
+        } else {
+            for line in lines {
+                script.extend(b"printf '%s\\n' '");
+                script.extend(*line);
+                script.extend(b"'\n");
+            }
+            script.extend(b"sleep 60\n");
+            let path = dir.join("app-server.sh");
+            std::fs::write(&path, script).unwrap();
+            brigadier_sandbox::SpawnSpec::new("sh").arg(path.display().to_string())
+        }
+    }
+
+    /// A session on `spec`'s process, its turn running once the process says so, and the
+    /// events it sends.
+    fn deaf_session(
+        scratch: &Path,
+        spec: &brigadier_sandbox::SpawnSpec,
+        options: process::Options,
+    ) -> (CodexSession, mpsc::Receiver<ProviderEvent>) {
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(scratch.join("data")),
+        })
+        .unwrap();
+        let process::Spawned { process, stdout } = process::spawn(platform, spec, options).unwrap();
+        let rpc = Arc::new(Rpc::new(process));
+        let (events_tx, events) = mpsc::channel(EVENTS);
+        let shared = Arc::new(Shared {
+            approvals: Mutex::new(HashMap::new()),
+            turn_id: Mutex::new(None),
+            commands: Mutex::default(),
+            terminals: Mutex::default(),
+            compact_asked: AtomicBool::new(false),
+            events: Events::new(events_tx, None),
+            thread: Mutex::new(Some("t".into())),
+            own_mcp: HashSet::new(),
+            mcp_listing: AtomicBool::new(false),
+            mcp_relist: Mutex::new(McpRelist::default()),
+        });
+        tokio::spawn(read_loop(
+            rpc.clone(),
+            stdout,
+            shared.clone(),
+            HashSet::new(),
+        ));
+        let session = CodexSession {
+            context_window: None,
+            thread_id: "t".into(),
+            ephemeral: true,
+            compacts: false,
+            rpc,
+            shared,
+            access: Access::Ask,
+            tools: ToolSet::Thread,
+            writable_roots: Vec::new(),
+            effort: None,
+            cwd: scratch.to_path_buf(),
+            model: "gpt-6.1-sol".into(),
+            thread_effort: None,
+            plan: Mutex::new(None),
+        };
+        (session, events)
+    }
+
+    const TURN_STARTED: &str = r#"{"method":"turn/started","params":{"threadId":"t","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#;
+
+    /// The stderr tail the session's exit reports, once it ends.
+    async fn exit_tail(events: &mut mpsc::Receiver<ProviderEvent>) -> String {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match events.recv().await {
+                    Some(ProviderEvent::Exited { stderr_tail, .. }) => {
+                        break stderr_tail.unwrap_or_default();
+                    }
+                    Some(_) => {}
+                    None => panic!("the events ended without an exit"),
+                }
+            }
+        })
+        .await
+        .expect("the session never ended")
+    }
+
+    /// #755: Stop alone recovers a session whose CLI stopped reading its input partway through
+    /// a message (a pasted image): the interrupt gives up within the write limit instead of
+    /// queuing forever behind that write, and the CLI is ended, which ends the session and its
+    /// turn. No shutdown is asked for.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stop_recovers_a_cli_that_stopped_reading_its_input() {
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-deaf-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let spec = deaf_app_server(&scratch, &[TURN_STARTED.as_bytes()]);
+        let (session, mut events) = deaf_session(
+            &scratch,
+            &spec,
+            process::Options {
+                write_timeout: Some(Duration::from_millis(500)),
+                ..process::Options::default()
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while session.turn_id().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the turn never started");
+        let pasting = tokio::spawn({
+            let rpc = session.rpc.clone();
+            async move { rpc.process.write_line(&"x".repeat(16 << 20)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let stopped = tokio::time::timeout(Duration::from_secs(20), session.interrupt())
+            .await
+            .expect("Stop waited forever behind a write the CLI doesn't read");
+        assert!(stopped.is_err(), "{stopped:?}");
+        let tail = exit_tail(&mut events).await;
+        assert!(tail.contains("cut short"), "{tail}");
+        assert!(session.turn_id().is_none(), "the turn still runs");
+        assert!(pasting.await.unwrap().is_err());
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// #769: a turn's end too long to read (past the stdout line limit) ends the session rather
+    /// than leaving its turn running forever: it is never handed on cut short, the CLI is ended,
+    /// and the exit says why.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_turn_end_too_long_to_read_ends_the_session() {
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-long-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let completed = format!(
+            r#"{{"method":"turn/completed","params":{{"threadId":"t","turn":{{"id":"turn-1","items":[],"status":"completed","pad":"{}"}}}}}}"#,
+            "x".repeat(4000)
+        );
+        let spec = deaf_app_server(&scratch, &[TURN_STARTED.as_bytes(), completed.as_bytes()]);
+        let (session, mut events) = deaf_session(
+            &scratch,
+            &spec,
+            process::Options {
+                stdout_line_max: Some(1024),
+                ..process::Options::default()
+            },
+        );
+        let tail = exit_tail(&mut events).await;
+        assert!(tail.contains("longer than the 1 KiB"), "{tail}");
+        assert!(session.turn_id().is_none(), "the turn still runs");
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// #769: a stdout line that isn't UTF-8 no longer ends the reader: the turn that starts
+    /// after it still shows.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_line_that_is_not_text_does_not_end_the_output() {
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-bytes-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let spec = deaf_app_server(&scratch, &[b"\xff\xfe not text", TURN_STARTED.as_bytes()]);
+        let (session, _events) = deaf_session(&scratch, &spec, process::Options::default());
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while session.turn_id().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the turn after a line that isn't text never showed");
+        session.rpc.process.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 }
