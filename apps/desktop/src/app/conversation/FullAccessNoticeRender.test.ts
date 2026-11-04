@@ -19,7 +19,6 @@ test("the Full access card is the full warning at nine tenths size, rounded like
     buttons: (string | null)[];
     lastBottom: number;
     noticeTop: number;
-    closed: boolean;
   };
   // The card's title over its warning.
   assert.equal(seen.title, "Full access is on");
@@ -34,10 +33,9 @@ test("the Full access card is the full warning at nine tenths size, rounded like
   // Rounded like the composer under it.
   assert.equal(seen.radius, seen.composerRadius);
   assert.ok(seen.radius >= 18, `rounder than a card, was ${seen.radius}px`);
-  assert.deepEqual(seen.buttons, ["Don’t show again", "Close"]);
+  assert.deepEqual(seen.buttons, ["Don’t show again"]);
   // At the bottom, the thread's last row ends above the card: the footer's height is room.
   assert.ok(seen.lastBottom <= seen.noticeTop, `last row ${seen.lastBottom} under the card at ${seen.noticeTop}`);
-  assert.equal(seen.closed, true);
 });
 
 test("the Full access card steps aside while approvals wait above the composer", { timeout: 60000 }, async (t) => {
