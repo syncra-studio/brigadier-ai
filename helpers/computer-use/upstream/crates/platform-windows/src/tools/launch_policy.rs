@@ -206,7 +206,12 @@ fn blocking_window_owner(app: &str, which: &str, unconfirmed_launch: bool) -> St
     }
 }
 
-pub(crate) fn notepad_open_refusal(titles: &[String], unconfirmed_launch: bool) -> String {
+/// `in_front`: one of the blocking windows is the user's front window.
+pub(crate) fn notepad_open_refusal(
+    titles: &[String],
+    unconfirmed_launch: bool,
+    in_front: bool,
+) -> String {
     let named = titles
         .iter()
         .filter(|title| !title.is_empty())
@@ -220,7 +225,12 @@ pub(crate) fn notepad_open_refusal(titles: &[String], unconfirmed_launch: bool) 
     };
     let owner = blocking_window_owner("Notepad", &which, unconfirmed_launch);
     let would = if unconfirmed_launch { "could" } else { "would" };
-    format!("No app was launched: Notepad is already open in {owner}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it {would} appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
+    let front = if in_front {
+        " Notepad is the user's front window right now."
+    } else {
+        ""
+    };
+    format!("No app was launched: Notepad is already open in {owner}.{front} Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it {would} appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. This is a limitation of Windows Notepad, not a temporary failure: Notepad has no way to open a file in a window of its own, so a retry is refused the same way while that Notepad window is open. Ask the user to close Notepad first, or use another editor.")
 }
 
 /// A window counts as the user's open window unless DWM reports it cloaked
@@ -309,17 +319,30 @@ mod fresh_document_tests {
         assert!(foreign_notepad_windows(&[], &[]).is_empty());
         assert!(foreign_notepad_windows(&[7, 9], &[7, 9, 11]).is_empty());
         assert_eq!(foreign_notepad_windows(&[7, 8], &[7]), vec![8]);
-        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()], false);
+        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()], false, false);
         assert!(refusal.starts_with("No app was launched"));
         assert!(refusal.contains("\"notes.txt - Notepad\""));
         assert!(refusal.contains("close Notepad"));
         assert!(refusal.contains("this helper did not open"));
-        assert!(!notepad_open_refusal(&[String::new()], false).contains("()"));
+        assert!(!refusal.contains("front window right now"));
+        assert!(!notepad_open_refusal(&[String::new()], false, false).contains("()"));
+    }
+    #[test]
+    fn notepad_refusal_says_it_is_a_lasting_limitation_and_names_the_front_window() {
+        for in_front in [false, true] {
+            let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()], false, in_front);
+            assert!(refusal.contains("limitation of Windows Notepad, not a temporary failure"));
+            assert!(refusal.contains("a retry is refused the same way"));
+            assert_eq!(
+                refusal.contains("Notepad is the user's front window right now."),
+                in_front
+            );
+        }
     }
     #[test]
     fn a_window_after_an_unconfirmed_launch_is_not_called_the_users_for_sure() {
         for refusal in [
-            notepad_open_refusal(&["Untitled - Notepad".into()], true),
+            notepad_open_refusal(&["Untitled - Notepad".into()], true, false),
             settings_open_refusal(&["Settings".into()], true),
         ] {
             assert!(refusal.starts_with("No app was launched"));

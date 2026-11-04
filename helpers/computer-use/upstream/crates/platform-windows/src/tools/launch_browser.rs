@@ -341,6 +341,19 @@ pub(super) fn foreign_notepad_windows() -> Vec<(u64, String)> {
         .collect()
 }
 
+/// Whether the user's front window is (or belongs to) one of `windows`.
+pub(super) fn front_window_among(windows: &[u64]) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
+    let front = unsafe { GetForegroundWindow() };
+    if front.0.is_null() {
+        return false;
+    }
+    let root = unsafe { GetAncestor(front, GA_ROOT) };
+    [front, root]
+        .iter()
+        .any(|window| !window.0.is_null() && windows.contains(&(window.0 as usize as u64)))
+}
+
 /// Held by a Notepad launch that found no foreign window: when its reply is
 /// built, every Notepad window then open came from this helper's launches.
 pub(super) struct OwnNotepadWindows;

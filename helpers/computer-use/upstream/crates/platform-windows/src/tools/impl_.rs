@@ -2682,10 +2682,17 @@ impl Tool for LaunchAppTool {
                     .await
                     .unwrap_or_default();
             if !foreign.is_empty() {
+                let in_front = super::launch_browser::front_window_among(
+                    &foreign
+                        .iter()
+                        .map(|(window, _)| *window)
+                        .collect::<Vec<_>>(),
+                );
                 let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
                 return ToolResult::error(super::launch_policy::notepad_open_refusal(
                     &titles,
                     super::launch_browser::unconfirmed_notepad_launch(),
+                    in_front,
                 ))
                     .with_structured(json!({"code": "notepad_open_in_user_window", "launch_confirmed": false, "windows": []}));
             }
