@@ -98,7 +98,8 @@ test("rows are named as their message names them, numbers restarting per message
 test("each kind opens its own way: images the viewer, text and scripts the reader, others the default app; what launches is refused", async () => {
   const server = await newServer();
   try {
-    const { attachmentOpens, attachmentSources } = await server.ssrLoadModule("/src/app/conversation/SummaryContent.tsx");
+    const { attachmentSources } = await server.ssrLoadModule("/src/app/conversation/SummaryContent.tsx");
+    const { attachmentOpens } = await server.ssrLoadModule("/src/components/conversation/elements/attachment-open.ts");
     const { useToasts } = await server.ssrLoadModule("/src/state/toasts.ts");
     const kind = (name: string, mime = "application/octet-stream") => attachmentOpens(ref("x", name, mime));
 

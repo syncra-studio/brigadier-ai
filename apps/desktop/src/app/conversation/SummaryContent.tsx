@@ -1,11 +1,14 @@
 import {
   AttachmentIcon,
+  attachmentOpens,
   ImageContextMenu,
   ImagePreview,
   inlineImageLabel,
+  openInDefaultApp,
   type OpenPastedText,
   pastedTextLabel,
   PastedTextOpenerContext,
+  refuse,
   useAttachmentUrl,
   useAui,
   SummaryRow,
@@ -67,7 +70,6 @@ import type {
   WorkerRow,
   WorkerWait,
 } from "@/ipc/generated";
-import { openArtifact } from "@/ipc/client";
 import { getSessionDiff, openConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useCliThread, useSessionMcp, useThreadFact, useWorkerRows } from "@/state/cliThread";
@@ -184,46 +186,6 @@ export function useUsedSources(conversationId: string): UsedSource[] {
   }, [conversationId, messages, pagesSeen, serversUsed, servers]);
 }
 
-/**
- * What the default app would run instead of showing, or can't be read as text: apps, installers,
- * compiled scripts and the links that start something. A blob is copied without an execute bit,
- * but these launch without one or ask to.
- */
-const LAUNCHES = new Set([
-  "app", "command", "tool", "terminal", "workflow", "wflow", "action", "pkg", "mpkg", "dmg", "scpt", "scptd", "osascript", "osax",
-  "prefpane", "saver", "qlgenerator", "kext", "mobileconfig", "shortcut", "widget", "plugin", "bundle", "webloc", "inetloc", "fileloc", "jar", "pyc",
-  "exe", "com", "msi", "msix", "scr", "pif", "vbe", "jse", "wsf", "wsh", "hta", "lnk", "reg", "cpl", "url",
-  "appimage", "desktop", "run", "deb", "rpm",
-]);
-
-/** Source text that runs when launched: the reader shows it and never runs it, whatever its type says (browsers often give none). */
-const SCRIPTS = new Set([
-  "sh", "bash", "zsh", "csh", "tcsh", "ksh", "fish", "py", "pyw", "rb", "pl", "php", "lua", "tcl", "js", "mjs", "cjs", "ps1", "bat", "cmd", "vbs", "applescript",
-]);
-
-function extensionOf(name: string): string {
-  const bare = name.replace(/[.\s]+$/, "");
-  const dot = bare.lastIndexOf(".");
-  return dot < 0 ? "" : bare.slice(dot + 1).toLowerCase();
-}
-
-/** The extension of the copy the daemon writes for the default app: it keeps the name's first 80 characters, which can leave another extension last. */
-function writtenExtension(name: string): string {
-  return extensionOf([...name.replace(/^\.+/, "")].slice(0, 80).join(""));
-}
-
-/** What a click on an attachment's row does: the image viewer, the read-only reader, the default app, or it refuses. */
-export function attachmentOpens(file: AttachmentRef): "viewer" | "reader" | "app" | "refused" {
-  if (file.mime.startsWith("image/")) return "viewer";
-  if (file.pasted) return "reader";
-  const extension = extensionOf(file.name);
-  const written = writtenExtension(file.name);
-  if (LAUNCHES.has(extension) || LAUNCHES.has(written)) return "refused";
-  if (SCRIPTS.has(extension) || file.mime.startsWith("text/") || file.mime === "application/json") return "reader";
-  // Named otherwise, a copy cut down to a script's name still must not reach the default app.
-  return SCRIPTS.has(written) ? "refused" : "app";
-}
-
 /** An attachment's name as its message reads it. */
 function attachmentName(file: AttachmentRef): string {
   if (file.pasted) return pastedTextLabel(file.inline ?? null);
@@ -240,16 +202,6 @@ export function attachmentLabels(files: readonly AttachmentRef[]): Map<string, s
     taken.add(label);
     return [file.id, label];
   }));
-}
-
-function refuse(file: AttachmentRef): void {
-  toast(`${file.name} wasn't opened: it could run a program on this Mac.`, { tone: "error" });
-}
-
-function openInDefaultApp(file: AttachmentRef): void {
-  openArtifact(file.id, file.name).catch((error: unknown) =>
-    toast(error instanceof Error ? error.message : String(error), { tone: "error" }),
-  );
 }
 
 /**
