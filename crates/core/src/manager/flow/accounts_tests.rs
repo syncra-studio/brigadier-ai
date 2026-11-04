@@ -1717,6 +1717,69 @@ async fn a_turn_handed_over_reads_stopped_when_the_user_stops_its_hand_over() {
     flow.stop().await;
 }
 
+/// The user's stop reaches a turn just as a limit ends it, before its hand-over began (seen live:
+/// the carry-on ran on, the stop lost): the turn reads stopped and nothing goes on.
+#[tokio::test]
+async fn a_stop_as_a_limit_ends_the_turn_stops_its_hand_over() {
+    use crate::thread_view::TurnEnd;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (started, go) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let (on_start, on_go) = (started.clone(), go.clone());
+    let carried = Arc::new(AtomicUsize::new(0));
+    let count = carried.clone();
+    let flow = Flow::start(
+        "accounts-hand-over-stop-as-it-ends",
+        session_file(),
+        Arc::new(move |turn: Turn| {
+            let (on_start, on_go, count) = (on_start.clone(), on_go.clone(), count.clone());
+            Box::pin(async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Noted.");
+                }
+                if turn.account.is_some() {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    return Reply::text("Done.");
+                }
+                on_start.notify_one();
+                on_go.notified().await;
+                Reply::limited()
+            })
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.say("First.").await;
+    started.notified().await;
+    let stopping = tokio::spawn({
+        let (manager, chat) = (flow.manager.clone(), flow.conversation.clone());
+        async move { manager.interrupt(chat).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    go.notify_one();
+    stopping.await.unwrap().unwrap();
+    super::eventually("its turn to read stopped", || {
+        last_end(&flow) == Some(TurnEnd::Stopped)
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    assert_eq!(last_end(&flow), Some(TurnEnd::Stopped));
+    assert_eq!(carried.load(Ordering::SeqCst), 0, "nothing went on");
+    let board = flow.board().await;
+    assert!(
+        board
+            .requests
+            .values()
+            .all(|request| request.state == RequestState::Stopped),
+        "{:?}",
+        board.requests
+    );
+    flow.stop().await;
+}
+
 /// A thread already on disk, its last turn handed over and nothing left to carry it on, reads
 /// cut off after a restart, with Continue, not working for good.
 #[tokio::test]

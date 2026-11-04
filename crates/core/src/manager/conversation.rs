@@ -5692,9 +5692,16 @@ impl SessionManager {
                 }
             }
             if limited.is_some() || model_failed {
+                // The user's stop came before its hand-over began: as one during it.
+                let stopped = state.interrupted;
+                if stopped && let Some(request) = &served {
+                    state
+                        .outcomes
+                        .insert(request.clone(), RequestState::Stopped);
+                }
                 state.hand_over = Some(HandOver {
-                    request: served.clone(),
-                    stopped: false,
+                    request: served.clone().filter(|_| !stopped),
+                    stopped,
                 });
             } else {
                 // Read: nothing of it goes again.
@@ -5724,6 +5731,10 @@ impl SessionManager {
         };
         for (item, how, tail) in unread {
             self.lingering_ended(conv, &item, &how, tail).await;
+        }
+        // Stopped as it ended: its request and its turn read so now, whichever way it hands over.
+        if (limit_hit.is_some() || model_failed) && conv.state.lock().await.interrupted {
+            self.settle_requests(&conv.id).await;
         }
         // Its workers' events no wait took reach it now, once (S29).
         self.net_soon(&conv.id);
