@@ -27,7 +27,8 @@ import { foldTranscript, type ThreadEntry, threadEntries } from "@/components/co
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import { ChevronRight } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
-import type { ThreadTurn, ThreadView, WorkerRow } from "@/ipc/generated";
+import type { Approval, ThreadTurn, ThreadView, WorkerRow } from "@/ipc/generated";
+import type { StatusHead } from "@/app/conversation/liveStatus";
 import { formatDuration } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
@@ -193,8 +194,26 @@ function NativeWorkerThread({ conversationId, row }: { conversationId: string; r
     const entries = read && (!held || read.length > held.length) ? read : held;
     return entries ? { entries, turns: [] } : null;
   }, [json, polled]);
-  return <WorkerTranscript row={row} view={view} error={view ? null : error} native />;
+  const awaiting = useBoard((s) => awaitsApproval(s.board?.approvals, callId));
+  return <WorkerTranscript row={row} view={view} error={view ? null : error} native awaiting={awaiting} />;
 }
+
+/**
+ * Whether subagent `callId` waits on the user's approval: a pending approval names it as the
+ * asker (`ApprovalRequest.agent`, which Claude's requests carry). Its call then reads "Awaiting
+ * approval", as the lead's does, not "Running …" (#668).
+ */
+export function awaitsApproval(approvals: Readonly<Record<string, Approval>> | undefined, callId: string): boolean {
+  return Object.values(approvals ?? {}).some(
+    (approval) => approval.state.type === "pending" && approval.subject.type === "cli" && approval.subject.request.agent === callId,
+  );
+}
+
+/** What a subagent's live line says while its call waits on the user's approval. */
+const AWAITING: StatusHead = { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" };
+
+/** A worker's own live words ("Thinking") as its live line. */
+const busyLine = (text: string | null): StatusHead | null => (text === null ? null : { text, tone: "busy" });
 
 /** A subagent's own entries in its parent's thread `parent`. */
 function ownEntries(parent: ThreadView, callId: string): ThreadView["entries"] {
@@ -211,7 +230,7 @@ function SubagentActionRow({ item, owner, view }: { item: Extract<ActionItem, { 
   return <StepRow words={stepWords(call)} status={call.status} trail={ranFor(ran)} onOpen={callId === null ? undefined : () => setPanel(subagentPanel(owner, callId))} />;
 }
 
-function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow; view: ThreadView | null; error: string | null; native?: boolean }) {
+function WorkerTranscript({ row, view, error, native = false, awaiting = false }: { row: WorkerRow; view: ThreadView | null; error: string | null; native?: boolean; awaiting?: boolean }) {
   const clock = useNow(60_000);
   const state = workerStateOf(row, clock);
   const working = row.working;
@@ -237,7 +256,9 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
   const last = entries.at(-1);
   // A thought with no words yet is the live line's "Thinking".
   const thinking = working && last?.kind === "item" && last.item.kind === "reasoning" && last.item.streaming && last.item.text.trim() ? last.item : null;
-  const now = working ? liveLabel(entries) : null;
+  // A call waiting on the user's approval says so, over what the call would be doing.
+  const line: StatusHead | null = awaiting ? AWAITING : working ? busyLine(liveLabel(entries)) : null;
+  const now = line?.text ?? null;
   // The newest group's own row says the live line, one step or several, as the lead's thread does.
   const nowInGroup = !!now && activity.at(-1)?.type === "group";
   const show = (item: (typeof activity)[number], index: number) =>
@@ -245,8 +266,8 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
       <ActivityGroup
         key={`group:${item.key}`}
         items={item.items}
-        live={working && index === activity.length - 1}
-        liveLabel={now && nowInGroup && index === activity.length - 1 ? { text: now, tone: "busy" } : null}
+        live={(working || awaiting) && index === activity.length - 1}
+        liveLabel={line && nowInGroup && index === activity.length - 1 ? line : null}
         describe={(step) => {
           const call = itemCall(step);
           return { words: stepWords(call), status: call.status, exit: exitOf(step) };
@@ -309,7 +330,7 @@ function WorkerTranscript({ row, view, error, native = false }: { row: WorkerRow
         {recent.map((item, index) => show(item, previous.length + index))}
         {switches.rest.map((transition) => <ProviderTransitionDivider key={transition.id} transition={transition} own />)}
         {thinking && <ThinkingLine text={thinking.text} />}
-        {now && !nowInGroup && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
+        {now && !nowInGroup && <div className={cn("shimmer truncate text-sm motion-reduce:animate-none", line?.waitsOn === "approval" && "shimmer-quiet")}>{now}</div>}
         {/* What it waits for, from its row: the user (in its session), or a limit's reset. */}
         {(state.kind === "needsYou" || state.kind === "limit") && <p data-slot="worker-waits" className="text-foreground/65 text-sm">{state.word}</p>}
       </div>
