@@ -850,6 +850,10 @@ async fn a_session_whose_last_target_fails_to_launch_goes_back_without_a_loop() 
         Some(crate::thread_view::TurnEnd::Failed),
         "{view:#?}"
     );
+    // It reads as the start that failed, not as what handed it over.
+    let last = view.turns.last().unwrap();
+    assert_eq!(last.error_kind, None, "{view:#?}");
+    assert_eq!(last.limit, None, "{view:#?}");
     bench.flow.stop().await;
 }
 

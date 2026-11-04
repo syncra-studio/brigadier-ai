@@ -1745,6 +1745,15 @@ async fn a_turn_handed_over_reads_interrupted_after_a_restart_when_nothing_carri
     assert_eq!(last_end(&flow), Some(TurnEnd::HandedOver));
     flow.restart().await;
     assert_eq!(last_end(&flow), Some(TurnEnd::Interrupted));
+    // Its Continue works: its request reads cut off too, and the thread goes on.
+    flow.manager
+        .resume(flow.conversation.clone())
+        .await
+        .unwrap();
+    super::eventually("Continue to go on", || {
+        last_end(&flow) == Some(TurnEnd::Done)
+    })
+    .await;
     flow.stop().await;
 }
 

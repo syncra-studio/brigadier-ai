@@ -601,7 +601,7 @@ impl SessionManager {
     /// `brigadier wait` all read, and a restart runs this for threads already on disk.
     pub(super) async fn end_handed_over_turn(&self, id: &ConversationId) {
         let dir = self.session_dir(id).record();
-        let Some(record) =
+        let Some(mut record) =
             thread_view::last_turn(&dir).filter(|turn| turn.end == Some(TurnEnd::HandedOver))
         else {
             return;
@@ -654,9 +654,23 @@ impl SessionManager {
             {
                 return;
             }
-            // Nothing answered it and nothing will: it reads cut off, with Continue (D84).
+            // Nothing answered it and nothing will: it reads cut off, with Continue (D84),
+            // which only a request that reads cut off too can take.
+            for request in &record.requests {
+                let cut = RequestState::Failed {
+                    error: super::conversation::INTERRUPTED_BY_QUIT.into(),
+                };
+                if let Err(err) = self.core.update_request(id, request, cut, None).await {
+                    tracing::debug!(conversation = %id, error = %err, "could not update a request");
+                }
+            }
             (TurnEnd::Interrupted, None)
         };
+        // Other words than what handed it over: it reads as them, not as that error.
+        if error.is_some() && error != record.error {
+            record.error_kind = None;
+            record.limit = None;
+        }
         let ended = TurnRecord {
             end: Some(end),
             error,
