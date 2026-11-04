@@ -4,7 +4,7 @@ import { newestFailedError, withoutTurnError } from "@/app/conversation/turnErro
 import { useAction } from "@/app/conversation/useAction";
 import { ComposerRailItem } from "@/components/conversation";
 import { Button, TooltipIconButton } from "@/components/controls";
-import { ExclamationMarkCircle, Info, Warning, X } from "@/components/icons";
+import { Info, Warning, X } from "@/components/icons";
 import type { Notice } from "@/ipc/generated";
 import { dismissNotice, loadConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -15,17 +15,12 @@ const NO_NOTICES: Notice[] = [];
 
 /**
  * What the user must act on, or what stopped the turn, in one tray joined to the composer's top
- * (#506): messages that couldn't load (Retry), notices (environment problems, failed work) and a
- * failed run, one row each, newest notice last. Limits and switches are dividers in the thread.
+ * (#506): messages that couldn't load (Retry) and notices (environment problems, failed work, a
+ * failed run no request names), one row each, newest notice last. Limits and switches are
+ * dividers in the thread. A failed run is a notice of the daemon's, so its × persists (#639).
  */
 export const Notices: FC<{ conversationId: string }> = ({ conversationId }) => {
   const notices = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.notices : NO_NOTICES));
-  // A run that failed a request is said by that request in the thread, once.
-  const runError = useBoard((s) =>
-    s.board?.conversationId === conversationId && s.board.run === "failed" && !s.board.runRequest
-      ? (s.board.runError ?? "The model stopped with an error.")
-      : null,
-  );
   // What the newest failed turn already says in the thread is never said again here.
   const turns = useThreadView(conversationId)?.turns;
   const turnError = useMemo(() => (turns ? newestFailedError(turns) : null), [turns]);
@@ -36,13 +31,10 @@ export const Notices: FC<{ conversationId: string }> = ({ conversationId }) => {
     () => withoutTurnError(notices, turnError).filter((notice) => !dismissed.has(notice.atMs)).slice(-3),
     [notices, turnError, dismissed],
   );
-  const failure = runError !== null && runError.trim() !== turnError?.trim() ? runError : null;
-  const [failureDismissed, setFailureDismissed] = useState<string | null>(null);
-  const failed = failure !== null && failure !== failureDismissed;
   // Its messages could not be loaded: said once, with Retry.
   const loadError = useApp((s) => s.threads[conversationId]?.loadError ?? null);
   const reload = useAction();
-  if (shown.length === 0 && !failed && loadError === null) return null;
+  if (shown.length === 0 && loadError === null) return null;
   return (
     <ComposerRailItem label="Notices">
       <ul className="divide-border flex flex-col divide-y">
@@ -91,16 +83,6 @@ export const Notices: FC<{ conversationId: string }> = ({ conversationId }) => {
             {notice.text}
           </NoticeRow>
         ))}
-        {failed && (
-          <NoticeRow
-            slot="run-failure"
-            role="status"
-            icon={<ExclamationMarkCircle aria-hidden className="text-destructive" />}
-            action={<Dismiss label="Dismiss" onClick={() => setFailureDismissed(failure)} />}
-          >
-            {failure}
-          </NoticeRow>
-        )}
       </ul>
     </ComposerRailItem>
   );

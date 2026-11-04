@@ -22,3 +22,17 @@ test("a dismissed notice stays dismissed when the tray is drawn anew, and a new 
   // The problem happening again is a new notice, and it shows.
   assert.deepEqual(seen.again, [ACCOUNT]);
 });
+
+test("a failed run no request names is one row, and its × holds through a fresh read (issue 639)", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "notice-dismiss.html?drive=1&failed=1", "notice-dismiss-result", 10000)) as {
+    before: string[];
+    dismissed: string[];
+    reread: string[];
+    dismissCalls: number;
+  };
+  // The daemon's notice says it; no second row of the run's own.
+  assert.deepEqual(seen.before, ["The CLI session ended unexpectedly."]);
+  assert.deepEqual(seen.dismissed, []);
+  assert.deepEqual(seen.reread, []);
+  assert.equal(seen.dismissCalls, 1);
+});
