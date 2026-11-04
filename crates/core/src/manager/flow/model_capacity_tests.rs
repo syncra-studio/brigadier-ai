@@ -868,6 +868,50 @@ async fn a_session_whose_last_target_fails_to_launch_goes_back_without_a_loop() 
     bench.flow.stop().await;
 }
 
+/// What a failed start kept for the next try doesn't stop a worker's word: it reaches the thread,
+/// or the worker's end would never be heard and its block would wait out the hold for nothing.
+#[tokio::test]
+async fn a_workers_word_wakes_a_session_whose_start_failed() {
+    let bench = bench(
+        "capacity-session-launch-wake",
+        &[("Fallback", "claude", "claude-c")],
+        true,
+        &[THREAD_MODEL],
+        None,
+    )
+    .await;
+    bench
+        .flow
+        .behavior
+        .fail_start_models
+        .lock()
+        .unwrap()
+        .push("claude-c".into());
+    bench.flow.say("Go on with it.").await;
+    bench.until_failed().await;
+    bench.fail(&[]);
+    let worker = crate::work::TaskId("t-word".into());
+    bench.flow.manager.worker_event(
+        &bench.flow.conversation,
+        &worker,
+        None,
+        crate::manager::plain_workers::event(
+            &worker,
+            brigadier_cli::protocol::EventKind::TurnEnded,
+        ),
+    );
+    super::eventually("the worker's word to reach the thread", || {
+        bench
+            .threads
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|turn| turn.input.contains("[worker events wn-"))
+    })
+    .await;
+    bench.flow.stop().await;
+}
+
 /// "Another agent when all are out" off: its only other row is another agent's, so it stays.
 #[tokio::test]
 async fn a_session_with_the_setting_off_stays_on_its_agent() {
