@@ -15,7 +15,7 @@ const command = "Get-ChildItem -Path $env:TEMP -Filter 'brigadier-*' -Recurse | 
 const conversationId = "flow-session";
 const question: Question = {
   id: "cleanup", conversationId, taskId: null, requestId: null, position: 999,
-  kind: { type: "orchestrator" }, text: "", options: [], recommended: null, title: null,
+  kind: { type: "orchestrator" }, text: "", options: [], recommended: null,
   items: [
     {
       text: "Clean up the leftover `brigadier-*` folders in TEMP now?",
