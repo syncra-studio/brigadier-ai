@@ -510,7 +510,8 @@ pub fn headroom(quota: &QuotaSnapshot, model: Option<&str>) -> Option<f64> {
 
 /// Whether a window scoped to `scope` limits `model` as a choice names it: by the same name,
 /// or by the family word the name carries (Claude's `opus` window limits `opus[1m]` and
-/// `claude-opus-5-5`), as `brigadier_router::window_applies` matches a catalog model.
+/// `claude-opus-5-5`), or by the plan it is of (`opencode-go` limits `opencode-go/glm-5.3`), as
+/// `brigadier_router::window_applies` matches a catalog model.
 fn limits(scope: &str, model: &str) -> bool {
     let words = |id: &str| -> Vec<String> {
         id.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
@@ -519,7 +520,10 @@ fn limits(scope: &str, model: &str) -> bool {
             .collect()
     };
     let scope = scope.trim();
-    if scope.is_empty() || scope.eq_ignore_ascii_case(model) {
+    if scope.is_empty()
+        || scope.eq_ignore_ascii_case(model)
+        || brigadier_router::forecast::in_plan(scope, model)
+    {
         return true;
     }
     match words(scope).as_slice() {
@@ -617,6 +621,7 @@ mod tests {
                 kind: LimitKind::UsageWindow,
                 window: Some("five_hour".into()),
                 resets_at_ms: None,
+                model: None,
             }),
             observed_at_ms: 0,
             source: QuotaSource::Read,
@@ -916,6 +921,7 @@ mod tests {
             kind: LimitKind::UsageWindow,
             window: Some("five_hour".into()),
             resets_at_ms: Some(1_000),
+            model: None,
         });
         let other = weekly(Some("work"), 40.0, Some(60));
         for candidate in [&limited, &other] {

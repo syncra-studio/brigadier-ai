@@ -8,4 +8,11 @@ export type LimitHit = {
 /**
  * The window that ran out, when known (`five_hour`, `seven_day`, `primary`, …).
  */
-window: string | null, resetsAtMs: number | null, kind: LimitKind, };
+window: string | null, resetsAtMs: number | null, kind: LimitKind, 
+/**
+ * The models it holds when it holds only some, named as a window's `model` names them,
+ * or a plan whose models' ids start with it and a `/` (OpenCode Go's `opencode-go` holds
+ * `opencode-go/glm-5.3`, not the free `opencode/big-pickle`); absent when it holds every
+ * model of the provider.
+ */
+model?: string, };

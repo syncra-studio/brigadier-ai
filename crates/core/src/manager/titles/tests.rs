@@ -418,6 +418,7 @@ async fn title_routing_uses_work_rows_rules_quota_and_account_selection() {
                 kind: brigadier_providers::LimitKind::UsageWindow,
                 window: None,
                 resets_at_ms: Some(crate::now_ms() + 60_000),
+                model: None,
             }),
             observed_at_ms: crate::now_ms(),
             source: brigadier_providers::QuotaSource::Read,

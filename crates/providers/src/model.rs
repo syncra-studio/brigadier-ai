@@ -320,6 +320,13 @@ pub struct LimitHit {
     pub resets_at_ms: Option<i64>,
     #[serde(default)]
     pub kind: LimitKind,
+    /// The models it holds when it holds only some, named as a window's `model` names them,
+    /// or a plan whose models' ids start with it and a `/` (OpenCode Go's `opencode-go` holds
+    /// `opencode-go/glm-5.3`, not the free `opencode/big-pickle`); absent when it holds every
+    /// model of the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
 }
 
 /// What went wrong, classified so the router can react (fallback, wait, ask the user).

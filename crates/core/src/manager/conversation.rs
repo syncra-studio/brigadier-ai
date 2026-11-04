@@ -5137,6 +5137,7 @@ impl SessionManager {
                                 ErrorKind::Auth => brigadier_providers::LimitKind::SpendControl,
                                 _ => brigadier_providers::LimitKind::UsageWindow,
                             },
+                            model: None,
                         }));
                 }
                 if self.seam_on(conv) && super::fallback::model_failed(error) {

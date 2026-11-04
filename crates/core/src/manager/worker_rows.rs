@@ -1477,6 +1477,7 @@ mod tests {
             window: Some("five_hour".into()),
             resets_at_ms: Some(9_000),
             kind: LimitKind::UsageWindow,
+            model: None,
         };
         follow(
             &mut cli,

@@ -521,7 +521,10 @@ fn approval(data: &Value, called: Option<&Value>) -> ApprovalRequest {
 /// OpenCode's error (`{type, message, status?}`, its types `provider.quota`,
 /// `provider.rate-limit`, `provider.auth`, …) in Brigadier's words. A used-up quota is a usage
 /// limit, as the other CLIs report one; its reset is when OpenCode says to try again
-/// (`retryAfterMs`, from the event's time `at`), when it says (D17).
+/// (`retryAfterMs`, from the event's time `at`), when it says (D17). OpenCode Go's limit
+/// (`provider.go-limit`) holds its plan's models only ([`GO_PLAN`]): a free model, or one of
+/// another provider, still answers (#688). Another quota doesn't say whose it is: it holds
+/// every model.
 pub(crate) fn classify(error: &Value, will_retry: bool, at: Option<i64>) -> ProviderError {
     let code = error["type"].as_str().unwrap_or("unknown").to_owned();
     let message = error["message"].as_str().unwrap_or(&code).to_owned();
@@ -546,10 +549,14 @@ pub(crate) fn classify(error: &Value, will_retry: bool, at: Option<i64>) -> Prov
                 .as_i64()
                 .map(|after| at.unwrap_or_else(crate::now_ms) + after),
             kind: LimitKind::UsageWindow,
+            model: (code == "provider.go-limit").then(|| GO_PLAN.to_owned()),
         }),
         code: Some(code),
     }
 }
+
+/// OpenCode Go's provider: its models' ids are `opencode-go/<model>`.
+pub(crate) const GO_PLAN: &str = "opencode-go";
 
 /// The permission rules a session runs under, after its agent's own (OpenCode's later rule
 /// wins), so each level means what it means on the other CLIs (see the module docs).
@@ -1400,7 +1407,8 @@ mod tests {
             error
                 .limit
                 .as_ref()
-                .is_some_and(|limit| limit.window.is_none())
+                .is_some_and(|limit| limit.window.is_none() && limit.model.is_none()),
+            "a quota that names no plan holds every model"
         );
         assert_eq!(error.code.as_deref(), Some("provider.quota"));
         assert!(matches!(
@@ -1419,7 +1427,8 @@ mod tests {
     }
 
     /// OpenCode Go's limit as `opencode serve` 2.2.3 sends it (checked live): a usage limit
-    /// that resets when OpenCode says to try again, so the wait can say when it resumes.
+    /// that resets when OpenCode says to try again, so the wait can say when it resumes. It
+    /// holds the Go plan's models only, not a free one (#688).
     #[test]
     fn a_go_limit_resets_when_opencode_says_to_try_again() {
         let mut parser = Parser::new(Some(S.into()), None);
@@ -1444,6 +1453,13 @@ mod tests {
         assert_eq!(
             error.limit.as_ref().and_then(|limit| limit.resets_at_ms),
             Some(538_141_000)
+        );
+        assert_eq!(
+            error
+                .limit
+                .as_ref()
+                .and_then(|limit| limit.model.as_deref()),
+            Some("opencode-go")
         );
         assert!(matches!(
             events[2],

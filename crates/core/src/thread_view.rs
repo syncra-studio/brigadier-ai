@@ -1086,6 +1086,7 @@ pub(crate) fn limit_of(error: &brigadier_providers::ProviderError) -> Option<Lim
             window: None,
             resets_at_ms: None,
             kind: Default::default(),
+            model: None,
         }),
         _ => None,
     }
@@ -1470,6 +1471,7 @@ mod tests {
                         window: Some("five_hour".into()),
                         resets_at_ms: Some(1793100600000),
                         kind: Default::default(),
+                        model: None,
                     }),
                     code: Some("rate_limit".into()),
                 },
@@ -1562,6 +1564,7 @@ mod tests {
             window: Some("primary".into()),
             resets_at_ms: Some(1793100600000),
             kind: Default::default(),
+            model: None,
         };
         let entries = Arc::new(vec![message("user", Role::User)]);
         let cut = TurnRecord {

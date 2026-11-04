@@ -102,6 +102,7 @@ async fn a_reset_behind_a_second_window_still_shows() {
                 kind: brigadier_providers::LimitKind::UsageWindow,
                 window: Some("seven_day".into()),
                 resets_at_ms: Some(weekly),
+                model: None,
             }),
             observed_at_ms: crate::now_ms(),
             source: brigadier_providers::QuotaSource::Read,
@@ -156,6 +157,7 @@ async fn another_account_taking_over_is_no_reset() {
                 kind: brigadier_providers::LimitKind::UsageWindow,
                 window: Some("seven_day".into()),
                 resets_at_ms: Some(crate::now_ms() + 3_600_000),
+                model: None,
             }),
             observed_at_ms: crate::now_ms(),
             source: brigadier_providers::QuotaSource::Read,
@@ -448,6 +450,7 @@ async fn limited_flow_n(
                             kind,
                             window: Some("five_hour".into()),
                             resets_at_ms: resets_in_ms.map(|ms| crate::now_ms() + ms),
+                            model: None,
                         }),
                         ..Reply::default()
                     }

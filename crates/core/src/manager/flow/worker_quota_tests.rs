@@ -51,6 +51,7 @@ async fn flow(
                             window: Some("five_hour".into()),
                             resets_at_ms: Some(crate::now_ms() + reset_ms),
                             kind: LimitKind::UsageWindow,
+                            model: None,
                         }),
                         ..Reply::default()
                     };

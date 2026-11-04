@@ -2101,6 +2101,7 @@ async fn a_resume_after_a_stop_during_a_quota_hand_over_goes() {
         kind: brigadier_providers::LimitKind::UsageWindow,
         window: Some("five_hour".into()),
         resets_at_ms: Some(crate::now_ms() + 60 * 60 * 1000),
+        model: None,
     };
     flow.manager
         .runtime

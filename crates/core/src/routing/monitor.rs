@@ -217,7 +217,9 @@ impl QuotaMonitor {
     /// a rate-limit notification): the provider counts as limited until the limit's reset (the
     /// named window's, when the error gave none), or, when neither is known, until a read shows
     /// it clear. A model's own window running out refuses that model only: the window reads as
-    /// used up and the provider stays usable for its other models.
+    /// used up and the provider stays usable for its other models. So does a limit that names
+    /// the models it holds ([`LimitHit::model`], OpenCode Go's plan): it is a used-up window of
+    /// theirs until its reset (#688).
     pub fn note_limit(
         &self,
         account: &AccountRef,
@@ -241,12 +243,26 @@ impl QuotaMonitor {
             {
                 limit.resets_at_ms = windows[index].resets_at_ms;
             }
-            match named.filter(|index| windows[*index].model.is_some()) {
+            let scoped = match named.filter(|index| windows[*index].model.is_some()) {
                 Some(index) => {
-                    // Only the scoped window, so the event lifts no other limit.
                     let mut window = windows.swap_remove(index);
-                    window.used_percent = window.used_percent.max(100.0);
                     window.resets_at_ms = window.resets_at_ms.or(limit.resets_at_ms);
+                    Some(window)
+                }
+                None => limit.model.as_ref().map(|scope| QuotaWindow {
+                    id: format!("limit.{scope}"),
+                    label: "Usage limit".into(),
+                    used_percent: 100.0,
+                    resets_at_ms: limit.resets_at_ms,
+                    window_minutes: None,
+                    bucket: None,
+                    model: Some(scope.clone()),
+                }),
+            };
+            match scoped {
+                Some(mut window) => {
+                    // Only the scoped window, so the event lifts no other limit.
+                    window.used_percent = window.used_percent.max(100.0);
                     QuotaSnapshot {
                         provider,
                         windows: vec![window],
@@ -490,6 +506,7 @@ mod tests {
             window: None,
             resets_at_ms,
             kind: LimitKind::UsageWindow,
+            model: None,
         };
         monitor.note_limit(&own, hit(Some(2 * HOUR)), 0);
         let empty = nothing(ProviderKind::OpenCode, QuotaSource::Unavailable, 5 * 60_000);
@@ -513,6 +530,44 @@ mod tests {
         assert!(monitor.current_for(&own, 4 * HOUR).unwrap().limit.is_none());
     }
 
+    /// OpenCode Go's limit holds the Go plan's models only: a free OpenCode model still takes
+    /// work, OpenCode's reads keep the hold, and it lifts at its reset with no restart (#688).
+    #[tokio::test]
+    async fn a_plans_limit_holds_its_models_only_until_its_reset() {
+        const HOUR: i64 = 60 * 60 * 1000;
+        let monitor = QuotaMonitor::load(None, 0).await;
+        let own = AccountRef::own(ProviderKind::OpenCode);
+        let (go, free) = (Some("opencode-go/glm-5.3"), Some("opencode/big-pickle"));
+        monitor.note_limit(
+            &own,
+            LimitHit {
+                window: None,
+                resets_at_ms: Some(6 * HOUR),
+                kind: LimitKind::UsageWindow,
+                model: Some("opencode-go".into()),
+            },
+            0,
+        );
+        let poll = |at| nothing(ProviderKind::OpenCode, QuotaSource::Unavailable, at);
+        monitor.note(&own, &poll(HOUR), HOUR);
+        let quota = monitor.current_for(&own, HOUR).unwrap();
+        assert!(quota.limit.is_none(), "not the whole provider: {quota:?}");
+        assert_eq!(crate::accounts::headroom(&quota, go), None);
+        assert_eq!(crate::accounts::ready_again_at(&quota, go), Some(6 * HOUR));
+        assert_eq!(crate::accounts::headroom(&quota, free), Some(100.0));
+        // At its reset it lifts, before any restart.
+        let quota = monitor.current_for(&own, 6 * HOUR).unwrap();
+        assert_eq!(crate::accounts::headroom(&quota, go), Some(100.0));
+        monitor.note(&own, &poll(7 * HOUR), 7 * HOUR);
+        assert!(
+            monitor
+                .current_for(&own, 7 * HOUR)
+                .unwrap()
+                .windows
+                .is_empty()
+        );
+    }
+
     /// A full read that names no window (Claude's or Codex's) still replaces what was known:
     /// a used-up window and its limit are gone, reset or not.
     #[tokio::test]
@@ -527,6 +582,7 @@ mod tests {
                 window: Some("five_hour".into()),
                 resets_at_ms: Some(2 * HOUR),
                 kind: LimitKind::UsageWindow,
+                model: None,
             });
             monitor.note(&own, &used_up, 0);
             assert!(monitor.current_for(&own, 60_000).unwrap().limit.is_some());
@@ -564,6 +620,7 @@ mod tests {
                 kind: LimitKind::UsageWindow,
                 window: Some("five_hour".into()),
                 resets_at_ms: Some(1_000_000),
+                model: None,
             },
             40,
         );
