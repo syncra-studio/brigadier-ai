@@ -5,6 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 /** A model's line in the picker when it's already in the order. */
 const IN_THE_ORDER = "In the order";
+const opusLine = (work: string) => `Opus 5.5 now rates higher for ${work} · 9.1 against Sonnet 5.5's 8.5Use itDismiss`;
 
 // The real Routing page in Chromium over a faked daemon and rules file (S32): who does what from
 // the file's rows over the shipped ones, a kind made My order and edited (effort, a second model,
@@ -251,8 +252,7 @@ test("Use it on a role replaces that role's model, the other role is untouched",
   const opus = { agent: "claude", model: "opus", effort: "high", reason: "Rated 9.1 of 10 for this work." };
   const codex = { agent: "codex", model: "default", effort: "high", reason: "Mine." };
   const notes = { work: "Release notes", agent: "codex", model: "gpt-6", effort: "low", reason: "Short and cheap." };
-  const line = (work: string) => `Opus 5.5 now rates higher for ${work} · 9.1 against Sonnet 5.5's 8.5Use itDismiss`;
-  assert.deepEqual(seen.lines, [line("Adversarial review"), line("Fusion · Claude consult")]);
+  assert.deepEqual(seen.lines, [opusLine("Adversarial review"), opusLine("Fusion · Claude consult")]);
   assert.equal(seen.writesBefore, 0);
   assert.deepEqual(seen.afterReview, [
     { work: "Adversarial review", ...codex },
@@ -261,7 +261,7 @@ test("Use it on a role replaces that role's model, the other role is untouched",
     { work: "fusion-codex", ...codex },
     notes,
   ]);
-  assert.deepEqual(seen.linesAfterReview, [line("Fusion · Claude consult")]);
+  assert.deepEqual(seen.linesAfterReview, [opusLine("Fusion · Claude consult")]);
   assert.deepEqual(seen.afterFusion, [
     { work: "Adversarial review", ...codex },
     { work: "Adversarial review", ...opus },

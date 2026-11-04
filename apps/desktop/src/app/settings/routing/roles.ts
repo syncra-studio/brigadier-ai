@@ -44,9 +44,9 @@ export const isRoleWork = (work: string) => /^(adversarial review|fallback|fusio
 
 /** The user's rows with `row`'s model in the first row of its work and agent, in place; a twin of it later in that role goes. Every other row stays. */
 export function withRoleModel(rows: readonly GuidanceRow[], row: GuidanceRow): GuidanceRow[] {
-  const role = (other: GuidanceRow) => other.work === row.work && other.agent === row.agent;
+  const role = (mine: GuidanceRow) => mine.work === row.work && mine.agent === row.agent;
   const at = rows.findIndex(role);
-  return rows.flatMap((other, index) => (index === at ? [row] : role(other) && other.model === row.model ? [] : [other]));
+  return rows.flatMap((mine, index) => (index === at ? [row] : role(mine) && mine.model === row.model ? [] : [mine]));
 }
 
 const isConsult = (work: string) => work === "fusion-claude" || work === "fusion-codex";

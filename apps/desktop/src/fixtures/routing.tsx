@@ -252,6 +252,8 @@ const agentRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-ag
 const modelRows = () => all('[data-slot="model-picker-model"]').map(text);
 const modelRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-model"]').find((row) => text(row).startsWith(name));
 /** The steps that show the Rules section at `stage`, for screenshots. */
+const roleSuggestionLine = (work: string) => document.querySelector(`[data-work="${work}"] [data-slot="routing-suggestion"]`);
+
 function ruleSteps(stage: string): (() => void)[] {
   const steps: (() => void)[] = [() => document.querySelector('[data-slot="routing-rules"]')?.closest("section")?.scrollIntoView({ block: "start" })];
   if (stage === "1") return steps;
@@ -296,17 +298,16 @@ function Fixture() {
         },
       ];
     } else if (roleSuggestions) {
-      const line = (work: string) => document.querySelector(`[data-work="${work}"] [data-slot="routing-suggestion"]`);
       steps = [
         () => {
           seen.lines = all('[data-slot="routing-suggestion"]').map(text);
           seen.writesBefore = writes.length;
-          button("Use it", line("Adversarial review") ?? document)?.click();
+          button("Use it", roleSuggestionLine("Adversarial review") ?? document)?.click();
         },
         () => {
           seen.afterReview = [...file.rows];
           seen.linesAfterReview = all('[data-slot="routing-suggestion"]').map(text);
-          button("Use it", line("Fusion") ?? document)?.click();
+          button("Use it", roleSuggestionLine("Fusion") ?? document)?.click();
         },
         () => {
           seen.afterFusion = [...file.rows];
