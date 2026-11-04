@@ -384,15 +384,17 @@ function AccountRow({
   };
 
   return (
-    <div data-slot="account-row" data-open={shown || undefined} className="flex flex-col">
+    <div
+      data-slot="account-row"
+      data-open={shown || undefined}
+      data-opens={opens || undefined}
+      className={cn("flex flex-col transition-colors", opens && "hover:bg-toolbar-hover hover:after:opacity-0")}
+    >
       {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- the button over it is the keyboard's and a screen reader's */}
       <div
         data-slot="account-header"
         onClick={onClick}
-        className={cn(
-          "group/account relative flex cursor-default items-center gap-4 px-4 py-3 transition-colors",
-          opens && "hover:bg-toolbar-hover",
-        )}
+        className="group/account relative flex cursor-default items-center gap-4 px-4 py-3"
       >
         {/* What opens the row for the keyboard and a screen reader: a real button over the
             header, beside its controls rather than around them; the pointer goes through it to
