@@ -601,19 +601,41 @@ impl SessionManager {
     /// `brigadier wait` all read, and a restart runs this for threads already on disk.
     pub(super) async fn end_handed_over_turn(&self, id: &ConversationId) {
         let dir = self.session_dir(id).record();
-        let Some(mut record) =
-            thread_view::last_turn(&dir).filter(|turn| turn.end == Some(TurnEnd::HandedOver))
-        else {
-            return;
-        };
-        if let Ok(conv) = self.conv(id)
-            && conv.turn_or_hand_over().await
-        {
+        if thread_view::last_turn(&dir).is_none_or(|turn| turn.end != Some(TurnEnd::HandedOver)) {
             return;
         }
+        let conv = self.conv(id).ok();
+        let holds = match &conv {
+            Some(conv) => self.work_holds(conv).await,
+            None => false,
+        };
+        // Read and written with no turn able to start, so a carry-on is never overwritten.
+        let ending = self.commit_handed_over_end(id, &dir, holds);
+        let ended = match &conv {
+            Some(conv) => conv.with_no_turn(ending).await.unwrap_or(false),
+            None => ending.await,
+        };
+        if ended {
+            self.block_soon(id);
+        }
+    }
+
+    /// [`Self::end_handed_over_turn`]'s reading of the record and the board, and its writes.
+    /// `holds`: what the turn started still runs. Whether it ended the turn.
+    async fn commit_handed_over_end(
+        &self,
+        id: &ConversationId,
+        dir: &std::path::Path,
+        holds: bool,
+    ) -> bool {
+        let Some(mut record) =
+            thread_view::last_turn(dir).filter(|turn| turn.end == Some(TurnEnd::HandedOver))
+        else {
+            return false;
+        };
         let (Ok(board), Ok(conversation)) = (self.core.board(id).await, self.core.conversation(id))
         else {
-            return;
+            return false;
         };
         let live =
             |state: &RequestState| matches!(state, RequestState::Working | RequestState::Waiting);
@@ -622,7 +644,7 @@ impl SessionManager {
             // One that carries no request goes on while the run still reads running.
             || (record.requests.is_empty() && matches!(board.run, RunState::Running | RunState::Starting))
         {
-            return;
+            return false;
         }
         let states: Vec<_> = record
             .requests
@@ -649,18 +671,19 @@ impl SessionManager {
             )
         } else {
             // What it started still runs: it reads working until that ends (D151).
-            if let Ok(conv) = self.conv(id)
-                && self.work_holds(&conv).await
-            {
-                return;
+            if holds {
+                return false;
             }
-            // Nothing answered it and nothing will: it reads cut off, with Continue (D84),
-            // which only a request that reads cut off too can take.
-            for request in &record.requests {
+            // Nothing answered it and nothing will: it reads cut off, with Continue (D84), which
+            // takes the newest request alone. An earlier one it carried stays as it ended.
+            if let Some(request) = board
+                .latest_request()
+                .filter(|request| record.requests.contains(&request.id))
+            {
                 let cut = RequestState::Failed {
                     error: super::conversation::INTERRUPTED_BY_QUIT.into(),
                 };
-                if let Err(err) = self.core.update_request(id, request, cut, None).await {
+                if let Err(err) = self.core.update_request(id, &request.id, cut, None).await {
                     tracing::debug!(conversation = %id, error = %err, "could not update a request");
                 }
             }
@@ -676,9 +699,9 @@ impl SessionManager {
             error,
             ..record
         };
-        if let Err(err) = thread_view::append_turn(&dir, &ended) {
+        if let Err(err) = thread_view::append_turn(dir, &ended) {
             tracing::warn!(conversation = %id, error = %err, "could not end a turn handed over");
-            return;
+            return false;
         }
         let _ = self.thread_news.send(ThreadNews {
             conversation_id: id.clone(),
@@ -695,7 +718,7 @@ impl SessionManager {
             block: None,
             seq: self.next_news_seq(),
         });
-        self.block_soon(id);
+        true
     }
 
     /// Follows the last line each running background command of conversation `id` prints,
@@ -779,8 +802,10 @@ impl SessionManager {
                 said_jobs(live, now_ms()).map(|jobs| (jobs, manager.next_news_seq()))
             };
             if let Some((jobs, seq)) = jobs {
-                manager.say_jobs(id, jobs, seq);
+                manager.say_jobs(id.clone(), jobs, seq);
             }
+            // That hold may be all a turn handed over was waiting on.
+            manager.settle_requests(&id).await;
         });
     }
 

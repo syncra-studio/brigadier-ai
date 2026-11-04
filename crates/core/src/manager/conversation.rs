@@ -729,10 +729,17 @@ impl ConvLive {
         )
     }
 
-    /// Whether a turn runs, or a hand-over is still being chosen (one the user stopped is over).
-    pub(super) async fn turn_or_hand_over(&self) -> bool {
+    /// Runs `commit` unless a turn runs or a hand-over is still being chosen (one the user
+    /// stopped is over), and no turn starts until it is done. `commit` must not touch this conversation's live state.
+    pub(super) async fn with_no_turn<T>(
+        &self,
+        commit: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
         let state = self.state.lock().await;
-        state.busy || state.hand_over.as_ref().is_some_and(|over| !over.stopped)
+        if state.busy || state.hand_over.as_ref().is_some_and(|over| !over.stopped) {
+            return None;
+        }
+        Some(commit.await)
     }
 
     /// Whether the running turn is a hand-off's own ([`seam::SeamLive::quiet`]).
