@@ -709,13 +709,14 @@ export function cliBlocks(
   // A turn begun while the core's work block of the block before is open goes on in it (D163):
   // one job, one block, as the core alone says.
   const holds = (each: Block) => coreHolds(view.block, turnOf.get(each)?.endedAtMs ?? null);
-  // A turn that carries on the request a usage limit cut (an account or CLI switch) goes on in
-  // its block: one block, one switch row, no stopped turn (goal 1), with what the user steered
-  // into it meanwhile (D25; seen live). Its requests, else the ones the engine noted it sent: one
-  // naming none of the cut turn's, a message the user sent anew, opens its own.
+  // A turn that carries on the request a usage limit, or anything else the core handed over, cut
+  // (an account, model or CLI switch) goes on in its block: one block, one switch row, no stopped
+  // turn (goal 1), with what the user steered into it meanwhile (D25; seen live). Its requests,
+  // else the ones the engine noted it sent: one naming none of the cut turn's, a message the user
+  // sent anew, opens its own.
   const carriesOn = (requests: readonly string[] = []) => {
     const before = view.turns[turn - 1];
-    if (before?.errorKind !== "usageLimit" && !before?.limit) return false;
+    if (before?.end !== "handedOver" && before?.errorKind !== "usageLimit" && !before?.limit) return false;
     const named = view.turns[turn]?.requests.length ? view.turns[turn]!.requests : requests;
     return named.length === 0 || named.some((request) => before.requests.includes(request));
   };
@@ -1039,6 +1040,8 @@ export function cliBlocks(
     }
   });
   if (block) close(block);
+  // A turn handed over reads working until its carry-on (D180): with a block after it, none is coming.
+  for (const each of blocks.slice(0, -1)) if (each.state === "working" && each.endedAtMs !== null) each.state = "done";
   attachReplies(blocks.flatMap((each) => each.orchestratorSteps), view.replies ?? []);
   // A compaction its turn ended with (Brigadier's at a turn's end, or the CLI's after its last
   // reply) is between that turn and the next: after the block, not in its work.

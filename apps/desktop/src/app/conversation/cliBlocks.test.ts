@@ -1648,6 +1648,28 @@ test("a turn carried on after a usage limit's switch goes on in its block: no st
   assert.deepEqual(cliBlocks({ entries: fresh, turns: limitTurns(false) }, "conv").map((block) => block.key), ["u1", "u2", "n1"]);
 });
 
+test("a turn handed over for any reason goes on in its block: one block closed Worked for, nothing left live, on every error that hands over", () => {
+  const entries: FileEntry[] = [
+    user("u1", "Did you merge?", 1000, { said: { by: "user" }, requests: ["r1"] }),
+    at({ type: "turnCompleted" } as ProviderEvent, 1164),
+    user("k1", "[Your last turn stopped early. Carry on from where you stopped.]", 7000, { said: { by: "brigadier" } }),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "Yes, it's merged." }, 10000),
+  ];
+  for (const errorKind of ["auth", "billing", "overloaded", "server", "network", "usageLimit"] as const) {
+    const cut = { ...turn("u1", 1000, 1164, "handedOver", "Failed to authenticate"), errorKind, requests: ["r1"] };
+    const blocks = cliBlocks({ entries, turns: [cut, { ...turn("k1", 7000, 10500, "done"), requests: ["r1"] }] }, "conv");
+    assert.deepEqual(blocks.map((block) => [block.key, block.state, block.error]), [["u1", "done", null]], errorKind);
+    assert.deepEqual(blocks[0]!.worked, [{ fromMs: 1000, toMs: 1164 }, { fromMs: 7000, toMs: 10500 }], errorKind);
+    // Before its carry-on's turn is read, it is the one block, still working.
+    const live = cliBlocks({ entries: entries.slice(0, 3), turns: [cut] }, "conv");
+    assert.deepEqual(live.map((block) => [block.key, block.state, block.error]), [["u1", "working", null]], errorKind);
+    // A message the user sends anew opens its own block, and the one before it no longer reads live.
+    const fresh = [...entries.slice(0, 2), user("n1", "Something else", 7000, { said: { by: "user" }, requests: ["r2"] })];
+    const both = cliBlocks({ entries: fresh, turns: [cut, { ...turn("n1", 7000, 8000, "done"), requests: ["r2"] }] }, "conv");
+    assert.deepEqual(both.map((block) => [block.key, block.state]), [["u1", "done"], ["n1", "done"]], errorKind);
+  }
+});
+
 test("a follow-up the user steers during a usage limit's switch goes on in the cut turn's block: one block, the switch's carry-on with it, never stopped (screen pass, every CLI)", () => {
   const FOLLOW = "Also, at the very end reply FOLLOW too.";
   const cut = { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit" as const, requests: ["r1"] };
