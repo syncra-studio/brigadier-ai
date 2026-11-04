@@ -673,7 +673,7 @@ impl Codex {
         recorder: Option<Arc<Recorder>>,
         ledger: Option<Arc<dyn Ledger>>,
         private_logs: bool,
-    ) -> Result<(Arc<Rpc>, mpsc::Receiver<String>)> {
+    ) -> Result<(Arc<Rpc>, process::Lines)> {
         let spec = self.server_spec(&self.binary()?, cwd, session);
         let redactor = session.and_then(|session| session.redactor.clone());
         let process::Spawned { process, stdout } = process::spawn(
@@ -732,7 +732,7 @@ impl Codex {
     /// Initializes the app-server `rpc` reads from `stdout`, runs `work`, then shuts it down.
     async fn control_on<T>(
         rpc: Arc<Rpc>,
-        stdout: mpsc::Receiver<String>,
+        stdout: process::Lines,
         work: impl AsyncFnOnce(&Rpc) -> Result<T>,
     ) -> Result<T> {
         let reader = tokio::spawn(control_reader(rpc.clone(), stdout));
@@ -1171,7 +1171,7 @@ fn terminal_servers(
 }
 
 /// Serves a control app-server's output: only responses matter.
-async fn control_reader(rpc: Arc<Rpc>, mut stdout: mpsc::Receiver<String>) {
+async fn control_reader(rpc: Arc<Rpc>, mut stdout: process::Lines) {
     let mut parser = Parser::live().with_private_logs(rpc.process.private_logs());
     while let Some(line) = stdout.recv().await {
         for output in parser.feed(&line) {
@@ -3378,7 +3378,7 @@ async fn withdraw_questions(shared: &Shared, rpc_id: Option<&Value>) {
 /// tool calls run without asking.
 async fn read_loop(
     rpc: Arc<Rpc>,
-    mut stdout: mpsc::Receiver<String>,
+    mut stdout: process::Lines,
     shared: Arc<Shared>,
     trusted: HashSet<String>,
 ) {
@@ -5322,23 +5322,27 @@ for line in sys.stdin:
 
     /// A Codex app-server stand-in that prints `lines`, then runs a minute without reading its
     /// input: a batch file on Windows, a shell script elsewhere.
-    fn deaf_app_server(dir: &Path, lines: &[String]) -> brigadier_sandbox::SpawnSpec {
+    fn deaf_app_server(dir: &Path, lines: &[&[u8]]) -> brigadier_sandbox::SpawnSpec {
+        let mut script = Vec::new();
         if cfg!(windows) {
-            let path = dir.join("app-server.cmd");
-            let mut script = String::from("@echo off\r\n");
+            script.extend(b"@echo off\r\n");
             for line in lines {
-                script.push_str(&format!("echo {line}\r\n"));
+                script.extend(b"echo ");
+                script.extend(*line);
+                script.extend(b"\r\n");
             }
-            script.push_str("ping -n 60 127.0.0.1 >nul\r\n");
+            script.extend(b"ping -n 60 127.0.0.1 >nul\r\n");
+            let path = dir.join("app-server.cmd");
             std::fs::write(&path, script).unwrap();
             brigadier_sandbox::SpawnSpec::new(&path)
         } else {
-            let path = dir.join("app-server.sh");
-            let mut script = String::new();
             for line in lines {
-                script.push_str(&format!("printf '%s\n' '{line}'\n"));
+                script.extend(b"printf '%s\\n' '");
+                script.extend(*line);
+                script.extend(b"'\n");
             }
-            script.push_str("sleep 60\n");
+            script.extend(b"sleep 60\n");
+            let path = dir.join("app-server.sh");
             std::fs::write(&path, script).unwrap();
             brigadier_sandbox::SpawnSpec::new("sh").arg(path.display().to_string())
         }
@@ -5423,7 +5427,7 @@ for line in sys.stdin:
         let scratch =
             std::env::temp_dir().join(format!("brigadier-codex-deaf-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&scratch).unwrap();
-        let spec = deaf_app_server(&scratch, &[TURN_STARTED.to_owned()]);
+        let spec = deaf_app_server(&scratch, &[TURN_STARTED.as_bytes()]);
         let (session, mut events) = deaf_session(
             &scratch,
             &spec,
@@ -5452,6 +5456,53 @@ for line in sys.stdin:
         assert!(tail.contains("cut short"), "{tail}");
         assert!(session.turn_id().is_none(), "the turn still runs");
         assert!(pasting.await.unwrap().is_err());
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// #769: a turn's end too long to read (past the stdout line limit) ends the session rather
+    /// than leaving its turn running forever: it is never handed on cut short, the CLI is ended,
+    /// and the exit says why.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_turn_end_too_long_to_read_ends_the_session() {
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-long-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let completed = format!(
+            r#"{{"method":"turn/completed","params":{{"threadId":"t","turn":{{"id":"turn-1","items":[],"status":"completed","pad":"{}"}}}}}}"#,
+            "x".repeat(4000)
+        );
+        let spec = deaf_app_server(&scratch, &[TURN_STARTED.as_bytes(), completed.as_bytes()]);
+        let (session, mut events) = deaf_session(
+            &scratch,
+            &spec,
+            process::Options {
+                stdout_line_max: Some(1024),
+                ..process::Options::default()
+            },
+        );
+        let tail = exit_tail(&mut events).await;
+        assert!(tail.contains("longer than the 1 KiB"), "{tail}");
+        assert!(session.turn_id().is_none(), "the turn still runs");
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// #769: a stdout line that isn't UTF-8 no longer ends the reader: the turn that starts
+    /// after it still shows.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_line_that_is_not_text_does_not_end_the_output() {
+        let scratch =
+            std::env::temp_dir().join(format!("brigadier-codex-bytes-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let spec = deaf_app_server(&scratch, &[b"\xff\xfe not text", TURN_STARTED.as_bytes()]);
+        let (session, _events) = deaf_session(&scratch, &spec, process::Options::default());
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while session.turn_id().is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the turn after a line that isn't text never showed");
+        session.rpc.process.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 }

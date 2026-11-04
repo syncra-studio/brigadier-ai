@@ -74,6 +74,14 @@ const PAGE_BYTES: usize = 4 * 1024 * 1024;
 /// Largest attachment accepted (it travels base64-encoded in one IPC frame).
 pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS: usize = 20;
+// Claude echoes each message whole on one stdout line, its images base64-encoded (4 bytes for
+// every 3). A CLI that prints a longer line than the reader takes is ended (#769), so the
+// largest message, with room for its text and JSON, must fit.
+const _: () = assert!(
+    MAX_ATTACHMENTS * MAX_ATTACHMENT_BYTES.div_ceil(3) * 4 + 16 * 1024 * 1024
+        <= brigadier_providers::process::STDOUT_LINE_MAX,
+    "the largest message Brigadier sends is longer than the CLI stdout line it reads"
+);
 const MAX_QUEUED: usize = 50;
 const BOARD_PAGE: u32 = 1_000;
 

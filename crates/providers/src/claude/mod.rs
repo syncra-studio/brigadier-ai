@@ -2426,7 +2426,7 @@ struct SessionFiles {
 /// folders it may have left empty are tidied ([`files::CliInFolder`]).
 async fn read_loop(
     process: Arc<CliProcess>,
-    mut stdout: mpsc::Receiver<String>,
+    mut stdout: process::Lines,
     shared: Arc<Shared>,
     mut commands: mpsc::UnboundedReceiver<ParserCommand>,
     refuses_compaction: bool,
