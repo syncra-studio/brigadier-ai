@@ -19,15 +19,15 @@ use brigadier_core::{
 };
 use brigadier_ipc::app::BridgeEvent;
 use brigadier_ipc::protocol::{
-    ClientFrame, ClientInfo, DaemonInfo, ErrorCode, EventEnvelope, IpcError, Outcome, Request,
-    Response, ServerFrame,
+    ClientFrame, ClientInfo, DaemonInfo, ErrorCode, EventEnvelope, IpcError, Outcome,
+    PROTOCOL_VERSION, Request, Response, ServerFrame,
 };
-use brigadier_ipc::{Connection, Reader};
+use brigadier_ipc::{Connection, Hello, Reader};
 use brigadier_sandbox::Platform;
 use tauri::ipc::Channel;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::launcher::Launcher;
+use crate::launcher::{Launched, Launcher};
 
 /// Requests waiting for a connection, at most.
 const QUEUED_REQUESTS: usize = 256;
@@ -55,6 +55,57 @@ const MIN_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
 /// A connection that lasted this long resets the reconnect backoff.
 const HEALTHY_CONNECTION: Duration = Duration::from_secs(5);
+
+/// How long the app waits on a daemon of another version (#771).
+#[derive(Clone, Copy)]
+struct Waits {
+    /// For an older daemon to acknowledge the quit asked of it: it ends its work and commits
+    /// its writes first, as for Quit.
+    quit_ack: Duration,
+    /// Then for its process to exit.
+    quit_exit: Duration,
+    /// Between checks, while one the app can't use holds the data folder.
+    blocked: Duration,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Self {
+            quit_ack: Duration::from_secs(30),
+            quit_exit: Duration::from_secs(10),
+            blocked: Duration::from_secs(30),
+        }
+    }
+}
+
+/// Why connecting failed.
+enum Unreachable {
+    /// Try again after the backoff, launching the daemon if nothing answers.
+    Retry(String),
+    /// A daemon this app can't use holds the data folder, so launching another is pointless:
+    /// say why, and check again after [`Waits::blocked`] without launching.
+    Blocked(String),
+}
+
+/// Where to end a daemon by hand, on this system.
+const PROCESS_VIEWER: &str = if cfg!(windows) {
+    "Task Manager"
+} else if cfg!(target_os = "macos") {
+    "Activity Monitor"
+} else {
+    "your system monitor"
+};
+
+/// A daemon of another version holds the data folder and closes this app's hello unanswered
+/// (one from before it could say its version), while the daemon this app launched exits at
+/// once because that one holds the lock.
+fn locked_out() -> String {
+    format!(
+        "A Brigadier engine from another version is running and doesn't accept this app. \
+         Quit it (end brigadierd in {PROCESS_VIEWER}), or wait: it quits by itself once \
+         its work is done. Brigadier connects then."
+    )
+}
 
 type Reply = oneshot::Sender<Result<Response, IpcError>>;
 
@@ -89,6 +140,7 @@ pub struct Bridge {
 struct Inner {
     platform: Arc<dyn Platform>,
     launcher: Launcher,
+    waits: Waits,
     requests: mpsc::Sender<Outgoing>,
     ui: Mutex<Option<Channel<BridgeEvent>>>,
     /// The computer-use setup window's feed: computer use's status only.
@@ -118,6 +170,24 @@ impl Bridge {
         in_front: InFront,
         open_setup: OpenSetup,
     ) -> Self {
+        Self::start_with(
+            platform,
+            launcher,
+            notify,
+            in_front,
+            open_setup,
+            Waits::default(),
+        )
+    }
+
+    fn start_with(
+        platform: Arc<dyn Platform>,
+        launcher: Launcher,
+        notify: Notify,
+        in_front: InFront,
+        open_setup: OpenSetup,
+        waits: Waits,
+    ) -> Self {
         let (requests, queue) = mpsc::channel(QUEUED_REQUESTS);
         let notified = NotificationKeys::load(
             platform
@@ -129,6 +199,7 @@ impl Bridge {
             inner: Arc::new(Inner {
                 platform,
                 launcher,
+                waits,
                 requests,
                 ui: Mutex::new(None),
                 setup_ui: Mutex::new(None),
@@ -217,7 +288,9 @@ impl Bridge {
     pub fn emit(&self, event: BridgeEvent) {
         if matches!(
             event,
-            BridgeEvent::Connected { .. } | BridgeEvent::Disconnected { .. }
+            BridgeEvent::Connected { .. }
+                | BridgeEvent::Disconnected { .. }
+                | BridgeEvent::Blocked { .. }
         ) {
             *self.inner.status.lock().expect("status lock") = Some(event.clone());
         }
@@ -253,6 +326,8 @@ impl Bridge {
 
     async fn run(&self, mut queue: mpsc::Receiver<Outgoing>) {
         let mut backoff = MIN_BACKOFF;
+        // What keeps the app from the daemon running, while it does (#771).
+        let mut blocked: Option<String> = None;
         loop {
             // Announced before checking `stopping`: a quit either sees this attempt and waits
             // for it, or this check sees the quit.
@@ -261,8 +336,9 @@ impl Bridge {
                 self.inner.link.send_replace(Link::Down);
                 return;
             }
-            match self.connect().await {
+            match self.connect(blocked.is_some()).await {
                 Ok((connection, daemon, last_seq)) => {
+                    blocked = None;
                     tracing::info!(pid = daemon.pid, "connected to brigadierd");
                     // Resume right after the last event we forwarded; first connection starts
                     // at the daemon's head.
@@ -293,37 +369,164 @@ impl Bridge {
                         backoff = MIN_BACKOFF;
                     }
                 }
-                Err(reason) => {
+                Err(Unreachable::Retry(reason)) => {
+                    blocked = None;
                     self.inner.link.send_replace(Link::Down);
                     tracing::warn!(reason = %reason, "cannot reach brigadierd");
                     self.emit(BridgeEvent::Disconnected { reason });
                     tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(MAX_BACKOFF);
                 }
+                Err(Unreachable::Blocked(reason)) => {
+                    self.inner.link.send_replace(Link::Down);
+                    if blocked.as_ref() != Some(&reason) {
+                        tracing::warn!(reason = %reason, "brigadierd of another version runs");
+                        self.emit(BridgeEvent::Blocked {
+                            reason: reason.clone(),
+                        });
+                        blocked = Some(reason);
+                    }
+                    backoff = MIN_BACKOFF;
+                    tokio::time::sleep(self.inner.waits.blocked).await;
+                }
             }
         }
     }
 
-    /// Connects, launching the daemon if nothing answers.
-    async fn connect(&self) -> Result<(Connection, DaemonInfo, i64), String> {
+    /// Connects, launching the daemon if nothing answers. A daemon of another version is
+    /// asked to quit when it is older ([`Self::replace`]), and otherwise blocks the app.
+    /// `blocked`: one the app couldn't use ran at the last attempt; it is not launched over
+    /// again while it still does.
+    async fn connect(&self, blocked: bool) -> Result<(Connection, DaemonInfo, i64), Unreachable> {
         let client = ClientInfo {
             name: "Brigadier".into(),
             pid: std::process::id(),
         };
-        if let Ok(connected) = brigadier_ipc::connect(&*self.inner.platform, client.clone()).await {
-            return Ok(connected);
+        let paths = self.inner.platform.paths();
+        match brigadier_ipc::hello(paths, client.clone()).await {
+            Ok(Hello::Welcome {
+                connection,
+                daemon,
+                last_seq,
+            }) => return Ok((connection, daemon, last_seq)),
+            Ok(Hello::Mismatch { connection, daemon }) => self.replace(connection, daemon).await?,
+            Err(brigadier_ipc::Error::Rejected) if blocked => {
+                return Err(Unreachable::Blocked(locked_out()));
+            }
+            Err(_) => {}
         }
-        self.inner.launcher.ensure_launched().await?;
+        let launched = self
+            .inner
+            .launcher
+            .ensure_launched()
+            .await
+            .map_err(Unreachable::Retry)?;
         let deadline = tokio::time::Instant::now() + LAUNCH_WAIT;
         loop {
-            match brigadier_ipc::connect(&*self.inner.platform, client.clone()).await {
-                Ok(connected) => return Ok(connected),
+            match brigadier_ipc::hello(paths, client.clone()).await {
+                Ok(Hello::Welcome {
+                    connection,
+                    daemon,
+                    last_seq,
+                }) => return Ok((connection, daemon, last_seq)),
+                Ok(Hello::Mismatch { connection, daemon }) => {
+                    self.replace(connection, daemon).await?;
+                    return Err(Unreachable::Retry(
+                        "an engine of another version quit; starting this one".into(),
+                    ));
+                }
+                // A daemon is up and closes the hello unanswered, and the one launched exited
+                // at once: that one holds the data folder, and launching again won't help.
+                Err(brigadier_ipc::Error::Rejected)
+                    if launched.as_ref().is_some_and(Launched::exited_ok) =>
+                {
+                    return Err(Unreachable::Blocked(locked_out()));
+                }
                 Err(err) if tokio::time::Instant::now() >= deadline => {
-                    return Err(format!("brigadierd did not start: {err}"));
+                    return Err(Unreachable::Retry(format!(
+                        "brigadierd did not start: {err}"
+                    )));
                 }
                 Err(_) => tokio::time::sleep(CONNECT_POLL).await,
             }
         }
+    }
+
+    /// A daemon of another protocol version answered the hello on `connection`. An older one
+    /// (an update landed while it ran) is asked to quit as Quit asks, and waited for, both
+    /// within [`Waits`]; once it is gone this app launches its own. A newer one is left
+    /// running: this app is out of date.
+    async fn replace(
+        &self,
+        mut connection: Connection,
+        daemon: DaemonInfo,
+    ) -> Result<(), Unreachable> {
+        let DaemonInfo {
+            version,
+            protocol,
+            pid,
+            ..
+        } = daemon;
+        if protocol > PROTOCOL_VERSION {
+            return Err(Unreachable::Blocked(format!(
+                "The Brigadier engine running (version {version}) is newer than this app. \
+                 Update Brigadier, or quit that engine (end brigadierd in {PROCESS_VIEWER}); \
+                 Brigadier connects then."
+            )));
+        }
+        tracing::info!(pid, %version, protocol, "asking an older brigadierd to quit");
+        self.emit(BridgeEvent::Disconnected {
+            reason: format!(
+                "An older Brigadier engine (version {version}) is running; asking it to quit"
+            ),
+        });
+        let waits = self.inner.waits;
+        let asked = async {
+            connection
+                .writer
+                .write(&ClientFrame::Request {
+                    id: 1,
+                    request: Request::Shutdown,
+                })
+                .await
+                .ok()?;
+            loop {
+                match connection.reader.read::<ServerFrame>().await {
+                    Ok(Some(ServerFrame::Response { id: 1, result })) => {
+                        return Some(matches!(result, Outcome::Ok { .. }));
+                    }
+                    // Closing without an answer still means it is quitting.
+                    Ok(Some(ServerFrame::Closing) | None) => return Some(true),
+                    Ok(Some(_)) => {}
+                    Err(_) => return None,
+                }
+            }
+        };
+        let acknowledged = tokio::time::timeout(waits.quit_ack, asked).await;
+        if !matches!(acknowledged, Ok(Some(true))) {
+            return Err(Unreachable::Blocked(format!(
+                "An older Brigadier engine (version {version}, process {pid}) didn't agree to \
+                 quit within {} s. Quit it (end brigadierd in {PROCESS_VIEWER}), or wait: it \
+                 quits by itself once its work is done. Brigadier connects then.",
+                waits.quit_ack.as_secs()
+            )));
+        }
+        drop(connection);
+        let processes = self.inner.platform.processes();
+        let deadline = tokio::time::Instant::now() + waits.quit_exit;
+        while processes.is_alive(pid) {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(Unreachable::Blocked(format!(
+                    "An older Brigadier engine (version {version}, process {pid}) agreed to quit \
+                     but is still running after {} s. End brigadierd in {PROCESS_VIEWER}; \
+                     Brigadier connects then.",
+                    waits.quit_exit.as_secs()
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tracing::info!(pid, "the older brigadierd quit");
+        Ok(())
     }
 
     /// Serves one connection until it drops. Returns why it ended.
@@ -467,7 +670,9 @@ impl Bridge {
             }
             ServerFrame::AppCall { call } => self.emit(BridgeEvent::AppCall { call }),
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
-            ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
+            ServerFrame::Welcome { .. } | ServerFrame::ProtocolMismatch { .. } => {
+                return Some("unexpected second welcome".into());
+            }
             ServerFrame::ThreadViewPart { .. } => return Some("unjoined thread response".into()),
         }
         None

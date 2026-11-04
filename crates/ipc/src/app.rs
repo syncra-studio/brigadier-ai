@@ -26,6 +26,12 @@ pub enum BridgeEvent {
     Disconnected {
         reason: String,
     },
+    /// The daemon running for this data folder is of another version and this app can't use
+    /// it, nor launch its own while it runs (#771). `reason` says so and how to clear it. The
+    /// shell no longer relaunches; it checks now and then, and connects once that one is gone.
+    Blocked {
+        reason: String,
+    },
     Event {
         event: EventEnvelope,
     },
