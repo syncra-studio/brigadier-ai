@@ -438,11 +438,12 @@ def main():
                 score(run.result, args.judge_model)
         except Exception as error:
             run.errors.append("score: " + str(error))
+        status = battery.exit_status(run.result)
         run.cleanup()
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
         battery.write_report(run.result, report(run.result, args.judge_model), args.report)
         battery.log("report: " + args.report)
-    return 0 if "items" in run.result or run.result.get("status") == "skipped" else 2
+    return status
 
 
 if __name__ == "__main__":

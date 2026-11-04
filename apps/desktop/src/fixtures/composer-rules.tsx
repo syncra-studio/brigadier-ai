@@ -4,6 +4,10 @@
  * Max: the picker shows High, and Extra high and Max greyed with the rule's words. Send is then
  * refused by the daemon (a rule added since): the banner says the rule in its words and the typed
  * message stays. What it saw goes as JSON into `<pre id="composer-rules-result">`.
+ *
+ * The composer's editor, which focuses itself as it loads, is held until the closed picker hands
+ * the keyboard back to its trigger, and the fixture looks again only once the editor has taken it:
+ * a slow machine's order (#682).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -16,10 +20,13 @@ import { model, overview } from "@/fixtures/agents";
 import { IDLE_RESEARCH } from "@/fixtures/rankings";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { ModelRules, Request } from "@/ipc/generated";
+import { revealApp } from "@/lib/splash";
 import { select } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 localStorage.clear();
+// Startup isn't over, so the composer's editor waits to load (whenRevealed).
+document.documentElement.dataset["splash"] = "";
 const rules: ModelRules = { path: "/tmp/models.md", revision: "fixture", shipped: [], rows: [], rules: [{ type: "effortCeiling", effort: "high" }], suggestions: [], research: IDLE_RESEARCH };
 const efforts = { efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" };
 let created = 0;
@@ -46,9 +53,13 @@ useApp.setState({
 updateDraft(null, { model: { provider: "claude", model: "opus", effort: "max" } });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** While set, the fixture doesn't look: something it mustn't see yet is under way. */
+let held: Promise<unknown> | null = null;
 async function until(what: string, check: () => boolean, ms = 10_000) {
   const end = performance.now() + ms;
-  while (!check()) {
+  for (;;) {
+    if (held) await held;
+    if (check()) return;
     if (performance.now() > end) throw new Error(`timed out waiting for ${what}`);
     await sleep(16);
   }
@@ -72,10 +83,33 @@ async function drive() {
       disabled: item.getAttribute("aria-disabled") === "true",
       checked: item.dataset.state === "on",
     }));
+    // The closed picker hands the keyboard back to its trigger first: the field takes it after.
+    // Heard as it happens: the editor taking the keyboard as it loads may end it before a look.
+    let back = false;
+    trigger()!.addEventListener("focus", () => (back = true), { once: true });
+    // The moment the closed picker hands the keyboard back to its trigger, the editor loads, and
+    // takes the keyboard as it does on loading, before the fixture looks again.
+    trigger()!.addEventListener(
+      "focus",
+      () => {
+        const taken = new Promise<void>((resolve) => {
+          const onFocus = () => {
+            if (document.activeElement !== field()) return;
+            document.removeEventListener("focusin", onFocus);
+            resolve();
+          };
+          document.addEventListener("focusin", onFocus);
+        });
+        held = Promise.race([taken, sleep(10_000)]).then(() => {
+          held = null;
+        });
+        void revealApp();
+      },
+      { once: true },
+    );
     menu()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     await until("the picker closed", () => menu() === null);
-    // The closed picker hands the keyboard back to its trigger first: the field takes it after.
-    await until("the keyboard back on the picker", () => document.activeElement === trigger());
+    await until("the keyboard back on the picker", () => back);
     await until("the field", () => field() !== null);
     await fixtureClick(field()!);
     await until("the field focused", () => document.activeElement === field());

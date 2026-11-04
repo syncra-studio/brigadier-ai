@@ -14,6 +14,56 @@ import battery
 from lineages import compactions
 
 
+def synthetic(event):
+    """An assistant event the CLI wrote itself (an API error, a refused request)."""
+    return bool(event.get("error")) or (event.get("message") or {}).get("model") == "<synthetic>"
+
+
+def reset_time(seconds):
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(seconds)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def rejected_limit(info):
+    """A rejected rate limit, with its window and reset time; None when it was allowed."""
+    if not isinstance(info, dict) or info.get("status") != "rejected":
+        return None
+    reset = reset_time(info.get("resetsAt"))
+    return (f"rate limit rejected: {info.get('rateLimitType') or 'unknown window'}" +
+            (f", resets {reset}" if reset else ""))
+
+
+def cli_errors(events, stderr=""):
+    """The CLI's own words about why a turn failed: an `is_error` result with its API status,
+    a rejected rate limit with its reset time, a synthetic error reply, and the stderr tail."""
+    found = []
+    for event in events:
+        kind = event.get("type")
+        if kind == "result" and event.get("is_error"):
+            status = event.get("api_error_status")
+            # Its diagnostics may come in `errors` beside a bare subtype instead of in `result`.
+            details = "; ".join(str(error) for error in event.get("errors") or [] if error)
+            found.append(f"{event.get('result') or event.get('subtype') or 'error result'}" +
+                         (f": {details}" if details else "") +
+                         (f" (API status {status})" if status else ""))
+        elif kind == "rate_limit_event":
+            limit = rejected_limit(event.get("rate_limit_info"))
+            if limit:
+                found.append(limit)
+        elif kind == "assistant" and synthetic(event) and event.get("error"):
+            text = " ".join(part.get("text", "") for part in (event.get("message") or {}).get("content", [])
+                            if isinstance(part, dict) and part.get("type") == "text").strip()
+            found.append(f"synthetic reply: {text or 'no text'} ({event['error']})")
+            limit = rejected_limit(((event.get("api_error_params") or {}).get("rate_limit_info")))
+            if limit:
+                found.append(limit)
+    if stderr and stderr.strip():
+        found.append("stderr: " + stderr.strip()[-300:])
+    return list(dict.fromkeys(found))
+
+
 class PlainBattery(battery.Battery):
     def setup(self):
         self.fixture()
@@ -59,6 +109,7 @@ class PlainBattery(battery.Battery):
             return send(self, name, text, fault)
         self.tick()
         battery.log(name)
+        # No fault is injected here (see fault()), so every step's errors are real.
         step = {"name": name, "sent_ms": battery.now()}
         self.steps.append(step)
         if self.args.provider == "claude":
@@ -79,26 +130,30 @@ class PlainBattery(battery.Battery):
         self.processes.append(proc)
         if fault:
             fault(step)
+        timed_out = False
         try:
             stdout, stderr = proc.communicate(text, timeout=min(self.args.turn_timeout, max(1, self.deadline - time.monotonic())))
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
             stdout, stderr = proc.communicate()
+            timed_out = True
             self.errors.append(name + ": native CLI timeout")
-        answer = []
+        answer, events = [], []
         for line in stdout.splitlines():
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
+            events.append(event)
             self.raw_events.append(event)
             self.native_id = event.get("session_id") or event.get("thread_id") or self.native_id
-            if event.get("type") == "assistant":
+            # The CLI's own error replies are never the model's answer.
+            if event.get("type") == "assistant" and not synthetic(event):
                 answer += [part["text"] for part in event.get("message", {}).get("content", []) if part.get("type") == "text"]
             if event.get("type") == "item.completed" and event.get("item", {}).get("type") == "agent_message":
                 answer.append(event["item"]["text"])
             if event.get("type") == "result":
-                if event.get("result"):
+                if event.get("result") and not event.get("is_error"):
                     answer = [event["result"]]
                 u = event.get("usage", {})
                 self.result.setdefault("usage", []).append({"at_ms": battery.now(), "kind": "thread",
@@ -110,14 +165,21 @@ class PlainBattery(battery.Battery):
                 self.result.setdefault("usage", []).append({"at_ms": battery.now(), "kind": "thread",
                     "input": max(0, u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)),
                     "cached_input": u.get("cached_input_tokens"), "output": u.get("output_tokens"), "cost_usd": None})
-        step.update(ended_ms=battery.now(), settled=proc.returncode == 0, answer="\n".join(answer))
+        errors = cli_errors(events, stderr if proc.returncode or timed_out else "")
+        outcome = ("timeout" if timed_out else
+                   "done" if proc.returncode == 0 and not any(e.get("type") == "result" and e.get("is_error") for e in events)
+                   else "failed")
+        step.update(ended_ms=battery.now(), settled=outcome == "done", outcome=outcome, answer="\n".join(answer))
+        if errors:
+            step["error"] = "; ".join(errors)
         if self.native_id:
             path = self.native_path()
             if not hasattr(self, "native_sessions"):
                 self.native_sessions = {}
             self.native_sessions[self.native_id] = str(path) if path else None
-        if proc.returncode:
-            self.errors.append(f"{name}: CLI exit {proc.returncode}: {stderr[-300:]}")
+        if proc.returncode and not timed_out:
+            errors.insert(0, f"CLI exit {proc.returncode}")
+        self.errors.extend(f"cli: {name}: {error}" for error in errors)
         if not self.native_id:
             raise RuntimeError("native CLI did not return a session id")
         return step

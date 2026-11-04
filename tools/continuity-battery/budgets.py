@@ -393,9 +393,10 @@ def main():
                 run.result["budget_scores"] = score_p2(run.result)
         except Exception as error:
             run.errors.append("capture/score: " + str(error))
+        status = battery.exit_status(run.result)
         run.cleanup()
         battery.write_report(run.result, report(run.result), args.report)
-    return 0 if run.result.get("items") or run.result.get("status") == "skipped" else 2
+    return status
 
 
 if __name__ == "__main__":

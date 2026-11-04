@@ -148,6 +148,7 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
   const search = useRef<HTMLInputElement>(null);
   const agents = useRef<HTMLDivElement>(null);
   const models = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => ({
     escape: () => {
       if (!query) return false;
@@ -157,9 +158,12 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
     },
   }));
   // The search takes the keyboard once the picker is open, after its holder's own focus moves
-  // (a menu focuses itself on opening); a timer, as a frame never comes in a hidden window.
+  // (a menu focuses itself on opening); a timer, as a frame never comes in a hidden window. A key
+  // pressed as it opened may have moved it within the picker already: there it stays (#598).
   useEffect(() => {
-    const timer = setTimeout(() => search.current?.focus());
+    const timer = setTimeout(() => {
+      if (!panel.current?.contains(document.activeElement)) search.current?.focus();
+    });
     return () => clearTimeout(timer);
   }, []);
 
@@ -372,7 +376,7 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
 
   return (
     // oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- the keys of the search and the two lists inside it
-    <div data-slot="model-picker" className="w-model-picker flex max-w-full flex-col" onKeyDown={onKeyDown}>
+    <div ref={panel} data-slot="model-picker" className="w-model-picker flex max-w-full flex-col" onKeyDown={onKeyDown}>
       <label data-picker-part="search" className="flex h-9 shrink-0 items-center gap-2 px-2.5">
         <MagnifyingGlassSmSearch aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
         <input
@@ -555,6 +559,11 @@ export function ModelPicker({
         className="max-w-(--radix-popover-content-available-width) p-1"
         onEscapeKeyDown={(event) => {
           if (handle.current?.escape()) event.preventDefault();
+        }}
+        // Closed, it gives the keyboard back to its trigger, a moment later: not when a picker
+        // opened since has it by then (#598).
+        onCloseAutoFocus={(event) => {
+          if (document.activeElement?.closest("[data-slot=model-picker]")) event.preventDefault();
         }}
       >
         <ModelPickerPanel

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """S21/S22: measure the seam; never implement continuity or gate on recall."""
 import argparse
+import datetime as dt
 import hashlib
 import importlib.util
 import json
@@ -24,7 +25,7 @@ from metrics import parse as parse_native
 from economics import NOTE as ECONOMICS_NOTE, combine, historical, usd
 NOTE = ECONOMICS_NOTE.replace("Cost units and regression rules are unchanged.",
                               "Dollar fields use native deduplicated economics only.")
-from scoring import definite_rejection, invoice_decision, recall_rows
+from scoring import definite_rejection, exit_status, invoice_decision, recall_rows
 spec = importlib.util.spec_from_file_location("live_smoke", SRC / "tools/live-smoke/smoke.py")
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
@@ -245,7 +246,7 @@ class Battery:
     def send(self, name, text, fault=None):
         self.tick()
         log(name)
-        step = {"name": name, "sent_ms": now()}
+        step = {"name": name, "sent_ms": now(), **({"fault": True} if fault else {})}
         self.steps.append(step)
         previous = {r["id"] for r in self.view()["requests"]}
         outcome = self.ipc.call({"method": "sendMessage", "conversationId": self.conversation,
@@ -274,11 +275,20 @@ class Battery:
             return v if req and req["state"]["type"] not in ("working", "queued", "deciding") and v["run"] in ("idle", "hibernated", "failed") else None
         v = self.wait(ended, self.args.turn_timeout)
         step["ended_ms"] = now()
+        # Settled: the request is over. Its outcome says whether it measured anything; a failed
+        # request settles too.
         step["settled"] = bool(v)
         if v:
+            state = next(r for r in v["requests"] if r["id"] == step["request"])["state"]
+            step["outcome"] = state["type"]
+            if state["type"] == "failed":
+                step["error"] = state.get("error") or ""
+                if not fault:
+                    self.errors.append(f"cli: {name}: request failed: {step['error'] or 'no error text'}")
             step["answer"] = "\n".join(m["text"] for m in smoke.messages(v)
                                        if m["role"] == "assistant" and m["createdAtMs"] >= step["sent_ms"])
         else:
+            step["outcome"] = "timeout"
             step["answer"] = ""
             step["timeout_view"] = self.view().get("run")
             self.errors.append(name + ": turn did not settle within bound")
@@ -422,6 +432,7 @@ class Battery:
             sum(compactions(native_path(file, provider), provider) for provider, file in self.native_sources))
         if missing:
             self.errors.append("capture: native transcripts unavailable: " + ", ".join(missing))
+        self.errors.extend("cli: " + text for text in transcript_errors(self.native_sources, self.steps))
         self.result["native_calls"] = native_calls(entries)
         self.result["seam_observations"] = seam_observations(self.result)
         # The seam's own record: each note and what each successor started from.
@@ -517,6 +528,49 @@ def native_path(filename, provider):
             if archived.is_file():
                 return archived
     return path
+
+
+def row_ms(row):
+    try:
+        return int(dt.datetime.fromisoformat(str(row["timestamp"]).replace("Z", "+00:00")).timestamp() * 1000)
+    except (KeyError, ValueError):
+        return None
+
+
+def synthetic_replies(rows, quiet=()):
+    """The CLI's own error replies in a Claude transcript (`<synthetic>` API error messages),
+    with their kind and status. `quiet` holds (start, end) ms windows of fault-injection steps,
+    whose errors are expected. A synthetic "No response requested." is not an error."""
+    found = []
+    for row in rows:
+        message = row.get("message") or {}
+        if message.get("model") != "<synthetic>" or not (row.get("isApiErrorMessage") or row.get("error")):
+            continue
+        at = row_ms(row)
+        if at is not None and any(start <= at <= end for start, end in quiet):
+            continue
+        content = message.get("content")
+        text = content if isinstance(content, str) else " ".join(
+            part.get("text", "") for part in content or [] if isinstance(part, dict) and part.get("type") == "text")
+        detail = ", ".join(str(v) for v in (row.get("error"), row.get("apiErrorStatus")) if v)
+        found.append(f"synthetic reply: {text.strip() or 'no text'}" + (f" ({detail})" if detail else ""))
+    return list(dict.fromkeys(found))
+
+
+def transcript_errors(sources, steps):
+    """Synthetic error replies across a run's Claude transcripts, outside its fault steps."""
+    from evidence import records
+    quiet = [(s["sent_ms"], s.get("ended_ms", s["sent_ms"])) for s in steps if s.get("fault")]
+    found = []
+    for provider, filename in sources:
+        path = native_path(filename, provider)
+        if provider != "claude" or not path.is_file():
+            continue
+        try:
+            found += synthetic_replies(records(path), quiet)
+        except (OSError, ValueError):
+            continue
+    return list(dict.fromkeys(found))
 
 
 def capture_roles(entries):
@@ -817,11 +871,12 @@ def main():
             battery.capture()
         except Exception as error:
             battery.errors.append("capture: " + str(error))
+        # A partial/infrastructure run is distinguishable; recall failures never affect exit.
+        status = exit_status(battery.result)
         battery.cleanup()
         write_report(battery.result, report(battery.result), args.report)
         log("report: " + args.report)
-    # A partial/infrastructure run is distinguishable; recall failures never affect exit.
-    return 0 if "items" in battery.result or battery.result.get("status") == "skipped" else 2
+    return status
 
 
 if __name__ == "__main__":

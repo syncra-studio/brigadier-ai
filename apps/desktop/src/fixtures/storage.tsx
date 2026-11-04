@@ -32,8 +32,13 @@ if (params.has("drive")) {
 
 const KB = 1024;
 const MB = 1024 * KB;
-const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
+/** The same time of day `days` calendar days before now: a day a clock change shortens or lengthens is still one day. */
+const daysBefore = (days: number) => {
+  const at = new Date(NOW);
+  at.setDate(at.getDate() - days);
+  return at.getTime();
+};
 
 function item(id: string, fields: Partial<CleanItem>): CleanItem {
   return {
@@ -60,7 +65,7 @@ function project(name: string, path: string, mb: number, daysAgo: number, fields
     name,
     path,
     repoFound: true,
-    lastUsedMs: NOW - daysAgo * DAY,
+    lastUsedMs: daysBefore(daysAgo),
     conversations: 12,
     archived: 0,
     brainBytes: bytes - blobs,
@@ -301,6 +306,7 @@ function Fixture() {
       [
         "rest",
         () => {
+          seen.clock = `${new Date(NOW).toDateString()} ${Intl.DateTimeFormat().resolvedOptions().timeZone}`;
           seen.title = text(q("h1"));
           seen.legend = all("[data-legend]").map(text);
           seen.usage = text(q("[data-usage]"));

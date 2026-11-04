@@ -173,10 +173,11 @@ def main():
             run.capture()
         except Exception as error:
             run.errors.append("capture: " + str(error))
+        status = battery.exit_status(run.result)
         run.cleanup()
         battery.write_report(run.result, report(run.result), args.report)
         battery.log("report: " + args.report)
-    return 0 if "items" in run.result or run.result.get("status") == "skipped" else 2
+    return status
 
 
 if __name__ == "__main__":
