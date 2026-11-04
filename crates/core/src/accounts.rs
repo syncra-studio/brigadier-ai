@@ -429,12 +429,15 @@ fn tightest<'a>(quota: &'a QuotaSnapshot, model: Option<&str>) -> Option<&'a Quo
         .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
 }
 
-/// Whether a window limits `model`: a window of every model, or one scoped to it.
+/// Whether a window limits `model`: a window of every model, or one scoped to it. The CLI's
+/// own default model (`None`) is also held by a limit a session met on some of the provider's
+/// models ([`crate::routing::monitor::LIMIT_WINDOW`], OpenCode Go's): whether the default is
+/// one of them isn't known here, so it waits as it did when such a limit held every model.
 fn applies(window: &QuotaWindow, model: Option<&str>) -> bool {
-    window
-        .model
-        .as_deref()
-        .is_none_or(|scope| model.is_some_and(|model| limits(scope, model)))
+    window.model.as_deref().is_none_or(|scope| match model {
+        Some(model) => limits(scope, model),
+        None => window.id.starts_with(crate::routing::monitor::LIMIT_WINDOW),
+    })
 }
 
 const FIVE_HOURS: i64 = 5 * 60;
@@ -1224,6 +1227,11 @@ mod tests {
                 0
             )
             .account,
+            None
+        );
+        // Claude's own model window doesn't hold work on the CLI's default model, as before.
+        assert_eq!(
+            select(&settings, ProviderKind::Claude, None, &all, &[], 0).account,
             None
         );
     }

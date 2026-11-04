@@ -41,6 +41,9 @@ const SAMPLE_EPSILON: f64 = 0.05;
 /// is quota about to be lost: the user is told once ([`QuotaMonitor::due_warnings`]).
 const WARN_BEFORE_RESET_MS: i64 = 12 * 60 * 60 * 1000;
 const WARN_UNUSED_PERCENT: f64 = 20.0;
+/// The id a limit that holds only some models ([`LimitHit::model`]) is kept under, its scope
+/// after it: `limit.opencode-go`.
+pub(crate) const LIMIT_WINDOW: &str = "limit.";
 
 #[derive(Default)]
 struct Tracked {
@@ -250,7 +253,7 @@ impl QuotaMonitor {
                     Some(window)
                 }
                 None => limit.model.as_ref().map(|scope| QuotaWindow {
-                    id: format!("limit.{scope}"),
+                    id: format!("{LIMIT_WINDOW}{scope}"),
                     label: "Usage limit".into(),
                     used_percent: 100.0,
                     resets_at_ms: limit.resets_at_ms,
@@ -555,9 +558,17 @@ mod tests {
         assert_eq!(crate::accounts::headroom(&quota, go), None);
         assert_eq!(crate::accounts::ready_again_at(&quota, go), Some(6 * HOUR));
         assert_eq!(crate::accounts::headroom(&quota, free), Some(100.0));
+        // Work on OpenCode's own default model (unnamed, which may be a Go one) waits for the
+        // reset rather than sending again into the limit.
+        assert_eq!(crate::accounts::headroom(&quota, None), None);
+        assert_eq!(
+            crate::accounts::ready_again_at(&quota, None),
+            Some(6 * HOUR)
+        );
         // At its reset it lifts, before any restart.
         let quota = monitor.current_for(&own, 6 * HOUR).unwrap();
         assert_eq!(crate::accounts::headroom(&quota, go), Some(100.0));
+        assert_eq!(crate::accounts::headroom(&quota, None), Some(100.0));
         monitor.note(&own, &poll(7 * HOUR), 7 * HOUR);
         assert!(
             monitor
