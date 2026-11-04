@@ -173,7 +173,9 @@ impl ConvLive {
 
 impl SessionManager {
     /// Queues a message sent while the conversation's block is open, Deciding, and judges it in
-    /// the background (D157).
+    /// the background (D157). One the user puts back in its slot (`queue_index`: a row pulled
+    /// out to edit, a delete undone) is theirs, as an edited or moved row is: it waits there,
+    /// never judged again, so never Deciding.
     pub(super) async fn queue_to_judge(
         &self,
         conv: &Arc<ConvLive>,
@@ -189,11 +191,16 @@ impl SessionManager {
                 attachments,
                 mentions,
                 queue_index,
-                true,
+                queue_index.is_none(),
                 None,
             ))
             .await?;
-        self.judge_now(conv, &item);
+        if queue_index.is_some() {
+            // As a judge's answer ends: only paused workers hold, and nothing else sends it.
+            self.kick(conv);
+        } else {
+            self.judge_now(conv, &item);
+        }
         Ok(SendOutcome::Queued(item))
     }
 
