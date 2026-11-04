@@ -508,7 +508,11 @@ impl StdoutPump {
     /// turn's end), so `too_long` ends the CLI instead, and the lines end with it.
     async fn run<R: AsyncBufRead + Unpin>(self, mut reader: R, too_long: impl FnOnce(usize)) {
         loop {
-            self.queued.room().await;
+            // An adapter that went while the budget was used takes nothing more.
+            tokio::select! {
+                () = self.queued.room() => {}
+                () = self.lines.closed() => break,
+            }
             let line = match read_line(&mut reader, self.max).await {
                 Ok(Read::Line(line)) => line,
                 Ok(Read::TooLong(line)) if self.is_log => {
@@ -972,6 +976,24 @@ mod tests {
         let all = all(&mut lines).await;
         assert_eq!(all.len(), 100);
         assert_eq!(queued.bytes.load(Ordering::Acquire), 0);
+    }
+
+    /// An adapter that goes while the byte budget is used takes nothing more: the reader ends
+    /// rather than waiting for it forever with the CLI's stdout held open.
+    #[tokio::test]
+    async fn the_reader_ends_when_the_adapter_goes_while_its_budget_is_used() {
+        let (lines, queued, _) = pump(b"aaaa\n".repeat(100), 1024, 12, false);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(queued.bytes.load(Ordering::Acquire), 15);
+        drop(lines);
+        // Only this test holds the count once the reader is gone.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while Arc::strong_count(&queued) > 1 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the reader waits forever for an adapter that went");
     }
 
     /// A secret cut at the stderr line limit shows no part of itself: the rest of it, which
