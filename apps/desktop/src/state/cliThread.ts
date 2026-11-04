@@ -5,6 +5,7 @@ import { turnCommands } from "@/app/conversation/turnCommands";
 import { workingWorkers } from "@/app/conversation/turnWorkers";
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
+import { readOrder } from "@/lib/readOrder";
 import { type NativeWorker, runningSubagents, subagentPanelOf, subagentRow } from "@/state/nativeWorkers";
 import type { AttachmentRef, FileEntry, FileImage, McpServerState, ProviderEvent, ThreadNews, ThreadView, WorkerRow } from "@/ipc/generated";
 
@@ -193,7 +194,11 @@ function addNews(view: ThreadView, news: ThreadNews, lists: boolean, read: boole
  * Reads under way: the news heard since each was asked for, whether to read once more (a
  * reconnect), and the read itself, which a second ask for the thread joins.
  */
-const reads = new Map<string, { heard: ThreadNews[]; again: boolean; done: Promise<void> }>();
+const reads = new Map<string, ThreadRead>();
+type ThreadRead = { heard: ThreadNews[]; again: boolean; done: Promise<void>; current: () => boolean };
+
+/** A read answering after its session's view was dropped (or read anew) is not drawn. */
+const threadReads = readOrder();
 
 /**
  * The news heard from a turn's start or end on, until a read asked for after it: only the engine
@@ -206,6 +211,74 @@ const owed = new Map<string, ThreadNews[]>();
 
 function setView(conversationId: string, view: ThreadView): void {
   useCliThread.setState((state) => ({ views: { ...state.views, [conversationId]: view } }));
+  touch(used, conversationId);
+  evictThreads();
+}
+
+/**
+ * How many sessions' threads are kept besides those on screen and those `keepThreadViews` names
+ * (the shown and running ones): the most recently used, as many as are read ahead (#760). The
+ * others are dropped, and read again when they open. Workers' threads are kept the same way.
+ */
+export const KEPT_THREADS = 10;
+export const KEPT_WORKER_THREADS = 10;
+
+/** When each kept view was last used, by session id or worker task id. */
+const used = new Map<string, number>();
+const workerUsed = new Map<string, number>();
+let usedAt = 0;
+const touch = (uses: Map<string, number>, id: string) => void uses.set(id, ++usedAt);
+
+/** The views on screen now, as many times as they show. */
+const onScreen = new Map<string, number>();
+const workersOnScreen = new Map<string, number>();
+
+function hold(counts: Map<string, number>, id: string): () => void {
+  counts.set(id, (counts.get(id) ?? 0) + 1);
+  return () => {
+    const left = (counts.get(id) ?? 1) - 1;
+    if (left > 0) counts.set(id, left);
+    else counts.delete(id);
+  };
+}
+
+let keeper: () => Iterable<string> = () => [];
+
+/** Names the sessions whose threads are always kept, beyond those on screen (the app's: shown or running). */
+export function keepThreadViews(keep: () => Iterable<string>): void {
+  keeper = keep;
+}
+
+/** Of `ids`, those beyond `limit` least recently used, by `uses`. */
+function leastUsed(ids: readonly string[], uses: ReadonlyMap<string, number>, limit: number): string[] {
+  if (ids.length <= limit) return [];
+  return ids.toSorted((a, b) => (uses.get(a) ?? 0) - (uses.get(b) ?? 0)).slice(0, ids.length - limit);
+}
+
+function evictThreads(): void {
+  const kept = new Set(keeper());
+  const spare = Object.keys(useCliThread.getState().views).filter((id) => !onScreen.has(id) && !kept.has(id));
+  const gone = leastUsed(spare, used, KEPT_THREADS);
+  if (gone.length > 0) forgetThreads(gone);
+}
+
+/** Drops sessions' views and all that waits on them; a read under way of one is not drawn. */
+function forgetThreads(ids: readonly string[]): void {
+  const now = Date.now();
+  for (const id of ids) {
+    threadReads.change(id);
+    reads.delete(id);
+    owed.delete(id);
+    pending.delete(id);
+    draining.delete(id);
+    used.delete(id);
+    dropped.set(id, now);
+  }
+  useCliThread.setState((state) => {
+    const views = { ...state.views };
+    for (const id of ids) delete views[id];
+    return { views };
+  });
 }
 
 /**
@@ -216,7 +289,7 @@ function setView(conversationId: string, view: ThreadView): void {
 export function loadThreadView(conversationId: string): Promise<void> {
   const going = reads.get(conversationId);
   if (going) return going.done;
-  const read = { heard: owed.get(conversationId) ?? [], again: false, done: Promise.resolve() };
+  const read: ThreadRead = { heard: owed.get(conversationId) ?? [], again: false, done: Promise.resolve(), current: threadReads.read(conversationId) };
   owed.delete(conversationId);
   reads.set(conversationId, read);
   read.done = new Promise((shown) => void readThread(conversationId, read, shown));
@@ -230,23 +303,30 @@ export const NEWEST_TURNS = 5;
  * Reads the thread; `shown` once it can be drawn. A thread not held yet comes in two: its newest
  * turns, drawn at once, then the whole of it, whose older turns fill in above what shows.
  */
-async function readThread(conversationId: string, read: { heard: ThreadNews[]; again: boolean }, shown: (value: void) => void): Promise<void> {
+async function readThread(conversationId: string, read: ThreadRead, shown: (value: void) => void): Promise<void> {
   try {
     // Cut, the newest come as just that many turns; with fewer or more they are all there is.
     const newest = useCliThread.getState().views[conversationId] ? null : await threadView(conversationId, NEWEST_TURNS);
+    // Its view dropped meanwhile: neither part is drawn (#760).
+    if (!read.current()) return;
     if (newest) {
       land(conversationId, read, newest);
       shown();
     }
-    if (!newest || newest.turns.length === NEWEST_TURNS) land(conversationId, read, await threadView(conversationId));
+    if (!newest || newest.turns.length === NEWEST_TURNS) {
+      const whole = await threadView(conversationId);
+      if (!read.current()) return;
+      land(conversationId, read, whole);
+    }
     readFailed(conversationId, false);
   } catch (error) {
     console.error("reading the thread failed", error);
-    readFailed(conversationId, true);
+    if (read.current()) readFailed(conversationId, true);
   } finally {
     shown();
-    reads.delete(conversationId);
-    if (read.again || owed.has(conversationId)) void loadThreadView(conversationId);
+    // A read dropped with its view leaves the one after it be.
+    if (reads.get(conversationId) === read) reads.delete(conversationId);
+    if (read.current() && (read.again || owed.has(conversationId))) void loadThreadView(conversationId);
   }
 }
 
@@ -459,6 +539,8 @@ export function resyncThreadViews(shown: readonly string[]): Promise<void> {
   const now = Date.now();
   for (const id of Object.keys(views)) if (!shown.includes(id)) dropped.set(id, now);
   useCliThread.setState({ views: Object.fromEntries(shown.flatMap((id) => (views[id] ? [[id, views[id]] as const] : []))) });
+  // Workers' threads not on screen may be stale too: they are read again when they show.
+  forgetWorkerThreads(Object.keys(useWorkerThreads.getState().views).filter((id) => !workersOnScreen.has(id)));
   // A read asked for before the reconnect may predate what was missed: it reads once more.
   for (const read of reads.values()) read.again = true;
   return Promise.all(shown.map((id) => loadThreadView(id))).then(() => {});
@@ -473,7 +555,15 @@ export function useThreadUnreadable(conversationId: string | null): boolean {
 export function useThreadView(conversationId: string | null): ThreadView | null {
   const view = useCliThread((s) => (conversationId ? (s.views[conversationId] ?? null) : null));
   useEffect(() => {
-    if (conversationId && !useCliThread.getState().views[conversationId]) void loadThreadView(conversationId);
+    if (!conversationId) return;
+    // Kept while it shows; last used when it stops showing.
+    const letGo = hold(onScreen, conversationId);
+    touch(used, conversationId);
+    if (!useCliThread.getState().views[conversationId]) void loadThreadView(conversationId);
+    return () => {
+      touch(used, conversationId);
+      letGo();
+    };
   }, [conversationId]);
   return view;
 }
@@ -587,17 +677,46 @@ export function useWorkerRow(taskId: string | null): WorkerRow | null {
  */
 export const useWorkerThreads = create<{ views: Readonly<Record<string, ThreadView>> }>(() => ({ views: {} }));
 
-/** The latest read asked for of each worker's thread. */
-const workerReads = new Map<string, number>();
+/** An older read of a worker's thread answering late never replaces a newer one, nor brings back a dropped one. */
+const workerReads = readOrder();
 
 /** Reads worker `taskId`'s thread into `useWorkerThreads`. */
 export async function loadWorkerThread(conversationId: string, taskId: string): Promise<void> {
-  const read = (workerReads.get(taskId) ?? 0) + 1;
-  workerReads.set(taskId, read);
+  const current = workerReads.read(taskId);
   const { view } = await request({ method: "workerThread", conversationId, taskId });
-  // An older read answering late never replaces a newer one.
-  if (workerReads.get(taskId) !== read) return;
+  if (!current()) return;
   useWorkerThreads.setState((state) => ({ views: { ...state.views, [taskId]: view } }));
+  touch(workerUsed, taskId);
+  const spare = Object.keys(useWorkerThreads.getState().views).filter((id) => !workersOnScreen.has(id));
+  forgetWorkerThreads(leastUsed(spare, workerUsed, KEPT_WORKER_THREADS));
+}
+
+/** Drops workers' threads; a read under way of one is not drawn. */
+function forgetWorkerThreads(ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  for (const id of ids) {
+    workerReads.change(id);
+    workerUsed.delete(id);
+  }
+  useWorkerThreads.setState((state) => {
+    const views = { ...state.views };
+    for (const id of ids) delete views[id];
+    return { views };
+  });
+}
+
+/** Keeps worker `taskId`'s thread while it shows; the returned function lets it go. */
+export function holdWorkerThread(taskId: string): () => void {
+  const letGo = hold(workersOnScreen, taskId);
+  return () => {
+    touch(workerUsed, taskId);
+    letGo();
+  };
+}
+
+/** Keeps worker `taskId`'s thread while the component showing it is on screen. */
+export function useHeldWorkerThread(taskId: string | null): void {
+  useEffect(() => (taskId ? holdWorkerThread(taskId) : undefined), [taskId]);
 }
 
 /** A view's entries by item id. */

@@ -11,8 +11,8 @@ import {
   prewarmConversations,
   toggleSettings,
 } from "@/state/actions";
-import { applyActivityEvents, applyActivityNews, loadActivity } from "@/state/activity";
-import { applyThreadNews, resyncThreadViews } from "@/state/cliThread";
+import { applyActivityEvents, applyActivityNews, loadActivity, rowActivity, useActivity } from "@/state/activity";
+import { applyThreadNews, keepThreadViews, resyncThreadViews } from "@/state/cliThread";
 import { migrateLastOpened } from "@/state/lastOpened";
 import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
@@ -69,6 +69,15 @@ function shownIds(): string[] {
   const { selection } = useApp.getState();
   return [...(selection.type === "conversation" ? [selection.id] : []), ...sideBoardIds()];
 }
+
+/**
+ * The sessions whose threads are always kept (#760): the shown ones, and the running ones, whose
+ * threads follow their stream while they aren't shown (as `prewarmConversations` reads them).
+ */
+keepThreadViews(() => [
+  ...shownIds(),
+  ...Object.entries(useActivity.getState().byConversation).flatMap(([id, activity]) => (rowActivity(activity).running ? [id] : [])),
+]);
 
 /** Reloads everything the UI holds: used after (re)connecting and after missing events.
  * Threads and kept boards other than the shown ones may be stale, so they are dropped and reload

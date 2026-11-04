@@ -5,7 +5,22 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { turnCommands } from "@/app/conversation/turnCommands";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";
-import { applyThreadNews, loadThreadView, mergeEntries, NEWEST_TURNS, resyncThreadViews, unreadSince, useCliThread, useUnreadThreads } from "@/state/cliThread";
+import {
+  applyThreadNews,
+  holdWorkerThread,
+  KEPT_THREADS,
+  KEPT_WORKER_THREADS,
+  keepThreadViews,
+  loadThreadView,
+  loadWorkerThread,
+  mergeEntries,
+  NEWEST_TURNS,
+  resyncThreadViews,
+  unreadSince,
+  useCliThread,
+  useUnreadThreads,
+  useWorkerThreads,
+} from "@/state/cliThread";
 
 const at = (event: ProviderEvent, atMs: number): FileEntry => ({ event, atMs });
 const command = (status: "inProgress" | "completed", output: string | null = null): ProviderEvent => ({
@@ -499,5 +514,138 @@ test("a thread whose read fails is marked unreadable until a read lands", async 
     clearMocks();
     useCliThread.setState({ views: {} });
     useUnreadThreads.setState({ failed: {} });
+  }
+});
+
+/**
+ * A daemon whose session and worker threads answer at once, one turn each (`long`: as many as a
+ * first read asks for), except a whole read of an id in `holding`, which waits in `waiting` (#760).
+ */
+function threadDaemon() {
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
+  const asked: string[] = [];
+  const long = new Set<string>();
+  const holding = new Set<string>();
+  const waiting: { id: string; answer: () => void }[] = [];
+  mockIPC((cmd, payload) => {
+    if (cmd !== "ipc_request") return null;
+    const { request } = payload as { request: { method: string; conversationId: string; taskId?: string; newestTurns?: number } };
+    const id = request.method === "workerThread" ? request.taskId! : request.conversationId;
+    asked.push(id);
+    const turns = Array.from({ length: long.has(id) ? NEWEST_TURNS : 1 }, (_, index) => ({
+      userMessage: `u-${id}-${index}`, startedAtMs: index, endedAtMs: index, end: "done" as const, error: null, requests: [],
+    }));
+    const response = { method: request.method, view: { entries: [], turns } satisfies ThreadView };
+    if (request.newestTurns !== undefined || !holding.has(id)) return response;
+    return new Promise((resolve) => waiting.push({ id, answer: () => resolve(response) }));
+  });
+  /** Lets the oldest read of `id` still waiting answer. */
+  const answer = async (id: string) => {
+    const index = waiting.findIndex((each) => each.id === id);
+    waiting.splice(index, 1)[0]!.answer();
+    await settle();
+  };
+  return { asked, long, holding, answer };
+}
+
+test("opening sessions one after another keeps only so many threads; a dropped one is read again when it opens", async () => {
+  const daemon = threadDaemon();
+  useCliThread.setState({ views: {} });
+  keepThreadViews(() => ["open-0"]);
+  try {
+    for (let index = 0; index < 30; index++) await loadThreadView(`open-${index}`);
+    const kept = Object.keys(useCliThread.getState().views);
+    assert.equal(kept.length, KEPT_THREADS + 1, `30 sessions opened, ${kept.length} threads kept`);
+    assert.ok(kept.includes("open-0"), "a shown session's thread stays, however long ago it was read");
+    assert.ok(!kept.includes("open-1"));
+    assert.ok(unreadSince("open-1") > 0);
+    await loadThreadView("open-1");
+    assert.ok(useCliThread.getState().views["open-1"], "back to it, its thread is read again");
+    assert.equal(daemon.asked.filter((id) => id === "open-1").length, 2);
+  } finally {
+    keepThreadViews(() => []);
+    clearMocks();
+  }
+});
+
+test("a thread read under way when its session is dropped doesn't bring it back, nor end the read after it", async () => {
+  const daemon = threadDaemon();
+  useCliThread.setState({ views: {} });
+  daemon.long.add("late");
+  daemon.holding.add("late");
+  try {
+    // Its newest turns come at once; the whole of it waits.
+    const dropped = loadThreadView("late");
+    await settle();
+    assert.ok(useCliThread.getState().views.late);
+    for (let index = 0; index < KEPT_THREADS; index++) await loadThreadView(`newer-${index}`);
+    assert.equal(useCliThread.getState().views.late, undefined, "the least recently used is dropped");
+    // Opened again: a read of its own, not the dropped one's.
+    const again = loadThreadView("late");
+    await settle();
+    await daemon.answer("late");
+    await dropped;
+    assert.equal(loadThreadView("late"), again, "the dropped read's end leaves the read after it under way");
+    await daemon.answer("late");
+    await again;
+    assert.equal(useCliThread.getState().views.late?.turns.length, NEWEST_TURNS);
+  } finally {
+    clearMocks();
+  }
+});
+
+test("a dropped session's whole read, answering late, doesn't bring its thread back", async () => {
+  const daemon = threadDaemon();
+  useCliThread.setState({ views: {} });
+  daemon.long.add("gone");
+  daemon.holding.add("gone");
+  try {
+    const read = loadThreadView("gone");
+    await settle();
+    for (let index = 0; index < KEPT_THREADS; index++) await loadThreadView(`after-${index}`);
+    await daemon.answer("gone");
+    await read;
+    assert.equal(useCliThread.getState().views.gone, undefined);
+    assert.equal(Object.keys(useCliThread.getState().views).length, KEPT_THREADS);
+  } finally {
+    clearMocks();
+  }
+});
+
+test("many workers opened inside one session keep only so many threads; one on screen stays", async () => {
+  threadDaemon();
+  useWorkerThreads.setState({ views: {} });
+  const release = holdWorkerThread("w-0");
+  try {
+    for (let index = 0; index < 30; index++) await loadWorkerThread("boss", `w-${index}`);
+    const kept = Object.keys(useWorkerThreads.getState().views);
+    assert.equal(kept.length, KEPT_WORKER_THREADS + 1, `30 workers opened, ${kept.length} threads kept`);
+    assert.ok(kept.includes("w-0"), "the worker whose panel shows keeps its thread");
+    assert.ok(kept.includes("w-29"));
+  } finally {
+    release();
+    clearMocks();
+  }
+});
+
+test("a worker's read under way when its thread is dropped doesn't bring it back; a resync drops those not on screen", async () => {
+  const daemon = threadDaemon();
+  useWorkerThreads.setState({ views: {} });
+  let release: (() => void) | null = null;
+  try {
+    await loadWorkerThread("boss", "wl");
+    daemon.holding.add("wl");
+    const late = loadWorkerThread("boss", "wl");
+    for (let index = 0; index < KEPT_WORKER_THREADS; index++) await loadWorkerThread("boss", `wn-${index}`);
+    assert.equal(useWorkerThreads.getState().views.wl, undefined);
+    await daemon.answer("wl");
+    await late;
+    assert.equal(useWorkerThreads.getState().views.wl, undefined);
+    release = holdWorkerThread("wn-9");
+    await resyncThreadViews([]);
+    assert.deepEqual(Object.keys(useWorkerThreads.getState().views), ["wn-9"]);
+  } finally {
+    release?.();
+    clearMocks();
   }
 });

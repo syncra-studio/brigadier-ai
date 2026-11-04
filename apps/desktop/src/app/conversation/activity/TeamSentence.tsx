@@ -16,7 +16,7 @@ import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";
 import { useBoard } from "@/state/board";
-import { loadWorkerThread, useWorkerThreads } from "@/state/cliThread";
+import { loadWorkerThread, useHeldWorkerThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
  * How workers show in the thread (THREAD-UX-PLAN.md §3.4): sentences in the row recipe of the
@@ -150,6 +150,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
   const conversationId = useViewConversation()?.id ?? null;
   const stopped = kind.type === "stopped" && atMs !== undefined ? kind.taskId : null;
   const turns = useWorkerThreads((s) => (stopped ? s.views[stopped]?.turns : undefined));
+  useHeldWorkerThread(stopped);
   useEffect(() => {
     if (stopped && conversationId && !turns) loadWorkerThread(conversationId, stopped).catch(() => undefined);
   }, [stopped, conversationId, turns]);
