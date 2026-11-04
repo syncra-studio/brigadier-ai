@@ -121,6 +121,9 @@ const READ: ModelRule[] = [
   { type: "forbid", names: ["sonnet"], work: "Adversarial review" },
   { type: "advice", text: "Prefer Codex when Claude is busy" },
 ];
+/** A second Add's words, and its rule: added after the first, it outlives the first one's Undo. */
+const TYPED_LATER = "never use haiku";
+const READ_LATER: ModelRule[] = [{ type: "forbid", names: ["haiku"] }];
 /** How long the faked Rule reading takes; scene 4 never ends, to show it rewriting. */
 const READING_MS = scene === "4" ? 3_600_000 : 900;
 /** The ratings' view of Bounded implementation: GPT-6 rates above the Sonnet 5.5 the user put first. */
@@ -203,7 +206,7 @@ mockIPC((command, payload) => {
           () =>
             req.text.includes("gibberish")
               ? reject({ code: "invalid", message: "Brigadier couldn't make a rule of that: try other words." })
-              : resolve({ method: req.method, rules: READ }),
+              : resolve({ method: req.method, rules: req.text.includes("haiku") ? READ_LATER : READ }),
           READING_MS,
         ),
       );
@@ -272,6 +275,9 @@ function Fixture() {
   useEffect(() => {
     openSettings("routing");
     const seen: Record<string, unknown> = {};
+    // The Undo of each of the drive's two Adds, pressed later.
+    let undoFirst: (() => void) | undefined;
+    let undoLater: (() => void) | undefined;
     let steps: (() => void)[];
     if (!params.has("drive")) {
       steps = [
@@ -533,7 +539,25 @@ function Fixture() {
           seen.rulesAfterAdd = ruleRows();
           const added = useToasts.getState().toasts.at(-1);
           seen.toast = added && [added.text, ...added.actions.map((action) => action.label)];
-          added?.actions[0]?.run();
+          undoFirst = added?.actions[0]?.run;
+          // A second rule added before the first one's Undo is pressed (#757).
+          (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.click();
+        },
+        () => type(TYPED_LATER),
+        () => button("Add", form() ?? document)?.click(),
+        () => {},
+        () => {},
+        () => {},
+        () => button("Add", form() ?? document)?.click(),
+        () => {
+          seen.rulesAfterLaterAdd = ruleRows();
+          undoLater = useToasts.getState().toasts.at(-1)?.actions[0]?.run;
+          undoFirst?.();
+        },
+        () => {
+          // The first Undo took out only its own rules: the later one stays.
+          seen.rulesAfterFirstUndo = ruleRows();
+          undoLater?.();
         },
         () => {
           seen.rulesAfterUndo = ruleRows();

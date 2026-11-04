@@ -122,6 +122,10 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   ]);
   assert.deepEqual(seen.rulesAfterAdd, [...rules, "Never use Sonnet for Adversarial review", "Prefer Codex when Claude is busyadvice"]);
   assert.deepEqual(seen.toast, ["Rules added", "Undo"]);
+  // A rule added after them outlives their Undo (#757); its own Undo then takes it back.
+  const added = [...rules, "Never use Sonnet for Adversarial review", "Prefer Codex when Claude is busyadvice"];
+  assert.deepEqual(seen.rulesAfterLaterAdd, [...added, "Never use Haiku"]);
+  assert.deepEqual(seen.rulesAfterFirstUndo, [...rules, "Never use Haiku"]);
   assert.deepEqual(seen.rulesAfterUndo, rules);
   // The file edited by hand shows when the page opens again: an order of two, a rule for one work
   // that keeps a kind's only model out, which its row and Automatic say.

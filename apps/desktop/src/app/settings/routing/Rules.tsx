@@ -54,9 +54,9 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
               file={file}
               names={names}
               onClose={() => setAdding(false)}
-              onSaved={(before) => {
+              onSaved={(added) => {
                 setAdding(false);
-                toast("Rules added", { actions: [{ label: "Undo", run: () => void undoAdd(before) }] });
+                toast("Rules added", { actions: [{ label: "Undo", run: () => void undoAdd(added) }] });
               }}
             />
           )}
@@ -81,11 +81,19 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
   );
 }
 
-/** Undo outlives the render that added the rules, so it saves over the file as it is now. */
-function undoAdd(before: readonly ModelRule[]): Promise<void> {
+/**
+ * Undo outlives the render that added the rules, so it takes out only the rules that Add added,
+ * from the file as it is now: rules added or removed since stay as they are.
+ */
+function undoAdd(added: readonly ModelRule[]): Promise<void> {
   const view = useModelRules.getState().view;
   if (!view) return Promise.resolve();
-  return saveModelRules(view, view.rows, before).catch(() => {
+  const gone = new Set(added.map(ruleText));
+  return saveModelRules(
+    view,
+    view.rows,
+    view.rules.filter((rule) => !gone.has(ruleText(rule))),
+  ).catch(() => {
     toast("Couldn't undo: your rules changed.");
   });
 }
@@ -144,7 +152,8 @@ function AddBox({
   file: ModelRules;
   names: ReturnType<typeof ruleNames>;
   onClose: () => void;
-  onSaved: (before: readonly ModelRule[]) => void;
+  /** The rules Add put in the file, the ones it didn't hold yet. */
+  onSaved: (added: readonly ModelRule[]) => void;
 }) {
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<Phase>({ at: "writing" });
@@ -180,10 +189,10 @@ function AddBox({
   const submit = () => {
     if (phase.at !== "read") return void read();
     const known = new Set(file.rules.map(ruleText));
-    const next = [...file.rules, ...phase.rules.filter((rule) => !known.has(ruleText(rule)))];
+    const added = phase.rules.filter((rule) => !known.has(ruleText(rule)));
     add.run(async () => {
-      await saveModelRules(file, file.rows, next);
-      onSaved(file.rules);
+      await saveModelRules(file, file.rows, [...file.rules, ...added]);
+      onSaved(added);
     });
   };
   const saved = phase.at === "read" ? phase.rules : [];
