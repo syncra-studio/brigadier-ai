@@ -142,6 +142,7 @@ pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
     }
     let path = path.to_vec();
     super::windows_enum::run_uia_with_deadline_cancelable(
+        super::windows_enum::UiaTarget::Window(hwnd),
         "menu-path", std::time::Duration::from_secs(4), "no fallback input",
         move |cancelled| invoke_inner(hwnd, &path, &cancelled),
     ).map_err(|error| format!("Menu action not confirmed because {}. No fallback input was sent; read fresh state before retrying.", super::click::deadline_reason(error)))?

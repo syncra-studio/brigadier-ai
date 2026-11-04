@@ -468,6 +468,7 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
     requestIds: requestIds.length > 0 ? [...requestIds] : [key],
     state: "working",
     error: null,
+    errorAt: null,
     startedAtMs,
     endedAtMs: null,
     worked: [{ fromMs: startedAtMs, toMs: null }],
@@ -559,8 +560,11 @@ function startsTurn(entry: FileEntry): boolean {
  * block's turns before it (Brigadier's word of its workers joined it): it started with the
  * first, and worked in each.
  */
-function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly ThreadTurn[] = []): void {
+function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly ThreadTurn[] = [], cutAt?: ReadonlyMap<ThreadTurn, number>): void {
   const { state, error } = turnState(turn ?? { end: null, error: null });
+  // A turn of it failed and a later one went on (a worker's end woke it): the failure stays said.
+  // A limit's is no failure: the switch goes on from it (goal 1).
+  const failed = earlier.findLast((each) => (each.end === "failed" || each.end === "interrupted") && each.errorKind !== "usageLimit" && !each.limit);
   const first = earlier[0] ? (earlier[0].startedAtMs ?? block.startedAtMs) : null;
   const own = turn?.startedAtMs ?? first ?? block.startedAtMs;
   const endedAtMs = turn?.end ? (turn.endedAtMs ?? own) : null;
@@ -570,7 +574,9 @@ function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly Th
   });
   Object.assign(block, {
     state,
-    error,
+    error: error ?? (failed ? turnState(failed).error : null),
+    // Its own turn's failure comes last by itself; an earlier one's stays where it happened (D16).
+    errorAt: error === null && failed ? (cutAt?.get(failed) ?? null) : null,
     startedAtMs: first ?? own,
     endedAtMs,
     worked: [...before, { fromMs: own, toMs: endedAtMs }],
@@ -682,7 +688,9 @@ export function cliBlocks(
     read && (read.errorKind === "usageLimit" || read.limit) && read.requests.some((request) => (board?.requests?.[request] as { state?: { type?: string } } | undefined)?.state?.type === "working")
       ? { ...read, end: null, endedAtMs: null, error: null }
       : read;
-  const close = (each: Block) => settle(each, switching(turnOf.get(each)), joined.get(each));
+  // Where each turn that another joined stopped: after all it said, before what the next one did.
+  const cutAt = new Map<ThreadTurn, number>();
+  const close = (each: Block) => settle(each, switching(turnOf.get(each)), joined.get(each), cutAt);
   // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
   // The block each message that joined one went on in (a seam's successor may start in one).
   const joinedBy = new Map<string, Block>();
@@ -690,6 +698,7 @@ export function cliBlocks(
     const item = view.entries[position]?.event;
     if (item?.type === "message") joinedBy.set(item.itemId, each);
     const last = turnOf.get(each);
+    if (last) cutAt.set(last, position - 0.25);
     joined.set(each, [...(joined.get(each) ?? []), ...(last ? [last] : [])]);
     turnOf.set(each, view.turns[turn]);
     for (const request of view.turns[turn]?.requests ?? []) if (!each.requestIds.includes(request)) each.requestIds.push(request);
@@ -709,20 +718,24 @@ export function cliBlocks(
   // A turn begun while the core's work block of the block before is open goes on in it (D163):
   // one job, one block, as the core alone says.
   const holds = (each: Block) => coreHolds(view.block, turnOf.get(each)?.endedAtMs ?? null);
-  // A turn that carries on the request a usage limit cut (an account or CLI switch) goes on in
-  // its block: one block, one switch row, no stopped turn (goal 1), with what the user steered
-  // into it meanwhile (D25; seen live). Its requests, else the ones the engine noted it sent: one
-  // naming none of the cut turn's, a message the user sent anew, opens its own.
-  const carriesOn = (requests: readonly string[] = []) => {
+  // A turn that carries on the request a usage limit, or anything else the core handed over, cut
+  // (an account, model or CLI switch) goes on in its block: one block, one switch row, no stopped
+  // turn (goal 1), with what the user steered into it meanwhile (D25; seen live). Its requests,
+  // else the ones the engine noted it sent: one naming none of the cut turn's, a message the user
+  // sent anew, opens its own.
+  const carriesOn = (requests: readonly string[] = [], shown = false) => {
     const before = view.turns[turn - 1];
-    if (before?.errorKind !== "usageLimit" && !before?.limit) return false;
+    const limited = before?.errorKind === "usageLimit" || !!before?.limit;
+    if (!limited && before?.end !== "handedOver") return false;
     const named = view.turns[turn]?.requests.length ? view.turns[turn]!.requests : requests;
-    return named.length === 0 || named.some((request) => before.requests.includes(request));
+    // Brigadier's own carry-on names no request; a message shown as the user's, naming none, is no proof.
+    if (named.length === 0) return limited || !shown;
+    return named.some((request) => before!.requests.includes(request));
   };
   // While its turn runs, a turn begun while the block before held goes on in it (D24, D113):
   // the daemon's `joins` may come only once the turn is judged or over.
-  const goesOn = (each: Block | null, requests?: readonly string[]): each is Block =>
-    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || carriesOn(requests) || (view.turns[turn]?.end == null && holds(each)));
+  const goesOn = (each: Block | null, requests?: readonly string[], shown?: boolean): each is Block =>
+    !!each && !internal.has(each) && (!!view.turns[turn]?.joins || overlaps() || carriesOn(requests, shown) || (view.turns[turn]?.end == null && holds(each)));
   // Whether Brigadier's word of its workers (`text`) names one started in `each`'s turns.
   const startedIn = (each: Block, text: string): boolean => {
     const from = (joined.get(each)?.[0] ?? turnOf.get(each))?.startedAtMs ?? each.startedAtMs;
@@ -922,7 +935,7 @@ export function cliBlocks(
       const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs);
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
-      if (goesOn(block, entry.requests ?? [])) {
+      if (goesOn(block, entry.requests ?? [], true)) {
         join(block, position, entry.atMs);
         // One the block already shows (a switch's carry-on sends it again) shows once.
         const ids = [block.user?.kind === "message" ? block.user.message.id : null, ...block.steers.map((steer) => steer.message.id)];
@@ -1039,6 +1052,8 @@ export function cliBlocks(
     }
   });
   if (block) close(block);
+  // A turn handed over reads working until its carry-on (D180): with a block after it, none is coming.
+  for (const each of blocks.slice(0, -1)) if (each.state === "working" && each.endedAtMs !== null) each.state = "done";
   attachReplies(blocks.flatMap((each) => each.orchestratorSteps), view.replies ?? []);
   // A compaction its turn ended with (Brigadier's at a turn's end, or the CLI's after its last
   // reply) is between that turn and the next: after the block, not in its work.

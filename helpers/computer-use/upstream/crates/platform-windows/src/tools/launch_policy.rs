@@ -198,15 +198,34 @@ pub(crate) fn foreign_notepad_windows(open: &[u64], own: &[u64]) -> Vec<u64> {
 /// Who opened the windows that block a launch, as the refusal states it. An
 /// earlier launch that did not answer in time may still have opened a window
 /// after its reply, so such a window cannot be called the user's for sure.
+/// Nothing ties a late window to that launch (one process of the app serves
+/// the user and the helper alike, and Windows activates it through a
+/// broker), so the helper never adopts it as its own either. The wording
+/// holds for Settings too, which shows only one window.
 fn blocking_window_owner(app: &str, which: &str, unconfirmed_launch: bool) -> String {
     if unconfirmed_launch {
-        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer in time, so that window may come from it or may be the user's")
+        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer within 15 s, and Windows may have opened that window for it afterwards. Nothing ties that window to the launch, because one {app} process serves the user and this helper alike, so the helper cannot tell such a late window from one the user opened and never puts anything into it")
     } else {
         format!("a window this helper did not open{which}")
     }
 }
 
-pub(crate) fn notepad_open_refusal(titles: &[String], unconfirmed_launch: bool) -> String {
+/// What ends the refusal after an unanswered launch: no window of the app
+/// left open. Empty when the launch that found the window answered in time.
+fn unconfirmed_refusal_clears(app: &str, unconfirmed_launch: bool) -> String {
+    if unconfirmed_launch {
+        format!(" Every {app} launch is refused this way until no {app} window is open; closing {app} clears it.")
+    } else {
+        String::new()
+    }
+}
+
+/// `in_front`: one of the blocking windows is the user's front window.
+pub(crate) fn notepad_open_refusal(
+    titles: &[String],
+    unconfirmed_launch: bool,
+    in_front: bool,
+) -> String {
     let named = titles
         .iter()
         .filter(|title| !title.is_empty())
@@ -220,7 +239,12 @@ pub(crate) fn notepad_open_refusal(titles: &[String], unconfirmed_launch: bool) 
     };
     let owner = blocking_window_owner("Notepad", &which, unconfirmed_launch);
     let would = if unconfirmed_launch { "could" } else { "would" };
-    format!("No app was launched: Notepad is already open in {owner}. Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it {would} appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. Ask the user to close Notepad first, or use another editor.")
+    let front = if in_front {
+        " Notepad is the user's front window right now."
+    } else {
+        ""
+    };
+    format!("No app was launched: Notepad is already open in {owner}.{front} Windows Notepad opens a file as a tab inside a Notepad window that is already open, so it {would} appear in the user's own window, and while Notepad is in front Windows lets it bring a new window in front of the user's work. This is a limitation of Windows Notepad, not a temporary failure: Notepad has no way to open a file in a window of its own, so a retry is refused the same way while that Notepad window is open. Ask the user to close Notepad first, or use another editor.{}", unconfirmed_refusal_clears("Notepad", unconfirmed_launch))
 }
 
 /// A window counts as the user's open window unless DWM reports it cloaked
@@ -245,7 +269,7 @@ pub(crate) fn settings_open_refusal(titles: &[String], unconfirmed_launch: bool)
     };
     let owner = blocking_window_owner("Settings", &which, unconfirmed_launch);
     let would = if unconfirmed_launch { "could" } else { "would" };
-    format!("No app was launched: Windows Settings is already open in {owner}. Settings has only one window, so opening a Settings page {would} change the page in the user's own Settings window. Ask the user to close Settings first.")
+    format!("No app was launched: Windows Settings is already open in {owner}. Settings has only one window, so opening a Settings page {would} change the page in the user's own Settings window. Ask the user to close Settings first.{}", unconfirmed_refusal_clears("Settings", unconfirmed_launch))
 }
 
 pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
@@ -309,25 +333,65 @@ mod fresh_document_tests {
         assert!(foreign_notepad_windows(&[], &[]).is_empty());
         assert!(foreign_notepad_windows(&[7, 9], &[7, 9, 11]).is_empty());
         assert_eq!(foreign_notepad_windows(&[7, 8], &[7]), vec![8]);
-        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()], false);
+        let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()], false, false);
         assert!(refusal.starts_with("No app was launched"));
         assert!(refusal.contains("\"notes.txt - Notepad\""));
         assert!(refusal.contains("close Notepad"));
         assert!(refusal.contains("this helper did not open"));
-        assert!(!notepad_open_refusal(&[String::new()], false).contains("()"));
+        assert!(!refusal.contains("front window right now"));
+        assert!(!notepad_open_refusal(&[String::new()], false, false).contains("()"));
+    }
+    #[test]
+    fn notepad_refusal_says_it_is_a_lasting_limitation_and_names_the_front_window() {
+        for in_front in [false, true] {
+            let refusal = notepad_open_refusal(&["notes.txt - Notepad".into()], false, in_front);
+            assert!(refusal.contains("limitation of Windows Notepad, not a temporary failure"));
+            assert!(refusal.contains("a retry is refused the same way"));
+            assert_eq!(
+                refusal.contains("Notepad is the user's front window right now."),
+                in_front
+            );
+        }
     }
     #[test]
     fn a_window_after_an_unconfirmed_launch_is_not_called_the_users_for_sure() {
         for refusal in [
-            notepad_open_refusal(&["Untitled - Notepad".into()], true),
+            notepad_open_refusal(&["Untitled - Notepad".into()], true, false),
             settings_open_refusal(&["Settings".into()], true),
         ] {
             assert!(refusal.starts_with("No app was launched"));
             assert!(refusal.contains("cannot confirm it opened"));
-            assert!(refusal.contains("did not answer in time"));
+            assert!(refusal.contains("did not answer within 15 s"));
             assert!(!refusal.contains("did not open"));
             assert!(!refusal.contains("would"));
         }
+    }
+    #[test]
+    fn a_refusal_after_an_unanswered_launch_says_why_and_what_clears_it() {
+        // #715: a late window of an unanswered launch is never adopted, so
+        // the refusal must say why it stays and what ends it.
+        for (app, refusal) in [
+            (
+                "Notepad",
+                notepad_open_refusal(&["Untitled - Notepad".into()], true, false),
+            ),
+            (
+                "Settings",
+                settings_open_refusal(&["Settings".into()], true),
+            ),
+        ] {
+            assert!(refusal.contains("Windows may have opened that window for it afterwards"));
+            assert!(refusal.contains("cannot tell such a late window from one the user opened"));
+            assert!(refusal.contains(&format!(
+                "one {app} process serves the user and this helper alike"
+            )));
+            assert!(refusal.contains(&format!(
+                "Every {app} launch is refused this way until no {app} window is open; closing {app} clears it."
+            )));
+        }
+        // A window found after launches that all answered is simply the user's.
+        assert!(!notepad_open_refusal(&["a - Notepad".into()], false, false).contains("clears it"));
+        assert!(!settings_open_refusal(&["Settings".into()], false).contains("clears it"));
     }
     #[test]
     fn restored_document_titles_cannot_match_the_new_file() {

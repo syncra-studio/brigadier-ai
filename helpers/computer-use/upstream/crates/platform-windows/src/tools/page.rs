@@ -134,6 +134,7 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
         let query = action == "query_dom";
         let result = tokio::task::spawn_blocking(move || {
             crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                crate::uia::windows_enum::UiaTarget::Window(hwnd),
                 "targeted page read",
                 std::time::Duration::from_secs(4),
                 "no page text",
@@ -178,10 +179,12 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
 // Untargeted accessibility reads need the same provider deadline as URL-matched
 // reads. A hung provider otherwise blocks page forever without a URL hint.
 fn bounded_page_read<T: Send + 'static>(
+    hwnd: u64,
     stage: &'static str,
     read: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
     crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+        crate::uia::windows_enum::UiaTarget::Window(hwnd),
         stage,
         std::time::Duration::from_secs(4),
         "no page content",
@@ -214,7 +217,9 @@ impl PageBackend for WindowsPageBackend {
     async fn get_text(&self, _pid: i32, window_id: u64) -> anyhow::Result<String> {
         let hwnd = window_id;
         tokio::task::spawn_blocking(move || {
-            bounded_page_read("page text read", move || unsafe { get_text_blocking(hwnd) })
+            bounded_page_read(hwnd, "page text read", move || unsafe {
+                get_text_blocking(hwnd)
+            })
         })
         .await
         .map_err(|e| anyhow::anyhow!("join error: {e}"))?
@@ -231,7 +236,7 @@ impl PageBackend for WindowsPageBackend {
         let selector = css_selector.to_owned();
         let attrs: Vec<String> = attributes.to_vec();
         tokio::task::spawn_blocking(move || {
-            bounded_page_read("page DOM read", move || unsafe {
+            bounded_page_read(hwnd, "page DOM read", move || unsafe {
                 query_dom_blocking(hwnd, &selector, &attrs)
             })
         })

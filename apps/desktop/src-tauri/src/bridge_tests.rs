@@ -266,3 +266,387 @@ fn quota_notification_keys_survive_restart_but_allow_the_next_reset() {
     assert!(!saved.contains("finished:"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A data folder of its own with a published token and a bound endpoint, standing in for a
+/// daemon of another version.
+struct OtherDaemon {
+    dir: PathBuf,
+    platform: Arc<dyn Platform>,
+    token: Token,
+    listener: Listener,
+}
+
+impl OtherDaemon {
+    fn start(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "win-issues-w10-bridge-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.clone()),
+        })
+        .unwrap();
+        platform
+            .private_fs()
+            .create_private_dir(&platform.paths().run_dir)
+            .unwrap();
+        let token = Token::generate().unwrap();
+        token
+            .publish(&*platform, &platform.paths().token_path)
+            .unwrap();
+        let listener = Listener::bind(&*platform).unwrap();
+        Self {
+            dir,
+            platform,
+            token,
+            listener,
+        }
+    }
+
+    /// The app's next hello, accepted.
+    async fn next(&self) -> Connection {
+        let pending = self.listener.accept().await.unwrap();
+        let Accepted::Client { connection, .. } = pending.handshake(&self.token).await.unwrap()
+        else {
+            panic!("expected the app's hello");
+        };
+        connection
+    }
+
+    /// Takes every hello and drops it unanswered, as a daemon from before #771 did.
+    async fn drop_hellos(&self) {
+        loop {
+            let pending = self.listener.accept().await.unwrap();
+            drop(pending.handshake(&self.token).await);
+        }
+    }
+
+    fn cleanup(&self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+        if let Some(dir) = self.platform.paths().socket_dir() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+fn daemon_info(protocol: u32, pid: u32) -> DaemonInfo {
+    DaemonInfo {
+        pid,
+        version: "0.0.1-other".into(),
+        protocol,
+        platform: "test".into(),
+        started_at_ms: 0,
+        data_dir: String::new(),
+    }
+}
+
+/// No process has this id.
+const GONE_PID: u32 = u32::MAX - 2;
+
+fn bridge_for(daemon: &OtherDaemon, launcher: Launcher, waits: Waits) -> Bridge {
+    Bridge::start_with(
+        daemon.platform.clone(),
+        launcher,
+        Box::new(|_, _| {}),
+        Box::new(|| false),
+        Box::new(|| {}),
+        waits,
+    )
+}
+
+fn quick_waits() -> Waits {
+    Waits {
+        quit_ack: Duration::from_millis(400),
+        quit_exit: Duration::from_millis(400),
+        blocked: Duration::from_millis(200),
+    }
+}
+
+/// The reason the bridge gives once it says it is blocked.
+async fn blocked_reason(bridge: &Bridge) -> String {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let status = bridge.inner.status.lock().unwrap().clone();
+            if let Some(BridgeEvent::Blocked { reason }) = status {
+                return reason;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the app never said it was blocked")
+}
+
+fn stop(bridge: Bridge) {
+    bridge.inner.stopping.store(true, Ordering::Release);
+}
+
+/// The app's next request on `connection`; None once it closed.
+async fn next_request(connection: &mut Connection) -> Option<(u32, Request)> {
+    match connection.reader.read::<ClientFrame>().await.ok()?? {
+        ClientFrame::Request { id, request } => Some((id, request)),
+        other => panic!("unexpected frame: {other:?}"),
+    }
+}
+
+/// An update landed while an older daemon ran (#771): the app is told its version, asks it to
+/// quit as Quit does, waits for it to go, and connects to the one it launches. Before, the
+/// hello went unanswered and the app relaunched forever.
+#[tokio::test]
+async fn an_older_daemon_is_asked_to_quit_and_the_app_connects_to_its_own() {
+    let daemon = OtherDaemon::start("older");
+    let launches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let launcher = Launcher::fake(daemon.platform.clone(), {
+        let launches = launches.clone();
+        move || {
+            launches.fetch_add(1, Ordering::AcqRel);
+            crate::launcher::Launched::running()
+        }
+    });
+    let bridge = bridge_for(&daemon, launcher, Waits::default());
+    let mut old = daemon.next().await;
+    old.writer
+        .write(&ServerFrame::ProtocolMismatch {
+            daemon: daemon_info(PROTOCOL_VERSION - 1, GONE_PID),
+        })
+        .await
+        .unwrap();
+    let (id, request) = tokio::time::timeout(Duration::from_secs(5), next_request(&mut old))
+        .await
+        .unwrap()
+        .expect("the older daemon was not asked to quit");
+    assert!(matches!(request, Request::Shutdown));
+    old.writer
+        .write(&ServerFrame::Response {
+            id,
+            result: Outcome::Ok {
+                value: Box::new(Response::Shutdown),
+            },
+        })
+        .await
+        .unwrap();
+    drop(old);
+    // Its own daemon, launched once the old one is gone, welcomes it.
+    let mut own = tokio::time::timeout(Duration::from_secs(5), daemon.next())
+        .await
+        .unwrap();
+    own.writer
+        .write(&ServerFrame::Welcome {
+            daemon: daemon_info(PROTOCOL_VERSION, std::process::id()),
+            last_seq: 0,
+        })
+        .await
+        .unwrap();
+    let mut link = bridge.inner.link.subscribe();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        link.wait_for(|link| *link == Link::Up),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(launches.load(Ordering::Acquire), 1);
+    stop(bridge);
+    drop(own);
+    daemon.cleanup();
+}
+
+/// A daemon from before #771 drops the app's hello unanswered, and the daemon the app launches
+/// exits at once, since that one holds the lock: the app says so and how to clear it, and
+/// stops launching. Before, it relaunched every few seconds for as long as that daemon ran.
+#[tokio::test]
+async fn a_daemon_that_drops_the_hello_blocks_the_app_without_relaunching() {
+    let daemon = OtherDaemon::start("silent");
+    let launches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let launcher = Launcher::fake(daemon.platform.clone(), {
+        let launches = launches.clone();
+        move || {
+            launches.fetch_add(1, Ordering::AcqRel);
+            crate::launcher::Launched::exited(0)
+        }
+    });
+    let bridge = bridge_for(&daemon, launcher, quick_waits());
+    let reason = tokio::select! {
+        reason = blocked_reason(&bridge) => reason,
+        () = daemon.drop_hellos() => unreachable!(),
+    };
+    assert!(reason.contains("another version"), "{reason}");
+    assert!(reason.contains("brigadierd"), "{reason}");
+    // Longer than the launcher's cooldown, with the app checking every 200 ms meanwhile.
+    tokio::select! {
+        () = tokio::time::sleep(Duration::from_millis(3_500)) => {}
+        () = daemon.drop_hellos() => unreachable!(),
+    }
+    assert_eq!(launches.load(Ordering::Acquire), 1, "launched again");
+    stop(bridge);
+    daemon.cleanup();
+}
+
+/// An older daemon that agrees to quit but doesn't go, and one that never answers: each is
+/// waited for no longer than its deadline, and the app says which, and how to clear it.
+#[tokio::test]
+async fn an_older_daemon_that_doesnt_quit_is_waited_for_within_a_deadline() {
+    for answers in [true, false] {
+        let daemon = OtherDaemon::start(if answers { "stays" } else { "mute" });
+        let launcher = Launcher::fake(daemon.platform.clone(), crate::launcher::Launched::running);
+        let started = tokio::time::Instant::now();
+        let bridge = bridge_for(&daemon, launcher, quick_waits());
+        let mut old = daemon.next().await;
+        // Still running: this test's own process.
+        old.writer
+            .write(&ServerFrame::ProtocolMismatch {
+                daemon: daemon_info(PROTOCOL_VERSION - 1, std::process::id()),
+            })
+            .await
+            .unwrap();
+        let (id, request) = next_request(&mut old).await.unwrap();
+        assert!(matches!(request, Request::Shutdown));
+        if answers {
+            old.writer
+                .write(&ServerFrame::Response {
+                    id,
+                    result: Outcome::Ok {
+                        value: Box::new(Response::Shutdown),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        let reason = blocked_reason(&bridge).await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        if answers {
+            assert!(reason.contains("still running"), "{reason}");
+        } else {
+            assert!(reason.contains("didn't agree to quit"), "{reason}");
+        }
+        assert!(reason.contains(&std::process::id().to_string()), "{reason}");
+        stop(bridge);
+        drop(old);
+        daemon.cleanup();
+    }
+}
+
+/// A newer daemon (this app was downgraded) is left running, and the app says to update.
+#[tokio::test]
+async fn a_newer_daemon_is_left_running_and_the_app_says_to_update() {
+    let daemon = OtherDaemon::start("newer");
+    let launcher = Launcher::fake(daemon.platform.clone(), crate::launcher::Launched::running);
+    let bridge = bridge_for(&daemon, launcher, quick_waits());
+    let mut newer = daemon.next().await;
+    newer
+        .writer
+        .write(&ServerFrame::ProtocolMismatch {
+            daemon: daemon_info(PROTOCOL_VERSION + 1, std::process::id()),
+        })
+        .await
+        .unwrap();
+    let reason = blocked_reason(&bridge).await;
+    assert!(reason.contains("newer than this app"), "{reason}");
+    assert!(
+        next_request(&mut newer).await.is_none(),
+        "a newer daemon was asked for something"
+    );
+    stop(bridge);
+    daemon.cleanup();
+}
+
+/// An older daemon that agrees to quit and stays: the app keeps saying it is blocked, and how
+/// to clear it, through every later attempt, never falling back to a plain "disconnected".
+#[tokio::test]
+async fn the_app_stays_blocked_while_an_older_daemon_keeps_running() {
+    let daemon = OtherDaemon::start("lingers");
+    let launcher = Launcher::fake(daemon.platform.clone(), crate::launcher::Launched::running);
+    let bridge = bridge_for(&daemon, launcher, quick_waits());
+    // Every hello is answered as an older daemon that agrees to quit and is still running:
+    // this test's own process.
+    let lingering = async {
+        loop {
+            let mut old = daemon.next().await;
+            old.writer
+                .write(&ServerFrame::ProtocolMismatch {
+                    daemon: daemon_info(PROTOCOL_VERSION - 1, std::process::id()),
+                })
+                .await
+                .unwrap();
+            let Some((id, _)) = next_request(&mut old).await else {
+                continue;
+            };
+            old.writer
+                .write(&ServerFrame::Response {
+                    id,
+                    result: Outcome::Ok {
+                        value: Box::new(Response::Shutdown),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+    };
+    let watched = async {
+        let first = blocked_reason(&bridge).await;
+        // Several attempts: each waits 400 ms for the exit, then 200 ms.
+        let until = tokio::time::Instant::now() + Duration::from_millis(2_500);
+        while tokio::time::Instant::now() < until {
+            let status = bridge.inner.status.lock().unwrap().clone();
+            assert!(
+                matches!(&status, Some(BridgeEvent::Blocked { reason }) if *reason == first),
+                "no longer blocked: {status:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::select! {
+        () = watched => {}
+        () = lingering => unreachable!(),
+    }
+    stop(bridge);
+    daemon.cleanup();
+}
+
+/// A quit asked while an older daemon is being asked to quit launches no daemon after it.
+#[tokio::test]
+async fn a_quit_while_an_older_daemon_goes_launches_none() {
+    let daemon = OtherDaemon::start("quitting");
+    let launches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let launcher = Launcher::fake(daemon.platform.clone(), {
+        let launches = launches.clone();
+        move || {
+            launches.fetch_add(1, Ordering::AcqRel);
+            crate::launcher::Launched::running()
+        }
+    });
+    let bridge = bridge_for(&daemon, launcher, Waits::default());
+    let mut old = daemon.next().await;
+    old.writer
+        .write(&ServerFrame::ProtocolMismatch {
+            daemon: daemon_info(PROTOCOL_VERSION - 1, GONE_PID),
+        })
+        .await
+        .unwrap();
+    let (id, _) = next_request(&mut old).await.unwrap();
+    // The user quits while the older daemon drains.
+    let quitting = tokio::spawn({
+        let bridge = bridge.clone();
+        async move { bridge.shutdown_daemon(Duration::from_secs(5)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    old.writer
+        .write(&ServerFrame::Response {
+            id,
+            result: Outcome::Ok {
+                value: Box::new(Response::Shutdown),
+            },
+        })
+        .await
+        .unwrap();
+    drop(old);
+    assert!(!quitting.await.unwrap(), "no daemon of its own to stop");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        launches.load(Ordering::Acquire),
+        0,
+        "launched while quitting"
+    );
+    daemon.cleanup();
+}

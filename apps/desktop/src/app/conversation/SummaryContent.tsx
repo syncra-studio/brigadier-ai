@@ -1,4 +1,21 @@
-import { type OpenPastedText, PastedTextOpenerContext, useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
+import {
+  AttachmentIcon,
+  attachmentOpens,
+  ImageContextMenu,
+  ImagePreview,
+  inlineImageLabel,
+  openInDefaultApp,
+  type OpenPastedText,
+  pastedTextLabel,
+  PastedTextOpenerContext,
+  refuse,
+  useAttachmentUrl,
+  useAui,
+  SummaryRow,
+  SummaryRowButton,
+  SummarySection,
+  type ViewerImage,
+} from "@/components/conversation";
 import {
   type ReactNode,
   useContext,
@@ -28,7 +45,6 @@ import {
   Folder,
   HandRaised,
   Link,
-  Paperclip,
   Plugin,
   Plus,
   PullRequestClosed,
@@ -129,7 +145,10 @@ function useSources(conversationId: string): string[] {
 }
 
 /** One of what a session used, as its card lists it. */
-export type UsedSource = { key: string; icon: ReactNode; label: string; title: string; meta?: string | undefined; open?: () => void };
+export type UsedSource = { key: string; icon: ReactNode; label: string; title: string; meta?: string | undefined; open?: () => void; viewer?: RowViewer };
+
+/** An image row's place in the conversation's images: a click opens the full-window viewer on it. */
+export type RowViewer = { file: AttachmentRef; label: string; gallery: { images: readonly ViewerImage[]; index: number } };
 
 /**
  * An MCP server's name as a line reads it ("linear" reads "Linear"). A server known only by its
@@ -163,7 +182,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
     const pages = pagesSeen === "" ? [] : pagesSeen.split("\n");
     const used = serversUsed === "" ? [] : serversUsed.split("\n");
     return [
-      ...files.map((file) => fileSource(conversationId, file)),
+      ...attachmentSources(files, (n, paste) => void openPastedTab(conversationId, n, paste)),
       ...pages.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
       ...used.map((name): UsedSource => {
         const state = statusOf(servers, name);
@@ -174,28 +193,84 @@ export function useUsedSources(conversationId: string): UsedSource[] {
   }, [conversationId, messages, pagesSeen, serversUsed, servers]);
 }
 
-/** How a Chat's attachment row opens it: a pasted text over the thread, as its chip or card does; another file not at all. */
-export function pastedOpener(open: OpenPastedText | null, file: AttachmentRef): (() => void) | undefined {
-  return open && file.pasted ? () => open(file.inline ?? null, file) : undefined;
+/** An attachment's name as its message reads it. */
+function attachmentName(file: AttachmentRef): string {
+  if (file.pasted) return pastedTextLabel(file.inline ?? null);
+  return file.inline != null && file.mime.startsWith("image/") ? inlineImageLabel(file.inline) : file.name;
 }
 
-/** A Chat's "Attachments": the files attached to the user's messages; a pasted text opens over the thread. */
+/** Attachments' row names, by id. Numbers restart per message, so a name already taken gets " (2)" after it. */
+export function attachmentLabels(files: readonly AttachmentRef[]): Map<string, string> {
+  const taken = new Set<string>();
+  return new Map(files.map((file) => {
+    const name = attachmentName(file);
+    let label = name;
+    for (let copy = 2; taken.has(label); copy += 1) label = `${name} (${copy})`;
+    taken.add(label);
+    return [file.id, label];
+  }));
+}
+
+/**
+ * The conversation's attachments as rows, the same in a session's Sources, its Sources tab and a
+ * Chat's Attachments. `openText` shows a text in the read-only reader, where the conversation has one.
+ */
+export function attachmentSources(files: readonly AttachmentRef[], openText: OpenPastedText | null): UsedSource[] {
+  const labels = attachmentLabels(files);
+  const images = files.filter((file) => attachmentOpens(file) === "viewer");
+  const gallery = images.map((file): ViewerImage => ({ name: labels.get(file.id)!, source: { ref: file } }));
+  return files.map((file): UsedSource => {
+    const label = labels.get(file.id)!;
+    const row: UsedSource = { key: `file:${file.id}`, icon: <AttachmentRowIcon file={file} />, label, title: file.name };
+    switch (attachmentOpens(file)) {
+      case "viewer":
+        return { ...row, viewer: { file, label, gallery: { images: gallery, index: images.indexOf(file) } } };
+      case "reader":
+        return openText ? { ...row, open: () => openText(file.inline ?? null, file) } : row;
+      case "app":
+        return { ...row, open: () => openInDefaultApp(file) };
+      case "refused":
+        return { ...row, open: () => refuse(file) };
+    }
+  });
+}
+
+/** An attachment's row icon: a tiny thumbnail of an image, else its kind's icon. */
+function AttachmentRowIcon({ file }: { file: AttachmentRef }) {
+  const url = useAttachmentUrl(file.mime.startsWith("image/") ? { ref: file } : {});
+  const [broken, setBroken] = useState(false);
+  return url && !broken
+    ? <img src={url} alt="" draggable={false} onError={() => setBroken(true)} className="size-icon-md rounded-xs object-cover" />
+    : <AttachmentIcon mime={file.mime} />;
+}
+
+/** The viewer around an image row's button, which takes its click and ref. */
+export function ImageRowViewer({ viewer: { file, label, gallery }, children }: { viewer: RowViewer; children: ReactNode }) {
+  const url = useAttachmentUrl({ ref: file });
+  return (
+    <ImagePreview url={url} name={label} gallery={gallery}>
+      <ImageContextMenu image={{ name: label, url, source: { ref: file } }}>{children}</ImageContextMenu>
+    </ImagePreview>
+  );
+}
+
+/** One of what a session used, or a Chat's attachment, on the card. */
+function UsedRow({ source }: { source: UsedSource }) {
+  const { title, icon, meta, label, open, viewer } = source;
+  // Its own slot, over the triggers' around it.
+  if (viewer) return <ImageRowViewer viewer={viewer}><SummaryRowButton data-slot="summary-row" title={title} icon={icon} meta={meta}>{label}</SummaryRowButton></ImageRowViewer>;
+  return open
+    ? <SummaryRowButton title={title} icon={icon} meta={meta} onClick={open}>{label}</SummaryRowButton>
+    : <SummaryRow title={title} icon={icon} meta={meta}>{label}</SummaryRow>;
+}
+
+/** A Chat's "Attachments": the files attached to its messages. */
 export function ChatAttachments({ attachments }: { attachments: readonly AttachmentRef[] }) {
   const openPasted = useContext(PastedTextOpenerContext);
+  const sources = useMemo(() => attachmentSources(attachments, openPasted), [attachments, openPasted]);
   return <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
-    {attachments.map((attachment) => {
-      const open = pastedOpener(openPasted, attachment);
-      return open
-        ? <SummaryRowButton key={attachment.id} onClick={open}>{attachment.name}</SummaryRowButton>
-        : <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>;
-    })}
+    {sources.map((source) => <UsedRow key={source.key} source={source} />)}
   </SummarySection>;
-}
-
-/** A file attached to the user's messages, as Sources lists it: a pasted text opens in its tab, as its chip or card does. */
-export function fileSource(conversationId: string, file: AttachmentRef): UsedSource {
-  const open = file.pasted ? () => void openPastedTab(conversationId, file.inline ?? null, file) : undefined;
-  return { key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name, ...(open ? { open } : {}) };
 }
 
 /** Sources shown before "View all". */
@@ -289,17 +364,7 @@ function SessionSources({ conversationId }: { conversationId: string }) {
   if (used.length === 0) return null;
   return (
     <SummarySection foldKey="sources" title="Sources" count={used.length} action={<AddSource />}>
-      {used.slice(0, SOURCES).map((source) =>
-        source.open ? (
-          <SummaryRowButton key={source.key} title={source.title} icon={source.icon} meta={source.meta} onClick={source.open}>
-            {source.label}
-          </SummaryRowButton>
-        ) : (
-          <SummaryRow key={source.key} title={source.title} icon={source.icon} meta={source.meta}>
-            {source.label}
-          </SummaryRow>
-        ),
-      )}
+      {used.slice(0, SOURCES).map((source) => <UsedRow key={source.key} source={source} />)}
       {(used.length > SOURCES || searched) && (
         <SummaryRowButton muted icon={<Link />} onClick={() => openPanelTab(conversationId, { type: "sources" }, "Sources")}>
           View all

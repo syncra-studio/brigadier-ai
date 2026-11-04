@@ -68,12 +68,12 @@ test("a message sent while a session works shows in the queue rail at once", asy
   assert.equal(inThread(), 0);
 });
 
-// D157: what is sent while a session works is judged in the background: its row is an ordinary
-// one from the start, as a side chat's is.
-test("a message sent while a session works is an ordinary row at once, as a side chat's is", async () => {
+// D157: what is sent while a session works is judged in the background, so its row is Deciding
+// from the first frame; a side chat's waits plainly.
+test("a message sent while a session works is Deciding at once, a side chat's is not", async () => {
   const rows = () => queueRows([], useApp.getState().pending.filter((entry) => entry.conversationId === id)).map((row) => [row.text, !!row.deciding]);
   const sent = send({ text, attachments: [], mentions: [] });
-  assert.deepEqual(rows(), [[text, false]]);
+  assert.deepEqual(rows(), [[text, true]]);
   reply({ type: "queued", item });
   await sent;
   useApp.setState({ conversations: { [id]: { id, kind: "chat", sideOf: "parent" } as Conversation }, pending: [] });

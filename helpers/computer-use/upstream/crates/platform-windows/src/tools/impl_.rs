@@ -2682,10 +2682,17 @@ impl Tool for LaunchAppTool {
                     .await
                     .unwrap_or_default();
             if !foreign.is_empty() {
+                let in_front = super::launch_browser::front_window_among(
+                    &foreign
+                        .iter()
+                        .map(|(window, _)| *window)
+                        .collect::<Vec<_>>(),
+                );
                 let titles: Vec<String> = foreign.into_iter().map(|(_, title)| title).collect();
                 return ToolResult::error(super::launch_policy::notepad_open_refusal(
                     &titles,
                     super::launch_browser::unconfirmed_notepad_launch(),
+                    in_front,
                 ))
                     .with_structured(json!({"code": "notepad_open_in_user_window", "launch_confirmed": false, "windows": []}));
             }
@@ -4524,6 +4531,7 @@ impl Tool for ClickTool {
                 let admitted = admitted.clone();
                 move || {
                     crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                        crate::uia::windows_enum::UiaTarget::Window(hwnd),
                         "click effect readback", std::time::Duration::from_secs(4), "no second input",
                         move |cancelled| {
                     let ptr = admitted.as_ref().filter(|e| e.is_uia()).map(|e| e.as_ptr());
@@ -5343,6 +5351,7 @@ impl Tool for TypeTextTool {
             move || {
                 let (worker_typed, worker_typing) = (typed.clone(), typing.clone());
                 crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                    crate::uia::windows_enum::UiaTarget::Window(hwnd),
                     "caret insertion",
                     insert_limit,
                     "unconfirmed insertion; no automatic retry",

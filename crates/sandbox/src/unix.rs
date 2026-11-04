@@ -164,10 +164,11 @@ pub(crate) fn kill_tree(pid: u32, children: impl Fn(u32) -> Vec<u32>) -> Result<
     // Piped children lead their own process group, so the group id is their pid.
     match signal::killpg(root, Signal::SIGKILL) {
         Ok(()) => Ok(()),
-        Err(nix::errno::Errno::ESRCH) => {
-            signal::kill(root, Signal::SIGKILL).map_err(io::Error::from)?;
-            Ok(())
-        }
+        // It left no group: the process alone, unless it has already gone, which is what was asked.
+        Err(nix::errno::Errno::ESRCH) => match signal::kill(root, Signal::SIGKILL) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+            Err(err) => Err(io::Error::from(err).into()),
+        },
         Err(err) => Err(io::Error::from(err).into()),
     }
 }
@@ -229,6 +230,15 @@ fn invalid_pid() -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What was to be killed had already gone (it exited just as its grace ran out): done.
+    #[test]
+    fn killing_a_process_already_gone_is_no_failure() {
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        let pid = gone.id();
+        gone.wait().unwrap();
+        kill_tree(pid, |_| Vec::new()).unwrap();
+    }
 
     /// A folder, removed when dropped however the test ends.
     struct Temp(std::path::PathBuf);

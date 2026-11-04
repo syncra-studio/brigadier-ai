@@ -47,6 +47,26 @@ async fn bench(
     failing: &[&str],
     request: Option<StartRequest>,
 ) -> Bench {
+    bench_on(
+        ProviderKind::Claude,
+        name,
+        rows,
+        switch_providers,
+        failing,
+        request,
+    )
+    .await
+}
+
+/// [`bench`], its thread on the CLI `thread`.
+async fn bench_on(
+    thread: ProviderKind,
+    name: &str,
+    rows: &[(&str, &str, &str)],
+    switch_providers: bool,
+    failing: &[&str],
+    request: Option<StartRequest>,
+) -> Bench {
     let names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(
         failing.iter().map(|model| (*model).to_owned()).collect(),
     ));
@@ -55,7 +75,11 @@ async fn bench(
     let flow = Flow::start(
         name,
         Options {
-            behavior: Arc::new(FakeBehavior::default()),
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            thread,
             ..Options::default()
         },
         Arc::new(move |turn| {
@@ -836,7 +860,203 @@ async fn a_session_whose_last_target_fails_to_launch_goes_back_without_a_loop() 
     assert_eq!(bench.setup_model().model.as_deref(), Some(THREAD_MODEL));
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(bench.thread_models(), strings(&[THREAD_MODEL]));
+    // Its turn was handed over and nothing carried it on: it reads failed, not working for good.
+    let view = bench
+        .flow
+        .manager
+        .thread_view(&bench.flow.conversation)
+        .unwrap();
+    assert_eq!(
+        view.turns.last().and_then(|turn| turn.end),
+        Some(crate::thread_view::TurnEnd::Failed),
+        "{view:#?}"
+    );
+    // It reads as the start that failed, not as what handed it over.
+    let last = view.turns.last().unwrap();
+    assert_eq!(last.error_kind, None, "{view:#?}");
+    assert_eq!(last.limit, None, "{view:#?}");
+    // What it kept for the next try isn't work: its block closes, or it would read working for good.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let view = bench
+        .flow
+        .manager
+        .thread_view(&bench.flow.conversation)
+        .unwrap();
+    assert!(
+        view.block.is_some_and(|block| block.ended_at_ms.is_some()),
+        "its work block is still open"
+    );
     bench.flow.stop().await;
+}
+
+/// What a failed start kept for the next try doesn't stop a worker's word: it reaches the thread,
+/// or the worker's end would never be heard and its block would wait out the hold for nothing.
+#[tokio::test]
+async fn a_workers_word_wakes_a_session_whose_start_failed() {
+    let bench = bench(
+        "capacity-session-launch-wake",
+        &[("Fallback", "claude", "claude-c")],
+        true,
+        &[THREAD_MODEL],
+        None,
+    )
+    .await;
+    bench
+        .flow
+        .behavior
+        .fail_start_models
+        .lock()
+        .unwrap()
+        .push("claude-c".into());
+    bench.flow.say("Go on with it.").await;
+    bench.until_failed().await;
+    bench.fail(&[]);
+    let worker = crate::work::TaskId("t-word".into());
+    bench.flow.manager.worker_event(
+        &bench.flow.conversation,
+        &worker,
+        None,
+        crate::manager::plain_workers::event(
+            &worker,
+            brigadier_cli::protocol::EventKind::TurnEnded,
+        ),
+    );
+    super::eventually("the worker's word to reach the thread", || {
+        bench
+            .threads
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|turn| turn.input.contains("[worker events wn-"))
+    })
+    .await;
+    bench.flow.stop().await;
+}
+
+const EVERY_CLI: [(ProviderKind, &str); 3] = [
+    (ProviderKind::Claude, "claude"),
+    (ProviderKind::Codex, "codex"),
+    (ProviderKind::OpenCode, "opencode"),
+];
+
+impl Bench {
+    /// A worker's word for the thread, waited for until a turn of the thread carried it.
+    async fn workers_word(&self) {
+        let worker = crate::work::TaskId("t-word".into());
+        self.flow.manager.worker_event(
+            &self.flow.conversation,
+            &worker,
+            None,
+            crate::manager::plain_workers::event(
+                &worker,
+                brigadier_cli::protocol::EventKind::TurnEnded,
+            ),
+        );
+        let threads = self.threads.clone();
+        super::eventually("the worker's word to reach the thread", || {
+            threads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|turn| turn.input.contains("[worker events wn-"))
+        })
+        .await;
+    }
+
+    /// The thread's turns that were given the user's message as something to do.
+    fn sent_as_new(&self, words: &str) -> usize {
+        self.threads
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|turn| turn.input.contains(words) && !turn.input.contains("began on it"))
+            .count()
+    }
+}
+
+/// The CLI began the turn, so it took the message (it may have started workers already); the
+/// switch's target then fails to start. A later turn doesn't hand it the message as new: real
+/// work would run twice. It still reads what was asked, as what it already began.
+#[tokio::test]
+async fn a_message_its_cli_took_is_not_sent_again_after_a_failed_start() {
+    for (thread, agent) in EVERY_CLI {
+        let bench = bench_on(
+            thread,
+            &format!("capacity-took-{agent}"),
+            &[("Fallback", agent, "next-model")],
+            true,
+            &[],
+            None,
+        )
+        .await;
+        let model = bench.setup_model().model.unwrap_or_default();
+        bench.fail(&[&model]);
+        bench
+            .flow
+            .behavior
+            .fail_start_models
+            .lock()
+            .unwrap()
+            .push("next-model".into());
+        bench.flow.say("Go on with it.").await;
+        bench.until_failed().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            1,
+            "{agent}: its first turn"
+        );
+        bench.fail(&[]);
+        bench.workers_word().await;
+        bench.flow.settled().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            1,
+            "{agent}: sent again as new"
+        );
+        bench.flow.stop().await;
+    }
+}
+
+/// The start failed before its CLI ever had the message: the next turn delivers it, so it isn't
+/// lost.
+#[tokio::test]
+async fn a_message_its_cli_never_had_goes_with_the_next_turn_after_a_failed_start() {
+    for (thread, agent) in EVERY_CLI {
+        let bench = bench_on(
+            thread,
+            &format!("capacity-never-{agent}"),
+            &[],
+            true,
+            &[],
+            None,
+        )
+        .await;
+        bench
+            .flow
+            .behavior
+            .fail_starts
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        bench.flow.say("Go on with it.").await;
+        bench.until_failed().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            0,
+            "{agent}: no CLI had it"
+        );
+        bench
+            .flow
+            .behavior
+            .fail_starts
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        bench.workers_word().await;
+        bench.flow.settled().await;
+        assert_eq!(
+            bench.sent_as_new("Go on with it."),
+            1,
+            "{agent}: delivered once"
+        );
+        bench.flow.stop().await;
+    }
 }
 
 /// "Another agent when all are out" off: its only other row is another agent's, so it stays.

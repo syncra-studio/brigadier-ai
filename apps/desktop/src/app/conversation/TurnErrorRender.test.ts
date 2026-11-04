@@ -11,6 +11,9 @@ test("a failed session turn reads calmly: one row, raw words under Details, Try 
     headerDestructive: boolean;
     rows: number;
     destructive: boolean;
+    summaryRed: boolean;
+    unboxed: boolean | null;
+    rawUnboxed: boolean | null;
     summary: string | null;
     detailsOpen: boolean | null;
     rawShownBefore: boolean;
@@ -26,6 +29,10 @@ test("a failed session turn reads calmly: one row, raw words under Details, Try 
   assert.equal(seen.headerDestructive, false);
   assert.equal(seen.rows, 1);
   assert.equal(seen.destructive, false);
+  assert.equal(seen.summaryRed, true);
+  // A quiet line, never a card: no box round the line or round what Details opens (D11, D12).
+  assert.equal(seen.unboxed, true);
+  assert.equal(seen.rawUnboxed, true);
   assert.equal(seen.summary, "This turn stopped because of an error on Claude's side.");
   // The raw error shows nowhere until Details opens: not in the row, not above the composer.
   assert.equal(seen.detailsOpen, false);

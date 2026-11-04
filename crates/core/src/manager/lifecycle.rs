@@ -139,7 +139,7 @@ impl SessionManager {
             if let Some(live) = &live {
                 live.recovering(true).await;
             }
-            // A queued message an older daemon's stop caught Deciding waits for its own turn
+            // A queued message the stop caught Deciding waits for its own turn
             // (#449).
             self.settle_unjudged(&conversation.id).await;
             // The thread's turn the restart cut off ran its calls no further, and its request
@@ -162,6 +162,8 @@ impl SessionManager {
                     .await;
             }
             self.recover_unheard_envelopes(&conversation.id).await;
+            // A hand-over dies with the daemon: its turn reads as it ended, not working for good.
+            self.end_handed_over_turn(&conversation.id).await;
             // What its workers did that it hadn't heard yet (S29).
             if conversation.lifecycle != Lifecycle::Archived {
                 self.recover_worker_events(&conversation.id).await;

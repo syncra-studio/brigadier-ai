@@ -6,7 +6,7 @@ import { INTERRUPTED } from "@/app/conversation/turnError";
 import { confirmPending } from "@/state/shownIds";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove, type SequenceEntry, turnTime } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
-import { belowAnswer, turnParts } from "@/app/conversation/workParts";
+import { belowActions, belowAnswer, turnParts } from "@/app/conversation/workParts";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, Wake } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
@@ -1648,6 +1648,47 @@ test("a turn carried on after a usage limit's switch goes on in its block: no st
   assert.deepEqual(cliBlocks({ entries: fresh, turns: limitTurns(false) }, "conv").map((block) => block.key), ["u1", "u2", "n1"]);
 });
 
+test("a turn handed over for any reason goes on in its block: one block closed Worked for, nothing left live, on every error that hands over", () => {
+  const entries: FileEntry[] = [
+    user("u1", "Did you merge?", 1000, { said: { by: "user" }, requests: ["r1"] }),
+    at({ type: "turnCompleted" } as ProviderEvent, 1164),
+    user("k1", "[Your last turn stopped early. Carry on from where you stopped.]", 7000, { said: { by: "brigadier" } }),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "Yes, it's merged." }, 10000),
+  ];
+  for (const errorKind of ["auth", "billing", "overloaded", "server", "network", "usageLimit"] as const) {
+    const cut = { ...turn("u1", 1000, 1164, "handedOver", "Failed to authenticate"), errorKind, requests: ["r1"] };
+    const blocks = cliBlocks({ entries, turns: [cut, { ...turn("k1", 7000, 10500, "done"), requests: ["r1"] }] }, "conv");
+    assert.deepEqual(blocks.map((block) => [block.key, block.state, block.error]), [["u1", "done", null]], errorKind);
+    assert.deepEqual(blocks[0]!.worked, [{ fromMs: 1000, toMs: 1164 }, { fromMs: 7000, toMs: 10500 }], errorKind);
+    // Before its carry-on's turn is read, it is the one block, still working.
+    const live = cliBlocks({ entries: entries.slice(0, 3), turns: [cut] }, "conv");
+    assert.deepEqual(live.map((block) => [block.key, block.state, block.error]), [["u1", "working", null]], errorKind);
+    // A message the user sends anew opens its own block, and the one before it no longer reads live.
+    const fresh = [...entries.slice(0, 2), user("n1", "Something else", 7000, { said: { by: "user" }, requests: ["r2"] })];
+    const both = cliBlocks({ entries: fresh, turns: [cut, { ...turn("n1", 7000, 8000, "done"), requests: ["r2"] }] }, "conv");
+    assert.deepEqual(both.map((block) => [block.key, block.state]), [["u1", "done"], ["n1", "done"]], errorKind);
+  }
+});
+
+test("after a hand-over, missing request ids join Brigadier's own carry-on but never a message shown as the user's", () => {
+  const cut = { ...turn("u1", 1000, 1164, "handedOver", "Failed to authenticate"), errorKind: "auth" as const, requests: ["r1"] };
+  const first: FileEntry[] = [user("u1", "Did you merge?", 1000, { said: { by: "user" }, requests: ["r1"] }), at({ type: "turnCompleted" } as ProviderEvent, 1164)];
+  const later = [{ ...turn("n1", 7000, 8000, "done"), requests: [] }];
+  // Brigadier's carry-on is noted with no request of its own (as the real record has it), its turn read or not.
+  const carry = [...first, user("n1", "[Your last turn stopped early. Carry on from where you stopped.]", 7000, { said: { by: "brigadier" } })];
+  for (const turns of [[cut], [cut, ...later]]) assert.deepEqual(cliBlocks({ entries: carry, turns }, "conv").map((block) => block.key), ["u1"]);
+  // A message with no note of the engine's, or noted as the user's with no request, is a new block.
+  for (const said of [undefined, { by: "user" as const }]) {
+    const fresh = [...first, user("n1", "Something else", 7000, { ...(said && { said }) })];
+    for (const turns of [[cut], [cut, ...later]]) {
+      const blocks = cliBlocks({ entries: fresh, turns }, "conv");
+      assert.deepEqual(blocks.map((block) => block.key), ["u1", "n1"], JSON.stringify([said, turns.length]));
+      assert.deepEqual(blocks[0]!.steers, []);
+      assert.equal(blocks[0]!.state, "done");
+    }
+  }
+});
+
 test("a follow-up the user steers during a usage limit's switch goes on in the cut turn's block: one block, the switch's carry-on with it, never stopped (screen pass, every CLI)", () => {
   const FOLLOW = "Also, at the very end reply FOLLOW too.";
   const cut = { ...turn("u1", 1000, 1400, "failed", "five_hour usage limit"), errorKind: "usageLimit" as const, requests: ["r1"] };
@@ -1730,6 +1771,15 @@ test("a message woken for while only a background subagent holds the block goes 
 const workerStep = (type: "paused" | "resumed" | "stopped", position: number): SequenceEntry =>
   ({ kind: "orchestrator", steps: [{ kind: { type, taskId: "t1", ...(type === "stopped" && { reason: "Stopped by the user" }) }, position, atMs: position }], position }) as SequenceEntry;
 const stepKinds = (entries: readonly SequenceEntry[] | undefined) => (entries ?? []).map((entry) => entry.kind === "orchestrator" && entry.steps[0]?.kind.type);
+
+test("a switch after the answer goes under the answer's action row, a worker's line above it", () => {
+  const switched = { kind: "orchestrator", steps: [{ kind: { type: "providerTransition", id: "s1" }, position: 3, atMs: 3 }], position: 3 } as unknown as SequenceEntry;
+  const activity = turnActivity([{ kind: "text", index: 0, messageId: "a1", position: 2 }, switched, workerStep("resumed", 4)], false);
+  assert.deepEqual(stepKinds(belowAnswer(activity, 0, true)), ["resumed"]);
+  assert.deepEqual(stepKinds(belowActions(activity, 0, true)), ["providerTransition"]);
+  const parts = turnParts(activity, 0, true, false, () => true);
+  assert.deepEqual(parts.flatMap((part) => (part.type === "work" ? (part.kept ?? []) : [])), []);
+});
 
 test("a worker paused before the answer and resumed and ended after it read in that order around it", () => {
   const sequence: SequenceEntry[] = [workerStep("paused", 1), { kind: "text", index: 0, messageId: "a1", position: 2 }, workerStep("resumed", 3), workerStep("stopped", 4)];

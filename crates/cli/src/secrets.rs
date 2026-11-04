@@ -75,7 +75,25 @@ const USAGE: &str = "usage: brigadier secret set <server> <name> (value on stand
                      brigadier secret remove <server> [<name>]\n       \
                      brigadier mcp run <server> -- <command> [<args>...]";
 
-/// Runs `words` when they are one of these commands; `None` for any other.
+/// The commands `brigadier` runs itself, by their first words, before any call to the daemon:
+/// no grant of the calling session is checked, and `mcp run` starts the program it is given.
+/// [`run_local`] takes only these, and no permission level runs one unasked
+/// (`brigadier_providers::policy::BRIGADIER_COMMANDS`, #737).
+pub const LOCAL_COMMANDS: &[&[&str]] = &[&["secret"], &["mcp", "run"]];
+
+/// Whether [`run_local`] takes `words` (the words after `brigadier`): they start with one of
+/// [`LOCAL_COMMANDS`]. Only reads the words.
+pub fn is_local<S: AsRef<str>>(words: &[S]) -> bool {
+    LOCAL_COMMANDS.iter().any(|local| {
+        words.len() >= local.len()
+            && local
+                .iter()
+                .zip(words)
+                .all(|(local, word)| *local == word.as_ref())
+    })
+}
+
+/// Runs `words` when they are one of these commands ([`is_local`]); `None` for any other.
 pub fn run_local(
     words: &[String],
     store: &dyn Store,
@@ -83,6 +101,9 @@ pub fn run_local(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Option<u8> {
+    if !is_local(words) {
+        return None;
+    }
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let result = match words.as_slice() {
         ["secret", "set", server, name] => set(store, server, name, stdin),
@@ -96,8 +117,7 @@ pub fn run_local(
                 std::process::exit(code)
             }),
         // `mcp list | tools | call` go to the daemon.
-        ["mcp", "run", ..] => Err(USAGE.to_owned()),
-        _ => return None,
+        _ => Err(USAGE.to_owned()),
     };
     Some(match result {
         Ok(()) => 0,

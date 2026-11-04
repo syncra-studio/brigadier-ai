@@ -132,7 +132,8 @@ export function AgentPage({
         <Installation provider={provider} overview={overview} signIn={signIn} />
       </SettingsSection>
       <SettingsSection title="Accounts" setting="Accounts" aside="Usage refreshes every few minutes">
-        <SettingsCard>
+        {/* The line above a lit account belongs to the row before it; the account hides its own. */}
+        <SettingsCard className="[&>:has(+[data-opens]:hover)]:after:opacity-0">
           <SettingsRow
             label={OVERVIEW_ROWS.switchAccounts.label}
             description={OVERVIEW_ROWS.switchAccounts.description}

@@ -1101,6 +1101,11 @@ pub enum ProviderEvent {
         item_id: String,
         text: String,
     },
+    /// The model wrote to a command it went on from, or polled it and found it still running
+    /// (Codex's `terminalInteraction`). An empty poll that reads the command's end sends none.
+    CommandPolled {
+        item_id: String,
+    },
     /// What a finished tool call or command (`itemId`) read and searched, in the same words
     /// for every CLI: Claude's `Read`, `Grep` and `Glob`, Codex's commands as it parsed them
     /// (`commandActions`). It follows the call's own completed event. `cwd` is what relative
@@ -1261,11 +1266,12 @@ pub enum ProviderEvent {
 /// | Level | Claude Code | Codex | OpenCode |
 /// |---|---|---|---|
 /// | Ask | `--permission-mode default` | approval `untrusted`, sandbox `workspace-write`; read-only commands answered | edits and commands ask, read-only commands run |
-/// | Accept edits | `--permission-mode acceptEdits`, `Bash(brigadier:*)` | approval `untrusted`, sandbox `workspace-write`; edits, read-only commands and `brigadier` answered | edits, read-only commands and `brigadier` run, other commands ask |
+/// | Accept edits | `--permission-mode acceptEdits`, `Bash(brigadier wait:*)` and the like for each of Brigadier's own commands (`policy::BRIGADIER_COMMANDS`, never `mcp run` or `secret`) | approval `untrusted`, sandbox `workspace-write`; edits, read-only commands and Brigadier's own answered | edits, read-only commands and Brigadier's own run, other commands ask |
 /// | Full access | `--permission-mode bypassPermissions` | approval `never`, sandbox `danger-full-access` | everything allowed |
 ///
 /// [`Access::ReadOnly`] is for Brigadier's own one-shot readers (a commit message, a Brain
-/// pass) and side and tab chats, never a user's level: a chat's shell runs `brigadier` only.
+/// pass) and side and tab chats, never a user's level: a chat's shell runs Brigadier's own
+/// commands only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Access {

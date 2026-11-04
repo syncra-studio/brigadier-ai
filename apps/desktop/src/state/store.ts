@@ -101,7 +101,8 @@ export function emptyDraft(projectId: string | null): DraftSetup {
 }
 
 export type ConnectionState = {
-  status: "connecting" | "connected" | "disconnected";
+  /** `blocked`: a core of another version runs and this app can't use it (`reason` says how to clear it). */
+  status: "connecting" | "connected" | "disconnected" | "blocked";
   daemon: DaemonInfo | null;
   reason: string | null;
 };
@@ -120,7 +121,7 @@ export type PendingMessage = {
    * Sent to wait in the queue: the rail shows it at `index` (else last) until the daemon's
    * queue item shows, rather than the thread (#491).
    */
-  queued?: { index: number | null };
+  queued?: { index: number | null; deciding: boolean };
 };
 
 export { shownIdOf, storedIdOf } from "@/state/shownIds";

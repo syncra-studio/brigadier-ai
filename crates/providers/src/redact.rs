@@ -537,6 +537,7 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
             opt(cwd);
         }
         ProviderEvent::TurnStarted { .. }
+        | ProviderEvent::CommandPolled { .. }
         | ProviderEvent::Usage { .. }
         | ProviderEvent::ContextSize { .. }
         | ProviderEvent::CompactionStarted { .. }

@@ -71,8 +71,6 @@ const twMerge = extendTailwindMerge({
         "notice-gap-wide",
         "notice-icon",
         "notice-button",
-        "notice-close",
-        "notice-close-icon",
         "add-project-list",
       ],
       container: ["thread", "setup", "onboarding", "summary", "summary-stack", "thread-beside-summary", "settings", "settings-wide", "plugins", "plugin-file", "question", "trust", "add-project", "project-dialog", "feedback", "palette"],

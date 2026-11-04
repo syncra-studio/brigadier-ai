@@ -299,7 +299,7 @@ impl Parser {
             }
             "turn/completed" => {
                 let Some(completed) =
-                    decode::<p::TurnCompletedNotification>(method, params, out, self.private_logs)
+                    decode::<TurnCompleted>(method, params, out, self.private_logs)
                 else {
                     return;
                 };
@@ -309,8 +309,12 @@ impl Parser {
                     p::TurnStatus::Completed | p::TurnStatus::InProgress => TurnStatus::Completed,
                     p::TurnStatus::Interrupted => TurnStatus::Interrupted,
                     p::TurnStatus::Failed => TurnStatus::Failed,
+                    // A status a newer Codex added: the turn ended, failed when it says why.
+                    p::TurnStatus::Unknown if turn.error.is_some() => TurnStatus::Failed,
+                    p::TurnStatus::Unknown => TurnStatus::Completed,
                 };
-                if let Some(error) = &turn.error
+                let error = turn.error.map(turn_error);
+                if let Some(error) = &error
                     && status == TurnStatus::Failed
                     && !std::mem::take(&mut self.turn_error)
                 {
@@ -378,6 +382,13 @@ impl Parser {
                     out.push(Output::Event(ProviderEvent::CommandOutputDelta {
                         item_id: delta.item_id,
                         text: delta.delta,
+                    }));
+                }
+            }
+            "item/commandExecution/terminalInteraction" => {
+                if let Some(item_id) = params.get("itemId").and_then(Value::as_str) {
+                    out.push(Output::Event(ProviderEvent::CommandPolled {
+                        item_id: item_id.to_owned(),
                     }));
                 }
             }
@@ -1773,6 +1784,39 @@ fn decode<T: DeserializeOwned>(
     }
 }
 
+/// `turn/completed`, only as far as it is read: what ends the turn. The rest of the turn (its
+/// `items`, `itemsView`) is left unread, so a newer Codex changing it can't keep the turn from
+/// ending (#754).
+#[derive(serde::Deserialize)]
+struct TurnCompleted {
+    turn: CompletedTurn,
+}
+
+#[derive(serde::Deserialize)]
+struct CompletedTurn {
+    id: String,
+    status: p::TurnStatus,
+    /// Read apart ([`turn_error`]): a turn ends even when its error can't be read.
+    #[serde(default)]
+    error: Option<Value>,
+    #[serde(rename = "durationMs", default)]
+    duration_ms: Option<i64>,
+}
+
+/// A turn's error; one these bindings can't read keeps at least its message.
+fn turn_error(error: Value) -> p::TurnError {
+    serde_json::from_value(error.clone()).unwrap_or_else(|_| p::TurnError {
+        additional_details: None,
+        codex_error_info: None,
+        message: error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("Codex reported an error it did not describe")
+            .to_owned(),
+        misalignment: None,
+    })
+}
+
 fn unreadable_message() -> Output {
     notice(
         NoticeLevel::Warning,
@@ -1844,6 +1888,135 @@ mod tests {
 
     const QUESTION_FEATURE_WARNING: &str =
         "Under-development features enabled: default_mode_request_user_input";
+
+    /// #754: what a newer Codex adds to `turn/completed` (a status, an error kind as a string
+    /// or an object, an `itemsView`, an item type, an error field of a new shape) still ends
+    /// the turn, with no "could not read" notice. Codex 0.166 already sends `modelNotFound`.
+    #[test]
+    fn a_newer_codexs_turn_completed_still_ends_the_turn() {
+        let failed = |info: Value| json!({"message": "it broke", "codexErrorInfo": info});
+        let cases = [
+            (
+                "status",
+                json!("paused"),
+                json!(null),
+                TurnStatus::Completed,
+                None,
+            ),
+            (
+                "status with an error",
+                json!("cancelledByPolicy"),
+                failed(json!("badRequest")),
+                TurnStatus::Failed,
+                Some((ErrorKind::InvalidRequest, "badRequest")),
+            ),
+            (
+                "error kind",
+                json!("failed"),
+                failed(json!("modelNotFound")),
+                TurnStatus::Failed,
+                Some((ErrorKind::Other, "modelNotFound")),
+            ),
+            (
+                "error kind object",
+                json!("failed"),
+                failed(json!({"quotaShifted": {"httpStatusCode": 429}})),
+                TurnStatus::Failed,
+                Some((ErrorKind::Other, "quotaShifted")),
+            ),
+            (
+                "known error kind, new payload",
+                json!("failed"),
+                failed(json!({"activeTurnNotSteerable": {"turnKind": "brandNew"}})),
+                TurnStatus::Failed,
+                Some((ErrorKind::Other, "activeTurnNotSteerable")),
+            ),
+            (
+                "error field",
+                json!("failed"),
+                json!({"message": "it broke", "misalignment": "a string now"}),
+                TurnStatus::Failed,
+                Some((ErrorKind::Other, "")),
+            ),
+        ];
+        for (case, status, error, want, want_error) in cases {
+            let mut parser = Parser::default();
+            parser.feed(
+                &json!({"method": "turn/started", "params": {"threadId": "t",
+                    "turn": {"id": "u", "items": [], "status": "inProgress"}}})
+                .to_string(),
+            );
+            assert_eq!(parser.turn_id.as_deref(), Some("u"), "{case}");
+            let line = json!({"method": "turn/completed", "params": {"threadId": "t", "turn": {
+                "id": "u", "items": [], "itemsView": "notLoaded", "status": status,
+                "error": error, "durationMs": 5,
+            }}});
+            let found = events(&mut parser, &line);
+            assert!(parser.turn_id.is_none(), "{case}: the turn still runs");
+            assert!(
+                !found
+                    .iter()
+                    .any(|event| matches!(event, ProviderEvent::Notice { .. })),
+                "{case}: {found:?}"
+            );
+            assert!(
+                found.iter().any(|event| matches!(
+                    event,
+                    ProviderEvent::TurnCompleted { turn_id: Some(id), status, .. }
+                        if id == "u" && *status == want
+                )),
+                "{case}: {found:?}"
+            );
+            let reported = found.iter().find_map(|event| match event {
+                ProviderEvent::Error { error } => {
+                    Some((error.kind, error.code.clone().unwrap_or_default()))
+                }
+                _ => None,
+            });
+            assert_eq!(
+                reported,
+                want_error.map(|(kind, code)| (kind, code.to_owned())),
+                "{case}"
+            );
+            assert!(
+                found.iter().all(|event| match event {
+                    ProviderEvent::Error { error } => error.message == "it broke",
+                    _ => true,
+                }),
+                "{case}"
+            );
+        }
+
+        // What the turn carries besides is left unread: an unknown `itemsView`, an item type
+        // or a known item of a new shape.
+        for (case, items_view, items) in [
+            ("itemsView", json!("partial"), json!([])),
+            (
+                "item type",
+                json!("full"),
+                json!([{"type": "hologram", "id": "i"}]),
+            ),
+            (
+                "item shape",
+                json!("full"),
+                json!([{"type": "commandExecution", "id": "i", "status": "teleported"}]),
+            ),
+        ] {
+            let mut parser = Parser::default();
+            let line = json!({"method": "turn/completed", "params": {"threadId": "t", "turn": {
+                "id": "u", "items": items, "itemsView": items_view, "status": "completed",
+            }}});
+            let found = events(&mut parser, &line);
+            assert!(
+                matches!(
+                    found.as_slice(),
+                    [ProviderEvent::TurnCompleted { turn_id: Some(id), status: TurnStatus::Completed, .. }]
+                        if id == "u"
+                ),
+                "{case}: {found:?}"
+            );
+        }
+    }
 
     /// The real line (worker fabe89d3), with no `codexErrorInfo` or with one, while it retries
     /// or once it has given up.

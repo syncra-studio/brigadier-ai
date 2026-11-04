@@ -76,6 +76,9 @@ pub fn heap<F: std::future::Future>(make: impl FnOnce() -> F) -> std::pin::Pin<B
     Box::pin(make())
 }
 
+#[cfg(test)]
+mod brigadier_commands_tests;
+
 /// How long a test may wait for what it needs before it fails: only a hang takes this long. On
 /// CI it stays under nextest's kill of a test hung for two minutes (`.config/nextest.toml`), so
 /// a hang fails saying what it waited for instead of being killed (#111).

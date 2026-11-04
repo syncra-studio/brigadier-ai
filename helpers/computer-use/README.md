@@ -95,8 +95,17 @@ What Windows and Linux can't do in the background is said plainly in the
 tool's answer: higher-privilege apps can block background input on Windows.
 The Windows policy also refuses apps identified as `ApplicationFrameHost`, the
 shared host for some Store apps, rather than an individual app; other Store
-apps are not refused as a group. The driver's uiAccess worker, `cua-driver-uia`,
-is vendored but not built or shipped. Another limitation is input in a pure
+apps are not refused as a group. Windows Notepad keeps all its windows in one
+process, opens every file as a tab in a window it already shows and has no way
+to open one in a window of its own, so a Notepad launch is refused while the
+user has a Notepad window open (in front or not) and the reply says this is a
+lasting limitation, not a temporary failure. When a Notepad or Settings launch
+did not answer within 15 s, Windows may still open its window later; nothing
+ties that window to the launch (one process of each app serves the user and
+the helper alike), so the helper never treats it as its own, and later launches
+of that app are refused, saying why, until no window of it is open. The
+driver's uiAccess worker, `cua-driver-uia`, is vendored but not built or
+shipped. Another limitation is input in a pure
 Wayland session without XWayland on Linux (the
 driver's experimental Wayland backend stays off). `cu-testkit`, and so
 `brigadier-cu`'s own tests, run on macOS only; CI runs clippy for both

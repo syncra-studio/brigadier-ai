@@ -299,6 +299,31 @@ fn opened_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("cache").join("open")
 }
 
+/// Writes the copy of an artifact the default app opens, marked as come from elsewhere: a
+/// worker made it, so the system treats it as a download (#770).
+fn write_copy(dir: &Path, path: PathBuf, bytes: &[u8]) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir).map_err(|err| io_error(dir, err))?;
+    std::fs::write(&path, bytes).map_err(|err| io_error(&path, err))?;
+    mark_from_elsewhere(&path);
+    Ok(path)
+}
+
+/// The Mark of the Web: the Internet zone, so SmartScreen and Office's Protected View check
+/// what opens it. A drive with no alternate streams (FAT, exFAT) keeps the file unmarked.
+#[cfg(windows)]
+fn mark_from_elsewhere(path: &Path) {
+    let mut stream = path.as_os_str().to_owned();
+    stream.push(":Zone.Identifier");
+    if let Err(err) = std::fs::write(&stream, "[ZoneTransfer]\r\nZoneId=3\r\n") {
+        tracing::warn!(path = %path.display(), error = %err, "could not mark an opened artifact");
+    }
+}
+
+/// macOS's equivalent, the quarantine attribute, isn't set yet: Brigadier's opener refuses the
+/// types that would run (`opening.rs` in the app).
+#[cfg(not(windows))]
+fn mark_from_elsewhere(_path: &Path) {}
+
 /// Removes the copies opened in an earlier run.
 pub(crate) fn clear_opened(data_dir: &Path) {
     let dir = opened_dir(data_dir);
@@ -328,12 +353,7 @@ impl SessionManager {
         let bytes = self.artifact_bytes(&id).await?;
         let dir = opened_dir(&self.data_dir).join(&id);
         let path = dir.join(super::conversation::safe_file_name(&file_name));
-        blocking(move || {
-            std::fs::create_dir_all(&dir).map_err(|err| io_error(&dir, err))?;
-            std::fs::write(&path, bytes).map_err(|err| io_error(&path, err))?;
-            Ok(path)
-        })
-        .await
+        blocking(move || write_copy(&dir, path, &bytes)).await
     }
 
     async fn artifact_bytes(&self, id: &str) -> Result<Vec<u8>> {
@@ -716,5 +736,25 @@ mod tests {
         assert_eq!(found("outputs/task-2/notes.md").as_deref(), Some("second"));
         // No such task: read as a folder named so, as before.
         assert_eq!(found("outputs/task-9/notes.md").as_deref(), Some("second"));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::write_copy;
+
+    /// The copy a worker's file opens from carries the Mark of the Web, so Windows checks
+    /// it as a download (#770).
+    #[test]
+    fn an_opened_copy_is_marked_as_from_the_internet() {
+        let dir =
+            std::env::temp_dir().join(format!("win-issues-w10-motw-{}", uuid::Uuid::now_v7()));
+        let path = write_copy(&dir, dir.join("report.docx"), b"doc").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"doc");
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        let mark = std::fs::read_to_string(&stream);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(mark.unwrap().contains("ZoneId=3"));
     }
 }

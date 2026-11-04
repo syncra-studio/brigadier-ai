@@ -1,7 +1,7 @@
 /**
  * The Full access card above the composer, in a finished session at Full access through the
  * real ConversationView (the phase-flow fixture). `?drive=1` scrolls the thread to its bottom,
- * writes what it saw into `#full-access-notice-result`, then closes the card with ×. With
+ * and writes what it saw into `#full-access-notice-result`. With
  * `&waiting=1` the session still works with approvals waiting above the composer, and the
  * result says whether the card stepped aside for them. With `&queued=1` a message waits in the
  * queue, and the result says whether the card stepped aside for it and came back once it left.
@@ -9,7 +9,7 @@
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
-// Closing it is kept across loads; each run starts with it not yet closed.
+// Its stepping aside is kept across loads; each run starts with it not yet gone.
 localStorage.removeItem("brigadier.fullAccessNoticeClosed");
 const params = new URLSearchParams(location.search);
 const drive = params.has("drive");
@@ -117,9 +117,6 @@ async function run() {
     lastBottom: Math.round(last.getBoundingClientRect().bottom),
     noticeTop: Math.round(box.top),
   };
-  [...line.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Close")?.click();
-  await pause();
-  seen.closed = notice() === null;
   report(seen);
 }
 

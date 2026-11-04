@@ -1442,9 +1442,9 @@ pub struct QueuedMessage {
     pub mentions: Vec<Mention>,
     pub queued_at_ms: i64,
     pub edited_at_ms: Option<i64>,
-    /// Only in rows stored by an older daemon, which held a message back until its judge
-    /// answered; a start settles them. A message sent while the session works is now an ordinary
-    /// row from the first frame, judged in the background (`queue_judging`).
+    /// A judge is reading whether it joins the work in progress (`queue_judging`). Only a label:
+    /// the row's actions stay usable and it never holds the queue. A start settles what a stop
+    /// left.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub deciding: bool,
@@ -1500,12 +1500,6 @@ impl MessageQueue {
         self.items
             .iter()
             .find(|item| !item.offer_session && item.worker.is_none())
-    }
-
-    /// The next message to send now: none while the next one is an older daemon's, still
-    /// Deciding (a start settles those).
-    pub fn ready_to_send(&self) -> Option<&QueuedMessage> {
-        self.next_to_send().filter(|item| !item.deciding)
     }
 }
 
@@ -3184,7 +3178,6 @@ mod tests {
         assert!(serialized.get("moved").is_none());
         assert!(serialized.get("sent").is_none());
         assert_eq!(queue.next_to_send().unwrap().id, "first");
-        assert!(queue.ready_to_send().is_none(), "Deciding holds the queue");
     }
 
     /// The retired `orch:<id>` log's events read back as retired (#540), and an injection

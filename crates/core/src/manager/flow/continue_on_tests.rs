@@ -716,6 +716,68 @@ async fn a_pending_move_survives_a_restart() {
     flow.stop().await;
 }
 
+/// The move waits on a job of the turn, and the restart cuts that job off, so the session's
+/// successor starts with word of it. That first message is still the hand-off, never a hidden
+/// input of Brigadier's: its turn shows, and the thread finds where the session moved.
+#[tokio::test]
+async fn a_move_a_restart_cut_a_job_off_for_still_starts_from_the_hand_off() {
+    let turns = Turns::default();
+    let script: Script = {
+        let turns = turns.clone();
+        Arc::new(move |turn: Turn| {
+            let turns = turns.clone();
+            Box::pin(async move {
+                turns.lock().unwrap().push((
+                    turn.provider,
+                    turn.native_id.clone(),
+                    turn.input.clone(),
+                ));
+                if turn.provider == ProviderKind::Codex {
+                    return Reply::text("Carrying on, on Codex.");
+                }
+                if turn.input.starts_with(NUDGE_MARK) {
+                    std::fs::write(note_of(&turn.input), "Doing now: nothing.").unwrap();
+                    return Reply::text("Handed off.");
+                }
+                let _ = turn
+                    .events
+                    .send(brigadier_providers::ProviderEvent::BackgroundJobs {
+                        running: vec!["job".to_owned()],
+                    })
+                    .await;
+                Reply::text("A job watches it.")
+            })
+        })
+    };
+    let mut flow = Flow::start("continue-on-cut-job", options(), script).await;
+    flow.say("Start the job.").await;
+    flow.until("the turn", |_| !turns.lock().unwrap().is_empty())
+        .await;
+    let (when, _) = flow
+        .manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap();
+    assert_eq!(when, ContinueWhen::AfterTurn);
+    flow.restart().await;
+    flow.until("a turn on Codex", |_| {
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(provider, ..)| *provider == ProviderKind::Codex)
+    })
+    .await;
+    let turns = turns.lock().unwrap().clone();
+    let (_, _, input) = turns
+        .iter()
+        .find(|(provider, ..)| *provider == ProviderKind::Codex)
+        .unwrap();
+    assert!(input.starts_with(HANDOFF_MARK), "{input}");
+    assert!(input.contains("stopped when your CLI ended"), "{input}");
+    flow.stop().await;
+}
+
 /// Asked for the move already coming with a model named, the move takes that model.
 #[tokio::test]
 async fn a_pending_move_takes_a_model_named_later() {

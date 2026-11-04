@@ -11,9 +11,9 @@ import {
   useRef,
 } from "react";
 
-import { TooltipIconButton, Badge } from "@/components/controls";
+import { TooltipIconButton } from "@/components/controls";
 import { useCheckoutRoot } from "@/components/conversation";
-import { UNTITLED } from "@/app/shell/TopBar";
+import { CoreBadge, UNTITLED } from "@/app/shell/TopBar";
 import { Chat, Plus } from "@/components/icons";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/side-panel/SidePanel";
@@ -152,7 +152,6 @@ export function SessionTabBar({
 }) {
   const { tabs, active } = useSessionTabsOf(id);
   useMockupTab(id);
-  const connection = useApp((s) => s.connection.status);
   const archived = conversation?.lifecycle === "archived";
   const strip = useRef<HTMLDivElement>(null);
   const cwd = useCheckoutRoot();
@@ -222,11 +221,7 @@ export function SessionTabBar({
     closeTab(id, tab);
   };
   const newTab = <NewTabButton tabsId={id} className="ms-0.5" onClick={lock.release} />;
-  const connecting = connection !== "connected" && (
-    <Badge variant="warning" role="status" className="shrink-0">
-      {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
-    </Badge>
-  );
+  const connecting = <CoreBadge className="shrink-0" />;
   const chatTitle = !conversation || UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
   const chatSeparator = active !== CHAT_TAB && tabs.length > 0 && tabs[0]?.id !== active || undefined;
 

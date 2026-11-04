@@ -74,6 +74,14 @@ const PAGE_BYTES: usize = 4 * 1024 * 1024;
 /// Largest attachment accepted (it travels base64-encoded in one IPC frame).
 pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS: usize = 20;
+// Claude echoes each message whole on one stdout line, its images base64-encoded (4 bytes for
+// every 3). A CLI that prints a longer line than the reader takes is ended (#769), so the
+// largest message, with room for its text and JSON, must fit.
+const _: () = assert!(
+    MAX_ATTACHMENTS * MAX_ATTACHMENT_BYTES.div_ceil(3) * 4 + 16 * 1024 * 1024
+        <= brigadier_providers::process::STDOUT_LINE_MAX,
+    "the largest message Brigadier sends is longer than the CLI stdout line it reads"
+);
 const MAX_QUEUED: usize = 50;
 const BOARD_PAGE: u32 = 1_000;
 
@@ -1996,12 +2004,13 @@ impl Core {
         mentions: Vec<Mention>,
         index: Option<u32>,
     ) -> Result<QueuedMessage> {
-        self.enqueue_as(id, text, attachments, mentions, index, None)
+        self.enqueue_as(id, text, attachments, mentions, index, false, None)
             .await
     }
 
-    /// [`Self::enqueue`]; for `worker`, the user's message to that worker of the session's
-    /// (goal 8).
+    /// [`Self::enqueue`]; `deciding` while a judge reads it; for `worker`, the user's message to
+    /// that worker of the session's (goal 8).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn enqueue_as(
         &self,
         id: &ConversationId,
@@ -2009,6 +2018,7 @@ impl Core {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
         index: Option<u32>,
+        deciding: bool,
         worker: Option<TaskId>,
     ) -> Result<QueuedMessage> {
         if text.trim().is_empty() && attachments.is_empty() {
@@ -2022,7 +2032,7 @@ impl Core {
             mentions,
             queued_at_ms: now_ms(),
             edited_at_ms: None,
-            deciding: false,
+            deciding,
             delivered: false,
             held_by: None,
             offer_session: false,
@@ -2054,6 +2064,7 @@ impl Core {
         id: &ConversationId,
         peer: PeerRef,
         text: String,
+        deciding: bool,
     ) -> Result<Option<QueuedMessage>> {
         let item = QueuedMessage {
             id: peer.message_id.clone(),
@@ -2062,7 +2073,7 @@ impl Core {
             mentions: Vec::new(),
             queued_at_ms: now_ms(),
             edited_at_ms: None,
-            deciding: false,
+            deciding,
             delivered: false,
             held_by: None,
             offer_session: false,
@@ -2110,6 +2121,8 @@ impl Core {
             item.attachments = attachments;
             item.mentions = mentions;
             item.edited_at_ms = Some(now_ms());
+            // The user's now: no judge has a say (`drop_judgment`).
+            item.deciding = false;
             Ok(())
         })
         .await
@@ -2128,7 +2141,9 @@ impl Core {
                 .iter()
                 .position(|item| item.id == item_id)
                 .ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))?;
-            let item = queue.items.remove(from);
+            let mut item = queue.items.remove(from);
+            // The user's now: no judge has a say (`drop_judgment`).
+            item.deciding = false;
             let to = (index as usize).min(queue.items.len());
             queue.items.insert(to, item);
             Ok(())
@@ -2152,28 +2167,21 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
-    /// Takes the Deciding mark off queued messages `item_ids`, rows an older daemon stored:
-    /// those still queued wait there for their turn. Returns those whose mark changed.
+    /// Takes the Deciding mark off queued message `only`, or off them all: those still queued
+    /// wait there for their turn. Nothing to write when no such row reads Deciding.
     pub(crate) async fn settle_queued(
         &self,
         id: &ConversationId,
-        item_ids: &[String],
-    ) -> Result<Vec<String>> {
-        let board = self.board(id).await?;
-        let changed: Vec<String> = board
-            .queue
-            .items
-            .iter()
-            .filter(|item| item.deciding && item_ids.contains(&item.id))
-            .map(|item| item.id.clone())
-            .collect();
-        if changed.is_empty() {
-            return Ok(changed);
+        only: Option<&str>,
+    ) -> Result<()> {
+        let marked =
+            |item: &QueuedMessage| item.deciding && only.is_none_or(|only| item.id == only);
+        if !self.board(id).await?.queue.items.iter().any(marked) {
+            return Ok(());
         }
-        let settled = changed.clone();
-        self.change_queue(id, move |queue| {
+        self.change_queue(id, |queue| {
             for item in &mut queue.items {
-                if settled.contains(&item.id) {
+                if marked(item) {
                     item.deciding = false;
                     item.held_by = None;
                 }
@@ -2181,7 +2189,7 @@ impl Core {
             Ok(())
         })
         .await?;
-        Ok(changed)
+        Ok(())
     }
 
     /// The user's "Run here" on a message the session offered as a new session: the offer goes
@@ -2216,14 +2224,14 @@ impl Core {
         self.record_conversation(id, vec![event]).await.map(|_| ())
     }
 
-    /// The next message to send, unless the queue is paused or holds none ready (the next one
-    /// is an older daemon's, still Deciding). [`Self::append_queued`] takes it out.
+    /// The next message to send, unless the queue is paused. [`Self::append_queued`] takes it
+    /// out.
     pub async fn next_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
         let board = self.board(id).await?;
         if board.queue.paused {
             return Ok(None);
         }
-        Ok(board.queue.ready_to_send().cloned())
+        Ok(board.queue.next_to_send().cloned())
     }
 
     /// Queued message `item_id` as it stands; [`Self::append_queued`] takes it out.

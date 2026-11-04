@@ -195,11 +195,87 @@ pub async fn accept_loop(
                     grant,
                     connection,
                 }) => upgrade::serve_cli(daemon_for_task, session, grant, connection).await,
+                Ok(Accepted::Mismatched {
+                    connection,
+                    client,
+                    protocol,
+                }) => serve_mismatched(daemon_for_task, connection, client, protocol).await,
                 Err(err) => tracing::warn!(error = %err, "rejected IPC connection"),
             }
         });
         daemon.connections.spawn(task);
     }
+}
+
+/// How long an app of another protocol version has to ask this daemon to quit.
+const MISMATCH_WAIT: Duration = Duration::from_secs(10);
+
+/// An app of another protocol version holds the token (an update landed while this daemon
+/// ran): it is told who this daemon is, and may ask it to quit, as Quit does (#771).
+async fn serve_mismatched(
+    daemon: Arc<Daemon>,
+    connection: Connection,
+    client: ClientInfo,
+    protocol: u32,
+) {
+    tracing::info!(
+        client = %client.name,
+        pid = client.pid,
+        protocol,
+        "an app of another protocol version connected"
+    );
+    let Connection { reader, writer } = connection;
+    let answered = answer_mismatch(
+        reader,
+        writer,
+        &daemon.info,
+        &daemon.quit,
+        daemon.drained.clone(),
+        MISMATCH_WAIT,
+    )
+    .await;
+    if let Err(err) = answered {
+        tracing::warn!(error = %err, "answering an app of another protocol version failed");
+    }
+}
+
+/// Says [`ServerFrame::ProtocolMismatch`], then takes one frame within `wait`: a shutdown
+/// request quits the daemon, answered once its writes are committed. Anything else is left
+/// unanswered. The request is read as plain JSON, since every other request's shape may
+/// differ between versions.
+async fn answer_mismatch<R, W>(
+    mut reader: brigadier_ipc::frame::FrameReader<R>,
+    mut writer: brigadier_ipc::frame::FrameWriter<W>,
+    info: &DaemonInfo,
+    quit: &mpsc::Sender<&'static str>,
+    mut drained: watch::Receiver<bool>,
+    wait: Duration,
+) -> Result<(), brigadier_ipc::Error>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    writer
+        .write(&ServerFrame::ProtocolMismatch {
+            daemon: info.clone(),
+        })
+        .await?;
+    let Ok(frame) = tokio::time::timeout(wait, reader.read::<serde_json::Value>()).await else {
+        return Ok(());
+    };
+    let Some(frame) = frame? else {
+        return Ok(());
+    };
+    let shutdown = frame["type"] == "request" && frame["request"]["method"] == "shutdown";
+    let id = frame["id"].as_u64().and_then(|id| u32::try_from(id).ok());
+    let (true, Some(id)) = (shutdown, id) else {
+        return Ok(());
+    };
+    let _ = quit.try_send("quit requested by an app of another version");
+    let _ = drained.wait_for(|drained| *drained).await;
+    writer
+        .write_response(id, Ok::<_, IpcError>(Response::Shutdown).into())
+        .await
 }
 
 async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) {
@@ -2064,7 +2140,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             image,
         } => {
             let (data, mime) = sessions.thread_image(&conversation_id, &image)?;
-            Response::ReadThreadImage { data, mime }
+            Response::ReadSessionFileImage { data, mime }
         }
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,
@@ -2695,8 +2771,15 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetProviders => Response::GetProviders {
             view: heap(|| daemon.runtime.view()).await,
         },
-        Request::RefreshProviders { provider } => {
-            daemon.runtime.refresh_providers(provider);
+        Request::RefreshProviders {
+            provider,
+            usage_only,
+        } => {
+            if usage_only {
+                daemon.runtime.refresh_usage();
+            } else {
+                daemon.runtime.refresh_providers(provider);
+            }
             Response::RefreshProviders
         }
         Request::CheckAgentPath { provider, path } => {
@@ -2998,6 +3081,107 @@ fn computer_error(message: String) -> IpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An app of another protocol version is told who this daemon is and may ask it to quit:
+    /// the quit is asked for, and answered once the writes are committed (#771). Before, the
+    /// hello was dropped unanswered and nothing could ask this daemon to quit.
+    #[tokio::test]
+    async fn an_app_of_another_version_can_ask_the_daemon_to_quit() {
+        use brigadier_ipc::frame::{FrameReader, FrameWriter};
+        let info = DaemonInfo {
+            version: "0.0.1-old".into(),
+            protocol: brigadier_ipc::protocol::PROTOCOL_VERSION,
+            pid: 7,
+            platform: "test".into(),
+            started_at_ms: 0,
+            data_dir: String::new(),
+        };
+        let (to_daemon, daemon_reads) = tokio::io::duplex(1 << 16);
+        let (daemon_writes, from_daemon) = tokio::io::duplex(1 << 16);
+        let (quit, mut quits) = mpsc::channel(1);
+        let (drained_tx, drained) = watch::channel(false);
+        let answering = tokio::spawn({
+            let info = info.clone();
+            async move {
+                answer_mismatch(
+                    FrameReader::new(daemon_reads),
+                    FrameWriter::new(daemon_writes),
+                    &info,
+                    &quit,
+                    drained,
+                    Duration::from_secs(5),
+                )
+                .await
+            }
+        });
+        let mut app_reads = FrameReader::new(from_daemon);
+        let mut app_writes = FrameWriter::new(to_daemon);
+        let Some(ServerFrame::ProtocolMismatch { daemon }) =
+            app_reads.read::<ServerFrame>().await.unwrap()
+        else {
+            panic!("not told who the daemon is");
+        };
+        assert_eq!(daemon, info);
+        // An app of another version: its shutdown request in the wire form every version keeps.
+        app_writes
+            .write(&serde_json::json!({
+                "type": "request", "id": 3, "request": { "method": "shutdown" }
+            }))
+            .await
+            .unwrap();
+        assert!(quits.recv().await.is_some(), "the quit was not asked for");
+        drained_tx.send(true).unwrap();
+        let Some(ServerFrame::Response { id, result }) =
+            app_reads.read::<ServerFrame>().await.unwrap()
+        else {
+            panic!("the shutdown was not answered");
+        };
+        assert_eq!(id, 3);
+        assert!(matches!(result, Outcome::Ok { value } if matches!(*value, Response::Shutdown)));
+        answering.await.unwrap().unwrap();
+    }
+
+    /// Anything but a shutdown from an app of another version is left unanswered, and asks
+    /// nothing of the daemon.
+    #[tokio::test]
+    async fn an_app_of_another_version_can_ask_nothing_else() {
+        use brigadier_ipc::frame::{FrameReader, FrameWriter};
+        let info = DaemonInfo {
+            version: "0.0.1-old".into(),
+            protocol: brigadier_ipc::protocol::PROTOCOL_VERSION,
+            pid: 7,
+            platform: "test".into(),
+            started_at_ms: 0,
+            data_dir: String::new(),
+        };
+        let (to_daemon, daemon_reads) = tokio::io::duplex(1 << 16);
+        let (daemon_writes, from_daemon) = tokio::io::duplex(1 << 16);
+        let (quit, mut quits) = mpsc::channel(1);
+        let (_drained_tx, drained) = watch::channel(false);
+        let answering = tokio::spawn(async move {
+            answer_mismatch(
+                FrameReader::new(daemon_reads),
+                FrameWriter::new(daemon_writes),
+                &info,
+                &quit,
+                drained,
+                Duration::from_secs(5),
+            )
+            .await
+        });
+        let mut app_reads = FrameReader::new(from_daemon);
+        let mut app_writes = FrameWriter::new(to_daemon);
+        app_reads.read::<ServerFrame>().await.unwrap().unwrap();
+        app_writes
+            .write(&serde_json::json!({
+                "type": "request", "id": 3, "request": { "method": "getCatalog" }
+            }))
+            .await
+            .unwrap();
+        answering.await.unwrap().unwrap();
+        assert!(app_reads.read::<ServerFrame>().await.unwrap().is_none());
+        assert!(quits.try_recv().is_err());
+    }
 
     #[tokio::test]
     async fn a_window_that_asks_for_the_speech_model_hears_its_download_end() {

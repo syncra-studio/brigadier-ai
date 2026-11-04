@@ -1,6 +1,11 @@
 import { type ComponentProps, useContext } from "react";
 
 import {
+  attachmentOpens,
+  openInDefaultApp,
+  refuse,
+} from "@/components/conversation/elements/attachment-open";
+import {
   FileTile,
   ImageTile,
   kindOf,
@@ -8,16 +13,30 @@ import {
   pasteTooLong,
 } from "@/components/conversation/elements/attachment-tile";
 import type { ViewerImage } from "@/components/conversation/elements/image-viewer";
-import { PastedTextOpenerContext } from "@/components/conversation/elements/pasted-text";
+import { type OpenPastedText, PastedTextOpenerContext } from "@/components/conversation/elements/pasted-text";
 import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+/** What a click on a file's card does; with no reader to open it in (a fixture board), nothing. */
+function cardAction(file: AttachmentRef, openPasted: OpenPastedText | null): (() => void) | undefined {
+  switch (attachmentOpens(file)) {
+    case "viewer":
+      return undefined;
+    case "reader":
+      return openPasted ? () => openPasted(file.inline ?? null, file) : undefined;
+    case "app":
+      return () => openInDefaultApp(file);
+    case "refused":
+      return () => refuse(file);
+  }
+}
+
 /**
  * The Message attachment element (assistant-ui): a sent message's files show as
  * images as thumbnails that open a preview, other files as cards with their kind and size. A
- * "Pasted text" card opens its text read only, as a chip does (a session's tab, elsewhere over
- * the thread).
+ * whole card opens its file as a Sources row does: pasted text, text files and scripts read only
+ * (a session's tab, elsewhere over the thread), other files in the default app.
  */
 export function MessageAttachments({
   attachments,
@@ -50,22 +69,9 @@ export function MessageAttachments({
             <FileTile
               name={attachment.name}
               mime={attachment.mime}
-              title={
-                attachment.pasted ? (
-                  openPasted ? (
-                    <button
-                      type="button"
-                      aria-label="Open Pasted text"
-                      onClick={() => openPasted(null, attachment)}
-                      className="hover:text-foreground max-w-full truncate text-start"
-                    >
-                      Pasted text
-                    </button>
-                  ) : (
-                    "Pasted text"
-                  )
-                ) : undefined
-              }
+              title={attachment.pasted ? "Pasted text" : undefined}
+              onOpen={cardAction(attachment, openPasted)}
+              openLabel={`Open ${attachment.pasted ? "Pasted text" : attachment.name}`}
               detail={
                 attachment.pasted && pasteTooLong(attachment.bytes) ? (
                   <PasteShortened />

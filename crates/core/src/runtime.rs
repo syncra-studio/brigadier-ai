@@ -50,6 +50,8 @@ const DELTA_WINDOW: Duration = Duration::from_millis(30);
 const SHUTDOWN_PUMPS: Duration = Duration::from_secs(3);
 /// Live quota updates are stored as provider overviews at most this often.
 const QUOTA_RECORD_INTERVAL_MS: i64 = 10_000;
+/// How old a provider's last whole check may get before [`Runtime::refresh_usage`] runs another.
+const FULL_CHECK_EVERY_MS: i64 = 60 * 60 * 1000;
 /// Longest pause kept between lines when replaying a recording.
 const REPLAY_MAX_GAP: Duration = Duration::from_millis(250);
 const PROVIDER_CHECKS_KEPT: u32 = 100;
@@ -92,6 +94,8 @@ struct State {
     refreshing: HashSet<ProviderKind>,
     /// Providers asked to be checked while their check ran: checked once more after it.
     again: HashSet<ProviderKind>,
+    /// Those whose last read of the model list failed: due a whole check at the next usage tick.
+    models_unread: HashSet<ProviderKind>,
     /// Counts the refreshes asked for ([`Runtime::refresh_all`]).
     generation: u32,
     /// The generation each provider's last finished check began in.
@@ -390,27 +394,7 @@ impl Runtime {
                 () = tokio::time::sleep(wait) => {}
             }
             for kind in adapters::kinds() {
-                let ready = {
-                    let state = self.state();
-                    !state.refreshing.contains(&kind)
-                        && state
-                            .overviews
-                            .get(&kind)
-                            .and_then(|overview| overview.status.as_ref())
-                            .is_some_and(|status| status.logged_in)
-                };
-                if !ready {
-                    continue;
-                }
-                let Some(provider) = self.provider(kind) else {
-                    continue;
-                };
-                match provider.quota().await {
-                    Ok(quota) => self.note_read(quota).await,
-                    Err(err) => {
-                        tracing::debug!(provider = %kind, error = %err, "quota read failed")
-                    }
-                }
+                self.read_quota(kind).await;
             }
             self.poll_accounts().await;
             self.warn_of_lost_quota().await;
@@ -422,6 +406,31 @@ impl Runtime {
                 {
                     tracing::warn!(error = %err, "could not prune the routing history");
                 }
+            }
+        }
+    }
+
+    /// Reads `kind`'s quota, when it is signed in and no check of it is running.
+    async fn read_quota(&self, kind: ProviderKind) {
+        let ready = {
+            let state = self.state();
+            !state.refreshing.contains(&kind)
+                && state
+                    .overviews
+                    .get(&kind)
+                    .and_then(|overview| overview.status.as_ref())
+                    .is_some_and(|status| status.logged_in)
+        };
+        if !ready {
+            return;
+        }
+        let Some(provider) = self.provider(kind) else {
+            return;
+        };
+        match provider.quota().await {
+            Ok(quota) => self.note_read(quota).await,
+            Err(err) => {
+                tracing::debug!(provider = %kind, error = %err, "quota read failed")
             }
         }
     }
@@ -864,6 +873,32 @@ impl Runtime {
         }
     }
 
+    /// Keeps usage fresh for the app's regular tick, in the background. A whole check starts
+    /// CLIs for login and models, so a provider only gets one once its last is
+    /// [`FULL_CHECK_EVERY_MS`] old, while it is signed out, so signing in shows, or while it has
+    /// no model list or its last read failed, so Routing isn't left without one; else just its
+    /// quota is read, and a CLI with no usage to read starts nothing.
+    pub fn refresh_usage(self: &Arc<Self>) {
+        let now = now_ms();
+        for kind in adapters::kinds() {
+            let unread = self.state().models_unread.contains(&kind);
+            let current = !unread
+                && self.overview(kind).is_some_and(|overview| {
+                    overview.models.is_some()
+                        && overview.status.is_some_and(|status| status.logged_in)
+                        && overview
+                            .checked_at_ms
+                            .is_some_and(|at| now - at < FULL_CHECK_EVERY_MS)
+                });
+            if current {
+                let runtime = self.clone();
+                self.spawn(async move { runtime.read_quota(kind).await });
+            } else {
+                self.refresh_providers(Some(kind));
+            }
+        }
+    }
+
     /// Checks `kind` again and waits until that check's overview is published, or `within`
     /// passes: a refresh still running when this is asked counts only once it ran again.
     pub async fn check_provider(self: &Arc<Self>, kind: ProviderKind, within: Duration) {
@@ -1009,9 +1044,13 @@ impl Runtime {
             let mut with_models = overview.clone();
             match &models {
                 Ok(catalog) => {
+                    self.state().models_unread.remove(&kind);
                     self.adopt_models(&lead, catalog.clone()).await;
                 }
-                Err(err) => with_models.error = Some(format!("models: {err}")),
+                Err(err) => {
+                    self.state().models_unread.insert(kind);
+                    with_models.error = Some(format!("models: {err}"));
+                }
             }
             // The lead may have moved meanwhile: its list is the one shown now.
             with_models.models = self.overview(kind).and_then(|now| now.models);
@@ -1089,6 +1128,7 @@ impl Runtime {
             };
             match provider.models().await {
                 Ok(catalog) => {
+                    runtime.state().models_unread.remove(&kind);
                     if runtime.adopt_models(&lead, catalog).await
                         && let Some(overview) = runtime.overview(kind)
                     {
@@ -1096,6 +1136,7 @@ impl Runtime {
                     }
                 }
                 Err(err) => {
+                    runtime.state().models_unread.insert(kind);
                     tracing::warn!(provider = %kind, error = %err, "could not read the models of the account in use")
                 }
             }

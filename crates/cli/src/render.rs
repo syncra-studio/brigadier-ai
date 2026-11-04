@@ -1101,6 +1101,15 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
     if output.rules.is_empty() {
         tail.push("  None.".into());
     }
+    if !output.invalid_rules.is_empty() {
+        tail.push(
+            "Rule lines that can't be read (they hold nothing; explicit starts are refused until fixed):"
+                .into(),
+        );
+        for line in &output.invalid_rules {
+            tail.push(format!("  {line}"));
+        }
+    }
     if !output.advice.is_empty() {
         tail.push("Your advice (weigh it when picking; it restricts nothing):".into());
         for advice in &output.advice {
@@ -1208,6 +1217,7 @@ mod tests {
             rules: vec![],
             rules_path: "/tmp/dev-data/models.md".into(),
             advice: vec![],
+            invalid_rules: vec![],
         };
         let text = models(&output);
         assert!(
@@ -1253,9 +1263,19 @@ mod tests {
             }],
             rules_path: "/Users/me/.brigadier/models.md".into(),
             advice: vec!["prefer Codex when Claude is busy".into()],
+            invalid_rules: vec!["line 7: - effort-ceiling: hgih".into()],
         };
         let text = models(&output);
         assert!(text.lines().count() <= 25, "{text}");
+        // #762: a rule line that can't be read shows, so the thread can tell the user.
+        assert!(
+            text.contains(
+                "
+  line 7: - effort-ceiling: hgih
+"
+            ),
+            "{text}"
+        );
         assert!(
             text.contains("More rows: brigadier models --json"),
             "{text}"

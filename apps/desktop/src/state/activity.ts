@@ -326,8 +326,11 @@ const QUIET: RowActivity = { running: false, awaiting: null, workers: 0 };
 
 export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
+  const failed = failedOf(activity);
+  // Its turn failed while its work runs: its block is still open, so it reads Working until that closes.
+  const held = failed && workHolds(activity);
   // Asleep, nothing of it runs (D10).
-  const running = activity.run !== "hibernated" && (works(activity) || !!activity.workersWorking || !!activity.commandsWorking);
+  const running = activity.run !== "hibernated" && (works(activity) || !!activity.workersWorking || !!activity.commandsWorking || held);
   const awaiting =
     activity.approvals.size > 0
       ? "approval"
@@ -335,7 +338,7 @@ export function rowActivity(activity: Activity | undefined): RowActivity {
         ? "input"
         : activity.signIns.size > 0
           ? "signIn"
-          : failedOf(activity)
+          : failed && !held
             ? "failed"
             : null;
   const workers = Object.values(activity.tasks).filter((state) => WORKING.has(state)).length;

@@ -573,12 +573,23 @@ pub(crate) fn permissions(access: Access, tools: ToolSet, folders: &[String]) ->
         rules.push(rule("shell", "*--output*", "ask"));
         rules
     };
+    // Brigadier's own commands, one rule each (`brigadier wait *`), never `brigadier mcp run`
+    // or `brigadier secret`, which start a program or print secrets before any grant is checked
+    // (`policy::BRIGADIER_COMMANDS`, #737).
+    let brigadier = |rules: &mut Vec<Value>| {
+        let (prefixes, exact) = crate::policy::brigadier_rules();
+        rules.extend(
+            (prefixes.iter().map(|prefix| format!("{prefix} *")))
+                .chain(exact)
+                .map(|line| rule("shell", &line, "allow")),
+        );
+    };
     let mut rules = match access {
         Access::Full => vec![rule("*", "*", "allow")],
-        // Brigadier's own commands too, as Claude's `Bash(brigadier:*)` at this level.
+        // Brigadier's own commands too, as Claude's rules for them at this level.
         Access::AcceptEdits => {
             let mut rules = commands(Vec::new());
-            rules.push(rule("shell", "brigadier *", "allow"));
+            brigadier(&mut rules);
             rules
         }
         Access::Ask => commands(vec![rule("edit", "*", "ask")]),
@@ -593,10 +604,10 @@ pub(crate) fn permissions(access: Access, tools: ToolSet, folders: &[String]) ->
             rule("read", "*.env.example", "allow"),
         ],
     };
-    // A side chat's and a tab chat's shell runs `brigadier` and nothing else, as Claude's
-    // `Bash(brigadier:*)` under `dontAsk` there: no redirect.
+    // A side chat's and a tab chat's shell runs Brigadier's own commands and nothing else, as
+    // Claude's rules for them under `dontAsk` there: no redirect.
     if access == Access::ReadOnly && matches!(tools, ToolSet::SideChat | ToolSet::TabChat) {
-        rules.push(rule("shell", "brigadier *", "allow"));
+        brigadier(&mut rules);
         rules.push(rule("shell", "*>*", "deny"));
     }
     // Its own question tool waits on a form Brigadier doesn't show: the model asks in words.
@@ -1708,6 +1719,12 @@ mod tests {
             "git status",
             "cat a.rs",
             "brigadier wait 2>&1",
+            "brigadier",
+            "brigadier --help",
+            "brigadier mcp list",
+            "brigadier mcp --json list",
+            "brigadier mcp call fake recall",
+            "brigadier mcp -h",
         ] {
             assert_eq!(
                 effect(Access::AcceptEdits, "shell", command),
@@ -1723,6 +1740,10 @@ mod tests {
             "cat a > b",
             "echo x >> ~/.zshrc",
             "git log --output=x",
+            // #737: Brigadier's local commands start a program or print secrets.
+            "brigadier mcp run a/b -- calc.exe",
+            "brigadier secret headers a/b",
+            "brigadier nonsense",
         ] {
             assert_eq!(
                 effect(Access::AcceptEdits, "shell", command),
@@ -1754,10 +1775,21 @@ mod tests {
         // A side chat's and a tab chat's: `brigadier` too, nothing else, no redirect.
         for tools in [ToolSet::SideChat, ToolSet::TabChat] {
             let rules = permissions(Access::ReadOnly, tools, &folders);
-            for command in ["brigadier app state", "brigadier report save --title P"] {
+            for command in [
+                "brigadier app state",
+                "brigadier report save --title P",
+                "brigadier mcp call fake recall",
+            ] {
                 assert_eq!(effect_of(&rules, "shell", command), allow);
             }
-            for command in ["ls", "rm a", "brigadier app state > out", "python3 -c 1"] {
+            for command in [
+                "ls",
+                "rm a",
+                "brigadier app state > out",
+                "python3 -c 1",
+                "brigadier mcp run a/b -- calc.exe",
+                "brigadier secret headers a/b",
+            ] {
                 assert_eq!(effect_of(&rules, "shell", command), deny, "{command}");
             }
             assert_eq!(effect_of(&rules, "edit", "a.rs"), deny);

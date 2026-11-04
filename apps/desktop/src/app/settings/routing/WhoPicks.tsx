@@ -6,7 +6,7 @@ import { RolePicks } from "@/app/settings/routing/RolePicks";
 import { ROLE_KINDS } from "@/app/settings/routing/roles";
 import { OrderList } from "@/app/settings/routing/OrderList";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
-import { automaticLine, withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
+import { automaticLine, sameWork, withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Segmented } from "@/components/controls";
 import type { GuidanceRow, ModelRules } from "@/ipc/generated";
@@ -27,9 +27,10 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
   const save = (order: GuidanceRow[]) => {
     setStarting(false);
     // Fusion is one display row but keeps its two work names in the rules file.
-    const works = [...new Set([...row.shipped, ...row.mine].map((found) => found.work))];
+    const works: string[] = [];
+    for (const { work } of [...row.shipped, ...row.mine]) if (!works.some((kind) => sameWork(kind, work))) works.push(work);
     const rows = role
-      ? works.reduce((saved, work) => withOrder(saved, work, order.filter((found) => found.work === work)), rules.rows)
+      ? works.reduce((saved, work) => withOrder(saved, work, order.filter((found) => sameWork(found.work, work))), rules.rows)
       : withOrder(rules.rows, row.work, order);
     return action.run(() => saveModelRules(rules, rows, rules.rules));
   };

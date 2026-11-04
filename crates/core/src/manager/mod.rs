@@ -956,6 +956,8 @@ impl SessionManager {
 
     /// Only the user's model rules can refuse a chosen model or effort.
     fn check_choice(&self, choice: &ModelChoice) -> Result<()> {
+        // #762: a model the user picks stops on a rules line that can't be read, naming it.
+        self.check_rules_file()?;
         if let Some(rule) = self.model_refusal(
             choice.provider,
             choice.model.as_deref(),

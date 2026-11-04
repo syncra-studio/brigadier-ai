@@ -9,7 +9,8 @@ import type { LeadStep } from "@/app/conversation/activity/group";
 import { LinkConversationContext } from "@/components/conversation/file-links";
 import { MarkdownText } from "@/components/conversation/markdown-text";
 import { TooltipProvider } from "@/components/overlays";
-import type { Request } from "@/ipc/generated";
+import type { Request, ThreadView } from "@/ipc/generated";
+import { useCliThread } from "@/state/cliThread";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 const image = { data: PNG, mime: "image/png" };
@@ -36,6 +37,7 @@ mockIPC(async (command, args) => {
     if (!found) throw new Error("This image is no longer there");
     return { method: request.method, ...found };
   }
+  if (request.method === "readSessionFileImage") return { method: request.method, ...image };
   return { method: request.method };
 });
 
@@ -51,6 +53,9 @@ const Answer = ({ text }: { text: string }) => (
 );
 
 const conversationId = "thread-images-fixture";
+// A Claude `Read`: its item in the thread carries the image its session file holds.
+const inSessionFile = { event: { type: "toolCall", itemId: "viewed-in-file", name: "Read", status: "completed" }, images: [{ file: "/tmp/session.jsonl", line: 1, index: 0, mime: "image/png" }] };
+useCliThread.setState({ views: { [conversationId]: { entries: [inSessionFile] } as unknown as ThreadView } });
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <LinkConversationContext.Provider value={conversationId}>
@@ -62,6 +67,7 @@ createRoot(document.getElementById("root")!).render(
         <section data-case="relative"><Answer text="![Relative](docs/picture.png)" /></section>
         <section data-case="tile"><ImageTiles conversationId={conversationId} steps={[step("viewed-deleted", 1)]} /></section>
         <section data-case="tile-gone"><ImageTiles conversationId={conversationId} steps={[step("viewed-gone", 2)]} /></section>
+        <section data-case="tile-in-file"><ImageTiles conversationId={conversationId} steps={[step("viewed-in-file", 3)]} /></section>
         <section data-case="proof">
           <Proofs conversationId={conversationId} proofs={[{ atMs: undefined, proof: { type: "proof", id: "viewed-deleted", name: "Night landscape", mime: "image/png" } }]} />
         </section>
@@ -82,7 +88,7 @@ function seen(name: string) {
 }
 
 setTimeout(() => {
-  const cases = ["answer", "file-url", "refused", "undrawable", "relative", "tile", "tile-gone", "proof"];
+  const cases = ["answer", "file-url", "refused", "undrawable", "relative", "tile", "tile-gone", "tile-in-file", "proof"];
   const result = document.createElement("pre");
   result.id = "thread-images-result";
   result.textContent = JSON.stringify({ asked, ...Object.fromEntries(cases.map((name) => [name, seen(name)])) });

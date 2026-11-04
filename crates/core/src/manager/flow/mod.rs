@@ -637,6 +637,9 @@ pub(crate) struct FakeBehavior {
     pub account_models: bool,
     /// The next this many model lists fail, whichever CLI reads them.
     pub models_failing: Mutex<u32>,
+    /// How many logins and quotas were read, by CLI.
+    pub status_reads: Mutex<Vec<ProviderKind>>,
+    pub quota_reads: Mutex<Vec<ProviderKind>>,
     pub refuse_steers: bool,
     pub refuse_sends: Mutex<Vec<ProviderKind>>,
     /// A message steered into a turn that its script never read is taken in once the script
@@ -816,6 +819,7 @@ impl Provider for FakeCli {
 
     fn status(&self) -> BoxFuture<'_, ProviderStatus> {
         Box::pin(async move {
+            self.behavior.status_reads.lock().unwrap().push(self.kind);
             let held = self
                 .account
                 .as_ref()
@@ -865,6 +869,7 @@ impl Provider for FakeCli {
 
     fn quota(&self) -> BoxFuture<'_, brigadier_providers::Result<QuotaSnapshot>> {
         Box::pin(async move {
+            self.behavior.quota_reads.lock().unwrap().push(self.kind);
             Ok(QuotaSnapshot {
                 provider: self.kind,
                 windows: Vec::new(),
@@ -2629,6 +2634,8 @@ mod open_in_app_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod records_tests;
+// The rules file and routing, read through the manager without a CLI turn: every platform.
+mod routing_rules_tests;
 #[cfg(unix)]
 mod scope_tests;
 #[cfg(unix)]

@@ -120,10 +120,18 @@ const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 const REVIEW_ALLOWED: &str = "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)";
 /// A side chat's built-in tools ([`ToolSet::SideChat`]): research's, and a shell for `brigadier`.
 const CHAT_TOOLS: &str = "WebSearch,WebFetch,Bash";
-/// The only command a side chat or a tab chat runs (`--allowedTools`, under `dontAsk`): `brigadier`
-/// (STRIP-DOWN-PLAN S16c). Claude Code still runs its own read-only commands (`ls`, `cat`) on
-/// files in the session's folders unasked, as its Read tool would (checked on 2.1.309).
-const BRIGADIER_ALLOWED: &str = "Bash(brigadier:*)";
+/// The only commands a side chat or a tab chat runs (`--allowedTools`, under `dontAsk`):
+/// Brigadier's own (STRIP-DOWN-PLAN S16c), one rule each (`Bash(brigadier wait:*)`), never
+/// `brigadier mcp run` or `brigadier secret`, which start a program or print secrets before
+/// any grant is checked (`policy::BRIGADIER_COMMANDS`, #737). Claude Code still runs its own
+/// read-only commands (`ls`, `cat`) on files in the session's folders unasked, as its Read tool
+/// would (checked on 2.1.309).
+fn brigadier_allowed() -> Vec<String> {
+    let (prefixes, exact) = crate::policy::brigadier_rules();
+    (prefixes.iter().map(|prefix| format!("Bash({prefix}:*)")))
+        .chain(exact.iter().map(|line| format!("Bash({line})")))
+        .collect()
+}
 
 /// Claude Code's account homes (`accounts`).
 static HOME: crate::accounts::Home = crate::accounts::Home {
@@ -695,7 +703,7 @@ impl Claude {
                 args.push("--tools".into());
                 args.push(CHAT_TOOLS.into());
                 args.push("--allowedTools".into());
-                args.push(BRIGADIER_ALLOWED.into());
+                args.push(brigadier_allowed().join(" "));
             }
             ToolSet::Review => {
                 args.push("--tools".into());
@@ -708,7 +716,10 @@ impl Claude {
                 args.push("--tools".into());
                 args.push(REVIEW_TOOLS.into());
                 args.push("--allowedTools".into());
-                args.push(format!("{REVIEW_ALLOWED} {BRIGADIER_ALLOWED}"));
+                args.push(format!(
+                    "{REVIEW_ALLOWED} {}",
+                    brigadier_allowed().join(" ")
+                ));
             }
         }
         let mut layer = settings(spec, &sub_agents, home_login);
@@ -1097,7 +1108,7 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     // `wait`, `ledger show`) unasked, as it does its edits (#578); everything else keeps
     // Claude's own Accept-edits prompts. Ask asks for them too; Full access runs everything.
     if spec.access == Access::AcceptEdits && spec.tools.user_setup() {
-        allow.push(BRIGADIER_ALLOWED.to_owned());
+        allow.extend(brigadier_allowed());
     }
     let mut permissions = json!({});
     if !allow.is_empty() {
@@ -1715,6 +1726,7 @@ impl Provider for Claude {
                     ledger: Some(ledger.clone()),
                     sweep_dir: spec.sweep_dir.clone(),
                     keeps_detached: spec.keeps_detached,
+                    ..process::Options::default()
                 },
             )?;
             ledger
@@ -2425,7 +2437,7 @@ struct SessionFiles {
 /// folders it may have left empty are tidied ([`files::CliInFolder`]).
 async fn read_loop(
     process: Arc<CliProcess>,
-    mut stdout: mpsc::Receiver<String>,
+    mut stdout: process::Lines,
     shared: Arc<Shared>,
     mut commands: mpsc::UnboundedReceiver<ParserCommand>,
     refuses_compaction: bool,
@@ -3329,7 +3341,9 @@ for line in sys.stdin:
                     .cloned()
                     .collect::<Vec<_>>();
                 let expected = if access == Access::AcceptEdits && tools != ToolSet::Default {
-                    vec![json!("Bash(brigadier:*)")]
+                    let rules = brigadier_allowed();
+                    assert_only_brigadiers_own(&rules);
+                    rules.into_iter().map(Value::from).collect()
                 } else {
                     vec![]
                 };
@@ -3391,23 +3405,51 @@ for line in sys.stdin:
         assert!(!args.iter().any(|arg| arg == "--allowedTools"));
     }
 
+    /// #737: Claude Code's own rules run Brigadier's commands one by one, never a catch-all
+    /// `Bash(brigadier:*)`, which also matched `brigadier mcp run <server> -- <program>` and
+    /// `brigadier secret headers`.
+    fn assert_only_brigadiers_own(rules: &[String]) {
+        for rule in [
+            "Bash(brigadier wait:*)",
+            "Bash(brigadier app:*)",
+            "Bash(brigadier mcp list:*)",
+            "Bash(brigadier mcp --json list:*)",
+            "Bash(brigadier mcp call:*)",
+            "Bash(brigadier mcp --help)",
+            "Bash(brigadier --help:*)",
+            "Bash(brigadier)",
+        ] {
+            assert!(rules.iter().any(|r| r == rule), "{rule} in {rules:?}");
+        }
+        for rule in rules {
+            assert_ne!(rule, "Bash(brigadier:*)");
+            assert_ne!(rule, "Bash(brigadier mcp:*)");
+            assert!(!rule.starts_with("Bash(brigadier secret"), "{rule}");
+            assert!(!rule.starts_with("Bash(brigadier mcp run"), "{rule}");
+        }
+    }
+
     /// S16c: a side chat's and a tab chat's shell runs `brigadier` and nothing else (a tab chat's
     /// also the read-only git commands), never asking, whatever level they are given.
     #[test]
     fn a_side_chat_and_a_tab_chat_run_only_brigadier_in_their_shell() {
         let cwd = Temp::new();
         let native_id = "00000000-0000-4000-8000-000000000000";
+        let brigadier = brigadier_allowed();
+        assert_only_brigadiers_own(&brigadier);
+        let brigadier = brigadier.join(" ");
         for (tools, built_in, allowed) in [
             (
                 ToolSet::SideChat,
                 "WebSearch,WebFetch,Bash",
-                "Bash(brigadier:*)",
+                brigadier.clone(),
             ),
             (
                 ToolSet::TabChat,
                 "Read,Grep,Glob,Bash",
-                "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*) \
-                 Bash(brigadier:*)",
+                format!(
+                    "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*) {brigadier}"
+                ),
             ),
         ] {
             for access in [Access::ReadOnly, Access::Ask, Access::Full] {
@@ -3427,7 +3469,7 @@ for line in sys.stdin:
                 assert_eq!(after("--tools").as_deref(), Some(built_in), "{tools:?}");
                 assert_eq!(
                     after("--allowedTools").as_deref(),
-                    Some(allowed),
+                    Some(allowed.as_str()),
                     "{tools:?}"
                 );
                 assert_eq!(after("--permission-mode").as_deref(), Some("dontAsk"));

@@ -7,11 +7,11 @@
 //! the session and `.env` files, which ask):
 //!
 //! - Ask: edits and commands ask, but commands that only read (`ls`, `cat`, `git status`, …).
-//!   Accept edits: those and `brigadier …` run too, any other command asks. Full access: nothing
-//!   asks.
+//!   Accept edits: those and Brigadier's own (`brigadier wait …`, never `mcp run` or `secret`)
+//!   run too, any other command asks. Full access: nothing asks.
 //! - Read-only (Brigadier's own readers): edits, commands, sub-agents and anything outside the
 //!   folder are declined, never asked about. A side chat's and a tab chat's shell runs
-//!   `brigadier …` and nothing else, as on the other CLIs.
+//!   Brigadier's own commands and nothing else, as on the other CLIs.
 //!
 //! Every request OpenCode asks reaches the user as a card ([`ProviderEvent::ApprovalRequested`]).
 //!
@@ -370,6 +370,13 @@ impl OpenCode {
         let cwd = self.platform.paths().data_dir.clone();
         let mut spec = env.spec(&self.binary()?);
         spec.cwd = Some(cwd);
+        // It answers and goes, so it watches no files: each of its 16-24 watches is a call into
+        // macOS's fseventsd, and while one is slow (seen at over a second) it can't exit.
+        crate::cli::apply_session_env(
+            &mut spec,
+            &[("OPENCODE_FILEWATCHER_DISABLE".into(), "1".into())],
+            &[],
+        );
         let server = Server::start(
             self.platform.clone(),
             spec,
@@ -856,6 +863,7 @@ impl Provider for OpenCode {
                         ledger: Some(ledger.clone()),
                         sweep_dir: spec.sweep_dir.clone(),
                         keeps_detached: spec.keeps_detached,
+                        ..process::Options::default()
                     },
                     recorder,
                 )
@@ -1252,7 +1260,15 @@ impl Server {
         let process::Spawned {
             process,
             mut stdout,
-        } = process::spawn(platform, &spec, options)?;
+        } = process::spawn(
+            platform,
+            &spec,
+            // Past its first line (where it listens), its stdout is logs.
+            process::Options {
+                stdout_is_log: true,
+                ..options
+            },
+        )?;
         let first = tokio::time::timeout(START_TIMEOUT, stdout.recv()).await;
         // What it prints later (its logs) is read and dropped, so it never blocks on a full pipe.
         tokio::spawn(async move { while stdout.recv().await.is_some() {} });
@@ -1849,6 +1865,7 @@ mod tests {
     const FAKE_SERVER: &str = r#"#!/usr/bin/env python3
 import http.server, json, os, sys, threading, time
 log = open(os.environ["LOG"], "a")
+log.write(f"watcher off: {os.environ.get('OPENCODE_FILEWATCHER_DISABLE')}\n"); log.flush()
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def answer(self, code, body=None):
@@ -1882,6 +1899,44 @@ print(json.dumps({"url": f"http://127.0.0.1:{server.server_address[1]}"}), flush
 threading.Thread(target=server.serve_forever, daemon=True).start()
 sys.stdin.read()
 "#;
+
+    /// A throwaway server watches no files: it couldn't exit while a watch was being set up.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_throwaway_server_watches_no_files() {
+        use std::ffi::OsString;
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("brigadier-opencode-watch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let script = root.join("opencode");
+        std::fs::write(&script, FAKE_SERVER).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let log = root.join("log");
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let env = CliEnv::from_vars([
+            (
+                OsString::from("PATH"),
+                OsString::from(format!(
+                    "{}:/usr/bin:/bin:/opt/homebrew/bin",
+                    root.display()
+                )),
+            ),
+            (OsString::from("HOME"), root.join("home").into_os_string()),
+            (OsString::from("LOG"), log.clone().into_os_string()),
+            (OsString::from("ACTIVE"), root.join("a").into_os_string()),
+        ]);
+        OpenCode::new(platform, Arc::new(env))
+            .models()
+            .await
+            .unwrap();
+        let said = std::fs::read_to_string(&log).unwrap();
+        assert!(said.contains("watcher off: 1"), "{said}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A fresh server slower to answer its first read than one request's timeout (several
     /// starting at once, seen live) is asked again, not taken as gone.

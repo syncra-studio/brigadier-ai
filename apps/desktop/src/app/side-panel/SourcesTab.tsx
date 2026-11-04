@@ -3,6 +3,7 @@ import { type ReactNode, useMemo } from "react";
 import { rowName } from "@/app/conversation/activity/workerState";
 import { webUse } from "@/app/conversation/cliFacts";
 import { hostOf, useUsedSources } from "@/app/conversation/PinnedSummary";
+import { ImageRowViewer, type RowViewer } from "@/app/conversation/SummaryContent";
 import { McpServerPanel } from "@/components/conversation";
 import type { FileEntry } from "@/ipc/generated";
 import { Globe, Search } from "@/components/icons";
@@ -54,7 +55,7 @@ export function SourcesTab({ conversationId }: { conversationId: string }) {
         {used.length > 0 && (
           <Part title="Used">
             {used.map((source) => (
-              <Line key={source.key} icon={source.icon} title={source.title} onClick={source.open}>
+              <Line key={source.key} icon={source.icon} title={source.title} onClick={source.open} viewer={source.viewer}>
                 {source.label}
               </Line>
             ))}
@@ -100,19 +101,24 @@ function Part({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** One source on one line: its icon and words; a click opens it, when it opens. */
-function Line({ icon, title, onClick, children }: { icon: ReactNode; title: string; onClick?: (() => void) | undefined; children: ReactNode }) {
+function Line({ icon, title, onClick, viewer, children }: { icon: ReactNode; title: string; onClick?: (() => void) | undefined; viewer?: RowViewer | undefined; children: ReactNode }) {
   const body = (
     <>
-      <span aria-hidden className="text-muted-foreground flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">{icon}</span>
+      <span aria-hidden className="text-muted-foreground flex size-4 shrink-0 items-center justify-center [&_img]:size-4 [&_svg]:size-4">{icon}</span>
       <span className="flex min-w-0 flex-1 items-baseline truncate">{children}</span>
     </>
   );
+  const button = (
+    <button type="button" onClick={onClick} className="hover:bg-foreground/8 rounded-control flex h-row-sm w-full min-w-0 items-center gap-2 px-2 text-start">
+      {body}
+    </button>
+  );
   return (
     <li data-slot="sources-line" title={title} className="text-sm">
-      {onClick ? (
-        <button type="button" onClick={onClick} className="hover:bg-foreground/8 rounded-control flex h-row-sm w-full min-w-0 items-center gap-2 px-2 text-start">
-          {body}
-        </button>
+      {viewer ? (
+        <ImageRowViewer viewer={viewer}>{button}</ImageRowViewer>
+      ) : onClick ? (
+        button
       ) : (
         <div className="flex h-row-sm min-w-0 items-center gap-2 px-2">{body}</div>
       )}

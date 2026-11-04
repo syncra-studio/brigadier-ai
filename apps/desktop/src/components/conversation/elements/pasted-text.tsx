@@ -14,7 +14,7 @@ import {
   readAttachmentText,
   TileRemove,
 } from "@/components/conversation/elements/attachment-tile";
-import { pastedTextLabel } from "@/components/conversation/elements/chipText";
+import { pastedTextLabel, readerTitle } from "@/components/conversation/elements/chipText";
 import { composerInlineNumber } from "@/components/conversation/elements/inline-image";
 import { bound, editing, rebound } from "@/components/conversation/elements/pasteBinding";
 import { Button } from "@/components/controls/button";
@@ -181,7 +181,7 @@ export function PastedTextView({ n, paste }: { n: number | null; paste: Attachme
     },
     [flush],
   );
-  const label = pastedTextLabel(n);
+  const label = readerTitle(n, paste);
   return (
     <div className="page-tab" data-slot="pasted-text-view">
       {from ? (

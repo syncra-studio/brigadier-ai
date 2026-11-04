@@ -765,7 +765,8 @@ export async function send(
           mentions: outgoing.mentions,
           createdAtMs: Date.now(),
           queuedIds: queue?.items.map((item) => item.id) ?? [],
-          ...(queued ? { queued: { index: slot } } : {}),
+          // A session's or Chat's is judged while it works (D157); a side chat's waits plainly.
+          ...(queued ? { queued: { index: slot, deciding: (working || running) && !paused && !target?.sideOf } } : {}),
         },
       ],
     }));
@@ -1729,7 +1730,12 @@ export async function loadProviders(): Promise<void> {
 
 /** Checks every provider again (or only `provider`); results arrive as events. */
 export async function refreshProviders(provider: ProviderKind | null = null): Promise<void> {
-  await request({ method: "refreshProviders", provider });
+  await request({ method: "refreshProviders", provider, usageOnly: false });
+}
+
+/** The regular usage tick: reads quotas; a provider only gets a whole check when it is due one. */
+export async function refreshProviderUsage(): Promise<void> {
+  await request({ method: "refreshProviders", provider: null, usageOnly: true });
 }
 
 /** Opens a raw session in the Providers tab (or goes back to the list with `null`). */

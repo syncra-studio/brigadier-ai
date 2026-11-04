@@ -30,6 +30,7 @@ export function useListedModels(): ListedModel[] {
           name: model.displayName,
           isDefault: own?.isDefault ?? false,
           defaultEffort: own?.defaultEffort ?? null,
+          legacy: model.legacy,
         };
       }),
     [models, groups],

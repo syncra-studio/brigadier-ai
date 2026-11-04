@@ -1,9 +1,10 @@
-import { shortPlaceName, workName, type WorkRow } from "@/app/settings/routing/words";
+import { rowModel, shortPlaceName, workName, type WorkRow } from "@/app/settings/routing/words";
 import { ROLE_KINDS } from "@/app/settings/routing/roles";
 import { effortLabel, findModel, type ModelGroup } from "@/components/shared/model-selector";
 import type { GuidanceRow, ModelChoice, ModelInfo, ModelRule, ProviderKind } from "@/ipc/generated";
 import { joinWords } from "@/lib/routing";
 import { cliFacts } from "@/lib/providerKinds";
+import { type Availability, modelAvailable, providerOn } from "@/state/providers";
 
 /*
  * The Rules card's words and sums: a rule as one plain sentence, the effort a choice runs at
@@ -50,6 +51,8 @@ export type ListedModel = {
   isDefault?: boolean;
   /** The effort it starts at when none is named. */
   defaultEffort?: string | null;
+  /** An older model: a family word never starts on it. */
+  legacy?: boolean;
 };
 
 /** Whether a rule's pattern names a model: `*`, the exact id, or one of its words (as the daemon matches). */
@@ -189,6 +192,35 @@ export function rowChoice(row: GuidanceRow, models: readonly ListedModel[]): Cho
     names: [...(fallback ? [] : [row.model]), ...(listed ? [listed.id, ...(listed.resolved ? [listed.resolved] : [])] : [])],
     effort: row.effort ?? listed?.defaultEffort ?? null,
   };
+}
+
+/**
+ * The listed model a row starts on, as the daemon's `listed_model` picks it: the agent's default
+ * for `default`, a listed id or alias, else a family word's newest model; null when none is listed.
+ */
+export function rowListed(row: GuidanceRow, models: readonly ListedModel[]): ListedModel | null {
+  const own = models.filter((model) => model.provider === row.agent);
+  return row.model === "default" ? (own.find((model) => model.isDefault) ?? null) : rowModel(own, row.model);
+}
+
+/** Whether a row can start as Settings › Providers stands: its agent is on and the model it starts on isn't made unavailable. */
+export function rowAvailable(row: GuidanceRow, models: readonly ListedModel[], availability: Availability): boolean {
+  const listed = rowListed(row, models);
+  return providerOn(availability, row.agent) && (!listed || modelAvailable(availability, { provider: row.agent, id: listed.id }));
+}
+
+/**
+ * The row a kind of work starts on now, as a start by its Work picks it: the first that your rules
+ * let start and Settings › Providers lets run; `undefined` when none can.
+ */
+export function startsOn(
+  rows: readonly GuidanceRow[],
+  rules: readonly ModelRule[],
+  models: readonly ListedModel[],
+  availability: Availability,
+  work: string,
+): GuidanceRow | undefined {
+  return rows.find((row) => !refusingRule(rules, rowChoice(row, models), work) && rowAvailable(row, models, availability));
 }
 
 /**

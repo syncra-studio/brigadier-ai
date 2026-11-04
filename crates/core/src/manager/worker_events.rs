@@ -887,7 +887,8 @@ impl SessionManager {
         let Ok(conv) = self.conv(id) else {
             return;
         };
-        if conv.is_busy().await {
+        // What a failed start kept isn't work under way: this turn is its next try.
+        if conv.work_under_way().await {
             return;
         }
         let after = i64::try_from(NET_AFTER.as_millis()).unwrap_or(i64::MAX);

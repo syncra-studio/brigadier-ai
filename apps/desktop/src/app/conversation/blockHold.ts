@@ -15,12 +15,15 @@ const NO_STARTS: readonly number[] = [];
 /**
  * Whether a block whose turns ended is still open, as the core's work block says (D163), and
  * what of it still works past them, to name its wait: its workers, its background commands, its
- * CLI's own subagents. One reading for its header and for the composer, so the two say the same (D94).
+ * CLI's own subagents. A failed turn holds as a done one does, its error in view; a stop is the
+ * user's word, so nothing holds it. One reading for its header and for the composer, so the two
+ * say the same (D94).
  */
 export function useBlockHold(conversationId: string | null, meta: HeldBlock | null | undefined) {
   // The workers its turn started that still work: over, it stays live until they finish (its own
   // wake-ups when they do are in the same turn).
-  const starts = meta?.state === "done" ? meta.worked.map((span) => span.fromMs) : NO_STARTS;
+  const over = meta?.state === "done" || meta?.state === "failed" ? meta : null;
+  const starts = over ? over.worked.map((span) => span.fromMs) : NO_STARTS;
   const workers = useTurnWorkers(conversationId, starts, meta?.endedAtMs ?? null);
   // So do the background commands it started (a CI watch, a Monitor) until the turn their end
   // starts is over (D21), though its work folds as it would without them.
@@ -42,7 +45,7 @@ export function useBlockHold(conversationId: string | null, meta: HeldBlock | nu
     return view ? JSON.stringify(heldWait(view, starts, meta!.startedAtMs, meta!.endedAtMs)) : "null";
   });
   // Open or over is the core's word alone (D163): what holds it above only names the wait.
-  const held = useCliThread((s) => coreHolds(conversationId ? s.views[conversationId]?.block : null, meta?.state === "done" ? meta.endedAtMs : null)) && meta?.state === "done";
+  const held = useCliThread((s) => coreHolds(conversationId ? s.views[conversationId]?.block : null, over?.endedAtMs ?? null)) && !!over;
   return { workers, commands, subagents, held, heldUntil, named: useMemo(() => JSON.parse(named) as StatusHead | null, [named]) };
 }
 
