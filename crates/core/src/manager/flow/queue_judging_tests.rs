@@ -1,8 +1,8 @@
-//! Judging (D157, D163): a message the user sends while a session works is an ordinary row of
-//! the rail at once, and a one-shot beside the session judges it in the background, even while a
+//! Judging (D157, D163): a message the user sends while a session works is a row of the rail at
+//! once, Deciding, and a one-shot beside the session judges it in the background, even while a
 //! long command holds the running turn: FITS steers it into the open block; WAITS, a late answer
 //! or none leaves it in the rail for its own turn, and the user taking the row over drops the
-//! answer. The session's turn is never asked to judge. Same on every CLI.
+//! answer. Deciding ends with any of them, a restart too. The session's turn is never asked to judge. Same on every CLI.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -139,11 +139,20 @@ async fn send_with(
     let crate::manager::SendOutcome::Queued(item) = sent else {
         panic!("it queues while the turn works: {sent:?}");
     };
-    assert!(
-        !item.deciding,
-        "an ordinary row from the first frame: {item:?}"
-    );
+    assert!(item.deciding, "Deciding from the first frame: {item:?}");
     (flow, answers, gate, item)
+}
+
+/// Waits until `item` is still queued, no longer Deciding.
+async fn until_decided(flow: &Flow, item: &QueuedMessage) {
+    flow.until("the row to stop reading Deciding", |board| {
+        board
+            .queue
+            .items
+            .iter()
+            .any(|queued| queued.id == item.id && !queued.deciding)
+    })
+    .await;
 }
 
 fn joined(board: &super::Board, item: &QueuedMessage) -> bool {
@@ -202,6 +211,35 @@ async fn a_follow_up_that_waits_goes_on_its_own_turn_after_the_block() {
         assert!(all[1].contains(ASKED) && !all[1].contains("[queued message"));
         flow.stop().await;
     }
+}
+
+/// The row reads Deciding from its first frame until the judge's answer lands, on every CLI.
+#[tokio::test]
+async fn a_row_reads_deciding_until_its_judge_answers() {
+    for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+        let (flow, _answers, gate, item) =
+            send_while_working(&format!("queue-deciding-{kind:?}"), kind, "WAITS").await;
+        until_decided(&flow, &item).await;
+        gate.notify_one();
+        flow.settled().await;
+        flow.stop().await;
+    }
+}
+
+/// A restart ends what the stop caught Deciding: no judge outlives it.
+#[tokio::test]
+async fn a_restart_ends_deciding() {
+    let (mut flow, _answers, _gate, item, _judge) = send_while_judged("queue-restart-judged").await;
+    flow.crash().await;
+    flow.until("the start to end Deciding", |board| {
+        !board
+            .queue
+            .items
+            .iter()
+            .any(|queued| queued.id == item.id && queued.deciding)
+    })
+    .await;
+    flow.stop().await;
 }
 
 /// A side chat keeps the plain queue: nothing judges it.
@@ -289,6 +327,7 @@ async fn a_refused_steer_still_drops_the_judges_answer() {
             .await
             .is_err()
     );
+    assert!(!row(&flow, &item).await.unwrap().deciding);
     conv.set_compacting(false).await;
     judge.add_permits(1);
     tokio::time::sleep(ANSWER_ACTS).await;
@@ -307,7 +346,8 @@ async fn a_refused_steer_still_drops_the_judges_answer() {
 #[tokio::test]
 async fn editing_a_row_being_judged_drops_the_judges_answer() {
     let (flow, answers, gate, item, judge) = send_while_judged("queue-edit-judged").await;
-    flow.manager
+    let queue = flow
+        .manager
         .edit_queued(
             &flow.conversation,
             &item.id,
@@ -317,6 +357,7 @@ async fn editing_a_row_being_judged_drops_the_judges_answer() {
         )
         .await
         .unwrap();
+    assert!(!queue.items[0].deciding);
     judge.add_permits(1);
     tokio::time::sleep(ANSWER_ACTS).await;
     assert_eq!(
@@ -345,6 +386,7 @@ async fn moving_a_row_being_judged_drops_the_judges_answer() {
         .await
         .unwrap();
     assert_eq!(queue.items[0].id, item.id);
+    assert!(!queue.items[0].deciding);
     assert!(!conv.judges(&item.id));
     judge.add_permits(1);
     tokio::time::sleep(ANSWER_ACTS).await;
@@ -399,7 +441,7 @@ async fn a_hung_judge_gives_up_after_about_five_seconds() {
         took > Duration::from_secs(4) && took < Duration::from_secs(10),
         "{took:?}"
     );
-    assert!(row(&flow, &item).await.is_some());
+    until_decided(&flow, &item).await;
     judge.add_permits(1);
     gate.notify_one();
     flow.until("it to go on its own turn", |board| joined(board, &item))
@@ -425,7 +467,7 @@ async fn a_judge_gives_up_at_its_clis_first_retry() {
     super::eventually("the judge to give up", || !conv.is_judging()).await;
     let took = started.elapsed();
     assert!(took < Duration::from_secs(3), "{took:?}");
-    assert!(row(&flow, &item).await.is_some());
+    until_decided(&flow, &item).await;
     judge.add_permits(1);
     gate.notify_one();
     flow.settled().await;

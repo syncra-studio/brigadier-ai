@@ -1290,7 +1290,7 @@ impl SessionManager {
             && activity.running.is_none()
             && activity.carried.is_empty()
             && !board.queue.paused
-            && board.queue.ready_to_send().is_some();
+            && board.queue.next_to_send().is_some();
         if waiting && !self.queue_holds(&conv).await {
             self.kick(&conv);
         }
@@ -1566,7 +1566,10 @@ impl SessionManager {
         }
         let routing = conv.queue_routing.lock().await;
         conv.drop_judgment(&item_id);
-        self.steer_routed(&conv, &item_id, routing).await
+        let steered = self.steer_routed(&conv, &item_id, routing).await;
+        // Kept queued (a seam, a compaction): the user's now, no longer Deciding.
+        self.end_deciding(&conv, &item_id).await;
+        steered
     }
 
     /// [`Self::steer_queued`] of a session's row, the queue's routing already held.
@@ -1936,7 +1939,7 @@ impl SessionManager {
             return false;
         }
         let ready = match self.core.board(&conv.id).await {
-            Ok(board) => board.queue.ready_to_send().is_some(),
+            Ok(board) => board.queue.next_to_send().is_some(),
             Err(_) => false,
         };
         if !ready {

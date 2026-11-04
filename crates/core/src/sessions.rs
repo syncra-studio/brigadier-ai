@@ -2004,12 +2004,13 @@ impl Core {
         mentions: Vec<Mention>,
         index: Option<u32>,
     ) -> Result<QueuedMessage> {
-        self.enqueue_as(id, text, attachments, mentions, index, None)
+        self.enqueue_as(id, text, attachments, mentions, index, false, None)
             .await
     }
 
-    /// [`Self::enqueue`]; for `worker`, the user's message to that worker of the session's
-    /// (goal 8).
+    /// [`Self::enqueue`]; `deciding` while a judge reads it; for `worker`, the user's message to
+    /// that worker of the session's (goal 8).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn enqueue_as(
         &self,
         id: &ConversationId,
@@ -2017,6 +2018,7 @@ impl Core {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
         index: Option<u32>,
+        deciding: bool,
         worker: Option<TaskId>,
     ) -> Result<QueuedMessage> {
         if text.trim().is_empty() && attachments.is_empty() {
@@ -2030,7 +2032,7 @@ impl Core {
             mentions,
             queued_at_ms: now_ms(),
             edited_at_ms: None,
-            deciding: false,
+            deciding,
             delivered: false,
             held_by: None,
             offer_session: false,
@@ -2062,6 +2064,7 @@ impl Core {
         id: &ConversationId,
         peer: PeerRef,
         text: String,
+        deciding: bool,
     ) -> Result<Option<QueuedMessage>> {
         let item = QueuedMessage {
             id: peer.message_id.clone(),
@@ -2070,7 +2073,7 @@ impl Core {
             mentions: Vec::new(),
             queued_at_ms: now_ms(),
             edited_at_ms: None,
-            deciding: false,
+            deciding,
             delivered: false,
             held_by: None,
             offer_session: false,
@@ -2118,6 +2121,8 @@ impl Core {
             item.attachments = attachments;
             item.mentions = mentions;
             item.edited_at_ms = Some(now_ms());
+            // The user's now: no judge has a say (`drop_judgment`).
+            item.deciding = false;
             Ok(())
         })
         .await
@@ -2136,7 +2141,9 @@ impl Core {
                 .iter()
                 .position(|item| item.id == item_id)
                 .ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))?;
-            let item = queue.items.remove(from);
+            let mut item = queue.items.remove(from);
+            // The user's now: no judge has a say (`drop_judgment`).
+            item.deciding = false;
             let to = (index as usize).min(queue.items.len());
             queue.items.insert(to, item);
             Ok(())
@@ -2160,8 +2167,8 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("queued message {item_id}")))
     }
 
-    /// Takes the Deciding mark off queued messages `item_ids`, rows an older daemon stored:
-    /// those still queued wait there for their turn. Returns those whose mark changed.
+    /// Takes the Deciding mark off queued messages `item_ids`: those still queued wait there for
+    /// their turn. Returns those whose mark changed.
     pub(crate) async fn settle_queued(
         &self,
         id: &ConversationId,
@@ -2224,14 +2231,14 @@ impl Core {
         self.record_conversation(id, vec![event]).await.map(|_| ())
     }
 
-    /// The next message to send, unless the queue is paused or holds none ready (the next one
-    /// is an older daemon's, still Deciding). [`Self::append_queued`] takes it out.
+    /// The next message to send, unless the queue is paused. [`Self::append_queued`] takes it
+    /// out.
     pub async fn next_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
         let board = self.board(id).await?;
         if board.queue.paused {
             return Ok(None);
         }
-        Ok(board.queue.ready_to_send().cloned())
+        Ok(board.queue.next_to_send().cloned())
     }
 
     /// Queued message `item_id` as it stands; [`Self::append_queued`] takes it out.

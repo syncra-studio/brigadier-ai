@@ -49,6 +49,7 @@ function railState() {
   const row = document.querySelector('[data-slot="message-queue-item"]');
   const notice = document.querySelector('[data-slot="message-queue-sent"]');
   return {
+    deciding: row?.getAttribute("data-deciding") === "true" && row.getAttribute("aria-busy") === "true",
     label: /Deciding/.test(row?.textContent ?? ""),
     steer: [...(row?.querySelectorAll("button") ?? [])].some((button) => /Steer/.test(button.textContent ?? "")),
     buttons: [...(row?.querySelectorAll("button") ?? [])].map((button) => button.textContent ?? "").filter((label) => /new session|Run here/.test(label)),
@@ -82,11 +83,13 @@ async function drive() {
   apply([queued([])]);
   await pause();
   const removed = view();
-  // Being judged in the background, it reads as any other row; the rail shows the offer it may
-  // come back with.
-  apply([queued([item])]);
+  // Being judged in the background it reads Deciding, its actions usable; the answer ends that.
+  apply([queued([{ ...item, deciding: true }])]);
   await pause();
   const judged = railState();
+  apply([queued([item])]);
+  await pause();
+  const waiting = railState();
   apply([queued([{ ...item, delivered: true, offerSession: true }])]);
   await pause();
   const offered = railState();
@@ -108,8 +111,9 @@ async function drive() {
   const whileWorkersWork = {
     rail: rows.length,
     chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(whileHeld)).length,
+    deciding: rows[0]?.getAttribute("data-deciding") === "true",
   };
-  respond({ type: "queued", item: { ...item, id: "while-held", text: whileHeld } });
+  respond({ type: "queued", item: { ...item, id: "while-held", text: whileHeld, deciding: true } });
   await holding;
   apply([queued([])]);
   await pause();
@@ -121,20 +125,21 @@ async function drive() {
   const chatWhileWorkersWork = {
     rail: chatRows.length,
     chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(chatWhileHeld)).length,
+    deciding: chatRows[0]?.getAttribute("data-deciding") === "true",
   };
-  respond({ type: "queued", item: { ...item, id: "chat-while-held", text: chatWhileHeld } });
+  respond({ type: "queued", item: { ...item, id: "chat-while-held", text: chatWhileHeld, deciding: true } });
   await chatHolding;
   // Another session's message in the rail (goal 4): its words and who sent it, never its header.
   const from = "c-api-work";
   useApp.setState((state) => ({ conversations: { ...state.conversations, [from]: { ...state.conversations[id]!, id: from, title: "API work" } } }));
   const peerId = "sm-0123feedbeef";
-  apply([queued([{ ...item, id: peerId, text: `[message from session "API work" (${from}) · ${peerId}]\nCan you check the schema?`, peer: { messageId: peerId, from } }])]);
+  apply([queued([{ ...item, id: peerId, text: `[message from session "API work" (${from}) · ${peerId}]\nCan you check the schema?`, deciding: true, peer: { messageId: peerId, from } }])]);
   await pause();
   const peerRow = document.querySelector('[data-slot="message-queue-item"]')?.textContent ?? "";
-  const fromPeer = { from: peerRow.includes("From API work"), words: peerRow.includes("Can you check the schema?"), header: peerRow.includes("[message from session") };
+  const fromPeer = { from: peerRow.includes("From API work"), words: peerRow.includes("Can you check the schema?"), header: peerRow.includes("[message from session"), deciding: railState().deciding };
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, judged, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork, fromPeer });
+  result.textContent = JSON.stringify({ idle, queued: queuedView, lateResponse, joined, removed, judged, waiting, offered, sentToWorker, whileWorkersWork, chatWhileWorkersWork, fromPeer });
   document.body.append(result);
 }
 void drive();

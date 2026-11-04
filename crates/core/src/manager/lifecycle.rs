@@ -139,7 +139,7 @@ impl SessionManager {
             if let Some(live) = &live {
                 live.recovering(true).await;
             }
-            // A queued message an older daemon's stop caught Deciding waits for its own turn
+            // A queued message the stop caught Deciding waits for its own turn
             // (#449).
             self.settle_unjudged(&conversation.id).await;
             // The thread's turn the restart cut off ran its calls no further, and its request

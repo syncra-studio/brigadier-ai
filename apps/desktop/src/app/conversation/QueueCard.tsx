@@ -97,7 +97,8 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
 /**
  * The queue card on the composer rail: what waits for the running turn, one row each (glyph,
  * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. A message
- * sent while the session works is an ordinary row, judged in the background (D157); one it
+ * sent while the session works shows Deciding while it is judged in the background (D157), its
+ * actions usable all the while; one it
  * judged could run apart waits for the user's pick, "Open as a new session" or "Run here"; one
  * it sent on to a worker just leaves (D90). Its ⋯ edits
  * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
@@ -161,6 +162,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
               key={item.id}
               data-queue-item-id={item.id}
               dragging={dragging === item.id}
+              deciding={!!item.deciding}
               grip={
                 items.length > 1 && !item.local && (
                   <button
@@ -187,7 +189,14 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )}
               </span>
               {item.peer && <FromPeer from={item.peer.from} />}
-              {item.worker ? (
+              {item.deciding ? (
+                <span
+                  title="The session is checking whether this belongs to the work in progress"
+                  className="text-muted-foreground shimmer shrink-0 text-xs motion-reduce:animate-none"
+                >
+                  Deciding
+                </span>
+              ) : item.worker ? (
                 <ToWorker taskId={item.worker} />
               ) : item.offerSession && (
                 <>
