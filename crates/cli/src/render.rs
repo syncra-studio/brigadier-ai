@@ -788,14 +788,11 @@ pub fn saved_images(
 /// through, so the bytes land only in `path`'s folder, which the daemon checked.
 fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    let temp = path.with_file_name(format!(
-        ".{name}.{}-{stamp}.brigadier-tmp",
-        std::process::id()
-    ));
+    // A short name of its own: one made from `path`'s could pass the longest a name may be.
+    let temp = path.with_file_name(format!(".brigadier-{}-{stamp}.tmp", std::process::id()));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1424,5 +1421,15 @@ mod saved_images_tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    /// A name near the longest a file system takes is saved as given: the file written first
+    /// beside it has a short name of its own.
+    #[test]
+    fn a_long_out_name_is_saved() {
+        let dir = Scratch::new("out-long");
+        let out = dir.0.join(format!("{}.png", "a".repeat(240)));
+        saved_images(shots(&[b"long"]), Some(&out)).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"long");
     }
 }
