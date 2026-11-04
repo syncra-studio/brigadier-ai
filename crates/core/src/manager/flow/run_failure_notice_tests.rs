@@ -116,3 +116,66 @@ async fn a_failure_stored_without_a_notice_gets_one_once_and_its_dismissal_persi
     assert!(read(&flow).await.is_empty());
     flow.stop().await;
 }
+
+/// Two reads of the board at once after a restart say a stored failure once, not twice. A
+/// notice with its words that was dismissed before neither hides it nor comes back (#639).
+#[tokio::test]
+async fn reads_at_once_say_a_stored_failure_once_and_an_older_dismissal_hides_nothing() {
+    let mut flow = crashing("run-failure-reads-at-once").await;
+    flow.say("Start.").await;
+    flow.settled().await;
+    // An older failure with the same words, said and dismissed.
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![DomainEvent::ConversationNotice {
+                conversation_id: flow.conversation.clone(),
+                notice: crate::model::Notice {
+                    level: brigadier_providers::NoticeLevel::Warning,
+                    text: ENDED.into(),
+                    at_ms: 1,
+                },
+            }],
+        )
+        .await
+        .unwrap();
+    flow.core
+        .dismiss_notice(&flow.conversation, 1)
+        .await
+        .unwrap();
+    // As an older daemon stored a later failed run of its own: no notice says it.
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![DomainEvent::RunStateChanged {
+                conversation_id: flow.conversation.clone(),
+                state: RunState::Failed,
+                request_id: None,
+                step: None,
+                error: Some(ENDED.into()),
+            }],
+        )
+        .await
+        .unwrap();
+    flow.restart().await;
+    let (first, second) = tokio::join!(read(&flow), read(&flow));
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0].0, ENDED);
+    assert_ne!(first[0].1, 1, "the dismissed one stays dismissed");
+    let said = flow
+        .events()
+        .await
+        .into_iter()
+        .filter(|event| matches!(event, DomainEvent::ConversationNotice { .. }))
+        .count();
+    assert_eq!(said, 2, "the older notice and the stored failure's, once");
+
+    flow.core
+        .dismiss_notice(&flow.conversation, first[0].1)
+        .await
+        .unwrap();
+    flow.restart().await;
+    assert!(read(&flow).await.is_empty());
+    flow.stop().await;
+}

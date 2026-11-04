@@ -1117,7 +1117,7 @@ impl Core {
     pub(crate) async fn head(&self, id: &ConversationId) -> Result<Option<String>> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         Ok(boards
@@ -1574,7 +1574,7 @@ impl Core {
         let stream = streams::conversation(id);
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         if let Some(item_id) = take {
@@ -1620,7 +1620,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         let current = boards
@@ -1691,7 +1691,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         if boards
@@ -1721,7 +1721,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         if boards
@@ -1770,7 +1770,7 @@ impl Core {
     ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         let Some(mut request) = boards
@@ -1825,7 +1825,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         let Some(mut request) = boards
@@ -1858,7 +1858,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            boards.insert(id.clone(), self.load_board(id).await?);
+            boards.insert(id.clone(), self.load_board_saying(id).await?);
         }
         let mut request = boards
             .get(id)
@@ -1889,7 +1889,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            boards.insert(id.clone(), self.load_board(id).await?);
+            boards.insert(id.clone(), self.load_board_saying(id).await?);
         }
         let Some(mut request) = boards
             .get(id)
@@ -1923,7 +1923,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         let Some(mut request) = boards
@@ -1956,7 +1956,7 @@ impl Core {
     ) -> Result<()> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         let Some(board) = boards.get(id) else {
@@ -2273,7 +2273,7 @@ impl Core {
         // Held across the write so two changes cannot interleave.
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
+            let board = self.load_board_saying(id).await?;
             boards.insert(id.clone(), board);
         }
         let mut queue = boards
@@ -2323,11 +2323,17 @@ impl Core {
         if let Some(board) = boards.get(id) {
             return Ok(board.clone());
         }
-        let board = self.load_board(id).await?;
+        let board = self.load_board_saying(id).await?;
         boards.insert(id.clone(), board.clone());
-        drop(boards);
-        // A failed run stored before every such failure was said as a notice gets its notice
-        // now, once: dismissing it then persists like any other (#639).
+        Ok(board)
+    }
+
+    /// [`Self::load_board`], for the board cache (whose lock the caller holds, so no other
+    /// load or write of it comes in between): a failed run stored before every such failure was
+    /// said as a notice gets its notice now, once, and dismissing it then persists like any
+    /// other's (#639). Should that write fail, the board is read as it is.
+    async fn load_board_saying(&self, id: &ConversationId) -> Result<Board> {
+        let mut board = self.load_board(id).await?;
         let Some(text) = board.unsaid_failure.clone() else {
             return Ok(board);
         };
@@ -2339,11 +2345,16 @@ impl Core {
                 at_ms: now_ms(),
             },
         };
-        if let Err(err) = self.record_conversation(id, vec![event]).await {
-            tracing::warn!(conversation = %id, error = %err, "could not say a failed run as a notice");
-            return Ok(board);
+        match self
+            .record(vec![(streams::conversation(id), event.clone())])
+            .await
+        {
+            Ok(stored) => board.apply(&event, stored[0]),
+            Err(err) => {
+                tracing::warn!(conversation = %id, error = %err, "could not say a failed run as a notice");
+            }
         }
-        Ok(self.boards.lock().await.get(id).cloned().unwrap_or(board))
+        Ok(board)
     }
 
     /// The tasks a conversation the catalog no longer has left in its stream, read without
