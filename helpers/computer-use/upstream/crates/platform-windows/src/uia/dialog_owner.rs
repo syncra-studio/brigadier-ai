@@ -55,12 +55,25 @@ fn process(hwnd: HWND) -> u32 {
     pid
 }
 
-/// Owners hidden by clicks that have not shown them yet. A click whose
-/// provider call hangs never reaches its drop, so the caller that gave up at
-/// the deadline shows them through [`restore_hidden_owners`].
+/// One click's claim on the owners it hides. A click whose provider call
+/// hangs never reaches its drop, so the caller that gave up at the deadline
+/// shows that click's owners, and only those, through
+/// [`restore_hidden_owners`]: another app's click may be running beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwnerScope(u64);
+
+impl OwnerScope {
+    pub(crate) fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Owners hidden by clicks that have not shown them yet, each with the click
+/// that hid it.
 #[derive(Debug, Default)]
 struct OwnerRegistry {
-    hidden: Vec<isize>,
+    hidden: Vec<(OwnerScope, isize)>,
 }
 
 impl OwnerRegistry {
@@ -69,6 +82,7 @@ impl OwnerRegistry {
     /// drains, so a late arm never hides a window nobody would show again.
     fn admit(
         &mut self,
+        scope: OwnerScope,
         cancelled: &AtomicBool,
         hide: impl FnOnce() -> Option<isize>,
     ) -> Option<isize> {
@@ -76,19 +90,30 @@ impl OwnerRegistry {
             return None;
         }
         let owner = hide()?;
-        self.hidden.push(owner);
+        self.hidden.push((scope, owner));
         Some(owner)
     }
 
-    /// True when `owner` was still recorded, so this caller must show it.
-    fn release(&mut self, owner: isize) -> bool {
+    /// True when `owner` was still recorded for `scope`, so this caller must
+    /// show it.
+    fn release(&mut self, scope: OwnerScope, owner: isize) -> bool {
         let before = self.hidden.len();
-        self.hidden.retain(|hidden| *hidden != owner);
+        self.hidden.retain(|hidden| *hidden != (scope, owner));
         self.hidden.len() != before
     }
 
-    fn drain(&mut self) -> Vec<isize> {
-        std::mem::take(&mut self.hidden)
+    /// Remove and return the owners `scope` hid; other clicks keep theirs.
+    fn drain(&mut self, scope: OwnerScope) -> Vec<isize> {
+        let mut owners = Vec::new();
+        self.hidden.retain(|&(hidden_by, owner)| {
+            if hidden_by == scope {
+                owners.push(owner);
+                false
+            } else {
+                true
+            }
+        });
+        owners
     }
 }
 
@@ -100,10 +125,11 @@ fn registry() -> std::sync::MutexGuard<'static, OwnerRegistry> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Show every owner a click hid and has not shown yet. Called when a click
-/// timed out: its worker may stay blocked in the provider indefinitely.
-pub(crate) fn restore_hidden_owners() {
-    let owners = registry().drain();
+/// Show every owner the click `scope` hid and has not shown yet. Called when
+/// that click timed out: its worker may stay blocked in the provider
+/// indefinitely. Owners hidden by other clicks still running stay hidden.
+pub(crate) fn restore_hidden_owners(scope: OwnerScope) {
+    let owners = registry().drain(scope);
     for owner in owners {
         show_under_front(HWND(owner as *mut _));
     }
@@ -129,10 +155,10 @@ fn show_under_front(owner: HWND) {
 
 /// Hides the owner on creation and shows it under the front window on drop,
 /// unless the caller that gave up on the click has shown it already.
-pub(crate) struct HiddenOwner(Option<HWND>);
+pub(crate) struct HiddenOwner(Option<HWND>, OwnerScope);
 
 impl HiddenOwner {
-    pub(crate) fn arm(dialog: HWND, cancelled: &AtomicBool) -> Self {
+    pub(crate) fn arm(dialog: HWND, cancelled: &AtomicBool, scope: OwnerScope) -> Self {
         let root = unsafe { GetAncestor(dialog, GA_ROOT) };
         let dialog = if root.0.is_null() { dialog } else { root };
         let owner = unsafe { GetAncestor(dialog, GA_ROOTOWNER) };
@@ -148,7 +174,7 @@ impl HiddenOwner {
                 && unsafe { GetAncestor(front, GA_ROOTOWNER) } != owner,
         };
         if !hide_owner(facts) {
-            return Self(None);
+            return Self(None, scope);
         }
         let flags = SWP_HIDEWINDOW
             | SWP_NOACTIVATE
@@ -158,12 +184,12 @@ impl HiddenOwner {
             | SWP_NOOWNERZORDER;
         // Hide under the registry lock, so a caller draining at the deadline
         // sees either nothing hidden or this owner recorded.
-        let hidden = registry().admit(cancelled, || {
+        let hidden = registry().admit(scope, cancelled, || {
             let hidden = unsafe { SetWindowPos(owner, None, 0, 0, 0, 0, flags) }.is_ok()
                 && !unsafe { IsWindowVisible(owner) }.as_bool();
             hidden.then_some(owner.0 as isize)
         });
-        Self(hidden.map(|_| owner))
+        Self(hidden.map(|_| owner), scope)
     }
 }
 
@@ -173,7 +199,7 @@ impl Drop for HiddenOwner {
             return;
         };
         // Bind first: show_under_front must not run under the registry lock.
-        let still_hidden = registry().release(owner.0 as isize);
+        let still_hidden = registry().release(self.1, owner.0 as isize);
         if still_hidden {
             show_under_front(owner);
         }
@@ -232,39 +258,109 @@ mod tests {
 
     #[test]
     fn a_window_that_is_not_an_owned_dialog_is_never_hidden() {
-        assert!(HiddenOwner::arm(HWND::default(), &AtomicBool::new(false))
-            .0
-            .is_none());
+        assert!(
+            HiddenOwner::arm(HWND::default(), &AtomicBool::new(false), OwnerScope::new())
+                .0
+                .is_none()
+        );
     }
 
     #[test]
     fn a_cancelled_click_hides_nothing() {
         let mut registry = OwnerRegistry::default();
+        let scope = OwnerScope::new();
         let mut hid = false;
-        let admitted = registry.admit(&AtomicBool::new(true), || {
+        let admitted = registry.admit(scope, &AtomicBool::new(true), || {
             hid = true;
             Some(7)
         });
         assert_eq!(admitted, None);
         assert!(!hid);
-        assert!(registry.drain().is_empty());
+        assert!(registry.drain(scope).is_empty());
     }
 
     #[test]
     fn an_owner_hidden_by_a_hung_click_is_shown_once_by_the_caller() {
         let mut registry = OwnerRegistry::default();
-        assert_eq!(registry.admit(&AtomicBool::new(false), || Some(7)), Some(7));
+        let scope = OwnerScope::new();
+        assert_eq!(
+            registry.admit(scope, &AtomicBool::new(false), || Some(7)),
+            Some(7)
+        );
         // The caller gave up at the deadline and shows what is still hidden.
-        assert_eq!(registry.drain(), vec![7]);
+        assert_eq!(registry.drain(scope), vec![7]);
         // The worker returning late must not show it a second time.
-        assert!(!registry.release(7));
+        assert!(!registry.release(scope, 7));
     }
 
     #[test]
     fn a_click_that_finishes_shows_its_own_owner() {
         let mut registry = OwnerRegistry::default();
-        assert_eq!(registry.admit(&AtomicBool::new(false), || Some(7)), Some(7));
-        assert!(registry.release(7));
-        assert!(registry.drain().is_empty());
+        let scope = OwnerScope::new();
+        assert_eq!(
+            registry.admit(scope, &AtomicBool::new(false), || Some(7)),
+            Some(7)
+        );
+        assert!(registry.release(scope, 7));
+        assert!(registry.drain(scope).is_empty());
+    }
+
+    #[test]
+    fn a_timed_out_click_in_one_app_leaves_another_apps_hidden_owner_alone() {
+        // Clicks into two apps run side by side: app A's click times out
+        // while app B's is still running with its owner hidden.
+        let mut registry = OwnerRegistry::default();
+        let (a, b) = (OwnerScope::new(), OwnerScope::new());
+        let running = AtomicBool::new(false);
+        assert_eq!(registry.admit(a, &running, || Some(7)), Some(7));
+        assert_eq!(registry.admit(b, &running, || Some(9)), Some(9));
+        assert_eq!(registry.drain(a), vec![7]);
+        // B's owner is still B's to show when B's click finishes.
+        assert!(registry.release(b, 9));
+        assert!(registry.drain(b).is_empty());
+        // A's late return finds nothing left to show.
+        assert!(!registry.release(a, 7));
+    }
+
+    #[test]
+    fn restoring_after_a_timeout_shows_only_that_clicks_real_windows() {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+        };
+        // Zero-size, never-shown popups: nothing appears on the desktop.
+        let create = || unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let (owner_a, owner_b) = (create(), create());
+        let (a, b) = (OwnerScope::new(), OwnerScope::new());
+        let running = AtomicBool::new(false);
+        registry().admit(a, &running, || Some(owner_a.0 as isize));
+        registry().admit(b, &running, || Some(owner_b.0 as isize));
+
+        restore_hidden_owners(a);
+        assert!(unsafe { IsWindowVisible(owner_a) }.as_bool());
+        assert!(!unsafe { IsWindowVisible(owner_b) }.as_bool());
+        // B's click still owns its record and shows its owner itself.
+        assert!(registry().release(b, owner_b.0 as isize));
+
+        unsafe {
+            DestroyWindow(owner_a).unwrap();
+            DestroyWindow(owner_b).unwrap();
+        }
     }
 }
