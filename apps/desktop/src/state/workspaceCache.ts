@@ -150,32 +150,66 @@ export function readFiles(target: WorkspaceTarget): Promise<FileList> {
   });
 }
 
-/** Reads a target's source state and keeps it. */
-export function readSource(target: WorkspaceTarget): Promise<SourceState> {
-  const key = workspaceKey(target);
-  return once(`source:${key}`, async () => {
-    const { state } = target.type === "conversation"
-      ? await request({ method: "getSourceState", conversationId: target.conversationId })
-      : await request({ method: "getProjectSourceState", projectId: target.projectId });
-    if (workspaceKey(target) === key) remember(key, { source: state });
-    return state;
-  });
-}
+/** How many times each checkout is known to have moved, by key: a source read begun before the last is stale. */
+const moves = new Map<string, number>();
 
-/** Keeps what a change or commit returned, so reopening shows it. */
-export function keepSource(target: WorkspaceTarget, state: SourceState, key = workspaceKey(target)): void {
-  if (workspaceKey(target) === key) remember(key, { source: state });
+function moved(key: string): void {
+  moves.set(key, (moves.get(key) ?? 0) + 1);
 }
 
 /**
- * Reads what the right sidebar would show for a target and isn't kept yet, so that opening it
- * paints the contents at once. Failures are left to the views, which read again.
+ * Reads a target's source state and keeps it. A read the checkout moved under is thrown away and
+ * made again here, inside the one promise, so neither the cache nor anyone already holding that
+ * promise gets what it said from before.
+ */
+export function readSource(target: WorkspaceTarget): Promise<SourceState> {
+  const key = workspaceKey(target);
+  return once(`source:${key}`, async () => {
+    for (;;) {
+      const begun = moves.get(key);
+      const stale = () => moves.get(key) !== begun && workspaceKey(target) === key;
+      try {
+        const { state } = target.type === "conversation"
+          ? await request({ method: "getSourceState", conversationId: target.conversationId })
+          : await request({ method: "getProjectSourceState", projectId: target.projectId });
+        if (stale()) continue;
+        if (workspaceKey(target) === key) remember(key, { source: state });
+        return state;
+      } catch (error) {
+        if (!stale()) throw error;
+      }
+    }
+  });
+}
+
+/** Says the checkout just moved, so any read under way is stale, and reads it again. */
+export function refreshSource(target: WorkspaceTarget, key = workspaceKey(target)): Promise<SourceState> {
+  moved(key);
+  return readSource(target);
+}
+
+/** Keeps what a change returned, so reopening shows it; a read begun before it can't replace it. */
+export function keepSource(target: WorkspaceTarget, state: SourceState, key = workspaceKey(target)): void {
+  if (workspaceKey(target) !== key) return;
+  moved(key);
+  remember(key, { source: state });
+}
+
+/** How many files Source lists: a file both staged and changed is one. */
+export function uncommittedFiles(source: SourceState | undefined): number {
+  return source ? new Set([...source.staged, ...source.changes].map((file) => file.path)).size : 0;
+}
+
+/**
+ * Reads what the right sidebar would show for a target, so that opening it paints the contents at
+ * once: its files if none are kept, and its source always, as what is kept may be out of date.
+ * Failures are left to the views, which read again.
  */
 export function prefetchWorkspace(target: WorkspaceTarget): void {
   const entry = cachedWorkspace(target);
   if (entry) remember(workspaceKey(target), {});
   if (!entry?.files) readFiles(target).catch(() => undefined);
-  if (!entry?.source) readSource(target).catch(() => undefined);
+  readSource(target).catch(() => undefined);
 }
 
 /** Reads one folder of a target's checkout from disk: an ignored folder opened in the tree. */
