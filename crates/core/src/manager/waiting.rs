@@ -428,13 +428,16 @@ mod durable_wake_tests {
         flow.say("Track an external dependency").await;
         // The turn is over and its request settled; its next turn isn't kicked yet.
         reached.notified().await;
-        assert!(!conv.idle().await, "idle before the turn's end kicked its next turn");
+        assert!(
+            !conv.idle().await,
+            "idle before the turn's end kicked its next turn"
+        );
         release.notify_one();
         flow.idle().await;
         assert!(conv.idle().await);
         flow.stop().await;
     }
-        #[tokio::test]
+    #[tokio::test]
     async fn overdue_wake_survives_stop_and_restart_and_is_taken_once() {
         let wakes = Arc::new(AtomicUsize::new(0));
         let observed = wakes.clone();
