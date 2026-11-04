@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import { pageCreate, pageRead, pageWrite } from "@/ipc/client";
 import type { Page, PageContent, PageWriteOutcome } from "@/ipc/generated";
+import { readOrder } from "@/lib/readOrder";
 import { onPageChanged } from "@/state/pageChanges";
 import { onFlushPages } from "@/state/pagesFlush";
 
@@ -101,8 +102,10 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
   const loads = new Map<string, Promise<void>>();
   const openings = new Map<string, number>();
   const readers = new Map<string, number>();
-  /** A change heard while a save was running, checked once it ends. */
+  /** A change heard while the page loaded or a save ran, checked once that ends. */
   const pendingChange = new Map<string, string | null>();
+  /** A read answering after a newer read or a delete of its page is not applied (#759). */
+  const order = readOrder();
 
   function serial(id: string, run: () => Promise<void>): Promise<void> {
     const next = (chains.get(id) ?? Promise.resolve()).then(run, run);
@@ -120,8 +123,9 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
     usePageEdits.setState(({ pages }) => ({ pages: { ...pages, [id]: {
       status: "loading", content: EMPTY_PAGE, revision: "", dirty: false, conflict: null, error: null, version: 0,
     } } }));
-    const load = ipc.read(id).then((page) => {
-      if (!get(id)) return;
+    const current = order.read(id);
+    const load: Promise<void> = ipc.read(id).then((page) => {
+      if (!get(id) || !current()) return;
       const recovery = readRecovery(id);
       const recovered = recovery && !samePage(recovery.content, page.content) ? recovery : null;
       if (recovery && !recovered) writeRecovery(id, null);
@@ -134,13 +138,18 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
         set(id, { status: "ready", content: page.content, revision: page.revision, version: get(id)!.version + 1 });
       }
     }, (error: unknown) => {
-      if (!get(id)) return;
+      if (!get(id) || !current()) return;
       const recovery = readRecovery(id);
       // A page whose file is gone still has its unsaved text here; it can be kept as a new page.
       set(id, recovery
         ? { status: "missing", content: recovery.content, revision: recovery.base, dirty: true, error: message(error), version: get(id)!.version + 1 }
         : { status: "failed", error: message(error) });
-    }).finally(() => loads.delete(id));
+    }).finally(() => {
+      if (loads.get(id) !== load) return;
+      loads.delete(id);
+      // What changed on disk while it loaded is checked against what it read.
+      recheck(id);
+    });
     loads.set(id, load);
     return load;
   }
@@ -202,17 +211,20 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
   /** Another window, program or agent changed the page. */
   function changed(id: string, revision: string | null): void {
     const current = get(id);
-    if (!current || current.status === "loading") return;
-    if (chains.has(id)) { pendingChange.set(id, revision); return; }
+    if (!current) return;
+    if (current.status === "loading" || chains.has(id)) { pendingChange.set(id, revision); return; }
     if (current.status === "ready" && revision !== null && revision === current.revision) return;
     if (revision === null) {
+      // A read already under way would bring it back.
+      order.change(id);
       if (!current.dirty) set(id, { status: "missing", conflict: null });
       else set(id, { status: "missing", conflict: null, error: "This page was deleted elsewhere." });
       return;
     }
+    const fresh = order.read(id);
     void ipc.read(id).then((page) => {
       const now = get(id);
-      if (!now) return;
+      if (!now || !fresh()) return;
       if (page.revision === now.revision) {
         if (now.status !== "ready") {
           set(id, { status: "ready", error: null });
@@ -280,6 +292,8 @@ export function createPageEditing(ipc: PageIpc, delay = SAVE_DELAY_MS) {
 
   /** The page was deleted on purpose: nothing of it is kept. */
   function forget(id: string): void {
+    order.change(id);
+    pendingChange.delete(id);
     readers.delete(id);
     clearTimeout(timers.get(id));
     timers.delete(id);

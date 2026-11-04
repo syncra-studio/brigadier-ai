@@ -348,3 +348,102 @@ test("flush says whether the page on disk holds the editor's text before it is s
   failing.edit("full", text("unsaved"));
   assert.match((await failing.flush("full")) ?? "", /disk full/);
 });
+
+/** `daemon`'s ipc, its reads held until let go, each answering with the page as it was when asked (#759). */
+function heldReads(daemon: ReturnType<typeof fakeDaemon>) {
+  const reads: (() => void)[] = [];
+  const ipc = {
+    ...daemon.ipc,
+    read: (id: string) => {
+      const page = daemon.pages.get(id);
+      return new Promise<Page>((resolve, reject) => reads.push(() => (page ? resolve(page) : reject(new Error("No such page")))));
+    },
+  };
+  /** Lets the `index`th read still held answer. */
+  const answer = async (index: number) => {
+    reads.splice(index, 1)[0]!();
+    await wait(0);
+  };
+  return { ipc, reads, answer };
+}
+
+test("a read of an outside edit answering after the page was deleted leaves it deleted", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("late-delete", text("base"));
+  const held = heldReads(daemon);
+  const editing = createPageEditing(held.ipc, 10_000);
+  const opened = editing.open("late-delete");
+  await held.answer(0);
+  await opened;
+  editing.changed("late-delete", daemon.put("late-delete", text("edited elsewhere")).revision);
+  daemon.pages.delete("late-delete");
+  editing.changed("late-delete", null);
+  await held.answer(0);
+  assert.equal(usePageEdits.getState().pages["late-delete"]!.status, "missing");
+});
+
+test("two outside edits whose reads answer in reverse order leave the newer content", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("reverse", text("base"));
+  const held = heldReads(daemon);
+  const editing = createPageEditing(held.ipc, 10_000);
+  const opened = editing.open("reverse");
+  await held.answer(0);
+  await opened;
+  editing.changed("reverse", daemon.put("reverse", text("first")).revision);
+  editing.changed("reverse", daemon.put("reverse", text("second")).revision);
+  await held.answer(1);
+  await held.answer(0);
+  const page = usePageEdits.getState().pages.reverse!;
+  assert.equal(page.content.body, "second");
+  assert.equal(page.revision, daemon.pages.get("reverse")!.revision);
+});
+
+test("a page deleted while it first loads reads as deleted, not ready", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("deleted-loading", text("base"));
+  const held = heldReads(daemon);
+  const editing = createPageEditing(held.ipc, 10_000);
+  const opened = editing.open("deleted-loading");
+  daemon.pages.delete("deleted-loading");
+  editing.changed("deleted-loading", null);
+  await held.answer(0);
+  await opened;
+  await wait(0);
+  assert.equal(usePageEdits.getState().pages["deleted-loading"]!.status, "missing");
+});
+
+test("a page edited elsewhere while it first loads shows the newer content", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("edited-loading", text("base"));
+  const held = heldReads(daemon);
+  const editing = createPageEditing(held.ipc, 10_000);
+  const opened = editing.open("edited-loading");
+  editing.changed("edited-loading", daemon.put("edited-loading", text("edited elsewhere")).revision);
+  await held.answer(0);
+  await opened;
+  await held.answer(0);
+  const page = usePageEdits.getState().pages["edited-loading"]!;
+  assert.equal(page.status, "ready");
+  assert.equal(page.content.body, "edited elsewhere");
+});
+
+test("a page's first load answering after it was deleted and opened again doesn't replace the new load", async () => {
+  data.clear();
+  const daemon = fakeDaemon();
+  daemon.put("reopened", text("old"));
+  const held = heldReads(daemon);
+  const editing = createPageEditing(held.ipc, 10_000);
+  void editing.open("reopened");
+  editing.forget("reopened");
+  daemon.put("reopened", text("new"));
+  const again = editing.open("reopened");
+  await held.answer(1);
+  await again;
+  await held.answer(0);
+  assert.equal(usePageEdits.getState().pages.reopened!.content.body, "new");
+});
