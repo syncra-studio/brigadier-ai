@@ -179,7 +179,53 @@ impl Core {
         if let Some(settings) = crate::routing::availability::migrate(&core.settings()) {
             core.update_settings(settings).await?;
         }
+        core.backfill_last_sent().await?;
         Ok(core)
+    }
+
+    /// Gives each conversation from before the inbox kept its own order a sort time, once: when
+    /// its transcript's last user message was sent, else (or if earlier, as in a fork) when it
+    /// was created. Recorded, so no later launch reads a transcript for it.
+    async fn backfill_last_sent(&self) -> Result<()> {
+        let unset: Vec<Conversation> = self
+            .catalog()
+            .conversations
+            .into_iter()
+            .filter(|conversation| conversation.last_sent_at_ms.is_none())
+            .collect();
+        let mut events = Vec::with_capacity(unset.len());
+        for conversation in unset {
+            let mut sent = None;
+            let mut before = None;
+            while sent.is_none() {
+                let Ok(page) = self
+                    .list_messages(conversation.id.clone(), before, 100)
+                    .await
+                else {
+                    break;
+                };
+                sent = page
+                    .messages
+                    .iter()
+                    .rfind(|message| message.role == MessageRole::User)
+                    .map(|message| message.created_at_ms);
+                if !page.has_more {
+                    break;
+                }
+                before = page.messages.first().map(|message| message.seq);
+            }
+            events.push((
+                streams::CATALOG.into(),
+                DomainEvent::ConversationSent {
+                    id: conversation.id,
+                    at_ms: sent.unwrap_or(0).max(conversation.created_at_ms),
+                },
+            ));
+        }
+        if !events.is_empty() {
+            self.record(events).await?;
+        }
+        Ok(())
     }
 
     pub fn store(&self) -> &Store {
@@ -430,9 +476,7 @@ impl Core {
             deleting: false,
             peer_at_ms: None,
             finished_at_ms: None,
-            done_at_ms: None,
-            snoozed_until_ms: None,
-            snoozed_at_ms: None,
+            last_sent_at_ms: Some(now),
             seen_at_ms: None,
         };
         events.insert(
@@ -719,36 +763,17 @@ impl Core {
         self.conversation(&id)
     }
 
-    /// Marks `id` done now, or brings it back (`done` false).
-    pub async fn set_done(&self, id: ConversationId, done: bool) -> Result<Conversation> {
-        self.conversation(&id)?;
+    /// The user sent `id` a message just now: the one thing that moves its inbox row by itself.
+    pub async fn mark_user_sent(&self, id: ConversationId) -> Result<()> {
         self.record(vec![(
             streams::CATALOG.into(),
-            DomainEvent::ConversationDone {
-                id: id.clone(),
-                done_at_ms: done.then(now_ms),
-            },
-        )])
-        .await?;
-        self.conversation(&id)
-    }
-
-    /// Snoozes `id` until `until_ms`, or wakes it (none).
-    pub async fn snooze(&self, id: ConversationId, until_ms: Option<i64>) -> Result<Conversation> {
-        let current = self.conversation(&id)?;
-        if until_ms.is_none() && current.snoozed_until_ms.is_none() {
-            return Ok(current);
-        }
-        self.record(vec![(
-            streams::CATALOG.into(),
-            DomainEvent::ConversationSnoozed {
-                id: id.clone(),
-                until_ms,
+            DomainEvent::ConversationSent {
+                id,
                 at_ms: now_ms(),
             },
         )])
         .await?;
-        self.conversation(&id)
+        Ok(())
     }
 
     /// `id`'s replies were seen up to `at_ms`; an earlier time than already recorded changes
@@ -767,15 +792,6 @@ impl Core {
         )])
         .await?;
         self.conversation(&id)
-    }
-
-    /// When `id` was last marked done or brought back, either way; 0 if never.
-    pub(crate) fn done_decided_at(&self, id: &ConversationId) -> i64 {
-        self.projection()
-            .done_decided_at
-            .get(id)
-            .copied()
-            .unwrap_or(0)
     }
 
     /// Appends a user message. The first message of an untitled conversation names it.
@@ -2626,8 +2642,7 @@ fn catalog_conversation(event: &DomainEvent) -> Option<&ConversationId> {
         | DomainEvent::ConversationRenamed { id, .. }
         | DomainEvent::ConversationWaiting { id, .. }
         | DomainEvent::ConversationPinned { id, .. }
-        | DomainEvent::ConversationDone { id, .. }
-        | DomainEvent::ConversationSnoozed { id, .. }
+        | DomainEvent::ConversationSent { id, .. }
         | DomainEvent::ConversationSeen { id, .. } => Some(id),
         _ => None,
     }

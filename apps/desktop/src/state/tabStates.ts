@@ -10,21 +10,22 @@ import { useApp } from "@/state/store";
  * Git marks retained for the context card's merge/undo refresh; never used as row words.
  * `landed`: nothing left to merge, committed or not (D61); absent until git was asked.
  */
-export type Settled = { state?: "ready" | "merged" | "reverted"; ahead?: number; landed?: boolean };
+export type Settled = { state?: "ready" | "merged" | "reverted"; ahead?: number; landed?: boolean; prMerged?: boolean };
 export const useSettledTabs = create<{ byTab: Readonly<Record<string, Settled>> }>(() => ({ byTab: {} }));
 
-/** The marks by tab from the daemon's settled tabs and the sessions with nothing left to merge. */
-export function settledByTab(tabs: readonly SettledTab[], landed: readonly string[]): Record<string, Settled> {
+/** The marks by tab from the daemon's settled tabs, the sessions with nothing left to merge and those whose pull request merged. */
+export function settledByTab(tabs: readonly SettledTab[], landed: readonly string[], merged: readonly string[] = []): Record<string, Settled> {
   const byTab: Record<string, Settled> = Object.fromEntries(tabs.flatMap(({ conversationId, state, ahead }) =>
     state === "ready" || state === "merged" || state === "reverted" ? [[conversationId, { state, ...(ahead === undefined ? {} : { ahead }), landed: landed.includes(conversationId) }]] : [],
   ));
   for (const id of landed) byTab[id] ??= { landed: true };
+  for (const id of merged) byTab[id] = { ...byTab[id], prMerged: true };
   return byTab;
 }
 
 export async function loadSettledTabs(): Promise<void> {
-  const { tabs, landed } = await request({ method: "getSettledTabs" });
-  useSettledTabs.setState({ byTab: settledByTab(tabs, landed) });
+  const { tabs, landed, merged } = await request({ method: "getSettledTabs" });
+  useSettledTabs.setState({ byTab: settledByTab(tabs, landed, merged) });
 }
 
 let refreshing: ReturnType<typeof setTimeout> | null = null;
@@ -47,6 +48,15 @@ export function applySettledTabEvents(batch: readonly EventEnvelope[]): boolean 
   let changed: Record<string, Settled> | null = null;
   let refresh = false;
   for (const { stream, event } of batch) {
+    if (event.type === "pullRequestSeen") {
+      // The Merged chip, from what the board just saw: no look at git needed.
+      const all: Readonly<Record<string, Settled>> = changed ?? useSettledTabs.getState().byTab;
+      const prMerged = event.pullRequest?.state === "merged";
+      if ((all[event.conversationId]?.prMerged ?? false) !== prMerged) {
+        changed = { ...all, [event.conversationId]: { ...all[event.conversationId], prMerged } };
+      }
+      continue;
+    }
     const id = event.type === "requestReady" ? event.conversationId : stream.startsWith("conversation:") ? stream.slice("conversation:".length) : null;
     const state = event.type === "requestReady" ? "ready" : event.type === "orchestratorStepped" && event.step.kind.type === "merged" ? "merged" : null;
     const all: Readonly<Record<string, Settled>> = changed ?? useSettledTabs.getState().byTab;
@@ -97,7 +107,8 @@ function needsYou({ awaiting, running }: RowActivity, viewing: boolean): boolean
 
 /** A row's mark: a spinner, the red error mark, the blue dot, or nothing; never a word (D3). */
 export type RowLook = "working" | "error" | "dot" | null;
-export type RowMark = { look: RowLook; hover: string | null };
+/** `amber`: it needs the user or failed, the sidebar's one mark for both. */
+export type RowMark = { look: RowLook; hover: string | null; amber?: boolean };
 
 const NO_MARK: RowMark = { look: null, hover: null };
 
@@ -121,9 +132,9 @@ export function rowMark(
 ): RowMark {
   switch (tabState(activity, quotaWait !== null, stopped, false, viewing)) {
     case "needsYou":
-      return { look: "dot", hover: `Needs you · ${activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "sign-in"}` };
+      return { look: "dot", amber: true, hover: `Needs you · ${activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "sign-in"}` };
     case "failed":
-      return { look: "error", hover: "Failed" };
+      return { look: "error", amber: true, hover: "Failed" };
     case "working":
       if (quotaWait && !activity.running) {
         return { look: "working", hover: quotaWait.resetsAtMs === null ? "Waiting for usage limit" : `Waiting for usage limit · resets ${hhmm(quotaWait.resetsAtMs)}` };

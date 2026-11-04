@@ -571,19 +571,11 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub finished_at_ms: Option<i64>,
-    /// When it was marked done (by the user, or after 3 idle days or a merged pull request);
-    /// absent when not done. The inbox reads it against later activity.
+    /// When the user last sent it a message, its creation until then: the inbox's order. Agent
+    /// turns, other sessions, sleep, wake, renames and finishes never change it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub done_at_ms: Option<i64>,
-    /// When its snooze ends; absent when not snoozed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub snoozed_until_ms: Option<i64>,
-    /// When it was last snoozed or woken by hand.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub snoozed_at_ms: Option<i64>,
+    pub last_sent_at_ms: Option<i64>,
     /// How far its replies were seen: the finish time last seen in any window (its row's
     /// unread dot).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -891,7 +883,7 @@ pub enum KeepAwake {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum SidebarMode {
-    /// One list across all projects: pinned, active, working, snoozed, done.
+    /// One list across all projects: pinned, open, archived.
     #[default]
     Inbox,
     /// Sessions under their projects, then chats.
@@ -2253,15 +2245,9 @@ pub enum DomainEvent {
         id: ConversationId,
         wait: Option<crate::work::QuotaWait>,
     },
-    /// Marked done (`done_at_ms`), or brought back by hand.
-    ConversationDone {
+    /// The user sent it a message at `at_ms` (the inbox's order).
+    ConversationSent {
         id: ConversationId,
-        done_at_ms: Option<i64>,
-    },
-    /// Snoozed until `until_ms`, or woken by hand (none), at `at_ms`.
-    ConversationSnoozed {
-        id: ConversationId,
-        until_ms: Option<i64>,
         at_ms: i64,
     },
     /// Its replies were seen up to `at_ms`.
@@ -2750,8 +2736,7 @@ impl DomainEvent {
             Self::WorkspaceArchived { .. } => "workspace.archived",
             Self::ConversationPinned { .. } => "conversation.pinned",
             Self::ConversationWaiting { .. } => "conversation.waiting",
-            Self::ConversationDone { .. } => "conversation.done",
-            Self::ConversationSnoozed { .. } => "conversation.snoozed",
+            Self::ConversationSent { .. } => "conversation.sent",
             Self::ConversationSeen { .. } => "conversation.seen",
             Self::MessageAppended { .. } => "message.appended",
             Self::SettingsChanged { .. } => "settings.changed",

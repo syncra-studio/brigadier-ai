@@ -24,7 +24,7 @@ import {
   Plus,
   Sidebar,
 } from "@/components/icons";
-import { Banner, ConversationRow, EmptyState, NavList, NavSection, RowAction, RowStatus, SidebarError, type RowActions } from "@/components/shared";
+import { Banner, ConversationRow, EmptyState, NavList, NavSection, RowAction, RowStatus, type RowActions } from "@/components/shared";
 import { DropdownMenuLabel, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useSidebar } from "@/components/layout";
 import type { Conversation, Project } from "@/ipc/generated";
@@ -122,7 +122,7 @@ function useInboxSections(): Sections {
 
 type SectionId = "pinned" | "projects" | "chats";
 const SECTIONS_KEY = "brigadier.sidebarSections";
-const INBOX_SECTIONS_KEY = "brigadier.inboxSections";
+const INBOX_SECTIONS_KEY = "brigadier.inboxFolded";
 
 function cachedFolded<T extends string>(key: string, initial: T[]): T[] {
   try {
@@ -449,7 +449,6 @@ function FlyoutConversation({
         className={cn("pe-1.5", nested && "ps-8")}
         onClick={() => pick(() => openConversation(conversation.id))}
       >
-        <SidebarError conversationId={conversation.id} />
         <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
           {conversation.title}
         </span>

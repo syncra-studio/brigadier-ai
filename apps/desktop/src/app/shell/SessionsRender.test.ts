@@ -48,7 +48,7 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
 
   test(`${place}: the row's ⋯ opens its tab's menu`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
-    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Mark done", "Snooze", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
+    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
     assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id", "Copy as Markdown"]);
   });
 }
@@ -60,7 +60,7 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
   };
   assert.equal(seen.error, undefined);
   assert.equal(seen.open, "none", "no session is open");
-  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Mark done", "Snooze", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
+  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
   assert.equal(seen.markdown, "# Fix the login\n\n## User\n\nFix the login.\n\n## Assistant\n\nThe token expired; it refreshes now.\n\n## User\n\nAnd the logout?\n\n## Assistant\n\nLogout clears it too.\n");
   assert.deepEqual(seen.forks, [{ conversationId: "w2-a", messageId: "a2", place: "newWorktree" }]);
   // Read once, for Copy; Fork finds it held.
@@ -95,9 +95,9 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     seen.rows.map(({ title, status, tip }) => [title, status, tip]),
     [
       // Those that need the user float to the top, newest first like the rest.
-      ["Deploy the site", "dot", "Needs you · approval"],
-      ["Broken build", "error", "Failed"],
-      ["Ship the release", "dot", "Needs you · sign-in"],
+      ["Deploy the site", "amber", "Needs you · approval"],
+      ["Broken build", "amber", "Failed"],
+      ["Ship the release", "amber", "Needs you · sign-in"],
       ["Footer", "working", "Working"],
       ["Header", "working", "Working"],
       ["Fix the login", null, null],
@@ -114,8 +114,8 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   );
   for (const row of seen.rows) {
     assert.equal(row.words, null, `${row.title}: no state word on a row`);
-    assert.equal(row.mark, row.status === "working" ? "spinner" : row.status === "dot" ? "unread" : null, `${row.title}: its mark`);
-    assert.equal(row.error, row.status === "error");
+    assert.equal(row.mark, row.status === "working" ? "spinner" : row.status === "dot" ? "unread" : row.status === "amber" ? "amber" : null, `${row.title}: its mark`);
+    assert.equal(row.error, false);
     assert.equal(row.plain, true, `${row.title}: no chip`);
   }
   // The title tells sessions apart: a mark takes only its 20-unit slot.
@@ -181,19 +181,18 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
     assert.equal(seen.find((row) => row.title === "Draft the notes")?.tip, "Draft the notes");
     for (const row of seen) {
       const busy = row.state === "working";
-      assert.equal(row.beforeMark, busy ? "spinner" : row.state === "dot" ? "unread" : null, `${row.title}: closed row mark`);
+      assert.equal(row.beforeMark, busy ? "spinner" : row.state === "dot" ? "unread" : row.state === "amber" ? "amber" : null, `${row.title}: closed row mark`);
       // In front of the user, a row shows no dot: its spinner if it works.
       assert.notEqual(row.openState, "dot", `${row.title}: no dot while open`);
       assert.equal(row.rowMark, row.openState === "working" ? "spinner" : null, `${row.title}: an open row has no dot`);
-      assert.equal(row.error, row.state === "error", `${row.title}: errors have a separate leading icon`);
+      assert.equal(row.error, false, `${row.title}: a failed row's one mark is amber, at its end`);
       assert.equal(row.plain, true, `${row.title}: no chip`);
       if (row.beforeMark === "unread") { assert.equal(row.unreadSize, 8); assert.equal(row.unreadSlot, 20); }
       if (busy) { assert.equal(row.spinnerSize, 16); assert.equal(row.spinnerSlot, 20); assert.equal(row.spinnerDuration, "2s"); }
-      if (row.error) { assert.equal(row.errorSize, 16); assert.equal(row.errorSlot, 20); assert.equal(row.leadingError, 4); }
       // The tab shows exactly the open row's marks (no grey dot of its own), without the words.
       assert.equal(row.mark, row.rowMark, `${row.title}: the tab's mark is the row's`);
       assert.equal(row.dot, false, `${row.title}: no dot of the tab's own`);
-      assert.equal(row.tabError, row.error, `${row.title}: the row's error glyph in the tab`);
+      assert.equal(row.tabError, row.rowTip === "Failed", `${row.title}: a failed tab keeps its error glyph`);
       assert.equal(row.words, "", `${row.title}: no state word in the tab`);
       assert.equal(row.tip, row.rowTip ? `${row.title} · ${row.rowTip}` : row.title, `${row.title}: the whole tab has the state tooltip`);
       assert.ok(row.width <= 20, `${row.title}: only a mark beside the title`);
@@ -211,20 +210,20 @@ test("an idle session whose turn ended shows only its unread dot, no Done word",
 });
 
 
-test("waiting questions show Needs you and the blue dot, also when an approval waits, but not while open; answers and skips clear it", { timeout: 60000 }, async (t) => {
+test("waiting questions show Needs you and the amber mark, also when an approval waits, but not while open; answers and skips clear it", { timeout: 60000 }, async (t) => {
   type Row = { status: string; tip: string; mark: string | null; active: boolean };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?questions=1", "sessions-result", 20000)) as { before: Row[]; opened: Row; after: Row[] };
   for (const row of seen.before) {
-    assert.equal(row.status, "dot");
+    assert.equal(row.status, "amber");
     assert.ok(["Needs you · question", "Needs you · approval"].includes(row.tip));
-    assert.equal(row.mark, "unread");
+    assert.equal(row.mark, "amber");
   }
   // The question is in front of the user: its row says what its turn does instead.
   assert.deepEqual({ status: seen.opened.status, tip: seen.opened.tip, mark: seen.opened.mark }, { status: "working", tip: "Working", mark: "spinner" });
   assert.equal(seen.opened.active, true);
   assert.deepEqual(seen.after.map(({ status, tip, mark }) => ({ status, tip, mark })), [
     { status: "working", tip: "Working", mark: "spinner" },
-    { status: "dot", tip: "Needs you · approval", mark: "unread" },
+    { status: "amber", tip: "Needs you · approval", mark: "amber" },
   ]);
 });
 
@@ -233,8 +232,8 @@ test("unopened sessions with working workers keep Working until idle, including 
   type Row = { title: string; status: string; mark: string | null };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?workerActivity=1", "sessions-result", 20000)) as { before: Row[]; someWorking: Row; idle: Row; reconnected: Row; threadReads: string[] };
   assert.deepEqual(seen.before.map(({ title, status, mark }) => [title, status, mark]), [
-    ["Approval with workers", "dot", "unread"],
-    ["Question with workers", "dot", "unread"],
+    ["Approval with workers", "amber", "amber"],
+    ["Question with workers", "amber", "amber"],
     ["Workers still running", "working", "spinner"],
   ]);
   for (const row of [seen.someWorking, seen.reconnected]) {
@@ -262,39 +261,4 @@ test("Done uses the recorded turn-end unread dot: opening clears it through clos
   assert.deepEqual([seen.before.status, seen.before.mark], ["dot", "unread"]);
   assert.deepEqual([seen.afterClose.status, seen.afterClose.mark], [null, null], "seen once opened, still seen after closing");
   assert.deepEqual([seen.nextTurn.status, seen.nextTurn.mark], ["dot", "unread"], "a later turn is a new reply");
-});
-
-
-test("Inbox mode: Pinned, Active, Working, Snoozed and Done across projects, each row naming its project; a new message brings a done row back; the switch flips to Projects", { timeout: 60000 }, async (t) => {
-  type Section = { title: string; open: boolean; rows: { title: string; label: string | null }[] };
-  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?inbox=1", "sessions-result", 30000)) as {
-    sections: Section[]; dock: { doneInside: boolean; below: number; between: number }; beforeWake: string; wokeLateMs: number; doneRunning: string; doneAfter: string; firstActive: string; projectsSections: string[]; mode: string; saved: boolean;
-  };
-  const titles = (section: Section) => section.rows.map((row) => row.title);
-  assert.deepEqual(seen.sections.map(({ title, open }) => [title, open]), [
-    ["Pinned", true], ["Active", true], ["Working", false], ["Snoozed", false], ["Done", false],
-  ]);
-  const [pinned, active, working, snoozed, done] = seen.sections as [Section, Section, Section, Section, Section];
-  assert.deepEqual(titles(pinned), ["Footer"], "pinned wins over working");
-  // Needs you and failed sit in Active (D11); a chat joins the same list.
-  assert.deepEqual(titles(active), ["Quick question", "Deploy the site", "Broken build", "Old fix", "Ship the release", "Finished reply", "Draft the notes", "Paused task"]);
-  assert.deepEqual(titles(working), ["Header", "Waiting on a limit", "Lone worker"]);
-  assert.deepEqual(titles(snoozed), ["Tidy the docs"]);
-  assert.deepEqual(titles(done), ["Fix the login"]);
-  // Done sits at the very bottom of the sidebar, even with a short list above it (D16).
-  assert.ok(seen.dock.doneInside, "Done is in the bottom dock");
-  assert.ok(Math.abs(seen.dock.below) <= 1, `Done's dock ends at the sidebar's bottom (${seen.dock.below}px off)`);
-  assert.ok(Math.abs(seen.dock.between) <= 1, `the list above stretches down to Done (${seen.dock.between}px apart)`);
-  // The project's name after each title; a chat has none.
-  for (const row of seen.sections.flatMap((section) => section.rows)) {
-    assert.equal(row.label, row.title === "Quick question" ? null : "brigadier", row.title);
-  }
-  assert.equal(seen.beforeWake, "Snoozed", "held until its time");
-  assert.ok(seen.wokeLateMs >= 0 && seen.wokeLateMs < 3000, `back at its wake time, not the next minute's look (${seen.wokeLateMs}ms late)`);
-  assert.equal(seen.doneRunning, "Working", "a new message's turn takes it off Done");
-  assert.equal(seen.doneAfter, "Active", "the turn's end keeps it back");
-  assert.equal(seen.firstActive, "Fix the login", "at the top");
-  assert.deepEqual(seen.projectsSections, ["Pinned", "Projects", "Chats"]);
-  assert.equal(seen.mode, "projects");
-  assert.equal(seen.saved, true, "the choice is a daemon setting");
 });

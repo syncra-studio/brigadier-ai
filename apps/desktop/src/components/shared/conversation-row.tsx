@@ -2,15 +2,16 @@ import { memo, useState, type ComponentType, type MouseEvent } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { NavRow } from "@/components/controls/nav-row";
-import { Archive, BranchAlt, Pencil, Pin, Trash, Unpin } from "@/components/icons";
+import { Badge } from "@/components/controls/badge";
+import { Archive, BranchAlt, Pencil, Pin, Trash, Unarchive, Unpin } from "@/components/icons";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { RowAction, RowActionsSlot } from "@/components/shared/row-action";
-import { SidebarActivityMark, SidebarError } from "@/components/shared/session-status";
+import { SidebarActivityMark, SidebarAmberMark } from "@/components/shared/session-status";
 import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { archive, archiveAll, openConversation, setPinned } from "@/state/actions";
+import { archive, archiveAll, openConversation, restore, setPinned } from "@/state/actions";
 import { askDelete, clearPicked, usePicked } from "@/state/picking";
-import { useRowMark } from "@/state/tabStates";
+import { useRowMark, useSettledTabs } from "@/state/tabStates";
 
 /** What the rows can ask the sidebar to do. */
 export type RowActions = {
@@ -36,13 +37,20 @@ const hideOnRowHover =
 const removeOnRowHover =
   "group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden";
 
-/** A row's trailing mark (spinner or dot), with what it means on hover; no state word (D3). */
+/** A row's trailing mark (spinner, dot or amber ring), with what it means on hover; no state word (D3). */
 export function RowStatus({ conversationId, reclaimSpace = false }: { conversationId: string; reclaimSpace?: boolean }) {
-  const { look, hover } = useRowMark(conversationId);
-  return <span data-slot="row-status" data-status={look ?? undefined} title={hover ?? undefined}
+  const { look, hover, amber } = useRowMark(conversationId);
+  return <span data-slot="row-status" data-status={amber ? "amber" : (look ?? undefined)} title={hover ?? undefined}
     className={cn("empty:hidden flex shrink-0 items-center", reclaimSpace ? removeOnRowHover : hideOnRowHover)}>
-    <SidebarActivityMark conversationId={conversationId} />
+    {amber ? <SidebarAmberMark label={hover} /> : <SidebarActivityMark conversationId={conversationId} />}
   </span>;
+}
+
+/** Its pull request merged, as the board last saw; an archived row has moved on from that. */
+function MergedChip({ conversation }: { conversation: Conversation }) {
+  const merged = useSettledTabs((s) => s.byTab[conversation.id]?.prMerged === true);
+  if (!merged || conversation.lifecycle === "archived") return null;
+  return <Badge data-slot="row-merged" className={cn("bg-pr-purple/15 text-pr-purple", removeOnRowHover)}>Merged</Badge>;
 }
 
 /**
@@ -65,11 +73,12 @@ export const ConversationRow = memo(function ConversationRow({
   nested?: boolean;
   /** Drawn under its source: a little further in, after the fork icon (D211). */
   forked?: boolean;
-  /** Small muted text after the title: the inbox's project name (D7). */
+  /** Small muted line under the title: the inbox's project name (D7). */
   label?: string | undefined;
 }) {
   const title = conversation.title;
   const pinned = conversation.pinnedAtMs !== null;
+  const archived = conversation.lifecycle === "archived";
   const noun = conversation.kind === "chat" ? "chat" : "session";
   const togglePin = () =>
     void setPinned(conversation.id, !pinned).catch((error: unknown) =>
@@ -79,13 +88,17 @@ export const ConversationRow = memo(function ConversationRow({
     void archive(conversation.id).catch((error: unknown) =>
       actions.onError(errorText(error)),
     );
+  const unarchiveIt = () =>
+    void restore(conversation.id).catch((error: unknown) =>
+      actions.onError(errorText(error)),
+    );
   const picked = usePicked((s) => s.list === "sidebar" && s.ids.includes(conversation.id));
   const { hover } = useRowMark(conversation.id);
   // What a right-click acts on: every picked row when this is one of several.
   const [targets, setTargets] = useState<string[]>([]);
 
   return (
-    <li className="group/row relative">
+    <li data-row-id={conversation.id} className="group/row relative">
       <ContextMenu
         modal={false}
         onOpenChange={(open) => {
@@ -111,18 +124,19 @@ export const ConversationRow = memo(function ConversationRow({
               nested && (forked ? "ps-10" : "ps-8"),
               !nested && forked && "ps-4",
               !picked && "group-hover/row:bg-foreground/8",
+              label && "h-auto items-start py-1",
             )}
             onClick={(event) => {
               if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
             }}
           >
-            <SidebarError conversationId={conversation.id} />
             {forked && <BranchAlt aria-label="Fork" className="text-muted-foreground size-icon-sm" />}
-            {/* A title too long for its row fades out at the end. */}
-            <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
-              {title}
-              {label && <span data-slot="row-label" className="text-muted-foreground ms-1.5 text-xs">{label}</span>}
+            {/* A title too long for its row fades out at the end; the project keeps its own line. */}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span data-slot="row-title" className="mask-fade-end overflow-hidden whitespace-nowrap">{title}</span>
+              {label && <span data-slot="row-label" className="text-muted-foreground mask-fade-end overflow-hidden text-xs whitespace-nowrap">{label}</span>}
             </span>
+            <MergedChip conversation={conversation} />
             <RowStatus conversationId={conversation.id} reclaimSpace />
           </NavRow>
         </ContextMenuTrigger>
@@ -141,6 +155,18 @@ export const ConversationRow = memo(function ConversationRow({
             <ContextMenuItem variant="destructive" onSelect={() => askDelete(targets)}>
               <Trash />
               Delete ({targets.length})…
+            </ContextMenuItem>
+          </ContextMenuContent>
+        ) : archived ? (
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={unarchiveIt}>
+              <Unarchive />
+              Unarchive {noun}
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={() => askDelete([conversation.id])}>
+              <Trash />
+              Delete {noun}…
             </ContextMenuItem>
           </ContextMenuContent>
         ) : (
@@ -167,17 +193,19 @@ export const ConversationRow = memo(function ConversationRow({
       </ContextMenu>
       <RowActionsSlot>
         <actions.Menu conversation={conversation} onRename={() => actions.onRename(conversation)} />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <RowAction
-              aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`}
-              onClick={togglePin}
-            >
-              {pinned ? <Unpin /> : <Pin />}
-            </RowAction>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{pinned ? `Unpin ${noun}` : `Pin ${noun}`}</TooltipContent>
-        </Tooltip>
+        {!archived && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <RowAction
+                aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`}
+                onClick={togglePin}
+              >
+                {pinned ? <Unpin /> : <Pin />}
+              </RowAction>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{pinned ? `Unpin ${noun}` : `Pin ${noun}`}</TooltipContent>
+          </Tooltip>
+        )}
       </RowActionsSlot>
     </li>
   );
