@@ -165,6 +165,12 @@ class MeasurementTests(unittest.TestCase):
         step = self.plain_send(run, fixture("claude-result-limit.jsonl"), returncode=0)
         self.assertEqual((step["outcome"], step["answer"]), ("failed", ""))
         self.assertEqual(run.errors, ["cli: probe: API Error: 429 (API status 429)"])
+        # Its diagnostics in `errors`, beside a bare subtype: a recorded steer that was turned down.
+        lines = (FIXTURES / "claude-steer-interrupt-approvals.jsonl").read_text().splitlines()
+        events = [json.loads(json.loads(line)["line"]) for line in lines if '\\"is_error\\":true' in line
+                  and '\\"type\\":\\"result\\"' in line]
+        self.assertEqual(plain.cli_errors(events), [
+            "error_during_execution: [ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"])
 
     def test_a_plain_cli_refusal_keeps_its_synthetic_reply_and_reset_time(self):
         run = self.plain_run()

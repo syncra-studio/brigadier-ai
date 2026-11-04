@@ -43,7 +43,10 @@ def cli_errors(events, stderr=""):
         kind = event.get("type")
         if kind == "result" and event.get("is_error"):
             status = event.get("api_error_status")
+            # Its diagnostics may come in `errors` beside a bare subtype instead of in `result`.
+            details = "; ".join(str(error) for error in event.get("errors") or [] if error)
             found.append(f"{event.get('result') or event.get('subtype') or 'error result'}" +
+                         (f": {details}" if details else "") +
                          (f" (API status {status})" if status else ""))
         elif kind == "rate_limit_event":
             limit = rejected_limit(event.get("rate_limit_info"))
