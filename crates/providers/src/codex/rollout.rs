@@ -3,7 +3,7 @@
 //! it under, so its events are the stream's ([`super::parse`]) with the same ids. A turn's end
 //! is `task_complete` or `turn_aborted`; a user message inside a running turn is a steer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -42,20 +42,23 @@ pub(crate) fn context_of(value: &Value) -> Option<Option<crate::session_file::Fi
 const ENDS_READ_TAIL: u64 = 4 * 1024 * 1024;
 
 /// Those of the background commands `items` whose end the model read, as the rollout at `path`
-/// proves: a script the model ran polled that command's process, and the script's output carries
-/// the exit code and the end of what the command printed. Codex's stream says no such thing.
-/// Whatever isn't that proof (no file, an unknown format, a line not written yet) reads as unread.
+/// proves: after that command's end in the file, the result of a script that only polled its
+/// process and printed that poll's result carries its exit code and all it printed. Codex's
+/// stream says no such thing. Whatever isn't that proof (no file, an unknown format, a line not
+/// written yet, a process id that served two commands) reads as unread, and is told again.
 ///
-/// shortcut: only a poll naming its process by number in a script's `session_id:`, printing its
-/// result as JSON, counts; a poll in a variable or a plain `write_stdin` call proves nothing, and
-/// its model hears the end again. Upgrade if those show up live.
+/// shortcut: only the two script shapes seen live count ([`polled_process`]), holding the whole
+/// output in one result; a poll in a variable or a loop, a plain `write_stdin` call, or output
+/// read in pieces proves nothing, and its model hears the end again. Upgrade if those show up live.
 pub fn ends_read(path: &Path, items: &[String]) -> Vec<String> {
     let Ok(text) = tail(path, ENDS_READ_TAIL) else {
         return Vec::new();
     };
-    let mut ends = HashMap::new();
+    // The last command to end on each process id, as the file reaches each line.
+    let mut ends: HashMap<String, Value> = HashMap::new();
+    let mut reused = HashSet::new();
     let mut polls = HashMap::new();
-    let mut results = Vec::new();
+    let mut proven = Vec::new();
     for line in text.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -69,10 +72,11 @@ pub fn ends_read(path: &Path, items: &[String]) -> Vec<String> {
                     continue;
                 };
                 if str_of(item, "type") == Some("CommandExecution")
-                    && str_of(item, "id").is_some_and(|id| items.iter().any(|item| item == id))
                     && let Some(process) = str_of(item, "process_id")
+                    && let Some(earlier) = ends.insert(process.to_owned(), item.clone())
+                    && str_of(&earlier, "id") != str_of(item, "id")
                 {
-                    ends.insert(process.to_owned(), item.clone());
+                    reused.insert(process.to_owned());
                 }
             }
             Some("custom_tool_call") if str_of(payload, "name") == Some("exec") => {
@@ -85,19 +89,20 @@ pub fn ends_read(path: &Path, items: &[String]) -> Vec<String> {
             }
             Some("custom_tool_call_output") => {
                 if let Some(process) = str_of(payload, "call_id").and_then(|call| polls.get(call))
-                    && let Some(output) = payload.get("output")
+                    && let Some(end) = ends.get(process)
+                    && payload.get("output").is_some_and(|out| shows_end(out, end))
+                    && let Some(id) = str_of(end, "id")
                 {
-                    results.push((process.clone(), output.clone()));
+                    proven.push((process.clone(), id.to_owned()));
                 }
             }
             _ => {}
         }
     }
-    // A poll's output and its command's end come in either order.
-    results
-        .iter()
-        .filter_map(|(process, output)| ends.get(process).filter(|end| shows_end(output, end)))
-        .filter_map(|end| str_of(end, "id").map(str::to_owned))
+    proven
+        .into_iter()
+        .filter(|(process, id)| !reused.contains(process) && items.contains(id))
+        .map(|(_, id)| id)
         .collect()
 }
 
@@ -111,22 +116,44 @@ fn tail(path: &Path, limit: u64) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The one process a code-mode script polls, named by number: `write_stdin({session_id:123,…`.
+/// The process a code-mode script polls, when polling it and printing that poll's result is all
+/// the script does, in one of the two shapes models write: `text(await tools.write_stdin({…}));`
+/// or `const r = await tools.write_stdin({…}); text(JSON.stringify(r))`.
 fn polled_process(script: &str) -> Option<&str> {
-    if !script.contains("write_stdin") {
-        return None;
+    const POLL: &str = "await tools.write_stdin({";
+    let script = script.trim();
+    let script = script.strip_suffix(';').unwrap_or(script);
+    if let Some(rest) = script.strip_prefix("text(") {
+        return poll_target(rest.strip_prefix(POLL)?.strip_suffix("}))")?);
     }
-    let mut named = script.split("session_id:").skip(1);
-    let rest = named.next()?.trim_start();
-    if named.next().is_some() {
-        return None;
-    }
-    let digits = rest.chars().take_while(char::is_ascii_digit).count();
-    (digits > 0).then(|| &rest[..digits])
+    let (name, rest) = script.strip_prefix("const ")?.split_once('=')?;
+    let name = name.trim();
+    let (args, print) = rest.trim_start().strip_prefix(POLL)?.split_once("});")?;
+    (name.chars().all(char::is_alphanumeric)
+        && print.trim() == format!("text(JSON.stringify({name}))"))
+    .then(|| poll_target(args))?
 }
 
-/// A script's `output` holds a result with the command's exit code and the end of its output.
-/// Part of it may have been read by an earlier poll; none of it, of one that printed, is no proof.
+/// The process in a poll's arguments: an empty write to one whole number. Anything else in them
+/// (an expression, a second id, input) may mean another process or another result.
+fn poll_target(args: &str) -> Option<&str> {
+    let whole = |value: &str| !value.is_empty() && value.chars().all(|c| c.is_ascii_digit());
+    let mut process = None;
+    for arg in args.split(',') {
+        let (key, value) = arg.split_once(':')?;
+        let value = value.trim();
+        match key.trim() {
+            "session_id" if process.is_none() && whole(value) => process = Some(value),
+            "chars" if value == "\"\"" => {}
+            "yield_time_ms" | "max_output_tokens" if whole(value) => {}
+            _ => return None,
+        }
+    }
+    process
+}
+
+/// A script's `output` holds a result with the command's exit code and all it printed, so the
+/// model read the answer here: read in pieces, an earlier piece may never have been shown to it.
 fn shows_end(output: &Value, end: &Value) -> bool {
     let printed = str_of(end, "aggregated_output").unwrap_or_default();
     output.as_array().into_iter().flatten().any(|part| {
@@ -137,10 +164,8 @@ fn shows_end(output: &Value, end: &Value) -> bool {
         };
         result
             .get("exit_code")
-            .is_some_and(|code| Some(code) == end.get("exit_code"))
-            && str_of(&result, "output").is_some_and(|seen| {
-                printed.ends_with(seen) && seen.is_empty() == printed.is_empty()
-            })
+            .is_some_and(|code| code.is_number() && Some(code) == end.get("exit_code"))
+            && str_of(&result, "output") == Some(printed)
     })
 }
 
@@ -529,61 +554,143 @@ mod tests {
     const POLL_1: &str = "text(await tools.write_stdin({session_id:111,chars:\"\"}));";
     const ENDED: &str = r#"{"exit_code":0,"output":"one\n"}"#;
 
+    /// The scripts seen live, each model's own way of writing a poll, all still prove their end.
+    #[test]
+    fn the_polls_seen_live_are_proof() {
+        for script in [
+            "const r = await tools.write_stdin({session_id:111, chars:\"\", yield_time_ms:8000});\ntext(JSON.stringify(r))\n",
+            "const r = await tools.write_stdin({session_id:111,chars:\"\",yield_time_ms:4000}); text(JSON.stringify(r))\n",
+            "const r = await tools.write_stdin({session_id:111,chars:\"\",yield_time_ms:4000});\ntext(JSON.stringify(r));\n",
+            "text(await tools.write_stdin({session_id:111,chars:\"\",yield_time_ms:4000}));\n",
+        ] {
+            let [call, output] = poll_lines("c1", script, ENDED);
+            let lines = [end_line("a", "111", "one\n"), call, output];
+            assert_eq!(ends_read_of("live", &lines, &["a"]), ["a"], "{script}");
+        }
+    }
+
     /// Two commands in a turn: a poll that read the first's end proves nothing of the second's,
-    /// though both ended, and whichever way round its end and output are recorded.
+    /// though both ended with the same words.
     #[test]
     fn a_polled_end_proves_only_its_own_command() {
         let [call, output] = poll_lines("c1", POLL_1, ENDED);
-        for lines in [
-            [
-                end_line("a", "111", "one\n"),
-                end_line("b", "222", "one\n"),
-                call.clone(),
-                output.clone(),
-            ],
-            [
-                call.clone(),
-                output.clone(),
-                end_line("a", "111", "one\n"),
-                end_line("b", "222", "one\n"),
-            ],
-        ] {
-            assert_eq!(ends_read_of("own", &lines, &["a", "b"]), ["a"]);
-        }
+        let lines = [
+            end_line("a", "111", "one\n"),
+            end_line("b", "222", "one\n"),
+            call,
+            output,
+        ];
+        assert_eq!(ends_read_of("own", &lines, &["a", "b"]), ["a"]);
     }
 
     #[test]
     fn a_poll_that_saw_it_running_proves_nothing() {
         let [call, output] = poll_lines("c1", POLL_1, r#"{"session_id":111,"output":""}"#);
-        let lines = [call, output, end_line("a", "111", "one\n")];
+        let lines = [end_line("a", "111", "one\n"), call, output];
         assert!(ends_read_of("running", &lines, &["a"]).is_empty());
     }
 
     /// The answer's own words can't pass for the proof, nor another command's result for its.
     #[test]
     fn only_a_result_of_this_commands_end_is_proof() {
-        for (script, result) in [
-            (POLL_1, r#"{"exit_code":0,"output":"other\n"}"#),
-            (POLL_1, r#"{"exit_code":3,"output":"one\n"}"#),
-            (POLL_1, r#"{"exit_code":0,"output":""}"#),
-            (POLL_1, r#""exit_code":0"#),
-            ("text(await tools.exec_command({cmd:\"echo one\"}));", ENDED),
-            (
-                "for (const s of [1]) await tools.write_stdin({session_id:s});",
-                ENDED,
-            ),
-            (
-                "await tools.write_stdin({session_id:111});await tools.write_stdin({session_id:222});",
-                ENDED,
-            ),
+        for result in [
+            r#"{"exit_code":0,"output":"other\n"}"#,
+            r#"{"exit_code":3,"output":"one\n"}"#,
+            r#"{"exit_code":null,"output":"one\n"}"#,
+            r#"{"exit_code":0,"output":""}"#,
+            r#""exit_code":0"#,
         ] {
-            let [call, output] = poll_lines("c1", script, result);
-            let lines = [call, output, end_line("a", "111", "one\n")];
+            let [call, output] = poll_lines("c1", POLL_1, result);
+            let lines = [end_line("a", "111", "one\n"), call, output];
+            assert!(ends_read_of("other", &lines, &["a"]).is_empty(), "{result}");
+        }
+    }
+
+    /// A last poll that printed only the end of the output doesn't show the answer before it,
+    /// and a script may have dropped what the polls before it read.
+    #[test]
+    fn a_result_holding_part_of_the_output_is_no_proof() {
+        for printed in ["\n", "lue\n"] {
+            let result = serde_json::json!({"exit_code": 0, "output": printed}).to_string();
+            let [call, output] = poll_lines("c1", POLL_1, &result);
+            let lines = [end_line("a", "111", "Which colour?: blue\n"), call, output];
             assert!(
-                ends_read_of("other", &lines, &["a"]).is_empty(),
-                "{script} {result}"
+                ends_read_of("part", &lines, &["a"]).is_empty(),
+                "{printed:?}"
             );
         }
+    }
+
+    /// Only a script that does nothing but poll and print that poll's result: another's printed
+    /// result, or a result it dropped, says nothing of what the model read.
+    #[test]
+    fn a_script_doing_anything_else_is_no_proof() {
+        for script in [
+            "text(await tools.exec_command({cmd:\"echo one\"}));",
+            "await tools.write_stdin({session_id:111}); text(await tools.exec_command({cmd:\"echo one\"}));",
+            "text(await tools.exec_command({cmd:\"echo one\"})); await tools.write_stdin({session_id:111});",
+            "const r = await tools.write_stdin({session_id:111}); text(JSON.stringify(other))",
+            "const r = await tools.write_stdin({session_id:111}); const o = await tools.exec_command({cmd:\"echo one\"}); text(JSON.stringify(o))",
+            "const r = await tools.write_stdin({session_id:111}); text(\"{}\"); text(JSON.stringify(r))",
+            "for (const s of [1]) await tools.write_stdin({session_id:s});",
+            "await tools.write_stdin({session_id:111});await tools.write_stdin({session_id:222});",
+            "text(await tools.write_stdin({session_id:222,session_id:111}));",
+            "text(await tools.write_stdin({session_id:111,chars:\"yes\"}));",
+        ] {
+            let [call, output] = poll_lines("c1", script, ENDED);
+            let lines = [end_line("a", "111", "one\n"), call, output];
+            assert!(ends_read_of("mixed", &lines, &["a"]).is_empty(), "{script}");
+        }
+    }
+
+    /// `111+1` polls process 112: only a whole number names its process.
+    #[test]
+    fn a_process_named_by_anything_but_a_whole_number_is_no_proof() {
+        for id in [
+            "111+1", "111_0", "111e0", "111.0", "111/*x*/", "0x6f", "s", "\"111\"", "",
+        ] {
+            let script = format!("text(await tools.write_stdin({{session_id:{id},chars:\"\"}}));");
+            let [call, output] = poll_lines("c1", &script, ENDED);
+            let lines = [end_line("a", "111", "one\n"), call, output];
+            assert!(ends_read_of("number", &lines, &["a"]).is_empty(), "{id}");
+        }
+    }
+
+    /// A process id can come back: a poll of an older command, kept in the file through a resume
+    /// too, says nothing of the new one that got its id, nor a later one's of this one.
+    #[test]
+    fn a_reused_process_id_is_no_proof() {
+        let [call, output] = poll_lines("c1", POLL_1, ENDED);
+        let older_polled = [
+            end_line("old", "111", "one\n"),
+            call.clone(),
+            output.clone(),
+            end_line("new", "111", "one\n"),
+        ];
+        assert!(ends_read_of("older", &older_polled, &["new"]).is_empty());
+        let later_polled = [
+            end_line("a", "111", "one\n"),
+            end_line("later", "111", "one\n"),
+            call.clone(),
+            output.clone(),
+        ];
+        assert!(ends_read_of("later", &later_polled, &["a"]).is_empty());
+        // The id came back after the proof was read: which command it spoke of can't be told.
+        let came_back = [
+            end_line("a", "111", "one\n"),
+            call,
+            output,
+            end_line("later", "111", "one\n"),
+        ];
+        assert!(ends_read_of("back", &came_back, &["a"]).is_empty());
+    }
+
+    /// A poll's output recorded before its command's end: the end is what ties them, so no proof.
+    #[test]
+    fn a_result_before_its_commands_end_is_no_proof() {
+        let [call, output] = poll_lines("c1", POLL_1, ENDED);
+        let lines = [call, output, end_line("a", "111", "one\n")];
+        assert!(ends_read_of("before", &lines, &["a"]).is_empty());
     }
 
     #[test]
