@@ -28,6 +28,7 @@ mod browser_ui;
 mod launcher;
 mod login_item;
 mod notifications;
+mod opening;
 mod reports;
 mod shell;
 mod simulator;
@@ -371,7 +372,7 @@ async fn export_conventions(
 }
 
 /// Opens an artifact with the system's default app for its type (a copy of it, named
-/// `file_name`).
+/// `file_name`), unless that would run it ([`open_checked`]).
 #[tauri::command]
 async fn open_artifact(
     app: tauri::AppHandle,
@@ -379,32 +380,62 @@ async fn open_artifact(
     id: String,
     file_name: String,
 ) -> Result<(), IpcError> {
-    let internal = |message: String| IpcError {
-        code: brigadier_ipc::protocol::ErrorCode::Internal,
-        message,
-    };
     let Response::OpenArtifact { path } = state
         .bridge
         .request(Request::OpenArtifact { id, file_name })
         .await?
     else {
-        return Err(internal("unexpected response".into()));
+        return Err(IpcError {
+            code: brigadier_ipc::protocol::ErrorCode::Internal,
+            message: "unexpected response".into(),
+        });
     };
-    app.opener()
-        .open_path(path, None::<&str>)
-        .map_err(|err| internal(format!("could not open it: {err}")))
+    open_checked(&app, &path, None)
 }
 
 /// Opens a folder (a session's working directory) in the system file manager, or with the
-/// app named `with` ("Terminal" on macOS).
+/// app named `with` ("Terminal" on macOS); or a file with its default app, unless that would
+/// run it ([`open_checked`]).
 #[tauri::command]
 fn open_folder(app: tauri::AppHandle, path: String, with: Option<String>) -> Result<(), IpcError> {
-    app.opener()
-        .open_path(path, with.as_deref())
-        .map_err(|err| IpcError {
-            code: brigadier_ipc::protocol::ErrorCode::Internal,
-            message: format!("could not open it: {err}"),
-        })
+    open_checked(&app, &path, with.as_deref())
+}
+
+/// Opens `path` with its default app, or with the app named `with`, as [`opening::decide`]
+/// allows (#770): the path comes from a worker's file name or a model's link, so a file that
+/// would run something is shown in the file manager instead, and a URI is refused.
+fn open_checked(app: &tauri::AppHandle, path: &str, with: Option<&str>) -> Result<(), IpcError> {
+    let failed = |code, message| IpcError { code, message };
+    match opening::decide(path, with.is_some()) {
+        opening::Opening::Open => app.opener().open_path(path, with).map_err(|err| {
+            failed(
+                brigadier_ipc::protocol::ErrorCode::Internal,
+                format!("could not open it: {err}"),
+            )
+        }),
+        opening::Opening::Reveal(name) => {
+            let manager = if cfg!(target_os = "macos") {
+                "Finder"
+            } else if cfg!(windows) {
+                "File Explorer"
+            } else {
+                "the file manager"
+            };
+            app.opener().reveal_item_in_dir(path).map_err(|err| {
+                failed(
+                    brigadier_ipc::protocol::ErrorCode::Internal,
+                    format!("{name} wasn't opened, as it could run a program, nor shown: {err}"),
+                )
+            })?;
+            Err(failed(
+                brigadier_ipc::protocol::ErrorCode::Invalid,
+                format!("{name} wasn't opened: it could run a program. It's shown in {manager}."),
+            ))
+        }
+        opening::Opening::Refuse(why) => {
+            Err(failed(brigadier_ipc::protocol::ErrorCode::Invalid, why))
+        }
+    }
 }
 
 /// Opens a web link in the user's browser, or an email link as a new message in their mail app

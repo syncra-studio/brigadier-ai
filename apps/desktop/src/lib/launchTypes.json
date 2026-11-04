@@ -1,0 +1,15 @@
+{
+  "about": "File types the system's default app would run instead of showing, by extension (lower case, no dot). One list for the app (attachments: components/conversation/elements/attachment-open.ts) and the shell (src-tauri/src/opening.rs), which never hands these to the default app. launches: apps, installers, bundles, compiled scripts, shortcuts and links that start something, disk images that mount. scripts: source text that runs when launched; the app's reader shows it instead.",
+  "launches": [
+    "app", "command", "tool", "terminal", "workflow", "wflow", "action", "pkg", "mpkg", "dmg", "scpt", "scptd", "osascript", "osax",
+    "prefpane", "saver", "qlgenerator", "kext", "mobileconfig", "shortcut", "widget", "plugin", "bundle", "webloc", "inetloc", "fileloc", "jar", "pyc",
+    "exe", "com", "msi", "msix", "scr", "pif", "vbe", "jse", "wsf", "wsh", "hta", "lnk", "reg", "cpl", "url",
+    "msp", "mst", "msixbundle", "appx", "appxbundle", "appinstaller", "appref-ms", "application", "xbap", "gadget", "msc", "inf", "scf", "chm", "hlp",
+    "settingcontent-ms", "library-ms", "search-ms", "searchconnector-ms", "website", "diagcab", "sct", "wsc", "ws", "vb", "psm1", "psd1", "ps1xml", "psc1",
+    "jnlp", "rdp", "xll", "iso", "img", "vhd", "vhdx",
+    "appimage", "desktop", "run", "deb", "rpm"
+  ],
+  "scripts": [
+    "sh", "bash", "zsh", "csh", "tcsh", "ksh", "fish", "py", "pyw", "rb", "pl", "php", "lua", "tcl", "js", "mjs", "cjs", "ps1", "bat", "cmd", "vbs", "applescript"
+  ]
+}
