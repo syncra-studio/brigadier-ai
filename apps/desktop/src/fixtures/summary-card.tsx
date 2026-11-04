@@ -113,6 +113,8 @@ useApp.setState((state) => ({
 const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector);
 const toggle = () => $<HTMLButtonElement>('button[aria-label="Context"]');
 const pressed = () => toggle()?.getAttribute("aria-pressed") === "true";
+/** A draft's toolbar: + in place of Context. */
+const newTab = () => $<HTMLButtonElement>('button[aria-label="New tab"]');
 /** The card can be seen: pinned beside the thread, or floating over it. */
 const open = () => pressed() || useSummary.getState().floating;
 const card = () => [...document.querySelectorAll<HTMLElement>('[data-slot="summary-card"]')].find((element) => element.getClientRects().length > 0
@@ -144,19 +146,15 @@ function setUp(id: string): void {
 async function drive(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   await fixtureInput({ type: "viewport", width: 992, height: 900 });
-  await until(() => toggle() && measured(), "the new chat's top bar");
+  await until(newTab, "the new chat's top bar");
   await frames();
-  seen.freshClosed = !open() && !card();
+  seen.freshClosed = !toggle() && !open() && !card();
 
-  // A new session's screen, its card left closed (opened and closed again), then its first send.
+  // A new session's screen has no card or Context toggle, then its first send opens the card.
   await select({ type: "draft", kind: "session", projectId: "project" });
-  await until(() => toggle() && measured(), "the new session's screen");
-  toggle()!.click();
-  await until(pressed, "Context to open the draft's card");
-  toggle()!.click();
-  await until(() => !pressed(), "Context to close the draft's card");
+  await until(newTab, "the new session's screen");
   await frames();
-  seen.draftClosed = !open();
+  seen.draftClosed = !toggle() && !open() && !card();
   void send({ text: "Start the release notes", attachments: [], mentions: [] }, { kind: "session", projectId: "project", setup: null }).catch(() => {});
   await until(() => useApp.getState().selection.type === "conversation" && measured(), "the new session's thread");
   await until(() => pressed() && card(), "the new session's card to open by itself").catch(() => {});
@@ -221,9 +219,9 @@ async function drive(): Promise<Record<string, unknown>> {
 
   // The same narrow pane: a new session's first send opens its card once, floating over the thread.
   await select({ type: "draft", kind: "session", projectId: "project" });
-  await until(() => toggle() && measured() && useSummary.getState().layout === "float", "the narrow new session's screen");
+  await until(newTab, "the narrow new session's screen");
   await frames();
-  seen.narrowDraftClosed = !open() && !card();
+  seen.narrowDraftClosed = !toggle() && !open() && !card();
   void send({ text: "Start in a narrow window", attachments: [], mentions: [] }, { kind: "session", projectId: "project", setup: null }).catch(() => {});
   await until(() => useApp.getState().selection.type === "conversation" && measured(), "the narrow new session's thread");
   await until(() => useSummary.getState().floating && card(), "the narrow new session's card to float open").catch(() => {});

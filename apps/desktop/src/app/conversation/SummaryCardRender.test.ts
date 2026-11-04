@@ -8,7 +8,7 @@ test("the summary card starts closed, opens by itself once on a new session's fi
   assert.equal(seen.error, undefined);
   assert.equal(seen.freshClosed, true, "a fresh install's new chat has its card closed");
   assert.equal(seen.draftClosed, true, "the new session's screen has its card closed");
-  assert.equal(seen.firstSendOpened, true, "its first send opens the card by itself, though closed on the draft");
+  assert.equal(seen.firstSendOpened, true, "its first send opens the card by itself");
   assert.equal(seen.firstSendOnce, true, "only once: closed by the user, it stays closed");
   assert.equal(seen.layout, "shift", "the default window keeps the thread beside the card");
   assert.equal(seen.noSetupClosed, true, "a session with nothing to show yet keeps it closed");
