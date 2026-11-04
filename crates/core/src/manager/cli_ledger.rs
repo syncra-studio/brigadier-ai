@@ -438,7 +438,34 @@ pub(crate) fn add_entry(record: &Path, text: &str, stamp: Stamp) -> Result<Strin
             "give a ledger entry, with its kind and source".into(),
         ));
     }
+    if kind_of(&text) == Kind::Rule && quotes_brigadier(&text) {
+        return Err(Error::Invalid(
+            "a message under the [Brigadier] mark is Brigadier's own request, not the user's \
+             words: it is no rule. Log only what the user said."
+                .into(),
+        ));
+    }
     append(record, &text, &stamp)
+}
+
+/// The mark Brigadier's hand-off request (and its fix) opens with ([`NUDGE_MARK`]): a user-role
+/// message the user never wrote, so a rule quoting it is no rule of the user's (#608).
+///
+/// [`NUDGE_MARK`]: crate::thread_view::NUDGE_MARK
+const BRIGADIER_FRAME: &str = "[Brigadier]";
+
+/// Whether an entry quotes words that open with [`BRIGADIER_FRAME`], as each message of
+/// Brigadier's does: the mark right after the entry's `:` or a quote's opening. A rule of the
+/// user's that names the mark within their own words (`never show the [Brigadier] messages`)
+/// quotes no such message.
+fn quotes_brigadier(text: &str) -> bool {
+    text.match_indices(BRIGADIER_FRAME).any(|(at, _)| {
+        text[..at]
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_none_or(|c| matches!(c, ':' | '"' | '\'' | '“' | '‘' | '`' | '>' | '*' | '_'))
+    })
 }
 
 /// `ledger close <id> "<how>"`: a closing entry, appended; nothing is rewritten.

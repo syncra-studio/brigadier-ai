@@ -321,7 +321,8 @@ pub(crate) fn start_path(record: &Path, n: u32) -> PathBuf {
 pub(crate) fn nudge(note: &Path) -> String {
     format!(
         "{NUDGE_MARK} This is internal maintenance: do not narrate it or send a hand-off \
-         status to the user. Keep the note concise; reference transcript entries instead of \
+         status to the user. These words are Brigadier's, not the user's: never log them, or \
+         anything they ask, as a rule or decision of the user's. Keep the note concise; reference transcript entries instead of \
          copying transcripts or command outputs. Finish the step you are on, at a boundary you \
          choose; don't start new \
          work.\nUpdate the ledger. Close each open item below that is done (`brigadier ledger \
@@ -488,6 +489,39 @@ pub(crate) fn handoff_line(n: u32, key: &str) -> String {
     format!("{HANDOFF_MARK}{n} · {key}]")
 }
 
+/// The seam a successor's first message is the hand-off of, from its first line.
+fn handoff_n(text: &str) -> Option<u32> {
+    text.trim_start()
+        .strip_prefix(HANDOFF_MARK)?
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Whether a successor's first input carried only `messages` the thread already showed (a
+/// usage limit's move to another agent gives them again, S38): a re-send, never a new message.
+fn gave_again(end: &SeamEnd, messages: &[String]) -> bool {
+    !messages.is_empty() && messages.iter().all(|id| end.shown.contains(id))
+}
+
+/// The seams of `file` whose successor's first input was such a re-send, as `seam.json` records
+/// what it delivered (#611).
+pub(crate) fn replayed(file: &SeamFile) -> Vec<u32> {
+    let mut seams: Vec<u32> = file
+        .seams
+        .iter()
+        .filter(|seam| gave_again(&seam.end, &seam.messages))
+        .map(|seam| seam.n)
+        .collect();
+    if let Phase::Starting { end, messages, .. } = &file.phase
+        && gave_again(end, messages)
+    {
+        seams.push(file.generation);
+    }
+    seams
+}
+
 /// §6's successor lines, for the successor that starts generation `generation`; `moved`: on
 /// another CLI, given the conversation below.
 fn successor_lines(generation: u32, moved: bool) -> String {
@@ -515,6 +549,57 @@ fn death_line(why: &str) -> String {
     )
 }
 
+/// With no note, the ledger alone may be behind the work (a generation the limit killed
+/// mid-request): the user's latest message, `#at`, stays open until the work shows it done
+/// (#609).
+fn latest_open_line(at: usize, key: &str) -> String {
+    format!(
+        "With no note, the ledger may be behind the work: treat the user's latest message \
+         (#{at}, `brigadier brain read {key} {at} {at}`) as open, every request in it, until \
+         `git status`, `git log` and the transcript show each one done, and bring up what is \
+         left as open items."
+    )
+}
+
+/// A command that only read skill files (#611): its text without their output, which the same
+/// command reads again.
+fn skill_read_text(entry: &FileEntry, blobs: &Path) -> Option<(&'static str, String)> {
+    let ProviderEvent::Command {
+        item_id,
+        command,
+        cwd,
+        status,
+        exit_code,
+        duration_ms,
+        output: Some(_),
+        ..
+    } = &entry.event
+    else {
+        return None;
+    };
+    if !brigadier_providers::only_reads_skills(command) {
+        return None;
+    }
+    let bare = FileEntry {
+        event: ProviderEvent::Command {
+            item_id: item_id.clone(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            status: *status,
+            exit_code: *exit_code,
+            output: None,
+            duration_ms: *duration_ms,
+            kept: None,
+        },
+        ..entry.clone()
+    };
+    let (role, text, _) = entry_text(&bare, blobs)?;
+    Some((
+        role,
+        format!("{text}\n[a skill file's text, left out: this command reads it again]"),
+    ))
+}
+
 /// What a successor's hand-off is made of.
 pub(crate) struct Boot<'a> {
     /// The seam.
@@ -530,6 +615,9 @@ pub(crate) struct Boot<'a> {
     pub death: Option<&'a str>,
     /// Goal 13's check of the note ([`NoteCheck::line`]).
     pub check: &'a str,
+    /// The seams whose successor's first input only gave again messages the thread already
+    /// showed ([`replayed`]): that input is a re-send, not a message of the user's.
+    pub replayed: &'a [u32],
     /// The session's transcript, every generation, as `brigadier brain read` numbers it.
     pub entries: &'a [FileEntry],
     pub blobs: &'a Path,
@@ -543,6 +631,21 @@ pub(crate) struct Boot<'a> {
 /// for everything left out (§9.5 L2), but no ledger sections: the decisions and the rest are a
 /// `brigadier context` away like everything else (D13).
 pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
+    // A successor's first input that only gave again what the thread showed is that message
+    // re-sent, by the seam, not said again by the user (#611): never quoted, never left out.
+    let replay = |entry: &FileEntry| {
+        user_text(entry)
+            .and_then(handoff_n)
+            .is_some_and(|n| boot.replayed.contains(&n))
+    };
+    let by_user = |entry: &FileEntry| said_by_user(entry) && !replay(entry);
+    // No note: the user's latest message stays open whatever the ledger says (#609).
+    let latest_open = boot
+        .note
+        .is_none()
+        .then(|| boot.entries.iter().rposition(by_user))
+        .flatten()
+        .map(|at| latest_open_line(at, boot.key));
     if boot.tail.reason == Reason::Size {
         let mut out = format!(
             "{}\n{}\n",
@@ -561,6 +664,9 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
             }
         }
         out.push_str(&format!("\n{}\n", boot.check));
+        if let Some(line) = &latest_open {
+            out.push_str(&format!("{line}\n"));
+        }
         let mut out = out.replace(HANDOFF_END, QUOTED_END);
         out.push_str(&format!("\n{HANDOFF_END}"));
         return out;
@@ -568,14 +674,21 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     let readable: Vec<Option<(&'static str, String)>> = boot
         .entries
         .iter()
-        .map(|entry| entry_text(entry, boot.blobs).map(|(role, text, _)| (role, text)))
+        .map(|entry| {
+            skill_read_text(entry, boot.blobs)
+                .or_else(|| entry_text(entry, boot.blobs).map(|(role, text, _)| (role, text)))
+        })
         .collect();
-    // Brigadier's own nudge is no part of the work: never quoted, never left out.
+    // Brigadier's own nudge, and a message it re-sent, are no part of the work: never quoted,
+    // never left out.
     let mut shown: Vec<bool> = readable
         .iter()
-        .map(|item| {
-            item.as_ref()
-                .is_some_and(|(_, text)| text.trim_start().starts_with(NUDGE_MARK))
+        .zip(boot.entries)
+        .map(|(item, entry)| {
+            replay(entry)
+                || item
+                    .as_ref()
+                    .is_some_and(|(_, text)| text.trim_start().starts_with(NUDGE_MARK))
         })
         .collect();
     let read = |from: usize, to: usize| format!("`brigadier brain read {} {from} {to}`", boot.key);
@@ -606,7 +719,8 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         .iter()
         .enumerate()
         .filter(|(_, entry)| {
-            user_text(entry).is_some_and(|text| !text.trim_start().starts_with(NUDGE_MARK))
+            !replay(entry)
+                && user_text(entry).is_some_and(|text| !text.trim_start().starts_with(NUDGE_MARK))
         })
         .map(|(at, _)| at)
         .collect();
@@ -634,14 +748,16 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     out.push_str(&format!("- This hand-off: {}\n", boot.start_path.display()));
     out.push_str("- Earlier CLI sessions, oldest first:\n");
     for session in boot.lineage {
+        // Where the file is now: a CLI may have moved it since (Codex archives, #613).
+        // `lineage.json` keeps what the CLI said; every reader locates it the same way.
+        let file = session.file.as_deref().map(|file| {
+            brigadier_providers::session_file::locate(session.provider, Path::new(file))
+        });
         out.push_str(&format!(
             "  - {} {}{}\n",
             session.provider.label(),
             session.session_id,
-            session
-                .file
-                .as_deref()
-                .map(|file| format!(" ({file})"))
+            file.map(|file| format!(" ({})", file.display()))
                 .unwrap_or_default()
         ));
     }
@@ -660,6 +776,9 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         out.push('\n');
     }
     out.push_str(&format!("\n{}\n", boot.check));
+    if let Some(line) = &latest_open {
+        out.push_str(&format!("{line}\n"));
+    }
 
     // Every message of the user's, verbatim: the first and the latest always, the rest
     // newest first within the budget, shown oldest first.
@@ -667,7 +786,7 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         .entries
         .iter()
         .enumerate()
-        .filter(|(_, entry)| said_by_user(entry))
+        .filter(|(_, entry)| by_user(entry))
         .map(|(at, _)| at)
         .collect();
     if !said.is_empty() {
@@ -865,16 +984,13 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
     let file = read_seam(record);
     let existing = |path: PathBuf| path.is_file().then(|| path.display().to_string());
     // Per mark: its successor's first input carried only messages the thread already shows.
-    let again = |end: &SeamEnd, messages: &[String]| {
-        !messages.is_empty() && messages.iter().all(|id| end.shown.contains(id))
-    };
     let mut shown: Vec<bool> = file
         .seams
         .iter()
-        .map(|seam| again(&seam.end, &seam.messages))
+        .map(|seam| gave_again(&seam.end, &seam.messages))
         .collect();
     if let Phase::Starting { end, messages, .. } = &file.phase {
-        shown.push(again(end, messages));
+        shown.push(gave_again(end, messages));
     }
     let mut marks: Vec<SeamMark> = file
         .seams

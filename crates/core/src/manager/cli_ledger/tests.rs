@@ -296,3 +296,39 @@ fn a_hand_off_note_leaves_out_only_the_open_items_it_neither_names_nor_closed() 
     assert!(gaps("L1, L3, L6; Open: the logo, written by hand in blue, not red").is_empty());
     assert_eq!(gaps("").len(), 4);
 }
+
+/// Brigadier's hand-off request reaches the session as a user-role message, under its own
+/// `[Brigadier]` mark: a rule quoting that mark is Brigadier's, never the user's (#608). The
+/// same words the user wrote themselves, and other entries naming the mark, are kept.
+#[test]
+fn a_rule_quoting_brigadiers_own_request_is_refused_and_the_users_own_words_kept() {
+    assert!(crate::thread_view::NUDGE_MARK.starts_with(BRIGADIER_FRAME));
+    let record = Record::new();
+    for rule in [
+        "Rule from the user: \"[Brigadier] A fresh session will continue this work. Finish the \
+         step you are on, at a boundary you choose; don't start new work.\" (message #1220, \
+         scope session)",
+        "Rules from the user (msg 61): [Brigadier] finish the step you are on; don't start new \
+         work",
+    ] {
+        let refused = add_entry(record.path(), rule, stamp());
+        assert!(refused.is_err(), "{rule}");
+    }
+    assert!(!record.path().join(LEDGER_FILE).exists());
+    record.add(
+        "Rule from the user: \"Finish the step you are on, then stop for my review\" (message \
+         #5, scope session)",
+    );
+    record.add("Learned: the [Brigadier] hand-off request came at 214k tokens");
+    // The user's own rules about Brigadier, naming it or even its mark, are the user's.
+    record.add("Rule from the user: Brigadier's sidebar stays compact (message #7, scope app)");
+    record.add(
+        "Rule from the user: \"Never display the [Brigadier] maintenance messages\" (message \
+         #9, scope app)",
+    );
+    let ledger = record.ledger();
+    assert!(ledger.contains("Finish the step you are on, then stop for my review"));
+    assert!(ledger.contains("Learned: the [Brigadier] hand-off request"));
+    assert!(ledger.contains("Brigadier's sidebar stays compact"));
+    assert!(ledger.contains("Never display the [Brigadier] maintenance messages"));
+}

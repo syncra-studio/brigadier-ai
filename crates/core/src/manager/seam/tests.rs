@@ -74,6 +74,7 @@ fn boot_tail(
         start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
         death,
         check: "Hand-off check: the ledger has no open items.",
+        replayed: &[],
         entries,
         blobs: Path::new("/nowhere"),
     })
@@ -742,6 +743,7 @@ fn a_note_with_gaps_or_none_fails_the_check_and_its_line_carries_what_is_left_ou
         start_path: &start_path(&record, 1),
         death: None,
         check: &passed.line(),
+        replayed: &[],
         entries: &[],
         blobs: &record,
     });
@@ -775,4 +777,232 @@ fn the_nudge_carries_the_open_items_and_rules_and_the_hand_off_its_workers() {
         handoff,
         format!("hand-off\n## Workers\nID    STATE\nab12  working\n\n{end}")
     );
+}
+
+/// A generation the limit killed mid-request wrote no note, and its ledger may never have opened
+/// the work: the hand-off keeps the user's latest message open rather than "no open items"
+/// (#609), on a move to another CLI and on the same CLI alike.
+#[test]
+fn a_death_without_a_note_keeps_the_users_latest_message_open() {
+    let entries = vec![
+        message("u0", Role::User, "Earlier, done."),
+        message("a0", Role::Assistant, "Done."),
+        message(
+            "u1",
+            Role::User,
+            "Six requests: one, two, three, four, five, six.",
+        ),
+        message(
+            "a1",
+            Role::Assistant,
+            "Committing, then on to the approval-card lag.",
+        ),
+    ];
+    let quota = TailBudget {
+        reason: Reason::Quota,
+        hot_tokens: Some(200_000),
+        target_window: Some(272_000),
+    };
+    let size = TailBudget {
+        reason: Reason::Size,
+        hot_tokens: None,
+        target_window: None,
+    };
+    let open = "treat the user's latest message (#2, `brigadier brain read abcd1234 2 2`) as open";
+    for tail in [quota, size] {
+        let text = boot_tail(&entries, None, Some("usage limit on Claude"), tail);
+        assert!(text.contains(open), "{text}");
+    }
+    // With a note, the note and the ledger's check say what is open.
+    let text = boot_tail(&entries, Some("Next: request four (L3)."), None, quota);
+    assert!(!text.contains("treat the user's latest message"), "{text}");
+}
+
+/// Codex moves an archived session's rollout to `archived_sessions/`: the Map names the file
+/// where it is now, not where the CLI first said it was (#613).
+#[test]
+fn the_map_names_a_moved_codex_rollout_where_it_is_now() {
+    let home = std::env::temp_dir().join(format!("win-issues-w14-codex-{}", uuid::Uuid::new_v4()));
+    let recorded = home
+        .join("sessions")
+        .join("2026")
+        .join("10")
+        .join("24")
+        .join("rollout-01a16f93.jsonl");
+    let archived = home
+        .join("archived_sessions")
+        .join("rollout-01a16f93.jsonl");
+    std::fs::create_dir_all(archived.parent().unwrap()).unwrap();
+    std::fs::write(&archived, "").unwrap();
+    let lineage = [crate::manager::session_dir::LineageEntry {
+        provider: ProviderKind::Codex,
+        session_id: "01a16f93".into(),
+        file: Some(recorded.display().to_string()),
+        started_at: 0,
+        forgotten: false,
+    }];
+    let entries = vec![message("u1", Role::User, "Go on.")];
+    let text = bootstrap(&Boot {
+        n: 2,
+        tail: TailBudget {
+            reason: Reason::Request,
+            hot_tokens: None,
+            target_window: None,
+        },
+        key: "abcd1234",
+        folder: Path::new("/s/abcd1234"),
+        lineage: &lineage,
+        note_path: Path::new("/s/abcd1234/record/handoff/2.md"),
+        note: None,
+        start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
+        death: None,
+        check: "Hand-off check: the ledger has no open items.",
+        replayed: &[],
+        entries: &entries,
+        blobs: Path::new("/nowhere"),
+    });
+    let _ = std::fs::remove_dir_all(&home);
+    assert!(
+        text.contains(&format!("01a16f93 ({})", archived.display())),
+        "{text}"
+    );
+    assert!(!text.contains(&recorded.display().to_string()), "{text}");
+}
+
+/// A move to another CLI's hand-off of `entries`, given which seams' first inputs were re-sends.
+fn boot_replayed(entries: &[FileEntry], replayed: &[u32]) -> String {
+    bootstrap(&Boot {
+        n: 2,
+        tail: TailBudget {
+            reason: Reason::Quota,
+            hot_tokens: Some(200_000),
+            target_window: Some(272_000),
+        },
+        key: "abcd1234",
+        folder: Path::new("/s/abcd1234"),
+        lineage: &[],
+        note_path: Path::new("/s/abcd1234/record/handoff/2.md"),
+        note: Some("Next: request four."),
+        start_path: Path::new("/s/abcd1234/record/handoff/2-start.md"),
+        death: None,
+        check: "Hand-off check: the ledger has no open items.",
+        replayed,
+        entries,
+        blobs: Path::new("/nowhere"),
+    })
+}
+
+/// Seam `n`'s successor's first message: its hand-off, then `message`.
+fn successor_start(n: u32, message: &str) -> String {
+    format!(
+        "{}\nThe earlier hand-off.\n{HANDOFF_END}\n\n{message}",
+        handoff_line(n, "abcd1234")
+    )
+}
+
+/// A usage limit's move gives the successor the message the old CLI had again; seam.json
+/// records that re-send, and the next hand-off quotes the message once (#611).
+#[test]
+fn a_message_the_seam_re_sent_is_quoted_once() {
+    let six = "Do these six things: one, two, three, four, five, six.";
+    let entries = vec![
+        message("u0", Role::User, six),
+        message(
+            "a0",
+            Role::Assistant,
+            "Committing, then on to the approval-card lag.",
+        ),
+        message("u1", Role::User, &successor_start(1, six)),
+        message("a1", Role::Assistant, "Picking up request four."),
+    ];
+    let text = boot_replayed(&entries, &[1]);
+    assert_eq!(text.matches(six).count(), 1, "{text}");
+    assert!(shown(&text).contains(&0), "{text}");
+    assert!(!shown(&text).contains(&2), "{text}");
+    assert!(
+        spans(&text)
+            .iter()
+            .all(|(from, to)| !(*from..=*to).contains(&2)),
+        "{text}"
+    );
+    assert!(text.contains("Picking up request four."), "{text}");
+}
+
+/// The same words sent twice are two requests ("Run the tests" after more edits), and a
+/// successor's first message the seam record shows no re-send of is the user's own: both kept.
+#[test]
+fn the_same_words_sent_again_by_the_user_are_kept_each_time() {
+    let again = "Run the tests";
+    let entries = vec![
+        message("u0", Role::User, again),
+        message("a0", Role::Assistant, "Edited the parser."),
+        message("u1", Role::User, again),
+        message("a1", Role::Assistant, "Edited the lexer."),
+        message("u2", Role::User, &successor_start(1, again)),
+        message("a2", Role::Assistant, "Running them."),
+    ];
+    let text = boot_replayed(&entries, &[]);
+    assert_eq!(text.matches(&format!("]\n{again}")).count(), 3, "{text}");
+    for at in [0, 2, 4] {
+        assert!(shown(&text).contains(&at), "#{at}: {text}");
+    }
+}
+
+fn command(id: &str, command: &str, output: &str) -> FileEntry {
+    FileEntry {
+        event: ProviderEvent::Command {
+            item_id: id.into(),
+            command: command.into(),
+            cwd: None,
+            status: brigadier_providers::ItemStatus::Completed,
+            exit_code: Some(0),
+            output: Some(output.into()),
+            duration_ms: None,
+            kept: None,
+        },
+        ..message(id, Role::User, "")
+    }
+}
+
+/// A command that only read a skill file keeps its command, which reads it again, but not the
+/// skill's text; a read mixed with anything else keeps its output (#611).
+#[test]
+fn a_skill_read_alone_keeps_its_command_but_not_the_skill() {
+    let skill = "sed -n '1,200p' /home/u/.codex/skills/impeccable/SKILL.md";
+    let other = "cat /home/u/.codex/skills/computer-use/SKILL.md";
+    let entries = vec![
+        message("u0", Role::User, "Polish the page."),
+        command("c0", other, "SKILL TEXT: Setup"),
+        message("a0", Role::Assistant, "Read the skill."),
+        message("u1", Role::User, "Now the cards."),
+        command("c1", skill, "SKILL TEXT: The loop for every run"),
+        command("c2", &format!("{skill} && git status"), "MIXED OUTPUT ONE"),
+        command("c3", &format!("{other} src/page.rs"), "MIXED OUTPUT TWO"),
+        message("a1", Role::Assistant, "Working on the cards."),
+    ];
+    let text = boot_replayed(&entries, &[]);
+    assert!(!text.contains("SKILL TEXT"), "{text}");
+    for command in [skill, other] {
+        assert!(
+            text.contains(&format!(
+                "Ran `{command}` (exit 0)\n[a skill file's text, left out: this command reads it \
+                 again]"
+            )),
+            "{command}: {text}"
+        );
+    }
+    assert!(text.contains("MIXED OUTPUT ONE"), "{text}");
+    assert!(text.contains("MIXED OUTPUT TWO"), "{text}");
+}
+
+/// The hand-off request comes as a user-role message: it says its words are Brigadier's, so the
+/// session logs none of them as the user's rule (#608).
+#[test]
+fn the_nudge_says_its_words_are_brigadiers_and_no_rule_of_the_users() {
+    let text = nudge(Path::new("/s/abcd1234/record/handoff/2.md"));
+    assert!(text.starts_with(NUDGE_MARK));
+    assert!(text.contains(
+        "These words are Brigadier's, not the user's: never log them, or anything they ask, as \
+         a rule or decision of the user's."
+    ));
 }

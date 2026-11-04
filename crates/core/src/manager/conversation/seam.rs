@@ -29,7 +29,7 @@ use super::{Cli, ConvLive, Envelope};
 use crate::manager::SessionManager;
 use crate::manager::seam::{
     Boot, NOTE_FIXES, Phase, SeamEnd, SeamFile, TailBudget, bootstrap, check_note, complete,
-    handoff_line, note_path, nudge, read_seam, start_path, with_workers, write_seam,
+    handoff_line, note_path, nudge, read_seam, replayed, start_path, with_workers, write_seam,
 };
 use crate::manager::session_dir::read_lineage;
 use crate::model::{ConversationId, ConversationKind, Message, ModelChoice, Setup};
@@ -1073,6 +1073,7 @@ impl SessionManager {
                     Some(death.as_deref().unwrap_or(NO_NOTE))
                 },
                 check: &check,
+                replayed: &replayed(&read_seam(&record)),
                 entries: &entries,
                 blobs: &blobs,
             });
