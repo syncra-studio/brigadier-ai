@@ -29,10 +29,8 @@ function summary(event: DomainEvent): string {
       return event.pinnedAtMs === null ? "unpinned" : "pinned";
     case "conversationWaiting":
       return event.wait === null ? "no longer waiting" : `waits: ${event.wait.reason}`;
-    case "conversationDone":
-      return event.doneAtMs === null ? "brought back" : "done";
-    case "conversationSnoozed":
-      return event.untilMs === null ? "woken" : "snoozed";
+    case "conversationSent":
+      return "sent";
     case "conversationSeen":
       return "seen";
     case "messageAppended":

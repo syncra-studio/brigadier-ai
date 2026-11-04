@@ -2,16 +2,23 @@ import { GENERAL_ROWS } from "@/app/settings/generalRows";
 import { NameRow } from "@/app/settings/NameRow";
 import { SettingsSection } from "@/app/settings/parts";
 import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
+import { SidebarViewChoice } from "@/app/settings/SidebarViewChoice";
 import { useSidebar } from "@/components/layout";
 import { SettingsCard, SettingsRow } from "@/components/shared";
 
-/** General › Appearance: your name, and what the sidebar leaves when it is closed. */
+/** General › Appearance: your name, how the sidebar lists, and what it leaves when it is closed. */
 export function AppearanceSection() {
   const { collapseMode, setCollapseMode } = useSidebar();
   return (
     <SettingsSection title="Appearance">
       <SettingsCard>
         <NameRow />
+        <SettingsRow
+          label={GENERAL_ROWS.sidebarView.label}
+          description={GENERAL_ROWS.sidebarView.description}
+        >
+          <SidebarViewChoice label={GENERAL_ROWS.sidebarView.label} />
+        </SettingsRow>
         <SettingsRow
           label={GENERAL_ROWS.sidebarClosed.label}
           description={GENERAL_ROWS.sidebarClosed.description}

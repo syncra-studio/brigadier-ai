@@ -4,6 +4,10 @@ export const GENERAL_ROWS = {
     label: "Your name",
     description: "What Brigadier calls you",
   },
+  sidebarView: {
+    label: "Sidebar view",
+    description: "One list of all your chats and sessions, or grouped by project",
+  },
   sidebarClosed: {
     label: "When the sidebar is closed",
     description: "Keep a strip of icons at the edge, or hide it completely",

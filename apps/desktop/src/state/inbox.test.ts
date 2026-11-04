@@ -2,80 +2,50 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Conversation } from "@/ipc/generated";
-import { inboxLists, inboxSection } from "@/state/inbox";
-import type { SessionState } from "@/state/tabStates";
+import { inboxLists, sortTime } from "@/state/inbox";
 
-const NOW = 1_000_000;
 const row = (id: string, extra: Partial<Conversation> = {}): Conversation => ({
   id, kind: "session", projectId: "p", title: id, pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null,
   lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null, ...extra,
 });
+const ids = (list: Conversation[]) => list.map((conversation) => conversation.id);
 
-test("inboxSection: every row's section (D7, D11)", () => {
-  const done = { doneAtMs: 500 };
-  const snoozed = { snoozedUntilMs: NOW + 60_000, snoozedAtMs: 500 };
-  const cases: [string, Partial<Conversation>, SessionState | null, number | undefined, string][] = [
-    ["a quiet row", {}, null, undefined, "active"],
-    ["a finished row, unread or not", {}, "done", 400, "active"],
-    ["pinned wins over everything", { pinnedAtMs: 1, ...done }, "working", undefined, "pinned"],
-    ["working: the spinner", {}, "working", undefined, "working"],
-    ["needs you is not working: its dot wins (D11)", {}, "needsYou", undefined, "active"],
-    ["failed", {}, "failed", 400, "active"],
-    // Done.
-    ["marked done", done, null, 400, "done"],
-    ["done, its last turn failed before", done, "failed", 400, "done"],
-    ["done, a new message started a turn", done, "working", 400, "working"],
-    ["done, a turn ended after", done, "done", 600, "active"],
-    ["done, a turn failed after", done, "failed", 600, "active"],
-    ["done, it needs you", done, "needsYou", 400, "active"],
-    ["auto-done (3 idle days or a merged PR) reads the same", { doneAtMs: NOW - 10 }, null, NOW - 3 * 86_400_000, "done"],
-    // Snooze.
-    ["snoozed", snoozed, null, 400, "snoozed"],
-    ["snoozed, its time came", { ...snoozed, snoozedUntilMs: NOW }, null, 400, "active"],
-    ["snoozed, failed before it", snoozed, "failed", 400, "snoozed"],
-    ["early wake: needs you", snoozed, "needsYou", 400, "active"],
-    ["early wake: a turn failed after", snoozed, "failed", 600, "active"],
-    ["early wake: a message's turn ended after", snoozed, "done", 600, "active"],
-    ["snoozed, a message's turn runs", snoozed, "working", 400, "working"],
-    ["done beats snoozed", { ...done, ...snoozed }, null, 400, "done"],
+test("Open is newest first by the user's last sent message, else created; nothing else counts", () => {
+  const { open } = inboxLists([
+    row("old", { createdAtMs: 10, lastSentAtMs: 100 }),
+    row("sent-just-now", { createdAtMs: 5, lastSentAtMs: 500 }),
+    // A finish, a peer's answer, a seen reply, sleep, wake and a rename move these clocks only.
+    row("busy", { createdAtMs: 1, lastSentAtMs: 200, updatedAtMs: 9_000, finishedAtMs: 9_000, peerAtMs: 9_000, seenAtMs: 9_000 }),
+    row("never-sent", { createdAtMs: 300 }),
+  ]);
+  assert.deepEqual(ids(open), ["sent-just-now", "never-sent", "busy", "old"]);
+  assert.equal(sortTime(row("r", { createdAtMs: 7 })), 7);
+});
+
+test("pins sit above by their own time, archived rows dock apart, and a restored row keeps its sort time", () => {
+  const rows = [
+    row("pin-a", { pinnedAtMs: 1, lastSentAtMs: 900 }),
+    row("pin-b", { pinnedAtMs: 2 }),
+    row("newer", { lastSentAtMs: 300 }),
+    row("put-away", { lifecycle: "archived", lastSentAtMs: 200, updatedAtMs: 5 }),
+    row("put-away-later", { lifecycle: "archived", lastSentAtMs: 100, updatedAtMs: 8 }),
+    row("older", { lastSentAtMs: 100 }),
+    row("side", { sideOf: "newer" }),
   ];
-  for (const [what, extra, state, finishedAtMs, section] of cases) {
-    assert.equal(inboxSection(row("r", extra), state, finishedAtMs, NOW), section, what);
-  }
+  const lists = inboxLists(rows);
+  assert.deepEqual(ids(lists.pinned), ["pin-b", "pin-a"]);
+  assert.deepEqual(ids(lists.open), ["newer", "older"]);
+  assert.deepEqual(ids(lists.archived), ["put-away-later", "put-away"]);
+  const restored = inboxLists(rows.map((each) => (each.id === "put-away" ? { ...each, lifecycle: "active" as const } : each)));
+  assert.deepEqual(ids(restored.open), ["newer", "put-away", "older"], "back where its sort time says");
 });
 
-test("inboxSection: a row that just stopped working stays on the shelf 2 s, unless it needs you or failed", () => {
-  const justLeft = NOW - 500;
-  assert.equal(inboxSection(row("r"), "done", NOW, NOW, justLeft), "working", "blinked out");
-  assert.equal(inboxSection(row("r"), null, undefined, NOW, NOW - 2000), "active", "grace over");
-  assert.equal(inboxSection(row("r"), "needsYou", undefined, NOW, justLeft), "active", "needs you goes at once");
-  assert.equal(inboxSection(row("r"), "failed", NOW, NOW, justLeft), "active", "a failure goes at once");
-});
-
-test("inboxLists: newest first by its latest move; pins, snoozes and done by their own times; forks under sources", () => {
-  const lists = inboxLists([
-    { conversation: row("old"), state: null, finishedAtMs: 10 },
-    { conversation: row("finished", { updatedAtMs: 5 }), state: "done", finishedAtMs: 300 },
-    { conversation: row("needs-you", { updatedAtMs: 5 }), state: "needsYou", leftWorkingAtMs: 400 },
-    { conversation: row("new", { createdAtMs: 200, updatedAtMs: 200 }), state: null },
-    { conversation: row("fork", { createdAtMs: 350, updatedAtMs: 350, forkedFrom: { conversationId: "old", messageId: "m" } }), state: null },
-    { conversation: row("pin-a", { pinnedAtMs: 1 }), state: "working" },
-    { conversation: row("pin-b", { pinnedAtMs: 2 }), state: null },
-    { conversation: row("run-a"), state: "working", finishedAtMs: 50 },
-    { conversation: row("run-b"), state: "working", finishedAtMs: 60 },
-    // Sleep and wake only move updatedAtMs: the row stays where it was (D7).
-    { conversation: row("slept", { updatedAtMs: 999 }), state: null, finishedAtMs: 5 },
-    { conversation: row("wake-late", { snoozedUntilMs: NOW + 9, snoozedAtMs: 1 }), state: null },
-    { conversation: row("wake-soon", { snoozedUntilMs: NOW + 1, snoozedAtMs: 1 }), state: null },
-    { conversation: row("done-early", { doneAtMs: 100 }), state: null },
-    { conversation: row("done-late", { doneAtMs: 200 }), state: null },
-  ], NOW);
-  const ids = Object.fromEntries(Object.entries(lists).map(([section, list]) => [section, list.map((c) => c.id)]));
-  assert.deepEqual(ids, {
-    pinned: ["pin-b", "pin-a"],
-    active: ["needs-you", "finished", "new", "old", "fork", "slept"],
-    working: ["run-b", "run-a"],
-    snoozed: ["wake-soon", "wake-late"],
-    done: ["done-late", "done-early"],
-  });
+test("a row stored as done or snoozed is back in Open, its old fields ignored; a fork stays under its source", () => {
+  const old = { doneAtMs: 500, snoozedUntilMs: 9e12, snoozedAtMs: 500 } as unknown as Partial<Conversation>;
+  const { open } = inboxLists([
+    row("was-done", { createdAtMs: 50, ...old }),
+    row("source", { lastSentAtMs: 40 }),
+    row("fork", { lastSentAtMs: 900, forkedFrom: { conversationId: "source", messageId: "m" } }),
+  ]);
+  assert.deepEqual(ids(open), ["was-done", "source", "fork"]);
 });

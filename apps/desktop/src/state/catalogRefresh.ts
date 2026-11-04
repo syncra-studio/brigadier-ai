@@ -54,7 +54,7 @@ function changed<T extends object>(rows: Record<string, T>, before: Record<strin
       continue;
     }
     const fields: Partial<T> = known ? known.fields : {};
-    // A field the row lost (Undo of Done or Snooze) counts too, so a late snapshot can't put it back.
+    // A field the row lost counts too, so a late snapshot can't put it back.
     for (const key of new Set([...Object.keys(was), ...Object.keys(row)]) as Set<keyof T>) {
       if (row[key] !== was[key]) fields[key] = row[key];
     }

@@ -386,14 +386,12 @@ impl SessionManager {
         });
     }
 
-    /// Hibernates conversations idle for longer than the setting, and marks done the ones
-    /// the inbox's sweep finds ([`super::inbox`]).
+    /// Hibernates conversations idle for longer than the setting.
     pub(super) fn start_hibernation_timer(&self) {
         let manager = self.me.clone();
         self.spawn(async move {
             let mut tick = tokio::time::interval(HIBERNATE_CHECK);
             tick.tick().await;
-            let mut ticks: u32 = 0;
             loop {
                 tick.tick().await;
                 let Some(manager) = manager.upgrade() else {
@@ -403,10 +401,6 @@ impl SessionManager {
                     return;
                 }
                 manager.hibernate_idle().await;
-                ticks = ticks.wrapping_add(1);
-                if ticks.is_multiple_of(super::inbox::SWEEP_EVERY_TICKS) {
-                    manager.sweep_done().await;
-                }
                 manager.brain_upkeep().await;
             }
         });

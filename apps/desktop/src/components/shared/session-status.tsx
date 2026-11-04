@@ -10,6 +10,14 @@ export function SidebarError({ conversationId }: { conversationId: string }) {
   </span>;
 }
 
+/** A sidebar row's trailing mark when it needs the user or failed: one amber ring for both. */
+export function SidebarAmberMark({ label }: { label: string | null }) {
+  return <span data-slot="status-amber" role="img" aria-label={label ?? "Needs you"} className="flex size-icon-lg shrink-0 items-center justify-center text-warning">
+    {/* Turned over, its ring's i reads as an exclamation. */}
+    <SidebarErrorGlyph aria-hidden className="size-icon-md rotate-180" />
+  </span>;
+}
+
 /** The trailing 20-unit slot: a spinner while it works, a blue dot when it needs the user or has a new reply. */
 export function SidebarActivityMark({ conversationId }: { conversationId: string }) {
   const { look, hover } = useRowMark(conversationId);

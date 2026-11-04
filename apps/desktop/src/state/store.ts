@@ -485,18 +485,6 @@ function applyProviderEvent(
   }
 }
 
-/** `conversation` with `key` set, or left out when `value` is null. */
-function withOptional(
-  conversation: Conversation,
-  key: "doneAtMs" | "snoozedUntilMs",
-  value: number | null,
-): Conversation {
-  const next = { ...conversation };
-  if (value === null) delete next[key];
-  else next[key] = value;
-  return next;
-}
-
 function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
   const { event, streamSeq } = envelope;
   switch (event.type) {
@@ -529,17 +517,14 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
         conversations: { ...slice.conversations, [event.id]: next },
       };
     }
-    case "conversationDone":
-    case "conversationSnoozed":
+    case "conversationSent":
     case "conversationSeen": {
       const current = slice.conversations[event.id];
       if (!current) return slice;
       const next =
-        event.type === "conversationDone"
-          ? withOptional(current, "doneAtMs", event.doneAtMs)
-          : event.type === "conversationSnoozed"
-            ? { ...withOptional(current, "snoozedUntilMs", event.untilMs), snoozedAtMs: event.atMs }
-            : { ...current, seenAtMs: Math.max(current.seenAtMs ?? 0, event.atMs) };
+        event.type === "conversationSent"
+          ? { ...current, lastSentAtMs: Math.max(current.lastSentAtMs ?? 0, event.atMs) }
+          : { ...current, seenAtMs: Math.max(current.seenAtMs ?? 0, event.atMs) };
       return {
         ...slice,
         conversations: { ...slice.conversations, [event.id]: next },
