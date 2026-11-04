@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { type BlockOrchestratorStep, madeImage } from "@/app/conversation/blocks";
@@ -29,6 +31,7 @@ export function ImageTiles({ conversationId, steps }: { conversationId: string |
   const done = steps.filter((step) => step.kind.type === "tool" && step.kind.status === "completed");
   const ids = done.flatMap((step) => (step.kind.type === "tool" ? [step.kind.itemId] : []));
   const images = useThreadImages(conversationId, ids);
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
   const made = done.map(madeImage);
   const gallery = images.map((image, index) => ({
     name: made[index] ? "Created image" : "Inspected image",
@@ -45,17 +48,18 @@ export function ImageTiles({ conversationId, steps }: { conversationId: string |
         const image = images[index];
         if (!image) return null;
         const alt = gallery[index]?.name ?? "Inspected image";
-        if (!image.url) {
+        const unavailable = !!image.error || (!!image.url && failed.has(image.url));
+        if (!image.url || unavailable) {
           return (
             <div key={id} data-slot="image-tile" title={image.error ?? undefined} className={cn(tile, "bg-foreground/5 text-muted-foreground flex items-center justify-center p-1 text-center text-xs")}>
-              {image.error ? "Not available" : <span className="shimmer">Loading</span>}
+              {unavailable ? "Not available" : <span className="shimmer">Loading</span>}
             </div>
           );
         }
         return (
           <ImagePreview key={id} url={image.url} name={alt} gallery={{ images: gallery, index }}>
             <button type="button" data-slot="image-tile" aria-label={`Open ${alt.toLowerCase()}`} className={cn(tile, "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none")}>
-              <img src={image.url} alt={alt} className="size-full object-cover" />
+              <img src={image.url} alt={alt} onError={() => setFailed((before) => new Set(before).add(image.url!))} className="size-full object-cover" />
             </button>
           </ImagePreview>
         );

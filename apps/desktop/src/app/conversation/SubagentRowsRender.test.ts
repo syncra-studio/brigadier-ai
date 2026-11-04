@@ -5,7 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Seen = { steps: string[]; workers: string[]; background: string[] | null; panel: string | null };
 
-test("a subagent is a row of its block that opens its transcript, never a worker; a background one is a Background row that stays once over (D96, D97, D98)", { timeout: 60000 }, async (t) => {
+test("a subagent is a row of its block that opens its transcript, never a worker; a background one is a Background row while it runs (D96, D97)", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "subagent-rows.html", "subagent-rows-result", 30000)) as {
     running: Seen; foreground: string; background: string; ended: Seen; forgotten: Seen; reopened: string;
   };
@@ -19,8 +19,8 @@ test("a subagent is a row of its block that opens its transcript, never a worker
   // The background one is a Background row while it runs, and opens its transcript (D97).
   assert.ok(running.background?.some((row) => /^Subagent: Explore the parser\d+s$/.test(row)), JSON.stringify(running.background));
   assert.match(seen.background, /Reading the parser now\./);
-  // Over, both stay, saying how they ended (D98), even once the CLI lists them no more.
-  assert.deepEqual(ended.background, ["sleep 30finished · exit 030s", "Subagent: Explore the parserfinished23s"]);
+  // Over, both leave for Background history, even once the CLI lists them no more.
+  assert.deepEqual(ended.background, []);
   assert.deepEqual(forgotten.background, ended.background);
   assert.match(seen.reopened, /Reading the parser now\./);
 });

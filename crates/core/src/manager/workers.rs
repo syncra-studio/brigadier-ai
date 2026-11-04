@@ -125,6 +125,12 @@ struct TaskLiveState {
     quota_cancelled: bool,
     quota_send_accepted: bool,
     quota_turn_started: bool,
+    /// The models its CLI gave up on in this run, never tried again in it. A run lasts until a
+    /// turn gets through, or nothing else can take it.
+    failed_models: Vec<fallback::TriedModel>,
+    /// The model this run started on (the one its session or routing chose): it goes back there
+    /// when nothing else can take it.
+    run_origin: Option<ModelChoice>,
 }
 
 /// A task's live worker.
@@ -167,6 +173,23 @@ impl TaskLive {
     /// Takes the reason the turn ended early, if any.
     pub(crate) async fn take_cutoff(&self) -> Option<AttemptEnd> {
         self.state.lock().await.cutoff.take()
+    }
+
+    /// The run its model failures count in is over.
+    pub(crate) async fn end_model_run(&self) {
+        let mut state = self.state.lock().await;
+        state.failed_models.clear();
+        state.run_origin = None;
+    }
+
+    /// Takes its model's failure as the reason the turn ended early, if that is the reason.
+    async fn take_model_failure(&self) -> Option<AttemptEnd> {
+        let mut state = self.state.lock().await;
+        let failed = matches!(
+            &state.cutoff,
+            Some(AttemptEnd::Error { kind, .. }) if fallback::kind_model_failed(*kind)
+        );
+        if failed { state.cutoff.take() } else { None }
     }
 
     /// Where its CLI runs.
@@ -1678,6 +1701,7 @@ impl SessionManager {
     }
 
     async fn on_worker_event(&self, live: &Arc<TaskLive>, cli: &Arc<Cli>, event: ProviderEvent) {
+        let event = self.retain_thread_image(&live.conversation_id, event).await;
         let cwd = live.cwd().await;
         self.follow_worker_commands(&live.conversation_id, &live.id, cwd, &event)
             .await;
@@ -1787,9 +1811,16 @@ impl SessionManager {
                     live.set_cutoff(end).await;
                     None
                 }
-                fallback::ErrorVerdict::Transient | fallback::ErrorVerdict::Keep => {
+                // Its model can't serve it now: the next one goes on when the turn ends.
+                fallback::ErrorVerdict::Transient => {
+                    live.set_cutoff(AttemptEnd::Error {
+                        kind: error.kind,
+                        message: error.message.clone(),
+                    })
+                    .await;
                     Some(error.message.clone())
                 }
+                fallback::ErrorVerdict::Keep => Some(error.message.clone()),
             },
             _ => None,
         };
@@ -1838,7 +1869,17 @@ impl SessionManager {
                 });
             }
             None if compacted => {}
-            None => self.plain_turn_ended(live, &task, status).await,
+            None => match live.take_model_failure().await {
+                Some(failure) if status == TurnStatus::Failed && !explicitly_paused(&task) => {
+                    self.move_off_failed_model(live, &task, failure);
+                }
+                _ => {
+                    if status == TurnStatus::Completed {
+                        live.end_model_run().await;
+                    }
+                    self.plain_turn_ended(live, &task, status).await;
+                }
+            },
         }
     }
 

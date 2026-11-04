@@ -104,10 +104,10 @@ import { isFusionArmed, isFusionChat, moveFusionSend } from "@/state/fusionSend"
 import { takeBackgroundSend } from "@/state/backgroundSend";
 import { beginDirectSend, directGenerationOf, directToOf, endDirectSend, setDirectTo } from "@/state/directTo";
 import { holdDirect } from "@/state/heldDirect";
-import { useActivity } from "@/state/activity";
+import { rowActivity, useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { loadWorkerThread, readSessionImageBlob, sessionImageOf, unreadSince, useThreadUnreadable, useThreadView, useWorkerRows } from "@/state/cliThread";
-import { lastFinished, markOpened } from "@/state/lastOpened";
+import { markSeen, useFinishedAt } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
@@ -656,10 +656,10 @@ export function ConversationView({
     }),
     [revealRow, conversationId, hasMore, olderFailedIn, oldest, searchOlder],
   );
-  // Open, what it finished is seen: the sidebar's dot clears, and stays clear.
-  const finishedAtMs = lastFinished(conversation) ?? 0;
+  // Open, what it finished is seen: the sidebar's dot clears in every window, and stays clear.
+  const finishedAtMs = useFinishedAt(conversationId ?? "");
   useEffect(() => {
-    if (!embedded && conversationId) markOpened(conversationId, Math.max(Date.now(), finishedAtMs));
+    if (!embedded && conversationId && finishedAtMs !== undefined) markSeen(conversationId, finishedAtMs);
   }, [embedded, conversationId, finishedAtMs]);
   useEffect(() => {
     if (!reveal) return;
@@ -678,6 +678,8 @@ export function ConversationView({
   );
   // The CLI's turn is open: Stop ends it.
   const answerWorking = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false));
+  // Working as its sidebar row shows it, from the same store (D4).
+  const working = useActivity((s) => (conversationId ? rowActivity(s.byConversation[conversationId]).running : false)) || waitingForQuota;
   // The user stopped the CLI's last turn, or it was cut off (Brigadier quit while it ran), and
   // nothing runs: the send button resumes it.
   const lastEnd = cliView?.turns.at(-1)?.end ?? null;
@@ -1016,7 +1018,8 @@ export function ConversationView({
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
     isLoading: conversationId !== null && cliView === null && !unreadable,
-    isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some(taskRuns),
+    // Stop keeps its own rule on top: its workers that still run keep Stop up (D7, D118).
+    isRunning: working || Object.values(digest?.tasks ?? {}).some(taskRuns),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,
     queue,

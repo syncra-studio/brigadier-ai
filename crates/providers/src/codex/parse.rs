@@ -1049,6 +1049,8 @@ impl Parser {
                 | I::ResponseStreamDisconnected { .. }
                 | I::ResponseTooManyFailedAttempts { .. },
             ) => ErrorKind::Network,
+            // Codex can say this with no `codexErrorInfo`, or one that tells nothing more.
+            _ if error.message.to_lowercase().contains("at capacity") => ErrorKind::Overloaded,
             _ if error.message.to_lowercase().contains("usage limit") => ErrorKind::UsageLimit,
             _ => ErrorKind::Other,
         };
@@ -1842,6 +1844,38 @@ mod tests {
 
     const QUESTION_FEATURE_WARNING: &str =
         "Under-development features enabled: default_mode_request_user_input";
+
+    /// The real line (worker fabe89d3), with no `codexErrorInfo` or with one, while it retries
+    /// or once it has given up.
+    #[test]
+    fn at_capacity_is_an_overload_with_or_without_error_info() {
+        const LINE: &str = "Selected model is at capacity. Please try a different model.";
+        for (info, will_retry) in [
+            (json!(null), false),
+            (json!(null), true),
+            (json!("serverOverloaded"), false),
+            (json!("other"), false),
+        ] {
+            let mut error = json!({"message": LINE});
+            if !info.is_null() {
+                error["codexErrorInfo"] = info;
+            }
+            let line = json!({"method": "error", "params": {
+                "threadId": "t", "turnId": "u", "error": error, "willRetry": will_retry
+            }});
+            let found = Parser::default()
+                .feed(&line.to_string())
+                .into_iter()
+                .find_map(|out| match out {
+                    Output::Event(ProviderEvent::Error { error }) => Some(error),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(found.kind, ErrorKind::Overloaded, "{line}");
+            assert_eq!(found.message, LINE);
+            assert_eq!(found.will_retry, will_retry);
+        }
+    }
 
     #[test]
     fn question_feature_startup_warning_is_hidden_live_and_on_replay() {

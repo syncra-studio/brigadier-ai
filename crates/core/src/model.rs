@@ -571,6 +571,24 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub finished_at_ms: Option<i64>,
+    /// When it was marked done (by the user, or after 3 idle days or a merged pull request);
+    /// absent when not done. The inbox reads it against later activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub done_at_ms: Option<i64>,
+    /// When its snooze ends; absent when not snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_until_ms: Option<i64>,
+    /// When it was last snoozed or woken by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snoozed_at_ms: Option<i64>,
+    /// How far its replies were seen: the finish time last seen in any window (its row's
+    /// unread dot).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub seen_at_ms: Option<i64>,
 }
 
 impl Conversation {
@@ -869,6 +887,17 @@ pub enum KeepAwake {
     Always,
 }
 
+/// How the sidebar lists conversations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SidebarMode {
+    /// One list across all projects: pinned, active, working, snoozed, done.
+    #[default]
+    Inbox,
+    /// Sessions under their projects, then chats.
+    Projects,
+}
+
 /// What a message sent while an answer works does by default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1046,6 +1075,8 @@ pub struct Settings {
     /// Routing suggestions the user dismissed: each stays hidden while the model's rating for
     /// that kind of work is the one it was dismissed at.
     pub dismissed_suggestions: Vec<DismissedSuggestion>,
+    /// How the sidebar lists conversations, the same in every window.
+    pub sidebar_mode: SidebarMode,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -1282,6 +1313,7 @@ impl Default for Settings {
             browser_ask_downloads: false,
             ratings_research_at: DEFAULT_RATINGS_RESEARCH_AT.to_owned(),
             dismissed_suggestions: Vec::new(),
+            sidebar_mode: SidebarMode::Inbox,
             settings_version: SETTINGS_VERSION,
         }
     }
@@ -2221,6 +2253,22 @@ pub enum DomainEvent {
         id: ConversationId,
         wait: Option<crate::work::QuotaWait>,
     },
+    /// Marked done (`done_at_ms`), or brought back by hand.
+    ConversationDone {
+        id: ConversationId,
+        done_at_ms: Option<i64>,
+    },
+    /// Snoozed until `until_ms`, or woken by hand (none), at `at_ms`.
+    ConversationSnoozed {
+        id: ConversationId,
+        until_ms: Option<i64>,
+        at_ms: i64,
+    },
+    /// Its replies were seen up to `at_ms`.
+    ConversationSeen {
+        id: ConversationId,
+        at_ms: i64,
+    },
     MessageAppended {
         message: Message,
     },
@@ -2702,6 +2750,9 @@ impl DomainEvent {
             Self::WorkspaceArchived { .. } => "workspace.archived",
             Self::ConversationPinned { .. } => "conversation.pinned",
             Self::ConversationWaiting { .. } => "conversation.waiting",
+            Self::ConversationDone { .. } => "conversation.done",
+            Self::ConversationSnoozed { .. } => "conversation.snoozed",
+            Self::ConversationSeen { .. } => "conversation.seen",
             Self::MessageAppended { .. } => "message.appended",
             Self::SettingsChanged { .. } => "settings.changed",
             Self::RawSessionCreated { .. } => "raw.created",

@@ -24,6 +24,7 @@ pub mod routing;
 pub mod runtime;
 mod sessions;
 pub mod storage;
+pub mod thread_image_files;
 pub mod thread_view;
 pub mod tools;
 mod traces;

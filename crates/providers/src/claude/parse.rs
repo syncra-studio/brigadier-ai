@@ -1543,6 +1543,10 @@ impl Parser {
             "rate_limit" if self.limit.rejected || lower.contains("hit your") => {
                 (ErrorKind::UsageLimit, Some(self.limit_hit()))
             }
+            // A `result`'s text can say so with no code of its own.
+            _ if lower.contains("at capacity") || lower.contains("overloaded") => {
+                (ErrorKind::Overloaded, None)
+            }
             "rate_limit" => (ErrorKind::RateLimit, None),
             "overloaded" => (ErrorKind::Overloaded, None),
             "authentication_failed" | "oauth_org_not_allowed" => (ErrorKind::Auth, None),
@@ -2592,6 +2596,35 @@ mod tests {
             parser.feed(API_ERROR_LIMIT);
             assert_eq!(errors(parser.feed(&assistant.to_string()))[0].kind, kind);
         }
+    }
+
+    /// The real line a CLI gives up with, in the two shapes Claude can send it: a result that
+    /// is only its text, with no error code, and an assistant error with one.
+    #[test]
+    fn at_capacity_is_an_overload_however_claude_says_it() {
+        const LINE: &str = "Selected model is at capacity. Please try a different model.";
+        let result = json!({"type": "result", "subtype": "success", "is_error": true,
+            "result": LINE, "session_id": "s", "duration_ms": 5});
+        let found = errors(Parser::live().feed(&result.to_string()));
+        assert_eq!(found[0].kind, ErrorKind::Overloaded);
+        assert_eq!(found[0].message, LINE);
+        assert!(!found[0].will_retry);
+
+        let assistant = json!({"type": "assistant", "error": "unknown", "session_id": "s",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": LINE}]}});
+        let found = errors(Parser::live().feed(&assistant.to_string()));
+        assert_eq!(found[0].kind, ErrorKind::Overloaded);
+
+        let overloaded = json!({"type": "result", "subtype": "success", "is_error": true,
+            "result": "API Error: 529 Overloaded", "session_id": "s", "duration_ms": 5});
+        let found = errors(Parser::live().feed(&overloaded.to_string()));
+        assert_eq!(found[0].kind, ErrorKind::Overloaded);
+
+        // Another text with no code stays what it was.
+        let other = json!({"type": "result", "subtype": "success", "is_error": true,
+            "result": "API Error: flagged", "session_id": "s", "duration_ms": 5});
+        let found = errors(Parser::live().feed(&other.to_string()));
+        assert_eq!(found[0].kind, ErrorKind::Other);
     }
 
     /// Claude's rule-checker note isn't the card's title: the card asks its own question, as on

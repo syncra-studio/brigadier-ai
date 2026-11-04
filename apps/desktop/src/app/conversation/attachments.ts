@@ -5,7 +5,7 @@ import type {
   CreateAttachment,
   PendingAttachment,
 } from "@/components/conversation/kit";
-import { useSyncExternalStore } from "react";
+import { createContext, useSyncExternalStore } from "react";
 
 import { draftRefs, inlineKey, inlineRefs } from "@/lib/inlineImages";
 import { inlineNumberOf, isPastedFile } from "@/components/conversation/elements/attachment-tile";
@@ -162,3 +162,6 @@ export class BlobAttachmentAdapter implements AttachmentAdapter {
     });
   }
 }
+
+/** A card has its own attachments, separate from the conversation composer. */
+export const ComposerAttachmentsContext = createContext<BlobAttachmentAdapter | null>(null);

@@ -74,7 +74,7 @@ export function signInsOf(servers: readonly McpServerState[]): string[] {
 /**
  * Its work still holds while no turn of its CLI runs: one of its workers still works, or a
  * background command of its CLI still runs or owes the turn its end starts. A message sent then
- * waits Deciding and goes on with that work, as the daemon's `work_holds` reads it.
+ * waits in the queue while it is judged, as the daemon's `work_holds` reads it.
  */
 export function workHolds(activity: Activity | undefined): boolean {
   if (!activity) return false;
@@ -82,15 +82,15 @@ export function workHolds(activity: Activity | undefined): boolean {
     || Object.values(activity.tasks).some((state) => WORKING.has(state) || state === "takenOver");
 }
 
-/** Its CLI works: its turn is open, or Brigadier hands it a message. */
-export const works = (activity: Activity) => activity.turnOpen || activity.run === "starting";
+/** Its CLI works: its turn is open, Brigadier hands it a message, or its run goes on (a handover). */
+export const works = (activity: Activity) => activity.turnOpen || activity.run === "starting" || activity.run === "running";
 
 /**
  * Nothing works, and its CLI did not take the turn or its last turn failed or was cut off. A turn
  * a limit cut ends failed while Brigadier still runs it on, switching account or CLI: not yet.
  */
 const failedOf = (activity: Activity) =>
-  !works(activity) && (activity.run === "failed" || (activity.ended === "failed" && activity.run !== "running"));
+  !works(activity) && (activity.run === "failed" || (activity.ended === "failed" && activity.run !== "hibernated"));
 
 /** Nothing works, and the user stopped its CLI's last turn. */
 export const stoppedOf = (activity: Activity | undefined): boolean =>
@@ -212,7 +212,9 @@ function toggled(set: ReadonlySet<string>, id: string, on: boolean): ReadonlySet
 function apply(current: Activity, { event }: EventEnvelope): Activity {
   switch (event.type) {
     case "runStateChanged":
-      return current.run === event.state ? current : { ...current, run: event.state };
+      if (current.run === event.state) return current;
+      // A session put to sleep has no turn open (D10).
+      return event.state === "hibernated" ? { ...current, run: event.state, turnOpen: false } : { ...current, run: event.state };
     case "mcpServersUpdated": {
       // The session's own CLI's servers; a worker's are its own.
       if (event.taskId !== null) return current;
@@ -324,7 +326,8 @@ const QUIET: RowActivity = { running: false, awaiting: null, workers: 0 };
 
 export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
-  const running = works(activity) || !!activity.workersWorking || !!activity.commandsWorking;
+  // Asleep, nothing of it runs (D10).
+  const running = activity.run !== "hibernated" && (works(activity) || !!activity.workersWorking || !!activity.commandsWorking);
   const awaiting =
     activity.approvals.size > 0
       ? "approval"

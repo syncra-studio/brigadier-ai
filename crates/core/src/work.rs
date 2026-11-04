@@ -1442,8 +1442,9 @@ pub struct QueuedMessage {
     pub mentions: Vec<Mention>,
     pub queued_at_ms: i64,
     pub edited_at_ms: Option<i64>,
-    /// Sent while the session's turn works: the session has it and judges it with `brigadier
-    /// queue` (run2-D40); it waits here, Deciding, until it is judged.
+    /// Only in rows stored by an older daemon, which held a message back until its judge
+    /// answered; a start settles them. A message sent while the session works is now an ordinary
+    /// row from the first frame, judged in the background (`queue_judging`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub deciding: bool,
@@ -1452,8 +1453,7 @@ pub struct QueuedMessage {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub delivered: bool,
-    /// The thread's command it waits behind while Deciding: the session reads it once that
-    /// command ends.
+    /// Only in rows stored by an older daemon: the thread's command it waited behind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub held_by: Option<HeldBy>,
@@ -1502,7 +1502,8 @@ impl MessageQueue {
             .find(|item| !item.offer_session && item.worker.is_none())
     }
 
-    /// The next message to send now: none while the next one is still Deciding.
+    /// The next message to send now: none while the next one is an older daemon's, still
+    /// Deciding (a start settles those).
     pub fn ready_to_send(&self) -> Option<&QueuedMessage> {
         self.next_to_send().filter(|item| !item.deciding)
     }

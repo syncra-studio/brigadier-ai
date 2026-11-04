@@ -29,6 +29,12 @@ function summary(event: DomainEvent): string {
       return event.pinnedAtMs === null ? "unpinned" : "pinned";
     case "conversationWaiting":
       return event.wait === null ? "no longer waiting" : `waits: ${event.wait.reason}`;
+    case "conversationDone":
+      return event.doneAtMs === null ? "brought back" : "done";
+    case "conversationSnoozed":
+      return event.untilMs === null ? "woken" : "snoozed";
+    case "conversationSeen":
+      return "seen";
     case "messageAppended":
       return imagePreview(event.message.text, event.message.attachments).slice(0, 120).replace(/\s+/g, " ");
     case "settingsChanged":

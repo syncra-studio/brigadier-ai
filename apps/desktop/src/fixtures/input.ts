@@ -11,6 +11,8 @@ export type FixtureInput =
   | { type: "type"; text: string }
   /** A real click (pointer down, then up) at a point in the page. */
   | { type: "click"; x: number; y: number }
+  /** A held pointer, so a live fixture can drag through several frames before releasing. */
+  | { type: "pointerDown" | "pointerUp"; x: number; y: number }
   /** The pointer moved to a point, without a click. */
   | { type: "pointer"; x: number; y: number };
 

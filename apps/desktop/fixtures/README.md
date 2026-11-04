@@ -215,3 +215,10 @@ a session's lead starts a worker and ends its turn, the user writes twice while 
 turn joins the block, the second starts another worker), then the workers finish one by one. The one
 block reads "Waiting for 2 workers", then "Waiting for a worker", then "Worked for" on the clock. This
 standalone entry is absent from the production build.
+
+# Thread images
+
+`/fixtures/thread-images.html` backs `src/app/conversation/activity/ThreadImagesRender.test.ts`. It renders
+the production answer image, tile and proof components under the app's image policy with a synthetic
+daemon: a local path it knows is an image, a tile's kept copy, refused paths, and an image the webview
+can't draw. What it saw goes to `#thread-images-result`.

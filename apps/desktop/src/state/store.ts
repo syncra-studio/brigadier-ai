@@ -120,7 +120,7 @@ export type PendingMessage = {
    * Sent to wait in the queue: the rail shows it at `index` (else last) until the daemon's
    * queue item shows, rather than the thread (#491).
    */
-  queued?: { index: number | null; deciding: boolean };
+  queued?: { index: number | null };
 };
 
 export { shownIdOf, storedIdOf } from "@/state/shownIds";
@@ -259,6 +259,7 @@ export const useApp = create<AppState>()(() => ({
     browserAskDownloads: false,
     ratingsResearchAt: "04:00",
     dismissedSuggestions: [],
+    sidebarMode: "inbox",
     settingsVersion: 1,
   },
   threads: {},
@@ -484,6 +485,18 @@ function applyProviderEvent(
   }
 }
 
+/** `conversation` with `key` set, or left out when `value` is null. */
+function withOptional(
+  conversation: Conversation,
+  key: "doneAtMs" | "snoozedUntilMs",
+  value: number | null,
+): Conversation {
+  const next = { ...conversation };
+  if (value === null) delete next[key];
+  else next[key] = value;
+  return next;
+}
+
 function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
   const { event, streamSeq } = envelope;
   switch (event.type) {
@@ -511,6 +524,22 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
           : event.type === "conversationPinned"
             ? { ...current, pinnedAtMs: event.pinnedAtMs }
             : { ...current, quotaWait: event.wait };
+      return {
+        ...slice,
+        conversations: { ...slice.conversations, [event.id]: next },
+      };
+    }
+    case "conversationDone":
+    case "conversationSnoozed":
+    case "conversationSeen": {
+      const current = slice.conversations[event.id];
+      if (!current) return slice;
+      const next =
+        event.type === "conversationDone"
+          ? withOptional(current, "doneAtMs", event.doneAtMs)
+          : event.type === "conversationSnoozed"
+            ? { ...withOptional(current, "snoozedUntilMs", event.untilMs), snoozedAtMs: event.atMs }
+            : { ...current, seenAtMs: Math.max(current.seenAtMs ?? 0, event.atMs) };
       return {
         ...slice,
         conversations: { ...slice.conversations, [event.id]: next },

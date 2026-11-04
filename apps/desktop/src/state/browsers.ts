@@ -5,7 +5,7 @@ import { browserClose, browserNavigate, browserOpen, browserPermission, browserZ
 import type { BrowserBounds } from "@/ipc/generated";
 import { pageUsed } from "@/state/agentPause";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
-import { closeTabAnywhere, openPopupTab } from "@/state/sessionTabs";
+import { closeTabAnywhere, openPopupTab, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -195,3 +195,20 @@ export function closePage(id: string): void {
     console.error("closing the browser failed", error),
   );
 }
+
+/**
+ * Its session went to sleep: its Browser tabs' pages close, all but the one on screen. Each tab
+ * keeps its address (it follows the page) and opens it again when it shows.
+ */
+export function sleepPages(conversationId: string): void {
+  const { selection } = useApp.getState();
+  const { tabs, active } = sessionTabs(conversationId);
+  const onScreen = selection.type === "conversation" && selection.id === conversationId ? active : null;
+  for (const tab of tabs) if (tab.kind === "browser" && tab.id !== onScreen) closePage(tab.id);
+}
+
+useApp.subscribe(({ conversations }, previous) => {
+  if (conversations === previous.conversations) return;
+  for (const [id, conversation] of Object.entries(conversations))
+    if (conversation.lifecycle === "hibernated" && previous.conversations[id]?.lifecycle !== "hibernated") sleepPages(id);
+});

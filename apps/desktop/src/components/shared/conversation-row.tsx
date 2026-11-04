@@ -1,18 +1,16 @@
-import { memo, useEffect, useState, type ComponentType, type MouseEvent } from "react";
+import { memo, useState, type ComponentType, type MouseEvent } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { NavRow } from "@/components/controls/nav-row";
 import { Archive, BranchAlt, Pencil, Pin, Trash, Unpin } from "@/components/icons";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { RowAction, RowActionsSlot } from "@/components/shared/row-action";
-import { SessionStatusLabel, SidebarActivityMark, SidebarError } from "@/components/shared/session-status";
+import { SidebarActivityMark, SidebarError } from "@/components/shared/session-status";
 import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { archive, archiveAll, openConversation, setPinned } from "@/state/actions";
-import { markOpened, unread, useLastOpened } from "@/state/lastOpened";
 import { askDelete, clearPicked, usePicked } from "@/state/picking";
-import { useApp } from "@/state/store";
-import { useActivity } from "@/state/activity";
+import { useRowMark } from "@/state/tabStates";
 
 /** What the rows can ask the sidebar to do. */
 export type RowActions = {
@@ -30,29 +28,21 @@ export type RowActions = {
 const roomForActions =
   "group-hover/row:pe-14 group-focus-within/row:pe-14 group-has-data-[state=open]/row:pe-14";
 
-/** A title beside its row's state word: cut with an ellipsis, not faded into the word. */
-const besideStatus = "group-has-data-[slot=status-word]/row:mask-none group-has-data-[slot=status-word]/row:text-ellipsis";
-
 /** Hides a row's trailing status while its actions show. */
 const hideOnRowHover =
   "group-hover/row:invisible group-focus-within/row:invisible group-has-data-[state=open]/row:invisible";
 
-/** Titles reclaim the state word's space when the row's actions replace it. */
+/** Titles reclaim the mark's space when the row's actions replace it. */
 const removeOnRowHover =
   "group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden";
 
-/** A row's state word and mark, with its reason on hover; otherwise its unread dot. */
+/** A row's trailing mark (spinner or dot), with what it means on hover; no state word (D3). */
 export function RowStatus({ conversationId, reclaimSpace = false }: { conversationId: string; reclaimSpace?: boolean }) {
-  const seen = useLastOpened((s) => s.at[conversationId]);
-  const finishedAtMs = useActivity((s) => s.byConversation[conversationId]?.turnEndedAtMs);
-  const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
-  useEffect(() => {
-    if (open) markOpened(conversationId, Math.max(Date.now(), finishedAtMs ?? 0));
-  }, [conversationId, open, finishedAtMs]);
-  const isUnread = unread(finishedAtMs, seen, open);
-  const mark = <SidebarActivityMark conversationId={conversationId} unread={isUnread} />;
-  return <SessionStatusLabel conversationId={conversationId} className={reclaimSpace ? removeOnRowHover : hideOnRowHover}
-    rowIndicator={mark} />;
+  const { look, hover } = useRowMark(conversationId);
+  return <span data-slot="row-status" data-status={look ?? undefined} title={hover ?? undefined}
+    className={cn("empty:hidden flex shrink-0 items-center", reclaimSpace ? removeOnRowHover : hideOnRowHover)}>
+    <SidebarActivityMark conversationId={conversationId} />
+  </span>;
 }
 
 /**
@@ -67,6 +57,7 @@ export const ConversationRow = memo(function ConversationRow({
   actions,
   nested = false,
   forked = false,
+  label,
 }: {
   conversation: Conversation;
   active: boolean;
@@ -74,6 +65,8 @@ export const ConversationRow = memo(function ConversationRow({
   nested?: boolean;
   /** Drawn under its source: a little further in, after the fork icon (D211). */
   forked?: boolean;
+  /** Small muted text after the title: the inbox's project name (D7). */
+  label?: string | undefined;
 }) {
   const title = conversation.title;
   const pinned = conversation.pinnedAtMs !== null;
@@ -87,6 +80,7 @@ export const ConversationRow = memo(function ConversationRow({
       actions.onError(errorText(error)),
     );
   const picked = usePicked((s) => s.list === "sidebar" && s.ids.includes(conversation.id));
+  const { hover } = useRowMark(conversation.id);
   // What a right-click acts on: every picked row when this is one of several.
   const [targets, setTargets] = useState<string[]>([]);
 
@@ -110,6 +104,7 @@ export const ConversationRow = memo(function ConversationRow({
             data-active={active}
             data-selected={picked}
             aria-current={active ? "page" : undefined}
+            title={hover ?? undefined}
             className={cn(
               "data-[selected=true]:bg-link/20 data-[selected=true]:text-foreground pe-1.5",
               roomForActions,
@@ -123,10 +118,10 @@ export const ConversationRow = memo(function ConversationRow({
           >
             <SidebarError conversationId={conversation.id} />
             {forked && <BranchAlt aria-label="Fork" className="text-muted-foreground size-icon-sm" />}
-            {/* A title too long for its row fades out at the end; beside a state word it ends in "…"
-                 instead, so the word never reads as covering it. */}
-            <span data-slot="row-title" className={cn("mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap", besideStatus)}>
+            {/* A title too long for its row fades out at the end. */}
+            <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
               {title}
+              {label && <span data-slot="row-label" className="text-muted-foreground ms-1.5 text-xs">{label}</span>}
             </span>
             <RowStatus conversationId={conversation.id} reclaimSpace />
           </NavRow>

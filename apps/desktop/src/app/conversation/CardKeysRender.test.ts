@@ -64,7 +64,7 @@ test("every question card takes Enter only on the focused card and lights nothin
 
 test("a question card keeps the answer the user lit and the text typed after a visit to Settings, takes a typed answer next to its options, and sends a multi-select question's marked answers together", { timeout: 90000 }, async (t) => {
   const { kept, typed, multi } = JSON.parse(await renderFixtureLive(t, "card-keys.html?case=kept", "card-keys-result", 60000)) as Record<string, Seen>;
-  assert.equal(kept!.error, undefined, `kept: ${kept!.error}`);
+  assert.equal(kept!.error, undefined, `kept: ${JSON.stringify(kept)}`);
   assert.notDeepEqual(kept!.litBefore, kept!.litFresh, "↓ lights an answer");
   assert.deepEqual(kept!.litAfter, kept!.litBefore);
   assert.equal(kept!.typedBefore, "tiers");

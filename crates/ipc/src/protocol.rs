@@ -689,6 +689,11 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
+    /// A local Markdown image, validated by content and bounded before returning bytes.
+    ReadLocalImage {
+        conversation_id: ConversationId,
+        path: String,
+    },
     /// Stops one of the thread's CLI's background tasks (`task_id`, the CLI's own id), or one
     /// of its worker `worker_id`'s CLI, as the CLI's own Stop does.
     StopBackgroundTask {
@@ -894,6 +899,13 @@ pub enum Request {
         conversation_id: ConversationId,
         card_id: CardId,
         decision: ApprovalDecision,
+    },
+    /// Saves pasted images and resolves composer pastes and mentions for a plain-text card answer.
+    PrepareCardAnswer {
+        conversation_id: ConversationId,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
     },
     /// Answers a question card's round: one answer per question, the picked option's label or
     /// the user's own words.
@@ -1104,6 +1116,21 @@ pub enum Request {
     SetPinned {
         id: ConversationId,
         pinned: bool,
+    },
+    /// Marks a conversation done, or brings it back.
+    SetDone {
+        id: ConversationId,
+        done: bool,
+    },
+    /// Snoozes a conversation until `until_ms`, or wakes it (`null`).
+    Snooze {
+        id: ConversationId,
+        until_ms: Option<i64>,
+    },
+    /// A conversation's replies were seen up to `at_ms`.
+    MarkSeen {
+        id: ConversationId,
+        at_ms: i64,
     },
     AppendMessage {
         conversation_id: ConversationId,
@@ -1675,6 +1702,10 @@ pub enum Response {
         data: String,
         mime: String,
     },
+    ReadLocalImage {
+        data: String,
+        mime: String,
+    },
     ThreadView {
         view: brigadier_core::thread_view::ThreadView,
     },
@@ -1790,6 +1821,9 @@ pub enum Response {
         note: Option<String>,
     },
     AnswerCard,
+    PrepareCardAnswer {
+        text: String,
+    },
     AnswerQuestion,
     WriteUpFeedback {
         write_up: FeedbackWriteUp,
@@ -1889,6 +1923,15 @@ pub enum Response {
         conversation: Box<Conversation>,
     },
     SetPinned {
+        conversation: Box<Conversation>,
+    },
+    SetDone {
+        conversation: Box<Conversation>,
+    },
+    Snooze {
+        conversation: Box<Conversation>,
+    },
+    MarkSeen {
         conversation: Box<Conversation>,
     },
     AppendMessage {
@@ -2226,6 +2269,9 @@ pub enum ServerFrame {
     ThreadNews {
         news: Vec<brigadier_core::thread_view::ThreadNews>,
     },
+    /// This connection fell behind the threads' news and some was dropped: the app reads
+    /// its rows' activity and the threads it shows again. Live only.
+    ThreadNewsMissed,
     /// What this connection's search with `id` found next, or that it ended. Live only.
     Search {
         id: u32,
@@ -2324,6 +2370,10 @@ pub enum TerminalOutput {
     Exited {
         terminal_id: String,
         code: Option<u32>,
+        /// Closed idle because its session went to sleep: the tab stays, and opening it
+        /// again starts a new shell with this one's output above it.
+        #[serde(default)]
+        asleep: bool,
     },
 }
 

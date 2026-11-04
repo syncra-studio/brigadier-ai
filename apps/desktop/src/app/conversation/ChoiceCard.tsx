@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { CardTextEditor, type CardTextHandle } from "@/app/conversation/CardTextEditor";
 import { CardDictate } from "@/app/conversation/CardDictate";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
 import { ActionCard, ActionCardQuestion, ActionFreeText, ActionOption, actionButton, staggered } from "@/components/conversation";
@@ -48,6 +49,7 @@ export function ChoiceCard({
   choices,
   kept,
   initialText = "",
+  draftScope,
   placeholder,
   pager,
   last = true,
@@ -78,6 +80,7 @@ export function ChoiceCard({
   kept?: number | null | undefined;
   /** What the free-text row holds at first (an answer typed before paging back). */
   initialText?: string;
+  draftScope?: string;
   placeholder: string;
   /** A round's "‹ 1 of 3 ›", beside the dismiss button. */
   pager?: ReactNode;
@@ -139,7 +142,7 @@ export function ChoiceCard({
     };
   }, [owner]);
   const card = useRef<HTMLElement>(null);
-  const field = useRef<HTMLInputElement>(null);
+  const field = useRef<CardTextHandle>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   // The card takes focus (the field, when there is nothing to pick), unless the user is
   // typing somewhere.
@@ -151,7 +154,10 @@ export function ChoiceCard({
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const [marked, setMarked] = useState<readonly number[]>(multiple?.kept ?? []);
-  const idle = !busy && chosen === null;
+  const [preparing, setPreparing] = useState(false);
+  const [prepareError, setPrepareError] = useState<string | null>(null);
+  const sending = useRef(false);
+  const idle = !busy && !preparing && chosen === null;
   const commit = (index: number, input: AnswerInput) => {
     if (!idle || choices[index] === undefined) return;
     if (multiple) {
@@ -171,7 +177,18 @@ export function ChoiceCard({
   const text = typed.trim();
   const send = (input: AnswerInput) => {
     if (!idle) return;
-    if (text) onText(text);
+    if (text) {
+      if (sending.current) return;
+      sending.current = true;
+      setPreparing(true);
+      setPrepareError(null);
+      void field.current?.answer().then(onText).catch((cause: unknown) => {
+        setPrepareError(cause instanceof Error ? cause.message : String(cause));
+      }).finally(() => {
+        sending.current = false;
+        setPreparing(false);
+      });
+    }
     else if (multiple && marked.length > 0) multiple.onChooseAll([...marked], input);
     else onSkip(input);
   };
@@ -267,7 +284,7 @@ export function ChoiceCard({
                   recommended={choice.recommended}
                   highlighted={index === highlight}
                   chosen={index === chosen || (!!multiple && marked.includes(index))}
-                  disabled={busy}
+                  disabled={busy || preparing}
                   onClick={(event) => commit(index, clickInput(event))}
                   {...row(index + 2)}
                 />
@@ -275,44 +292,40 @@ export function ChoiceCard({
             </div>
           )}
           <ActionFreeText
-            ref={field}
-            value={typed}
-            aria-label="Your answer"
-            placeholder={placeholder}
             marker={choices.length > 0}
             highlighted={choices.length > 0 && highlight === -1}
-            disabled={busy}
-            onFocus={() => setHighlight(-1)}
-            onChange={(event) => {
-              setTyped(event.target.value);
-              onTyped?.(event.target.value);
-              if (event.target.value) setHighlight(-1);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                // Never the composer's form around the card.
-                event.preventDefault();
-                if (text) send("enter");
-              } else if (event.key === "ArrowUp" && choices.length > 0) {
-                event.preventDefault();
-                setHighlight(choices.length - 1);
-                card.current?.focus();
-              } else if (event.key === "Escape") {
-                // Back to the answers; a second Esc puts the card aside.
-                event.preventDefault();
-                card.current?.focus();
-              }
-            }}
             {...row(choices.length + 2)}
+            editor={
+              <CardTextEditor
+                ref={field}
+                value={typed}
+                draftScope={draftScope}
+                placeholder={placeholder}
+                disabled={busy || preparing}
+                onFocus={() => setHighlight(-1)}
+                onTyped={(value) => {
+                  setTyped(value);
+                  onTyped?.(value);
+                  if (value) setHighlight(-1);
+                }}
+                onSubmit={() => { if (text) send("enter"); }}
+                onUp={() => {
+                  if (choices.length === 0) return;
+                  setHighlight(choices.length - 1);
+                  card.current?.focus();
+                }}
+                onEscape={() => card.current?.focus()}
+              />
+            }
           >
-            <CardDictate owner={owner} disabled={busy} />
+            <CardDictate owner={owner} disabled={busy || preparing} />
             <button
               type="button"
               className={actionButton(
                 ready ? "primary" : "outline",
                 "font-medium",
               )}
-              disabled={busy}
+              disabled={busy || preparing}
               onClick={(event) => send(clickInput(event))}
             >
               {!ready ? skipLabel : last ? "Submit" : "Next"}
@@ -320,9 +333,9 @@ export function ChoiceCard({
           </ActionFreeText>
         </div>
       </div>
-      {error && (
+      {(error || prepareError) && (
         <p role="alert" className="text-destructive px-4 pb-2 text-xs">
-          {error}
+          {error || prepareError}
         </p>
       )}
       {footer}

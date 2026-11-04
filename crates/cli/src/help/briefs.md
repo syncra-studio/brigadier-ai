@@ -3,7 +3,7 @@ Brief: five lines.
 2. Change: what to build or fix, and decisions made (quote the user's words when they matter).
 3. Do not touch: files, areas or behaviour that must stay.
 4. Files: the exact files or names it owns. Two workers never share a file; two that need one run in order or get exact names up front.
-5. Acceptance: the exact commands that must pass; "commit, merge into my branch (below), then say done with the commit ids and each command's last lines".
+5. Acceptance: first a demo the user sees (a preview with `--purpose user`, screenshots or real output), relayed to the user at once; tests, suites and CI only after their go, then the exact commands that must pass; "commit, merge into my branch (below), then say done with the commit ids and each command's last lines".
 
 Add "Ask me (your parent) if something blocks you; don't guess on scope."
 Start it with `--title "<its job in 2-4 words>"` ("Add timed marks"): its name in the thread and on the Workers card, never a place ("repo root") or a file.

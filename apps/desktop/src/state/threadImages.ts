@@ -73,3 +73,44 @@ export function useThreadImages(conversationId: string | null, itemIds: readonly
   }, [conversationId, ids, key]);
   return state.for === key ? state.images : itemIds.map(() => ({ url: null, error: null }));
 }
+
+/** Local Markdown sources never go to the webview's img src. */
+export function localImagePath(src: string): string | null {
+  try {
+    if (src.startsWith("file:")) {
+      const url = new URL(src);
+      if (url.hostname && url.hostname !== "localhost") return null;
+      const path = decodeURIComponent(url.pathname);
+      return /^\/[a-z]:\//i.test(path) ? path.slice(1) : path;
+    }
+    return src.startsWith("/") || /^[a-z]:[\\/]/i.test(src) ? decodeURIComponent(src) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A local answer image, loaded through the daemon with the same bounded cache as tiles. */
+export function useLocalImage(conversationId: string | null, path: string | null): { url: string | null; error: string | null } {
+  const [state, setState] = useState<{ for: string; url: string | null; error: string | null }>({ for: "", url: null, error: null });
+  const key = `local|${conversationId}|${path}`;
+  useEffect(() => {
+    if (!conversationId || !path) return;
+    let current = true;
+    let promise = read.get(key);
+    if (!promise) {
+      promise = request({ method: "readLocalImage", conversationId, path }).then(({ data, mime }) => `data:${mime};base64,${data}`);
+      promise.catch(() => read.delete(key));
+      read.set(key, promise);
+      for (const old of read.keys()) {
+        if (read.size <= KEPT) break;
+        if (old !== key) read.delete(old);
+      }
+    }
+    promise.then(
+      (url) => current && setState({ for: key, url, error: null }),
+      () => current && setState({ for: key, url: null, error: "Not available" }),
+    );
+    return () => { current = false; };
+  }, [conversationId, path, key]);
+  return state.for === key ? state : { url: null, error: null };
+}

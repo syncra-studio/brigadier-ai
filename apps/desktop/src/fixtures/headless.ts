@@ -496,6 +496,7 @@ export async function renderFixtureLive(
   // What a page can't do itself, done for it as a user's input would be (`fixtureInput`, in
   // fixtures/input.ts): a wheel turned over a point, the window resized, a key pressed (to
   // whatever has focus, so focus handling is what's tested), a click or a pointer move.
+  let pointerButtons = 0;
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data)) as { method?: string; params?: { name: string; payload: string } };
     if (message.method !== "Runtime.bindingCalled" || message.params?.name !== "fixtureInput") return;
@@ -529,8 +530,14 @@ export async function renderFixtureLive(
           await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: asked.x, y: asked.y });
           await call("Input.dispatchMouseEvent", { type: "mousePressed", x: asked.x, y: asked.y, button: "left", buttons: 1, clickCount: 1 });
           return call("Input.dispatchMouseEvent", { type: "mouseReleased", x: asked.x, y: asked.y, button: "left", buttons: 0, clickCount: 1 });
+        case "pointerDown":
+          pointerButtons = 1;
+          return call("Input.dispatchMouseEvent", { type: "mousePressed", x: asked.x, y: asked.y, button: "left", buttons: 1, clickCount: 1 });
+        case "pointerUp":
+          pointerButtons = 0;
+          return call("Input.dispatchMouseEvent", { type: "mouseReleased", x: asked.x, y: asked.y, button: "left", buttons: 0, clickCount: 1 });
         case "pointer":
-          return call("Input.dispatchMouseEvent", { type: "mouseMoved", x: asked.x, y: asked.y });
+          return call("Input.dispatchMouseEvent", { type: "mouseMoved", x: asked.x, y: asked.y, button: pointerButtons ? "left" : "none", buttons: pointerButtons });
       }
     };
     void act().then(done);
