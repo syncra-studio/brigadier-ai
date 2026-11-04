@@ -1431,7 +1431,6 @@ fn read_beside(request: &Request) -> bool {
             | Request::ListUserWorktrees { .. }
             | Request::GetWorktreeSourceState { .. }
             | Request::GetSessionDiff { .. }
-            | Request::GetWorkerDiffs { .. }
             | Request::GetWorkerSource { .. }
             | Request::GetPendingChanges { .. }
             | Request::GetReviewDiff { .. }
@@ -1902,9 +1901,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 stat: diff.map(|(stat, _)| stat),
             }
         }
-        Request::GetWorkerDiffs { conversation_id } => Response::GetWorkerDiffs {
-            diffs: heap(|| sessions.worker_diffs(&conversation_id)).await?,
-        },
         Request::GetWorkerSource {
             conversation_id,
             task_id,
@@ -3263,9 +3259,6 @@ mod tests {
                 conversation_id: id(),
             },
             Request::GetSessionDiff { id: id() },
-            Request::GetWorkerDiffs {
-                conversation_id: id(),
-            },
             Request::GetWorkerSource {
                 conversation_id: id(),
                 task_id: brigadier_core::TaskId("t1".into()),

@@ -27,8 +27,8 @@ use brigadier_core::{
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
     SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TrackedPullRequest, TrackedWork,
-    UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn, WorkerDiff,
-    WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn, WorkerPage,
+    WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -441,11 +441,6 @@ pub enum Request {
     /// What a worktree session's branch changed against its base (the pinned summary card).
     GetSessionDiff {
         id: ConversationId,
-    },
-    /// What each worker at work on a change has changed in its worktree so far: its +N −N in
-    /// the Workers summary while it works.
-    GetWorkerDiffs {
-        conversation_id: ConversationId,
     },
     /// The files a worker of the conversation changed, as its +N −N counts them: the Source
     /// panel's worker scope. It only reads.
@@ -1648,9 +1643,6 @@ pub enum Response {
         /// changes nothing. 0 without a stat.
         #[serde(default)]
         commits: u32,
-    },
-    GetWorkerDiffs {
-        diffs: Vec<WorkerDiff>,
     },
     GetWorkerSource {
         source: WorkerSource,
