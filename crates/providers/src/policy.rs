@@ -923,18 +923,25 @@ pub fn workspace_grant(request: &ApprovalRequest, workspace: &std::path::Path) -
         .then(|| workspace.display().to_string())
 }
 
-/// Folders whose files run code or set permissions outside the sandbox: Git's hooks and
-/// config, Claude's settings and hooks, Codex's config, agent skills and editor tasks.
-const PROTECTED_DIRS: [&str; 5] = [".git", ".claude", ".codex", ".agents", ".vscode"];
+/// Names whose files run code or set permissions outside the sandbox: Git's hooks and config,
+/// Claude's settings and hooks, Codex's config, agent skills, editor tasks, and an
+/// `.mcp.json`'s servers.
+pub const PROTECTED_NAMES: [&str; 6] = [
+    ".git",
+    ".claude",
+    ".codex",
+    ".agents",
+    ".vscode",
+    ".mcp.json",
+];
 
-/// Whether `path` lies in a [`PROTECTED_DIRS`] folder or is an `.mcp.json`, at any depth.
-/// Names compare case-insensitively, as macOS's file system does (`.GIT` is `.git`).
+/// Whether `path` lies in, or is, a [`PROTECTED_NAMES`] entry, at any depth. Names compare
+/// case-insensitively, as macOS's file system does (`.GIT` is `.git`).
 fn protected(path: &std::path::Path) -> bool {
     path.components().any(|part| match part {
         std::path::Component::Normal(name) => name.to_str().is_none_or(|name| {
-            PROTECTED_DIRS
+            PROTECTED_NAMES
                 .iter()
-                .chain([&".mcp.json"])
                 .any(|protected| name.eq_ignore_ascii_case(protected))
         }),
         _ => false,

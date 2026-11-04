@@ -196,23 +196,40 @@ fn tool_reply(action: &str, reply: ToolReply) -> CliReply {
 /// unasked ([`policy::workspace_grant`]). Its names as given, then as the file system resolves
 /// them (`..`, symlinks, junctions, case), lie in `folder` and outside Git's metadata and the
 /// agents' settings (`.git`, `.claude`, `.codex`, `.agents`, `.vscode`, `.mcp.json`), so a
-/// `.claude` that is a junction to a plain folder still refuses `.claude/settings.json`. A
-/// relative path, another drive, a UNC path and a name with `:` (an NTFS stream, as in
-/// `.git::$INDEX_ALLOCATION`) are refused; with no folder, everything is.
+/// `.claude` that is a junction to a plain folder still refuses `.claude/settings.json`. The
+/// save is written beside `out` and renamed over it, replacing a link there rather than
+/// following it, so `out`'s own folder must lie in `folder` too (not a link outside leading
+/// in, nor `folder` itself). A relative path, another drive, a UNC path and a name Windows
+/// reads as another are refused: one with `:` (an NTFS stream, as in
+/// `.git::$INDEX_ALLOCATION`), one ending in a dot or a space, which it drops (`.mcp.json.`),
+/// and a short 8.3 name of a protected one (`CLAUDE~1`). With no folder, everything is.
 pub(super) fn out_allowed(out: &Path, folder: Option<&Path>) -> bool {
-    let (Some(folder), Some(text)) = (folder, out.to_str()) else {
+    let (Some(folder), Some(text), Some(parent)) =
+        (folder, out.to_str(), out.parent().and_then(Path::to_str))
+    else {
         return false;
     };
-    let stream = out.components().any(
-        |part| matches!(part, Component::Normal(name) if name.to_string_lossy().contains(':')),
-    );
+    let mut named = PathBuf::new();
+    for part in out.components() {
+        named.push(part);
+        let Component::Normal(name) = part else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        if name.contains(':')
+            || name.ends_with(['.', ' '])
+            || (name.contains('~') && short_name_of_protected(&named))
+        {
+            return false;
+        }
+    }
     let request = ApprovalRequest {
         id: String::new(),
         kind: ApprovalKind::FileChange,
         tool: "brigadier --out".into(),
         command: None,
         cwd: None,
-        paths: vec![text.to_owned()],
+        paths: vec![text.to_owned(), parent.to_owned()],
         reason: None,
         escalation: false,
         input: None,
@@ -220,7 +237,22 @@ pub(super) fn out_allowed(out: &Path, folder: Option<&Path>) -> bool {
         network: false,
         agent: None,
     };
-    !stream && policy::workspace_grant(&request, folder).is_some()
+    policy::workspace_grant(&request, folder).is_some()
+}
+
+/// Whether `path` is another name of a [`policy::PROTECTED_NAMES`] entry beside it, as
+/// Windows' short 8.3 names are (`CLAUDE~1` for `.claude`): the given names would pass for
+/// plain ones, and where `.claude` is a link to a plain folder so would the resolved ones.
+fn short_name_of_protected(path: &Path) -> bool {
+    let (Some(parent), Ok(real)) = (path.parent(), path.canonicalize()) else {
+        return false;
+    };
+    policy::PROTECTED_NAMES.iter().any(|name| {
+        parent
+            .join(name)
+            .canonicalize()
+            .is_ok_and(|other| other == real)
+    })
 }
 
 impl SessionManager {
@@ -627,7 +659,10 @@ mod out_tests {
                 PathBuf::from(format!("{drive}shot.png")),
                 // UNC, even when it names the folder itself through the admin share.
                 PathBuf::from(format!(r"\\localhost\{}${rest}\shot.png", &drive[..1])),
-                PathBuf::from(format!(r"\\?\UNC\localhost\{}${rest}\shot.png", &drive[..1])),
+                PathBuf::from(format!(
+                    r"\\?\UNC\localhost\{}${rest}\shot.png",
+                    &drive[..1]
+                )),
                 PathBuf::from(r"\\127.0.0.1\share\shot.png"),
                 // A device.
                 PathBuf::from(r"\\.\PhysicalDrive0"),
@@ -639,12 +674,48 @@ mod out_tests {
             assert!(!allowed(path), "{}", path.display());
         }
 
-        // A file symlink inside leading out, and one leading nowhere.
+        // A link outside leading in: the save replaces the link, in the folder outside. And
+        // the folder itself, whose save would be written beside it, outside.
+        link_dir(&folder.join("src"), &outside.join("in"));
+        for path in [outside.join("in"), folder.clone(), folder.join(".")] {
+            assert!(!allowed(&path), "{}", path.display());
+        }
+
+        // Names Windows reads as other names: a trailing dot or space, which it drops
+        // (`.mcp.json.` is `.mcp.json`), and a short 8.3 name, which hides the name of a
+        // `.claude` that is a junction to a plain folder. Refused wherever they'd be read so.
+        for path in [
+            folder.join(".mcp.json."),
+            folder.join(".mcp.json "),
+            folder.join(".claude./settings.json"),
+            folder.join(".claude /settings.json"),
+            folder.join("src/shot.png."),
+        ] {
+            assert!(!allowed(&path), "{}", path.display());
+        }
+        if folder.join("CLAUDE~1").exists() {
+            for path in [
+                folder.join("CLAUDE~1/settings.json"),
+                folder.join("claude~1/settings.local.json"),
+            ] {
+                assert!(!allowed(&path), "{}", path.display());
+            }
+        } else {
+            eprintln!("no 8.3 names here: the short-name case is left out");
+        }
+        // A name with `~` that is its own name is a plain name.
+        std::fs::create_dir_all(folder.join("v~1")).unwrap();
+        assert!(allowed(&folder.join("v~1/shot.png")));
+        assert!(allowed(&folder.join("new~1.png")));
+
+        // A file symlink inside leading out, and one leading nowhere; one outside leading in.
         match link_file(&outside.join("profile.ps1"), &folder.join("evil.png")) {
             Ok(()) => {
                 link_file(&outside.join("gone.png"), &folder.join("dangling.png")).unwrap();
                 assert!(!allowed(&folder.join("evil.png")));
                 assert!(!allowed(&folder.join("dangling.png")));
+                link_file(&folder.join("src/existing.png"), &outside.join("in.png")).unwrap();
+                assert!(!allowed(&outside.join("in.png")));
             }
             // The junction above covers a link leading out on such a machine.
             Err(err) => eprintln!("no file symlink here ({err}); the junction case covers it"),

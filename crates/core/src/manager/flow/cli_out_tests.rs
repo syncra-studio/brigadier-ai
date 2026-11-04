@@ -13,8 +13,8 @@ use super::{Flow, Options, Reply, Script, Turn};
 use crate::model::PermissionLevel;
 
 /// `brigadier browser screenshot --tab browser:x --out <out>` as the turn's shell runs it: as
-/// its session, with its grant. An error comes back as `{"error": …}`.
-async fn screenshot(turn: &Turn, out: &std::path::Path) -> Value {
+/// its session, with its grant, speaking `protocol`. An error comes back as `{"error": …}`.
+async fn screenshot(turn: &Turn, out: &std::path::Path, protocol: u32) -> Value {
     let session = turn.env(SESSION_ENV).expect("the CLI knows its session");
     let grant = turn.env(GRANT_ENV).expect("the CLI has its grant");
     let caller = turn
@@ -22,7 +22,7 @@ async fn screenshot(turn: &Turn, out: &std::path::Path) -> Value {
         .cli_caller(session, grant)
         .expect("the session's own grant is accepted");
     let call = CliCall {
-        protocol: PROTOCOL,
+        protocol,
         request: CliRequest::Tool {
             tool: Tool::Browser,
             action: "screenshot".into(),
@@ -37,7 +37,8 @@ async fn screenshot(turn: &Turn, out: &std::path::Path) -> Value {
 }
 
 /// At Accept edits a file in the checkout is let through to the tool, one beside the checkout
-/// or in its `.claude` is refused, saying why; at Full access none is refused.
+/// or in its `.claude` is refused, saying why; at Full access none is refused. A call of the
+/// protocol before `--out` was checked is refused by its version, not run.
 #[tokio::test]
 async fn out_follows_the_sessions_permission_level() {
     for permission in [PermissionLevel::AcceptEdits, PermissionLevel::Full] {
@@ -56,9 +57,13 @@ async fn out_follows_the_sessions_permission_level() {
                         ("outside", checkout.parent().unwrap().join("outside.png")),
                         ("settings", checkout.join(".claude/settings.json")),
                     ] {
-                        let answer = screenshot(&turn, &out).await;
+                        let answer = screenshot(&turn, &out, PROTOCOL).await;
                         answers.lock().unwrap().push((name, answer));
                     }
+                    // A `brigadier` from before `--out` was sent, which the daemon couldn't
+                    // check, is told to use the app's.
+                    let old = screenshot(&turn, &checkout.join("shot.png"), 2).await;
+                    answers.lock().unwrap().push(("old", old));
                     Reply::text("Saved them.")
                 })
             })
@@ -69,11 +74,20 @@ async fn out_follows_the_sessions_permission_level() {
         };
         let flow = Flow::start("cli-out", options, script).await;
         flow.say("Save the shots.").await;
-        flow.until("it saved them", |_| answers.lock().unwrap().len() == 3)
+        flow.until("it saved them", |_| answers.lock().unwrap().len() == 4)
             .await;
         flow.settled().await;
         let answers = answers.lock().unwrap().clone();
         for (name, answer) in &answers {
+            if *name == "old" {
+                assert_eq!(
+                    answer["error"]["code"], "version",
+                    "{permission:?}: {answer:#}"
+                );
+                let message = answer["error"]["message"].as_str().unwrap_or_default();
+                assert!(message.contains("speaks protocol 2"), "{message}");
+                continue;
+            }
             let refused = answer["error"]["code"] == "refused"
                 && answer["error"]["message"]
                     .as_str()
