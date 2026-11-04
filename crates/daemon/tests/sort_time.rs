@@ -2,7 +2,7 @@
 //! under /tmp, with a scratch home so no real agent CLI or account can be reached, spoken to over
 //! its own IPC. It first checks the one-time fill of rows stored by an older Brigadier, then which
 //! requests move a row. No agent answers here: a turn fails at once, and the requests' handlers
-//! run all the same.
+//! run all the same. An image read goes through the same real daemon at the end.
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
@@ -472,4 +472,78 @@ async fn clients_with_the_retired_inbox_commands_are_rejected_at_handshake() {
         reply.is_none(),
         "an incompatible old client was welcomed: {reply:?}"
     );
+}
+
+/// A tile of an image a Claude session viewed, as the app reads it: the shape `threadView` gives
+/// its item, sent back as `readSessionFileImage`. The app refuses any answer whose `method` isn't
+/// the one it asked, and the original file doesn't have to be there.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_image_in_a_session_file_is_answered_as_what_was_asked() {
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let dir = scratch();
+    let (_daemon, mut client) = start(&dir.0).await;
+    let chat = match client
+        .ask(Request::CreateConversation {
+            kind: ConversationKind::Chat,
+            project_id: None,
+            title: Some("Pictures".into()),
+            setup: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::CreateConversation { conversation } => conversation.id,
+        other => panic!("{other:?}"),
+    };
+    // As Claude Code writes a `Read` of an image.
+    let session = dir.0.join("session.jsonl");
+    let lines = [
+        json!({"type": "assistant", "uuid": "a", "timestamp": "2026-11-04T10:00:00.000Z", "message": {
+        "id": "msg", "role": "assistant", "content": [
+            {"type": "tool_use", "id": "read", "name": "Read", "input": {"file_path": dir.0.join("gone.png")}}
+        ]}}),
+        json!({"type": "user", "uuid": "b", "timestamp": "2026-11-04T10:00:01.000Z", "message": {
+        "role": "user", "content": [{"type": "tool_result", "tool_use_id": "read", "content": [
+            {"type": "image", "source": {"type": "base64", "data": PNG, "media_type": "image/png"}}
+        ]}]}}),
+    ];
+    std::fs::write(&session, format!("{}\n{}\n", lines[0], lines[1])).unwrap();
+    let paths = AppPaths::resolve(dir.0.join("data")).unwrap();
+    let record = paths.sessions_dir.join(chat.short()).join("record");
+    std::fs::create_dir_all(&record).unwrap();
+    std::fs::write(
+        record.join("lineage.json"),
+        json!([{"provider": "claude", "sessionId": "s", "file": session, "startedAt": 1}])
+            .to_string(),
+    )
+    .unwrap();
+
+    let view = match client
+        .ask(Request::ThreadView {
+            conversation_id: chat.clone(),
+            newest_turns: None,
+        })
+        .await
+        .unwrap()
+    {
+        Response::ThreadView { view } => view,
+        other => panic!("{other:?}"),
+    };
+    let image = view
+        .entries
+        .iter()
+        .find(|entry| !entry.images.is_empty())
+        .map(|entry| entry.images[0].clone())
+        .expect("the viewed image's item carries it");
+    let answer = client
+        .ask(Request::ReadSessionFileImage {
+            conversation_id: chat,
+            image,
+        })
+        .await
+        .unwrap();
+    let answer = serde_json::to_value(&answer).unwrap();
+    assert_eq!(answer["method"], "readSessionFileImage");
+    assert_eq!(answer["data"], PNG);
+    assert_eq!(answer["mime"], "image/png");
 }

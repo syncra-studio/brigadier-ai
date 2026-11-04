@@ -1705,6 +1705,10 @@ pub enum Response {
         data: String,
         mime: String,
     },
+    ReadSessionFileImage {
+        data: String,
+        mime: String,
+    },
     ThreadView {
         view: brigadier_core::thread_view::ThreadView,
     },
