@@ -10,9 +10,9 @@ import type { TaskId } from "./TaskId";
  */
 export type QueuedMessage = { id: string, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, queuedAtMs: number, editedAtMs: number | null, 
 /**
- * Only in rows stored by an older daemon, which held a message back until its judge
- * answered; a start settles them. A message sent while the session works is now an ordinary
- * row from the first frame, judged in the background (`queue_judging`).
+ * A judge is reading whether it joins the work in progress (`queue_judging`). Only a label:
+ * the row's actions stay usable and it never holds the queue. A start settles what a stop
+ * left.
  */
 deciding?: boolean, 
 /**

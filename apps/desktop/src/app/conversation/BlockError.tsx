@@ -65,7 +65,7 @@ export function useBlockError(meta: BlockMeta | undefined, error: string | null)
 const TRY_AGAIN = "Try again.";
 
 /**
- * The block's error: one plain line, the error's own words under Details, and Try again where it
+ * The block's error: one quiet line, the error's own words under Details, and Try again where it
  * can be: a Chat answers again; a session's last turn gets "Try again." sent as the user's
  * message, the way the composer sends it. An overnight run's turn has none: the run goes on.
  */
@@ -76,7 +76,7 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
       ? String(status.error ?? "The reply failed.")
       : null;
   });
-  const read = useBlockError(meta, failed);
+  const read = useBlockError(meta, failed ?? meta.error);
   const kind = useBlockTurn(meta, (turn) => turn?.errorKind ?? null);
   const turnProvider = useBlockTurn(meta, (turn) => turn?.provider ?? null);
   const latest = useAuiState((s) => s.message.isLast);
@@ -94,6 +94,8 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
   // Brigadier quit while it ran: Continue picks the request up (UI audit H1).
   const interrupted = interruptedByQuit(error);
   const again = (() => {
+    // A later turn of its block went on: there is nothing to try again.
+    if (failed === null) return undefined;
     if (interrupted) {
       if (!resumable || live || !latest || !conversation || conversation.lifecycle === "archived" || action.busy) return undefined;
       const id = conversation.id;
@@ -130,7 +132,7 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
     <div className="flex flex-col gap-1">
       <ErrorState summary={summary} details={interrupted ? null : error} onRetry={again} retryLabel={interrupted ? "Continue" : undefined} />
       {action.error && (
-        <p role="alert" className="text-muted-foreground px-3 text-xs">
+        <p role="alert" className="text-muted-foreground text-xs">
           Couldn’t send it: {action.error}
         </p>
       )}

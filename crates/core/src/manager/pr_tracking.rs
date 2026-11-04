@@ -19,6 +19,8 @@ pub(super) struct Poller {
 }
 /// A PR to poll with its host-resolved key and every session that tracks it.
 type PollTarget = (String, TrackedPullRequest, Vec<ConversationId>);
+/// A tracked PR's status with no account to read it with.
+const ACCOUNT_NEEDED: &str = "Account needed for review status";
 /// How one PR touch is recorded: who did what, and the evidence it came from.
 struct PrTouch<'a> {
     account: Option<String>,
@@ -531,7 +533,7 @@ impl SessionManager {
                 continue;
             }
             let Some(account) = pr.account.clone() else {
-                pr.status = "Account needed: brigadier pr watch <url> --account <login>".into();
+                pr.status = ACCOUNT_NEEDED.into();
                 pr.complete = false;
                 self.pr_poll.state.lock().unwrap().insert(
                     key,
@@ -1133,6 +1135,11 @@ fn retry_after(headers: &str, now: i64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The row's status is the user's to read; the command that fixes it is the model's.
+    #[test]
+    fn a_pr_needing_an_account_says_so_in_plain_words() {
+        assert!(!ACCOUNT_NEEDED.contains("brigadier"), "{ACCOUNT_NEEDED}");
+    }
     #[test]
     fn compound_commands_never_prove_a_touch() {
         for c in [
@@ -1405,7 +1412,7 @@ impl SessionManager {
         pr.status = match found.state {
             PullRequestState::Merged => "Merged",
             PullRequestState::Closed => "Closed",
-            _ if pr.account.is_none() => "Account needed for review status",
+            _ if pr.account.is_none() => ACCOUNT_NEEDED,
             _ => "Checking status",
         }
         .into();

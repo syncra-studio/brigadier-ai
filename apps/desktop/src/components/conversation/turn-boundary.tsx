@@ -22,7 +22,7 @@ export class TurnBoundary extends Component<{ children: ReactNode; summary?: str
     const { error } = this.state;
     if (!error) return this.props.children;
     return (
-      <div data-slot="turn-render-error" className="border-border rounded-control mx-2 border p-3">
+      <div data-slot="turn-render-error">
         <ErrorState summary={this.props.summary ?? "This turn couldn’t render."} details={error.message} onRetry={() => this.setState({ error: null })} />
       </div>
     );

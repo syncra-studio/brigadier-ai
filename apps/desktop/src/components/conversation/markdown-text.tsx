@@ -31,7 +31,7 @@ import {
 import { FileTypeIcon } from "@/components/conversation/elements/file-type-icon";
 import { ImagePreview } from "@/components/conversation/elements/image-viewer";
 import { codePath, type CodePath, underRoot, useCodePathExists } from "@/components/conversation/code-paths";
-import { httpsOrigin, useSiteIcon } from "@/components/conversation/site-icons";
+import { httpsOrigin, imageIsDarkMark, useSiteIcon } from "@/components/conversation/site-icons";
 import { createWordFade } from "@/components/conversation/word-fade";
 import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import {
@@ -811,8 +811,16 @@ function ReportBody({ text }: { text: string }) {
  */
 function SiteIcon({ href }: { href: string }) {
   const icon = useSiteIcon(href);
+  const [darkOn, setDarkOn] = useState<string | null>(null);
   return icon ? (
-    <img data-slot="site-icon" src={icon} alt="" referrerPolicy="no-referrer" className="inline-block size-icon-sm rounded-xs object-contain align-text-bottom select-none" />
+    <img
+      data-slot="site-icon"
+      src={icon}
+      alt=""
+      referrerPolicy="no-referrer"
+      onLoad={(event) => setDarkOn(imageIsDarkMark(event.currentTarget) ? icon : null)}
+      className={cn("inline-block size-icon-sm rounded-xs object-contain align-text-bottom select-none", darkOn === icon && "invert")}
+    />
   ) : (
     <Globe data-slot="site-icon" aria-hidden className="inline-block size-icon-sm align-text-bottom select-none" />
   );

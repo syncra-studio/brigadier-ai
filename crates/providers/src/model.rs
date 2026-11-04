@@ -1101,6 +1101,11 @@ pub enum ProviderEvent {
         item_id: String,
         text: String,
     },
+    /// The model wrote to a command it went on from, or polled it and found it still running
+    /// (Codex's `terminalInteraction`). An empty poll that reads the command's end sends none.
+    CommandPolled {
+        item_id: String,
+    },
     /// What a finished tool call or command (`itemId`) read and searched, in the same words
     /// for every CLI: Claude's `Read`, `Grep` and `Glob`, Codex's commands as it parsed them
     /// (`commandActions`). It follows the call's own completed event. `cwd` is what relative

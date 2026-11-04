@@ -11,7 +11,7 @@ use super::conversation::{BACKGROUND_TURN_GRACE, ConvLive, WAKE_SETTLE};
 use super::session_dir::read_lineage;
 use crate::model::{ContextUsage, ConversationId, ConversationView};
 use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
-use crate::work::{ConversationActivity, TaskId};
+use crate::work::{ConversationActivity, RequestState, RunState, TaskId};
 use crate::{Error, Result, now_ms};
 
 #[path = "envelope_provenance.rs"]
@@ -595,6 +595,132 @@ impl SessionManager {
         }
     }
 
+    /// A turn handed over whose carry-on will never come ends as its request did: the switch's
+    /// target failed to start, nowhere could take it, the user stopped it, or a restart cut it
+    /// off (D180 holds only while it goes on). Its record is what the thread, the row and a
+    /// `brigadier wait` all read, and a restart runs this for threads already on disk.
+    pub(super) async fn end_handed_over_turn(&self, id: &ConversationId) {
+        let dir = self.session_dir(id).record();
+        if thread_view::last_turn(&dir).is_none_or(|turn| turn.end != Some(TurnEnd::HandedOver)) {
+            return;
+        }
+        let conv = self.conv(id).ok();
+        let holds = match &conv {
+            Some(conv) => self.work_holds(conv).await,
+            None => false,
+        };
+        // Read and written with no turn able to start, so a carry-on is never overwritten.
+        let ending = self.commit_handed_over_end(id, &dir, holds);
+        let ended = match &conv {
+            Some(conv) => conv.with_no_turn(ending).await.unwrap_or(false),
+            None => ending.await,
+        };
+        if ended {
+            self.block_soon(id);
+        }
+    }
+
+    /// [`Self::end_handed_over_turn`]'s reading of the record and the board, and its writes.
+    /// `holds`: what the turn started still runs. Whether it ended the turn.
+    async fn commit_handed_over_end(
+        &self,
+        id: &ConversationId,
+        dir: &std::path::Path,
+        holds: bool,
+    ) -> bool {
+        let Some(mut record) =
+            thread_view::last_turn(dir).filter(|turn| turn.end == Some(TurnEnd::HandedOver))
+        else {
+            return false;
+        };
+        let (Ok(board), Ok(conversation)) = (self.core.board(id).await, self.core.conversation(id))
+        else {
+            return false;
+        };
+        let live =
+            |state: &RequestState| matches!(state, RequestState::Working | RequestState::Waiting);
+        if conversation.quota_wait.is_some()
+            || board.requests.values().any(|request| live(&request.state))
+            // One that carries no request goes on while the run still reads running.
+            || (record.requests.is_empty() && matches!(board.run, RunState::Running | RunState::Starting))
+        {
+            return false;
+        }
+        let states: Vec<_> = record
+            .requests
+            .iter()
+            .filter_map(|request| board.requests.get(request))
+            .map(|request| &request.state)
+            .collect();
+        let (end, error) = if states.contains(&&RequestState::Stopped) {
+            (TurnEnd::Stopped, None)
+        } else if let Some(RequestState::Failed { error }) = states
+            .iter()
+            .find(|state| matches!(state, RequestState::Failed { .. }))
+        {
+            let cut = states
+                .iter()
+                .any(|state| super::conversation::interrupted_by_quit(state));
+            (
+                if cut {
+                    TurnEnd::Interrupted
+                } else {
+                    TurnEnd::Failed
+                },
+                Some(error.clone()),
+            )
+        } else {
+            // What it started still runs: it reads working until that ends (D151).
+            if holds {
+                return false;
+            }
+            // Nothing answered it and nothing will: it reads cut off, with Continue (D84), which
+            // takes the newest request alone. An earlier one it carried stays as it ended.
+            if let Some(request) = board
+                .latest_request()
+                .filter(|request| record.requests.contains(&request.id))
+            {
+                let cut = RequestState::Failed {
+                    error: super::conversation::INTERRUPTED_BY_QUIT.into(),
+                };
+                if let Err(err) = self.core.update_request(id, &request.id, cut, None).await {
+                    tracing::debug!(conversation = %id, error = %err, "could not update a request");
+                }
+            }
+            (TurnEnd::Interrupted, None)
+        };
+        // Other words than what handed it over: it reads as them, not as that error.
+        if error.is_some() && error != record.error {
+            record.error_kind = None;
+            record.limit = None;
+        }
+        let ended = TurnRecord {
+            end: Some(end),
+            error,
+            ..record
+        };
+        if let Err(err) = thread_view::append_turn(dir, &ended) {
+            tracing::warn!(conversation = %id, error = %err, "could not end a turn handed over");
+            return false;
+        }
+        let _ = self.thread_news.send(ThreadNews {
+            conversation_id: id.clone(),
+            entries: Vec::new(),
+            opened: false,
+            ended: Some(end),
+            turn_ended_at_ms: ended.ended_at_ms,
+            context: None,
+            background: None,
+            mcp: None,
+            workers: None,
+            jobs: None,
+            replies: None,
+            block: None,
+            seq: self.next_news_seq(),
+        });
+        true
+    }
+
     /// Follows the last line each running background command of conversation `id` prints,
     /// from its output file, while it has one: its row shows it, as the CLI's own does.
     async fn follow_task_output(&self, id: ConversationId) {
@@ -676,8 +802,10 @@ impl SessionManager {
                 said_jobs(live, now_ms()).map(|jobs| (jobs, manager.next_news_seq()))
             };
             if let Some((jobs, seq)) = jobs {
-                manager.say_jobs(id, jobs, seq);
+                manager.say_jobs(id.clone(), jobs, seq);
             }
+            // That hold may be all a turn handed over was waiting on.
+            manager.settle_requests(&id).await;
         });
     }
 
@@ -736,7 +864,7 @@ impl SessionManager {
         let Ok(conv) = self.conv(id) else {
             return false;
         };
-        let live = conv.is_busy().await || self.work_holds(&conv).await;
+        let live = conv.work_under_way().await || self.work_holds(&conv).await;
         let said = {
             let mut blocks = self.work_blocks.lock().unwrap();
             let now = now_ms();

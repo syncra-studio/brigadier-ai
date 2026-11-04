@@ -193,8 +193,6 @@
   --spacing-notice-gap-wide: calc(var(--spacing) * 2.7);
   --spacing-notice-icon: calc(var(--spacing-icon-md) * 0.9);
   --spacing-notice-button: round(calc(var(--spacing-control-xs) * 0.9), 1px);
-  --spacing-notice-close: round(calc(var(--spacing-icon-button-sm) * 0.9), 1px);
-  --spacing-notice-close-icon: calc(var(--spacing-icon-sm) * 0.9);
   /* The pinned summary: its gap to the top bar and the thread pane's edges (also the gap
      between its cards), how short a card may get before the cards scroll together instead (its
      own height when shorter), and how far the thread's column moves aside for it in a pane too

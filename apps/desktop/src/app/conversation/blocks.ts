@@ -293,6 +293,8 @@ export type Block = {
   requestIds: string[];
   state: BlockState;
   error: string | null;
+  /** Where that error's turn failed, when a later turn of the block went on after it. */
+  errorAt: number | null;
   startedAtMs: number;
   endedAtMs: number | null;
   /** When its turn worked, by its CLI's timestamps (open while it does), for "Worked for …". */
@@ -594,6 +596,7 @@ export type SequenceSource = {
   orchestratorSteps: readonly BlockOrchestratorStep[];
   thinking?: readonly ThinkingSegment[];
   state?: BlockState;
+  errorAt?: number | null;
   rows: readonly BlockRow[];
 };
 
@@ -611,7 +614,9 @@ export type SequenceEntry =
   | { kind: "taskNotice"; text: string; position: number; id?: string; inWork?: boolean; detail?: string }
   | { kind: "row"; row: BlockRow; position: number }
   /** More than an hour passed in the turn before what follows, which came at `atMs` (#130). */
-  | { kind: "gap"; atMs: number; position: number };
+  | { kind: "gap"; atMs: number; position: number }
+  /** Where a turn of the block failed, a later one having gone on (D16): the block draws its error line here. */
+  | { kind: "turnError"; position: number };
 
 /** Whether a lead's step is an image the thread looked at or made: its row stands apart from the work. */
 export function isImageStep(step: BlockOrchestratorStep): boolean {
@@ -659,6 +664,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
       position: step.position,
     })),
     ...source.rows.map((row) => ({ kind: "row" as const, row, position: row.position })),
+    ...(source.errorAt == null ? [] : [{ kind: "turnError" as const, position: source.errorAt }]),
   ].toSorted((a, b) => a.position - b.position);
   const tail = entries.at(-1);
   if (tail?.kind === "thinking") tail.live = !tail.segment.complete && (source.state === undefined || source.state === "working");
@@ -825,6 +831,7 @@ const IN_VIEW: ReadonlySet<string> = new Set(["feedbackOffered", "sessionOffered
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
+  if (entry.kind === "turnError") return false;
   if (entry.kind === "orchestrator" && entry.steps.some((step) => IN_VIEW.has(step.kind.type))) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }

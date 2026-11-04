@@ -1,7 +1,7 @@
 import { useState } from "react";
 
-import { Button, TooltipIconButton } from "@/components/controls";
-import { ShieldExclamation, X } from "@/components/icons";
+import { Button } from "@/components/controls";
+import { ShieldExclamation } from "@/components/icons";
 import type { Conversation } from "@/ipc/generated";
 import { pageShown } from "@/lib/pageHidden";
 import { cn } from "@/lib/utils";
@@ -9,7 +9,7 @@ import { useQueueRows } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
-/** Set once it was closed, or stepped aside after showing: gone in every session, across restarts (D191, D216). */
+/** Set once it stepped aside after showing: gone in every session, across restarts (D191, D216). */
 const CLOSED = "brigadier.fullAccessNoticeClosed";
 /** "shown": it showed in this run, so stepping aside counts as closing it. */
 const seen = new Set<"shown">();
@@ -21,13 +21,12 @@ const seen = new Set<"shown">();
  * rounded like the composer. It steps aside while a question, proposal or approval
  * waits above the composer, so it never pushes that card or the thread's last lines out of
  * view, and while messages wait in the queue, so they stay right under the conversation (#448).
- * Once it has shown and stepped aside it stays gone, as if closed (demo12). × closes it in every
- * session, new ones too, across restarts (D191, D216); "Don't show again" turns it off in
- * Settings, where turning it back on shows it again.
+ * Once it has shown and stepped aside it stays gone (demo12), in every session, new ones too, across
+ * restarts (D191, D216); "Don't show again" turns it off in Settings, where turning it back on
+ * shows it again.
  */
 export function FullAccessNotice({ conversation, aside = false }: { conversation: Conversation; aside?: boolean }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
-  const [, setClosed] = useState(0);
   // One that came while nobody could see the window is simply there when it shows again.
   const [opens] = useState(pageShown);
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
@@ -38,10 +37,6 @@ export function FullAccessNotice({ conversation, aside = false }: { conversation
   if (show && full && (aside || queued) && seen.has("shown")) localStorage.setItem(CLOSED, "1");
   if (!show || !full || aside || queued || localStorage.getItem(CLOSED)) return null;
   seen.add("shown");
-  const close = () => {
-    localStorage.setItem(CLOSED, "1");
-    setClosed((count) => count + 1);
-  };
   return (
     <section
       aria-label="Full access is on"
@@ -73,14 +68,6 @@ export function FullAccessNotice({ conversation, aside = false }: { conversation
           >
             Don’t show again
           </Button>
-          <TooltipIconButton
-            tooltip="Close"
-            side="bottom"
-            className="rounded-capsule size-notice-close"
-            onClick={close}
-          >
-            <X className="size-notice-close-icon" />
-          </TooltipIconButton>
         </div>
       </div>
     </section>

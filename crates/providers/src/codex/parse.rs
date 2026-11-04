@@ -385,6 +385,13 @@ impl Parser {
                     }));
                 }
             }
+            "item/commandExecution/terminalInteraction" => {
+                if let Some(item_id) = params.get("itemId").and_then(Value::as_str) {
+                    out.push(Output::Event(ProviderEvent::CommandPolled {
+                        item_id: item_id.to_owned(),
+                    }));
+                }
+            }
             "thread/tokenUsage/updated" => {
                 let Some(update) = decode::<p::ThreadTokenUsageUpdatedNotification>(
                     method,

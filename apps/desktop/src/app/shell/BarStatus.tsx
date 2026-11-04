@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
 
 import { accountLabel, accountsOf, loadAccounts, oneRowPerAccount } from "@/state/accounts";
 
-import { loadProviders, openSettings, refreshProviders } from "@/state/actions";
+import { loadProviders, openSettings, refreshProviderUsage } from "@/state/actions";
 
 import { openAgentPage } from "@/state/agentPage";
 
@@ -57,7 +57,7 @@ let lastUsageRefreshMs = Date.now();
 
 function refreshUsage(): void {
   lastUsageRefreshMs = Date.now();
-  refreshProviders().catch((error: unknown) => console.error("refreshing usage failed", error));
+  refreshProviderUsage().catch((error: unknown) => console.error("refreshing usage failed", error));
 }
 
 /*

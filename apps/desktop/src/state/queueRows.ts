@@ -21,7 +21,7 @@ export function queueRows(items: readonly QueuedMessage[], sent: readonly Pendin
   if (waiting.length === 0) return items as QueueRow[];
   const rows: QueueRow[] = [...items];
   for (const entry of waiting) {
-    const { index } = entry.queued!;
+    const { index, deciding } = entry.queued!;
     rows.splice(Math.min(index ?? rows.length, rows.length), 0, {
       id: entry.localId,
       text: entry.text,
@@ -29,6 +29,7 @@ export function queueRows(items: readonly QueuedMessage[], sent: readonly Pendin
       mentions: [...(entry.mentions ?? [])],
       queuedAtMs: entry.createdAtMs,
       editedAtMs: null,
+      deciding,
       local: true,
     });
   }

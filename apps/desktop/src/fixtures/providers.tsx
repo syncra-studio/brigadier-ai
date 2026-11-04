@@ -320,6 +320,48 @@ function Fixture() {
       })();
       return;
     }
+    if (params.get("drive") === "hover") {
+      void (async () => {
+        const limits = { quota: snapshot("claude", [quotaWindow("five_hour", "5-hour", 24, { windowMinutes: 300 })]), quotaAtMs: Date.now() };
+        listed = ["one", "two", "three"].map((id) => account("claude", id, `${id}@example.com`, limits));
+        useApp.setState({ accounts: { accounts: listed, warnings: [] } });
+        await pause(300);
+        openClaude();
+        await pause(500);
+        const card = accountRow(0)?.closest('[data-slot="settings-card"]');
+        card?.scrollIntoView({ block: "center" });
+        await pause(100);
+        const lines = () => [...(card?.children ?? [])].map((child) => getComputedStyle(child, "::after").opacity);
+        const boxes = () => [...(card?.children ?? [])].map((child) => JSON.stringify(child.getBoundingClientRect()));
+        const before = boxes();
+        const hovering = async (element: Element | null | undefined) => {
+          const box = element!.getBoundingClientRect();
+          await fixtureInput({ type: "pointer", x: box.x + box.width / 3, y: box.y + box.height / 2 });
+          await pause(100);
+          const row = element?.closest('[data-slot="account-row"]');
+          return {
+            fill: row && getComputedStyle(row).backgroundColor,
+            parts: all("[data-slot=account-header], [data-slot=account-limits]", row ?? undefined).map((part) => getComputedStyle(part).backgroundColor),
+            fillsCard: fillsCard(row),
+            lines: lines(),
+            moved: boxes().some((now, index) => now !== before[index]),
+          };
+        };
+        const header = (index: number) => accountRow(index)?.querySelector('[data-slot="account-header"]');
+        seen.rest = lines();
+        seen.wash = colourOf("bg-toolbar-hover");
+        seen.clear = colourOf("bg-transparent");
+        seen.expandedHeader = await hovering(header(0));
+        seen.expandedLimits = await hovering(accountRow(0)?.querySelector('[data-slot="account-limits"]'));
+        seen.collapsed = await hovering(header(1));
+        seen.last = await hovering(header(all('[data-slot="account-row"]').length - 1));
+        await fixtureInput({ type: "pointer", x: 1, y: 1 });
+        await pause(100);
+        seen.left = lines();
+        setResult(JSON.stringify(seen));
+      })();
+      return;
+    }
     if (look) {
       void (async () => {
         openSettings("general");

@@ -984,8 +984,6 @@ impl SessionManager {
         state.seam.held = false;
         state.seam.base = None;
         state.context = None;
-        state.continuing.clear();
-        state.continuing_envelopes.clear();
         drop(state);
         Some(Successor {
             n: file.generation,

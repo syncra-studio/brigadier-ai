@@ -84,6 +84,10 @@ impl SaidStreaming {
 /// Characters of a CLI job's output its message to the thread carries (the end of it).
 const JOB_OUTPUT_TAIL: usize = 4000;
 
+/// How long a turn's end waits on reading its rollout (`drop_ends_read`), which takes
+/// milliseconds on a local disk.
+const ENDS_READ_WAIT: Duration = Duration::from_millis(500);
+
 /// What the thread hears when its CLI ended while jobs of its own still ran (`words`: the
 /// commands known by name; `count`: those it only counted).
 fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
@@ -281,10 +285,12 @@ struct ConvState {
     /// list ends it too, should its item's end not come (D21).
     terminals: HashMap<String, String>,
     /// Codex commands the turn went on from (`terminals`) that ended while it still ran, by
-    /// item: their words, end and output's tail, and how many of the model's calls ended since.
-    /// One whose end no call of its model's read (at most the turn's last ended since) is told
-    /// as a lingering one's is: Codex never says it (D177: a `brigadier ask` answered so).
-    unread_ends: HashMap<String, (String, String, String, u32)>,
+    /// item: their words, end and output's tail. Each is told as a lingering one's is: Codex
+    /// never says it (D177: a `brigadier ask` answered so). One its model polled to its end
+    /// goes at the turn's end, if its rollout proves that (`drop_ends_read`).
+    unread_ends: HashMap<String, (String, String, String)>,
+    /// The CLI's own session file, from its start (Codex's rollout for `drop_ends_read`).
+    session_file: Option<PathBuf>,
     /// The request whose turn left Codex commands running (`lingering`): it works until each
     /// has ended and the thread heard of it. While they run, as while the CLI's own background
     /// jobs do (`background`), the CLI stays up (nothing retires it).
@@ -729,6 +735,19 @@ impl ConvLive {
         )
     }
 
+    /// Runs `commit` unless a turn runs or a hand-over is still being chosen (one the user
+    /// stopped is over), and no turn starts until it is done. `commit` must not touch this conversation's live state.
+    pub(super) async fn with_no_turn<T>(
+        &self,
+        commit: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        let state = self.state.lock().await;
+        if state.busy || state.hand_over.as_ref().is_some_and(|over| !over.stopped) {
+            return None;
+        }
+        Some(commit.await)
+    }
+
     /// Whether the running turn is a hand-off's own ([`seam::SeamLive::quiet`]).
     pub(super) async fn quiet_turn(&self) -> bool {
         let state = self.state.lock().await;
@@ -999,6 +1018,26 @@ impl ConvLive {
         self.state.lock().await.workspace_reserved = false;
     }
 
+    /// Whether a turn runs, is being handed over, or has messages on their way. What a failed
+    /// start kept for the next try isn't: its request is over, and nothing sends it by itself.
+    pub(super) async fn work_under_way(&self) -> bool {
+        let state = self.state.lock().await;
+        let over = |request: Option<&String>| {
+            request.is_some_and(|request| state.outcomes.contains_key(request))
+        };
+        state.busy
+            || state.unowned_turn
+            || state.hand_over.is_some()
+            || state
+                .inbox
+                .iter()
+                .any(|(_, request)| !over(request.as_ref()))
+            || state
+                .pending
+                .iter()
+                .any(|message| !over(message.request_id.as_ref()))
+    }
+
     pub async fn is_busy(&self) -> bool {
         let state = self.state.lock().await;
         state.busy
@@ -1250,13 +1289,14 @@ impl SessionManager {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
             }
         }
+        self.end_handed_over_turn(conversation_id).await;
         // No turn runs or waits to run: the next queued message goes; while the block stays
         // open it waits for the next one (D25), and the block's end kicks it then.
         let waiting = conv.kind == ConversationKind::Session
             && activity.running.is_none()
             && activity.carried.is_empty()
             && !board.queue.paused
-            && board.queue.ready_to_send().is_some();
+            && board.queue.next_to_send().is_some();
         if waiting && !self.queue_holds(&conv).await {
             self.kick(&conv);
         }
@@ -1532,7 +1572,10 @@ impl SessionManager {
         }
         let routing = conv.queue_routing.lock().await;
         conv.drop_judgment(&item_id);
-        self.steer_routed(&conv, &item_id, routing).await
+        let steered = self.steer_routed(&conv, &item_id, routing).await;
+        // Kept queued (a seam, a compaction): the user's now, no longer Deciding.
+        self.end_deciding(&conv.id, Some(item_id)).await;
+        steered
     }
 
     /// [`Self::steer_queued`] of a session's row, the queue's routing already held.
@@ -1902,7 +1945,7 @@ impl SessionManager {
             return false;
         }
         let ready = match self.core.board(&conv.id).await {
-            Ok(board) => board.queue.ready_to_send().is_some(),
+            Ok(board) => board.queue.next_to_send().is_some(),
             Err(_) => false,
         };
         if !ready {
@@ -2629,6 +2672,7 @@ impl SessionManager {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }
         drop(state);
+        self.end_handed_over_turn(&conv.id).await;
     }
 
     /// Starts the next turn if none runs and there is something to say.
@@ -2910,6 +2954,15 @@ impl SessionManager {
                 std::mem::take(&mut state.off_failed_model),
             )
         };
+        // A turn that never reached its CLI leaves what its CLI took marked so for the next try:
+        // that one mustn't hand it over as new, and do real work twice.
+        let still_landed = async || {
+            let mut state = conv.state.lock().await;
+            state.continuing.clone_from(&landed);
+            state.continuing_envelopes.clone_from(&landed_envelopes);
+            state.after_limit = after_limit;
+            state.off_failed_model = off_failed_model;
+        };
         // What the resumed session already holds isn't read again: it carries on with it.
         let unread: Vec<(Envelope, Option<String>)> = envelopes
             .iter()
@@ -2941,6 +2994,7 @@ impl SessionManager {
         {
             Ok(input) => input,
             Err(error) => {
+                still_landed().await;
                 self.fail_turn(&conv, users, envelopes, &error.to_string())
                     .await;
                 return;
@@ -2948,10 +3002,19 @@ impl SessionManager {
         };
         if unsent.len() < users.len() || unread.len() < envelopes.len() {
             let stalled = conv.state.lock().await.watchdog.take_carry_note();
+            // A session started anew holds nothing of its own: it reads what was asked, as begun.
+            let began: Vec<&str> = users
+                .iter()
+                .filter(|message| landed.contains(&message.id))
+                .map(|message| message.text.as_str())
+                .collect();
+            let began = (reseed && !began.is_empty()).then(|| prompts::began_earlier(&began));
             prepend_said(
                 &mut input,
                 &mut user,
-                if stalled {
+                if let Some(began) = &began {
+                    began
+                } else if stalled {
                     watchdog::CARRY_ON
                 } else if after_limit {
                     prompts::CONTINUE_AFTER_LIMIT
@@ -2980,12 +3043,13 @@ impl SessionManager {
                         self.seam_not_started(&conv, successor).await;
                     }
                     let message = format!("Could not write the hand-off: {err}");
+                    still_landed().await;
                     self.fail_turn(&conv, users, envelopes, &message).await;
                     return;
                 }
             }
         } else if reseed {
-            let transcript = self.reseed_text(&conv.id, &users).await;
+            let transcript = self.reseed_text(&conv.id, &unsent).await;
             if !transcript.is_empty() {
                 prepend_said(&mut input, &mut user, &transcript);
             }
@@ -2996,7 +3060,14 @@ impl SessionManager {
         {
             crate::logging::private_trace!(conv.private_logs, warn, "could not set the CLI's plan mode"; conversation = %conv.id, error = %err);
         }
-        if only_typed_notes && unsent.is_empty() && users.is_empty() && !unread.is_empty() {
+        // A successor's first input is its hand-off, whatever notes go with it: the thread shows
+        // its turn and finds its seam by it.
+        if only_typed_notes
+            && unsent.is_empty()
+            && users.is_empty()
+            && !unread.is_empty()
+            && successor.is_none()
+        {
             let kinds: Vec<_> = unread.iter().map(|(envelope, _)| envelope.kind).collect();
             // All prepends are complete. Bind the exact input that is actually sent, never
             // a genuine user's message mixed with daemon notes.
@@ -3021,6 +3092,7 @@ impl SessionManager {
                 self.seam_not_started(&conv, successor).await;
             }
             let message = format!("The CLI did not take the turn: {err}");
+            still_landed().await;
             self.turn_could_not_start(&conv, users, envelopes, &message)
                 .await;
             return;
@@ -4739,20 +4811,46 @@ impl SessionManager {
                 return;
             }
             let words = state.command_words.remove(item);
+            let terminals = state.terminals.len();
+            state.terminals.retain(|_, of| of != item);
+            let in_background = state.terminals.len() < terminals;
             if !state.lingering.contains_key(item) {
                 state.persistent_commands.remove(item);
                 if let Some(words) = words
                     && state.busy
-                    && state.terminals.values().any(|of| of == item)
+                    && in_background
                 {
                     state
                         .unread_ends
-                        .insert(item.to_owned(), (words, how, tail, 0));
+                        .insert(item.to_owned(), (words, how, tail));
                 }
                 return;
             }
         }
         self.lingering_ended(conv, item, &how, tail).await;
+    }
+
+    /// Forgets the unread ends the model did read: Codex's stream can't say a poll saw an end, and
+    /// its rollout can. Only with an unread end to tell, so a turn with none reads nothing. No
+    /// answer, in time or at all, means it's told: an extra word beats a lost answer.
+    async fn drop_ends_read(&self, conv: &Arc<ConvLive>) {
+        let (file, items) = {
+            let state = conv.state.lock().await;
+            let items: Vec<String> = state.unread_ends.keys().cloned().collect();
+            match state.session_file.clone().filter(|_| !items.is_empty()) {
+                Some(file) => (file, items),
+                None => return,
+            }
+        };
+        let reading = tokio::task::spawn_blocking(move || {
+            brigadier_providers::codex::rollout::ends_read(&file, &items)
+        });
+        if let Ok(Ok(read)) = tokio::time::timeout(ENDS_READ_WAIT, reading).await {
+            let mut state = conv.state.lock().await;
+            for item in read {
+                state.unread_ends.remove(&item);
+            }
+        }
     }
 
     /// A Codex background terminal of the thread's own shell was listed, or left the list
@@ -4769,12 +4867,14 @@ impl SessionManager {
                 }
                 return;
             }
-            let Some(item) = state.terminals.remove(&task.id) else {
+            let Some(item) = state.terminals.get(&task.id).cloned() else {
                 return;
             };
+            // Its command's end comes next, and asks whether it ran in the background: kept.
             if !state.lingering.contains_key(&item) {
                 return;
             }
+            state.terminals.remove(&task.id);
             item
         };
         let (manager, conv) = (self.arc(), conv.clone());
@@ -5123,6 +5223,10 @@ impl SessionManager {
                     self.orchestrator_step(&conv.id, kind).await;
                 }
             }
+            ProviderEvent::CommandPolled { item_id } => {
+                // Only after its end does a look read that end: one before it saw it running.
+                conv.state.lock().await.unread_ends.remove(item_id);
+            }
             ProviderEvent::BackgroundTask { task } => {
                 self.terminal_seen(
                     conv,
@@ -5225,6 +5329,7 @@ impl SessionManager {
                 ..
             } => {
                 cli.meter.session_started(cli_version.as_deref());
+                conv.state.lock().await.session_file = file.as_ref().map(PathBuf::from);
                 let entry = super::session_dir::LineageEntry {
                     provider: cli.provider,
                     session_id: native_id.clone(),
@@ -5316,10 +5421,6 @@ impl SessionManager {
                 }
             }
             ProviderEvent::Usage { total, last, calls } => {
-                // A call of its model's ended: it may have read the ends before it.
-                for end in conv.state.lock().await.unread_ends.values_mut() {
-                    end.3 += 1;
-                }
                 // Claude sums a turn's calls; the context its last call read came apart.
                 let context = conv.context_used().await;
                 self.note_use(
@@ -5554,6 +5655,9 @@ impl SessionManager {
         if self.finish_thread_stall(conv).await {
             return;
         }
+        if status == TurnStatus::Completed {
+            self.drop_ends_read(conv).await;
+        }
         let (
             limit_hit,
             model_failed,
@@ -5578,11 +5682,9 @@ impl SessionManager {
                         state.lingering.insert(item, words);
                     }
                 }
-                for (item, (words, how, tail, calls)) in std::mem::take(&mut state.unread_ends) {
-                    if calls <= 1 {
-                        state.lingering.insert(item.clone(), words);
-                        unread.push((item, how, tail));
-                    }
+                for (item, (words, how, tail)) in std::mem::take(&mut state.unread_ends) {
+                    state.lingering.insert(item.clone(), words);
+                    unread.push((item, how, tail));
                 }
             }
             state.unread_ends.clear();
@@ -5677,9 +5779,16 @@ impl SessionManager {
                 }
             }
             if limited.is_some() || model_failed {
+                // The user's stop came before its hand-over began: as one during it.
+                let stopped = state.interrupted;
+                if stopped && let Some(request) = &served {
+                    state
+                        .outcomes
+                        .insert(request.clone(), RequestState::Stopped);
+                }
                 state.hand_over = Some(HandOver {
-                    request: served.clone(),
-                    stopped: false,
+                    request: served.clone().filter(|_| !stopped),
+                    stopped,
                 });
             } else {
                 // Read: nothing of it goes again.
@@ -5709,6 +5818,10 @@ impl SessionManager {
         };
         for (item, how, tail) in unread {
             self.lingering_ended(conv, &item, &how, tail).await;
+        }
+        // Stopped as it ended: its request and its turn read so now, whichever way it hands over.
+        if (limit_hit.is_some() || model_failed) && conv.state.lock().await.interrupted {
+            self.settle_requests(&conv.id).await;
         }
         // Its workers' events no wait took reach it now, once (S29).
         self.net_soon(&conv.id);

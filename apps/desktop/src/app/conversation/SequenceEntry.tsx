@@ -68,5 +68,8 @@ export const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: 
       return <TeamSentence row={entry.row} />;
     case "gap":
       return <TimeSeparator atMs={entry.atMs} className="py-2" />;
+    case "turnError":
+      // The block draws it: it knows the block's error and whether it can be tried again.
+      return null;
   }
 };

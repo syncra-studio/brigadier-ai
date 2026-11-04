@@ -223,6 +223,15 @@ pub(crate) const CONTINUE_ON_ACCOUNT: &str = "[Your last turn stopped early: its
 /// the turn the limit stopped: it already holds the user's message and what the turn did.
 pub(crate) const CONTINUE_AFTER_LIMIT: &str = "[Your last turn stopped early at a usage limit, which has reset. Carry on from where you stopped. Don't redo anything you already did.]";
 
+/// A turn's input in a session started anew, for messages its earlier session already took: what
+/// was asked, never a new request, or the work it began would run twice.
+pub(crate) fn began_earlier(messages: &[&str]) -> String {
+    format!(
+        "[Your earlier session took this and began on it, then stopped early. It is here to say what was asked, not as a new request: check what already happened and carry on from there. Don't redo anything already done.]\n\n{}",
+        messages.join("\n\n")
+    )
+}
+
 /// More `brigadier` look-ups than this in one block get the drift note (D167).
 pub(crate) const MAX_LOOK_UPS: u32 = 3;
 
