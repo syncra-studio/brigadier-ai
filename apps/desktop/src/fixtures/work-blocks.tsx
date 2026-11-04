@@ -58,7 +58,7 @@ import type {
 } from "@/ipc/generated";
 import { answerHtml } from "@/app/conversation/AnswerActions";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import { fixtureClick } from "@/fixtures/input";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { loadConversation, openConversation } from "@/state/actions";
 import { type Board, type ShownApproval, useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
@@ -170,6 +170,10 @@ mockIPC((command, payload) => {
     case "openSideChat":
       calls.push(`${req.method} ${req.conversationId}`);
       return { method: req.method, conversation: { ...conversation(SIDE, "Side chat", "chat"), sideOf: ID } };
+    case "sendMessage":
+      // `drive=select`: the message goes, so the composer empties.
+      if (drive !== "select") return { method: req.method };
+      return { method: req.method, outcome: { type: "sent", message: { ...user("r2", 3, req.text, Date.now()), id: "sent" } } };
     default:
       return { method: req.method };
   }
@@ -814,7 +818,7 @@ async function driveSelect(): Promise<object> {
   await settle(600);
   const answer: Message = {
     id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: begun + 5000, attachments: [], mentions: [],
-    text: "Rounding now uses half-up everywhere.\n\nThe tests cover negative values too.", model: null, requestId: "r1", parentId: "r1", answerAtMs: begun + 5000,
+    text: "Rounding now uses half-up everywhere.\n\nThe `snake_case` tests cover **negative** values, and 2 * 3 * 4 too.", model: null, requestId: "r1", parentId: "r1", answerAtMs: begun + 5000,
   };
   daemon.messages = [...daemon.messages, answer];
   daemon.run = "idle";
@@ -823,9 +827,13 @@ async function driveSelect(): Promise<object> {
   request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
   for (const end = performance.now() + 8000; performance.now() < end && !all("[data-role=assistant] p").some((p) => text(p)?.startsWith("Rounding")); ) await frame();
   await settle();
-  const select = () => {
-    const paragraph = all("[data-role=assistant] p").find((p) => text(p)?.startsWith("Rounding"));
+  const paragraphOf = (start: string) => {
+    const paragraph = all("[data-role=assistant] p").find((p) => text(p)?.startsWith(start));
     if (!paragraph) throw new Error("the answer's paragraph never showed");
+    return paragraph;
+  };
+  const select = (start = "Rounding") => {
+    const paragraph = paragraphOf(start);
     const range = document.createRange();
     range.selectNodeContents(paragraph);
     const selection = document.getSelection()!;
@@ -853,14 +861,88 @@ async function driveSelect(): Promise<object> {
   const composer = text(one("[contenteditable=true][aria-label='Message input'] blockquote"));
   const marked = CSS.highlights.get("thread-annotation")?.size ?? 0;
   const afterAdd = { pill: !!pill(), collapsed: document.getSelection()?.isCollapsed ?? null };
-  // Selected again: Ask in side chat.
+  // What is marked in the answer, and what the composer holds.
+  const field = () => one("[contenteditable=true][aria-label='Message input']")!;
+  const state = () => ({
+    marks: [...(CSS.highlights.get("thread-annotation")?.values() ?? [])].map((range) => (range as Range).toString().slice(0, 8)).toSorted(),
+    quotes: all("blockquote", field()).map((quote) => text(quote)?.slice(0, 8) ?? ""),
+    other: all("p", field()).map((line) => text(line)).filter(Boolean),
+  });
+  const pillAdd = async () => {
+    for (const end = performance.now() + 3000; performance.now() < end && !pill(); ) await frame();
+    const button = all("button", pill() ?? document.createElement("div")).find((each) => text(each) === "Add to chat");
+    if (button) await fixtureClick(button);
+    await settle();
+  };
+  /** The words of the quote starting `start` selected in the field from `from` on, and real Backspaces. */
+  const erase = async (start: string, from: number, presses: number) => {
+    const quote = all("blockquote", field()).find((each) => text(each)?.startsWith(start));
+    if (!quote) throw new Error(`no quote of ${start}`);
+    const words = document.createTreeWalker(quote, NodeFilter.SHOW_TEXT).nextNode() as Text;
+    const selection = document.getSelection()!;
+    selection.setBaseAndExtent(words, from, words, words.length);
+    await settle(100);
+    for (let press = 0; press < presses; press++) await fixtureInput({ type: "key", key: "Backspace" });
+    await settle(100);
+  };
+  // A click in the composer keeps the mark.
+  await fixtureClick(field());
+  await settle();
+  const composerClick = state();
+  // A real drag over the next paragraph keeps the mark, and its pill's button adds a second.
+  const next = paragraphOf("The").getBoundingClientRect();
+  const y = next.top + next.height / 2;
+  await fixtureInput({ type: "pointer", x: next.left + 1, y });
+  await fixtureInput({ type: "pointerDown", x: next.left + 1, y });
+  await fixtureInput({ type: "pointer", x: next.left + next.width / 2, y });
+  await fixtureInput({ type: "pointer", x: next.right - 1, y });
+  await fixtureInput({ type: "pointerUp", x: next.right - 1, y });
+  await settle();
+  const dragged = state();
+  await pillAdd();
+  const twoAdded = state();
+  // Other text beside the quotes, its Markdown read back: the marks stay.
+  await fixtureClick(field().lastElementChild!);
+  await fixtureInput({ type: "type", text: "Is this right?" });
+  await settle(100);
+  const typed = state();
+  // One quote emptied: its mark goes, the other's stays; a second Backspace takes the empty block.
+  await erase("Rounding", 1, 2);
+  const emptied = state();
+  await fixtureInput({ type: "key", key: "Backspace" });
+  await settle(100);
+  const blockGone = state();
+  // The last quote deleted, other text left: the composer is not empty, and nothing is marked.
+  await erase("The", 0, 2);
+  const deleted = state();
+  // Both added again: a click in the thread takes both marks off and leaves the composer.
+  select();
+  await pillAdd();
+  select("The");
+  await pillAdd();
+  const before = state();
+  await fixtureClick(paragraphOf("Rounding"));
+  await settle();
+  const threadClick = { before, after: state() };
+  // Added again and sent: the composer empties and nothing is marked.
+  select();
+  await pillAdd();
+  const unsent = state();
+  const send = one(".aui-composer-send");
+  if (send) await fixtureClick(send);
+  for (const end = performance.now() + 3000; performance.now() < end && text(field()); ) await frame();
+  await settle();
+  const sent = { before: unsent, after: state(), field: text(field()) };
+  // Selected again: Ask in side chat. The send moved the answer away, and a scroll hides the pill.
+  paragraphOf("Rounding").scrollIntoView({ block: "center" });
+  await settle(300);
   select();
   for (const end = performance.now() + 3000; performance.now() < end && !pill(); ) await frame();
   all<HTMLButtonElement>("button", pill() ?? document.createElement("div")).find((button) => text(button) === "Ask in side chat")?.click();
   for (const end = performance.now() + 3000; performance.now() < end && !calls.some((call) => call.startsWith("openSideChat")); ) await frame();
   await settle();
   const draft = JSON.parse(localStorage.getItem("brigadier.drafts") ?? "{}")[SIDE]?.text ?? null;
-  return { pills, placed, buttons, composer, focusedOwn, marked, afterAdd, sideChat: calls.filter((call) => call.startsWith("openSideChat")), draft };
+  return { pills, placed, buttons, composer, focusedOwn, marked, afterAdd, composerClick, dragged, twoAdded, typed, emptied, blockGone, deleted, threadClick, sent, sideChat: calls.filter((call) => call.startsWith("openSideChat")), draft };
 }
 
 /**
