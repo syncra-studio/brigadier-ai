@@ -1,13 +1,12 @@
 import { ModelEffort } from "@/app/settings/routing/ModelEffort";
 import { Badge, HAIRLINE_TOP } from "@/app/settings/routing/parts";
 import { useListedModels } from "@/app/settings/routing/pickers";
-import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
+import { refusingRule, rowAvailable, rowChoice } from "@/app/settings/routing/ruleWords";
 import { rowModelName, type WorkRow } from "@/app/settings/routing/words";
 import type { ModelGroup } from "@/components/shared";
 import type { ModelRule } from "@/ipc/generated";
 import { joinWords } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { providerOn } from "@/state/providers";
 import { useApp } from "@/state/store";
 
 /**
@@ -22,7 +21,7 @@ export function AutoPicks({ row, rules, groups }: { row: WorkRow; rules: readonl
   const refused = (found: WorkRow["shipped"][number]) => refusingRule(rules, rowChoice(found, models), row.work);
   const eligible = row.shipped.filter((found) => !refused(found));
   const skipped = row.shipped.filter((found) => refused(found));
-  const picked = eligible.findIndex((found) => providerOn(availability, found.agent));
+  const picked = eligible.findIndex((found) => rowAvailable(found, models, availability));
   return (
     <div data-slot="auto-picks" className={cn(HAIRLINE_TOP, "flex flex-col pt-1 pb-3")}>
       {eligible.map((found, index) => (

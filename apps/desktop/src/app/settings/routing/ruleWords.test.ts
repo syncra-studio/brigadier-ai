@@ -4,6 +4,7 @@ import { createServer, type ViteDevServer } from "vite";
 
 import type * as RuleWords from "@/app/settings/routing/ruleWords";
 import type { ListedModel, Names } from "@/app/settings/routing/ruleWords";
+import type { Availability } from "@/state/providers";
 import type { WorkRow } from "@/app/settings/routing/words";
 import type { ModelGroup } from "@/components/shared/model-selector";
 import type { GuidanceRow, ModelInfo, ModelRule } from "@/ipc/generated";
@@ -21,12 +22,13 @@ let allowedPick: typeof RuleWords.allowedPick;
 let pickRefusal: typeof RuleWords.pickRefusal;
 let refusalText: typeof RuleWords.refusalText;
 let rowChoice: typeof RuleWords.rowChoice;
+let startsOn: typeof RuleWords.startsOn;
 before(async () => {
   const globals = globalThis as Record<string, unknown>;
   globals.document ??= { documentElement: {} };
   globals.getComputedStyle ??= () => ({ getPropertyValue: () => "" });
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ allowedPick, matches, pickRefusal, refusalText, refusingRule, rowChoice, ruledEffort, ruleNames, ruleText, ruleTitle, ruleWarnings } = (await server.ssrLoadModule(
+  ({ allowedPick, matches, pickRefusal, refusalText, refusingRule, rowChoice, ruledEffort, ruleNames, ruleText, ruleTitle, ruleWarnings, startsOn } = (await server.ssrLoadModule(
     "/src/app/settings/routing/ruleWords.ts",
   )) as typeof RuleWords);
 });
@@ -259,4 +261,38 @@ test("the daemon's refusal reads in the rule's words; other errors stay as they 
     refusalText('refused by your model rules: "effort-ceiling opus: medium" and "effort-floor for Adversarial review: high" can\'t both be met', both, names),
     "Refused: your rules “Never run Opus above Medium” and “Adversarial review never below High” can't both be met",
   );
+});
+
+// Who does what's "now" (#761): the first row your rules let start that Settings › Providers lets
+// run, as a start by its Work picks it, so the row agrees with the kind's own Automatic list.
+test("a kind starts on the first row whose agent is on and whose model isn't made unavailable", () => {
+  const models: ListedModel[] = [
+    ...MODELS,
+    { provider: "claude", id: "claude-sonnet-4-5", resolved: null, name: "Sonnet 4.5", legacy: true },
+    { provider: "codex", id: "gpt-6-luna", resolved: null, name: "GPT-6 Luna", isDefault: true },
+  ];
+  const order: GuidanceRow[] = [
+    { work: "Docs", agent: "claude", model: "opus", effort: "high", reason: "Mine." },
+    { work: "Docs", agent: "codex", model: "gpt-6", effort: null, reason: "Mine." },
+  ];
+  const all: Availability = { disabledProviders: [], hiddenModels: [] };
+  const on = (availability: Partial<Availability>) => startsOn(order, [], models, { ...all, ...availability }, "Docs");
+  assert.equal(on({}), order[0]);
+  // Claude switched off: the order starts on Codex, as a start would.
+  assert.equal(on({ disabledProviders: ["claude"] }), order[1]);
+  // Claude on, its model made unavailable (as its listed id): Codex too.
+  assert.equal(on({ hiddenModels: [{ provider: "claude", id: "opus" }] }), order[1]);
+  // Nothing on: nothing starts.
+  assert.equal(on({ disabledProviders: ["claude", "codex"] }), undefined);
+  // A rule still comes first: refused rows never start, whatever is on.
+  assert.equal(startsOn(order, [{ type: "forbid", names: ["gpt-6"] }], models, { ...all, disabledProviders: ["claude"] }, "Docs"), undefined);
+  // A family word starts on its newest current model, the agent's default on its default: those are what's judged.
+  const family: GuidanceRow[] = [
+    { work: "Docs", agent: "claude", model: "sonnet", effort: null, reason: "Mine." },
+    { work: "Docs", agent: "codex", model: "default", effort: null, reason: "Mine." },
+  ];
+  const familyOn = (availability: Partial<Availability>) => startsOn(family, [], models, { ...all, ...availability }, "Docs");
+  assert.equal(familyOn({ hiddenModels: [{ provider: "claude", id: "claude-sonnet-4-5" }] }), family[0]);
+  assert.equal(familyOn({ hiddenModels: [{ provider: "claude", id: "sonnet" }] }), family[1]);
+  assert.equal(familyOn({ hiddenModels: [{ provider: "claude", id: "sonnet" }, { provider: "codex", id: "gpt-6-luna" }] }), undefined);
 });

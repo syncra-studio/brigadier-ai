@@ -114,11 +114,11 @@ function compareVersions(a: readonly number[], b: readonly number[]): number {
  * id or alias as it is; else a family word's newest model, the one of the highest version among
  * the current models with the word as a part of their id (the last of equals); null when none.
  */
-export function rowModel(models: readonly ModelInfo[], word: string): ModelInfo | null {
+export function rowModel<M extends Pick<ModelInfo, "id" | "resolved"> & { legacy?: boolean }>(models: readonly M[], word: string): M | null {
   const lower = word.toLowerCase();
   const listed = models.find((model) => model.id.toLowerCase() === lower || model.resolved?.toLowerCase() === lower);
   if (listed) return listed;
-  let newest: ModelInfo | null = null;
+  let newest: M | null = null;
   for (const model of models) {
     if (model.legacy || !model.id.split(/[-_ ]/).some((part) => part.toLowerCase() === lower)) continue;
     if (!newest || compareVersions(versionOf(model.id), versionOf(newest.id)) >= 0) newest = model;
