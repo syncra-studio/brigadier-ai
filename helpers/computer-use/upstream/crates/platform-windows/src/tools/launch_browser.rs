@@ -210,6 +210,10 @@ pub(super) async fn window_showing_url(
     let url = url.to_owned();
     tokio::task::spawn_blocking(move || {
         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+            owner_pid.map_or(
+                crate::uia::windows_enum::UiaTarget::Desktop,
+                crate::uia::windows_enum::UiaTarget::Process,
+            ),
             "browser URL verification",
             timeout,
             "no unverified browser window",
@@ -460,6 +464,7 @@ pub(super) async fn notepad_document_window(
 ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
     tokio::task::spawn_blocking(move || {
         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+            crate::uia::windows_enum::UiaTarget::Desktop,
             "fresh Notepad document verification",
             std::time::Duration::from_secs(2),
             "no unverified document",
@@ -539,6 +544,7 @@ pub(super) async fn notepad_document_window(
 pub(super) async fn additional_tabs(hwnd: u64, requested_tabs: usize) -> Option<usize> {
     tokio::task::spawn_blocking(move || {
         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+            crate::uia::windows_enum::UiaTarget::Window(hwnd),
             "launch tab count",
             std::time::Duration::from_millis(500),
             "unknown tab count",

@@ -245,6 +245,7 @@ unsafe fn read_field(hwnd: u64, retained: &RetainedElement) -> Result<Field> {
 async fn field_snapshot(hwnd: u64, retained: RetainedElement) -> Result<Field> {
     tokio::task::spawn_blocking(move || {
         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+            crate::uia::windows_enum::UiaTarget::Window(hwnd),
             "Chromium field selection",
             Duration::from_secs(2),
             "no text input",

@@ -322,7 +322,12 @@ pub(crate) fn deadline_reason(error: super::windows_enum::UiaDeadlineError) -> &
         UiaDeadlineError::Timeout => {
             "the app's accessibility provider did not respond before the deadline"
         }
-        UiaDeadlineError::Busy => "an earlier accessibility provider call is still running",
+        UiaDeadlineError::Busy => {
+            "an earlier accessibility provider call to this app is still running"
+        }
+        UiaDeadlineError::Saturated => {
+            "too many earlier accessibility provider calls are still running"
+        }
         UiaDeadlineError::Unavailable => {
             "the accessibility worker could not start or stopped unexpectedly"
         }
@@ -334,13 +339,15 @@ pub(crate) fn retained_click(
     retained: super::snapshot::RetainedElement,
     expand_only: bool,
 ) -> anyhow::Result<Option<ToolResult>> {
+    let scope = super::dialog_owner::OwnerScope::new();
     super::windows_enum::run_uia_with_deadline_cancelable(
+        super::windows_enum::UiaTarget::Window(hwnd),
         "semantic-click", Duration::from_secs(4), "no fallback input",
-        move |cancelled| try_click(hwnd, retained.as_ptr(), expand_only, &cancelled),
+        move |cancelled| try_click(hwnd, retained.as_ptr(), expand_only, &cancelled, scope),
     ).map_err(|error| {
         // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
         if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
-            super::dialog_owner::restore_hidden_owners();
+            super::dialog_owner::restore_hidden_owners(scope);
         }
         anyhow::anyhow!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error))
     })?
@@ -352,6 +359,7 @@ fn try_click(
     ptr: usize,
     expand_only: bool,
     cancelled: &AtomicBool,
+    scope: super::dialog_owner::OwnerScope,
 ) -> anyhow::Result<Option<ToolResult>> {
     if crate::input::delivery::is_wpf_target_window(hwnd) {
         // WPF peers may call Focus during semantic activation. Preserve the
@@ -370,6 +378,7 @@ fn try_click(
         super::dialog_owner::HiddenOwner::arm(
             element_root_window(HWND(hwnd as *mut _), &element),
             cancelled,
+            scope,
         )
     });
     let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
@@ -567,17 +576,19 @@ fn try_click_guarded(
 /// Search inside the addressed window, never ElementFromPoint on the user's
 /// desktop: an occluding app must not become the click target.
 pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolResult>> {
+    let scope = super::dialog_owner::OwnerScope::new();
     match super::windows_enum::run_uia_with_deadline_cancelable(
+        super::windows_enum::UiaTarget::Window(hwnd),
         "semantic-point-click",
         Duration::from_secs(4),
         "no fallback input",
-        move |cancelled| at_point_inner(hwnd, x, y, &cancelled),
+        move |cancelled| at_point_inner(hwnd, x, y, &cancelled, scope),
     ) {
         Ok(result) => result,
         Err(error) => {
             // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
             if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
-                super::dialog_owner::restore_hidden_owners();
+                super::dialog_owner::restore_hidden_owners(scope);
             }
             Ok(Some(ToolResult::error(format!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error)))))
         }
@@ -588,6 +599,7 @@ fn at_point_inner(
     x: i32,
     y: i32,
     cancelled: &AtomicBool,
+    scope: super::dialog_owner::OwnerScope,
 ) -> anyhow::Result<Option<ToolResult>> {
     let _com = ComApartment::new();
     unsafe {
@@ -611,7 +623,7 @@ fn at_point_inner(
         }
         candidates.sort_by_key(|(area, _)| *area);
         for (_, element) in candidates {
-            match try_click(hwnd, element.as_raw() as usize, false, cancelled) {
+            match try_click(hwnd, element.as_raw() as usize, false, cancelled, scope) {
                 Ok(Some(result)) => return Ok(Some(result)),
                 Ok(None) => {}
                 Err(error) => return Ok(Some(ToolResult::error(error.to_string()))),

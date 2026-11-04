@@ -4531,6 +4531,7 @@ impl Tool for ClickTool {
                 let admitted = admitted.clone();
                 move || {
                     crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                        crate::uia::windows_enum::UiaTarget::Window(hwnd),
                         "click effect readback", std::time::Duration::from_secs(4), "no second input",
                         move |cancelled| {
                     let ptr = admitted.as_ref().filter(|e| e.is_uia()).map(|e| e.as_ptr());
@@ -5350,6 +5351,7 @@ impl Tool for TypeTextTool {
             move || {
                 let (worker_typed, worker_typing) = (typed.clone(), typing.clone());
                 crate::uia::windows_enum::run_uia_with_deadline_cancelable(
+                    crate::uia::windows_enum::UiaTarget::Window(hwnd),
                     "caret insertion",
                     insert_limit,
                     "unconfirmed insertion; no automatic retry",

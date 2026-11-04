@@ -1,0 +1,1006 @@
+Why: A Windows accessibility call that hangs in one app no longer blocks calls into other apps: each blocking UI Automation call is admitted per target process (desktop-wide scans and hit-tests share one desktop gate), within a budget of four workers in all, and a stuck worker keeps its app's gate and its budget slot until its provider call really returns. Before, one process-wide gate meant a File Explorer Close that hung in its provider made a Calculator click 25 s later fail as busy. A click that times out shows again only the dialog owners it hid itself, not those of another app's click still running, and a call refused while its app is busy says that an earlier call to this app is still running.
+
+diff --git a/crates/platform-windows/src/tools/chromium_text.rs b/crates/platform-windows/src/tools/chromium_text.rs
+index 57c574b48..0c8cad92d 100644
+--- a/crates/platform-windows/src/tools/chromium_text.rs
++++ b/crates/platform-windows/src/tools/chromium_text.rs
+@@ -245,6 +245,7 @@ unsafe fn read_field(hwnd: u64, retained: &RetainedElement) -> Result<Field> {
+ async fn field_snapshot(hwnd: u64, retained: RetainedElement) -> Result<Field> {
+     tokio::task::spawn_blocking(move || {
+         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++            crate::uia::windows_enum::UiaTarget::Window(hwnd),
+             "Chromium field selection",
+             Duration::from_secs(2),
+             "no text input",
+diff --git a/crates/platform-windows/src/tools/impl_.rs b/crates/platform-windows/src/tools/impl_.rs
+index 32ef9468f..daaffdeea 100644
+--- a/crates/platform-windows/src/tools/impl_.rs
++++ b/crates/platform-windows/src/tools/impl_.rs
+@@ -4531,6 +4531,7 @@ impl Tool for ClickTool {
+                 let admitted = admitted.clone();
+                 move || {
+                     crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++                        crate::uia::windows_enum::UiaTarget::Window(hwnd),
+                         "click effect readback", std::time::Duration::from_secs(4), "no second input",
+                         move |cancelled| {
+                     let ptr = admitted.as_ref().filter(|e| e.is_uia()).map(|e| e.as_ptr());
+@@ -5350,6 +5351,7 @@ impl Tool for TypeTextTool {
+             move || {
+                 let (worker_typed, worker_typing) = (typed.clone(), typing.clone());
+                 crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++                    crate::uia::windows_enum::UiaTarget::Window(hwnd),
+                     "caret insertion",
+                     insert_limit,
+                     "unconfirmed insertion; no automatic retry",
+diff --git a/crates/platform-windows/src/tools/launch_browser.rs b/crates/platform-windows/src/tools/launch_browser.rs
+index 68c4c1c7a..1889fdf32 100644
+--- a/crates/platform-windows/src/tools/launch_browser.rs
++++ b/crates/platform-windows/src/tools/launch_browser.rs
+@@ -210,6 +210,10 @@ pub(super) async fn window_showing_url(
+     let url = url.to_owned();
+     tokio::task::spawn_blocking(move || {
+         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++            owner_pid.map_or(
++                crate::uia::windows_enum::UiaTarget::Desktop,
++                crate::uia::windows_enum::UiaTarget::Process,
++            ),
+             "browser URL verification",
+             timeout,
+             "no unverified browser window",
+@@ -460,6 +464,7 @@ pub(super) async fn notepad_document_window(
+ ) -> anyhow::Result<Option<crate::win32::WindowInfo>> {
+     tokio::task::spawn_blocking(move || {
+         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++            crate::uia::windows_enum::UiaTarget::Desktop,
+             "fresh Notepad document verification",
+             std::time::Duration::from_secs(2),
+             "no unverified document",
+@@ -539,6 +544,7 @@ pub(super) async fn notepad_document_window(
+ pub(super) async fn additional_tabs(hwnd: u64, requested_tabs: usize) -> Option<usize> {
+     tokio::task::spawn_blocking(move || {
+         crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++            crate::uia::windows_enum::UiaTarget::Window(hwnd),
+             "launch tab count",
+             std::time::Duration::from_millis(500),
+             "unknown tab count",
+diff --git a/crates/platform-windows/src/tools/page.rs b/crates/platform-windows/src/tools/page.rs
+index bcc012e2e..ca9593b32 100644
+--- a/crates/platform-windows/src/tools/page.rs
++++ b/crates/platform-windows/src/tools/page.rs
+@@ -134,6 +134,7 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
+         let query = action == "query_dom";
+         let result = tokio::task::spawn_blocking(move || {
+             crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++                crate::uia::windows_enum::UiaTarget::Window(hwnd),
+                 "targeted page read",
+                 std::time::Duration::from_secs(4),
+                 "no page text",
+@@ -178,10 +179,12 @@ impl cua_driver_core::tool::Tool for WindowsPageTool {
+ // Untargeted accessibility reads need the same provider deadline as URL-matched
+ // reads. A hung provider otherwise blocks page forever without a URL hint.
+ fn bounded_page_read<T: Send + 'static>(
++    hwnd: u64,
+     stage: &'static str,
+     read: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+ ) -> anyhow::Result<T> {
+     crate::uia::windows_enum::run_uia_with_deadline_cancelable(
++        crate::uia::windows_enum::UiaTarget::Window(hwnd),
+         stage,
+         std::time::Duration::from_secs(4),
+         "no page content",
+@@ -214,7 +217,9 @@ impl PageBackend for WindowsPageBackend {
+     async fn get_text(&self, _pid: i32, window_id: u64) -> anyhow::Result<String> {
+         let hwnd = window_id;
+         tokio::task::spawn_blocking(move || {
+-            bounded_page_read("page text read", move || unsafe { get_text_blocking(hwnd) })
++            bounded_page_read(hwnd, "page text read", move || unsafe {
++                get_text_blocking(hwnd)
++            })
+         })
+         .await
+         .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+@@ -231,7 +236,7 @@ impl PageBackend for WindowsPageBackend {
+         let selector = css_selector.to_owned();
+         let attrs: Vec<String> = attributes.to_vec();
+         tokio::task::spawn_blocking(move || {
+-            bounded_page_read("page DOM read", move || unsafe {
++            bounded_page_read(hwnd, "page DOM read", move || unsafe {
+                 query_dom_blocking(hwnd, &selector, &attrs)
+             })
+         })
+diff --git a/crates/platform-windows/src/uia/click.rs b/crates/platform-windows/src/uia/click.rs
+index 5f410b2b3..d65414dbb 100644
+--- a/crates/platform-windows/src/uia/click.rs
++++ b/crates/platform-windows/src/uia/click.rs
+@@ -322,7 +322,12 @@ pub(crate) fn deadline_reason(error: super::windows_enum::UiaDeadlineError) -> &
+         UiaDeadlineError::Timeout => {
+             "the app's accessibility provider did not respond before the deadline"
+         }
+-        UiaDeadlineError::Busy => "an earlier accessibility provider call is still running",
++        UiaDeadlineError::Busy => {
++            "an earlier accessibility provider call to this app is still running"
++        }
++        UiaDeadlineError::Saturated => {
++            "too many earlier accessibility provider calls are still running"
++        }
+         UiaDeadlineError::Unavailable => {
+             "the accessibility worker could not start or stopped unexpectedly"
+         }
+@@ -334,13 +339,15 @@ pub(crate) fn retained_click(
+     retained: super::snapshot::RetainedElement,
+     expand_only: bool,
+ ) -> anyhow::Result<Option<ToolResult>> {
++    let scope = super::dialog_owner::OwnerScope::new();
+     super::windows_enum::run_uia_with_deadline_cancelable(
++        super::windows_enum::UiaTarget::Window(hwnd),
+         "semantic-click", Duration::from_secs(4), "no fallback input",
+-        move |cancelled| try_click(hwnd, retained.as_ptr(), expand_only, &cancelled),
++        move |cancelled| try_click(hwnd, retained.as_ptr(), expand_only, &cancelled, scope),
+     ).map_err(|error| {
+         // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
+         if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
+-            super::dialog_owner::restore_hidden_owners();
++            super::dialog_owner::restore_hidden_owners(scope);
+         }
+         anyhow::anyhow!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error))
+     })?
+@@ -352,6 +359,7 @@ fn try_click(
+     ptr: usize,
+     expand_only: bool,
+     cancelled: &AtomicBool,
++    scope: super::dialog_owner::OwnerScope,
+ ) -> anyhow::Result<Option<ToolResult>> {
+     if crate::input::delivery::is_wpf_target_window(hwnd) {
+         // WPF peers may call Focus during semantic activation. Preserve the
+@@ -370,6 +378,7 @@ fn try_click(
+         super::dialog_owner::HiddenOwner::arm(
+             element_root_window(HWND(hwnd as *mut _), &element),
+             cancelled,
++            scope,
+         )
+     });
+     let mut result = try_click_guarded(hwnd, ptr, expand_only, cancelled);
+@@ -567,17 +576,19 @@ fn try_click_guarded(
+ /// Search inside the addressed window, never ElementFromPoint on the user's
+ /// desktop: an occluding app must not become the click target.
+ pub(crate) fn at_point(hwnd: u64, x: i32, y: i32) -> anyhow::Result<Option<ToolResult>> {
++    let scope = super::dialog_owner::OwnerScope::new();
+     match super::windows_enum::run_uia_with_deadline_cancelable(
++        super::windows_enum::UiaTarget::Window(hwnd),
+         "semantic-point-click",
+         Duration::from_secs(4),
+         "no fallback input",
+-        move |cancelled| at_point_inner(hwnd, x, y, &cancelled),
++        move |cancelled| at_point_inner(hwnd, x, y, &cancelled, scope),
+     ) {
+         Ok(result) => result,
+         Err(error) => {
+             // A timed-out worker may stay blocked in the provider with a dialog's owner hidden.
+             if matches!(error, super::windows_enum::UiaDeadlineError::Timeout) {
+-                super::dialog_owner::restore_hidden_owners();
++                super::dialog_owner::restore_hidden_owners(scope);
+             }
+             Ok(Some(ToolResult::error(format!("Click not confirmed because {}. No fallback click was sent; read fresh state before retrying.", deadline_reason(error)))))
+         }
+@@ -588,6 +599,7 @@ fn at_point_inner(
+     x: i32,
+     y: i32,
+     cancelled: &AtomicBool,
++    scope: super::dialog_owner::OwnerScope,
+ ) -> anyhow::Result<Option<ToolResult>> {
+     let _com = ComApartment::new();
+     unsafe {
+@@ -611,7 +623,7 @@ fn at_point_inner(
+         }
+         candidates.sort_by_key(|(area, _)| *area);
+         for (_, element) in candidates {
+-            match try_click(hwnd, element.as_raw() as usize, false, cancelled) {
++            match try_click(hwnd, element.as_raw() as usize, false, cancelled, scope) {
+                 Ok(Some(result)) => return Ok(Some(result)),
+                 Ok(None) => {}
+                 Err(error) => return Ok(Some(ToolResult::error(error.to_string()))),
+diff --git a/crates/platform-windows/src/uia/dialog_owner.rs b/crates/platform-windows/src/uia/dialog_owner.rs
+index 428083f5d..66d30b75a 100644
+--- a/crates/platform-windows/src/uia/dialog_owner.rs
++++ b/crates/platform-windows/src/uia/dialog_owner.rs
+@@ -55,12 +55,25 @@ fn process(hwnd: HWND) -> u32 {
+     pid
+ }
+ 
+-/// Owners hidden by clicks that have not shown them yet. A click whose
+-/// provider call hangs never reaches its drop, so the caller that gave up at
+-/// the deadline shows them through [`restore_hidden_owners`].
++/// One click's claim on the owners it hides. A click whose provider call
++/// hangs never reaches its drop, so the caller that gave up at the deadline
++/// shows that click's owners, and only those, through
++/// [`restore_hidden_owners`]: another app's click may be running beside it.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) struct OwnerScope(u64);
++
++impl OwnerScope {
++    pub(crate) fn new() -> Self {
++        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++        Self(NEXT.fetch_add(1, Ordering::Relaxed))
++    }
++}
++
++/// Owners hidden by clicks that have not shown them yet, each with the click
++/// that hid it.
+ #[derive(Debug, Default)]
+ struct OwnerRegistry {
+-    hidden: Vec<isize>,
++    hidden: Vec<(OwnerScope, isize)>,
+ }
+ 
+ impl OwnerRegistry {
+@@ -69,6 +82,7 @@ impl OwnerRegistry {
+     /// drains, so a late arm never hides a window nobody would show again.
+     fn admit(
+         &mut self,
++        scope: OwnerScope,
+         cancelled: &AtomicBool,
+         hide: impl FnOnce() -> Option<isize>,
+     ) -> Option<isize> {
+@@ -76,19 +90,30 @@ impl OwnerRegistry {
+             return None;
+         }
+         let owner = hide()?;
+-        self.hidden.push(owner);
++        self.hidden.push((scope, owner));
+         Some(owner)
+     }
+ 
+-    /// True when `owner` was still recorded, so this caller must show it.
+-    fn release(&mut self, owner: isize) -> bool {
++    /// True when `owner` was still recorded for `scope`, so this caller must
++    /// show it.
++    fn release(&mut self, scope: OwnerScope, owner: isize) -> bool {
+         let before = self.hidden.len();
+-        self.hidden.retain(|hidden| *hidden != owner);
++        self.hidden.retain(|hidden| *hidden != (scope, owner));
+         self.hidden.len() != before
+     }
+ 
+-    fn drain(&mut self) -> Vec<isize> {
+-        std::mem::take(&mut self.hidden)
++    /// Remove and return the owners `scope` hid; other clicks keep theirs.
++    fn drain(&mut self, scope: OwnerScope) -> Vec<isize> {
++        let mut owners = Vec::new();
++        self.hidden.retain(|&(hidden_by, owner)| {
++            if hidden_by == scope {
++                owners.push(owner);
++                false
++            } else {
++                true
++            }
++        });
++        owners
+     }
+ }
+ 
+@@ -100,10 +125,11 @@ fn registry() -> std::sync::MutexGuard<'static, OwnerRegistry> {
+         .unwrap_or_else(|poisoned| poisoned.into_inner())
+ }
+ 
+-/// Show every owner a click hid and has not shown yet. Called when a click
+-/// timed out: its worker may stay blocked in the provider indefinitely.
+-pub(crate) fn restore_hidden_owners() {
+-    let owners = registry().drain();
++/// Show every owner the click `scope` hid and has not shown yet. Called when
++/// that click timed out: its worker may stay blocked in the provider
++/// indefinitely. Owners hidden by other clicks still running stay hidden.
++pub(crate) fn restore_hidden_owners(scope: OwnerScope) {
++    let owners = registry().drain(scope);
+     for owner in owners {
+         show_under_front(HWND(owner as *mut _));
+     }
+@@ -129,10 +155,10 @@ fn show_under_front(owner: HWND) {
+ 
+ /// Hides the owner on creation and shows it under the front window on drop,
+ /// unless the caller that gave up on the click has shown it already.
+-pub(crate) struct HiddenOwner(Option<HWND>);
++pub(crate) struct HiddenOwner(Option<HWND>, OwnerScope);
+ 
+ impl HiddenOwner {
+-    pub(crate) fn arm(dialog: HWND, cancelled: &AtomicBool) -> Self {
++    pub(crate) fn arm(dialog: HWND, cancelled: &AtomicBool, scope: OwnerScope) -> Self {
+         let root = unsafe { GetAncestor(dialog, GA_ROOT) };
+         let dialog = if root.0.is_null() { dialog } else { root };
+         let owner = unsafe { GetAncestor(dialog, GA_ROOTOWNER) };
+@@ -148,7 +174,7 @@ impl HiddenOwner {
+                 && unsafe { GetAncestor(front, GA_ROOTOWNER) } != owner,
+         };
+         if !hide_owner(facts) {
+-            return Self(None);
++            return Self(None, scope);
+         }
+         let flags = SWP_HIDEWINDOW
+             | SWP_NOACTIVATE
+@@ -158,12 +184,12 @@ impl HiddenOwner {
+             | SWP_NOOWNERZORDER;
+         // Hide under the registry lock, so a caller draining at the deadline
+         // sees either nothing hidden or this owner recorded.
+-        let hidden = registry().admit(cancelled, || {
++        let hidden = registry().admit(scope, cancelled, || {
+             let hidden = unsafe { SetWindowPos(owner, None, 0, 0, 0, 0, flags) }.is_ok()
+                 && !unsafe { IsWindowVisible(owner) }.as_bool();
+             hidden.then_some(owner.0 as isize)
+         });
+-        Self(hidden.map(|_| owner))
++        Self(hidden.map(|_| owner), scope)
+     }
+ }
+ 
+@@ -173,7 +199,7 @@ impl Drop for HiddenOwner {
+             return;
+         };
+         // Bind first: show_under_front must not run under the registry lock.
+-        let still_hidden = registry().release(owner.0 as isize);
++        let still_hidden = registry().release(self.1, owner.0 as isize);
+         if still_hidden {
+             show_under_front(owner);
+         }
+@@ -232,39 +258,109 @@ mod tests {
+ 
+     #[test]
+     fn a_window_that_is_not_an_owned_dialog_is_never_hidden() {
+-        assert!(HiddenOwner::arm(HWND::default(), &AtomicBool::new(false))
+-            .0
+-            .is_none());
++        assert!(
++            HiddenOwner::arm(HWND::default(), &AtomicBool::new(false), OwnerScope::new())
++                .0
++                .is_none()
++        );
+     }
+ 
+     #[test]
+     fn a_cancelled_click_hides_nothing() {
+         let mut registry = OwnerRegistry::default();
++        let scope = OwnerScope::new();
+         let mut hid = false;
+-        let admitted = registry.admit(&AtomicBool::new(true), || {
++        let admitted = registry.admit(scope, &AtomicBool::new(true), || {
+             hid = true;
+             Some(7)
+         });
+         assert_eq!(admitted, None);
+         assert!(!hid);
+-        assert!(registry.drain().is_empty());
++        assert!(registry.drain(scope).is_empty());
+     }
+ 
+     #[test]
+     fn an_owner_hidden_by_a_hung_click_is_shown_once_by_the_caller() {
+         let mut registry = OwnerRegistry::default();
+-        assert_eq!(registry.admit(&AtomicBool::new(false), || Some(7)), Some(7));
++        let scope = OwnerScope::new();
++        assert_eq!(
++            registry.admit(scope, &AtomicBool::new(false), || Some(7)),
++            Some(7)
++        );
+         // The caller gave up at the deadline and shows what is still hidden.
+-        assert_eq!(registry.drain(), vec![7]);
++        assert_eq!(registry.drain(scope), vec![7]);
+         // The worker returning late must not show it a second time.
+-        assert!(!registry.release(7));
++        assert!(!registry.release(scope, 7));
+     }
+ 
+     #[test]
+     fn a_click_that_finishes_shows_its_own_owner() {
+         let mut registry = OwnerRegistry::default();
+-        assert_eq!(registry.admit(&AtomicBool::new(false), || Some(7)), Some(7));
+-        assert!(registry.release(7));
+-        assert!(registry.drain().is_empty());
++        let scope = OwnerScope::new();
++        assert_eq!(
++            registry.admit(scope, &AtomicBool::new(false), || Some(7)),
++            Some(7)
++        );
++        assert!(registry.release(scope, 7));
++        assert!(registry.drain(scope).is_empty());
++    }
++
++    #[test]
++    fn a_timed_out_click_in_one_app_leaves_another_apps_hidden_owner_alone() {
++        // Clicks into two apps run side by side: app A's click times out
++        // while app B's is still running with its owner hidden.
++        let mut registry = OwnerRegistry::default();
++        let (a, b) = (OwnerScope::new(), OwnerScope::new());
++        let running = AtomicBool::new(false);
++        assert_eq!(registry.admit(a, &running, || Some(7)), Some(7));
++        assert_eq!(registry.admit(b, &running, || Some(9)), Some(9));
++        assert_eq!(registry.drain(a), vec![7]);
++        // B's owner is still B's to show when B's click finishes.
++        assert!(registry.release(b, 9));
++        assert!(registry.drain(b).is_empty());
++        // A's late return finds nothing left to show.
++        assert!(!registry.release(a, 7));
++    }
++
++    #[test]
++    fn restoring_after_a_timeout_shows_only_that_clicks_real_windows() {
++        use windows::core::w;
++        use windows::Win32::UI::WindowsAndMessaging::{
++            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
++        };
++        // Zero-size, never-shown popups: nothing appears on the desktop.
++        let create = || unsafe {
++            CreateWindowExW(
++                WINDOW_EX_STYLE(0),
++                w!("STATIC"),
++                w!(""),
++                WS_POPUP,
++                0,
++                0,
++                0,
++                0,
++                None,
++                None,
++                None,
++                None,
++            )
++            .unwrap()
++        };
++        let (owner_a, owner_b) = (create(), create());
++        let (a, b) = (OwnerScope::new(), OwnerScope::new());
++        let running = AtomicBool::new(false);
++        registry().admit(a, &running, || Some(owner_a.0 as isize));
++        registry().admit(b, &running, || Some(owner_b.0 as isize));
++
++        restore_hidden_owners(a);
++        assert!(unsafe { IsWindowVisible(owner_a) }.as_bool());
++        assert!(!unsafe { IsWindowVisible(owner_b) }.as_bool());
++        // B's click still owns its record and shows its owner itself.
++        assert!(registry().release(b, owner_b.0 as isize));
++
++        unsafe {
++            DestroyWindow(owner_a).unwrap();
++            DestroyWindow(owner_b).unwrap();
++        }
+     }
+ }
+diff --git a/crates/platform-windows/src/uia/menu.rs b/crates/platform-windows/src/uia/menu.rs
+index 070d0db39..642f897c7 100644
+--- a/crates/platform-windows/src/uia/menu.rs
++++ b/crates/platform-windows/src/uia/menu.rs
+@@ -142,6 +142,7 @@ pub(super) fn invoke(hwnd: u64, path: &[String]) -> Result<(), String> {
+     }
+     let path = path.to_vec();
+     super::windows_enum::run_uia_with_deadline_cancelable(
++        super::windows_enum::UiaTarget::Window(hwnd),
+         "menu-path", std::time::Duration::from_secs(4), "no fallback input",
+         move |cancelled| invoke_inner(hwnd, &path, &cancelled),
+     ).map_err(|error| format!("Menu action not confirmed because {}. No fallback input was sent; read fresh state before retrying.", super::click::deadline_reason(error)))?
+diff --git a/crates/platform-windows/src/uia/windows_enum.rs b/crates/platform-windows/src/uia/windows_enum.rs
+index 6741d82a3..ffbe8df6e 100644
+--- a/crates/platform-windows/src/uia/windows_enum.rs
++++ b/crates/platform-windows/src/uia/windows_enum.rs
+@@ -18,13 +18,12 @@
+ // with a fresh local binding and break the match. Mirrors overlay.rs:12.
+ #![allow(non_upper_case_globals)]
+ 
++use std::collections::HashSet;
+ use std::sync::atomic::{AtomicBool, Ordering};
+-use std::sync::{mpsc, Arc, OnceLock};
++use std::sync::{mpsc, Arc, Mutex, OnceLock};
+ use std::thread;
+ use std::time::Duration;
+ 
+-use cua_driver_core::single_flight::SingleFlight;
+-
+ use anyhow::{bail, Context};
+ use windows::core::{Interface, BSTR};
+ use windows::Win32::Foundation::{HWND, RECT};
+@@ -65,26 +64,124 @@ const HEALTH_PROBE_TIMEOUT: Duration = SUBTREE_OP_TIMEOUT;
+ #[derive(Debug)]
+ pub(crate) enum UiaDeadlineError {
+     Timeout,
++    /// An earlier call into the same app (or, for desktop-wide work, an
++    /// earlier desktop-wide call) is still running.
+     Busy,
++    /// Every worker slot is held by calls that have not returned yet.
++    Saturated,
+     Unavailable,
+ }
+ 
+-/// Process-wide gate for blocking UIA calls.
++/// What a blocking UIA call reads or acts on, which picks its gate.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum UiaTarget {
++    /// One known window: gated by the process that owns it.
++    Window(u64),
++    /// One known process.
++    Process(u32),
++    /// Work that may reach every app's provider (desktop scans and hit-tests).
++    Desktop,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++enum GateKey {
++    Process(u32),
++    Desktop,
++}
++
++impl UiaTarget {
++    fn key(self) -> GateKey {
++        let pid = match self {
++            Self::Window(hwnd) => crate::win32::window_owner_pid(hwnd),
++            Self::Process(pid) => Some(pid),
++            Self::Desktop => None,
++        };
++        match pid {
++            Some(pid) if pid != 0 => GateKey::Process(pid),
++            _ => GateKey::Desktop,
++        }
++    }
++}
++
++/// Most UIA workers alive at once, including ones whose provider call hung.
++const UIA_WORKER_BUDGET: usize = 4;
++
++/// Admission for blocking UIA calls: one worker per app (or one desktop-wide
++/// worker), and at most `budget` workers in all.
+ ///
+ /// Windows offers no safe way to cancel a COM provider call in another thread.
+-/// The gate therefore remains owned by a timed-out worker until that worker
+-/// actually returns. Retries fail fast instead of stranding more threads, then
+-/// resume as soon as the provider call returns (no cooldown).
+-fn uia_single_flight() -> &'static Arc<SingleFlight> {
+-    static GATE: OnceLock<Arc<SingleFlight>> = OnceLock::new();
+-    GATE.get_or_init(|| Arc::new(SingleFlight::new(Duration::ZERO)))
++/// A timed-out worker therefore keeps its app's gate and its budget slot until
++/// it actually returns. Retries into that app fail fast instead of stranding
++/// more threads, while calls into other apps still run: a hung File Explorer
++/// provider must not block a click on Calculator. The budget keeps the number
++/// of stranded threads bounded however many apps hang. Gates reopen as soon
++/// as the provider call returns (no cooldown).
++struct UiaGates {
++    budget: usize,
++    in_flight: Mutex<HashSet<GateKey>>,
++}
++
++impl UiaGates {
++    fn new(budget: usize) -> Self {
++        Self {
++            budget,
++            in_flight: Mutex::new(HashSet::new()),
++        }
++    }
++
++    fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<GateKey>> {
++        self.in_flight
++            .lock()
++            .unwrap_or_else(|poisoned| poisoned.into_inner())
++    }
++
++    fn try_acquire(self: &Arc<Self>, key: GateKey) -> Result<UiaPermit, UiaDeadlineError> {
++        let mut in_flight = self.lock();
++        if in_flight.contains(&key) {
++            return Err(UiaDeadlineError::Busy);
++        }
++        if in_flight.len() >= self.budget {
++            return Err(UiaDeadlineError::Saturated);
++        }
++        in_flight.insert(key);
++        Ok(UiaPermit {
++            gates: Arc::clone(self),
++            key,
++            timed_out: Arc::new(AtomicBool::new(false)),
++        })
++    }
++
++    #[cfg(test)]
++    fn in_flight(&self) -> usize {
++        self.lock().len()
++    }
++}
++
++/// One admitted worker. Dropping it, when the worker returns, frees its app's
++/// gate and its budget slot.
++struct UiaPermit {
++    gates: Arc<UiaGates>,
++    key: GateKey,
++    timed_out: Arc<AtomicBool>,
++}
++
++impl Drop for UiaPermit {
++    fn drop(&mut self) {
++        self.gates.lock().remove(&self.key);
++    }
++}
++
++fn uia_gates() -> &'static Arc<UiaGates> {
++    static GATES: OnceLock<Arc<UiaGates>> = OnceLock::new();
++    GATES.get_or_init(|| Arc::new(UiaGates::new(UIA_WORKER_BUDGET)))
+ }
+ 
+-/// Run `f` on a dedicated thread under `gate`. `f` receives the flag that is
+-/// set when the caller's deadline fires, so it can skip side effects the
+-/// caller will no longer observe.
+-fn run_uia_single_flight<T, F>(
+-    gate: &Arc<SingleFlight>,
++/// Run `f` on a dedicated thread admitted under `key`. `f` receives the flag
++/// that is set when the caller's deadline fires, so it can skip side effects
++/// the caller will no longer observe.
++fn run_uia_gated<T, F>(
++    gates: &Arc<UiaGates>,
++    key: GateKey,
+     stage: &'static str,
+     timeout: Duration,
+     fallback: &'static str,
+@@ -94,17 +191,20 @@ where
+     T: Send + 'static,
+     F: FnOnce(Arc<AtomicBool>) -> T + Send + 'static,
+ {
+-    let Some(permit) = gate.try_acquire() else {
+-        tracing::debug!(
+-            target: "uia_windows_enum",
+-            "UIA {stage} skipped while another provider call is in flight"
+-        );
+-        return Err(UiaDeadlineError::Busy);
++    let permit = match gates.try_acquire(key) {
++        Ok(permit) => permit,
++        Err(error) => {
++            tracing::debug!(
++                target: "uia_windows_enum",
++                "UIA {stage} skipped ({error:?}) while earlier provider calls are in flight"
++            );
++            return Err(error);
++        }
+     };
+ 
+     let (tx, rx) = mpsc::channel();
+-    let cancelled = permit.timeout_flag();
+-    let worker_cancelled = permit.timeout_flag();
++    let cancelled = Arc::clone(&permit.timed_out);
++    let worker_cancelled = Arc::clone(&permit.timed_out);
+     let spawn = thread::Builder::new()
+         .name(format!("cua-uia-{stage}"))
+         .spawn(move || {
+@@ -126,7 +226,7 @@ where
+             cancelled.store(true, Ordering::Release);
+             tracing::warn!(
+                 target: "uia_windows_enum",
+-                "UIA {stage} exceeded {}ms; falling back to {fallback}; no other UIA worker will start until this provider call returns",
++                "UIA {stage} exceeded {}ms; falling back to {fallback}; no other UIA worker for {key:?} will start until this provider call returns",
+                 timeout.as_millis()
+             );
+             Err(UiaDeadlineError::Timeout)
+@@ -139,6 +239,7 @@ where
+ }
+ 
+ fn run_uia_with_deadline<T, F>(
++    target: UiaTarget,
+     stage: &'static str,
+     timeout: Duration,
+     fallback: &'static str,
+@@ -148,10 +249,13 @@ where
+     T: Send + 'static,
+     F: FnOnce() -> T + Send + 'static,
+ {
+-    run_uia_with_deadline_cancelable(stage, timeout, fallback, |_| f())
++    run_uia_with_deadline_cancelable(target, stage, timeout, fallback, |_| f())
+ }
+ 
++/// Run a blocking UIA call for `target` under its app's gate and the shared
++/// worker budget, giving up after `timeout`.
+ pub(crate) fn run_uia_with_deadline_cancelable<T, F>(
++    target: UiaTarget,
+     stage: &'static str,
+     timeout: Duration,
+     fallback: &'static str,
+@@ -161,7 +265,7 @@ where
+     T: Send + 'static,
+     F: FnOnce(Arc<AtomicBool>) -> T + Send + 'static,
+ {
+-    run_uia_single_flight(uia_single_flight(), stage, timeout, fallback, f)
++    run_uia_gated(uia_gates(), target.key(), stage, timeout, fallback, f)
+ }
+ 
+ struct ComInit {
+@@ -210,6 +314,7 @@ fn get_uia() -> Option<IUIAutomation> {
+ /// best-effort source and union with `EnumWindows`.
+ pub fn enumerate_top_level_windows() -> Vec<WindowInfo> {
+     run_uia_with_deadline(
++        UiaTarget::Desktop,
+         "desktop enumeration",
+         DESKTOP_CALL_TIMEOUT,
+         "Win32-only window list",
+@@ -265,10 +370,11 @@ fn enumerate_top_level_windows_unbounded() -> Vec<WindowInfo> {
+ }
+ 
+ /// Exercise the real desktop enumeration call shape for `cua-driver doctor`
+-/// without allowing health checks to bypass the process-wide single-flight
+-/// bound used by window and interaction tools.
++/// without allowing health checks to bypass the desktop-wide gate and the worker
++/// budget used by window and interaction tools.
+ pub(crate) fn probe_desktop_availability() -> Result<(), String> {
+     match run_uia_with_deadline(
++        UiaTarget::Desktop,
+         "health probe",
+         HEALTH_PROBE_TIMEOUT,
+         "Win32-only window tools",
+@@ -279,7 +385,7 @@ pub(crate) fn probe_desktop_availability() -> Result<(), String> {
+             "UI Automation desktop enumeration exceeded {}ms; a UIA provider may be hung. Window tools will fall back to Win32-only enumeration until it recovers.",
+             HEALTH_PROBE_TIMEOUT.as_millis()
+         )),
+-        Err(UiaDeadlineError::Busy) => Err(
++        Err(UiaDeadlineError::Busy | UiaDeadlineError::Saturated) => Err(
+             "UI Automation is busy with an earlier timed-out provider call; window tools are temporarily using Win32-only enumeration."
+                 .to_owned(),
+         ),
+@@ -406,7 +512,7 @@ impl PointInvokeOutcome {
+     fn from_worker(result: Result<Self, UiaDeadlineError>) -> Self {
+         match result {
+             Ok(outcome) => outcome,
+-            Err(UiaDeadlineError::Busy) => Self::Busy,
++            Err(UiaDeadlineError::Busy | UiaDeadlineError::Saturated) => Self::Busy,
+             Err(UiaDeadlineError::Timeout) => Self::Timeout,
+             Err(UiaDeadlineError::Unavailable) => Self::Unavailable,
+         }
+@@ -415,6 +521,7 @@ impl PointInvokeOutcome {
+ 
+ pub(crate) fn try_invoke_in_window_at_point(hwnd: isize, sx: i32, sy: i32) -> PointInvokeOutcome {
+     PointInvokeOutcome::from_worker(run_uia_with_deadline_cancelable(
++        UiaTarget::Window(hwnd as usize as u64),
+         "window hit-test invoke",
+         SUBTREE_OP_TIMEOUT,
+         "an unknown-effect error without another input attempt",
+@@ -609,6 +716,7 @@ fn try_invoke_in_window_at_point_unbounded(
+ pub fn try_invoke_accelerator_in_window(hwnd: isize, combo: &str) -> anyhow::Result<(bool, usize)> {
+     let combo = combo.to_owned();
+     run_uia_with_deadline_cancelable(
++        UiaTarget::Window(hwnd as usize as u64),
+         "accelerator invoke",
+         SUBTREE_OP_TIMEOUT,
+         "keyboard message delivery",
+@@ -1125,6 +1233,7 @@ mod tests {
+         }
+         for (error, expected) in [
+             (UiaDeadlineError::Busy, PointInvokeOutcome::Busy),
++            (UiaDeadlineError::Saturated, PointInvokeOutcome::Busy),
+             (UiaDeadlineError::Timeout, PointInvokeOutcome::Timeout),
+             (
+                 UiaDeadlineError::Unavailable,
+@@ -1194,7 +1303,8 @@ mod tests {
+ 
+     #[test]
+     fn wedged_provider_has_bounded_worker_growth_and_recovers_immediately() {
+-        let gate = Arc::new(SingleFlight::new(Duration::ZERO));
++        let gate = Arc::new(UiaGates::new(UIA_WORKER_BUDGET));
++        let app = GateKey::Process(42);
+         let (started_tx, started_rx) = mpsc::channel();
+         let (release_tx, release_rx) = mpsc::channel();
+         let starts = Arc::new(AtomicUsize::new(0));
+@@ -1203,8 +1313,13 @@ mod tests {
+         let side_effects = Arc::new(AtomicUsize::new(0));
+ 
+         let first_start = Instant::now();
+-        let result =
+-            run_uia_single_flight(&gate, "test wedge", Duration::from_millis(20), "test", {
++        let result = run_uia_gated(
++            &gate,
++            app,
++            "test wedge",
++            Duration::from_millis(20),
++            "test",
++            {
+                 let starts = Arc::clone(&starts);
+                 let active = Arc::clone(&active);
+                 let max_active = Arc::clone(&max_active);
+@@ -1220,7 +1335,8 @@ mod tests {
+                     }
+                     active.fetch_sub(1, Ordering::AcqRel);
+                 }
+-            });
++            },
++        );
+         assert!(matches!(result, Err(UiaDeadlineError::Timeout)));
+         assert_eq!(
+             PointInvokeOutcome::from_worker(result.map(|()| PointInvokeOutcome::Miss)),
+@@ -1232,8 +1348,9 @@ mod tests {
+         let retries_start = Instant::now();
+         for _ in 0..100 {
+             let starts = Arc::clone(&starts);
+-            let retry = run_uia_single_flight(
++            let retry = run_uia_gated(
+                 &gate,
++                app,
+                 "test retry",
+                 Duration::from_secs(1),
+                 "test",
+@@ -1253,14 +1370,19 @@ mod tests {
+ 
+         release_tx.send(()).unwrap();
+         let recovery_deadline = Instant::now() + Duration::from_secs(1);
+-        while gate.is_in_flight() && Instant::now() < recovery_deadline {
++        while gate.in_flight() != 0 && Instant::now() < recovery_deadline {
+             thread::yield_now();
+         }
+-        assert!(!gate.is_in_flight());
++        assert_eq!(gate.in_flight(), 0);
+         assert_eq!(side_effects.load(Ordering::Acquire), 0);
+ 
+-        let recovered =
+-            run_uia_single_flight(&gate, "test recovery", Duration::from_secs(1), "test", {
++        let recovered = run_uia_gated(
++            &gate,
++            app,
++            "test recovery",
++            Duration::from_secs(1),
++            "test",
++            {
+                 let starts = Arc::clone(&starts);
+                 let active = Arc::clone(&active);
+                 let max_active = Arc::clone(&max_active);
+@@ -1271,11 +1393,159 @@ mod tests {
+                     active.fetch_sub(1, Ordering::AcqRel);
+                     42
+                 }
+-            });
++            },
++        );
+         assert!(matches!(recovered, Ok(42)));
+         assert_eq!(starts.load(Ordering::Acquire), 2);
+         assert_eq!(max_active.load(Ordering::Acquire), 1);
+     }
++
++    /// Start a worker under `key` whose provider call hangs until the
++    /// returned sender is used or dropped; the caller gives up after 20 ms.
++    fn hang(
++        gates: &Arc<UiaGates>,
++        key: GateKey,
++        stage: &'static str,
++        starts: &Arc<AtomicUsize>,
++    ) -> (Result<(), UiaDeadlineError>, mpsc::Sender<()>) {
++        let (release_tx, release_rx) = mpsc::channel::<()>();
++        let worker_starts = Arc::clone(starts);
++        let result = run_uia_gated(gates, key, stage, Duration::from_millis(20), "test", {
++            move |_| {
++                worker_starts.fetch_add(1, Ordering::AcqRel);
++                let _ = release_rx.recv();
++            }
++        });
++        (result, release_tx)
++    }
++
++    fn hang_timed_out(
++        gates: &Arc<UiaGates>,
++        key: GateKey,
++        stage: &'static str,
++        starts: &Arc<AtomicUsize>,
++    ) -> mpsc::Sender<()> {
++        let (result, release) = hang(gates, key, stage, starts);
++        assert!(
++            matches!(result, Err(UiaDeadlineError::Timeout)),
++            "{result:?}"
++        );
++        release
++    }
++
++    fn wait_until_idle(gates: &UiaGates) {
++        let deadline = Instant::now() + Duration::from_secs(2);
++        while gates.in_flight() != 0 && Instant::now() < deadline {
++            thread::sleep(Duration::from_millis(1));
++        }
++        assert_eq!(gates.in_flight(), 0);
++    }
++
++    fn quick(
++        gates: &Arc<UiaGates>,
++        key: GateKey,
++        stage: &'static str,
++    ) -> Result<u8, UiaDeadlineError> {
++        run_uia_gated(gates, key, stage, Duration::from_secs(2), "test", |_| 7)
++    }
++
++    #[test]
++    fn a_stuck_call_into_one_app_does_not_block_another_app() {
++        // Live (2026-11-02): File Explorer's title-bar Close hung in its
++        // provider, and a Calculator Close 25 s later was refused as busy.
++        let gates = Arc::new(UiaGates::new(UIA_WORKER_BUDGET));
++        let starts = Arc::new(AtomicUsize::new(0));
++        let explorer = GateKey::Process(100);
++        let calculator = GateKey::Process(200);
++        let release = hang_timed_out(&gates, explorer, "semantic-click", &starts);
++
++        assert!(matches!(
++            quick(&gates, explorer, "semantic-click"),
++            Err(UiaDeadlineError::Busy)
++        ));
++        assert!(matches!(quick(&gates, calculator, "semantic-click"), Ok(7)));
++        assert!(matches!(
++            quick(&gates, GateKey::Desktop, "desktop enumeration"),
++            Ok(7)
++        ));
++        assert_eq!(starts.load(Ordering::Acquire), 1);
++
++        drop(release);
++        wait_until_idle(&gates);
++        assert!(matches!(quick(&gates, explorer, "semantic-click"), Ok(7)));
++    }
++
++    #[test]
++    fn a_stuck_read_blocks_an_action_on_the_same_app_only() {
++        let gates = Arc::new(UiaGates::new(UIA_WORKER_BUDGET));
++        let starts = Arc::new(AtomicUsize::new(0));
++        let browser = GateKey::Process(300);
++        let release = hang_timed_out(&gates, browser, "targeted page read", &starts);
++        let acted = Arc::new(AtomicUsize::new(0));
++        let action = run_uia_gated(
++            &gates,
++            browser,
++            "semantic-click",
++            Duration::from_secs(2),
++            "test",
++            {
++                let acted = Arc::clone(&acted);
++                move |_| {
++                    acted.fetch_add(1, Ordering::AcqRel);
++                }
++            },
++        );
++        assert!(matches!(action, Err(UiaDeadlineError::Busy)));
++        assert_eq!(
++            acted.load(Ordering::Acquire),
++            0,
++            "no action may run beside the stuck read"
++        );
++        drop(release);
++        wait_until_idle(&gates);
++    }
++
++    #[test]
++    fn stuck_calls_across_many_apps_keep_a_finite_worker_budget() {
++        let gates = Arc::new(UiaGates::new(UIA_WORKER_BUDGET));
++        let starts = Arc::new(AtomicUsize::new(0));
++        let mut releases = Vec::new();
++        for pid in 1..=10u32 {
++            let (result, release) = hang(&gates, GateKey::Process(pid), "semantic-click", &starts);
++            if pid as usize <= UIA_WORKER_BUDGET {
++                assert!(
++                    matches!(result, Err(UiaDeadlineError::Timeout)),
++                    "pid {pid}: {result:?}"
++                );
++            } else {
++                assert!(
++                    matches!(result, Err(UiaDeadlineError::Saturated)),
++                    "pid {pid}: {result:?}"
++                );
++            }
++            releases.push(release);
++        }
++        // No thread was started past the budget, and none for desktop work.
++        assert!(matches!(
++            quick(&gates, GateKey::Desktop, "desktop enumeration"),
++            Err(UiaDeadlineError::Saturated)
++        ));
++        assert_eq!(starts.load(Ordering::Acquire), UIA_WORKER_BUDGET);
++        assert_eq!(gates.in_flight(), UIA_WORKER_BUDGET);
++
++        // Capacity comes back only as the stuck workers really return.
++        drop(releases.remove(0));
++        let deadline = Instant::now() + Duration::from_secs(2);
++        while gates.in_flight() == UIA_WORKER_BUDGET && Instant::now() < deadline {
++            thread::sleep(Duration::from_millis(1));
++        }
++        assert!(matches!(
++            quick(&gates, GateKey::Process(9), "semantic-click"),
++            Ok(7)
++        ));
++        drop(releases);
++        wait_until_idle(&gates);
++    }
+ }
+ 
+ /// Hit chain (nearest first), each node's bounds `[x, y, w, h]`, and whether
+@@ -1304,6 +1574,7 @@ const POINT_SHAPE_DOCUMENT_DEPTH: usize = 16;
+ /// `None` when UIA is unavailable, busy with another call, or over budget.
+ pub(crate) fn point_shape_chain(sx: i32, sy: i32) -> Option<PointShapeChain> {
+     run_uia_with_deadline(
++        UiaTarget::Desktop,
+         "pointer shape hit-test",
+         POINT_SHAPE_TIMEOUT,
+         "the arrow",
