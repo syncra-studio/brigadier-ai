@@ -2668,6 +2668,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             daemon.runtime.refresh_providers(provider);
             Response::RefreshProviders
         }
+        Request::RefreshUsage => {
+            daemon.runtime.refresh_usage();
+            Response::RefreshUsage
+        }
         Request::CheckAgentPath { provider, path } => {
             let runtime = &daemon.runtime;
             let checked = brigadier_providers::cli::check_binary(

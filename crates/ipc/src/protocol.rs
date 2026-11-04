@@ -1302,6 +1302,9 @@ pub enum Request {
         #[serde(default)]
         provider: Option<ProviderKind>,
     },
+    /// The app's regular usage tick: reads each provider's quota in the background, with a whole
+    /// check only for one that is due it; results arrive as `providerChecked`.
+    RefreshUsage,
     /// Whether `path` is `provider`'s own CLI, before the user's choice of it is saved in
     /// `agentPaths`: answers its version, or fails with what is wrong in plain words.
     CheckAgentPath {
@@ -2029,6 +2032,7 @@ pub enum Response {
         view: ProvidersView,
     },
     RefreshProviders,
+    RefreshUsage,
     CheckAgentPath {
         version: String,
     },

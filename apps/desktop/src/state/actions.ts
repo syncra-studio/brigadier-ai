@@ -1719,6 +1719,11 @@ export async function refreshProviders(provider: ProviderKind | null = null): Pr
   await request({ method: "refreshProviders", provider });
 }
 
+/** The regular usage tick: reads quotas; a provider only gets a whole check when it is due one. */
+export async function refreshProviderUsage(): Promise<void> {
+  await request({ method: "refreshUsage" });
+}
+
 /** Opens a raw session in the Providers tab (or goes back to the list with `null`). */
 export function selectRawSession(id: string | null): void {
   updateProviders((providers) => ({ ...providers, selected: id }));

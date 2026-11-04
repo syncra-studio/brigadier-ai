@@ -194,6 +194,53 @@ async fn activity_reads_each_accounts_samples_over_the_range_asked() {
     flow.stop().await;
 }
 
+/// The app's usage tick reads quotas. It starts no CLI for a login or a model list it read lately
+/// (a CLI that reports no usage, none at all); one signed out is still checked, so signing in shows.
+#[tokio::test]
+async fn the_usage_tick_checks_whole_only_what_is_due() {
+    let flow = Flow::start("usage-tick", Options::default(), answering()).await;
+    let runtime = &flow.manager.runtime;
+    flow.behavior
+        .signed_out
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Codex);
+    let generation = runtime.refresh_all();
+    assert!(
+        runtime
+            .providers_checked(generation, Duration::from_secs(20))
+            .await
+    );
+    flow.behavior.status_reads.lock().unwrap().clear();
+    flow.behavior.quota_reads.lock().unwrap().clear();
+
+    runtime.refresh_usage();
+    flow.until("Claude's quota is read and Codex is checked", |_| {
+        flow.behavior
+            .quota_reads
+            .lock()
+            .unwrap()
+            .contains(&ProviderKind::Claude)
+            && flow
+                .behavior
+                .status_reads
+                .lock()
+                .unwrap()
+                .contains(&ProviderKind::Codex)
+    })
+    .await;
+    assert!(
+        !flow
+            .behavior
+            .status_reads
+            .lock()
+            .unwrap()
+            .contains(&ProviderKind::Claude),
+        "a provider checked lately was checked whole again"
+    );
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_refresh_waits_for_a_check_that_began_before_it() {
     let flow = Flow::start("usage-refresh", Options::default(), answering()).await;
