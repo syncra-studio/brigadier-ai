@@ -615,7 +615,9 @@ pub const COMMANDS: &[Command] = &[
             flag(
                 "out",
                 "FILE",
-                "screenshot: where to save it; the session's temporary folder by default.",
+                "screenshot: the file to save it to, in your working folder and outside .git \
+                 and the agents' settings (anywhere at Full access); the session's temporary \
+                 folder by default.",
             ),
             rest(
                 "args",

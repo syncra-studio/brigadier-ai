@@ -48,6 +48,7 @@ async fn fusion_offer_waits_for_a_click_and_concurrent_clicks_send_once() {
                         tool: Tool::Fusion,
                         action: "offer".into(),
                         args: json!({"question": "Compare approaches."}),
+                        out: None,
                     },
                 )
                 .await;
@@ -278,6 +279,7 @@ async fn fusion_is_refused_in_sessions_side_chats_tab_chats_and_workers() {
                         tool: Tool::Fusion,
                         action: "offer".into(),
                         args: json!({"question": "Question"}),
+                        out: None,
                     },
                 },
             )

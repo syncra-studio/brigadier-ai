@@ -531,6 +531,7 @@ fn sample(request: &CliRequest) -> CliReply {
             tool: Tool::Ledger,
             action,
             args,
+            ..
         } => CliReply::ok(&LedgerOutput {
             action: action.clone(),
             text: format!("Ledger {action}: {args}"),
@@ -557,6 +558,7 @@ fn sample(request: &CliRequest) -> CliReply {
             tool: Tool::Library,
             action,
             args,
+            ..
         } => CliReply::ok(&LibraryOutput {
             action: action.clone(),
             items: match action.as_str() {
@@ -605,7 +607,9 @@ fn sample(request: &CliRequest) -> CliReply {
             },
             warning: None,
         }),
-        CliRequest::Tool { tool, action, args } => CliReply::ok(&ToolOutput {
+        CliRequest::Tool {
+            tool, action, args, ..
+        } => CliReply::ok(&ToolOutput {
             action: action.clone(),
             text: format!("{tool:?} {action}: {args}"),
             images: Vec::new(),
@@ -1297,6 +1301,7 @@ fn fusion_offer_reads_its_question_from_stdin() {
             tool: Tool::Fusion,
             action,
             args,
+            ..
         } = request
         else {
             panic!("{request:?}")
@@ -1346,6 +1351,7 @@ fn checkpoint_set_reads_stdin_and_show_prints_it() {
             tool: Tool::Checkpoint,
             action,
             args,
+            ..
         } = request
         else {
             panic!("expected a checkpoint call: {request:?}");
@@ -1416,6 +1422,7 @@ fn ledger_add_prints_its_id_reads_stdin_and_show_close_and_check_pass_their_word
             tool: Tool::Ledger,
             action,
             args,
+            ..
         } = request
         else {
             panic!("expected a ledger call: {request:?}");
@@ -1673,4 +1680,70 @@ fn mcp_calls_reach_the_daemon_and_mcp_run_stays_local() {
         "{output:?}"
     );
     assert_ne!(output.status.code(), Some(0));
+}
+
+/// `--out` goes with the call, as an absolute path from the shell's folder with its names as
+/// given, so the daemon can refuse it before anything runs; a refused one saves nothing.
+/// `--json` saves nothing, and sends none.
+#[test]
+fn out_is_sent_absolute_and_a_refused_one_saves_nothing() {
+    fn answer(request: &CliRequest) -> CliReply {
+        let CliRequest::Tool { out, .. } = request else {
+            panic!("not a tool: {request:?}");
+        };
+        if out.as_deref().is_some_and(|out| out.contains("refuse")) {
+            return CliReply::error(ErrorCode::Refused, "refused: --out outside");
+        }
+        CliReply::ok(&ToolOutput {
+            action: "screenshot".into(),
+            text: format!("out: {}", out.as_deref().unwrap_or("none")),
+            images: vec!["data:image/png;base64,AA==".into()],
+            saved: Vec::new(),
+        })
+    }
+    let dir = DataDir::new("out");
+    let folder = dir.0.join("checkout");
+    std::fs::create_dir_all(folder.join(".claude")).unwrap();
+    let daemon = stand_in_daemon(&dir.0, 4, answer);
+    let run = |words: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_brigadier"))
+            .args(["browser", "screenshot", "--tab", "browser:agent-1"])
+            .args(words)
+            .current_dir(&folder)
+            .env("BRIGADIER_DATA_DIR", &dir.0)
+            .env(SESSION_ENV, SESSION)
+            .env(GRANT_ENV, GRANT)
+            .output()
+            .unwrap()
+    };
+    let absolute = |path: &str| {
+        std::path::absolute(folder.join(path))
+            .unwrap()
+            .display()
+            .to_string()
+    };
+
+    let shown = stdout(&run(&["--out", "shot.png"]));
+    assert!(
+        shown.starts_with(&format!("out: {}\n", absolute("shot.png"))),
+        "{shown}"
+    );
+    assert_eq!(std::fs::read(folder.join("shot.png")).unwrap(), [0]);
+    // Its names as given: the daemon judges `.claude`, not what a link there leads to.
+    let shown = stdout(&run(&["--out", ".claude/settings.json"]));
+    assert!(
+        shown.starts_with(&format!("out: {}\n", absolute(".claude/settings.json"))),
+        "{shown}"
+    );
+    let refused = run(&["--out", "refuse.png"]);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("refused: --out outside"),
+        "{refused:?}"
+    );
+    assert!(!folder.join("refuse.png").exists());
+    let json = stdout(&run(&["--json", "--out", "json.png"]));
+    assert!(json.contains("\"out: none\""), "{json}");
+    assert!(!folder.join("json.png").exists());
+    daemon.join().unwrap();
 }

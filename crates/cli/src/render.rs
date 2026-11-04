@@ -740,7 +740,8 @@ pub fn tool(output: &ToolOutput) -> String {
 }
 
 /// Writes the output's screenshots to files, for text output: to `out` (numbered after the
-/// first), else to the session's temporary folder.
+/// first, beside it), which the daemon checked before the tool ran, else to the session's
+/// temporary folder.
 pub fn saved_images(
     mut output: ToolOutput,
     out: Option<&std::path::Path>,
@@ -775,11 +776,34 @@ pub fn saved_images(
                 std::env::temp_dir().join(format!("brigadier-screenshot-{stamp}-{n}.{extension}"))
             }
         };
-        std::fs::write(&path, bytes)
+        replace_file(&path, &bytes)
             .map_err(|err| format!("could not save the screenshot to {}: {err}", path.display()))?;
         output.saved.push(path.display().to_string());
     }
     Ok(output)
+}
+
+/// Puts `bytes` at `path` as a new file: written beside it first, then renamed over it. A link
+/// already at `path` (a symlink, or a hard link to a file elsewhere) is replaced, never written
+/// through, so the bytes land only in `path`'s folder, which the daemon checked.
+fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    // A short name of its own: one made from `path`'s could pass the longest a name may be.
+    let temp = path.with_file_name(format!(".brigadier-{}-{stamp}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    let written = written.and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
 }
 
 /// `ask`: the user's answer, as they gave it; for several questions, each numbered with its
@@ -1285,5 +1309,127 @@ mod tests {
             text.ends_with("Your advice (weigh it when picking; it restricts nothing):\n  prefer Codex when Claude is busy\n"),
             "{text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod saved_images_tests {
+    use super::*;
+
+    /// A folder of its own under the temporary folder, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!(
+                "brigadier-cli-{name}-{}-{stamp}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir.canonicalize().unwrap())
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn shots(bytes: &[&[u8]]) -> ToolOutput {
+        ToolOutput {
+            action: "screenshot".into(),
+            text: "Took it.".into(),
+            images: bytes
+                .iter()
+                .map(|bytes| {
+                    format!(
+                        "data:image/png;base64,{}",
+                        base64::engine::general_purpose::STANDARD.encode(bytes)
+                    )
+                })
+                .collect(),
+            saved: Vec::new(),
+        }
+    }
+
+    /// `--out` names a file in the checked folder; a hard link there to a file elsewhere (a
+    /// startup script, a dotfile) is replaced by the screenshot, never written through. The
+    /// file it pointed to keeps its bytes, and so does a second screenshot's numbered file.
+    #[test]
+    fn a_link_at_out_is_replaced_not_written_through() {
+        let dir = Scratch::new("out-link");
+        let outside = dir.0.join("outside");
+        let folder = dir.0.join("checkout");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        let profile = outside.join("profile.ps1");
+        let other = outside.join("other.txt");
+        std::fs::write(&profile, "keep me").unwrap();
+        std::fs::write(&other, "keep me too").unwrap();
+        let out = folder.join("shot.png");
+        std::fs::hard_link(&profile, &out).unwrap();
+        std::fs::hard_link(&other, folder.join("shot-2.png")).unwrap();
+
+        let saved = saved_images(shots(&[b"one", b"two"]), Some(&out)).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&profile).unwrap(), "keep me");
+        assert_eq!(std::fs::read_to_string(&other).unwrap(), "keep me too");
+        assert_eq!(std::fs::read(&out).unwrap(), b"one");
+        assert_eq!(std::fs::read(folder.join("shot-2.png")).unwrap(), b"two");
+        assert_eq!(
+            saved.saved,
+            [
+                out.display().to_string(),
+                folder.join("shot-2.png").display().to_string()
+            ]
+        );
+        // Nothing else is left beside them.
+        let mut names: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["shot-2.png", "shot.png"]);
+    }
+
+    /// An existing file at `--out` is overwritten (the folder is the caller's to write); a
+    /// folder there is not, and nothing is left behind.
+    #[test]
+    fn out_overwrites_a_file_and_refuses_a_folder() {
+        let dir = Scratch::new("out-overwrite");
+        let out = dir.0.join("shot.png");
+        std::fs::write(&out, "old").unwrap();
+        saved_images(shots(&[b"new"]), Some(&out)).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"new");
+
+        let folder = dir.0.join("folder");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("inside.txt"), "kept").unwrap();
+        let err = saved_images(shots(&[b"new"]), Some(&folder)).unwrap_err();
+        assert!(err.contains("could not save the screenshot"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(folder.join("inside.txt")).unwrap(),
+            "kept"
+        );
+        let names: Vec<_> = std::fs::read_dir(&dir.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    /// A name near the longest a file system takes is saved as given: the file written first
+    /// beside it has a short name of its own.
+    #[test]
+    fn a_long_out_name_is_saved() {
+        let dir = Scratch::new("out-long");
+        let out = dir.0.join(format!("{}.png", "a".repeat(240)));
+        saved_images(shots(&[b"long"]), Some(&out)).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"long");
     }
 }
