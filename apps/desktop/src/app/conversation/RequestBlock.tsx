@@ -20,7 +20,7 @@ import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useBlockHold, useLiveWait } from "@/app/conversation/blockHold";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
-import { belowAnswer, turnParts, type WorkPart } from "@/app/conversation/workParts";
+import { belowActions, belowAnswer, turnParts, type WorkPart } from "@/app/conversation/workParts";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
@@ -379,6 +379,11 @@ export const RequestBlock: FC = () => {
           answerId={meta.answerId}
         />
       )}
+      {belowActions(activity, answer, done).map((entry) => (
+        <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
+          <SequenceEntry entry={entry} streaming={false} />
+        </div>
+      ))}
       <ContinuedFrom forkId={meta.forkId} />
       {meta.compactions
         .filter((compaction) => !compaction.inTurn)

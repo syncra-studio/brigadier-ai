@@ -68,7 +68,7 @@ export function turnParts(
   answers: (index: number) => boolean,
 ): WorkPart[] {
   // The answer and what stays in view after it are drawn under the parts; the rest that stays in view, in its run.
-  const below = new Set(belowAnswer(activity, answer, done));
+  const below = new Set(underAnswer(activity, answer, done));
   const folded = activity.filter((item) => item.type === "group" || (!below.has(item.entry) && (item.entry.kind !== "text" || foldsAway(item.entry, answer))));
   return keepJoinedAnswers(done ? workParts(folded, false, (entry) => !foldsAway(entry, answer)) : workParts(activity, live), done, answers);
 }
@@ -79,6 +79,17 @@ export function turnParts(
  * replied), never above the reply that came before them.
  */
 export function belowAnswer(activity: readonly Activity<LeadStep, Entry>[], answer: number | null, done: boolean): Entry[] {
+  return underAnswer(activity, answer, done).filter((entry) => !isSwitch(entry));
+}
+
+/** A switch made after the answer: under its action row, which belongs to the answer above it. */
+export function belowActions(activity: readonly Activity<LeadStep, Entry>[], answer: number | null, done: boolean): Entry[] {
+  return underAnswer(activity, answer, done).filter(isSwitch);
+}
+
+const isSwitch = (entry: Entry) => entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "providerTransition");
+
+function underAnswer(activity: readonly Activity<LeadStep, Entry>[], answer: number | null, done: boolean): Entry[] {
   if (!done || answer === null) return [];
   const at = activity.find((item) => item.type === "entry" && item.entry.kind === "text" && item.entry.index === answer);
   if (at?.type !== "entry") return [];

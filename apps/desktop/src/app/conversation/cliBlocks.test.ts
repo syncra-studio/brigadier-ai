@@ -6,7 +6,7 @@ import { INTERRUPTED } from "@/app/conversation/turnError";
 import { confirmPending } from "@/state/shownIds";
 import { answerIndex, blockSequence, type BoardDigest, foldsAway, seamMove, type SequenceEntry, turnTime } from "@/app/conversation/blocks";
 import { turnActivity } from "@/app/conversation/activity/group";
-import { belowAnswer, turnParts } from "@/app/conversation/workParts";
+import { belowActions, belowAnswer, turnParts } from "@/app/conversation/workParts";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, Wake } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
@@ -1771,6 +1771,15 @@ test("a message woken for while only a background subagent holds the block goes 
 const workerStep = (type: "paused" | "resumed" | "stopped", position: number): SequenceEntry =>
   ({ kind: "orchestrator", steps: [{ kind: { type, taskId: "t1", ...(type === "stopped" && { reason: "Stopped by the user" }) }, position, atMs: position }], position }) as SequenceEntry;
 const stepKinds = (entries: readonly SequenceEntry[] | undefined) => (entries ?? []).map((entry) => entry.kind === "orchestrator" && entry.steps[0]?.kind.type);
+
+test("a switch after the answer goes under the answer's action row, a worker's line above it", () => {
+  const switched = { kind: "orchestrator", steps: [{ kind: { type: "providerTransition", id: "s1" }, position: 3, atMs: 3 }], position: 3 } as unknown as SequenceEntry;
+  const activity = turnActivity([{ kind: "text", index: 0, messageId: "a1", position: 2 }, switched, workerStep("resumed", 4)], false);
+  assert.deepEqual(stepKinds(belowAnswer(activity, 0, true)), ["resumed"]);
+  assert.deepEqual(stepKinds(belowActions(activity, 0, true)), ["providerTransition"]);
+  const parts = turnParts(activity, 0, true, false, () => true);
+  assert.deepEqual(parts.flatMap((part) => (part.type === "work" ? (part.kept ?? []) : [])), []);
+});
 
 test("a worker paused before the answer and resumed and ended after it read in that order around it", () => {
   const sequence: SequenceEntry[] = [workerStep("paused", 1), { kind: "text", index: 0, messageId: "a1", position: 2 }, workerStep("resumed", 3), workerStep("stopped", 4)];
