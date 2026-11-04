@@ -27,7 +27,7 @@ export function SuggestionLine({
   const name = rowModelName(groups, suggestion.row.agent, suggestion.row.model);
   const current = rowModelName(groups, row.mine[0]?.agent ?? suggestion.row.agent, suggestion.current);
   const use = () =>
-    action.run(() => saveModelRules(withOrder(rules.rows, row.work, withFirst(row.mine, suggestion.row)), rules.rules));
+    action.run(() => saveModelRules(rules, withOrder(rules.rows, row.work, withFirst(row.mine, suggestion.row)), rules.rules));
   const dismiss = () =>
     action.run(async () => {
       await editSettings((settings) => ({ ...settings, dismissedSuggestions: withDismissed(settings.dismissedSuggestions, suggestion) }));

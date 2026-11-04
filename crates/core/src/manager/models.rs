@@ -13,6 +13,16 @@ pub(super) const DEFAULT_RULES: &str = include_str!("models_default.md");
 /// The Work whose rows a session moves to another agent with (S38, D25, D34).
 pub(crate) const FALLBACK_WORK: &str = "Fallback";
 
+/// Read the former work name in existing rows, scoped rules and `--work` starts.
+pub(super) fn canonical_work(work: &str) -> &str {
+    let work = work.trim();
+    if work.eq_ignore_ascii_case("Independent review") {
+        "Adversarial review"
+    } else {
+        work
+    }
+}
+
 fn rank(effort: &str) -> Option<usize> {
     [
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
@@ -27,30 +37,70 @@ fn matches(pattern: &str, model: &str) -> bool {
             .split(|c: char| !c.is_alphanumeric())
             .any(|word| word.eq_ignore_ascii_case(pattern))
 }
-fn rows(text: &str) -> Vec<GuidanceRow> {
-    text.lines()
-        .filter_map(|line| {
-            let cells: Vec<_> = line
-                .trim()
-                .trim_matches('|')
-                .split('|')
-                .map(str::trim)
-                .collect();
-            if cells.len() != 5 {
-                return None;
-            }
-            // An agent as the rules file names it: a CLI Brigadier drives.
-            let agent = ProviderKind::parse(cells[1])
-                .filter(|kind| brigadier_providers::adapters::adapter(*kind).is_some())?;
-            Some(GuidanceRow {
-                work: cells[0].into(),
+fn table_cells(line: &str) -> Vec<&str> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect()
+}
+fn routing_header(line: &str) -> bool {
+    line.trim_start().starts_with('|')
+        && table_cells(line) == ["Work", "Agent", "Model", "Effort", "Reason"]
+}
+fn table_separator(line: &str) -> bool {
+    line.trim_start().starts_with('|')
+        && table_cells(line).iter().all(|cell| {
+            let dashes = cell.trim_matches(':');
+            dashes.len() >= 3 && dashes.chars().all(|c| c == '-')
+        })
+}
+/// The readable routing rows and their line numbers. Old files may have rows without a header;
+/// a table with another header is prose, even if a cell happens to name an agent.
+fn routing_rows(text: &str) -> Vec<(usize, GuidanceRow)> {
+    let mut lines = text.lines().enumerate().peekable();
+    let mut routing = true;
+    let mut found = Vec::new();
+    while let Some((index, line)) = lines.next() {
+        if !line.trim_start().starts_with('|') {
+            routing = true;
+            continue;
+        }
+        if lines.peek().is_some_and(|(_, next)| table_separator(next)) {
+            routing = routing_header(line);
+            lines.next();
+            continue;
+        }
+        if !routing {
+            continue;
+        }
+        let cells = table_cells(line);
+        if cells.len() != 5 {
+            continue;
+        }
+        let Some(agent) = agent_named(cells[1]) else {
+            continue;
+        };
+        found.push((
+            index,
+            GuidanceRow {
+                work: canonical_work(cells[0]).into(),
                 agent,
                 model: cells[2].into(),
                 effort: (!cells[3].is_empty()).then(|| cells[3].into()),
                 reason: cells[4].into(),
-            })
-        })
-        .collect()
+            },
+        ));
+    }
+    found
+}
+fn rows(text: &str) -> Vec<GuidanceRow> {
+    routing_rows(text).into_iter().map(|(_, row)| row).collect()
+}
+/// The shipped guidance's rows.
+#[cfg(test)]
+pub(super) fn shipped_rows() -> Vec<GuidanceRow> {
+    rows(GUIDANCE)
 }
 fn guidance(shipped: Vec<GuidanceRow>, user: &str) -> Vec<Guidance> {
     let shown = |row: GuidanceRow, source: &str| Guidance {
@@ -85,6 +135,11 @@ fn guidance(shipped: Vec<GuidanceRow>, user: &str) -> Vec<Guidance> {
     }
     merged
 }
+/// An agent as the rules file names it: a CLI Brigadier drives.
+fn agent_named(word: &str) -> Option<ProviderKind> {
+    ProviderKind::parse(word)
+        .filter(|agent| brigadier_providers::adapters::adapter(*agent).is_some())
+}
 /// How a shipped kind of work picks its automatic models from the ratings, and the one agent a
 /// fusion consult's kind is for (brief L11). `None`: the kind keeps its shipped rows.
 fn pick_rule(work: &str) -> Option<(PickRule, Option<ProviderKind>)> {
@@ -97,7 +152,7 @@ fn pick_rule(work: &str) -> Option<(PickRule, Option<ProviderKind>)> {
         needs_images: effort_from == C::Operate,
     };
     let only = |categories| Rating::Categories(categories);
-    Some(match work.trim() {
+    Some(match canonical_work(work) {
         "Architecture and broad changes" => (
             rule(only(&[C::Orchestrate, C::Design]), false, C::Orchestrate),
             None,
@@ -107,7 +162,7 @@ fn pick_rule(work: &str) -> Option<(PickRule, Option<ProviderKind>)> {
             rule(only(&[C::Implement, C::Scout]), true, C::Implement),
             None,
         ),
-        "Independent review" => (rule(only(&[C::Review]), false, C::Review), None),
+        "Adversarial review" => (rule(only(&[C::Review]), false, C::Review), None),
         "Computer use" => (rule(only(&[C::Operate]), false, C::Operate), None),
         "Conversation titles" => (rule(only(&[C::GitText]), true, C::GitText), None),
         FALLBACK_WORK => (rule(Rating::Overall, false, C::Orchestrate), None),
@@ -116,6 +171,12 @@ fn pick_rule(work: &str) -> Option<(PickRule, Option<ProviderKind>)> {
             (rule(Rating::Overall, false, C::Orchestrate), Some(agent))
         }
     })
+}
+/// Whether a kind of work's rows are one model per agent, each for its own role, not an order.
+fn by_role(work: &str) -> bool {
+    same_work(work, "Adversarial review")
+        || same_work(work, FALLBACK_WORK)
+        || work.trim().starts_with("fusion-")
 }
 /// How an automatic row from the ratings starts its reason; a shipped row's reason never does.
 const RATED_REASON: &str = "Rated ";
@@ -184,7 +245,9 @@ fn automatic(
 /// The suggestions for the user's orders: for each kind of work they ordered, the best-rated
 /// model when it rates at least [`SUGGEST_MARGIN`] above the first of their order, unless they
 /// dismissed it at that rating. Reads `user` only: an order changes when the user takes one.
-/// `listed` gives the listed model a row's model word starts (`default`: the CLI's default).
+/// `listed` gives the listed model a row's model word starts (`default`: the CLI's default). A
+/// kind of roles (review, Fallback, a fusion's consults) has none: its rows are one model per
+/// agent, not an order, so a first place to take doesn't exist.
 fn suggestions(
     user: &[GuidanceRow],
     registry: &brigadier_router::Registry,
@@ -199,6 +262,9 @@ fn suggestions(
             .iter()
             .any(|row| same_work(&row.work, &first.work))
         {
+            continue;
+        }
+        if by_role(&first.work) {
             continue;
         }
         let Some((rule, _)) = pick_rule(&first.work) else {
@@ -254,7 +320,7 @@ fn suggestions(
     found
 }
 /// The directive a rules-file line holds, with the line as the user wrote it; `None` for prose.
-fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
+pub(super) fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
     let rule = line.trim().strip_prefix("- ").unwrap_or(line.trim());
     let Some((key, value)) = rule.split_once(':') else {
         return Ok(None);
@@ -268,44 +334,78 @@ fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
-    // `forbid for Independent review: sonnet`: the rule holds for that kind of work only.
+    // `forbid for Adversarial review: sonnet`: the rule holds for that kind of work only.
     let (key, work) = match key.split_once(" for ") {
-        Some((key, work)) if !work.trim().is_empty() => (key, Some(work.trim().to_owned())),
+        Some((key, work)) if !work.trim().is_empty() => {
+            (key, Some(canonical_work(work).to_owned()))
+        }
         _ => (key, None),
     };
-    let parsed = match key.trim() {
-        "forbid" => ModelRule::Forbid {
+    // `allow claude`, `effort-ceiling opus`: the directive, then what it is about.
+    let key = key.trim();
+    let (kind, target) = match key.split_once(' ') {
+        Some((kind, target)) => (kind, Some(target.trim())),
+        None => (key, None),
+    };
+    let parsed = match (kind, target) {
+        ("forbid", None) => ModelRule::Forbid {
             names: names(),
             work,
         },
-        "allow" => ModelRule::Allow {
+        ("allow", None) => ModelRule::Allow {
             agent: None,
             names: names(),
             work,
         },
-        // `allow <agent>`: an agent Brigadier drives.
-        other
-            if let Some(agent) = other
-                .strip_prefix("allow ")
-                .and_then(ProviderKind::parse)
-                .filter(|agent| brigadier_providers::adapters::adapter(*agent).is_some()) =>
-        {
-            ModelRule::Allow {
-                agent: Some(agent),
-                names: names(),
-                work,
-            }
-        }
-        "effort-ceiling" => {
+        ("allow", Some(target)) if let Some(agent) = agent_named(target) => ModelRule::Allow {
+            agent: Some(agent),
+            names: names(),
+            work,
+        },
+        ("effort-ceiling" | "effort-floor", target) => {
+            // An agent's id, else one model name (no spaces, commas).
+            let (agent, model) = match target {
+                None => (None, None),
+                Some(target) if let Some(agent) = agent_named(target) => (Some(agent), None),
+                Some(target) if !target.is_empty() && !target.contains([' ', ',']) => {
+                    (None, Some(target.to_owned()))
+                }
+                Some(_) => return Ok(None),
+            };
             rank(value).ok_or_else(|| Error::Invalid(format!("invalid model rule: {rule}")))?;
-            ModelRule::EffortCeiling {
-                effort: value.to_ascii_lowercase(),
-                work,
+            let effort = value.to_ascii_lowercase();
+            if kind == "effort-floor" {
+                ModelRule::EffortFloor {
+                    effort,
+                    agent,
+                    model,
+                    work,
+                }
+            } else {
+                ModelRule::EffortCeiling {
+                    effort,
+                    agent,
+                    model,
+                    work,
+                }
             }
         }
+        ("advice", None) if work.is_none() && !value.is_empty() => ModelRule::Advice {
+            text: value.to_owned(),
+        },
         _ => return Ok(None),
     };
     Ok(Some((rule.into(), parsed)))
+}
+/// Whether an effort rule's agent or model is the choice's (none named: every choice).
+fn effort_target(
+    agent: Option<ProviderKind>,
+    model: Option<&str>,
+    provider: ProviderKind,
+    models: &[&str],
+) -> bool {
+    agent.is_none_or(|agent| agent == provider)
+        && model.is_none_or(|pattern| models.iter().any(|m| matches(pattern, m)))
 }
 pub(super) struct Policy {
     entries: Vec<(String, ModelRule)>,
@@ -318,8 +418,31 @@ impl Policy {
         }
         Ok(Self { entries })
     }
-    /// The first rule a choice breaks, quoted. A rule for one kind of work judges only a start
-    /// for that `work`.
+    /// Whether a rule holds for a start of `work`: a rule for one kind of work judges only a
+    /// start for that work.
+    fn holds(directive: &ModelRule, work: Option<&str>) -> bool {
+        directive
+            .work()
+            .is_none_or(|scope| work.is_some_and(|work| same_work(scope, work)))
+    }
+    /// Rules for any of these scopes, evaluated together (a move must meet both its work and
+    /// Fallback). Erase scopes only after selecting them, so effort bounds share one interval.
+    fn for_works(mut self, works: &[Option<&str>]) -> Self {
+        self.entries
+            .retain(|(_, rule)| works.iter().any(|work| Self::holds(rule, *work)));
+        for (_, rule) in &mut self.entries {
+            match rule {
+                ModelRule::Forbid { work, .. }
+                | ModelRule::Allow { work, .. }
+                | ModelRule::EffortCeiling { work, .. }
+                | ModelRule::EffortFloor { work, .. } => *work = None,
+                ModelRule::Advice { .. } => {}
+            }
+        }
+        self
+    }
+    /// The first rule a choice breaks, quoted; effort rules refuse only when they can't be met
+    /// (see [`Self::effort`]).
     fn refusal(
         &self,
         provider: ProviderKind,
@@ -327,11 +450,18 @@ impl Policy {
         effort: Option<&str>,
         work: Option<&str>,
     ) -> Option<String> {
+        self.model_refusal(provider, models, work)
+            .or_else(|| self.effort(provider, models, effort, &[], work).err())
+    }
+    /// The first Never or Only rule a choice's model breaks, quoted.
+    fn model_refusal(
+        &self,
+        provider: ProviderKind,
+        models: &[&str],
+        work: Option<&str>,
+    ) -> Option<String> {
         self.entries.iter().find_map(|(rule, directive)| {
-            if directive
-                .work()
-                .is_some_and(|scope| work.is_none_or(|work| !same_work(scope, work)))
-            {
+            if !Self::holds(directive, work) {
                 return None;
             }
             let violates = match directive {
@@ -343,13 +473,96 @@ impl Policy {
                         && !models.is_empty()
                         && !models.iter().any(|m| names.iter().any(|p| matches(p, m)))
                 }
-                ModelRule::EffortCeiling {
-                    effort: ceiling, ..
-                } => effort
-                    .is_some_and(|e| rank(e).is_none_or(|r| rank(ceiling).is_some_and(|c| r > c))),
+                ModelRule::EffortCeiling { .. }
+                | ModelRule::EffortFloor { .. }
+                | ModelRule::Advice { .. } => false,
             };
             violates.then(|| format!("refused by your model rule: \"{rule}\""))
         })
+    }
+    /// The effort a choice runs at under the effort rules that hold for it (D-L38): one asked
+    /// above the lowest cap comes down to it, one below the highest minimum (or none, with a
+    /// minimum) goes up to it; with `listed` efforts, to the nearest of those within the rules.
+    /// An effort within them stays as it is. `Err`, the refusal when a cap and a minimum can't
+    /// both be met, or (`listed`) no effort of the model is within a rule.
+    fn effort(
+        &self,
+        provider: ProviderKind,
+        models: &[&str],
+        effort: Option<&str>,
+        listed: &[String],
+        work: Option<&str>,
+    ) -> std::result::Result<Option<String>, String> {
+        // An effort rule that holds: its effort's rank, its effort, its line.
+        type Limit<'a> = Option<(usize, &'a str, &'a str)>;
+        let (mut floor, mut ceiling): (Limit, Limit) = (None, None);
+        for (rule, directive) in &self.entries {
+            if !Self::holds(directive, work) {
+                continue;
+            }
+            match directive {
+                ModelRule::EffortCeiling {
+                    effort,
+                    agent,
+                    model,
+                    ..
+                } if effort_target(*agent, model.as_deref(), provider, models) => {
+                    let r = rank(effort).unwrap_or(usize::MAX);
+                    if ceiling.is_none_or(|(c, ..)| r < c) {
+                        ceiling = Some((r, effort, rule));
+                    }
+                }
+                ModelRule::EffortFloor {
+                    effort,
+                    agent,
+                    model,
+                    ..
+                } if effort_target(*agent, model.as_deref(), provider, models) => {
+                    let r = rank(effort).unwrap_or(0);
+                    if floor.is_none_or(|(f, ..)| r > f) {
+                        floor = Some((r, effort, rule));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let refused = |rule: &str| format!("refused by your model rule: \"{rule}\"");
+        if let (Some((f, _, floor)), Some((c, _, ceiling))) = (floor, ceiling)
+            && f > c
+        {
+            return Err(format!(
+                "refused by your model rules: \"{ceiling}\" and \"{floor}\" can't both be met"
+            ));
+        }
+        let within =
+            |r: usize| floor.is_none_or(|(f, ..)| f <= r) && ceiling.is_none_or(|(c, ..)| r <= c);
+        let asked = effort.map(|e| (rank(e), e));
+        let (limit, up) = match asked {
+            Some((Some(r), e)) if within(r) => return Ok(Some(e.to_owned())),
+            // No effort named, and no minimum: the CLI's own default stays.
+            None if floor.is_none() => return Ok(None),
+            Some((Some(r), _)) if ceiling.is_some_and(|(c, ..)| r > c) => (ceiling, false),
+            Some((None, _)) if ceiling.is_some() => (ceiling, false),
+            Some((None, e)) if floor.is_none() => return Ok(Some(e.to_owned())),
+            _ => (floor, true),
+        };
+        let Some((_, effort, rule)) = limit else {
+            return Ok(effort.map(str::to_owned));
+        };
+        let ranked: Vec<(usize, &String)> =
+            listed.iter().filter_map(|e| Some((rank(e)?, e))).collect();
+        if ranked.is_empty() {
+            return Ok(Some(effort.to_owned()));
+        }
+        let fits = ranked.iter().filter(|(r, _)| within(*r));
+        let nearest = if up {
+            fits.min_by_key(|(r, _)| *r)
+        } else {
+            fits.max_by_key(|(r, _)| *r)
+        };
+        nearest
+            .map(|(_, e)| Some((*e).clone()))
+            .ok_or_else(|| refused(rule))
     }
     /// Whether a rule for every kind of work keeps some of `provider`'s models out.
     fn restricts_models(&self, provider: ProviderKind) -> bool {
@@ -357,20 +570,37 @@ impl Policy {
             _ if d.work().is_some() => false,
             ModelRule::Forbid { names, .. } => !names.is_empty(),
             ModelRule::Allow { agent, .. } => agent.is_none_or(|p| p == provider),
-            ModelRule::EffortCeiling { .. } => false,
+            ModelRule::EffortCeiling { .. }
+            | ModelRule::EffortFloor { .. }
+            | ModelRule::Advice { .. } => false,
         })
+    }
+    /// The advice notes, in the file's order.
+    fn advice(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter_map(|(_, d)| match d {
+                ModelRule::Advice { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
     }
 }
 /// Whether two Work cells name the same kind of work, as `--work` finds a row.
 pub(super) fn same_work(a: &str, b: &str) -> bool {
-    a.trim().eq_ignore_ascii_case(b.trim())
+    canonical_work(a).eq_ignore_ascii_case(canonical_work(b))
 }
 /// A rule as the file writes it: `forbid: fable`, `allow claude: opus, sonnet`,
-/// `effort-ceiling for Independent review: medium`.
-fn rule_text(rule: &ModelRule) -> String {
+/// `effort-ceiling opus for Adversarial review: medium`, `advice: prefer Codex`.
+pub(super) fn rule_text(rule: &ModelRule) -> String {
     let scope = rule
         .work()
         .map_or(String::new(), |work| format!(" for {}", work.trim()));
+    let about = |agent: &Option<ProviderKind>, model: &Option<String>| match (agent, model) {
+        (Some(agent), _) => format!(" {}", agent.id()),
+        (None, Some(model)) => format!(" {}", model.trim()),
+        (None, None) => String::new(),
+    };
     match rule {
         ModelRule::Forbid { names, .. } => format!("forbid{scope}: {}", names.join(", ")),
         ModelRule::Allow { agent, names, .. } => format!(
@@ -378,7 +608,19 @@ fn rule_text(rule: &ModelRule) -> String {
             agent.map_or(String::new(), |p| format!(" {}", p.id())),
             names.join(", ")
         ),
-        ModelRule::EffortCeiling { effort, .. } => format!("effort-ceiling{scope}: {effort}"),
+        ModelRule::EffortCeiling {
+            effort,
+            agent,
+            model,
+            ..
+        } => format!("effort-ceiling{}{scope}: {effort}", about(agent, model)),
+        ModelRule::EffortFloor {
+            effort,
+            agent,
+            model,
+            ..
+        } => format!("effort-floor{}{scope}: {effort}", about(agent, model)),
+        ModelRule::Advice { text } => format!("advice: {}", text.trim()),
     }
 }
 const TABLE_HEAD: &str =
@@ -386,7 +628,7 @@ const TABLE_HEAD: &str =
 /// Checks what Settings › Routing sends before it reaches the file: every cell fits the file's
 /// one-line table, names and a work fit a rule, efforts are levels, and no work names the same
 /// model twice in its order.
-fn check_rules(rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<()> {
+pub(super) fn check_rules(rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<()> {
     let bad = |what: &str| Err(Error::Invalid(format!("invalid model rules: {what}")));
     let cell = |text: &str| text.contains(['|', '\n', '\r']);
     for (i, row) in rows.iter().enumerate() {
@@ -427,9 +669,35 @@ fn check_rules(rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<()> {
                     return bad("a rule names models without commas, colons or line breaks");
                 }
             }
-            ModelRule::EffortCeiling { effort, .. } => {
+            ModelRule::EffortCeiling {
+                effort,
+                agent,
+                model,
+                ..
+            }
+            | ModelRule::EffortFloor {
+                effort,
+                agent,
+                model,
+                ..
+            } => {
                 if rank(effort).is_none() {
                     return bad("unknown effort level");
+                }
+                if agent.is_some() && model.is_some() {
+                    return bad("an effort rule names an agent or a model, not both");
+                }
+                if model.as_deref().is_some_and(|m| {
+                    m.trim().is_empty()
+                        || m.contains([' ', ',', ':', '\n', '\r'])
+                        || agent_named(m.trim()).is_some()
+                }) {
+                    return bad("an effort rule names one model, without spaces, commas or colons");
+                }
+            }
+            ModelRule::Advice { text } => {
+                if text.trim().is_empty() || text.contains(['\n', '\r']) {
+                    return bad("advice is one line of words");
                 }
             }
         }
@@ -437,8 +705,8 @@ fn check_rules(rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<()> {
     Ok(())
 }
 /// The rules file with its rows and rules replaced, in the same text format: prose and comments
-/// stay where they are, the rules take the place of the first rule line and the table the place
-/// of the first table line (else each goes at the end).
+/// stay where they are, including unrelated tables and rows this version cannot read. The rules
+/// take the place of the first rule line and the table the first readable row (else at the end).
 fn rewrite(text: &str, rows: &[GuidanceRow], rules: &[ModelRule]) -> String {
     let rules_block: Vec<String> = rules
         .iter()
@@ -457,8 +725,28 @@ fn rewrite(text: &str, rows: &[GuidanceRow], rules: &[ModelRule]) -> String {
     }));
     let (mut rules_done, mut table_done) = (false, false);
     let mut out: Vec<String> = Vec::new();
-    for line in text.lines() {
-        if line.trim_start().starts_with('|') {
+    let readable = routing_rows(text);
+    let mut lines = text.lines().enumerate().peekable();
+    while let Some((index, line)) = lines.next() {
+        // Only consume our header and its separator, never an unrelated table's header.
+        if routing_header(line) {
+            if lines.peek().is_some_and(|(_, next)| table_separator(next)) {
+                lines.next();
+            }
+            // Keep the header when unreadable rows remain underneath it.
+            let unreadable = lines
+                .clone()
+                .take_while(|(_, line)| line.trim_start().starts_with('|'))
+                .any(|(index, _)| !readable.iter().any(|(at, _)| *at == index));
+            if !rows.is_empty() || unreadable {
+                out.push(line.to_owned());
+                out.push("| --- | --- | --- | --- | --- |".to_owned());
+                if !table_done {
+                    out.extend(table.iter().skip(1).cloned());
+                    table_done = true;
+                }
+            }
+        } else if readable.iter().any(|(at, _)| *at == index) {
             if !table_done && !rows.is_empty() {
                 out.extend(table.iter().cloned());
             }
@@ -512,6 +800,33 @@ fn editable(path: &std::path::Path, default: &str) -> Result<String> {
     }
     std::fs::read_to_string(path).map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))
 }
+/// A revision covers the whole file, including advice/prose not represented in the page's rows.
+fn rules_revision(text: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(text.as_bytes()))
+}
+fn save_rules(
+    path: &std::path::Path,
+    revision: &str,
+    rows: &[GuidanceRow],
+    rules: &[ModelRule],
+) -> Result<()> {
+    // Serialize the revision check and rename for all saves handled by this daemon.
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    check_rules(rows, rules)?;
+    let current = editable(path, DEFAULT_RULES)?;
+    if rules_revision(&current) != revision {
+        return Err(Error::Invalid("Routing changed since this page was read. Reopen Routing and try again; your changes were not saved.".into()));
+    }
+    let text = rewrite(&current, rows, rules);
+    let io = |e: std::io::Error| Error::Invalid(format!("{}: {e}", path.display()));
+    let staged = path.with_extension("md.saving");
+    std::fs::write(&staged, text).map_err(io)?;
+    std::fs::rename(&staged, path).map_err(io)?;
+    Ok(())
+}
 impl SessionManager {
     pub(super) fn models_rules_path(&self) -> PathBuf {
         if cfg!(test) {
@@ -532,6 +847,7 @@ impl SessionManager {
         let (shipped, suggestions) = self.automatic_view(&text)?;
         Ok(ModelRules {
             path: path.display().to_string(),
+            revision: rules_revision(&text),
             shipped,
             rows: rows(&text),
             rules: Policy::parse(&text)?
@@ -590,14 +906,13 @@ impl SessionManager {
     }
     /// Settings › Routing's save: the file's rows and rules become these, in the file's own text
     /// format, its prose kept (S32).
-    pub fn set_model_rules(&self, rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<ModelRules> {
-        check_rules(rows, rules)?;
-        let path = self.models_rules_path();
-        let text = rewrite(&editable(&path, DEFAULT_RULES)?, rows, rules);
-        let io = |e: std::io::Error| Error::Invalid(format!("{}: {e}", path.display()));
-        let staged = path.with_extension("md.saving");
-        std::fs::write(&staged, text).map_err(io)?;
-        std::fs::rename(&staged, &path).map_err(io)?;
+    pub fn set_model_rules(
+        &self,
+        revision: &str,
+        rows: &[GuidanceRow],
+        rules: &[ModelRule],
+    ) -> Result<ModelRules> {
+        save_rules(&self.models_rules_path(), revision, rows, rules)?;
         self.model_rules()
     }
     /// `brigadier start --work`'s rows: the user's order of that work, else the shipped rows,
@@ -680,13 +995,16 @@ impl SessionManager {
                     continue;
                 }
                 let account = self.runtime.launch_account(provider, Some(model));
-                let choice = crate::model::ModelChoice {
-                    provider,
-                    model: Some(model.clone()),
-                    effort: row.effort.clone(),
-                    fast: None,
-                    account: account.account.clone(),
-                };
+                let choice = self.ruled_choice(
+                    crate::model::ModelChoice {
+                        provider,
+                        model: Some(model.clone()),
+                        effort: row.effort.clone(),
+                        fast: None,
+                        account: account.account.clone(),
+                    },
+                    Some(WORK),
+                );
                 if !self.account_frees_choice(&choice, &account).await {
                     continue;
                 }
@@ -743,14 +1061,15 @@ impl SessionManager {
             .into_iter()
             .map(|row| {
                 let provider = row.agent;
-                crate::model::ModelChoice {
+                let choice = crate::model::ModelChoice {
                     provider,
                     model: (!row.model.is_empty() && !row.model.eq_ignore_ascii_case("default"))
                         .then(|| self.listed_model(provider, &row.model)),
                     effort: row.effort,
                     fast: None,
                     account: None,
-                }
+                };
+                self.ruled_choice(choice, Some(FALLBACK_WORK))
             })
             .collect()
     }
@@ -816,7 +1135,95 @@ impl SessionManager {
             .chain(selected.and_then(|m| m.resolved.as_deref()))
             .collect();
         let effort = effort.or(selected.and_then(|m| m.default_effort.as_deref()));
-        Ok(self.model_policy()?.refusal(provider, &names, effort, work))
+        let listed = selected.map(|m| m.efforts.as_slice()).unwrap_or_default();
+        let policy = self.model_policy()?;
+        Ok(policy
+            .model_refusal(provider, &names, work)
+            .or_else(|| policy.effort(provider, &names, effort, listed, work).err()))
+    }
+    /// The effort a choice runs at under the user's effort rules (D-L38): `effort` as asked
+    /// when the rules allow it (`None`, the model's default, stays `None`), else moved to the
+    /// cap or the minimum. A choice the rules refuse keeps its effort; [`Self::model_refusal`]
+    /// says why.
+    pub(super) fn ruled_effort(
+        &self,
+        provider: ProviderKind,
+        model: Option<&str>,
+        effort: Option<&str>,
+        work: Option<&str>,
+    ) -> Result<Option<String>> {
+        let catalog = self.runtime.overview(provider).and_then(|o| o.models);
+        let selected = listed(catalog.as_ref(), model);
+        let names: Vec<_> = model
+            .into_iter()
+            .chain(selected.map(|m| m.id.as_str()))
+            .chain(selected.and_then(|m| m.resolved.as_deref()))
+            .collect();
+        let judged = effort.or(selected.and_then(|m| m.default_effort.as_deref()));
+        let listed = selected.map(|m| m.efforts.as_slice()).unwrap_or_default();
+        Ok(
+            match self
+                .model_policy()?
+                .effort(provider, &names, judged, listed, work)
+            {
+                Ok(ruled) if ruled.as_deref() == judged => effort.map(str::to_owned),
+                Ok(ruled) => ruled,
+                Err(_) => effort.map(str::to_owned),
+            },
+        )
+    }
+    /// `choice` with its effort as the user's effort rules move it, for `work`.
+    pub(super) fn ruled_choice(
+        &self,
+        mut choice: crate::model::ModelChoice,
+        work: Option<&str>,
+    ) -> crate::model::ModelChoice {
+        if let Ok(effort) = self.ruled_effort(
+            choice.provider,
+            choice.model.as_deref(),
+            choice.effort.as_deref(),
+            work,
+        ) {
+            choice.effort = effort;
+        }
+        choice
+    }
+    /// A quota retry on its own agent follows its work; a move also follows Fallback rules.
+    pub(super) fn ruled_quota_choice(
+        &self,
+        mut choice: crate::model::ModelChoice,
+        work: Option<&str>,
+        moving: bool,
+    ) -> Result<crate::model::ModelChoice> {
+        let mut works = vec![work];
+        if moving {
+            works.push(Some(FALLBACK_WORK));
+        }
+        let policy = self.model_policy()?.for_works(&works);
+        let catalog = self
+            .runtime
+            .overview(choice.provider)
+            .and_then(|o| o.models);
+        let selected = listed(catalog.as_ref(), choice.model.as_deref());
+        let names: Vec<_> = std::iter::once(choice.model.as_deref().unwrap_or("default"))
+            .chain(selected.map(|m| m.id.as_str()))
+            .chain(selected.and_then(|m| m.resolved.as_deref()))
+            .collect();
+        if let Some(reason) = policy.model_refusal(choice.provider, &names, None) {
+            return Err(Error::Invalid(reason));
+        }
+        let judged = choice
+            .effort
+            .as_deref()
+            .or(selected.and_then(|m| m.default_effort.as_deref()));
+        let efforts = selected.map(|m| m.efforts.as_slice()).unwrap_or_default();
+        let effort = policy
+            .effort(choice.provider, &names, judged, efforts, None)
+            .map_err(Error::Invalid)?;
+        if effort.as_deref() != judged {
+            choice.effort = effort;
+        }
+        Ok(choice)
     }
     pub(super) fn rules_models(&self, provider: ProviderKind) -> Result<Option<AllowedModels>> {
         let policy = self.model_policy()?;
@@ -951,9 +1358,11 @@ impl SessionManager {
             switch_providers: settings.switch_providers,
             accounts,
             guidance: guidance(shipped, &user),
+            advice: policy.advice(),
             rules: policy
                 .entries
                 .into_iter()
+                .filter(|(_, directive)| !matches!(directive, ModelRule::Advice { .. }))
                 .map(|(rule, _)| Rule { rule })
                 .collect(),
         })
@@ -1215,7 +1624,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            of("Independent review"),
+            of("Adversarial review"),
             [
                 (ProviderKind::Claude, "big".into(), Some("high".into())),
                 (ProviderKind::Codex, "sol".into(), Some("high".into())),
@@ -1262,6 +1671,33 @@ mod tests {
 
     /// A better-rated model for a kind of work the user ordered is suggested; the user's rows
     /// are only read. Dismissed at its rating, it stays hidden until that rating changes.
+    /// A kind of roles keeps one model per agent, so the ratings suggest no first place in it,
+    /// under its old name too; its rows still come from the ratings. Rule reading isn't rated:
+    /// it keeps the shipped family word, which follows newer models.
+    #[test]
+    fn roles_get_no_suggestion_and_rule_reading_keeps_its_family_word() {
+        let (registry, models) = small_catalog();
+        let listed = |_: ProviderKind, word: &str| Some(word.to_owned());
+        for work in ["Adversarial review", "Independent review", FALLBACK_WORK] {
+            assert!(pick_rule(work).is_some(), "{work}");
+            let mine = rows(&format!("| {work} | codex | sol | high | Mine. |\n"));
+            let found = suggestions(&mine, &registry, &models, &|_, _| true, &listed, &[]);
+            assert!(found.is_empty(), "{work}: {found:?}");
+        }
+        let shipped = automatic(rows(GUIDANCE), &models, &|_, _| true);
+        let reading: Vec<_> = shipped
+            .iter()
+            .filter(|row| row.work == "Rule reading")
+            .map(|row| (row.agent, row.model.as_str()))
+            .collect();
+        assert_eq!(
+            reading,
+            [
+                (ProviderKind::Claude, "sonnet"),
+                (ProviderKind::Codex, "default")
+            ]
+        );
+    }
     #[test]
     fn a_suggestion_reads_the_users_order_and_never_changes_it() {
         let (registry, mut models) = small_catalog();
@@ -1320,8 +1756,60 @@ mod tests {
         assert_eq!(row.source, "user");
     }
     #[test]
+    fn the_old_review_name_reads_as_adversarial_review() {
+        let old = "Independent review";
+        let current = "Adversarial review";
+        assert_eq!(canonical_work(old), current);
+        assert!(same_work(" independent review ", current));
+        assert!(same_work(old, " adversarial REVIEW "));
+
+        let user = format!("| {old} | claude | sonnet | medium | My reviewer. |\n");
+        let rows = guidance(rows(GUIDANCE), &user);
+        let review: Vec<_> = rows.iter().filter(|r| same_work(&r.work, old)).collect();
+        assert_eq!(
+            review.len(),
+            1,
+            "the old row replaces the shipped reviewers"
+        );
+        assert_eq!(review[0].work, current);
+        assert_eq!(review[0].model, "sonnet");
+        assert_eq!(review[0].source, "user");
+
+        let policy = Policy::parse(&format!(
+            "- forbid for {old}: sonnet\n- effort-ceiling for {old}: medium\n"
+        ))
+        .unwrap();
+        for (_, rule) in &policy.entries {
+            assert_eq!(rule.work(), Some(current));
+        }
+        for work in [old, current] {
+            assert!(
+                policy
+                    .refusal(ProviderKind::Claude, &["sonnet"], None, Some(work))
+                    .unwrap()
+                    .contains(old),
+                "a refusal still quotes the user's rule verbatim"
+            );
+            assert_eq!(
+                policy.effort(
+                    ProviderKind::Claude,
+                    &["opus"],
+                    Some("high"),
+                    &[],
+                    Some(work)
+                ),
+                Ok(Some("medium".into()))
+            );
+            assert!(
+                policy
+                    .refusal(ProviderKind::Claude, &["opus"], Some("high"), Some(work))
+                    .is_none()
+            );
+        }
+    }
+    #[test]
     fn a_works_order_replaces_its_shipped_row_in_place() {
-        let user = "| Independent review | claude | opus | high | First. |\n| Independent review | codex | gpt-6 | | Next. |\n| Docs | claude | haiku | low | Mine. |\n";
+        let user = "| Adversarial review | claude | opus | high | First. |\n| Adversarial review | codex | gpt-6 | | Next. |\n| Docs | claude | haiku | low | Mine. |\n";
         let rows = guidance(rows(GUIDANCE), user);
         let works: Vec<_> = rows
             .iter()
@@ -1330,15 +1818,15 @@ mod tests {
         assert_eq!(
             &works[3..6],
             [
-                ("Independent review", "opus", "user"),
-                ("Independent review", "gpt-6", "user"),
+                ("Adversarial review", "opus", "user"),
+                ("Adversarial review", "gpt-6", "user"),
                 ("fusion-claude", "opus", "shipped"),
             ]
         );
         assert_eq!(works.last(), Some(&("Docs", "haiku", "user")));
         assert_eq!(
             rows.iter()
-                .filter(|r| r.work == "Independent review")
+                .filter(|r| r.work == "Adversarial review")
                 .count(),
             2
         );
@@ -1346,15 +1834,15 @@ mod tests {
     #[test]
     fn a_rule_for_one_kind_of_work_judges_only_its_starts() {
         let policy = Policy::parse(
-            "- forbid for Independent review: sonnet\n- effort-ceiling for Docs: low\n",
+            "- forbid for Adversarial review: sonnet\n- effort-ceiling for Docs: low\n",
         )
         .unwrap();
-        assert_eq!(policy.entries[0].0, "forbid for Independent review: sonnet");
+        assert_eq!(policy.entries[0].0, "forbid for Adversarial review: sonnet");
         assert_eq!(
             policy.entries[0].1,
             ModelRule::Forbid {
                 names: vec!["sonnet".into()],
-                work: Some("Independent review".into())
+                work: Some("Adversarial review".into())
             }
         );
         let sonnet = ["claude-sonnet-5-5"];
@@ -1364,10 +1852,10 @@ mod tests {
                     ProviderKind::Claude,
                     &sonnet,
                     None,
-                    Some("independent review")
+                    Some("adversarial review")
                 )
                 .unwrap()
-                .contains("forbid for Independent review: sonnet")
+                .contains("forbid for Adversarial review: sonnet")
         );
         assert!(
             policy
@@ -1379,10 +1867,19 @@ mod tests {
                 .refusal(ProviderKind::Claude, &sonnet, None, Some("Docs"))
                 .is_none()
         );
+        // D-L38: an effort above a cap runs at the cap; it is not refused.
         assert!(
             policy
                 .refusal(ProviderKind::Claude, &[], Some("medium"), Some("Docs"))
-                .is_some()
+                .is_none()
+        );
+        assert_eq!(
+            policy.effort(ProviderKind::Claude, &[], Some("medium"), &[], Some("Docs")),
+            Ok(Some("low".into()))
+        );
+        assert_eq!(
+            policy.effort(ProviderKind::Claude, &[], Some("medium"), &[], None),
+            Ok(Some("medium".into()))
         );
         // A chat or session, and a CLI's own subagents, are judged by rules for every work only.
         assert!(!policy.restricts_models(ProviderKind::Claude));
@@ -1426,11 +1923,9 @@ mod tests {
                 )
                 .is_none()
         );
-        assert!(
-            policy
-                .refusal(ProviderKind::Codex, &[], Some("xhigh"), None)
-                .unwrap()
-                .contains("effort-ceiling: high")
+        assert_eq!(
+            policy.effort(ProviderKind::Codex, &[], Some("xhigh"), &[], None),
+            Ok(Some("high".into()))
         );
         let policy = Policy::parse("- allow claude: opus, sonnet").unwrap();
         assert!(
@@ -1466,6 +1961,79 @@ mod tests {
         );
     }
     #[test]
+    fn stale_routing_save_keeps_newer_rows_rules_and_advice() {
+        let dir = std::env::temp_dir().join(format!("routing-stale-save-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("models.md");
+        let first = editable(&path, DEFAULT_RULES).unwrap();
+        let revision = rules_revision(&first);
+        let row = GuidanceRow {
+            work: "Docs".into(),
+            agent: ProviderKind::Claude,
+            model: "sonnet".into(),
+            effort: Some("medium".into()),
+            reason: "Mine".into(),
+        };
+        let rules = [
+            ModelRule::Forbid {
+                names: vec!["opus".into()],
+                work: None,
+            },
+            ModelRule::Advice {
+                text: "Use cheap models when busy".into(),
+            },
+        ];
+        save_rules(&path, &revision, &[row], &rules).unwrap();
+        let newer = std::fs::read_to_string(&path).unwrap();
+        let err = save_rules(&path, &revision, &[], &[]).unwrap_err();
+        assert!(err.to_string().contains("Routing changed since"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+        // A hand edit to prose alone also invalidates the page's revision.
+        std::fs::write(&path, format!("{newer}Hand-edited advice.\n")).unwrap();
+        assert!(save_rules(&path, &rules_revision(&newer), &[], &[]).is_err());
+        let current = std::fs::read_to_string(&path).unwrap();
+        save_rules(&path, &rules_revision(&current), &[], &[]).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("Hand-edited advice.")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn advice_with_pipes_is_never_a_routing_row() {
+        let rule = ModelRule::Advice {
+            text: "Prefer cheap models | claude | opus | high | use when busy".into(),
+        };
+        let written = rewrite(DEFAULT_RULES, &[], std::slice::from_ref(&rule));
+        assert!(
+            rows(&written).is_empty(),
+            "advice created routing rows: {:?}",
+            rows(&written)
+        );
+        assert_eq!(Policy::parse(&written).unwrap().entries[0].1, rule);
+    }
+
+    #[test]
+    fn saving_keeps_unrelated_tables_and_unreadable_routing_rows() {
+        let notes = "| Preference | Reason |\n| --- | --- |\n| Cheap | Save quota |\n\n| Name | Provider | Model | Effort | Note |\n| --- | --- | --- | --- | --- |\n| Note | claude | opus | high | Only a note |\n";
+        let future = "| Docs | future-agent | cheap | medium | Keep my future agent |\n";
+        let text = format!(
+            "# Mine\n{notes}\n{TABLE_HEAD}\n{future}| Docs | claude | sonnet | low | Current |\n"
+        );
+        let written = rewrite(&text, &[], &[]);
+        assert!(written.contains(notes), "lost advice notes: {written}");
+        assert!(rows(&written).is_empty(), "notes became routing rows");
+        assert!(
+            written.contains(future),
+            "lost an unreadable user row: {written}"
+        );
+        assert!(!written.contains("| Docs | claude |"));
+        assert_eq!(rewrite(&written, &[], &[]), written);
+    }
+
+    #[test]
     fn the_page_writes_the_files_own_format_and_keeps_its_prose() {
         let row = GuidanceRow {
             work: "Bounded implementation".into(),
@@ -1486,11 +2054,13 @@ mod tests {
             },
             ModelRule::EffortCeiling {
                 effort: "high".into(),
+                agent: None,
+                model: None,
                 work: None,
             },
             ModelRule::Forbid {
                 names: vec!["sonnet".into()],
-                work: Some("Independent review".into()),
+                work: Some("Adversarial review".into()),
             },
         ];
         check_rules(std::slice::from_ref(&row), &rules).unwrap();
@@ -1498,7 +2068,7 @@ mod tests {
         let written = rewrite(DEFAULT_RULES, std::slice::from_ref(&row), &rules);
         assert!(written.starts_with(DEFAULT_RULES.trim_end()));
         assert!(written.contains(
-            "- forbid: fable\n- allow codex: gpt-6, default\n- effort-ceiling: high\n- forbid for Independent review: sonnet\n\n| Work |"
+            "- forbid: fable\n- allow codex: gpt-6, default\n- effort-ceiling: high\n- forbid for Adversarial review: sonnet\n\n| Work |"
         ));
         assert!(
             written.ends_with(
@@ -1551,6 +2121,8 @@ mod tests {
                 &[],
                 &[ModelRule::EffortCeiling {
                     effort: "huge".into(),
+                    agent: None,
+                    model: None,
                     work: None
                 }]
             )
@@ -1566,6 +2138,356 @@ mod tests {
             )
             .is_err()
         );
+    }
+    fn effort(
+        policy: &Policy,
+        provider: ProviderKind,
+        models: &[&str],
+        asked: Option<&str>,
+        work: Option<&str>,
+    ) -> std::result::Result<Option<String>, String> {
+        policy.effort(provider, models, asked, &[], work)
+    }
+    #[test]
+    fn an_effort_cap_for_one_model_moves_only_that_model() {
+        let policy = Policy::parse("- effort-ceiling opus: medium\n").unwrap();
+        assert_eq!(
+            policy.entries[0].1,
+            ModelRule::EffortCeiling {
+                effort: "medium".into(),
+                agent: None,
+                model: Some("opus".into()),
+                work: None,
+            }
+        );
+        let opus = ["opus", "claude-opus-5-5"];
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &opus, Some("max"), None),
+            Ok(Some("medium".into()))
+        );
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &opus, Some("low"), None),
+            Ok(Some("low".into()))
+        );
+        assert_eq!(
+            effort(
+                &policy,
+                ProviderKind::Claude,
+                &["claude-sonnet-5-5"],
+                Some("max"),
+                None
+            ),
+            Ok(Some("max".into()))
+        );
+        assert!(
+            policy
+                .refusal(ProviderKind::Claude, &opus, Some("max"), None)
+                .is_none()
+        );
+        // No effort named and no minimum: the model's own default stays.
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &opus, None, None),
+            Ok(None)
+        );
+    }
+    #[test]
+    fn an_effort_cap_for_one_agent_moves_only_that_agent() {
+        let policy = Policy::parse("- effort-ceiling codex: high\n").unwrap();
+        assert_eq!(
+            policy.entries[0].1,
+            ModelRule::EffortCeiling {
+                effort: "high".into(),
+                agent: Some(ProviderKind::Codex),
+                model: None,
+                work: None,
+            }
+        );
+        assert_eq!(
+            effort(
+                &policy,
+                ProviderKind::Codex,
+                &["gpt-6.1-sol"],
+                Some("ultra"),
+                None
+            ),
+            Ok(Some("high".into()))
+        );
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &["opus"], Some("max"), None),
+            Ok(Some("max".into()))
+        );
+        // The lowest cap that holds wins.
+        let policy =
+            Policy::parse("- effort-ceiling: xhigh\n- effort-ceiling codex: high\n").unwrap();
+        assert_eq!(
+            effort(&policy, ProviderKind::Codex, &[], Some("max"), None),
+            Ok(Some("high".into()))
+        );
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &[], Some("max"), None),
+            Ok(Some("xhigh".into()))
+        );
+    }
+    #[test]
+    fn a_minimum_effort_brings_less_up() {
+        let policy = Policy::parse("- effort-floor for Adversarial review: high\n").unwrap();
+        assert_eq!(
+            policy.entries[0].1,
+            ModelRule::EffortFloor {
+                effort: "high".into(),
+                agent: None,
+                model: None,
+                work: Some("Adversarial review".into()),
+            }
+        );
+        let review = Some("Adversarial review");
+        assert_eq!(
+            effort(
+                &policy,
+                ProviderKind::Claude,
+                &["opus"],
+                Some("low"),
+                review
+            ),
+            Ok(Some("high".into()))
+        );
+        // No effort named: a minimum names one.
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &["opus"], None, review),
+            Ok(Some("high".into()))
+        );
+        assert_eq!(
+            effort(
+                &policy,
+                ProviderKind::Claude,
+                &["opus"],
+                Some("max"),
+                review
+            ),
+            Ok(Some("max".into()))
+        );
+        // Other work, a chat: not this rule's.
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &["opus"], Some("low"), None),
+            Ok(Some("low".into()))
+        );
+        // With the model's efforts listed, the nearest of them within the rules.
+        let listed: Vec<String> = ["low", "medium", "max"].map(String::from).to_vec();
+        assert_eq!(
+            policy.effort(
+                ProviderKind::Claude,
+                &["opus"],
+                Some("low"),
+                &listed,
+                review
+            ),
+            Ok(Some("max".into()))
+        );
+        let capped = Policy::parse("- effort-ceiling: low\n").unwrap();
+        let only_high: Vec<String> = ["high", "max"].map(String::from).to_vec();
+        assert!(
+            capped
+                .effort(
+                    ProviderKind::Claude,
+                    &["deepseek"],
+                    Some("max"),
+                    &only_high,
+                    None
+                )
+                .unwrap_err()
+                .contains("effort-ceiling: low"),
+            "no effort of the model is within the cap"
+        );
+    }
+    #[test]
+    fn effort_rules_adjust_and_refuse_only_when_two_cannot_both_be_met() {
+        let policy = Policy::parse(
+            "- effort-ceiling opus: medium\n- effort-floor for Adversarial review: high\n",
+        )
+        .unwrap();
+        let opus = ["opus", "claude-opus-5-5"];
+        // Each alone moves the effort.
+        assert_eq!(
+            effort(&policy, ProviderKind::Claude, &opus, Some("max"), None),
+            Ok(Some("medium".into()))
+        );
+        assert_eq!(
+            effort(
+                &policy,
+                ProviderKind::Codex,
+                &["gpt-6.1-sol"],
+                Some("low"),
+                Some("Adversarial review")
+            ),
+            Ok(Some("high".into()))
+        );
+        // Together, on Opus for a review: refused, quoting both.
+        let refusal = policy
+            .refusal(
+                ProviderKind::Claude,
+                &opus,
+                Some("high"),
+                Some("Adversarial review"),
+            )
+            .unwrap();
+        assert_eq!(
+            refusal,
+            "refused by your model rules: \"effort-ceiling opus: medium\" and \"effort-floor for Adversarial review: high\" can't both be met"
+        );
+        assert!(
+            policy
+                .refusal(
+                    ProviderKind::Claude,
+                    &opus,
+                    None,
+                    Some("Adversarial review")
+                )
+                .is_some()
+        );
+    }
+    #[test]
+    fn advice_notes_round_trip_and_never_refuse() {
+        let rules = vec![
+            ModelRule::EffortFloor {
+                effort: "high".into(),
+                agent: None,
+                model: None,
+                work: Some("Adversarial review".into()),
+            },
+            ModelRule::EffortCeiling {
+                effort: "medium".into(),
+                agent: None,
+                model: Some("opus".into()),
+                work: None,
+            },
+            ModelRule::EffortCeiling {
+                effort: "high".into(),
+                agent: Some(ProviderKind::Claude),
+                model: None,
+                work: Some("Docs".into()),
+            },
+            ModelRule::Advice {
+                text: "prefer Codex when Claude is busy: it is faster".into(),
+            },
+        ];
+        check_rules(&[], &rules).unwrap();
+        let written = rewrite(DEFAULT_RULES, &[], &rules);
+        assert!(written.ends_with(
+            "- effort-floor for Adversarial review: high\n- effort-ceiling opus: medium\n- effort-ceiling claude for Docs: high\n- advice: prefer Codex when Claude is busy: it is faster\n"
+        ), "{written}");
+        let policy = Policy::parse(&written).unwrap();
+        assert_eq!(
+            policy
+                .entries
+                .iter()
+                .map(|(_, r)| r.clone())
+                .collect::<Vec<_>>(),
+            rules
+        );
+        assert_eq!(
+            policy.advice(),
+            ["prefer Codex when Claude is busy: it is faster"]
+        );
+        assert_eq!(rewrite(&written, &[], &rules), written);
+        for provider in brigadier_providers::adapters::kinds() {
+            assert!(!policy.restricts_models(provider));
+        }
+        let only_advice = Policy::parse("- advice: never use fable\n").unwrap();
+        assert!(
+            only_advice
+                .refusal(
+                    ProviderKind::Claude,
+                    &["claude-fable-5-1"],
+                    Some("ultra"),
+                    None
+                )
+                .is_none()
+        );
+        // The page never writes what the file cannot hold.
+        for bad in [
+            ModelRule::Advice { text: " ".into() },
+            ModelRule::Advice {
+                text: "two\nlines".into(),
+            },
+            ModelRule::EffortCeiling {
+                effort: "high".into(),
+                agent: Some(ProviderKind::Claude),
+                model: Some("opus".into()),
+                work: None,
+            },
+            ModelRule::EffortFloor {
+                effort: "high".into(),
+                agent: None,
+                model: Some("two words".into()),
+                work: None,
+            },
+            ModelRule::EffortFloor {
+                effort: "high".into(),
+                agent: None,
+                model: Some("codex".into()),
+                work: None,
+            },
+        ] {
+            assert!(
+                check_rules(&[], std::slice::from_ref(&bad)).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+    #[test]
+    fn an_old_rules_file_reads_as_it_did() {
+        // The shape of a file from before the new rules: prose, a scoped ceiling, notes with colons.
+        let old = "# My model rules\n\nEffort levels: none, minimal, low.\nA rule may name one Work (`forbid for Docs: sonnet`).\n- forbid: fable\n- allow claude: opus, sonnet\n- effort-ceiling: high\n- effort-ceiling for Independent review: medium\nnote: keep it cheap\n";
+        let policy = Policy::parse(old).unwrap();
+        assert_eq!(
+            policy
+                .entries
+                .iter()
+                .map(|(_, r)| r.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                ModelRule::Forbid {
+                    names: vec!["fable".into()],
+                    work: None
+                },
+                ModelRule::Allow {
+                    agent: Some(ProviderKind::Claude),
+                    names: vec!["opus".into(), "sonnet".into()],
+                    work: None
+                },
+                ModelRule::EffortCeiling {
+                    effort: "high".into(),
+                    agent: None,
+                    model: None,
+                    work: None
+                },
+                ModelRule::EffortCeiling {
+                    effort: "medium".into(),
+                    agent: None,
+                    model: None,
+                    work: Some("Adversarial review".into())
+                },
+            ]
+        );
+        assert!(policy.advice().is_empty());
+        // Its JSON from an older page (no agent or model on a ceiling) still reads.
+        let rule: ModelRule =
+            serde_json::from_str(r#"{"type":"effortCeiling","effort":"high"}"#).unwrap();
+        assert_eq!(
+            rule,
+            ModelRule::EffortCeiling {
+                effort: "high".into(),
+                agent: None,
+                model: None,
+                work: None
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&rule).unwrap(),
+            r#"{"type":"effortCeiling","effort":"high"}"#
+        );
+        // The shipped prose holds no directive.
+        assert!(Policy::parse(DEFAULT_RULES).unwrap().entries.is_empty());
     }
     #[test]
     fn fit_and_runway_respect_pooled_and_scoped_windows() {

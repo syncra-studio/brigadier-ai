@@ -196,7 +196,7 @@ function ModelRow() {
       const order = withFirst(work.rows, picked);
       const refusal = refusingRule(rules.rules, rowChoice(order[0]!, models), work.work);
       if (refusal) throw new Error(`Refused by your rule “${ruleTitle(refusal, ruleNames(groups))}”`);
-      await saveModelRules(withOrder(rules.rows, work.work, order), rules.rules);
+      await saveModelRules(rules, withOrder(rules.rows, work.work, order), rules.rules);
     });
   };
   return (

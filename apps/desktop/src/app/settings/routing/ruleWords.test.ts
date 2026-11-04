@@ -6,15 +6,15 @@ import type * as RuleWords from "@/app/settings/routing/ruleWords";
 import type { ListedModel, Names } from "@/app/settings/routing/ruleWords";
 import type { WorkRow } from "@/app/settings/routing/words";
 import type { ModelGroup } from "@/components/shared/model-selector";
-import type { GuidanceRow, ModelInfo, ModelRule, OverrideTarget } from "@/ipc/generated";
+import type { GuidanceRow, ModelInfo, ModelRule } from "@/ipc/generated";
 
 // The rules' words need the model names lib/routing reads through the app's modules: loaded by Vite.
 let server: ViteDevServer;
-let draftRules: typeof RuleWords.draftRules;
 let refusingRule: typeof RuleWords.refusingRule;
+let ruledEffort: typeof RuleWords.ruledEffort;
+let ruleWarnings: typeof RuleWords.ruleWarnings;
+let ruleNames: typeof RuleWords.ruleNames;
 let matches: typeof RuleWords.matches;
-let previewDraft: typeof RuleWords.previewDraft;
-let ruleLine: typeof RuleWords.ruleLine;
 let ruleText: typeof RuleWords.ruleText;
 let ruleTitle: typeof RuleWords.ruleTitle;
 let allowedPick: typeof RuleWords.allowedPick;
@@ -26,16 +26,15 @@ before(async () => {
   globals.document ??= { documentElement: {} };
   globals.getComputedStyle ??= () => ({ getPropertyValue: () => "" });
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ allowedPick, draftRules, matches, pickRefusal, previewDraft, refusalText, refusingRule, rowChoice, ruleLine, ruleText, ruleTitle } = (await server.ssrLoadModule(
+  ({ allowedPick, matches, pickRefusal, refusalText, refusingRule, rowChoice, ruledEffort, ruleNames, ruleText, ruleTitle, ruleWarnings } = (await server.ssrLoadModule(
     "/src/app/settings/routing/ruleWords.ts",
   )) as typeof RuleWords);
 });
 after(() => server.close());
 
-const DISPLAY: Record<string, string> = { opus: "Opus 5.5", sonnet: "Sonnet 5.5", "gpt-6": "GPT-6", "claude-fable-5-1": "Fable 5.1" };
+const DISPLAY: Record<string, string> = { "gpt-6": "GPT-6", "claude-fable-5-1": "Fable 5.1" };
 const names: Names = {
   pattern: (_agent, name) => (name === "*" ? "any model" : (DISPLAY[name] ?? name.charAt(0).toUpperCase() + name.slice(1))),
-  target: (target) => (target.type === "model" ? (DISPLAY[target.id] ?? target.id) : target.type === "family" ? `Newest ${target.family}` : "default"),
 };
 const MODELS: ListedModel[] = [
   { provider: "claude", id: "opus", resolved: "claude-opus-5-5", name: "Opus 5.5" },
@@ -43,24 +42,12 @@ const MODELS: ListedModel[] = [
   { provider: "claude", id: "claude-fable-5-1", resolved: null, name: "Fable 5.1" },
   { provider: "codex", id: "gpt-6", resolved: null, name: "GPT-6" },
 ];
-const fable: OverrideTarget = { type: "family", provider: "claude", family: "fable" };
-const sonnet: OverrideTarget = { type: "model", provider: "claude", id: "sonnet" };
-const opus: OverrideTarget = { type: "model", provider: "claude", id: "opus" };
 const row = (work: string, fields: Partial<GuidanceRow>, ...next: Partial<GuidanceRow>[]): WorkRow => {
   const shipped = [fields, ...next].map((own): GuidanceRow => ({ work, agent: "claude", model: "opus", effort: "high", reason: "Shipped.", ...own }));
   return { work, rows: shipped, shipped, mine: [] };
 };
-const ROWS = [row("Architecture", {}), row("Review", { agent: "codex", model: "default" })];
-/** A draft of `effect`: any work, High effort, unless given. */
-const draft = (effect: RuleWords.DraftEffect, target: OverrideTarget | null, more: Partial<RuleWords.Draft> = {}): RuleWords.Draft => ({
-  effect,
-  target,
-  effort: "high",
-  work: null,
-  ...more,
-});
 
-test("a rule reads as the file writes it and as a sentence: its model, then where it applies and what it does", () => {
+test("a rule reads as the file writes it and as one plain sentence", () => {
   const rules: ModelRule[] = [
     { type: "forbid", names: ["fable", "claude-fable-5-1"] },
     { type: "allow", agent: "claude", names: ["opus", "sonnet"] },
@@ -69,6 +56,12 @@ test("a rule reads as the file writes it and as a sentence: its model, then wher
     { type: "forbid", names: ["sonnet"], work: "Review" },
     { type: "allow", agent: "codex", names: ["gpt-6"], work: "Review" },
     { type: "effortCeiling", effort: "medium", work: "Review" },
+    { type: "effortCeiling", effort: "medium", model: "opus" },
+    { type: "effortCeiling", effort: "high", agent: "codex" },
+    { type: "effortFloor", effort: "high", work: "Adversarial review" },
+    { type: "effortFloor", effort: "low" },
+    { type: "effortFloor", effort: "xhigh", model: "opus", work: "Review" },
+    { type: "advice", text: "Prefer Codex when Claude is busy" },
   ];
   assert.deepEqual(rules.map(ruleText), [
     "forbid: fable, claude-fable-5-1",
@@ -78,28 +71,46 @@ test("a rule reads as the file writes it and as a sentence: its model, then wher
     "forbid for Review: sonnet",
     "allow codex for Review: gpt-6",
     "effort-ceiling for Review: medium",
+    "effort-ceiling opus: medium",
+    "effort-ceiling codex: high",
+    "effort-floor for Adversarial review: high",
+    "effort-floor: low",
+    "effort-floor opus for Review: xhigh",
+    "advice: Prefer Codex when Claude is busy",
   ]);
   assert.deepEqual(
     rules.map((rule) => ruleTitle(rule, names)),
     [
-      "Never give Fable or Fable 5.1 work",
-      "Only use Opus 5.5 or Sonnet 5.5 on Claude",
+      "Never use Fable or Fable 5.1",
+      "Only use Opus or Sonnet on Claude",
       "Only use any model",
       "Never go above High effort",
-      "Don't use Sonnet 5.5 for Review",
+      "Never use Sonnet for Review",
       "Only use GPT-6 on Codex for Review",
-      "Never go above Medium effort for Review",
+      "Review never above Medium",
+      "Never run Opus above Medium",
+      "Never run Codex above High",
+      "Adversarial review never below High",
+      "Never go below Low effort",
+      "Never run Opus below Extra high for Review",
+      "Prefer Codex when Claude is busy",
     ],
   );
-  assert.deepEqual(rules.map(ruleLine), [
-    "Everywhere · Chats, sessions and workers can't run on them",
-    "Everywhere · Claude chats, sessions and workers run on nothing else",
-    "Everywhere · Chats, sessions and workers run on nothing else",
-    "Everywhere · Chats, sessions and workers run at this effort or lower",
-    "Review only · Its workers can't run on it",
-    "Review only · Its Codex workers run on nothing else",
-    "Review only · Its workers run at this effort or lower",
-  ]);
+});
+
+test("a family word reads as the family, an exact id as its model; every forbid has one form", () => {
+  const groups = [
+    { provider: "claude", label: "Claude Code", models: [{ id: "opus", displayName: "Opus 5.5", resolved: "claude-opus-5-5", efforts: [] }] },
+    { provider: "codex", label: "Codex", models: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", resolved: null, efforts: [] }] },
+  ] as unknown as ModelGroup[];
+  const real = ruleNames(groups);
+  const title = (rule: ModelRule) => ruleTitle(rule, real);
+  assert.equal(title({ type: "forbid", names: ["opus"] }), "Never use Opus");
+  assert.equal(title({ type: "forbid", names: ["sonnet"], work: "Adversarial review" }), "Never use Sonnet for Adversarial review");
+  assert.equal(title({ type: "forbid", names: ["claude-opus-5-5"] }), "Never use Opus 5.5");
+  assert.equal(title({ type: "forbid", names: ["gpt-6.1-sol"] }), "Never use GPT-6.1 Sol");
+  assert.equal(title({ type: "effortCeiling", effort: "medium", model: "opus" }), "Never run Opus above Medium");
+  assert.equal(title({ type: "forbid", names: ["*"] }), "Never use any model");
 });
 
 test("a pattern matches as the daemon matches it: a whole word, the id, or *", () => {
@@ -116,7 +127,62 @@ test("a rule for one kind of work refuses only a start of that work, as the daem
   assert.equal(refusingRule(rules, sonnetChoice, "review"), rules[0]);
   assert.equal(refusingRule(rules, sonnetChoice, "Architecture"), null);
   assert.equal(refusingRule(rules, sonnetChoice, null), null);
-  assert.equal(refusingRule(rules, { ...sonnetChoice, effort: "max" }, null), rules[1]);
+  // A cap moves the effort; it refuses nothing by itself.
+  assert.equal(refusingRule(rules, { ...sonnetChoice, effort: "max" }, null), null);
+  assert.equal(ruledEffort(rules, { ...sonnetChoice, effort: "max" }, null), "high");
+});
+
+test("caps and minimums move the effort, for one model or agent; only a cap and a minimum that can't both be met refuse", () => {
+  const opusChoice = { provider: "claude" as const, names: ["opus", "claude-opus-5-5"], effort: "max" };
+  const gpt = { provider: "codex" as const, names: ["gpt-6"], effort: "low" };
+  const rules: ModelRule[] = [
+    { type: "effortCeiling", effort: "medium", model: "opus" },
+    { type: "effortCeiling", effort: "high", agent: "codex" },
+    { type: "effortFloor", effort: "high", work: "Adversarial review" },
+  ];
+  assert.equal(ruledEffort(rules, opusChoice, null), "medium");
+  assert.equal(ruledEffort(rules, { ...opusChoice, names: ["sonnet"] }, null), "max");
+  assert.equal(ruledEffort(rules, { ...gpt, effort: "max" }, null), "high");
+  assert.equal(ruledEffort(rules, gpt, "Adversarial review"), "high");
+  // No effort named: a minimum names one; a cap leaves the model's default.
+  assert.equal(ruledEffort(rules, { ...gpt, effort: null }, "Adversarial review"), "high");
+  assert.equal(ruledEffort(rules, { ...opusChoice, effort: null }, null), null);
+  assert.equal(refusingRule(rules, opusChoice, null), null);
+  assert.equal(refusingRule(rules, gpt, "Adversarial review"), null);
+  // Opus for a review: kept at Medium, needing High.
+  assert.equal(refusingRule(rules, opusChoice, "Adversarial review"), rules[0]);
+  // Advice never refuses or moves anything.
+  const advice: ModelRule[] = [{ type: "advice", text: "never use opus" }];
+  assert.equal(refusingRule(advice, opusChoice, null), null);
+  assert.equal(ruledEffort(advice, opusChoice, null), "max");
+});
+
+const MODEL_NAMES: Record<string, string> = { opus: "Opus 5.5", "gpt-6": "GPT-6" };
+const modelName = (found: GuidanceRow) => MODEL_NAMES[found.model] ?? found.model;
+
+test("a rule that stops a kind of work says so in one line; one that only moves its effort says nothing", () => {
+  const kinds = [
+    row("Architecture", {}),
+    row("Adversarial review", { agent: "codex", model: "gpt-6" }, {}),
+    row("Computer use", {}, { agent: "codex", model: "gpt-6" }),
+  ];
+  const cap: ModelRule = { type: "effortCeiling", effort: "medium", model: "opus" };
+  const floor: ModelRule = { type: "effortFloor", effort: "high", work: "Adversarial review" };
+  const never: ModelRule = { type: "forbid", names: ["opus"] };
+  assert.deepEqual([...ruleWarnings([cap], kinds, MODELS, names, modelName)], []);
+  assert.deepEqual([...ruleWarnings([cap, floor], kinds, MODELS, names, modelName)], [
+    ["effort-ceiling opus: medium", "Reviews Codex's work: it needs High, and this rule keeps Opus at Medium."],
+  ]);
+  // Never: Architecture has no other model; Computer use's next one runs; a review's other side still can.
+  assert.deepEqual([...ruleWarnings([never], kinds, MODELS, names, modelName)], [
+    ["forbid: opus", "Architecture can't start: this rule keeps out Opus 5.5. Reviews Codex's work: this rule keeps out Opus 5.5."],
+  ]);
+  // A kind of roles with no side left can't start; Fallback's side is named as Fallback names it.
+  const roles = [row("Adversarial review", { agent: "codex", model: "gpt-6" }, {}), row("Fallback", {}, { agent: "codex", model: "gpt-6" })];
+  assert.deepEqual([...ruleWarnings([{ type: "forbid", names: ["opus", "gpt-6"] }], roles, MODELS, names, modelName)], [
+    ["forbid: opus, gpt-6", "Adversarial review can't start: this rule keeps out GPT-6 and Opus 5.5. Fallback can't start: this rule keeps out Opus 5.5 and GPT-6."],
+  ]);
+  assert.deepEqual([...ruleWarnings([never], roles.slice(1), MODELS, names, modelName)], [["forbid: opus", "Moving to Claude Code: this rule keeps out Opus 5.5."]]);
 });
 
 test("a row of the agent's default is judged as its default model at that model's effort, as the daemon resolves it", () => {
@@ -124,100 +190,14 @@ test("a row of the agent's default is judged as its default model at that model'
     { provider: "codex", id: "gpt-6", resolved: null, name: "GPT-6", isDefault: true, defaultEffort: "medium" },
     { provider: "codex", id: "gpt-6-luna", resolved: null, name: "GPT-6 Luna", isDefault: false, defaultEffort: "low" },
   ];
-  const review: GuidanceRow = { work: "Independent review", agent: "codex", model: "default", effort: null, reason: "Shipped." };
+  const review: GuidanceRow = { work: "Adversarial review", agent: "codex", model: "default", effort: null, reason: "Shipped." };
   assert.deepEqual(rowChoice(review, listed), { provider: "codex", names: ["gpt-6"], effort: "medium" });
   // A rule that keeps the default model out keeps the row out, so the page never shows it as the pick.
   const rules: ModelRule[] = [{ type: "forbid", names: ["gpt-6"] }];
-  assert.equal(refusingRule(rules, rowChoice(review, listed), "Independent review"), rules[0]);
-  assert.equal(refusingRule([{ type: "effortCeiling", effort: "low" }], rowChoice(review, listed), null)?.type, "effortCeiling");
+  assert.equal(refusingRule(rules, rowChoice(review, listed), "Adversarial review"), rules[0]);
+  assert.equal(ruledEffort([{ type: "effortCeiling", effort: "low" }], rowChoice(review, listed), null), "low");
   // A named model with no effort starts at its own default effort.
   assert.equal(rowChoice({ ...review, model: "gpt-6-luna" }, listed).effort, "low");
-});
-
-test("a draft adds its rule: Only joins its agent's allowlist of the same work, a ceiling replaces the one of its work", () => {
-  const old: ModelRule[] = [{ type: "allow", agent: "claude", names: ["opus"] }, { type: "effortCeiling", effort: "max" }];
-  assert.deepEqual(draftRules(draft("never", fable), old), [...old, { type: "forbid", names: ["fable"] }]);
-  assert.deepEqual(draftRules(draft("only", sonnet), old), [{ type: "allow", agent: "claude", names: ["opus", "sonnet"] }, old[1]]);
-  assert.deepEqual(draftRules(draft("only", { type: "model", provider: "codex", id: "gpt-6" }), old), [
-    ...old,
-    { type: "allow", agent: "codex", names: ["gpt-6"] },
-  ]);
-  assert.deepEqual(draftRules(draft("cap", null), old), [old[0], { type: "effortCeiling", effort: "high" }]);
-  // For one kind of work: its own line, beside the rules for every work.
-  assert.deepEqual(draftRules(draft("only", sonnet, { work: "Review" }), old), [
-    ...old,
-    { type: "allow", agent: "claude", names: ["sonnet"], work: "Review" },
-  ]);
-  assert.deepEqual(draftRules(draft("cap", null, { effort: "low", work: "Review" }), old), [
-    ...old,
-    { type: "effortCeiling", effort: "low", work: "Review" },
-  ]);
-});
-
-const preview = (next: RuleWords.Draft, rules: ModelRule[] = [], rows: WorkRow[] = ROWS) =>
-  previewDraft(next, { rules, rows, models: MODELS, names });
-
-test("a draft's preview says what it changes, and warns of a rule already there or a kind of work it would stop", () => {
-  assert.equal(preview(draft("never", null)), null);
-  assert.deepEqual(preview(draft("never", fable)), {
-    tone: "info",
-    text: "Fable 5.1 won't be used: a chat, session or worker that asks for it is refused, quoting this rule.",
-  });
-  assert.deepEqual(preview(draft("never", fable, { work: "Review" })), {
-    tone: "info",
-    text: "Fable 5.1 won't be used for Review: a worker for Review that asks for it is refused, quoting this rule.",
-  });
-  assert.deepEqual(preview(draft("never", fable), [{ type: "forbid", names: ["fable"] }]), {
-    tone: "warning",
-    text: "You already have this rule.",
-  });
-  // A kind of work whose model the rule names, as written or as the listed model it resolves to:
-  // the warning names where to fix it, and the kinds to open.
-  assert.deepEqual(preview(draft("never", { type: "model", provider: "claude", id: "claude-opus-5-5" })), {
-    tone: "warning",
-    text: "“Architecture” uses claude-opus-5-5, so starting it would be refused. Pick another model for it in Who does what, or make this rule for one kind of work.",
-    works: ["Architecture"],
-  });
-  // For another kind of work only, it stops nothing.
-  assert.equal(preview(draft("never", opus, { work: "Review" }))?.tone, "info");
-  // A kind whose order has another model the rules allow still starts.
-  assert.equal(preview(draft("never", opus), [], [row("Architecture", {}, { agent: "codex", model: "gpt-6" })])?.tone, "info");
-  assert.deepEqual(preview(draft("only", opus)), {
-    tone: "info",
-    text: "Claude chats, sessions and workers will use only Opus 5.5. Sonnet 5.5 and Fable 5.1 are refused.",
-  });
-  assert.deepEqual(preview(draft("only", sonnet), [{ type: "allow", agent: "claude", names: ["opus"] }]), {
-    tone: "info",
-    text: "Sonnet 5.5 joins your Only rule for Claude. Claude chats, sessions and workers will use only Opus 5.5 or Sonnet 5.5. Fable 5.1 is refused.",
-  });
-  assert.deepEqual(preview(draft("only", sonnet)), {
-    tone: "warning",
-    text: "“Architecture” uses another Claude model, so starting it would be refused. Pick another model for it in Who does what, or make this rule for one kind of work.",
-    works: ["Architecture"],
-  });
-  assert.deepEqual(preview(draft("only", sonnet, { work: "Architecture" })), {
-    tone: "warning",
-    text: "“Architecture” uses another Claude model, so starting it would be refused. Pick another model for it in Who does what.",
-    works: ["Architecture"],
-  });
-  // Never rules win: Only of a model a Never rule keeps out.
-  assert.deepEqual(preview(draft("only", sonnet), [{ type: "forbid", names: ["sonnet"] }]), {
-    tone: "warning",
-    text: "“Never give Sonnet 5.5 work” already keeps Sonnet 5.5 out, and Never rules win, so with this rule no Claude model could run. Remove that rule first.",
-  });
-  assert.deepEqual(preview(draft("cap", null, { effort: "medium" })), {
-    tone: "warning",
-    text: "“Architecture” and “Review” ask for more than Medium effort, so starting them would be refused. Lower their effort in Who does what, or make this rule for one kind of work.",
-    works: ["Architecture", "Review"],
-  });
-  assert.deepEqual(preview(draft("cap", null), [{ type: "effortCeiling", effort: "max" }]), {
-    tone: "info",
-    text: "Chats, sessions and workers will run at High effort or lower; asking for more is refused. It replaces your Max ceiling.",
-  });
-  assert.deepEqual(preview(draft("cap", null), [{ type: "effortCeiling", effort: "high" }]), {
-    tone: "warning",
-    text: "You already have this rule.",
-  });
 });
 
 // The composer's model picker (issue 545): what the rules keep out, in the Rules card's words.
@@ -236,8 +216,15 @@ test("the picker shows an effort or model the rules keep out with the rule's tit
   // The model alone: a ceiling doesn't keep it out.
   assert.equal(pickRefusal(CEILING, names, "claude", OPUS, null), null);
   // A rule names a model by its id or what it resolves to.
-  assert.equal(pickRefusal([{ type: "forbid", names: ["claude-opus-5-5"] }], names, "claude", OPUS, null), "Never give Claude-opus-5-5 work");
-  assert.equal(pickRefusal([{ type: "allow", agent: "claude", names: ["sonnet"] }], names, "claude", OPUS, null), "Only use Sonnet 5.5 on Claude");
+  assert.equal(pickRefusal([{ type: "forbid", names: ["claude-opus-5-5"] }], names, "claude", OPUS, null), "Never use Claude-opus-5-5");
+  assert.equal(pickRefusal([{ type: "allow", agent: "claude", names: ["sonnet"] }], names, "claude", OPUS, null), "Only use Sonnet on Claude");
+  // A minimum keeps lower efforts out; a cap and a minimum on one model that can't both be met keep the model out.
+  assert.equal(pickRefusal([{ type: "effortFloor", effort: "medium" }], names, "claude", OPUS, "low"), "Never go below Medium effort");
+  assert.equal(pickRefusal([{ type: "effortFloor", effort: "medium" }], names, "claude", OPUS, "high"), null);
+  assert.equal(
+    pickRefusal([{ type: "effortCeiling", effort: "low", model: "opus" }, { type: "effortFloor", effort: "high" }], names, "claude", OPUS, null),
+    "Never run Opus above Low",
+  );
   // A rule for one kind of work never judges a chat's or session's pick.
   assert.equal(pickRefusal([{ type: "effortCeiling", effort: "low", work: "Review" }], names, "claude", OPUS, "max"), null);
 });
@@ -252,6 +239,9 @@ test("a pick above the ceiling comes down to its model's highest allowed effort;
   assert.deepEqual(allowedPick([{ type: "effortCeiling", effort: "low" }], GROUPS, { provider: "claude", model: "sonnet", effort: null }), {
     provider: "claude", model: "sonnet", effort: "low",
   });
+  // Below a minimum: up to its model's lowest effort within the rules.
+  assert.deepEqual(allowedPick([{ type: "effortFloor", effort: "xhigh" }], GROUPS, { ...max, effort: "low" }), { ...max, effort: "xhigh" });
+  assert.deepEqual(allowedPick([{ type: "effortCeiling", effort: "medium", agent: "codex" }], GROUPS, max), max);
   // A model the rules keep out stays as it is: the picker shows why, the daemon refuses it.
   const forbid: ModelRule[] = [{ type: "forbid", names: ["opus"] }];
   assert.deepEqual(allowedPick(forbid, GROUPS, max), max);
@@ -260,7 +250,13 @@ test("a pick above the ceiling comes down to its model's highest allowed effort;
 test("the daemon's refusal reads in the rule's words; other errors stay as they are (issue 545)", () => {
   assert.equal(refusalText('refused by your model rule: "effort-ceiling: high"', CEILING, names), "Refused by your rule “Never go above High effort”");
   // As the user wrote it in the file: case and spaces don't matter.
-  assert.equal(refusalText('refused by your model rule: "forbid:  Opus,sonnet"', [{ type: "forbid", names: ["opus", "sonnet"] }], names), "Refused by your rule “Never give Opus 5.5 or Sonnet 5.5 work”");
+  assert.equal(refusalText('refused by your model rule: "forbid:  Opus,sonnet"', [{ type: "forbid", names: ["opus", "sonnet"] }], names), "Refused by your rule “Never use Opus or Sonnet”");
   assert.equal(refusalText('refused by your model rule: "forbid: fable"', CEILING, names), 'refused by your model rule: "forbid: fable"');
   assert.equal(refusalText("the daemon closed the connection", CEILING, names), "the daemon closed the connection");
+  // Two that can't both be met, both named.
+  const both: ModelRule[] = [{ type: "effortCeiling", effort: "medium", model: "opus" }, { type: "effortFloor", effort: "high", work: "Adversarial review" }];
+  assert.equal(
+    refusalText('refused by your model rules: "effort-ceiling opus: medium" and "effort-floor for Adversarial review: high" can\'t both be met', both, names),
+    "Refused: your rules “Never run Opus above Medium” and “Adversarial review never below High” can't both be met",
+  );
 });

@@ -1,4 +1,4 @@
-import { since } from "@/app/settings/routing/RatingsFooter";
+import { since } from "@/app/settings/routing/RatingsLine";
 import { rowModelName } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Input } from "@/components/controls";

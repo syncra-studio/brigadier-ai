@@ -1,24 +1,17 @@
 import { shortPlaceName, workName, type WorkRow } from "@/app/settings/routing/words";
+import { ROLE_KINDS } from "@/app/settings/routing/roles";
 import { effortLabel, findModel, type ModelGroup } from "@/components/shared/model-selector";
-import type { GuidanceRow, ModelChoice, ModelInfo, ModelRule, OverrideTarget, ProviderKind } from "@/ipc/generated";
+import type { GuidanceRow, ModelChoice, ModelInfo, ModelRule, ProviderKind } from "@/ipc/generated";
 import { joinWords } from "@/lib/routing";
 import { cliFacts } from "@/lib/providerKinds";
 
 /*
- * The Rules card's words and sums: a rule's title and line, the rules a draft makes, what a
- * draft would change before it is added (or why it would change nothing), and which rule
- * refuses a row. The rules are those of the user's rules file, `~/.brigadier/models.md`; a rule
- * holds everywhere or for one kind of work (a row's Work).
+ * The Rules card's words and sums: a rule as one plain sentence, the effort a choice runs at
+ * under the effort rules (a cap or a minimum moves it), which rule refuses a row, and the one
+ * line under a rule that stops a kind of work from starting. The rules are those of the user's
+ * rules file, `~/.brigadier/models.md`; a rule holds everywhere or for one kind of work (a row's
+ * Work), and an effort rule may name an agent or one model.
  */
-
-/** What a new rule does: keeps a model out, allows only some models, or caps the effort. */
-export type DraftEffect = "never" | "only" | "cap";
-
-/**
- * A rule being written: what it does, to which model (never, only) or up to which effort (cap),
- * and for which kind of work (`null`: any work).
- */
-export type Draft = { effect: DraftEffect; target: OverrideTarget | null; effort: string; work: string | null };
 
 /** The efforts a ceiling may name, lowest first, as the rules file ranks them. */
 export const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
@@ -26,11 +19,10 @@ export const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh
 /** An effort's place among the levels; -1 for one the file doesn't know. */
 export const effortRank = (effort: string) => EFFORT_LEVELS.indexOf(effort.toLowerCase() as (typeof EFFORT_LEVELS)[number]);
 
-/** The names the words need: a rule's model pattern, a menu's pick. */
+/** The names the words need: a rule's model pattern. */
 export type Names = {
-  /** A pattern of a rule ("fable", "claude-opus-5-5", "*") in a few words, for an agent or any. */
+  /** A pattern of a rule in a few words, for an agent or any: "fable" reads "Fable", a family; "claude-opus-5-5" reads "Opus 5.5"; "*" reads "any model". */
   pattern: (agent: ProviderKind | null, pattern: string) => string;
-  target: (target: OverrideTarget) => string;
 };
 
 /** The names the rules' words need, from the model list. */
@@ -38,12 +30,14 @@ export function ruleNames(groups: readonly ModelGroup[]): Names {
   const pattern = (agent: ProviderKind | null, name: string) => {
     if (name === "*") return "any model";
     if (name === "default") return agent ? shortPlaceName({ type: "vendor", provider: agent }, groups) : "the default model";
+    // A family word covers every model of the family, today's and newer ones: never one version's name.
+    if (/^\p{L}+$/u.test(name)) return name.charAt(0).toUpperCase() + name.slice(1);
     const listed = (agent ? groups.filter((group) => group.provider === agent) : groups)
       .map((group) => findModel(groups, { provider: group.provider, model: name, effort: null }))
       .find(Boolean);
     return listed?.displayName ?? name.charAt(0).toUpperCase() + name.slice(1);
   };
-  return { pattern, target: (target) => shortPlaceName(target, groups) };
+  return { pattern };
 }
 
 /** A model the agents list now, as a rule's preview checks it. */
@@ -74,76 +68,110 @@ export function matches(pattern: string, model: string): boolean {
 const named = (patterns: readonly string[], names: readonly string[]) =>
   names.some((name) => patterns.some((pattern) => matches(pattern, name)));
 
-/** A rule as the file writes it: `forbid: fable`, `allow claude: opus, sonnet`, `effort-ceiling for Review: medium`. */
+/** An effort rule's agent or model, as the file writes it after the directive. */
+const about = (rule: { agent?: ProviderKind; model?: string }) => (rule.agent ? ` ${rule.agent}` : rule.model ? ` ${rule.model}` : "");
+
+/** A rule as the file writes it: `forbid: fable`, `allow claude: opus, sonnet`, `effort-ceiling opus for Review: medium`, `advice: …`. */
 export function ruleText(rule: ModelRule): string {
-  const scope = rule.work ? ` for ${workName(rule.work)}` : "";
+  if (rule.type === "advice") return `advice: ${rule.text}`;
+  const scope = rule.work ? ` for ${rule.work}` : "";
   switch (rule.type) {
     case "forbid":
       return `forbid${scope}: ${rule.names.join(", ")}`;
     case "allow":
       return `allow${rule.agent ? ` ${rule.agent}` : ""}${scope}: ${rule.names.join(", ")}`;
     case "effortCeiling":
-      return `effort-ceiling${scope}: ${rule.effort}`;
+      return `effort-ceiling${about(rule)}${scope}: ${rule.effort}`;
+    case "effortFloor":
+      return `effort-floor${about(rule)}${scope}: ${rule.effort}`;
   }
 }
 
-/** "Never give Fable work", "Don't use Sonnet 5.5 for Review", "Only use Opus or Sonnet on Claude", "Never go above High effort". */
+/** What an effort rule is about, in a word or two ("Opus", "Codex"); `null`, every model. */
+const effortTarget = (rule: { agent?: ProviderKind; model?: string }, names: Names): string | null =>
+  rule.agent ? cliFacts(rule.agent).vendor : rule.model ? names.pattern(null, rule.model) : null;
+
+/**
+ * A rule as one plain sentence: "Never use Fable", "Never use Sonnet for Adversarial review",
+ * "Only use Opus or Sonnet on Claude", "Never go above High effort", "Never run Opus above
+ * Medium", "Adversarial review never below High"; advice as its own words.
+ */
 export function ruleTitle(rule: ModelRule, names: Names): string {
+  if (rule.type === "advice") return rule.text;
   const scope = rule.work ? ` for ${workName(rule.work)}` : "";
   switch (rule.type) {
     case "forbid": {
       const models = joinWords(rule.names.map((name) => names.pattern(null, name)), "or");
-      return rule.work ? `Don't use ${models} for ${workName(rule.work)}` : `Never give ${models} work`;
+      return `Never use ${models}${scope}`;
     }
     case "allow": {
       const models = joinWords(rule.names.map((name) => names.pattern(rule.agent, name)), "or");
       return `Only use ${models}${rule.agent ? ` on ${cliFacts(rule.agent).vendor}` : ""}${scope}`;
     }
     case "effortCeiling":
-      return `Never go above ${effortLabel(rule.effort)} effort${scope}`;
-  }
-}
-
-/**
- * Where a rule applies, then what it does: "Everywhere · Chats, sessions and workers can't run
- * on it", "Review only · Its workers can't run on it".
- */
-export function ruleLine(rule: ModelRule): string {
-  const scope = rule.work ? `${workName(rule.work)} only` : "Everywhere";
-  const vendor = rule.type === "allow" && rule.agent ? `${cliFacts(rule.agent).vendor} ` : "";
-  const who = rule.work ? `Its ${vendor}workers` : vendor ? `${vendor}chats, sessions and workers` : "Chats, sessions and workers";
-  switch (rule.type) {
-    case "forbid":
-      return `${scope} · ${who} can't run on ${rule.names.length === 1 ? "it" : "them"}`;
-    case "allow":
-      return `${scope} · ${who} run on nothing else`;
-    case "effortCeiling":
-      return `${scope} · ${who} run at this effort or lower`;
+    case "effortFloor": {
+      const way = rule.type === "effortCeiling" ? "above" : "below";
+      const effort = effortLabel(rule.effort);
+      const target = effortTarget(rule, names);
+      if (target) return `Never run ${target} ${way} ${effort}${scope}`;
+      if (rule.work) return `${workName(rule.work)} never ${way} ${effort}`;
+      return `Never go ${way} ${effort} effort`;
+    }
   }
 }
 
 /** Whether a rule holds for a start of `work` (`null`: a chat, a session, or a start for no work). */
 const holdsFor = (rule: ModelRule, work: string | null) =>
-  !rule.work || (work !== null && rule.work.trim().toLowerCase() === work.trim().toLowerCase());
+  rule.type !== "advice" && (!rule.work || (work !== null && rule.work.trim().toLowerCase() === work.trim().toLowerCase()));
 
 /** A choice a rule may refuse: its agent, the names its model goes by, its effort. */
 export type Choice = { provider: ProviderKind; names: readonly string[]; effort: string | null };
 
-/** The first rule that refuses `choice` for a start of `work`, as the daemon judges it; `null` if none does. */
+type EffortRule = Extract<ModelRule, { type: "effortCeiling" | "effortFloor" }>;
+
+/** The effort rules that hold for a choice: the lowest cap and the highest minimum, as the daemon sums them. */
+export function effortLimits(rules: readonly ModelRule[], choice: Choice, work: string | null): { ceiling: EffortRule | null; floor: EffortRule | null } {
+  let ceiling: EffortRule | null = null;
+  let floor: EffortRule | null = null;
+  for (const rule of rules) {
+    if ((rule.type !== "effortCeiling" && rule.type !== "effortFloor") || !holdsFor(rule, work)) continue;
+    if (rule.agent && rule.agent !== choice.provider) continue;
+    if (rule.model && !named([rule.model], choice.names)) continue;
+    if (rule.type === "effortCeiling" && (!ceiling || effortRank(rule.effort) < effortRank(ceiling.effort))) ceiling = rule;
+    if (rule.type === "effortFloor" && (!floor || effortRank(rule.effort) > effortRank(floor.effort))) floor = rule;
+  }
+  return { ceiling, floor };
+}
+
+/**
+ * The first rule that refuses `choice` for a start of `work`, as the daemon judges it; `null`
+ * if none does. A cap or minimum alone moves the effort and refuses nothing; a cap and a
+ * minimum that can't both be met refuse it (the cap is the rule named).
+ */
 export function refusingRule(rules: readonly ModelRule[], choice: Choice, work: string | null): ModelRule | null {
-  return (
-    rules.find((rule) => {
-      if (!holdsFor(rule, work)) return false;
-      switch (rule.type) {
-        case "forbid":
-          return named(rule.names, choice.names);
-        case "allow":
-          return (rule.agent === null || rule.agent === choice.provider) && choice.names.length > 0 && !named(rule.names, choice.names);
-        case "effortCeiling":
-          return choice.effort !== null && effortRank(choice.effort) > effortRank(rule.effort);
-      }
-    }) ?? null
-  );
+  const model = rules.find((rule) => {
+    if (!holdsFor(rule, work)) return false;
+    switch (rule.type) {
+      case "forbid":
+        return named(rule.names, choice.names);
+      case "allow":
+        return (rule.agent === null || rule.agent === choice.provider) && choice.names.length > 0 && !named(rule.names, choice.names);
+      default:
+        return false;
+    }
+  });
+  if (model) return model;
+  const { ceiling, floor } = effortLimits(rules, choice, work);
+  return ceiling && floor && effortRank(floor.effort) > effortRank(ceiling.effort) ? ceiling : null;
+}
+
+/** The effort `choice` runs at under the effort rules: moved down to a cap or up to a minimum; as asked within them. */
+export function ruledEffort(rules: readonly ModelRule[], choice: Choice, work: string | null): string | null {
+  const { ceiling, floor } = effortLimits(rules, choice, work);
+  const asked = choice.effort === null ? -1 : effortRank(choice.effort);
+  if (ceiling && choice.effort !== null && (asked < 0 || asked > effortRank(ceiling.effort))) return ceiling.effort;
+  if (floor && asked < effortRank(floor.effort)) return floor.effort;
+  return choice.effort;
 }
 
 /**
@@ -184,7 +212,7 @@ const modelPick = (provider: ProviderKind, model: ModelInfo, effort: string | nu
 /**
  * Why the rules keep a model out of a chat or session, or one of its efforts (`effort` null:
  * the model itself), in the Rules card's words ("Never go above High effort"); `null` if
- * they don't.
+ * they don't. An effort above a cap or below a minimum is kept out of the menus.
  */
 export function pickRefusal(
   rules: readonly ModelRule[],
@@ -193,167 +221,95 @@ export function pickRefusal(
   model: ModelInfo,
   effort: string | null,
 ): string | null {
-  const rule = refusingRule(rules, modelPick(provider, model, effort), null);
-  return rule ? ruleTitle(rule, names) : null;
+  const pick = modelPick(provider, model, effort);
+  const rule = refusingRule(rules, pick, null);
+  if (rule) return ruleTitle(rule, names);
+  if (effort === null) return null;
+  const { ceiling, floor } = effortLimits(rules, pick, null);
+  const rank = effortRank(effort);
+  const outside = ceiling && (rank < 0 || rank > effortRank(ceiling.effort)) ? ceiling : floor && rank < effortRank(floor.effort) ? floor : null;
+  return outside ? ruleTitle(outside, names) : null;
 }
 
 /**
- * A pick the rules allow, as near the one asked for as can be: an effort above a ceiling comes
- * down to the highest of its model's efforts the rules allow. Any other pick stays as it is.
+ * A pick the rules allow, as near the one asked for as can be: an effort above a cap comes down
+ * to the highest of its model's efforts within the rules, one below a minimum goes up to the
+ * lowest. Any other pick stays as it is.
  */
 export function allowedPick(rules: readonly ModelRule[], groups: readonly ModelGroup[], choice: ModelChoice): ModelChoice {
   const model = findModel(groups, choice);
   if (!model || rules.length === 0) return choice;
-  const rule = refusingRule(rules, pickedChoice(groups, choice), null);
-  if (rule?.type !== "effortCeiling") return choice;
-  const lower = model.efforts.toReversed().find((effort) => !refusingRule(rules, pickedChoice(groups, { ...choice, effort }), null));
-  return lower ? { ...choice, effort: lower } : choice;
+  const picked = pickedChoice(groups, choice);
+  if (picked.effort === null || refusingRule(rules, picked, null)) return choice;
+  const ruled = ruledEffort(rules, picked, null);
+  if (ruled === picked.effort) return choice;
+  const within = (effort: string) => ruledEffort(rules, { ...picked, effort }, null) === effort;
+  const up = effortRank(ruled ?? "") > effortRank(picked.effort);
+  const listed = up ? model.efforts.find(within) : model.efforts.toReversed().find(within);
+  return listed ? { ...choice, effort: listed } : choice;
 }
 
 /** A rules-file line as the daemon quotes it in a refusal, compared without case or spaces. */
 const lineKey = (line: string) => line.toLowerCase().replace(/\s+/g, "");
 
 /**
- * An error in the Rules card's words when it is the daemon's refusal by one of the user's rules
+ * An error in the Rules card's words when it is the daemon's refusal by the user's rules
  * (`refused by your model rule: "effort-ceiling: high"`): "Refused by your rule “Never go above
- * High effort”". Any other error stays as it is.
+ * High effort”"; two that can't both be met, both named. Any other error stays as it is.
  */
 export function refusalText(message: string, rules: readonly ModelRule[], names: Names): string {
+  const title = (quoted: string) => {
+    const rule = rules.find((found) => lineKey(ruleText(found)) === lineKey(quoted));
+    return rule ? ruleTitle(rule, names) : null;
+  };
+  const both = /refused by your model rules: "(.*?)" and "(.*?)" can't both be met/s.exec(message);
+  if (both) {
+    const [first, second] = [title(both[1]!), title(both[2]!)];
+    return first && second ? `Refused: your rules “${first}” and “${second}” can't both be met` : message;
+  }
   const quoted = /refused by your model rule: "(.*)"/s.exec(message)?.[1];
   if (quoted === undefined) return message;
-  const rule = rules.find((found) => lineKey(ruleText(found)) === lineKey(quoted));
-  return rule ? `Refused by your rule “${ruleTitle(rule, names)}”` : message;
-}
-
-/** The word of a draft's model the rule names: a listed id, a family word, or `default`. */
-function draftName(target: OverrideTarget): string {
-  return target.type === "model" ? target.id : target.type === "family" ? target.family : "default";
-}
-
-/** Whether two rules hold for the same work. */
-const sameScope = (rule: ModelRule, work: string | null) => (rule.work ?? null) === work;
-
-/**
- * The rules once a finished draft is added: Never adds its own line; Only joins the allowlist
- * of the model's agent for the same work when there is one (two allowlists would allow only
- * what both name); a ceiling replaces the one of the same work.
- */
-export function draftRules(draft: Draft, rules: readonly ModelRule[]): ModelRule[] {
-  const scope = draft.work ? { work: draft.work } : {};
-  if (draft.effect === "cap") {
-    const ceiling: ModelRule = { type: "effortCeiling", effort: draft.effort, ...scope };
-    const at = rules.findIndex((rule) => rule.type === "effortCeiling" && sameScope(rule, draft.work));
-    return at < 0 ? [...rules, ceiling] : rules.map((rule, index) => (index === at ? ceiling : rule));
-  }
-  const target = draft.target;
-  if (!target) return [...rules];
-  const name = draftName(target);
-  if (draft.effect === "never") return [...rules, { type: "forbid", names: [name], ...scope }];
-  const own = rules.findIndex((rule) => rule.type === "allow" && rule.agent === target.provider && sameScope(rule, draft.work));
-  if (own < 0) return [...rules, { type: "allow", agent: target.provider, names: [name], ...scope }];
-  return rules.map((rule, index) =>
-    index === own && rule.type === "allow" && !rule.names.includes(name) ? { ...rule, names: [...rule.names, name] } : rule,
-  );
+  const one = title(quoted);
+  return one ? `Refused by your rule “${one}”` : message;
 }
 
 /**
- * What a draft would change, said before it is added; a warning when it would change nothing
- * or clash. `works`, the kinds of work it would stop from starting, for the note to open.
+ * The one line under each rule that stops work, keyed by the rule's text. A kind of work with no
+ * row that may run can't start: "Docs can't start: this rule keeps out Opus." A kind of roles
+ * (review, Fallback) with a side that still may run can start, so the line names only the side
+ * it stops: "Reviews Codex's work: this rule keeps out Opus 5.5."
  */
-export type DraftPreview = { tone: "info" | "warning"; text: string; works?: string[] };
-
-/** "“Bounded implementation” and “Review”": the kinds of work rows name. */
-const works = (rows: readonly WorkRow[]) => joinWords(rows.map((row) => `“${workName(row.work)}”`));
-
-/**
- * What adding the draft would do, from the models the agents list now and the rows in force;
- * a warning when it is already a rule, Never already keeps its model out, or a kind of work
- * that starts now could no longer start (then where to fix it).
- */
-export function previewDraft(
-  draft: Draft,
-  {
-    rules,
-    rows,
-    models,
-    names,
-  }: {
-    rules: readonly ModelRule[];
-    rows: readonly WorkRow[];
-    models: readonly ListedModel[];
-    names: Names;
-  },
-): DraftPreview | null {
-  const target = draft.target;
-  if (draft.effect !== "cap" && !target) return null;
-  const next = draftRules(draft, rules);
-  const made = next.find((rule) => !rules.some((old) => ruleText(old) === ruleText(rule)));
-  const kept = (rule: ModelRule) => rule.type === "forbid" && sameScope(rule, draft.work) && target !== null && rule.names.includes(draftName(target));
-  if (!made || (draft.effect === "never" && rules.some(kept))) return { tone: "warning", text: "You already have this rule." };
-  const scope = draft.work ? ` for ${workName(draft.work)}` : "";
-  // A kind of work starts while any of its rows may: the first its rules allow takes it.
-  const starts = (row: WorkRow, using: readonly ModelRule[]) =>
-    row.rows.some((found) => !refusingRule(using, rowChoice(found, models), row.work));
-  const inScope = rows.filter((row) => draft.work === null || row.work === draft.work);
-  const hit = inScope.filter((row) => starts(row, rules) && !starts(row, next));
-  const them = hit.length === 1 ? "it" : "them";
-  const fix = (change: string) =>
-    `${change} in Who does what${draft.work ? "" : ", or make this rule for one kind of work"}.`;
-  if (draft.effect === "cap") {
-    if (hit.length > 0) {
-      return {
-        tone: "warning",
-        text: `${works(hit)} ${hit.length === 1 ? "asks" : "ask"} for more than ${effortLabel(draft.effort)} effort, so starting ${them} would be refused. ${fix(`Lower ${hit.length === 1 ? "its" : "their"} effort`)}`,
-        works: hit.map((row) => row.work),
-      };
-    }
-    const old = rules.find((rule) => rule.type === "effortCeiling" && sameScope(rule, draft.work));
-    const replaces = old?.type === "effortCeiling" ? ` It replaces your ${effortLabel(old.effort)} ceiling${scope}.` : "";
-    const who = draft.work ? `Workers for ${workName(draft.work)}` : "Chats, sessions and workers";
-    return { tone: "info", text: `${who} will run at ${effortLabel(draft.effort)} effort or lower; asking for more is refused.${replaces}` };
-  }
-  if (!target) return null;
-  const name = draftName(target);
-  const model = names.target(target);
-  const vendor = cliFacts(target.provider).vendor;
-  if (draft.effect === "only") {
-    // Never rules win: Only of a model a Never rule keeps out leaves no model of the agent.
-    const never = rules.find((rule) => rule.type === "forbid" && holdsFor(rule, draft.work) && named(rule.names, [name]));
-    if (never) {
-      return {
-        tone: "warning",
-        text: `“${ruleTitle(never, names)}” already keeps ${model} out, and Never rules win, so with this rule no ${vendor} model could run${scope}. Remove that rule first.`,
-      };
+export function ruleWarnings(
+  rules: readonly ModelRule[],
+  kinds: readonly WorkRow[],
+  models: readonly ListedModel[],
+  names: Names,
+  modelName: (row: GuidanceRow) => string,
+): Map<string, string> {
+  const warnings = new Map<string, string[]>();
+  for (const kind of kinds) {
+    const refused = kind.rows.map((row) => {
+      const choice = rowChoice(row, models);
+      return { row, choice, rule: refusingRule(rules, choice, kind.work) };
+    });
+    const roles = ROLE_KINDS[kind.work];
+    const none = refused.every((found) => found.rule);
+    const stopped = none ? refused.slice(0, 1) : roles ? refused.filter((found) => found.rule) : [];
+    for (const { rule, choice, row } of stopped) {
+      if (!rule) continue;
+      const who = none ? `${workName(kind.work)} can't start` : roles!.role(row);
+      let line: string;
+      if (rule.type === "effortCeiling") {
+        const { floor } = effortLimits(rules, choice, kind.work);
+        const target = effortTarget(rule, names) ?? modelName(row);
+        line = `${who}: it needs ${effortLabel(floor?.effort ?? rule.effort)}, and this rule keeps ${target} at ${effortLabel(rule.effort)}.`;
+      } else {
+        const out = none ? joinWords([...new Set(refused.filter((found) => found.rule === rule).map((found) => modelName(found.row)))]) : modelName(row);
+        line = `${who}: this rule keeps out ${out}.`;
+      }
+      const key = ruleText(rule);
+      warnings.set(key, [...(warnings.get(key) ?? []), line]);
     }
   }
-  if (hit.length > 0) {
-    const uses = hit.length === 1 ? "uses" : "use";
-    const what = draft.effect === "never" ? model : `another ${vendor} model`;
-    return {
-      tone: "warning",
-      text: `${works(hit)} ${uses} ${what}, so starting ${them} would be refused. ${fix(`Pick another model for ${them}`)}`,
-      works: hit.map((row) => row.work),
-    };
-  }
-  if (draft.effect === "never") {
-    const caught = models.filter((found) => named([name], [found.id, ...(found.resolved ? [found.resolved] : [])]));
-    if (caught.length === 0) return { tone: "info", text: `No model listed now is ${model}; the rule applies once one is.` };
-    const who = draft.work ? `a worker for ${workName(draft.work)}` : "a chat, session or worker";
-    return {
-      tone: "info",
-      text: `${joinWords(caught.map((found) => found.name))} won't be used${scope}: ${who} that asks for ${caught.length === 1 ? "it" : "them"} is refused, quoting this rule.`,
-    };
-  }
-  const allow = next.find((rule) => rule.type === "allow" && rule.agent === target.provider && sameScope(rule, draft.work));
-  const allowed = allow?.type === "allow" ? allow.names : [name];
-  const joins = allowed.length > 1 ? `${model} joins your Only rule for ${vendor}${scope}. ` : "";
-  const refused = models.filter(
-    (found) => found.provider === target.provider && !named(allowed, [found.id, ...(found.resolved ? [found.resolved] : [])]),
-  );
-  const rest =
-    refused.length === 0
-      ? `No ${vendor} model listed now is refused.`
-      : `${joinWords(refused.map((found) => found.name))} ${refused.length === 1 ? "is" : "are"} refused.`;
-  const who = draft.work ? `${vendor} workers for ${workName(draft.work)}` : `${vendor} chats, sessions and workers`;
-  return { tone: "info", text: `${joins}${who} will use only ${joinWords(allowed.map((found) => names.pattern(target.provider, found)), "or")}. ${rest}` };
+  return new Map([...warnings].map(([key, lines]) => [key, lines.join(" ")]));
 }

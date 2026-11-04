@@ -52,12 +52,15 @@ export function useTargetPanel({
   taken = [],
   vendors = true,
   opensOn,
+  provider: roleProvider,
 }: {
   onPick: (target: OverrideTarget) => void;
   taken?: readonly OverrideTarget[];
   vendors?: boolean;
   /** The agent it opens on (the first otherwise). */
   opensOn?: ProviderKind;
+  /** A role belongs to one agent; offer only that agent's models. */
+  provider?: ProviderKind;
 }): TargetPanel {
   // Only what the user made available is offered; a family resolves on the whole list.
   const groups = useAvailableModelGroups();
@@ -72,7 +75,7 @@ export function useTargetPanel({
       return rowModel(models, target.family)?.id === model.id;
     });
   return {
-    groups,
+    groups: roleProvider ? groups.filter((group) => group.provider === roleProvider) : groups,
     checked: null,
     opensOn,
     agentDefault: vendors ? (provider) => cliFacts(provider).vendor : undefined,

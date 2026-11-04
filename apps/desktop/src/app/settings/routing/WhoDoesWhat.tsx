@@ -1,4 +1,5 @@
 import { KindRow } from "@/app/settings/routing/KindRow";
+import { withFusion } from "@/app/settings/routing/roles";
 import { workRows } from "@/app/settings/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
 import { type ModelGroup, SettingsCard } from "@/components/shared";
@@ -6,7 +7,7 @@ import type { ModelRules } from "@/ipc/generated";
 
 export const WHO_DOES_WHAT = {
   label: "Who does what",
-  description: "Automatic picks each kind of work's best-rated models. Open one to set your own order of models and their effort; the ratings only suggest changes to it.",
+  description: "Automatic uses the best-rated models, from ratings researched every day. Your own order is never changed: a better-rated model only shows up as a suggestion.",
 } as const;
 
 /**
@@ -29,7 +30,7 @@ export function WhoDoesWhat({
     <SettingsSection title={WHO_DOES_WHAT.label} description={WHO_DOES_WHAT.description}>
       <SettingsCard inset data-slot="who-does-what">
         {rules &&
-          workRows(rules).map((row) => (
+          withFusion(workRows(rules)).map((row) => (
             <KindRow
               key={row.work}
               row={row}

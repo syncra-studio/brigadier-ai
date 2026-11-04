@@ -1,6 +1,7 @@
 import { HAIRLINE_TOP, StepNumber } from "@/app/settings/routing/parts";
 import { useListedModels } from "@/app/settings/routing/pickers";
 import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
+import { ROLE_KINDS, withFusion } from "@/app/settings/routing/roles";
 import { rowModelName, workName, workRows } from "@/app/settings/routing/words";
 import type { ModelGroup } from "@/components/shared";
 import type { ModelRules } from "@/ipc/generated";
@@ -13,13 +14,13 @@ const STEPS: readonly [string, string][] = [
   ["Automatic", "With no order of your own, it takes the first model of the automatic advice that your rules allow."],
   [
     "Your rules",
-    "Last, your rules check the result: a model they keep out, or an effort above your cap, is refused and the worker doesn't start. Your rules win over everything above.",
+    "Last, your rules check the result: an effort above a cap or below a minimum runs at that limit instead, and a model they keep out is refused, so the worker doesn't start. Your rules win over everything above.",
   ],
 ];
 
 /** A fixed example, when no kind of work on the page shows one. */
 const EXAMPLE =
-  "For example, if your rules keep the first model for Independent review out, the next model in its order runs; with none left, the worker is refused.";
+  "For example, if your rules keep the first model for Computer use out, the next model in its order runs; with none left, the worker is refused.";
 
 /**
  * The example line: the first kind of work whose first model your rules keep out while a later
@@ -27,7 +28,9 @@ const EXAMPLE =
  */
 function useExample(rules: ModelRules | null, groups: readonly ModelGroup[]): string {
   const models = useListedModels();
-  for (const row of rules ? workRows(rules) : []) {
+  for (const row of rules ? withFusion(workRows(rules)) : []) {
+    // These models fill separate roles; a later role cannot take over for a refused one.
+    if (ROLE_KINDS[row.work]) continue;
     const refused = (index: number) => refusingRule(rules!.rules, rowChoice(row.rows[index]!, models), row.work) !== null;
     if (row.rows.length < 2 || !refused(0)) continue;
     const next = row.rows.findIndex((_, index) => !refused(index));

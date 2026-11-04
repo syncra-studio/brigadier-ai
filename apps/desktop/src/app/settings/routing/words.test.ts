@@ -9,12 +9,13 @@ import type { GuidanceRow } from "@/ipc/generated";
 let server: ViteDevServer;
 let withFirst: typeof Words.withFirst;
 let withDismissed: typeof Words.withDismissed;
+let automaticLine: typeof Words.automaticLine;
 before(async () => {
   const globals = globalThis as Record<string, unknown>;
   globals.document ??= { documentElement: {} };
   globals.getComputedStyle ??= () => ({ getPropertyValue: () => "" });
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ withFirst, withDismissed } = (await server.ssrLoadModule("/src/app/settings/routing/words.ts")) as typeof Words);
+  ({ automaticLine, withFirst, withDismissed } = (await server.ssrLoadModule("/src/app/settings/routing/words.ts")) as typeof Words);
 });
 after(() => server.close());
 
@@ -30,6 +31,15 @@ test("a picked model goes first in the order, the others kept after it", () => {
 });
 
 const suggestion = (score: number) => ({ work: "Computer use", row: row("codex", "gpt-6.1-terra", "high"), score, current: "opus", currentScore: 9 });
+
+const kind = (found: GuidanceRow) => ({ work: found.work, rows: [found], shipped: [found], mine: [] });
+
+test("Who picks says the ratings only for a kind they pick", () => {
+  const rated = { ...row("claude", "opus", "high"), work: "Adversarial review", reason: "Rated 9.0 of 10 for this work: Claude Code's best model by the ratings." };
+  const own = { ...row("claude", "sonnet", "medium"), work: "Rule reading", reason: "Rewrites the rules you type into exact rules and advice." };
+  assert.equal(automaticLine(kind(rated)), "Automatic: the best-rated models, researched daily");
+  assert.equal(automaticLine(kind(own)), "Automatic: set by the app, always a current model");
+});
 
 // Dismiss keeps one entry per kind of work and model, at the rating it was dismissed at.
 test("a dismissed suggestion is kept once, at its latest rating", () => {
