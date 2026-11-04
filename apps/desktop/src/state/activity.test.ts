@@ -161,6 +161,27 @@ test("the reconnect snapshot restores live worker activity without a thread view
 });
 
 
+test("a turn that failed while its work runs reads Working until the block closes, then Failed", () => {
+  const working = { look: "working", hover: "Working" };
+  const failed = { look: "error", hover: "Failed" };
+  const id = "failed-held";
+  applyActivityNews({ conversationId: id, entries: [], opened: true, workers: [workerRow(true)] });
+  applyActivityNews({ conversationId: id, entries: [], ended: "failed" });
+  assert.deepEqual(rowMark(row(id)), working, "a worker holds it");
+  // Its word's wake turn comes and goes: no red between them.
+  applyActivityNews({ conversationId: id, entries: [], workers: [workerRow(false)], jobs: { waking: true } });
+  assert.deepEqual(rowMark(row(id)), working, "the turn the worker's end owes holds it");
+  applyActivityNews({ conversationId: id, entries: [], jobs: { holding: ["ci"] } });
+  assert.deepEqual(rowMark(row(id)), working, "a background job holds it");
+  applyActivityNews({ conversationId: id, entries: [], jobs: {} });
+  assert.deepEqual(rowMark(row(id)), failed, "closed: its mark as before");
+
+  const held = (tasks: [string, "starting"][]) => fromSnapshot({ conversationId: id, run: "failed", tasks, approvals: [], questions: [] });
+  assert.deepEqual(rowMark(rowActivity(held([["t", "starting"]]))), working, "a worker not yet at its CLI holds it too, and a failed run");
+  assert.deepEqual(rowMark(rowActivity(held([]))), failed, "nothing runs: red at once");
+  assert.deepEqual(rowMark(rowActivity({ ...held([["t", "starting"]]), approvals: new Set(["a"]) })), { look: "dot", hover: "Needs you · approval" });
+});
+
 test("turn-end timestamps survive snapshots and worker-only news, independent of finished requests", () => {
   const snapshot = fromSnapshot({ conversationId: "done", run: "idle", tasks: [], approvals: [], questions: [], turnEndedAtMs: 123 });
   useActivity.setState({ byConversation: { done: snapshot } });
