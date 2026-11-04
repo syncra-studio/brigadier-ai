@@ -648,6 +648,12 @@ impl SessionManager {
                 Some(error.clone()),
             )
         } else {
+            // What it started still runs: it reads working until that ends (D151).
+            if let Ok(conv) = self.conv(id)
+                && self.work_holds(&conv).await
+            {
+                return;
+            }
             // Nothing answered it and nothing will: it reads cut off, with Continue (D84).
             (TurnEnd::Interrupted, None)
         };

@@ -417,6 +417,36 @@ async fn a_workers_end_holds_the_work_until_the_turn_that_carries_it_starts() {
     flow.stop().await;
 }
 
+/// D151: a turn handed over with nothing to carry it on doesn't read cut off while its worker
+/// runs. It reads working until the worker's end leaves nothing holding it.
+#[tokio::test]
+async fn a_turn_handed_over_stays_open_while_its_worker_runs() {
+    use crate::thread_view::{self, TurnEnd};
+    let (flow, seen) = flow("events-hand-over-worker", PermissionLevel::Full).await;
+    flow.say("Start Hang-on.").await;
+    flow.settled().await;
+    let chat = flow.conversation.clone();
+    let dir = flow.manager.session_dir(&chat).record();
+    let done = thread_view::last_turn(&dir).unwrap();
+    thread_view::append_turn(
+        &dir,
+        &thread_view::TurnRecord {
+            end: Some(TurnEnd::HandedOver),
+            ..done
+        },
+    )
+    .unwrap();
+    flow.manager.settle_requests(&chat).await;
+    let end = || thread_view::last_turn(&dir).and_then(|turn| turn.end);
+    assert_eq!(end(), Some(TurnEnd::HandedOver));
+    seen.release.store(true, Ordering::SeqCst);
+    super::eventually("its turn to stop reading handed over", || {
+        end() != Some(TurnEnd::HandedOver)
+    })
+    .await;
+    flow.stop().await;
+}
+
 /// The plan's first: the parent ends its turn with a `wait` running in the background; its
 /// worker finishes; the CLI's next turn starts with the event, once, and the net sends
 /// nothing.
