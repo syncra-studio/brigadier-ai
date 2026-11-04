@@ -651,21 +651,39 @@ const ThreadMessages: FC<{
         if (rect.height > 0) changed(rect);
       }),
     // The scroller's own moves are heard as they are made, not a frame later with their scroll
-    // event: the rows of where it put the view are drawn before that frame paints.
+    // event: the rows of where it put the view are drawn before that frame paints. Only the first
+    // in a task, though: in a click's microtasks React draws at once, so rows mounting move the
+    // view, which mounts other rows, and a row that grew after it was measured (its "Show more")
+    // can make that go round for good, with no frame for its true height to be heard in.
     observeElementOffset: (instance, changed) => {
       const stop = observeElementOffset(instance, (offset, scrolling) => {
         if (hidden()) return;
         place();
         changed(offset, scrolling);
       });
-      const unsubscribe = scroller.subscribe(() => {
+      let task: ReturnType<typeof setTimeout> | null = null;
+      let again = false;
+      const hear = () => {
         if (!viewport || hidden()) return;
+        if (task !== null) {
+          again = true;
+          return;
+        }
         place();
         changed(viewport.scrollTop, false);
-      });
+        task = setTimeout(() => {
+          task = null;
+          if (again) {
+            again = false;
+            hear();
+          }
+        });
+      };
+      const unsubscribe = scroller.subscribe(hear);
       return () => {
         stop?.();
         unsubscribe();
+        if (task !== null) clearTimeout(task);
       };
     },
   });

@@ -240,3 +240,19 @@ test("a message sent while the thread works shows its turn in view once it start
   assert.ok(room > 0, `room ${room}`);
   assert.ok(userTop !== null && userTop < seen.viewport.height / 3, `top ${userTop}`);
 });
+
+// A click that opens a held conversation draws it in that click's own microtasks, where an update
+// React takes as sync: rows mounting move the view, which mounts other rows, with no frame between.
+test("a conversation of long messages opened by a click settles from any kept place", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1&only=clickToOpen", "thread-scroll-result", 170000)) as {
+    error?: string;
+    clickToOpen: { eventInMicrotask?: string; most: number; looped: unknown[]; goingOn: unknown[]; tried: number };
+  };
+  assert.equal(seen.error, undefined);
+  // The click's event is still current in its microtasks, which is what makes React's update sync.
+  assert.equal(seen.clickToOpen.eventInMicrotask, "click");
+  assert.ok(seen.clickToOpen.tried > 0);
+  assert.deepEqual(seen.clickToOpen.looped, []);
+  assert.deepEqual(seen.clickToOpen.goingOn, []);
+  console.log(`most rounds in a task: ${seen.clickToOpen.most} of ${seen.clickToOpen.tried} opens`);
+});

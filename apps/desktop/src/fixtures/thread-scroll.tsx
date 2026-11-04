@@ -6,6 +6,7 @@
  * - `long`: a session of 36 turns (only those near the view mounted), each answer a report
  *   with its Details folded, one long user message clipped behind "Show more".
  * - `other`: a Chat of 8 turns. `working`: a Chat whose one turn still runs, never opened.
+ * - `asks`: a Chat of 24 turns, each user message clipped behind "Show more".
  * A message sent here is answered at once, or (`sentWorking`) its turn goes on working; with
  * `sentUnsaid` its CLI hasn't said it yet (see `cliLag`).
  *
@@ -14,7 +15,7 @@
  * holds the steps for a browser probe.
  */
 import { cliLag, cliSays, cliTurnsRead, followBoardRun } from "@/fixtures/cliView";
-import { fixtureInput } from "@/fixtures/input";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -27,6 +28,26 @@ import type { Conversation, ConversationView as View, EventEnvelope, Message, Re
 import { select, send } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, useApp } from "@/state/store";
+
+/**
+ * How many mutation observers' calls the page's longest task held. Past `ROUNDS_CUT` they stop
+ * being delivered: a loop that never yields would hang the page, and with it the test's report.
+ */
+const ROUNDS_CUT = 3000;
+let roundsNow = 0;
+let roundsMost = 0;
+let roundsEver = 0;
+const PageObserver = MutationObserver;
+window.MutationObserver = class extends PageObserver {
+  constructor(callback: MutationCallback) {
+    super((records, observer) => {
+      if (roundsNow === 0) setTimeout(() => (roundsNow = 0));
+      roundsEver += 1;
+      roundsMost = Math.max(roundsMost, ++roundsNow);
+      if (roundsNow <= ROUNDS_CUT) callback(records, observer);
+    });
+  }
+};
 
 const LOAD_MS = 250;
 /** How far the window shrinks in the resize checks. */
@@ -72,7 +93,7 @@ function messages(id: string, turns: number, report: boolean): Message[] {
     const request = `${id}-r${turn}`;
     const at = start + turn * 60_000;
     const asked =
-      turn === turns - 3
+      turn === turns - 3 || id === "asks"
         ? Array.from({ length: 24 }, (_, line) => `Line ${line + 1} of a long message the user pasted.`).join("\n")
         : `Question ${turn + 1}: how does the thread scroll here?`;
     list.push({
@@ -96,11 +117,13 @@ const conversations: Record<string, Conversation> = {
   long: conversation("long", "session", "A long session"),
   other: conversation("other", "chat", "Another chat"),
   working: conversation("working", "chat", "A chat still answering"),
+  asks: conversation("asks", "chat", "A chat of long messages"),
 };
 const stored: Record<string, Message[]> = {
   long: messages("long", 36, true),
   other: messages("other", 8, false),
   working: messages("working", 1, false).slice(0, 1),
+  asks: messages("asks", 24, false),
 };
 const blobs = new Map<string, string>();
 for (const list of Object.values(stored)) {
@@ -470,6 +493,50 @@ function stopStreaming(conversationId: string, messageId: string, text: string, 
 
 /** The steps, each returning what it measured. */
 const steps = {
+  /**
+   * A conversation of long messages opened by a real click, as a sidebar row does, from each
+   * place it could have been left at: the page draws it and takes the next input.
+   */
+  clickToOpen: async () => {
+    const opener = document.createElement("button");
+    opener.textContent = "Open";
+    opener.style.cssText = "position:fixed;top:0;left:0;z-index:99";
+    let eventInMicrotask: string | undefined;
+    opener.addEventListener("click", () => {
+      queueMicrotask(() => (eventInMicrotask = window.event?.type));
+      void select({ type: "conversation", id: "asks" });
+    });
+    document.body.append(opener);
+    await open("asks");
+    await open("other");
+    const tried: { top: number; rounds: number; after: number }[] = [];
+    await open("asks");
+    const range = max();
+    // A row's "Show more" is 20px: steps of 12 land in that window at each edge of a turn's worth.
+    const from = Math.round(range / 2);
+    for (let top = from; top <= from + 1000; top += 12) {
+      await userScroll(top);
+      const at = viewport().scrollTop;
+      await select({ type: "conversation", id: "other" });
+      await settle(0);
+      roundsMost = 0;
+      await fixtureClick(opener);
+      await settle(0);
+      // Settled, nothing goes on going round from task to task either.
+      const before = roundsEver;
+      await wait(100);
+      tried.push({ top: at, rounds: roundsMost, after: roundsEver - before });
+      if (roundsMost > ROUNDS_CUT) break;
+    }
+    opener.remove();
+    return {
+      eventInMicrotask,
+      most: Math.max(...tried.map((each) => each.rounds)),
+      looped: tried.filter((each) => each.rounds > ROUNDS_CUT),
+      goingOn: tried.filter((each) => each.after > 0),
+      tried: tried.length,
+    };
+  },
   /** First open: the bottom, and the gap from the last content to the composer. */
   async firstOpen() {
     await open("long");
@@ -972,7 +1039,7 @@ async function drive(): Promise<void> {
       if (only !== null && name !== only) continue;
       // A cold open needs a page that opened nothing yet, and a send while working one that sent
       // nothing yet: each runs on its own.
-      if (only === null && (name === "coldOpen" || name === "sendWhileWorking")) continue;
+      if (only === null && (name === "coldOpen" || name === "sendWhileWorking" || name === "clickToOpen")) continue;
       // Where a run that ran out of time stopped.
       document.body.dataset["scrollStep"] = name;
       result[name] = await step();
