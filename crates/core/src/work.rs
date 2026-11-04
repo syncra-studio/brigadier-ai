@@ -2477,6 +2477,9 @@ pub struct SourceState {
     pub upstream: Option<String>,
     /// Commits not pushed yet.
     pub ahead: u32,
+    /// Commits on its upstream not pulled yet, as last fetched.
+    #[serde(default)]
+    pub behind: u32,
     /// The index against HEAD, sorted by path.
     pub staged: Vec<SourceFile>,
     /// The files against the index, untracked and conflicted files included, sorted by path.
@@ -2884,7 +2887,8 @@ pub struct CheckoutFile {
 }
 
 /// Whose checkout the right sidebar shows: a session's (its worktree, or the repository while
-/// that doesn't exist yet), or a project's folder before its session starts.
+/// that doesn't exist yet), a project's folder before its session starts, or a worktree of that
+/// project the user made themselves. The daemon checks a worktree's path on every call.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(
     tag = "type",
@@ -2894,6 +2898,7 @@ pub struct CheckoutFile {
 pub enum WorkspaceTarget {
     Conversation { conversation_id: ConversationId },
     Project { project_id: ProjectId },
+    Worktree { project_id: ProjectId, path: String },
 }
 
 /// A checkout's files as the right sidebar's tree lists them.

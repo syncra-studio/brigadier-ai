@@ -130,7 +130,7 @@ function Fixture() {
         <RightSidebarContext.Provider value={panel}>
           <main className={`bg-background text-foreground flex h-screen min-w-0 flex-col ${wide ? "w-screen" : "w-narrowest-window"}`}>
             <SummaryFloat>
-              <SessionTabBar conversation={conversation} onRename={() => {}}>
+              <SessionTabBar id={conversation.id} conversation={conversation} onRename={() => {}}>
                 <ConversationToolbar kind="session" onContext={() => selectTab(id, CHAT_TAB)} />
               </SessionTabBar>
               <div className="relative flex min-h-0 flex-1">

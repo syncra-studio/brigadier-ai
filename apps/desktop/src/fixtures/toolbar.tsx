@@ -120,6 +120,7 @@ function Fixture() {
     // The right panel stays in the page while closed, and the room it takes is its full width
     // from the moment it opens rather than the sliding width, frame by frame.
     const shown = () => document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')?.style.getPropertyValue("--right-sidebar-shown");
+    const contextPressed = () => document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed");
     // The preview's Background row; a click opens its output in a tab.
     const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] button[data-activity]');
     const arrival = (previewId: string, conversationId = id) => {
@@ -136,7 +137,6 @@ function Fixture() {
     };
     const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
     const sourceCount = () => document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent ?? null;
-    const contextPressed = () => document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed");
     void (async () => {
       await until(() => controls().length === 3 && document.querySelector('[data-slot="workspace-pane"] > div'), "the toolbar");
       seen.sessionControls = controls(); seen.initialRight = right();
@@ -314,10 +314,11 @@ function Fixture() {
       seen.draftFiles = pane(); seen.draftTree = document.querySelector('[data-slot="workspace-pane"] [role="tree"]')?.textContent;
       document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')!.click();
 
-      await until(() => runtime.thread.composer.getState().text, "the file's mention in the composer");
-      seen.draftComposer = runtime.thread.composer.getState().text; seen.draftMention = [...mentions.known()]; click("Source");
+      await until(() => sessionTabs("draft:project").tabs.length > 0, "the file's preview tab in the draft");
+      seen.draftComposer = runtime.thread.composer.getState().text; seen.draftOpened = sessionTabs("draft:project").tabs.map((tab) => tab.kind === "file" ? [tab.path, tab.preview] : tab.kind);
+      useSessionTabs.setState({ sessions: {} }); click("Source");
 
-      await until(() => pane() === "source" && document.querySelector('[data-slot="own-copy-note"]'), "the draft's Source");
+      await until(() => pane() === "source" && document.querySelector('[aria-label="Commit message"]'), "the draft's Source");
       seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]');
       seen.dotOnSource = !!document.querySelector('[data-slot="source-changes-dot"]');
@@ -326,20 +327,20 @@ function Fixture() {
       await until(() => pane() === null, "the right sidebar to close on Source");
       seen.closedSource = pane(); click("Right sidebar");
 
-      await until(() => pane() === "source" && document.querySelector('[data-slot="own-copy-note"]'), "Source to reopen");
+      await until(() => pane() === "source" && document.querySelector('[aria-label="Commit message"]'), "Source to reopen");
       projectChanged = true;
       emitWorkspaceChanged({ type: "project", projectId: "project" });
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
-      seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
-      // Work in the local checkout: the draft's Source works on the project folder itself.
+      seen.worktreeNote = !!document.querySelector('[data-slot="own-copy-note"]');
+      // Working in the local checkout, its Source is the same.
       updateDraft("project", { environment: "localCheckout" });
 
-      await until(() => !document.querySelector('[data-slot="own-copy-note"]') && document.querySelector('[aria-label="Commit message"]'), "the local draft's Source");
+      await until(() => document.querySelector('[aria-label="Commit message"]'), "the local draft's Source");
       seen.localSource = buttons('[data-slot="source-panel"]'); seen.localCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       updateDraft("project", { environment: "newWorktree" });
 
-      await until(() => document.querySelector('[data-slot="own-copy-note"]'), "the worktree draft's Source again");
-      // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
+      await until(() => document.querySelector('[aria-label="Commit message"]'), "the worktree draft's Source again");
+      // ⇧⌘F shows Search with its field taking the keyboard, Replace beside it in a draft too.
       key("KeyF", { metaKey: true, shiftKey: true });
       useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
 
@@ -353,7 +354,7 @@ function Fixture() {
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
       setKind("chat");
 
-      await until(() => controls().length === 3 && controls()[0] === "Chat actions", "the chat's toolbar");
+      await until(() => controls().length === 4 && controls()[0] === "Chat actions", "the chat's toolbar");
       if (contextPressed() !== "true") click("Context");
 
       await until(() => contextPressed() === "true" && document.querySelector('[data-slot="summary-card"]'), "the chat's Context card");
@@ -369,6 +370,11 @@ function Fixture() {
       seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent;
       click("Context");
       await closed("Context to close before checking toolbar colors");
+      // The same as the tab bar's "+": a New tab, from any of these.
+      click("New tab");
+      await until(() => sessionTabs(id).tabs.length > 0, "the toolbar's + to open a New tab");
+      seen.toolbarNewTab = sessionTabs(id).tabs.map((tab) => tab.kind);
+      useSessionTabs.setState({ sessions: {} });
       const actions = document.querySelector<HTMLButtonElement>('button[aria-label="Chat actions"]')!;
       const context = document.querySelector<HTMLButtonElement>('button[aria-label="Context"]')!;
       (document.activeElement as HTMLElement)?.blur();
@@ -413,7 +419,7 @@ function Fixture() {
       {/* As ConversationView lays it out: the top bar across the window, the panels below it. */}
       <div className="bg-background text-foreground flex h-screen min-w-0 flex-1 flex-col">
         <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">
-          <TitlebarTips>{kind === "chat" && <ChatActions conversation={conversation} onRename={() => {}} />}<ConversationToolbar kind={kind === "chat" ? "chat" : "session"} /></TitlebarTips>
+          <TitlebarTips>{kind === "chat" && <ChatActions conversation={conversation} onRename={() => {}} />}<ConversationToolbar kind={kind} tabsId={kind === "draft" ? "draft:project" : id} /></TitlebarTips>
         </header>
         <div className="flex min-h-0 min-w-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col">

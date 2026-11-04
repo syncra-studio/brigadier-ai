@@ -16,7 +16,7 @@ import { App } from "@/app/App";
 import type { Conversation, Page, PageContent, Project, Request } from "@/ipc/generated";
 import { useActivity } from "@/state/activity";
 import { emptyBoard, useBoard } from "@/state/board";
-import { openBrowserTab, openFileTab, openPageTab, openReviewTab, newSessionTab, selectTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
+import { changeSessionTab, openBrowserTab, openFileTab, openPageTab, openReviewTab, newSessionTab, selectTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
 import { emptyThread, useApp } from "@/state/store";
 import { canChat } from "@/state/tabChats";
 
@@ -243,6 +243,13 @@ async function drive(): Promise<Record<string, unknown>> {
       ? (asked.findLast((request) => request.method === "openTabChat") as Extract<Request, { method: "openTabChat" }>).target : null,
     welcome: inFront('[data-slot="tab-chat"] [data-embedded-view]')?.textContent?.includes("Ask about this file") ?? false,
   };
+  // The daemon keeps a tab's chat for sessions alone: a plain chat's tab, and a draft's, have no button.
+  changeSessionTab(ID, "file:src/app.ts", (tab) => withoutChat(tab));
+  await until(() => button() !== null);
+  seen.sessionButton = button() !== null;
+  useApp.setState((state) => ({ conversations: { ...state.conversations, [ID]: { ...state.conversations[ID]!, kind: "chat" } } }));
+  await until(() => button() === null);
+  seen.plainChatButton = button() !== null;
   return seen;
 }
 

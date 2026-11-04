@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 use super::{SessionManager, blocking};
 use crate::model::{ConversationId, Environment, Setup};
-use crate::work::CheckoutFile;
+use crate::work::{CheckoutFile, WorkspaceTarget};
 use crate::{Error, Result};
 
 /// The most of a file the tab shows; a longer one is cut here and says so.
@@ -43,6 +43,17 @@ impl SessionManager {
         }
         let root = self.checkout_dir(id)?;
         blocking(move || read_checkout_file(Path::new(&root), &path)).await
+    }
+
+    /// The file at `path` in a target's checkout: a project's folder, or a worktree the user
+    /// made (checked now, as every worktree call is).
+    pub async fn read_target_file(
+        &self,
+        target: &WorkspaceTarget,
+        path: String,
+    ) -> Result<CheckoutFile> {
+        let root = self.workspace_dir(target).await?;
+        blocking(move || read_checkout_file(&root, &path)).await
     }
 }
 

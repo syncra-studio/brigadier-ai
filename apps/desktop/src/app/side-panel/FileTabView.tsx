@@ -11,7 +11,6 @@ import {
 
 import { FileReviewBar, FileReviewBody, useFileReview } from "@/app/side-panel/FileReview";
 import { FindLineBox, MAX_MATCHES } from "@/app/side-panel/FindLineBox";
-import { useCheckoutRoot } from "@/components/conversation";
 import { CodeFileHeader } from "@/components/shared";
 import { request, RequestError } from "@/ipc/client";
 import type { CheckoutFile } from "@/ipc/generated";
@@ -20,12 +19,14 @@ import { HIGHLIGHT_CHARS, highlight, languageOf, type Token } from "@/lib/highli
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
+import { tabTarget } from "@/state/draftTabs";
 import type { FileTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
-import { onWorkspaceChanged } from "@/state/workspaceCache";
+import { useTabRoot } from "@/state/tabRoot";
+import { onWorkspaceChanged, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 
 /**
- * A file tab: one of the session checkout's files, read only, with its line numbers and
+ * A file tab: one of the files of the session's checkout, or before it starts of a project's folder or worktree, read only, with its line numbers and
  * colours, ⌘F to find in it and ⌃G to go to a line. It reads the file again each time it
  * comes to the front. While agents' changes to it wait for review, it shows them inline to
  * keep or undo (`FileReview`).
@@ -37,12 +38,16 @@ type Read =
   | { state: "gone" }
   | { state: "failed"; error: string };
 
-function useFile(conversationId: string, path: string, again: number): Read {
+function useFile(target: WorkspaceTarget, path: string, again: number): Read {
   const [read, setRead] = useState<{ key: string; time: number; read: Read } | null>(null);
-  const key = `${conversationId}:${path}`;
+  // A session moving to its own copy reads another checkout, so the file is read again there.
+  const key = `${useCheckoutKey(target)}:${path}`;
+  const connected = useApp((s) => s.connection.status === "connected");
   useEffect(() => {
     let live = true;
-    request({ method: "readFile", conversationId, path })
+    (target.type === "conversation"
+      ? request({ method: "readFile", conversationId: target.conversationId, path })
+      : request({ method: "readCheckoutFile", target, path }))
       .then(({ file }) => live && setRead({ key, time: again, read: { state: "read", file } }))
       .catch(
         (cause: unknown) =>
@@ -59,7 +64,9 @@ function useFile(conversationId: string, path: string, again: number): Read {
     return () => {
       live = false;
     };
-  }, [conversationId, path, key, again]);
+    // Edits made while disconnected do not arrive through the replacement watch.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [target, path, key, again, connected]);
   // A read of another file must not show under this one's name.
   return read?.key === key ? read.read : { state: "loading" };
 }
@@ -73,7 +80,8 @@ export function FileTabView({
   tab: FileTab;
   active: boolean;
 }) {
-  const root = useCheckoutRoot();
+  const root = useTabRoot(conversationId, tab.checkout);
+  const target = useMemo(() => tabTarget(conversationId, tab.checkout), [conversationId, tab.checkout]);
   // Read again each time the tab comes to the front, and while in front as work lands or the
   // window gains focus: an agent or another app may have changed or removed the file.
   const [again, setAgain] = useState(0);
@@ -90,13 +98,13 @@ export function FileTabView({
     const readAgain = () => setAgain((count) => count + 1);
     window.addEventListener("focus", readAgain);
     // The right sidebar hears the checkout change while it shows (a replace there, say).
-    const unsubscribe = onWorkspaceChanged({ type: "conversation", conversationId }, readAgain);
+    const unsubscribe = onWorkspaceChanged(target, readAgain);
     return () => {
       window.removeEventListener("focus", readAgain);
       unsubscribe();
     };
-  }, [active, conversationId]);
-  const read = useFile(conversationId, tab.path, again);
+  }, [active, target]);
+  const read = useFile(target, tab.path, again);
   const review = useFileReview(conversationId, tab.path, again, active);
   // A file outside the checkout is opened by its absolute path.
   const absolute = root && !/^(\/|[A-Za-z]:[\\/])/.test(tab.path) ? `${root.replace(/\/$/, "")}/${tab.path}` : tab.path;
@@ -113,7 +121,7 @@ export function FileTabView({
       {review.file ? (
         <FileReviewBody review={review} line={tab.line} reveal={tab.reveal} />
       ) : read.state === "gone" ? (
-        <p className="text-muted-foreground m-auto p-4 text-sm">This file was deleted or moved</p>
+        <p className="text-muted-foreground m-auto p-4 text-sm">{tab.carried ? "This file isn't in this session's copy" : "This file was deleted or moved"}</p>
       ) : read.state === "failed" ? (
         <p role="alert" className="text-destructive p-4 text-sm">
           {read.error}

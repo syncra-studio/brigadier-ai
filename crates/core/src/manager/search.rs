@@ -72,7 +72,7 @@ impl SessionManager {
         target: &WorkspaceTarget,
         query: SearchQuery,
     ) -> Result<SearchRun> {
-        let dir = self.workspace_dir(target)?;
+        let dir = self.workspace_dir(target).await?;
         let git = self.git.clone();
         let root =
             blocking(move || Ok(git.open(&dir).map_err(git_error)?.root().to_path_buf())).await?;
@@ -134,6 +134,9 @@ impl SessionManager {
             }
             WorkspaceTarget::Project { project_id } => {
                 write(self.project_checkout(project_id)?).await
+            }
+            WorkspaceTarget::Worktree { project_id, path } => {
+                write(self.user_worktree(project_id, path).await?).await
             }
         }
     }

@@ -190,6 +190,15 @@ session there on the model the rules allow; picking a Codex model asks the same 
 Code's own list has only its models. It writes what it saw as JSON into `#composer-continue-on-result`;
 `ComposerContinueOnRender.test.ts` checks it. This entry is absent from the production build.
 
+# Source and card freshness
+
+`/fixtures/source-freshness.html` is the production summary card, toolbar toggle and right sidebar
+over a scripted checkout. It stages, discards, commits, changes files from outside, lands a worker,
+takes focus and ends a turn, with the sidebar on Source, on another view and closed, and answers a
+read begun before each mutation after it. It writes a pass or fail for each as JSON into
+`#source-freshness-result`; `SourceFreshnessRender.test.ts` checks them. `?draft=1` shows a project's
+draft. This entry is absent from the production build.
+
 # Source panel menu
 
 `/fixtures/source-menu.html` is the Source panel on a project's folder with More Actions' Branch ›
@@ -229,3 +238,10 @@ can't draw. What it saw goes to `#thread-images-result`.
 rows of the Inbox mockups (`src/fixtures/inbox.tsx`). Query: `view=archived`, `view=projects`,
 `view=settings`. Buttons in the main area start and end a turn and send a message, to see which rows
 move. `drive=1` backs `src/app/shell/InboxRender.test.ts`.
+
+# Tab names and active rows
+
+`http://localhost:1426/fixtures/tab-names-rows.html` backs `src/app/shell/TabNamesRowsRender.test.ts`
+(`?drive=1`): two open tabs of one name say their checkout, dim, only while they clash, and the row
+of the tab in front lights up in Files and Source, on stacked rows only in that tab's own checkout.
+`?shot=clash|worktree|folder|files|session` holds one state for a screenshot.

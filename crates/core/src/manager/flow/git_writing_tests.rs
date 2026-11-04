@@ -719,7 +719,7 @@ async fn the_source_panel_merges_resolves_and_commits_with_the_merge_message() {
 
     std::fs::write(repo.join("draft.txt"), "draft\n").unwrap();
     git(repo, &["add", "draft.txt"]);
-    let (message, _) = manager.write_source_message(&target).await.unwrap();
+    let (message, _) = manager.write_source_message(&target, false).await.unwrap();
     assert_eq!(message, "Add the draft");
     assert_eq!(
         git(repo, &["log", "-1", "--format=%s"]).trim(),

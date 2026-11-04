@@ -108,6 +108,9 @@ pub struct ProbeBurst {
     pub interval_ms: u32,
 }
 
+/// Each conversation's newest `stream_seq` when last read, and the worktrees its tasks named.
+type TaskWorktrees = HashMap<ConversationId, (i64, Arc<[String]>)>;
+
 /// The session manager. Validates commands, records them as events, and keeps the catalog
 /// projection current.
 pub struct Core {
@@ -116,6 +119,9 @@ pub struct Core {
     /// Boards of the conversations read since start, kept current by every write through
     /// [`Core::record_conversation`].
     boards: tokio::sync::Mutex<HashMap<ConversationId, Board>>,
+    /// The worktrees each conversation's tasks name, with the newest `stream_seq` read then
+    /// (see [`Core::task_worktrees`]).
+    task_worktrees: Mutex<TaskWorktrees>,
     /// Held across a settings change the core makes itself (read, change, write), so a
     /// change from a client isn't lost in between.
     settings_writes: tokio::sync::Mutex<()>,
@@ -180,6 +186,7 @@ impl Core {
             store,
             projection: Mutex::new(projection),
             boards: tokio::sync::Mutex::new(HashMap::new()),
+            task_worktrees: Mutex::new(HashMap::new()),
             settings_writes: tokio::sync::Mutex::new(()),
             titles: tokio::sync::Mutex::new(titles),
             title_hook: std::sync::OnceLock::new(),
@@ -2324,7 +2331,66 @@ impl Core {
     /// The tasks a conversation the catalog no longer has left in its stream, read without
     /// keeping its board.
     pub(crate) async fn deleted_tasks(&self, id: &ConversationId) -> Result<Vec<Task>> {
+        self.tasks_unkept(id).await
+    }
+
+    /// A conversation's tasks as its stream has them, without loading its board for good or
+    /// waiting on the boards' lock: for a look across every conversation.
+    pub(crate) async fn tasks_unkept(&self, id: &ConversationId) -> Result<Vec<Task>> {
         Ok(self.load_board(id).await?.sorted_tasks())
+    }
+
+    /// The worktree paths a conversation's tasks name, as written in its stream. Folded once
+    /// and remembered until the stream has a newer event; a stream that doesn't read is an
+    /// error every time, never a remembered answer.
+    pub(crate) async fn task_worktrees(&self, id: &ConversationId) -> Result<Arc<[String]>> {
+        // The head before the fold: an event landing in between only costs one more fold,
+        // where the other order would remember a fold that missed it as current.
+        let head = self
+            .store
+            .read_stream(
+                streams::conversation(id),
+                StreamPage {
+                    before: None,
+                    kinds: Vec::new(),
+                    limit: 1,
+                },
+            )
+            .await?
+            .first()
+            .map_or(0, |event| event.stream_seq);
+        if let Some((seen, paths)) = self.task_worktrees_seen().get(id)
+            && *seen == head
+        {
+            return Ok(paths.clone());
+        }
+        let tasks = self.tasks_unkept(id).await?;
+        let paths: HashSet<&str> = tasks
+            .iter()
+            .filter_map(|task| task.workspace.as_ref()?.worktree.as_deref())
+            .collect();
+        let paths: Arc<[String]> = paths.into_iter().map(str::to_owned).collect();
+        self.task_worktrees_seen()
+            .insert(id.clone(), (head, paths.clone()));
+        Ok(paths)
+    }
+
+    /// Forgets the remembered worktrees of conversations no longer among `conversations`.
+    pub(crate) fn forget_task_worktrees(&self, conversations: &[Conversation]) {
+        let kept: HashSet<&ConversationId> = conversations.iter().map(|c| &c.id).collect();
+        self.task_worktrees_seen().retain(|id, _| kept.contains(id));
+    }
+
+    /// The conversations whose worktrees are remembered.
+    #[cfg(all(test, unix))]
+    pub(crate) fn remembered_task_worktrees(&self) -> HashSet<ConversationId> {
+        self.task_worktrees_seen().keys().cloned().collect()
+    }
+
+    /// The conversations whose boards are kept loaded.
+    #[cfg(all(test, unix))]
+    pub(crate) async fn kept_boards(&self) -> HashSet<ConversationId> {
+        self.boards.lock().await.keys().cloned().collect()
     }
 
     /// Folds a conversation's stream into its board, newest page first.
@@ -2520,6 +2586,13 @@ impl Core {
             }
         };
         Ok((burst, run))
+    }
+
+    fn task_worktrees_seen(&self) -> MutexGuard<'_, TaskWorktrees> {
+        // Each entry is whole or absent, whatever a panic interrupted.
+        self.task_worktrees
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     fn projection(&self) -> MutexGuard<'_, Projection> {

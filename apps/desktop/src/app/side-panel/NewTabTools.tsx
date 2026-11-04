@@ -5,17 +5,18 @@ import { shortcutLabel } from "@/app/side-panel/SidePanel";
 import { useCheckoutRoot } from "@/components/conversation";
 import { TooltipIconButton, Kbd } from "@/components/controls";
 import { SiteIcon } from "@/components/shared";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Grid, Search, X } from "@/components/icons";
 import { pageList } from "@/ipc/client";
 import type { BrowserVisit, PageSummary } from "@/ipc/generated";
 import { browserHistory } from "@/state/browserData";
+import { isDraftTabs } from "@/state/draftTabs";
 import { useBrowsers } from "@/state/browsers";
 import { useBrowserOn } from "@/state/links";
 import { onPageChanged } from "@/state/pageChanges";
 import { openPageTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
-import { setTerminalOpen } from "@/state/terminalPlaces";
+import { HOME_PLACE, setTerminalOpen } from "@/state/terminalPlaces";
 
 import { suggestedSites } from "./newTabSites";
 import "./NewTabTools.css";
@@ -29,6 +30,8 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
   const cwd = useCheckoutRoot();
   const mac = useApp((s) => s.info?.platform === "macos");
   const archived = useApp((s) => s.conversations[conversationId]?.lifecycle === "archived");
+  // Before its conversation exists there is nothing for a side chat to be about.
+  const draft = isDraftTabs(conversationId);
   const browserOn = useBrowserOn();
   const [history, setHistory] = useState<BrowserVisit[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -78,7 +81,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
                   <TooltipIconButton tooltip="Terminal options" disabled={archived} className="new-tab-options shrink-0 rounded-full"><DotsHorizontal /></TooltipIconButton>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => setTerminalOpen(`conv:${conversationId}`, true)}>Open bottom terminal</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setTerminalOpen(draft ? HOME_PLACE : `conv:${conversationId}`, true)}>Open bottom terminal</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -88,10 +91,17 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
               </button>
             </div>
             <div className="new-tab-card">
-              <button type="button" aria-label="Side chat" disabled={archived} onClick={() => replaceNewTab(conversationId, tabId, "sideChat")} className="new-tab-tool">
-                <ChatCompose aria-hidden /><span className="new-tab-tool-label">Side chat</span>
-                <Kbd>{shortcutLabel("⌥⌘S", mac)}</Kbd>
-              </button>
+              {draft ? (
+                <Tooltip>
+                  {/* A disabled button hears no pointer, so its tooltip hangs on what holds it. */}
+                  <TooltipTrigger asChild>
+                    <span className="flex w-full">
+                      <SideChatTool mac={mac} disabled onClick={() => {}} />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>Start the session to use Side chat</TooltipContent>
+                </Tooltip>
+              ) : <SideChatTool mac={mac} disabled={archived} onClick={() => replaceNewTab(conversationId, tabId, "sideChat")} />}
             </div>
             <div className="new-tab-card">
               <DropdownMenu>
@@ -143,6 +153,15 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
         )}
       </div>
     </div>
+  );
+}
+
+function SideChatTool({ mac, disabled, onClick }: { mac: boolean; disabled: boolean; onClick: () => void }) {
+  return (
+    <button type="button" aria-label="Side chat" disabled={disabled} onClick={onClick} className="new-tab-tool">
+      <ChatCompose aria-hidden /><span className="new-tab-tool-label">Side chat</span>
+      <Kbd>{shortcutLabel("⌥⌘S", mac)}</Kbd>
+    </button>
   );
 }
 

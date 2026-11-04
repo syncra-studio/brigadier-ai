@@ -37,7 +37,7 @@ let state: SourceState = {
   branch: null,
   remote: "origin",
   upstream: null,
-  ahead: 0,
+  ahead: 0, behind: 0,
   staged: [file("src/cart/coupon.ts", "modified")],
   changes: [file(path, "conflicted")],
   merging: null,

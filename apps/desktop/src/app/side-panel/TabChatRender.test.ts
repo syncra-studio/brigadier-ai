@@ -70,4 +70,6 @@ test("a tab's own chat: its button, the split, resizing, folding, hiding, the do
   assert.deepEqual(seen.newChat, { fresh: true, view: "split", share: 0.7, deleted: true, opened: true });
   // A file tab's chat is about the file.
   assert.deepEqual(seen.fileChat, { target: { type: "file", path: "src/app.ts" }, welcome: true });
+  assert.equal(seen.sessionButton, true);
+  assert.equal(seen.plainChatButton, false, "a plain chat's tab has no chat button");
 });

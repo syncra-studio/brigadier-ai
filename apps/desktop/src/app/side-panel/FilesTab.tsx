@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { FileBrowser } from "@/app/side-panel/FileBrowser";
 import { listFiles, listProjectFiles } from "@/state/actions";
+import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";
-import { openFileTab, replaceNewTabWithFile } from "@/state/sessionTabs";
+import { activeRow, openFileTab, replaceNewTabWithFile, useSessionTabsOf } from "@/state/sessionTabs";
 import {
   type FileList, onWorkspaceChanged, readFiles, useCachedEntry, useCheckoutKey, type WorkspaceTarget,
 } from "@/state/workspaceCache";
@@ -30,11 +31,13 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled, r
     ? Object.values(s.board.tasks).filter((task) => task.landed !== null).length : 0);
   const list = useWorkspaceFiles(target, landed);
   const search = useCallback((query: string) => listFiles(conversationId, query), [conversationId]);
+  const shown = activeRow(useSessionTabsOf(conversationId), undefined)?.path ?? null;
   return (
     <FileBrowser
       scope={conversationId}
       target={target}
       list={list}
+      shown={shown}
       search={search}
       searchRequest={searchRequest}
       onSearchHandled={onSearchHandled}
@@ -48,27 +51,36 @@ export function FilesTab({ conversationId, searchRequest = 0, onSearchHandled, r
 }
 
 /**
- * The Files pane before a session starts: its project folder's files. There are no tabs yet, so
- * opening a file is up to `onOpen`.
+ * The Files pane before a session starts: its project folder's files, opening in the draft's tabs
+ * as a session's do, with the same preview tab and the same New tab's Find file.
  */
-export function ProjectFiles({ projectId, searchRequest, onSearchHandled, onOpen }: {
+export function ProjectFiles({ projectId, searchRequest, onSearchHandled, replaceTabId, onFileOpened }: {
   projectId: string;
   searchRequest: number;
   onSearchHandled: () => void;
-  onOpen: (path: string) => void;
+  replaceTabId?: string | undefined;
+  onFileOpened?: (() => void) | undefined;
 }) {
+  const owner = `draft:${projectId}`;
   const target = useMemo(() => ({ type: "project", projectId }) as const, [projectId]);
   const list = useWorkspaceFiles(target, 0);
   const search = useCallback((query: string) => listProjectFiles(projectId, query), [projectId]);
+  // A tab from a worktree's row isn't this tree's: the tree is the project's folder.
+  const shown = activeRow(useSessionTabsOf(owner), undefined)?.path ?? null;
   return (
     <FileBrowser
       scope={`project:${projectId}`}
       target={target}
       list={list}
+      shown={shown}
       search={search}
       searchRequest={searchRequest}
       onSearchHandled={onSearchHandled}
-      onOpen={(path) => onOpen(path)}
+      onOpen={(path, keep) => {
+        if (!replaceTabId || !replaceNewTabWithFile(owner, replaceTabId, path))
+          openFileTab(owner, path, { preview: !keep });
+        onFileOpened?.();
+      }}
     />
   );
 }
@@ -80,6 +92,7 @@ export function ProjectFiles({ projectId, searchRequest, onSearchHandled, onOpen
  */
 function useWorkspaceFiles(target: WorkspaceTarget, changed: number): FileList | null {
   const key = useCheckoutKey(target);
+  const connected = useApp((s) => s.connection.status === "connected");
   const kept = useCachedEntry(key)?.files;
   const [read, setRead] = useState<{ key: string; list: FileList } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -101,7 +114,7 @@ function useWorkspaceFiles(target: WorkspaceTarget, changed: number): FileList |
     };
     // `changed` asks for a fresh read even though nothing read here depends on it.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [target, key, changed]);
+  }, [target, key, changed, connected]);
   return kept ?? (read?.key === key ? read.list : failed === key ? EMPTY : null);
 }
 

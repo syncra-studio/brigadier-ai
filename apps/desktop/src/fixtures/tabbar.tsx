@@ -187,7 +187,7 @@ function Fixture() {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <main className="bg-background text-foreground w-narrowest-window flex h-screen min-w-0 flex-col">
-        <SessionTabBar conversation={conversation} onRename={() => {}}>
+        <SessionTabBar id={conversation.id} conversation={conversation} onRename={() => {}}>
           <button type="button" aria-label="Context">Context</button>
         </SessionTabBar>
         <input id="field" aria-label="Field" defaultValue="text" />

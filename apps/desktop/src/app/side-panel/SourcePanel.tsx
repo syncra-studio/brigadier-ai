@@ -3,29 +3,32 @@ import { type FC, type ReactNode, useCallback, useEffect, useMemo, useRef, useSt
 import { BranchNameBox, BranchPicker } from "@/app/side-panel/BranchPicker";
 import { CommitBox } from "@/app/side-panel/CommitBox";
 import { SourceGroup } from "@/app/side-panel/SourceGroup";
-import { SourceHeader } from "@/app/side-panel/SourceHeader";
+import { SourceActions, SourceHeader, SourceRow } from "@/app/side-panel/SourceHeader";
 import { SourceMoreMenu } from "@/app/side-panel/SourceMoreMenu";
-import { type CommitHow, CONFLICTS_LEFT, type Picking, reason, sessionOf, sourceCalls, type SourceTarget } from "@/app/side-panel/sourceTarget";
+import { type CommitHow, CONFLICTS_LEFT, mainAction, type Picking, reason, sessionOf, sourceCalls, type SourceTarget, useRowOpen, useStageAll } from "@/app/side-panel/sourceTarget";
 import { conflictCount, parseConflicts } from "@/app/side-panel/conflicts";
 import { LETTERS } from "@/app/side-panel/sourceStatus";
 import {
-  Branch,
   FileDocument,
   FileIcon,
   Minus,
   Plus,
+  PublishGlyph,
+  SyncGlyph,
   Undo,
 } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
 import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/overlays";
 import { request } from "@/ipc/client";
-import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
+import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, readUserWorktrees, refreshSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import type { SourceAction, SourceBranch, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
+import { useApp } from "@/state/store";
 import { noteSourceState } from "@/state/review";
-import { openConflictTab, openFileTab, openReviewTab } from "@/state/sessionTabs";
+import { tabsOfTarget } from "@/state/draftTabs";
+import { activeRow, openConflictTab, openFileTab, openReviewTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /**
@@ -39,9 +42,9 @@ import { toast } from "@/state/toasts";
  * committed with Continue, or aborted; a rebase's alike, commit by commit, Continue going on
  * to the next commit's.
  *
- * Before a session starts it shows its project's folder instead. A session that will work in
- * that folder can stage and commit there already (there is no Review tab yet); one that will
- * make its own copy only reads it.
+ * Before a session starts it works on its project's folder, and on the worktrees of it the user
+ * made (there is no Review tab yet). With more than one checkout, each is a stacked row
+ * ([`SourceRow`]), and the panel draws one of them.
  */
 
 function baseName(path: string): string {
@@ -60,19 +63,17 @@ function dirName(path: string): string {
  */
 function useSourceState(target: SourceTarget) {
   const conversationId = sessionOf(target);
-  const projectId = target.type === "project" ? target.projectId : null;
-  const cacheTarget = useMemo<WorkspaceTarget>(
-    () => (conversationId ? { type: "conversation", conversationId } : { type: "project", projectId: projectId ?? "" }),
-    [conversationId, projectId],
-  );
+  // The same target from any render, whatever object it came in.
+  const stable = JSON.stringify(target);
+  const cacheTarget = useMemo(() => JSON.parse(stable) as WorkspaceTarget, [stable]);
   const key = useCheckoutKey(cacheTarget);
   const kept = useCachedEntry(key)?.source;
   const [read, setRead] = useState<{ key: string; state: SourceState } | null>(null);
   const state = kept ?? (read?.key === key ? read.state : null);
   const [failure, setFailure] = useState<{ key: string; error: string } | null>(null);
   const changeKey = useCheckoutChanges(conversationId ?? "");
-  const load = useCallback(() => {
-    readSource(cacheTarget)
+  const show = useCallback((reading: Promise<SourceState>) => {
+    reading
       .then((next) => {
         if (workspaceKey(cacheTarget) !== key) return;
         setRead({ key, state: next });
@@ -81,6 +82,10 @@ function useSourceState(target: SourceTarget) {
       })
       .catch((error: unknown) => { if (workspaceKey(cacheTarget) === key) setFailure({ key, error: reason(error) }); });
   }, [cacheTarget, conversationId, key]);
+  const load = useCallback(() => show(readSource(cacheTarget)), [show, cacheTarget]);
+  const connected = useApp((s) => s.connection.status === "connected");
+  // The checkout just moved (a commit, which returns no state; Refresh): no read under way will do.
+  const reload = useCallback(() => show(refreshSource(cacheTarget, key)), [show, cacheTarget, key]);
   // A landing, Undo or Reapply changes the checkout at once.
   useEffect(() => {
     if (changeKey) load();
@@ -94,7 +99,14 @@ function useSourceState(target: SourceTarget) {
       unsubscribe();
       window.removeEventListener("focus", load);
     };
-  }, [load, cacheTarget]);
+    // Reinstalling a watch does not report changes made while disconnected.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [load, cacheTarget, connected]);
+  // A worktree that can't be read may be gone: its row goes with what git lists.
+  const failed = failure?.key === key;
+  useEffect(() => {
+    if (failed && cacheTarget.type === "worktree") readUserWorktrees(cacheTarget.projectId).catch(() => undefined);
+  }, [failed, cacheTarget]);
   const set = (next: SourceState) => {
     if (workspaceKey(cacheTarget) !== key) return;
     keepSource(cacheTarget, next, key);
@@ -102,7 +114,7 @@ function useSourceState(target: SourceTarget) {
     setFailure(null);
     if (conversationId) noteSourceState(conversationId, next);
   };
-  return { state, error: failure?.key === key ? failure.error : null, set, load, cacheTarget };
+  return { state, error: failure?.key === key ? failure.error : null, set, reload, cacheTarget };
 }
 
 type Discarding = { scope: SourceScope; files: SourceFile[] };
@@ -122,19 +134,21 @@ const PICK_PLACEHOLDER: Record<Picking, string> = {
 /** A name box open: a new branch's (from what is checked out, or `from`), or the branch's new name. */
 type Naming = { kind: "create"; from: string | null } | { kind: "rename" };
 
-/** `scopeSwitch`, under the title, switches a session's Source to one of its workers' changes. */
-export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; scopeSwitch?: ReactNode }) {
-  const { state, error, set, load, cacheTarget } = useSourceState(target);
-  const conversationId = sessionOf(target);
-  const readOnly = target.type === "project" && target.readOnly;
+/** One of a Source's stacked rows: what it is called, the key its open state goes by, and whether it starts open. */
+export type SourceRowInfo = { name: string; title: string; rowKey: string; startOpen: boolean };
+
+/** `row` draws it as one of a Source's stacked rows, under a title of the caller's. */
+export function SourcePanel({ target, row }: { target: SourceTarget; row?: SourceRowInfo }) {
+  const { state, error, set, reload, cacheTarget } = useSourceState(target);
   const calls = sourceCalls(target);
+  const stageAll = useStageAll((s) => s.choice);
+  const [rowOpen, setRowOpen] = useRowOpen(row?.rowKey ?? "", row?.startOpen ?? true);
   const [busy, setBusy] = useState(false);
   // A commit reads the staged diff for its message, then commits the index: it stays as is.
   const [committing, setCommitting] = useState(false);
   const locked = busy || committing;
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
   const [stagingConflicts, setStagingConflicts] = useState<StagingConflicts | null>(null);
-  const [open, setOpen] = useState(true);
   const [picker, setPicker] = useState<Picking | null>(null);
   const [naming, setNaming] = useState<Naming | null>(null);
   const [droppingStash, setDroppingStash] = useState(false);
@@ -142,12 +156,16 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
   const [gitOutput, setGitOutput] = useState<SourceGitRun[] | null | "closed">("closed");
   const [branches, setBranches] = useState<SourceBranch[] | null>(null);
   const [nowMs, setNowMs] = useState(0);
-  // A diff opens in the session's Review tab; before it starts there is none.
-  const review = conversationId
-    ? (path: string, staged: boolean) => openReviewTab(conversationId, { type: "file", path, staged })
-    : null;
+  // A diff opens in the Review tab, and a file in its own, before a session starts too: a
+  // worktree's rows name their checkout.
+  const { owner, checkout } = tabsOfTarget(target);
+  // The row of the tab in front lights up, only in the checkout that tab reads.
+  const shownRow = activeRow(useSessionTabsOf(owner), checkout);
+  const shows = (path: string, staged: boolean | null) =>
+    shownRow?.path === path && (staged === null || shownRow.staged === undefined || shownRow.staged === staged);
+  const review = (path: string, staged: boolean) => openReviewTab(owner, { type: "file", path, staged }, undefined, checkout);
   // Checkout is for the project folder: a session works on its own branch.
-  const canCheckout = target.type === "project" && !readOnly;
+  const canCheckout = target.type !== "conversation";
 
   const act = (run: () => Promise<{ state: SourceState }>, failed: string) => {
     setBusy(true);
@@ -167,7 +185,7 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
     const first = paths[0];
     toast(CONFLICTS_LEFT, {
       tone: "error",
-      actions: conversationId && first ? [{ label: "Show Changes", run: () => openConflictTab(conversationId, first) }] : [],
+      actions: first ? [{ label: "Show Changes", run: () => openConflictTab(owner, first, "conflict", checkout) }] : [],
     });
   };
   /**
@@ -308,52 +326,84 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
   const merging = state?.merging ?? null;
   // A merge or rebase stopped on conflicts: the branch stays as it is till it ends.
   const resolving = merging !== null || state?.rebasing != null;
-  // Nothing to commit and nothing under way: the message box and Commit have no job (#490).
+  // Nothing to commit and nothing under way: the message box and Commit show, off.
   const clean = state !== null && staged.length === 0 && all.length === 0 && !resolving;
   const openGroup = (scope: "staged" | "unstaged") => {
-    if (conversationId) openReviewTab(conversationId, { type: "changes", staged: scope === "staged" });
+    openReviewTab(owner, { type: "changes", staged: scope === "staged" }, undefined, checkout);
   };
-  const openFile = conversationId ? (path: string) => openFileTab(conversationId, path) : null;
+  const openFile = (path: string) => openFileTab(owner, path, { checkout });
   const commitRef = useRef<((how: CommitHow) => void) | null>(null);
 
+  const action = mainAction(state, stageAll);
+  const canCommit = (action.kind === "commit" || action.kind === "continue") && action.enabled;
+  const refresh = () => {
+    reload();
+    if (cacheTarget.type !== "conversation") readUserWorktrees(cacheTarget.projectId).catch(() => undefined);
+  };
+  const actions = (
+    <SourceActions
+      canCommit={canCommit}
+      locked={locked}
+      onCommit={() => commitRef.current?.("commit")}
+      onRefresh={refresh}
+      moreMenu={
+        <SourceMoreMenu
+          state={state}
+          merging={merging !== null}
+          resolving={resolving}
+          canCheckout={canCheckout}
+          hasChanges={changes.length > 0}
+          hasStaged={staged.length > 0}
+          onPull={pull}
+          onPush={push}
+          onFetch={fetch}
+          onPick={pick}
+          onCommit={(how) => commitRef.current?.(how)}
+          onAbortMerge={abortMerge}
+          onAbortRebase={abortRebase}
+          onStageAll={() => stage(changes.map((file) => file.path))}
+          onUnstageAll={() => unstage(null)}
+          onDiscardAll={() => setDiscarding({ scope: "unstaged", files: changes })}
+          onCreateBranch={() => setNaming({ kind: "create", from: null })}
+          onRenameBranch={() => setNaming({ kind: "rename" })}
+          onPublish={publish}
+          onStash={stash}
+          onApplyStash={applyStash}
+          onDropStash={() => setDroppingStash(true)}
+          onShowGitOutput={showGitOutput}
+        />
+      }
+    />
+  );
+  const branchName = state ? (state.branch ?? state.rebasing?.branch ?? null) : null;
   return (
-    <div data-slot="source-panel" className="relative flex min-h-0 flex-1 flex-col">
-      <SourceHeader
-        open={open}
-        onToggle={() => setOpen(!open)}
-        readOnly={readOnly}
-        locked={locked}
-        onCommit={() => commitRef.current?.("commit")}
-        onRefresh={load}
-        moreMenu={
-          <SourceMoreMenu
-            state={state}
-            merging={merging !== null}
-            resolving={resolving}
-            canCheckout={canCheckout}
-            hasChanges={changes.length > 0}
-            hasStaged={staged.length > 0}
-            onPull={pull}
-            onPush={push}
-            onFetch={fetch}
-            onPick={pick}
-            onCommit={(how) => commitRef.current?.(how)}
-            onAbortMerge={abortMerge}
-            onAbortRebase={abortRebase}
-            onStageAll={() => stage(changes.map((file) => file.path))}
-            onUnstageAll={() => unstage(null)}
-            onDiscardAll={() => setDiscarding({ scope: "unstaged", files: changes })}
-            onCreateBranch={() => setNaming({ kind: "create", from: null })}
-            onRenameBranch={() => setNaming({ kind: "rename" })}
-            onPublish={publish}
-            onStash={stash}
-            onApplyStash={applyStash}
-            onDropStash={() => setDroppingStash(true)}
-            onShowGitOutput={showGitOutput}
-          />
-        }
-      />
-      {scopeSwitch}
+    <div data-slot="source-panel" className={cn("relative flex flex-col", row ? "shrink-0" : "min-h-0 flex-1")}>
+      {row ? (
+        <SourceRow
+          open={rowOpen}
+          onToggle={() => setRowOpen(!rowOpen)}
+          name={row.name}
+          title={row.title}
+          branch={branchName}
+          onBranch={canCheckout ? () => pick("checkout") : null}
+          branchDisabled={locked}
+        >
+          {state?.branch && (state.upstream || state.remote) && (
+            state.upstream ? (
+              <TooltipIconButton tooltip={`Sync Changes ↓${state.behind} ↑${state.ahead}`} size="icon-xs" disabled={locked} onClick={sync}>
+                <SyncGlyph />
+              </TooltipIconButton>
+            ) : (
+              <TooltipIconButton tooltip="Publish Branch" size="icon-xs" disabled={locked} onClick={publish}>
+                <PublishGlyph />
+              </TooltipIconButton>
+            )
+          )}
+          {actions}
+        </SourceRow>
+      ) : (
+        <SourceHeader>{actions}</SourceHeader>
+      )}
       {picker && (
         <BranchPicker
           placeholder={PICK_PLACEHOLDER[picker]}
@@ -382,72 +432,58 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
         />
       )}
       {/* Folded, it stays mounted: a commit under way keeps its state. */}
-      <div className={cn("flex min-h-0 flex-1 flex-col", !open && "hidden")}>
-          {readOnly ? (
-            <OwnCopyNote state={state} />
-          ) : (
-            <CommitBox
-              target={target}
-              state={state}
-              staging={busy}
-              commitRef={commitRef}
-              onCommitting={setCommitting}
-              onCommitted={load}
-              onSync={sync}
-              onContinueRebase={continueRebase}
-              onBranch={canCheckout ? () => pick("checkout") : null}
-              locked={locked}
-              idle={clean}
-            />
-          )}
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className={cn("flex flex-col", row ? "ps-4" : "min-h-0 flex-1", row && !rowOpen && "hidden")}>
+          <CommitBox
+            target={target}
+            state={state}
+            staging={busy}
+            commitRef={commitRef}
+            onCommitting={setCommitting}
+            onCommitted={reload}
+            onSync={sync}
+            onPublish={publish}
+            onContinueRebase={continueRebase}
+            onBranch={canCheckout ? () => pick("checkout") : null}
+            locked={locked}
+            idle={clean}
+            inRow={!!row}
+          />
+          <div className={cn("px-2 pb-2", !row && "min-h-0 flex-1 overflow-y-auto")}>
             {error && !state && <p className="text-destructive p-2 text-sm">{error}</p>}
             {state && clean && (
-              <div className="text-muted-foreground p-2 text-sm">
-                <p>Nothing to commit</p>
-                {state.ahead > 0 && (
-                  <p>
-                    The changes are committed on this branch ({state.ahead} {state.ahead === 1 ? "commit" : "commits"} not pushed).
-                  </p>
-                )}
-              </div>
+              <p className="text-muted-foreground p-2 text-sm">Nothing to commit</p>
             )}
             {conflicted.length > 0 && (
               <SourceGroup
                 title="Merge Changes"
                 count={conflicted.length}
                 actions={
-                  !readOnly && (
-                    <TooltipIconButton
-                      tooltip="Stage All Merge Changes"
-                      size="icon-xs"
-                      disabled={locked}
-                      onClick={() => stageConflicted(conflicted.map((file) => file.path))}
-                    >
-                      <Plus />
-                    </TooltipIconButton>
-                  )
+                  <TooltipIconButton
+                    tooltip="Stage All Merge Changes"
+                    size="icon-xs"
+                    disabled={locked}
+                    onClick={() => stageConflicted(conflicted.map((file) => file.path))}
+                  >
+                    <Plus />
+                  </TooltipIconButton>
                 }
               >
                 {conflicted.map((file) => (
                   <FileRow
                     key={`merge:${file.path}`}
                     file={file}
-                    onOpen={conversationId ? () => openConflictTab(conversationId, file.path) : null}
+                    selected={shows(file.path, null)}
+                    onOpen={() => openConflictTab(owner, file.path, "conflict", checkout)}
                   >
-                    {!readOnly && (
-                      <>
-                        {openFile && <OpenFileButton onClick={() => openFile(file.path)} />}
-                        <TooltipIconButton
-                          tooltip="Stage Changes"
-                          size="icon-xs"
-                          disabled={locked}
-                          onClick={() => stageConflicted([file.path])}
-                        >
-                          <Plus />
-                        </TooltipIconButton>
-                      </>
-                    )}
+                    <OpenFileButton onClick={() => openFile(file.path)} />
+                    <TooltipIconButton
+                      tooltip="Stage Changes"
+                      size="icon-xs"
+                      disabled={locked}
+                      onClick={() => stageConflicted([file.path])}
+                    >
+                      <Plus />
+                    </TooltipIconButton>
                   </FileRow>
                 ))}
               </SourceGroup>
@@ -458,32 +494,26 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
                 count={staged.length}
                 actions={
                   <>
-                    {conversationId && (
-                      <TooltipIconButton tooltip="Open Staged Changes" size="icon-xs" onClick={() => openGroup("staged")}>
-                        <FileDocument />
-                      </TooltipIconButton>
-                    )}
-                    {!readOnly && (
-                      <TooltipIconButton tooltip="Unstage All Changes" size="icon-xs" disabled={locked} onClick={() => unstage(null)}>
-                        <Minus />
-                      </TooltipIconButton>
-                    )}
+                    <TooltipIconButton tooltip="Open Staged Changes" size="icon-xs" onClick={() => openGroup("staged")}>
+                      <FileDocument />
+                    </TooltipIconButton>
+                    <TooltipIconButton tooltip="Unstage All Changes" size="icon-xs" disabled={locked} onClick={() => unstage(null)}>
+                      <Minus />
+                    </TooltipIconButton>
                   </>
                 }
               >
                 {staged.map((file) => (
-                  <FileRow key={`staged:${file.path}`} file={file} onOpen={review ? () => review(file.path, true) : null}>
-                    {openFile && file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
-                    {!readOnly && (
-                      <TooltipIconButton
-                        tooltip="Unstage Changes"
-                        size="icon-xs"
-                        disabled={locked}
-                        onClick={() => unstage([file.path])}
-                      >
-                        <Minus />
-                      </TooltipIconButton>
-                    )}
+                  <FileRow key={`staged:${file.path}`} file={file} selected={shows(file.path, true)} onOpen={() => review(file.path, true)}>
+                    {file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
+                    <TooltipIconButton
+                      tooltip="Unstage Changes"
+                      size="icon-xs"
+                      disabled={locked}
+                      onClick={() => unstage([file.path])}
+                    >
+                      <Minus />
+                    </TooltipIconButton>
                   </FileRow>
                 ))}
               </SourceGroup>
@@ -495,58 +525,48 @@ export function SourcePanel({ target, scopeSwitch }: { target: SourceTarget; sco
                 actions={
                   changes.length > 0 && (
                     <>
-                      {conversationId && (
-                        <TooltipIconButton tooltip="Open Changes" size="icon-xs" onClick={() => openGroup("unstaged")}>
-                          <FileDocument />
-                        </TooltipIconButton>
-                      )}
-                      {!readOnly && (
-                        <>
-                          <TooltipIconButton
-                            tooltip="Discard All Changes"
-                            size="icon-xs"
-                            disabled={locked}
-                            onClick={() => setDiscarding({ scope: "unstaged", files: changes })}
-                          >
-                            <Undo />
-                          </TooltipIconButton>
-                          <TooltipIconButton
-                            tooltip="Stage All Changes"
-                            size="icon-xs"
-                            disabled={locked}
-                            onClick={() => stage(changes.map((file) => file.path))}
-                          >
-                            <Plus />
-                          </TooltipIconButton>
-                        </>
-                      )}
+                      <TooltipIconButton tooltip="Open Changes" size="icon-xs" onClick={() => openGroup("unstaged")}>
+                        <FileDocument />
+                      </TooltipIconButton>
+                      <TooltipIconButton
+                        tooltip="Discard All Changes"
+                        size="icon-xs"
+                        disabled={locked}
+                        onClick={() => setDiscarding({ scope: "unstaged", files: changes })}
+                      >
+                        <Undo />
+                      </TooltipIconButton>
+                      <TooltipIconButton
+                        tooltip="Stage All Changes"
+                        size="icon-xs"
+                        disabled={locked}
+                        onClick={() => stage(changes.map((file) => file.path))}
+                      >
+                        <Plus />
+                      </TooltipIconButton>
                     </>
                   )
                 }
               >
                 {changes.map((file) => (
-                  <FileRow key={`changes:${file.path}`} file={file} onOpen={review ? () => review(file.path, false) : null}>
-                    {openFile && file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
-                    {!readOnly && (
-                      <>
-                        <TooltipIconButton
-                          tooltip="Discard Changes"
-                          size="icon-xs"
-                          disabled={locked}
-                          onClick={() => setDiscarding({ scope: "unstaged", files: [file] })}
-                        >
-                          <Undo />
-                        </TooltipIconButton>
-                        <TooltipIconButton
-                          tooltip="Stage Changes"
-                          size="icon-xs"
-                          disabled={locked}
-                          onClick={() => stage([file.path])}
-                        >
-                          <Plus />
-                        </TooltipIconButton>
-                      </>
-                    )}
+                  <FileRow key={`changes:${file.path}`} file={file} selected={shows(file.path, false)} onOpen={() => review(file.path, false)}>
+                    {file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
+                    <TooltipIconButton
+                      tooltip="Discard Changes"
+                      size="icon-xs"
+                      disabled={locked}
+                      onClick={() => setDiscarding({ scope: "unstaged", files: [file] })}
+                    >
+                      <Undo />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      tooltip="Stage Changes"
+                      size="icon-xs"
+                      disabled={locked}
+                      onClick={() => stage([file.path])}
+                    >
+                      <Plus />
+                    </TooltipIconButton>
                   </FileRow>
                 ))}
               </SourceGroup>
@@ -658,9 +678,10 @@ const OpenFileButton: FC<{ onClick: () => void }> = ({ onClick }) => (
  * A changed file: click to open its diff (once there is a Review tab); its actions show on hover,
  * its `counts` (a worker's file's +N −N) before its letter.
  */
-export const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; counts?: ReactNode; children?: ReactNode }> = ({
+export const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; selected?: boolean; counts?: ReactNode; children?: ReactNode }> = ({
   file,
   onOpen,
+  selected = false,
   counts,
   children,
 }) => {
@@ -685,7 +706,7 @@ export const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; counts
   // Inset as the Files tree's rows are.
   const look = "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-2 text-start text-sm";
   return (
-    <li className="group/source-row hover:bg-muted rounded-control flex h-control-sm items-center gap-1 pe-1">
+    <li aria-current={selected || undefined} className={cn("group/source-row hover:bg-muted rounded-control flex h-control-sm items-center gap-1 pe-1", selected && "bg-muted")}>
       {onOpen ? (
         <button type="button" title={title} onClick={onOpen} className={look}>
           {name}
@@ -760,19 +781,3 @@ const DiscardDialog: FC<{
     />
   );
 };
-
-/**
- * Over a project folder's changes when the session will make its own copy: the folder's branch,
- * and that the session's work won't land here, so nothing here can be changed from this pane.
- */
-const OwnCopyNote: FC<{ state: SourceState | null }> = ({ state }) => (
-  <div className="border-border flex shrink-0 flex-col gap-1 border-b p-2">
-    <div className="text-muted-foreground flex h-control-sm items-center gap-1.5 px-1 text-sm">
-      <Branch className="size-icon-sm shrink-0" />
-      <span className="text-foreground min-w-0 truncate">{state?.branch ?? "…"}</span>
-    </div>
-    <p data-slot="own-copy-note" className="text-muted-foreground px-1 text-xs">
-      This session will work in its own copy
-    </p>
-  </div>
-);

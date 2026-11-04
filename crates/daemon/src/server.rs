@@ -10,7 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use brigadier_core::heap;
 use brigadier_core::manager::search::SearchRun;
-use brigadier_core::manager::workspace::WorkspaceWatch;
+use brigadier_core::manager::workspace::WorkspaceWatches;
 use brigadier_core::manager::{ComputerNews, SessionManager};
 use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
@@ -312,7 +312,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         computer_feed: None,
         app_feed: None,
         checkout_saves: None,
-        workspace_watch: None,
+        workspace_watches: WorkspaceWatches::default(),
         search: None,
         searches: 0,
         late_tx,
@@ -366,8 +366,8 @@ struct Session {
     app_feed: Option<broadcast::Receiver<AppCall>>,
     /// The checkouts a tab chat saved a file in, once subscribed to the live feed.
     checkout_saves: Option<broadcast::Receiver<WorkspaceTarget>>,
-    /// The checkout this connection's right sidebar shows, watched while it shows.
-    workspace_watch: Option<(WorkspaceTarget, WorkspaceWatch)>,
+    /// The checkouts this connection's right sidebar shows, watched while they show.
+    workspace_watches: WorkspaceWatches,
     /// The right sidebar's search running for this connection, by its id.
     search: Option<(u32, SearchRun)>,
     /// The last search id given out.
@@ -515,10 +515,8 @@ impl Session {
                         self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
                     }
                 }
-                target = next_workspace_change(&mut self.workspace_watch) => {
-                    if let Some(target) = target {
-                        self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
-                    }
+                target = self.workspace_watches.next_change() => {
+                    self.writer.write(&ServerFrame::WorkspaceChanged { target }).await?;
                 }
                 found = next_search_update(&mut self.search) => {
                     if let Some((id, update)) = found {
@@ -612,20 +610,13 @@ impl Session {
                 .open_account_terminal(&id, cols, rows)
                 .await?
                 .map(|terminal| Response::SignInAccount { terminal }),
-            Request::WatchWorkspace { target } => {
-                // The old watch stops first, and a failed new one leaves none.
-                self.workspace_watch = None;
-                match target {
-                    None => Ok(Response::WatchWorkspace { watching: false }),
-                    Some(target) => match self.daemon.sessions.watch_workspace(&target).await {
-                        Ok(watch) => {
-                            self.workspace_watch = Some((target, watch));
-                            Ok(Response::WatchWorkspace { watching: true })
-                        }
-                        Err(err) => Err(IpcError::from(err)),
-                    },
-                }
-            }
+            Request::WatchWorkspace { targets } => Ok(Response::WatchWorkspace {
+                watching: self
+                    .daemon
+                    .sessions
+                    .watch_workspaces(&mut self.workspace_watches, targets)
+                    .await,
+            }),
             Request::StartSearch { target, query } => {
                 // The old search stops first, and a failed new one leaves none.
                 self.search = None;
@@ -1086,22 +1077,6 @@ async fn next_search_update(search: &mut Option<(u32, SearchRun)>) -> Option<(u3
     }
 }
 
-/// The watched checkout's next change; pending forever while none is watched.
-async fn next_workspace_change(
-    watch: &mut Option<(WorkspaceTarget, WorkspaceWatch)>,
-) -> Option<WorkspaceTarget> {
-    match watch {
-        Some((target, changes)) => match changes.changed().await {
-            Some(()) => Some(target.clone()),
-            None => {
-                *watch = None;
-                None
-            }
-        },
-        None => std::future::pending().await,
-    }
-}
-
 /// The next checkout a tab chat saved a file in; pending forever until subscribed.
 async fn next_checkout_save(
     feed: &mut Option<broadcast::Receiver<WorkspaceTarget>>,
@@ -1475,11 +1450,15 @@ fn read_beside(request: &Request) -> bool {
         request,
         Request::GetSourceState { .. }
             | Request::GetProjectSourceState { .. }
+            | Request::ListUserWorktrees { .. }
+            | Request::GetWorktreeSourceState { .. }
             | Request::GetSessionDiff { .. }
             | Request::GetWorkerDiffs { .. }
             | Request::GetWorkerSource { .. }
             | Request::GetPendingChanges { .. }
             | Request::GetReviewDiff { .. }
+            | Request::GetCheckoutReviewDiff { .. }
+            | Request::ReadCheckoutFile { .. }
             | Request::GetWorkspaceTree { .. }
             | Request::ListWorkspaceFolder { .. }
             | Request::ListFiles { .. }
@@ -1787,6 +1766,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             path,
         } => Response::ReadFile {
             file: heap(|| sessions.read_file(&conversation_id, path)).await?,
+        },
+        Request::ReadCheckoutFile { target, path } => Response::ReadCheckoutFile {
+            file: heap(|| sessions.read_target_file(&target, path)).await?,
         },
         Request::OpenTerminal { .. }
         | Request::AddAccount { .. }
@@ -2311,6 +2293,39 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             })
             .await?,
         },
+        Request::ListUserWorktrees { project_id } => Response::ListUserWorktrees {
+            paths: heap(|| sessions.user_worktrees(&project_id)).await?,
+        },
+        Request::GetWorktreeSourceState { project_id, path } => Response::GetWorktreeSourceState {
+            state: heap(|| sessions.worktree_source_state(&project_id, &path)).await?,
+        },
+        Request::ChangeWorktreeSource {
+            project_id,
+            path,
+            change,
+        } => Response::ChangeWorktreeSource {
+            state: heap(|| sessions.change_worktree_source(&project_id, &path, change)).await?,
+        },
+        Request::CommitWorktreeChanges {
+            project_id,
+            path,
+            message,
+            include_unstaged,
+            push,
+            amend,
+        } => Response::CommitWorktreeChanges {
+            outcome: heap(|| {
+                sessions.commit_worktree_changes(
+                    &project_id,
+                    &path,
+                    message,
+                    include_unstaged,
+                    push,
+                    amend.unwrap_or(false),
+                )
+            })
+            .await?,
+        },
         Request::ListSourceBranches { target } => Response::ListSourceBranches {
             branches: heap(|| sessions.source_branches(&target)).await?,
         },
@@ -2323,8 +2338,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetConflictFile { target, path } => Response::GetConflictFile {
             file: heap(|| sessions.conflict_file(&target, path)).await?,
         },
-        Request::WriteCommitMessage { target } => {
-            let (message, note) = heap(|| sessions.write_source_message(&target)).await?;
+        Request::WriteCommitMessage {
+            target,
+            include_unstaged,
+        } => {
+            let (message, note) =
+                heap(|| sessions.write_source_message(&target, include_unstaged.unwrap_or(false)))
+                    .await?;
             Response::WriteCommitMessage { message, note }
         }
         Request::GetReviewDiff {
@@ -2335,6 +2355,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::GetReviewDiff {
             review: heap(|| {
                 sessions.review_diff(&conversation_id, scope, whole_files, ignore_whitespace)
+            })
+            .await?,
+        },
+        Request::GetCheckoutReviewDiff {
+            target,
+            scope,
+            whole_files,
+            ignore_whitespace,
+        } => Response::GetCheckoutReviewDiff {
+            review: heap(|| {
+                sessions.target_review_diff(&target, scope, whole_files, ignore_whitespace)
             })
             .await?,
         },
@@ -3268,6 +3299,16 @@ mod tests {
             },
             Request::GetWorkspaceTree { target: target() },
             Request::ListSourceBranches { target: target() },
+            Request::ReadCheckoutFile {
+                target: target(),
+                path: "README.md".into(),
+            },
+            Request::GetCheckoutReviewDiff {
+                target: target(),
+                scope: brigadier_core::ReviewScope::Unstaged,
+                whole_files: true,
+                ignore_whitespace: false,
+            },
         ] {
             assert!(read_beside(&request), "{request:?} is read beside");
         }

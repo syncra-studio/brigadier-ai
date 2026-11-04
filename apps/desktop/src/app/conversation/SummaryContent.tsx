@@ -23,6 +23,7 @@ import {
   useLayoutEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -75,6 +76,7 @@ import { useBoard } from "@/state/board";
 import { useCliThread, useSessionMcp, useThreadFact, useWorkerRows } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { uncommittedFiles, useCachedEntry, useCheckoutKey } from "@/state/workspaceCache";
 import { heldMap } from "@/lib/held";
 import { cn } from "@/lib/utils";
 
@@ -84,38 +86,43 @@ const serversOf = (entries: readonly FileEntry[]) => usedMcpServers(entries).joi
 const searchedIn = (entries: readonly FileEntry[]) => webUse(entries).searches.length > 0;
 
 /**
- * A worktree session's +N −N against its base, a Local checkout's uncommitted changes, read
- * again whenever a turn of its CLI ends and whenever a git command of its thread finishes (a
- * commit, a merge).
+ * A worktree session's +N −N against its base, a Local checkout's uncommitted changes, and how
+ * many files aren't committed yet. The stat is read again whenever Source is (a Source action,
+ * the watch, a landing, focus, a turn's end: see `useWorkspacePane`), and whenever a git command
+ * of its thread finishes (a commit, a merge).
  */
 function useSessionDiff(
   conversationId: string,
   session: boolean,
-): { stat: DiffStat; commits: number } | null {
+): { diff: { stat: DiffStat; commits: number } | null; uncommitted: number } {
   const turns = useCliThread((s) => {
     const all = s.views[conversationId]?.turns ?? [];
     return `${all.length}:${all.at(-1)?.end ?? ""}`;
   });
   const git = useThreadFact(conversationId, gitCommandsKey);
+  const target = useMemo(() => ({ type: "conversation", conversationId }) as const, [conversationId]);
+  const source = useCachedEntry(useCheckoutKey(target))?.source;
   const [, redraw] = useReducer((n: number) => n + 1, 0);
+  // Answers show in the order they were asked: a later read answering first stands, while a burst
+  // of readings can't keep every read from showing.
+  const reads = useRef({ asked: 0, shown: 0 });
   useEffect(() => {
     if (!session) return;
-    let current = true;
+    const read = ++reads.current.asked;
     getSessionDiff(conversationId)
       .then((next) => {
+        if (read < reads.current.shown) return;
+        reads.current.shown = read;
         lastDiffs.set(conversationId, next ?? undefined);
-        if (current) redraw();
+        redraw();
       })
       // The last stat read stays while git can't tell; the card shows the branch alone when none was.
       .catch(() => {});
-    return () => {
-      current = false;
-    };
-    // Each turn's end and each git command may move the branch: read it again.
+    // Each new reading of Source, turn's end and git command may have moved the branch: read it again.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [conversationId, session, turns, git]);
+  }, [conversationId, session, turns, git, source]);
   // The last stat read of it shows while it is read again, opened anew too: never a blank between.
-  return session ? (lastDiffs.get(conversationId) ?? null) : null;
+  return { diff: session ? (lastDiffs.get(conversationId) ?? null) : null, uncommitted: session ? uncommittedFiles(source) : 0 };
 }
 
 /** Each session's last diff stat read, held across restarts so a first open shows it at once. */
@@ -572,7 +579,7 @@ function SessionSummaryContent({
   );
   const setup =
     conversation.setup?.type === "session" ? conversation.setup : null;
-  const sessionDiff = useSessionDiff(conversation.id, setup !== null);
+  const { diff: sessionDiff, uncommitted } = useSessionDiff(conversation.id, setup !== null);
   const diff = sessionDiff?.stat ?? null;
   const { pullRequest, authRequired } = prStatus;
   // Before a session has its folder and branch, its card is a chat's: never an empty space.
@@ -591,7 +598,7 @@ function SessionSummaryContent({
             title={<span title={checkout}>{project ?? setup.repo}</span>}
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
-            <BranchRow branch={setup.environment.branch} diff={diff} />
+            <BranchRow branch={setup.environment.branch} diff={diff} uncommitted={uncommitted} />
             <SharedFolderRows conversation={conversation} />
 
           </SummarySection>

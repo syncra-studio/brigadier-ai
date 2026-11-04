@@ -5,11 +5,12 @@
 //! that is disposed of right after, by the model and style the user's Git settings name.
 //!
 //! A session not started yet has no checkout of its own: its Source pane reads, stages and
-//! commits in its project's folder (the `project_*` actions), which is where a session that
-//! works in the project folder will work. One that will make its own copy shows it read-only;
-//! the window keeps to that, as only it knows how the session will be set up.
+//! commits in its project's folder (the `project_*` actions), and in the worktrees of it the user
+//! made themselves (the `worktree_*` actions). [`SessionManager::user_worktree`] is the one check
+//! of a worktree's path: what Brigadier's own sessions and workers use is never reached this way.
 
 use brigadier_providers::KindFacts as _;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,7 +27,7 @@ use super::source_actions::MergedPr;
 use super::{SessionManager, blocking, git_error};
 use crate::accounts::AccountRef;
 use crate::model::{
-    ConversationId, Environment, GitStyle, ModelChoice, ProjectId, Settings, Setup,
+    Conversation, ConversationId, Environment, GitStyle, ModelChoice, ProjectId, Settings, Setup,
 };
 use crate::work::{
     CommitOutcome, GitState, SourceChange, SourceFile, SourceMerge, SourceRebase, SourceScope,
@@ -80,6 +81,74 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("the project has no repository".into()))
     }
 
+    /// The worktrees of a project's repository the user made: what `git worktree list` lists,
+    /// without the project's folder and what Brigadier's sessions and workers use. In the
+    /// order git lists them, each path with its links resolved. This runs on every draft open
+    /// and every worktree read: git's list comes first, so a project with no worktree outside
+    /// Brigadier's own folder reads no board, and only a stream that changed since the last
+    /// look is folded again ([`crate::sessions::Core::task_worktrees`]).
+    pub async fn user_worktrees(&self, project: &ProjectId) -> Result<Vec<String>> {
+        let folder = self.project_checkout(project)?;
+        let sessions_dir = canonical_path(&self.runtime.platform().paths().sessions_dir);
+        let git = self.git.clone();
+        let mut candidates = blocking(move || {
+            let repo = git.open(&folder).map_err(git_error)?;
+            let own = canonical_path(repo.root());
+            let listed = repo.worktrees().map_err(git_error)?;
+            Ok(listed
+                .into_iter()
+                // A bare repository's entry has no `.git` of its own, a removed worktree's nothing.
+                .filter(|worktree| !worktree.prunable && worktree.path.join(".git").exists())
+                .map(|worktree| canonical_path(&worktree.path))
+                .filter(|path| *path != own && !path.starts_with(&sessions_dir))
+                .collect::<Vec<_>>())
+        })
+        .await?;
+        let conversations = self.core.catalog().conversations;
+        self.core.forget_task_worktrees(&conversations);
+        let sessions = session_checkouts(&conversations);
+        candidates.retain(|path| !sessions.contains(path));
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Workers' worktrees are named only in their conversations' streams.
+        for conversation in &conversations {
+            // Unknown ownership is not permission to read or mutate a worker's checkout.
+            let paths = self.core.task_worktrees(&conversation.id).await?;
+            // Resolved on each look, not remembered: a link can change under a path.
+            let used: HashSet<PathBuf> = paths
+                .iter()
+                .map(|path| canonical_path(Path::new(path)))
+                .collect();
+            candidates.retain(|path| !used.contains(path));
+            if candidates.is_empty() {
+                break;
+            }
+        }
+        Ok(candidates
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect())
+    }
+
+    /// The one check of a worktree target's path, on every call that reads or changes it: it is
+    /// one of [`Self::user_worktrees`], looked up again now. Anything else is refused.
+    pub(super) async fn user_worktree(&self, project: &ProjectId, path: &str) -> Result<PathBuf> {
+        let asked = canonical_path(Path::new(path));
+        if Path::new(path).is_absolute()
+            && self
+                .user_worktrees(project)
+                .await?
+                .iter()
+                .any(|worktree| Path::new(worktree) == asked)
+        {
+            return Ok(asked);
+        }
+        Err(Error::Invalid(format!(
+            "{path} is not a worktree you made in this project"
+        )))
+    }
+
     /// What the commit popover shows: the checkout's branch, what is staged and uncommitted,
     /// and where it pushes.
     pub async fn git_state(&self, id: &ConversationId) -> Result<GitState> {
@@ -121,6 +190,16 @@ impl SessionManager {
     /// What the Source pane lists before a session starts: its project folder's changes.
     pub async fn project_source_state(&self, project: &ProjectId) -> Result<SourceState> {
         let path = self.project_checkout(project)?;
+        self.source_state_at(path).await
+    }
+
+    /// What the Source pane lists for a worktree the user made.
+    pub async fn worktree_source_state(
+        &self,
+        project: &ProjectId,
+        path: &str,
+    ) -> Result<SourceState> {
+        let path = self.user_worktree(project, path).await?;
         self.source_state_at(path).await
     }
 
@@ -170,14 +249,21 @@ impl SessionManager {
     ) -> Result<SourceState> {
         self.admit()?;
         let path = self.project_checkout(project)?;
-        self.change_source_at(path, move |repo| match change {
-            SourceChange::Stage { paths } => repo.stage(paths.as_deref()),
-            SourceChange::Unstage { paths } => repo.unstage(paths.as_deref()),
-            SourceChange::Discard { scope, paths } => {
-                repo.discard(scope == SourceScope::Staged, paths.as_deref())
-            }
-        })
-        .await
+        self.change_source_at(path, move |repo| apply_change(repo, change))
+            .await
+    }
+
+    /// The user's staging, unstaging or discarding in a worktree they made.
+    pub async fn change_worktree_source(
+        &self,
+        project: &ProjectId,
+        path: &str,
+        change: SourceChange,
+    ) -> Result<SourceState> {
+        self.admit()?;
+        let path = self.user_worktree(project, path).await?;
+        self.change_source_at(path, move |repo| apply_change(repo, change))
+            .await
     }
 
     /// Runs one of the Source panel's changes in the checkout, then reads it again.
@@ -239,6 +325,22 @@ impl SessionManager {
     ) -> Result<CommitOutcome> {
         self.admit()?;
         let path = self.project_checkout(project)?;
+        self.commit_at(path, None, message, include_unstaged, push, amend)
+            .await
+    }
+
+    /// The user's commit in a worktree they made; as [`Self::commit_changes`] otherwise.
+    pub async fn commit_worktree_changes(
+        &self,
+        project: &ProjectId,
+        path: &str,
+        message: Option<String>,
+        include_unstaged: bool,
+        push: bool,
+        amend: bool,
+    ) -> Result<CommitOutcome> {
+        self.admit()?;
+        let path = self.user_worktree(project, path).await?;
         self.commit_at(path, None, message, include_unstaged, push, amend)
             .await
     }
@@ -829,6 +931,41 @@ fn choice_name(provider: ProviderKind, model: Option<&str>) -> String {
 }
 
 /// A checkout's Source panel state.
+fn apply_change(repo: &Repo, change: SourceChange) -> brigadier_git::Result<()> {
+    match change {
+        SourceChange::Stage { paths } => repo.stage(paths.as_deref()),
+        SourceChange::Unstage { paths } => repo.unstage(paths.as_deref()),
+        SourceChange::Discard { scope, paths } => {
+            repo.discard(scope == SourceScope::Staged, paths.as_deref())
+        }
+    }
+}
+
+/// The checkouts sessions name in the catalog, archived ones too.
+fn session_checkouts(conversations: &[Conversation]) -> HashSet<PathBuf> {
+    let mut used = HashSet::new();
+    for conversation in conversations {
+        if let Some(Setup::Session {
+            repo, environment, ..
+        }) = &conversation.setup
+        {
+            used.insert(canonical_path(Path::new(repo)));
+            if let Environment::NewWorktree {
+                path: Some(path), ..
+            } = environment
+            {
+                used.insert(canonical_path(Path::new(path)));
+            }
+        }
+    }
+    used
+}
+
+/// A path with its links resolved, as itself when it isn't there.
+fn canonical_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned())
+}
+
 pub(super) fn source_state_of(repo: &Repo) -> Result<SourceState> {
     let (changes, branch) = repo.source_status().map_err(git_error)?;
     let remote = match &branch {
@@ -858,7 +995,8 @@ pub(super) fn source_state_of(repo: &Repo) -> Result<SourceState> {
         branch,
         remote: remote.as_ref().and_then(|state| state.remote.clone()),
         upstream: remote.as_ref().and_then(|state| state.upstream.clone()),
-        ahead: remote.map_or(0, |state| state.ahead),
+        ahead: remote.as_ref().map_or(0, |state| state.ahead),
+        behind: remote.map_or(0, |state| state.behind),
         staged: files(changes.staged),
         changes: files(changes.changes),
         merging: repo.merging().map_err(git_error)?.map(|merge| SourceMerge {

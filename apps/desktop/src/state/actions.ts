@@ -38,7 +38,8 @@ import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { useAgentPageAsk } from "@/state/agentSignIn";
 import { providerForSetting } from "@/state/providerDestination";
-import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
+import { tabsIdOf } from "@/state/draftTabs";
+import { carryDraftTabs, CHAT_TAB, openSideChatTab, selectTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { onRealActivity, realActivity, rowActivity, useActivity, workHolds } from "@/state/activity";
@@ -683,15 +684,27 @@ export async function send(
   } else if (selection.type === "conversation") {
     conversationId = selection.id;
   } else if (selection.type === "draft" && draft) {
+    const draftTabs = tabsIdOf(selection);
+    const sentWith = draftTabs ? new Set(sessionTabs(draftTabs).tabs.map((tab) => tab.id)) : null;
+    // File/Review ids can be reused after closing. A new tab in a revisited draft is not
+    // the tab this send started with, even when it names the same file.
+    const untrack = useSessionTabs.subscribe(({ sessions }) => {
+      if (!draftTabs || !sentWith) return;
+      const stillOpen = new Set(sessions[draftTabs]?.tabs.map((tab) => tab.id));
+      for (const id of sentWith) if (!stillOpen.has(id)) sentWith.delete(id);
+    });
     const { conversation } = await request({
       method: "createConversation",
       kind: draft.kind,
       projectId: draft.kind === "session" ? draft.projectId : null,
       title: null,
       setup: draft.setup,
-    });
+    }).finally(untrack);
     storeConversation(conversation);
     conversationId = conversation.id;
+    // The tabs go with the conversation, even if the user has left the draft. Having left and come
+    // back, what they opened since is the draft's own and stays.
+    if (draftTabs && sentWith) carryDraftTabs(draftTabs, conversationId, useApp.getState().selection === selection ? undefined : sentWith);
     // A new session's first send opens its card, once and however it was left on the draft:
     // floating where the pane is too narrow to keep it beside the thread. The user's show or
     // hide decides from then on.

@@ -1,6 +1,7 @@
 import { request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { handBack } from "@/state/agentPause";
+import { shellOwner } from "@/state/draftTabs";
 import { closePage, useBrowsers } from "@/state/browsers";
 import { forgetDraft } from "@/state/drafts";
 import { changeSessionTab, discardTab, dropBrowserTabs, isAgentTab, onDiscardTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
@@ -11,16 +12,23 @@ import { canChat, followTabChats, goneTabChats } from "@/state/tabChats";
 // Lives across ConversationView remounts, but not a real app reload. The stable tab ID is
 // the daemon session ID; its first attachment in this app lifetime replaces the old shell.
 const shells = new Map<string, { terminal: Promise<TerminalInfo>; closed: boolean }>();
+function terminalTabOwner(tabId: string): string | undefined {
+  return Object.entries(useSessionTabs.getState().sessions)
+    .find(([, session]) => session.tabs.some((tab) => tab.id === tabId && tab.kind === "terminal"))?.[0];
+}
+
 export async function openMainTerminal(conversationId: string, tabId: string, cols: number, rows: number): Promise<TerminalInfo> {
   const tab = sessionTabs(conversationId).tabs.find((candidate) => candidate.id === tabId);
   if (tab?.kind !== "terminal") throw new Error("Terminal tab closed");
+  const owner = shellOwner(conversationId, tab);
   let entry = shells.get(tab.id);
   const started = !entry;
   if (!entry) {
     // An agent's tab shows the shell the daemon started for it, with what it typed there.
-    const terminal = request({ method: "openTerminal", conversationId, sessionId: tab.id, ...(isAgentTab(tab) ? {} : { fresh: true }),
+    const terminal = request({ method: "openTerminal", ...owner, sessionId: tab.id, ...(isAgentTab(tab) ? {} : { fresh: true }),
       ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows }).then((opened) => {
-        changeSessionTab(conversationId, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: opened.terminal.cwd } : current);
+        const currentOwner = terminalTabOwner(tab.id);
+        if (currentOwner) changeSessionTab(currentOwner, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: opened.terminal.cwd } : current);
         return opened.terminal;
       });
     entry = { terminal, closed: false };
@@ -28,7 +36,7 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
     terminal.catch(() => { if (shells.get(tab.id) === entry) shells.delete(tab.id); });
   }
   const terminal = await entry.terminal;
-  if (entry.closed || !sessionTabs(conversationId).tabs.some((current) => current.id === tab.id)) {
+  if (entry.closed || !terminalTabOwner(tab.id)) {
     await request({ method: "closeTerminal", terminalId: terminal.id });
     throw new Error("Terminal tab closed");
   }
@@ -36,8 +44,8 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
   // that output twice, once in the scrollback and once from the stream.
   if (started) return terminal;
   // Attach this connection and get current scrollback when its session becomes visible again.
-  const attached = await request({ method: "openTerminal", conversationId, sessionId: tab.id, ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows });
-  if (entry.closed || !sessionTabs(conversationId).tabs.some((current) => current.id === tab.id)) {
+  const attached = await request({ method: "openTerminal", ...owner, sessionId: tab.id, ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows });
+  if (entry.closed || !terminalTabOwner(tab.id)) {
     await request({ method: "closeTerminal", terminalId: attached.terminal.id });
     throw new Error("Terminal tab closed");
   }
@@ -74,9 +82,13 @@ useSessionTabs.subscribe(followTabChats);
 // A gone tab chat's unsent text goes with it.
 useSessionTabs.subscribe((state, before) => { for (const id of goneTabChats(state, before)) forgetDraft(id); });
 useSessionTabs.subscribe((state, before) => {
+  // A tab carried from a draft to its session is still open, in the other place.
+  let open: Set<string> | null = null;
   for (const [id, previous] of Object.entries(before.sessions)) {
     const kept = state.sessions[id]?.tabs ?? [];
     for (const tab of previous.tabs) if (!kept.some((current) => current.id === tab.id)) {
+      open ??= new Set(Object.values(state.sessions).flatMap((session) => session.tabs.map((each) => each.id)));
+      if (open.has(tab.id)) continue;
       if (tab.kind === "terminal" && shells.has(tab.id)) closeShell(tab.id);
       else if (tab.kind === "terminal" && isAgentTab(tab)) endUnshownShell(id, tab.id);
       if (tab.kind === "browser") {

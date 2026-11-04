@@ -6,6 +6,8 @@
  * invalid pattern's error, a cleared query, and no
  * Replace for a session whose own copy doesn't exist yet. Then many results: only those in view
  * drawn, the arrow keys moving through all of them, Collapse all, and Replace all for every file.
+ * Then a draft: Replace offered, and the title row's Refresh, Expand all and Clear, and the files
+ * to include and exclude staying open when the view opens again.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -76,6 +78,7 @@ mockIPC((command, args) => {
 const session = { type: "conversation", conversationId: "search-fixture" } as const;
 const waiting = { type: "conversation", conversationId: "search-waiting" } as const;
 const crowded = { type: "conversation", conversationId: "search-many" } as const;
+const draft = { type: "project", projectId: "search-draft" } as const;
 
 function until(check: () => boolean, timeoutMs = 3000): Promise<void> {
   const start = performance.now();
@@ -113,6 +116,7 @@ function type(input: HTMLInputElement, value: string) {
 function Fixture() {
   const [result, setResult] = useState("");
   const [opened, setOpened] = useState<unknown[]>([]);
+  const [draftView, setDraftView] = useState(0);
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     void (async () => {
@@ -246,6 +250,38 @@ function Fixture() {
       seen.manyReplaced = (asked.filter((req) => req.method === "replaceInFiles")[1] as Extract<Request, { method: "replaceInFiles" }>).files.length;
       await until(() => !!inPanel("many").querySelector('[role="status"]'));
       seen.manyOutcome = inPanel("many").querySelector('[role="status"]')?.textContent;
+      // The replace's refresh goes first: a window runs one search at a time.
+      await sleep(400);
+      // A draft replaces straight away; its title row acts on what it found.
+      seen.draftReplace = !!field("draft", "Replace");
+      seen.clearWhenEmpty = button("draft", "Clear")!.disabled;
+      type(field("draft", "Search"), "foo");
+      await until(() => summary("draft") === "3 results in 2 files");
+      button("draft", "Dismiss")!.click();
+      await until(() => summary("draft") === "1 result in 1 file");
+      button("draft", "Refresh")!.click();
+      await until(() => summary("draft") === "3 results in 2 files");
+      seen.draftRefreshed = summary("draft");
+      button("draft", "Collapse all")!.click();
+      await until(() => !!button("draft", "Expand all"));
+      seen.draftCollapsed = drawn("draft").every((row) => row.dataset.row === "file");
+      button("draft", "Expand all")!.click();
+      await until(() => !!button("draft", "Collapse all"));
+      seen.draftExpanded = drawn("draft").some((row) => row.dataset.row === "line");
+      // The files to include and exclude stay open when the view opens again.
+      seen.detailsAtFirst = !!field("draft", "files to include");
+      button("draft", "Files to include and exclude")!.click();
+      await until(() => !!field("draft", "files to include"));
+      const before = field("draft", "Search");
+      setDraftView(1);
+      await until(() => !!field("draft", "Search") && field("draft", "Search") !== before);
+      seen.detailsRemembered = !!field("draft", "files to include");
+      type(field("draft", "Replace"), "bar");
+      type(field("draft", "files to include"), "src/**");
+      await until(() => field("draft", "files to include").value === "src/**");
+      button("draft", "Clear")!.click();
+      await until(() => summary("draft") === null);
+      seen.draftCleared = ["Search", "Replace", "files to include"].map((label) => field("draft", label).value);
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen })));
   }, []);
@@ -261,6 +297,9 @@ function Fixture() {
     </div>
     <div data-panel="many" className="flex w-80 flex-col">
       <SearchPanel target={crowded} readOnly={false} onOpen={() => undefined} />
+    </div>
+    <div data-panel="draft" className="flex w-80 flex-col">
+      <SearchPanel key={draftView} target={draft} onOpen={() => undefined} />
     </div>
     {result && <pre id="search-result">{JSON.stringify({ ...JSON.parse(result), opened })}</pre>}
   </div>;

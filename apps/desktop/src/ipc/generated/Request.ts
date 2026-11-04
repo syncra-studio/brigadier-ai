@@ -61,7 +61,11 @@ query: string | null, } | { "method": "getWorkspaceTree", target: WorkspaceTarge
 /**
  * Relative to the checkout's root.
  */
-path: string, } | { "method": "watchWorkspace", target: WorkspaceTarget | null, } | { "method": "startSearch", target: WorkspaceTarget, query: SearchQuery, } | { "method": "cancelSearch", id: number, } | { "method": "replaceInFiles", target: WorkspaceTarget, query: SearchQuery, replacement: string, files: Array<ReplaceFile>, } | { "method": "readFile", conversationId: ConversationId, 
+path: string, } | { "method": "watchWorkspace", targets: Array<WorkspaceTarget>, } | { "method": "startSearch", target: WorkspaceTarget, query: SearchQuery, } | { "method": "cancelSearch", id: number, } | { "method": "replaceInFiles", target: WorkspaceTarget, query: SearchQuery, replacement: string, files: Array<ReplaceFile>, } | { "method": "readFile", conversationId: ConversationId, 
+/**
+ * Relative to the checkout's root.
+ */
+path: string, } | { "method": "readCheckoutFile", target: WorkspaceTarget, 
 /**
  * Relative to the checkout's root.
  */
@@ -103,7 +107,7 @@ attachments?: Array<AttachmentRef>, } | { "method": "regenerate", conversationId
 /**
  * Only its newest this many turns: what it shows at once when it opens (D46).
  */
-newestTurns?: number, } | { "method": "continueWaiting", conversationId: ConversationId, } | { "method": "dontResume", conversationId: ConversationId, } | { "method": "getModelRules" } | { "method": "setModelRules", revision: string, rows: Array<GuidanceRow>, rules: Array<ModelRule>, } | { "method": "readModelRules", text: string, } | { "method": "workerThread", conversationId: ConversationId, taskId: TaskId, } | { "method": "readSessionFileImage", conversationId: ConversationId, image: FileImage, } | { "method": "getReviewDiff", conversationId: ConversationId, scope: ReviewScope, wholeFiles: boolean, ignoreWhitespace: boolean, } | { "method": "getGitState", conversationId: ConversationId, } | { "method": "getBackgroundHistory", conversationId: ConversationId, before?: string, limit: number, 
+newestTurns?: number, } | { "method": "continueWaiting", conversationId: ConversationId, } | { "method": "dontResume", conversationId: ConversationId, } | { "method": "getModelRules" } | { "method": "setModelRules", revision: string, rows: Array<GuidanceRow>, rules: Array<ModelRule>, } | { "method": "readModelRules", text: string, } | { "method": "workerThread", conversationId: ConversationId, taskId: TaskId, } | { "method": "readSessionFileImage", conversationId: ConversationId, image: FileImage, } | { "method": "getReviewDiff", conversationId: ConversationId, scope: ReviewScope, wholeFiles: boolean, ignoreWhitespace: boolean, } | { "method": "getCheckoutReviewDiff", target: WorkspaceTarget, scope: ReviewScope, wholeFiles: boolean, ignoreWhitespace: boolean, } | { "method": "getGitState", conversationId: ConversationId, } | { "method": "getBackgroundHistory", conversationId: ConversationId, before?: string, limit: number, 
 /**
  * Include live records when resolving an invocation's Output tab.
  */
@@ -115,7 +119,11 @@ amend?: boolean, } | { "method": "pushChanges", conversationId: ConversationId, 
 /**
  * Rewrites the last commit instead (a blank message keeps its own).
  */
-amend?: boolean, } | { "method": "listSourceBranches", target: WorkspaceTarget, } | { "method": "sourceAction", target: WorkspaceTarget, action: SourceAction, } | { "method": "getSourceGitOutput", target: WorkspaceTarget, } | { "method": "getConflictFile", target: WorkspaceTarget, path: string, } | { "method": "writeCommitMessage", target: WorkspaceTarget, } | { "method": "answerCard", conversationId: ConversationId, cardId: CardId, decision: ApprovalDecision, } | { "method": "prepareCardAnswer", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, } | { "method": "answerQuestion", conversationId: ConversationId, cardId: CardId, answers: Array<string>, 
+amend?: boolean, } | { "method": "listUserWorktrees", projectId: ProjectId, } | { "method": "getWorktreeSourceState", projectId: ProjectId, path: string, } | { "method": "changeWorktreeSource", projectId: ProjectId, path: string, change: SourceChange, } | { "method": "commitWorktreeChanges", projectId: ProjectId, path: string, message: string | null, includeUnstaged: boolean, push: boolean, 
+/**
+ * Rewrites the last commit instead (a blank message keeps its own).
+ */
+amend?: boolean, } | { "method": "listSourceBranches", target: WorkspaceTarget, } | { "method": "sourceAction", target: WorkspaceTarget, action: SourceAction, } | { "method": "getSourceGitOutput", target: WorkspaceTarget, } | { "method": "getConflictFile", target: WorkspaceTarget, path: string, } | { "method": "writeCommitMessage", target: WorkspaceTarget, includeUnstaged?: boolean, } | { "method": "answerCard", conversationId: ConversationId, cardId: CardId, decision: ApprovalDecision, } | { "method": "prepareCardAnswer", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, } | { "method": "answerQuestion", conversationId: ConversationId, cardId: CardId, answers: Array<string>, 
 /**
  * How the user gave the answer, kept with it.
  */

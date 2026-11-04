@@ -7,11 +7,13 @@ import { TooltipIconButton } from "@/components/controls";
 import {
   ChevronDown,
   ChevronRight,
+  ClearAllGlyph,
   CollapseAllGlyph,
   FileIcon,
   MatchCaseGlyph,
   MoreGlyph,
   RegexGlyph,
+  Reload,
   ReplaceAllGlyph,
   WholeWordGlyph,
   X,
@@ -41,6 +43,24 @@ import { PLAIN_FIELD } from "@/lib/plainTyping";
 const TYPING_MS = 250;
 /** How long the checkout settles after a change before the search runs again. */
 const CHANGED_MS = 300;
+/** Whether files to include and exclude show, for every Search and across launches. */
+const DETAILS_KEY = "brigadier.searchDetails";
+
+function savedDetails(): boolean {
+  try {
+    return localStorage.getItem(DETAILS_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveDetails(open: boolean): void {
+  try {
+    localStorage.setItem(DETAILS_KEY, String(open));
+  } catch {
+    /* Keep in memory. */
+  }
+}
 
 /** Opens `path` at `line`: in the preview tab, or with `keep` in a tab of its own. */
 type OnOpen = (path: string, line: number, keep: boolean) => void;
@@ -58,15 +78,17 @@ function plural(count: number, one: string, many = `${one}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? one : many}`;
 }
 
-export function SearchPanel({ target, onOpen, readOnly }: {
+export function SearchPanel({ target, onOpen, readOnly = false }: {
   target: WorkspaceTarget;
   onOpen: OnOpen;
-  /** Replace is left out: the session will work in a copy of its own, not made yet. */
-  readOnly: boolean;
+  /** Replace is left out: a started session's copy of its own isn't made yet. */
+  readOnly?: boolean;
 }) {
   const id = searchId(target);
   const checkout = useCheckoutKey(target);
-  const form = useWorkspaceSearch((s) => s.entries[id]?.form ?? EMPTY_FORM);
+  const fields = useWorkspaceSearch((s) => s.entries[id]?.form ?? EMPTY_FORM);
+  const [details, setDetails] = useState(savedDetails);
+  const form = useMemo(() => ({ ...fields, details }), [fields, details]);
   const dismissFile = useCallback((path: string) => dismissSearchFile(target, path), [target]);
   const stored = useWorkspaceSearch((s) => s.entries[id]?.results ?? null);
   // Results for another checkout of the same session (its copy made since) don't show.
@@ -140,12 +162,28 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   };
   // Only what a finished search found, for the query the fields hold.
   const canReplace = !readOnly && !!results?.done && results.files.length > 0 && !replacing && sameQuery(results.query, query);
+  const allCollapsed = !!results?.files.length && results.files.every((file) => collapsed.has(file.path));
+  const empty = !form.text && !form.replace && !form.include && !form.exclude;
   const confirmedFiles = results?.files.filter((file) => !confirming?.file || file.path === confirming.file) ?? [];
   const confirmedMatches = confirmedFiles.reduce((sum, file) => sum + file.matches, 0);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-border flex shrink-0 flex-col gap-1.5 border-b p-2">
+      <header className="text-muted-foreground flex h-control-md shrink-0 items-center gap-0.5 ps-3 pe-2">
+        <h2 className="min-w-0 flex-1 text-xs font-semibold tracking-wide">SEARCH</h2>
+        <TooltipIconButton tooltip="Refresh" size="icon-xs" disabled={!query} onClick={() => query && runSearch(target, query, true)}>
+          <Reload />
+        </TooltipIconButton>
+        <TooltipIconButton tooltip="Clear" size="icon-xs" disabled={empty}
+          onClick={() => { set({ text: "", replace: "", include: "", exclude: "" }); setOutcome(null); }}>
+          <ClearAllGlyph />
+        </TooltipIconButton>
+        <TooltipIconButton tooltip={allCollapsed ? "Expand all" : "Collapse all"} size="icon-xs" disabled={!results?.files.length}
+          onClick={() => setCollapsed(new Set(allCollapsed ? [] : results?.files.map((file) => file.path)))}>
+          <CollapseAllGlyph />
+        </TooltipIconButton>
+      </header>
+      <div className="border-border flex shrink-0 flex-col gap-1.5 border-b px-2 pb-2">
         <SettingsSearch variant="bordered" icon={null} clearable={false} clearOnEscape={false} className={FIELD}
           label="Search" value={form.text} onChange={(text) => { set({ text }); setOutcome(null); }}
           onKeyDown={onEnter(() => query && runSearch(target, query, true))}>
@@ -153,11 +191,7 @@ export function SearchPanel({ target, onOpen, readOnly }: {
           <Toggle label="Whole word" pressed={form.wholeWord} onChange={(wholeWord) => set({ wholeWord })}><WholeWordGlyph /></Toggle>
           <Toggle label="Regular expression" pressed={form.regex} onChange={(regex) => set({ regex })}><RegexGlyph /></Toggle>
         </SettingsSearch>
-        {readOnly ? (
-          <p data-slot="own-copy-note" className="text-muted-foreground px-1 text-xs">
-            This session will work in its own copy: Replace works there once it starts
-          </p>
-        ) : (
+        {!readOnly && (
           <SettingsSearch variant="bordered" icon={null} clearable={false} clearOnEscape={false} className={FIELD}
             label="Replace" value={form.replace} onChange={(value) => set({ replace: value })}
             onKeyDown={onEnter(() => canReplace && setConfirming({}))}>
@@ -167,15 +201,15 @@ export function SearchPanel({ target, onOpen, readOnly }: {
           </SettingsSearch>
         )}
         <div className="flex items-center justify-end">
-          <TooltipIconButton tooltip={form.details ? "Hide files to include and exclude" : "Files to include and exclude"}
-            size="icon-xs" aria-expanded={form.details} onClick={() => set({ details: !form.details })}>
+          <TooltipIconButton tooltip={details ? "Hide files to include and exclude" : "Files to include and exclude"}
+            size="icon-xs" aria-expanded={details} onClick={() => { saveDetails(!details); setDetails(!details); }}>
             <MoreGlyph />
           </TooltipIconButton>
         </div>
-        {form.details && (
+        {details && (
           <>
-            <Glob label="Files to include" placeholder="e.g. src/**, *.ts" value={form.include} onChange={(include) => set({ include })} />
-            <Glob label="Files to exclude" placeholder="e.g. *.test.ts, docs" value={form.exclude} onChange={(exclude) => set({ exclude })} />
+            <Glob label="files to include" placeholder="e.g. src/**, *.ts" value={form.include} onChange={(include) => set({ include })} />
+            <Glob label="files to exclude" placeholder="e.g. *.test.ts, docs" value={form.exclude} onChange={(exclude) => set({ exclude })} />
           </>
         )}
       </div>
@@ -184,19 +218,13 @@ export function SearchPanel({ target, onOpen, readOnly }: {
       ) : results && (
         <>
           <div className="flex shrink-0 flex-col px-2 pt-2" aria-busy={searching}>
-            <div className="flex h-control-sm items-center gap-1 px-1">
-              <p data-slot="search-summary" className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+            <p data-slot="search-summary" className="text-muted-foreground flex h-control-sm items-center px-1 text-xs">
+              <span className="min-w-0 truncate">
                 {results.files.length === 0
                   ? !results.done ? "Searching…" : results.filteredFiles ? "All results dismissed. Press Enter in Search to show them again." : "No results"
                   : `${plural(matches, "result")} in ${plural(results.files.length, "file")}${searching ? "…" : ""}`}
-              </p>
-              {results.files.length > 0 && (
-                <TooltipIconButton tooltip="Collapse all" size="icon-xs"
-                  onClick={() => setCollapsed(new Set(results.files.map((file) => file.path)))}>
-                  <CollapseAllGlyph />
-                </TooltipIconButton>
-              )}
-            </div>
+              </span>
+            </p>
             {outcome && <ReplaceNote outcome={outcome} />}
             {results.done?.capped && (
               <p className="text-muted-foreground px-1 pb-1 text-xs">

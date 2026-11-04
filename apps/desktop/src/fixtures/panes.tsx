@@ -308,7 +308,7 @@ function Fixture() {
                 <div
                   className="flex min-w-0 flex-1 flex-col"
                 >
-                  {kind === "session" ? <SessionTabBar conversation={{ ...conversation, id: conversationId, title }} onRename={() => setRenaming(true)}>
+                  {kind === "session" ? <SessionTabBar id={conversationId} conversation={{ ...conversation, id: conversationId, title }} onRename={() => setRenaming(true)}>
                     <TerminalButton /><WorkspacePaneToggle />
                   </SessionTabBar> : <header className="h-titlebar ps-clear-3 flex items-center"><span className="flex-1">{kind === "chat" ? "Plain chat" : "Home"}</span><TerminalButton /></header>}
                   {renaming && <div role="dialog" aria-label="Rename session" className="bg-background absolute inset-8 z-50 p-4"><input aria-label="Session title" value={title} onChange={(event) => setTitle(event.target.value)} /><button onClick={() => setRenaming(false)}>Done</button></div>}

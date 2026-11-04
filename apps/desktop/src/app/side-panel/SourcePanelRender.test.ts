@@ -49,12 +49,29 @@ test("the Source panel commits from its menu, merges a branch in, lists its conf
   assert.deepEqual([committed.message, committed.amend, committed.push], ["Merge branch 'main' into brigadier/912a9469/session", false, false]);
   assert.equal(seen.afterAbort, "", "an aborted merge's message leaves the box");
   assert.equal(seen.keptMessage, "Unsent message", "closing Source keeps the unsent commit message");
-  // Nothing to commit, the change already committed on the branch: the words say so, and only the branch shows (#490).
+  // Nothing to commit: the box and the button show, off, or publishing where there's a remote; the branch stays.
   assert.deepEqual(seen.clean, {
-    box: false,
-    commit: false,
+    boxOff: true,
+    main: "Publish Branch",
+    mainOff: false,
     branch: "brigadier/912a9469/session1",
-    empty: ["Nothing to commit", "The changes are committed on this branch (1 commit not pushed)."],
+    empty: ["Nothing to commit"],
+    check: true,
   });
-  assert.deepEqual(seen.changedAgain, { box: true, commit: "Commit" });
+  assert.equal(seen.sync, "Sync Changes12", "down, then up");
+  assert.deepEqual(seen.level, { main: "Commit", off: true });
+  // A change, none staged: Commit asks, in Cursor's words, Yes taking the keyboard.
+  assert.deepEqual(seen.stagePrompt, {
+    words: "There are no staged changes to commit. Would you like to stage all your changes and commit them directly?",
+    buttons: ["Never", "Always", "Yes"],
+    focused: "Yes",
+  });
+  assert.deepEqual(seen.escaped, { commits: 0, choice: "ask" });
+  assert.deepEqual(seen.yes, { includeUnstaged: true, choice: "ask" });
+  assert.equal(seen.always, "always");
+  assert.equal(seen.alwaysAsks, false);
+  assert.deepEqual(seen.never, { commits: 3, choice: "never", off: true }, "Never commits nothing");
+  assert.equal(seen.neverStaged, "Commit");
+  assert.deepEqual(seen.wayBack, ["Ask Before Staging All on Commit"]);
+  assert.equal(seen.back, "ask");
 });

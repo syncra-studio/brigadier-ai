@@ -4,10 +4,14 @@ import type { Conversation, Project, SourceState, WorkspaceFolder } from "@/ipc/
 import { request } from "@/ipc/client";
 import { useApp } from "@/state/store";
 
-/** Whose files the right sidebar shows: a session's checkout, or a draft's project folder. */
+/**
+ * Whose files the right sidebar shows: a session's checkout, a draft's project folder, or a
+ * worktree of that project the user made (the daemon checks its path on every call).
+ */
 export type WorkspaceTarget =
   | { type: "conversation"; conversationId: string }
-  | { type: "project"; projectId: string };
+  | { type: "project"; projectId: string }
+  | { type: "worktree"; projectId: string; path: string };
 
 /** A checkout's files, and (from the right sidebar's read) what it ignores: folders end in `/`. */
 export type FileList = { files: string[]; truncated: boolean; ignored?: string[] };
@@ -17,8 +21,8 @@ export type WorkspaceEntry = { files?: FileList; source?: SourceState };
 
 type CacheState = { entries: Record<string, WorkspaceEntry>; order: readonly string[] };
 
-/** How many checkouts are kept: the open one and the few visited just before it. */
-export const CHECKOUTS_KEPT = 4;
+/** How many checkouts are kept: the open one, its worktree rows and the few visited just before it. */
+export const CHECKOUTS_KEPT = 8;
 /** Total retained payload budget, measured as UTF-16 JSON bytes. */
 export const CACHE_BYTES = 8 * 1024 * 1024;
 
@@ -30,6 +34,7 @@ export function checkoutKey(target: WorkspaceTarget, conversations: Record<strin
   if (target.type === "project") {
     return JSON.stringify(["project", target.projectId, projects[target.projectId]?.repos.map((repo) => repo.path)]);
   }
+  if (target.type === "worktree") return JSON.stringify(["worktree", target.projectId, target.path]);
   const conversation = conversations[target.conversationId];
   const environment = conversation?.setup?.type === "session" ? conversation.setup.environment : null;
   const checkout = environment?.type === "newWorktree" ? environment.path ?? "repo" : "local";
@@ -150,32 +155,68 @@ export function readFiles(target: WorkspaceTarget): Promise<FileList> {
   });
 }
 
-/** Reads a target's source state and keeps it. */
-export function readSource(target: WorkspaceTarget): Promise<SourceState> {
-  const key = workspaceKey(target);
-  return once(`source:${key}`, async () => {
-    const { state } = target.type === "conversation"
-      ? await request({ method: "getSourceState", conversationId: target.conversationId })
-      : await request({ method: "getProjectSourceState", projectId: target.projectId });
-    if (workspaceKey(target) === key) remember(key, { source: state });
-    return state;
-  });
-}
+/** How many times each checkout is known to have moved, by key: a source read begun before the last is stale. */
+const moves = new Map<string, number>();
 
-/** Keeps what a change or commit returned, so reopening shows it. */
-export function keepSource(target: WorkspaceTarget, state: SourceState, key = workspaceKey(target)): void {
-  if (workspaceKey(target) === key) remember(key, { source: state });
+function moved(key: string): void {
+  moves.set(key, (moves.get(key) ?? 0) + 1);
 }
 
 /**
- * Reads what the right sidebar would show for a target and isn't kept yet, so that opening it
- * paints the contents at once. Failures are left to the views, which read again.
+ * Reads a target's source state and keeps it. A read the checkout moved under is thrown away and
+ * made again here, inside the one promise, so neither the cache nor anyone already holding that
+ * promise gets what it said from before.
+ */
+export function readSource(target: WorkspaceTarget): Promise<SourceState> {
+  const key = workspaceKey(target);
+  return once(`source:${key}`, async () => {
+    for (;;) {
+      const begun = moves.get(key);
+      const stale = () => moves.get(key) !== begun && workspaceKey(target) === key;
+      try {
+        const { state } = target.type === "conversation"
+          ? await request({ method: "getSourceState", conversationId: target.conversationId })
+          : target.type === "project"
+            ? await request({ method: "getProjectSourceState", projectId: target.projectId })
+            : await request({ method: "getWorktreeSourceState", projectId: target.projectId, path: target.path });
+        if (stale()) continue;
+        if (workspaceKey(target) === key) remember(key, { source: state });
+        return state;
+      } catch (error) {
+        if (!stale()) throw error;
+      }
+    }
+  });
+}
+
+/** Says the checkout just moved, so any read under way is stale, and reads it again. */
+export function refreshSource(target: WorkspaceTarget, key = workspaceKey(target)): Promise<SourceState> {
+  moved(key);
+  return readSource(target);
+}
+
+/** Keeps what a change returned, so reopening shows it; a read begun before it can't replace it. */
+export function keepSource(target: WorkspaceTarget, state: SourceState, key = workspaceKey(target)): void {
+  if (workspaceKey(target) !== key) return;
+  moved(key);
+  remember(key, { source: state });
+}
+
+/** How many files Source lists: a file both staged and changed is one. */
+export function uncommittedFiles(source: SourceState | undefined): number {
+  return source ? new Set([...source.staged, ...source.changes].map((file) => file.path)).size : 0;
+}
+
+/**
+ * Reads what the right sidebar would show for a target, so that opening it paints the contents at
+ * once: its files if none are kept, and its source always, as what is kept may be out of date.
+ * Failures are left to the views, which read again.
  */
 export function prefetchWorkspace(target: WorkspaceTarget): void {
   const entry = cachedWorkspace(target);
   if (entry) remember(workspaceKey(target), {});
   if (!entry?.files) readFiles(target).catch(() => undefined);
-  if (!entry?.source) readSource(target).catch(() => undefined);
+  readSource(target).catch(() => undefined);
 }
 
 /** Reads one folder of a target's checkout from disk: an ignored folder opened in the tree. */
@@ -185,9 +226,14 @@ export async function readFolder(target: WorkspaceTarget, path: string): Promise
 }
 
 function sameTarget(a: WorkspaceTarget, b: WorkspaceTarget): boolean {
-  return a.type === "conversation"
-    ? b.type === "conversation" && a.conversationId === b.conversationId
-    : b.type === "project" && a.projectId === b.projectId;
+  switch (a.type) {
+    case "conversation":
+      return b.type === "conversation" && a.conversationId === b.conversationId;
+    case "project":
+      return b.type === "project" && a.projectId === b.projectId;
+    case "worktree":
+      return b.type === "worktree" && a.projectId === b.projectId && a.path === b.path;
+  }
 }
 
 const changeListeners = new Set<(target: WorkspaceTarget) => void>();
@@ -212,9 +258,35 @@ export function emitWorkspaceChanged(target: WorkspaceTarget): void {
   for (const listener of changeListeners) listener(target);
 }
 
-/** Watches a target's checkout while the right sidebar shows it; null stops. */
-export function watchWorkspace(target: WorkspaceTarget | null): void {
-  request({ method: "watchWorkspace", target }).catch((error: unknown) => {
-    console.error("watching the checkout failed", error);
+/** Watches these checkouts while the right sidebar shows them, in place of the last ones; none stops. */
+export function watchWorkspaces(targets: readonly WorkspaceTarget[]): void {
+  request({ method: "watchWorkspace", targets: [...targets] }).catch((error: unknown) => {
+    console.error("watching the checkouts failed", error);
+  });
+}
+
+/** What the right sidebar shows, so what it watches: its checkout, and on Source a draft's worktree rows. */
+export function watchTargets(target: WorkspaceTarget | null, worktrees: readonly string[] | undefined, onSource: boolean): WorkspaceTarget[] {
+  if (!target) return [];
+  if (target.type !== "project" || !onSource) return [target];
+  return [target, ...(worktrees ?? []).map((path) => ({ type: "worktree", projectId: target.projectId, path }) as const)];
+}
+
+/** Each project's worktrees the user made, as last read. */
+const useUserWorktreeLists = create<Record<string, readonly string[]>>()(() => ({}));
+
+/** The worktrees of the project the user made, once read: its Source shows a row for each. */
+export function useUserWorktrees(projectId: string | null): readonly string[] | undefined {
+  return useUserWorktreeLists((lists) => (projectId ? lists[projectId] : undefined));
+}
+
+/** Reads which worktrees the user made; rows come and go with what git lists. An unchanged list keeps its identity. */
+export function readUserWorktrees(projectId: string): Promise<readonly string[]> {
+  return once(`worktrees:${projectId}`, async () => {
+    const { paths } = await request({ method: "listUserWorktrees", projectId });
+    const kept = useUserWorktreeLists.getState()[projectId];
+    if (sameList(kept, paths)) return kept!;
+    useUserWorktreeLists.setState({ [projectId]: paths });
+    return paths;
   });
 }

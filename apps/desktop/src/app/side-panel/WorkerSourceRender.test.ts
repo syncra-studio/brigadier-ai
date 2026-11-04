@@ -6,11 +6,18 @@ import { renderFixturePage } from "@/fixtures/headless";
 /** The fixture's JSON as the page's DOM escaped it. */
 const unescape = (dump: string) => dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&");
 
-test("a worker's +N −N opens Source on its changes, read only; the switch goes back to the session's and on to another worker; a gone worker falls back quietly", { timeout: 60000 }, async (t) => {
+test("a session's Source stacks its checkout and its workers; a worker's +N −N opens its row, read only; a gone worker's row goes quietly", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(unescape(await renderFixturePage(t, "worker-source.html", "worker-source-result", 8000))) as Record<string, unknown>;
   assert.equal(seen.error, undefined, JSON.stringify(seen));
-  // Before: the session's own checkout, as Source showed it, the switch over it.
-  assert.deepEqual(seen.start, { scope: "session", switch: "This session", groups: ["Changes1"] });
+  // Before: the session's own checkout open, each worker's row folded, no switch, no actions on the title.
+  assert.deepEqual(seen.start, {
+    rows: ["This session", "Cart fixes", "Readme fixes"],
+    groups: ["Changes1"],
+    folded: [[], []],
+    title: "SOURCE",
+    titleActions: 0,
+    switcher: false,
+  });
 
   // (a) The row still opens the worker's panel; its +N −N opens the right sidebar's Source on the worker.
   assert.deepEqual(seen.rowOpens, ["t1"]);
@@ -20,11 +27,13 @@ test("a worker's +N −N opens Source on its changes, read only; the switch goes
   ]);
   assert.deepEqual(seen.opened, {
     pane: { open: true, tab: "source" },
-    asked: ["t1"],
-    switch: "Cart fixes",
-    branch: "brigadier/w/t1into brigadier/session",
+    asked: ["t1", "t2"],
+    branch: "brigadier/w/t1",
+    branchTitle: "brigadier/w/t1 into brigadier/session",
+    scope: "worker",
     groups: ["Changes2"],
     files: ["total.tssrc/cart+10 −3M", "loose.tssrc/cart+2 −0U"],
+    request: null,
   });
 
   // (c) Read only: no message box, no Commit, More Actions, stage or discard; a file opens its diff.
@@ -36,13 +45,11 @@ test("a worker's +N −N opens Source on its changes, read only; the switch goes
     opener: "chat",
   });
 
-  // (b) The switch: the session, then each worker with a worktree, with its +N −N.
-  assert.deepEqual(seen.menu, ["This session", "Cart fixes+12 −3", "Readme fixes+4 −0"]);
-  assert.deepEqual(seen.parent, { switch: "This session", groups: ["Changes1"], box: true });
-  assert.deepEqual(seen.other, { switch: "Readme fixes", files: ["README.md+4 −0M"] });
+  assert.deepEqual(seen.parent, { box: true });
+  assert.deepEqual(seen.other, { files: ["README.md+4 −0M"] });
 
-  // A worker that is gone closes its Review tab and leaves the session's scope, with no error.
+  // A worker that is gone closes its Review tab and loses its row, with no error; none left, no rows.
   assert.deepEqual(seen.reviewGone, { active: "chat", error: "" });
-  assert.deepEqual(seen.sourceGone, { switch: "This session", scope: null, error: "" });
-  assert.deepEqual(seen.closedGone, { switch: "This session", scope: null });
+  assert.deepEqual(seen.sourceGone, { rows: ["This session", "Cart fixes"], error: "" });
+  assert.deepEqual(seen.noRows, { rows: [], branch: "brigadier/session" });
 });

@@ -15,7 +15,7 @@ import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
 
 const project = "source-menu-project";
-let state: SourceState = { branch: "main", remote: "origin", upstream: null, ahead: 0, staged: [], changes: [], merging: null, rebasing: null };
+let state: SourceState = { branch: "main", remote: "origin", upstream: null, ahead: 0, behind: 0, staged: [], changes: [], merging: null, rebasing: null };
 const ago = (minutes: number) => Date.now() - minutes * 60_000;
 const BRANCHES: SourceBranch[] = [
   { name: "main", remote: false, atMs: ago(1), author: "Stephen", subject: "Tax" },
@@ -168,7 +168,7 @@ function Fixture() {
   return (
     <TooltipProvider>
       <div className="bg-background text-foreground flex h-screen w-80 flex-col">
-        <SourcePanel target={{ type: "project", projectId: project, readOnly: false }} />
+        <SourcePanel target={{ type: "project", projectId: project }} />
         {result && <pre id="source-menu-result">{result}</pre>}
       </div>
     </TooltipProvider>

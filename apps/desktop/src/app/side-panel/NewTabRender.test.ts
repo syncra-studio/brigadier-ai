@@ -31,6 +31,8 @@ for (const reduced of [false, true]) {
     assert.deepEqual(seen.more, ["Find file⌘P"]);
     assert.deepEqual(seen.files, { open: true, tab: "files", placeholder: "newTab" });
     assert.equal(seen.newPage, "page"); assert.equal(seen.terminal, "terminal"); assert.equal(seen.sideChat, "sideChat");
+    // Before the conversation exists Side chat stays in its place, off, and says why on hover.
+    assert.deepEqual(seen.draftSideChat, { shown: true, disabled: true, stillNewTab: true, tooltip: "Start the session to use Side chat" });
     assert.equal((seen.siteTab as { kind: string; url: string }).kind, "browser"); assert.equal((seen.siteTab as { url: string }).url, "https://two.test/");
     assert.equal(seen.clearedSuggested, true);
     const spinner = seen.spinner as Record<string, unknown>;

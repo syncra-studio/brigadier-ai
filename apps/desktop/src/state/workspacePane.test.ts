@@ -3,8 +3,14 @@ import { test } from "node:test";
 import { columnsFit, isFilesSearchKey, legacyWorkspacePane, toolbarToggles, workspacePaneKey, workspacePaneState } from "./workspacePane";
 
 test("sessions and project drafts end with context, terminal, right sidebar; chats have context, terminal", () => {
-  assert.deepEqual(toolbarToggles("session"), ["context", "terminal", "right-sidebar"]);
-  assert.deepEqual(toolbarToggles("chat"), ["context", "terminal"]);
+  assert.deepEqual(toolbarToggles("session", false), ["context", "terminal", "right-sidebar"]);
+  assert.deepEqual(toolbarToggles("session", true), ["context", "terminal", "right-sidebar"]);
+  assert.deepEqual(toolbarToggles("draft", false), ["new-tab", "terminal", "right-sidebar"]);
+  assert.deepEqual(toolbarToggles("draft", true), ["terminal", "right-sidebar"]);
+  assert.deepEqual(toolbarToggles("chat", false), ["new-tab", "context", "terminal"]);
+  assert.deepEqual(toolbarToggles("chat", true), ["context", "terminal"]);
+  assert.deepEqual(toolbarToggles("chatDraft", false), ["new-tab", "terminal"]);
+  assert.deepEqual(toolbarToggles("chatDraft", true), ["terminal"]);
 });
 
 test("the right sidebar and the Workers panel open together only when both fit beside the thread", () => {

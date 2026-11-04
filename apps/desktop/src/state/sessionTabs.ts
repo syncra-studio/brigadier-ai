@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { notePaneClose } from "@/state/closedPanes";
+import { draftProject } from "@/state/draftTabs";
 import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
 import type { AttachmentRef, ReviewScope } from "@/ipc/generated";
 
@@ -77,6 +78,10 @@ export type FileTab = {
   preview: boolean;
   /** The tab it was opened from, where closing it returns. */
   opener: string | null;
+  /** The worktree it reads, opened from that worktree's row before a session starts. */
+  checkout?: string;
+  /** Opened before the session started: the session's copy may not have it. */
+  carried?: boolean;
   chat?: TabChatState;
 };
 
@@ -86,6 +91,8 @@ export type ReviewTabState = {
   id: string;
   target: ReviewTarget;
   opener: string | null;
+  /** The worktree it reads, opened from that worktree's row before a session starts. */
+  checkout?: string;
 };
 
 export type BrowserTabState = {
@@ -106,6 +113,8 @@ export type NewTabState = {
 };
 export type TerminalTabState = {
   kind: "terminal"; id: string; opener: string | null; cwd: string | null; title: string;
+  /** Opened before its conversation existed: its shell stays Home's, running where it started. */
+  homeShell?: { projectId: string | null };
 };
 export type SideChatTabState = {
   kind: "sideChat"; id: string; opener: string | null; conversationId: string | null; title: string;
@@ -134,6 +143,8 @@ export type MockupTabState = { kind: "mockup"; id: typeof MOCKUP_TAB; opener: st
  */
 export type ConflictTabState = {
   kind: "conflict"; id: string; opener: string | null; path: string; view: ConflictView;
+  /** The worktree it reads, opened from that worktree's row before a session starts. */
+  checkout?: string;
 };
 export type ConflictView = "conflict" | "compare" | "merge";
 /**
@@ -523,8 +534,17 @@ export function changeSessionTab(conversationId: string, id: string, change: (ta
   }));
 }
 
-function fileId(path: string): string {
-  return `file:${path}`;
+/** A tab from a worktree's row names its checkout: two worktrees' same path are two tabs. */
+function inCheckout(path: string, checkout: string | undefined): string {
+  return checkout ? `${checkout}//${path}` : path;
+}
+
+function fileId(path: string, checkout?: string): string {
+  return `file:${inCheckout(path, checkout)}`;
+}
+
+function conflictId(path: string, view: ConflictView, checkout?: string): string {
+  return `${view}:${inCheckout(path, checkout)}`;
 }
 
 /**
@@ -535,10 +555,10 @@ function fileId(path: string): string {
 export function openFileTab(
   conversationId: string,
   path: string,
-  { line = null, preview = false }: { line?: number | null; preview?: boolean } = {},
+  { line = null, preview = false, checkout }: { line?: number | null; preview?: boolean; checkout?: string | undefined } = {},
 ): void {
   update(conversationId, (current) => {
-    const id = fileId(path);
+    const id = fileId(path, checkout);
     const existing = current.tabs.find((tab) => tab.id === id);
     if (existing && existing.kind === "file") {
       const tabs = current.tabs.map((tab) =>
@@ -554,7 +574,7 @@ export function openFileTab(
       return { tabs, active: id };
     }
     const opener = current.active;
-    const tab: FileTab = { kind: "file", id, path, line, reveal: 0, preview, opener };
+    const tab: FileTab = { kind: "file", id, path, line, reveal: 0, preview, opener, ...(checkout ? { checkout } : {}) };
     const previewAt = preview
       ? current.tabs.findIndex((entry) => entry.kind === "file" && entry.preview)
       : -1;
@@ -570,12 +590,12 @@ export function openFileTab(
 }
 
 /** A file picked from New tab never takes the unrelated preview tab's place. */
-export function replaceNewTabWithFile(conversationId: string, id: string, path: string): boolean {
+export function replaceNewTabWithFile(conversationId: string, id: string, path: string, checkout?: string): boolean {
   let replaced = false;
   update(conversationId, (current) => {
-    const existing = current.tabs.find((tab) => tab.kind === "file" && tab.path === path);
+    const existing = current.tabs.find((tab) => tab.id === fileId(path, checkout));
     const tab: FileTab = existing?.kind === "file" ? { ...existing, preview: false }
-      : { kind: "file", id: fileId(path), path, line: null, reveal: 0, preview: false, opener: null };
+      : { kind: "file", id: fileId(path, checkout), path, line: null, reveal: 0, preview: false, opener: null, ...(checkout ? { checkout } : {}) };
     const next = replacePlaceholder(current, id, tab);
     replaced = next !== null;
     return next ?? current;
@@ -594,13 +614,15 @@ export function keepTabOpen(conversationId: string, id: string): void {
 }
 
 /** Opens the Review tab on `target`, in place of what it showed. */
-export function openReviewTab(conversationId: string, target: ReviewTarget, replace?: string): void {
-  // A merge's change opens beside the Changes tab, not in its place (#411).
-  const id = target.type === "commit" ? `${REVIEW_TAB}:${target.commit}` : REVIEW_TAB;
+export function openReviewTab(conversationId: string, target: ReviewTarget, replace?: string, checkout?: string): void {
+  // A merge's change opens beside the Changes tab, not in its place (#411); a worktree's beside
+  // another checkout's.
+  const id = target.type === "commit" ? `${REVIEW_TAB}:${target.commit}` : checkout ? `${REVIEW_TAB}:${checkout}` : REVIEW_TAB;
+  const named = checkout ? { checkout } : {};
   update(conversationId, (current) => {
     const existing = current.tabs.find((tab) => tab.id === id);
     const replaced = replacePlaceholder(current, replace, {
-      kind: "review", id, target, opener: existing?.opener ?? current.active,
+      kind: "review", id, target, opener: existing?.opener ?? current.active, ...named,
     });
     if (replaced) return replaced;
     if (existing) {
@@ -614,6 +636,7 @@ export function openReviewTab(conversationId: string, target: ReviewTarget, repl
       id,
       target,
       opener: current.active,
+      ...named,
     };
     return { tabs: insertAfterActive(current, tab), active: id };
   });
@@ -653,11 +676,11 @@ export function openPanelTab(conversationId: string, view: PanelView, title: str
 }
 
 /** Shows `path`'s conflicts in `view`: its tab when it has one, else a new one after the tab in front. */
-export function openConflictTab(conversationId: string, path: string, view: ConflictView = "conflict"): string {
-  const id = `${view}:${path}`;
+export function openConflictTab(conversationId: string, path: string, view: ConflictView = "conflict", checkout?: string): string {
+  const id = conflictId(path, view, checkout);
   update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
     ? { ...current, active: id }
-    : { tabs: insertAfterActive(current, { kind: "conflict", id, opener: current.active, path, view }), active: id });
+    : { tabs: insertAfterActive(current, { kind: "conflict", id, opener: current.active, path, view, ...(checkout ? { checkout } : {}) }), active: id });
   return id;
 }
 
@@ -667,6 +690,59 @@ export function selectTab(conversationId: string, id: string): void {
       ? { ...current, active: id }
       : current,
   );
+}
+
+/**
+ * The file or change the tab in front shows, for the row of `checkout` (none: its owner's own) that
+ * should light up. `staged`: only that group's row, a Review tab being of one side of a file.
+ */
+export function activeRow(current: SessionTabs, checkout: string | undefined): { path: string; staged?: boolean } | null {
+  const tab = current.tabs.find((entry) => entry.id === current.active);
+  if (!tab || (tab.kind !== "file" && tab.kind !== "review" && tab.kind !== "conflict") || tab.checkout !== checkout) return null;
+  if (tab.kind !== "review") return { path: tab.path };
+  return tab.target.type === "file" ? { path: tab.target.path, staged: tab.target.staged } : null;
+}
+
+/** A tab as it is once its session exists: it follows the session's copy (no checkout of its own). */
+function followingSession(tab: SessionTab, homeProject: string | null): SessionTab {
+  if (tab.kind === "terminal") return { ...tab, homeShell: { projectId: homeProject } };
+  if (tab.kind !== "file" && tab.kind !== "review" && tab.kind !== "conflict") return tab;
+  const { checkout: _session, ...rest } = tab;
+  if (rest.kind === "file") return { ...rest, id: fileId(rest.path), carried: true };
+  if (rest.kind === "conflict") return { ...rest, id: conflictId(rest.path, rest.view) };
+  return rest.target.type === "commit" ? rest : { ...rest, id: REVIEW_TAB };
+}
+
+/**
+ * A draft's tabs move to the conversation made from it, in order, with the one in front. File and
+ * Review tabs now follow the session's copy; two worktrees' same file become one tab. `only`: just
+ * these (the ones it had when sent, when the user left it meanwhile); the rest stay with the draft.
+ */
+export function carryDraftTabs(draft: string, conversationId: string, only?: ReadonlySet<string>): void {
+  useSessionTabs.setState(({ sessions }) => {
+    const from = sessions[draft];
+    if (!from) return { sessions };
+    const moving = only ? from.tabs.filter((tab) => only.has(tab.id)) : from.tabs;
+    if (!moving.length) return { sessions };
+    const renamed = new Map<string, string>();
+    const moved: SessionTab[] = [];
+    for (const tab of moving) {
+      const next = followingSession(tab, draftProject(draft));
+      renamed.set(tab.id, next.id);
+      const duplicate = moved.findIndex((entry) => entry.id === next.id);
+      if (duplicate < 0) moved.push(next);
+      // Keep the view the user was looking at when checkout identities converge.
+      else if (tab.id === from.active) moved[duplicate] = next;
+    }
+    const tabs = moved.map((tab) => ({ ...tab, opener: tab.opener ? renamed.get(tab.opener) ?? tab.opener : null }));
+    const left = from.tabs.filter((tab) => !renamed.has(tab.id));
+    const { [draft]: _moved, ...others } = sessions;
+    return { sessions: {
+      ...others,
+      ...(left.length ? { [draft]: { tabs: left, active: left.some((tab) => tab.id === from.active) ? from.active : CHAT_TAB } } : {}),
+      [conversationId]: { tabs, active: renamed.get(from.active) ?? CHAT_TAB },
+    } };
+  });
 }
 
 /** The tabs closed in each session, newest last, for ⌘⇧T. */

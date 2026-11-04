@@ -51,7 +51,9 @@ export function TabWithChat({ conversationId, tab, children }: { conversationId:
   // On macOS a browser tab's page lies beneath the app, so its button floats over the page too.
   const mac = useApp((s) => s.info?.platform === "macos");
   const inToolbar = tab.kind === "browser" && !mac;
-  const hidden = target && view === "hidden";
+  // The daemon keeps these chats for sessions alone: a draft or a plain chat has no button.
+  const session = useApp((s) => s.conversations[conversationId]?.kind === "session");
+  const hidden = session && target && view === "hidden";
   const button = hidden ? <ChatButton conversationId={conversationId} tab={tab} chat={chat} floating={!inToolbar} /> : null;
   return (
     <ToolbarButton.Provider value={inToolbar ? button : null}>
