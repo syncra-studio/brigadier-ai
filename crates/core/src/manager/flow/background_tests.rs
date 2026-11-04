@@ -240,18 +240,16 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
     flow.stop().await;
 }
 
-/// A Codex command its turn went on from (a background terminal) that ends while the turn still
-/// runs, with no call of the model's after its end to read it, is told as one ending after the
-/// turn is, in the same request: Codex never says it (D177: a `brigadier ask` answered so).
-#[tokio::test]
-async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
+/// A Codex `brigadier ask` the turn went on from, answered while the turn still runs. `polled`:
+/// whether its model looked in on it. What each turn was sent, and the flow's first request.
+async fn a_codex_ask_ending_in_its_turn(name: &str, polled: bool) -> (Flow, Vec<String>, String) {
     use brigadier_providers::{
         BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
     };
     let inputs: Log = Log::default();
     let log = inputs.clone();
     let flow = Flow::start(
-        "codex-unread-end",
+        name,
         Options {
             thread: brigadier_providers::ProviderKind::Codex,
             ..Options::default()
@@ -289,17 +287,34 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
                         last_line: None,
                     },
                 };
-                // As the provider sends them: a terminal's end just before its command's.
-                for event in [
+                let usage = ProviderEvent::Usage {
+                    total: Default::default(),
+                    last: None,
+                    calls: Vec::new(),
+                };
+                let poll = ProviderEvent::CommandPolled {
+                    item_id: "cmd-1".into(),
+                };
+                // As Codex sends them: a terminal's end just before its command's, then its
+                // usage twice for the one call that ends the turn.
+                let mut events = vec![
                     command(ItemStatus::InProgress, None, None),
                     terminal(BackgroundTaskStatus::Running),
+                ];
+                if polled {
+                    events.push(poll);
+                }
+                events.extend([
                     terminal(BackgroundTaskStatus::Completed),
                     command(
                         ItemStatus::Completed,
                         Some(0),
                         Some("Which colour?: blue\n"),
                     ),
-                ] {
+                    usage.clone(),
+                    usage,
+                ]);
+                for event in events {
                     let _ = turn.events.send(event).await;
                 }
                 Reply::text("Waiting for your colour choice.")
@@ -312,6 +327,14 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
     let root = board.requests.keys().next().unwrap().clone();
     assert_eq!(board.requests[&root].state, RequestState::Done);
     let inputs = inputs.lock().unwrap().clone();
+    (flow, inputs, root)
+}
+
+/// One that ends with no look from its model is told as one ending after the turn is, in the
+/// same request: Codex never says it (D177).
+#[tokio::test]
+async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
+    let (flow, inputs, root) = a_codex_ask_ending_in_its_turn("codex-unread-end", false).await;
     assert!(
         inputs.iter().any(|input| input.contains(
             "[your background command `brigadier ask \"Which colour?\"` finished after your turn · exit 0]"
@@ -323,6 +346,14 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
         answers.contains(&("Wrote blue.".into(), Some(root))),
         "{answers:?}"
     );
+    flow.stop().await;
+}
+
+/// One its model looked in on read its end itself: no turn is started to say it again.
+#[tokio::test]
+async fn a_codex_command_its_model_polled_is_not_told_again() {
+    let (flow, inputs, _) = a_codex_ask_ending_in_its_turn("codex-polled-end", true).await;
+    assert_eq!(inputs.len(), 1, "{inputs:#?}");
     flow.stop().await;
 }
 

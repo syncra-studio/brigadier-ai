@@ -280,11 +280,12 @@ struct ConvState {
     /// a command whose item still runs at its turn's end lingers; its terminal's leaving the
     /// list ends it too, should its item's end not come (D21).
     terminals: HashMap<String, String>,
-    /// Codex commands the turn went on from (`terminals`) that ended while it still ran, by
-    /// item: their words, end and output's tail, and how many of the model's calls ended since.
-    /// One whose end no call of its model's read (at most the turn's last ended since) is told
+    /// Codex commands the turn went on from (`terminals`) that ended while it still ran and
+    /// its model never looked in on, by item: their words, end and output's tail. Each is told
     /// as a lingering one's is: Codex never says it (D177: a `brigadier ask` answered so).
-    unread_ends: HashMap<String, (String, String, String, u32)>,
+    unread_ends: HashMap<String, (String, String, String)>,
+    /// The commands the running turn's model looked in on, which read their end themselves.
+    polled: HashSet<String>,
     /// The request whose turn left Codex commands running (`lingering`): it works until each
     /// has ended and the thread heard of it. While they run, as while the CLI's own background
     /// jobs do (`background`), the CLI stays up (nothing retires it).
@@ -4810,10 +4811,11 @@ impl SessionManager {
                 if let Some(words) = words
                     && state.busy
                     && in_background
+                    && !state.polled.contains(item)
                 {
                     state
                         .unread_ends
-                        .insert(item.to_owned(), (words, how, tail, 0));
+                        .insert(item.to_owned(), (words, how, tail));
                 }
                 return;
             }
@@ -5191,6 +5193,11 @@ impl SessionManager {
                     self.orchestrator_step(&conv.id, kind).await;
                 }
             }
+            ProviderEvent::CommandPolled { item_id } => {
+                let mut state = conv.state.lock().await;
+                state.unread_ends.remove(item_id);
+                state.polled.insert(item_id.clone());
+            }
             ProviderEvent::BackgroundTask { task } => {
                 self.terminal_seen(
                     conv,
@@ -5384,10 +5391,6 @@ impl SessionManager {
                 }
             }
             ProviderEvent::Usage { total, last, calls } => {
-                // A call of its model's ended: it may have read the ends before it.
-                for end in conv.state.lock().await.unread_ends.values_mut() {
-                    end.3 += 1;
-                }
                 // Claude sums a turn's calls; the context its last call read came apart.
                 let context = conv.context_used().await;
                 self.note_use(
@@ -5646,14 +5649,13 @@ impl SessionManager {
                         state.lingering.insert(item, words);
                     }
                 }
-                for (item, (words, how, tail, calls)) in std::mem::take(&mut state.unread_ends) {
-                    if calls <= 1 {
-                        state.lingering.insert(item.clone(), words);
-                        unread.push((item, how, tail));
-                    }
+                for (item, (words, how, tail)) in std::mem::take(&mut state.unread_ends) {
+                    state.lingering.insert(item.clone(), words);
+                    unread.push((item, how, tail));
                 }
             }
             state.unread_ends.clear();
+            state.polled.clear();
             state.commands.clear();
             // Taken now, so no turn starts on it in between.
             let end_commands = (std::mem::take(&mut state.end_commands)
