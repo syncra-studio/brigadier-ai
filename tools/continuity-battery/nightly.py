@@ -16,7 +16,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "tools/bench"))
 from economics import combine, historical, mean_usd, ratio, usd
 from battery import NOTE, role_table
-from scoring import recall_rows
+from scoring import INCOMPLETE, recall_rows
 FIELDS = ("input", "cached_input", "cache_write", "output", "cost_usd")
 ARMS = ("seam", "plain", "zed", "summary")
 PROFILES = (("recall", "short", 9, 1200), ("recall", "long", 90, 3500),
@@ -111,6 +111,16 @@ def metrics(result):
                 if isinstance(result.get("items"), dict) and result["items"] else None)}
 
 
+def observation_status(result, returncode):
+    """A cell is complete only if its run exited 0 and lost nothing: no capture or score error,
+    no CLI error text (an expired credential, a refused request), no unmeasured step (the
+    `incomplete:` reasons its main wrote, see scoring.exit_status)."""
+    if result.get("status") == "skipped":
+        return "skipped"
+    lost = any(str(error).startswith(INCOMPLETE) for error in result.get("errors", []))
+    return "complete" if returncode == 0 and not lost else "incomplete"
+
+
 def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=False):
     from evidence import purge
     purge()
@@ -159,8 +169,7 @@ def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=
                                     proc.kill()
                                     proc.wait()
                         result = json.loads(evidence.read_text())
-                        row.update(status="skipped" if result.get("status") == "skipped" else
-                                   "complete" if proc.returncode == 0 and not any(e.startswith(("capture:", "score:", "capture/score:")) for e in result.get("errors", [])) else "incomplete",
+                        row.update(status=observation_status(result, proc.returncode),
                                    reason=result.get("reason"),
                                    errors=result.get("errors", []), model=result.get("model"), **metrics(result))
                         if row["status"] == "complete" and block in ("p2", "p3") and row.get("budget_scores") is None:

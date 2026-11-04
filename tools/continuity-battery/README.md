@@ -37,8 +37,14 @@ Overrides pass through `run.sh`, for example `--tokens 75000 --max-fillers 24`.
 `--report PATH` chooses the text report. `--evidence /absolute/private/path.json`
 keeps detailed input/output, provider events, hand-offs and metering outside git.
 The evidence contains the planted answers and is written before scratch cleanup.
-A seven-day private bundle is also retained by default (location and expiry below). Exit 0 means the probe ran,
-even when recall fails; exit 2 means the run ended before the probe. This is a report,
+A seven-day private bundle is also retained by default (location and expiry below). Exit 0 means the
+graded turns (here `apply` and the probe) finished, even when recall fails. Exit 2 means the observation is incomplete:
+the run ended before the probe, no turn settled, a graded turn failed, stopped or timed out, or the
+CLI reported an error. Each step records its turn's `outcome` beside `settled`, since a failed request
+settles too. Only fault-injection steps (`seam-*`) may end failed or stopped. The CLI's own error text
+(an `is_error` result with its API status, a rejected rate limit with its reset time, a `<synthetic>`
+error reply in the native transcript, the stderr tail) is kept as a `cli:` run problem and is never
+graded as an answer. The reasons appear as `incomplete:` run problems. This is a report,
 never a gate. A report-only formatting pass can import `report()` from `battery.py`
 and pass it saved JSON evidence; it makes no model calls.
 

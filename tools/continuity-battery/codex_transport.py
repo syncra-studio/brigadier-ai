@@ -90,7 +90,12 @@ def send(run, name, text, fault=None):
         index += 1
         params = event.get("params") or {}
         if event.get("method") == "turn/completed" and (params.get("turn") or {}).get("id") == turn["id"]:
-            step["settled"] = params["turn"]["status"] == "completed"
+            status = params["turn"]["status"]
+            step["settled"] = status == "completed"
+            step["outcome"] = {"completed": "done", "interrupted": "stopped"}.get(status, "failed")
+            error = params["turn"].get("error")
+            if error:
+                step["error"] = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             break
     events = client.events[start:]
     answer = [event["params"]["item"]["text"] for event in events if event.get("method") == "item/completed"
@@ -98,7 +103,7 @@ def send(run, name, text, fault=None):
     run.raw_events.extend(events)
     step.update(ended_ms=battery.now(), answer="\n".join(answer))
     if not step["settled"]:
-        run.errors.append(name + ": Codex turn failed")
+        run.errors.append(f"cli: {name}: Codex turn {step['outcome']}" + (": " + step["error"] if step.get("error") else ""))
     path = run.native_sessions.get(run.native_id) or run.native_path()
     run.native_sessions[run.native_id] = str(path) if path else None
     return step
