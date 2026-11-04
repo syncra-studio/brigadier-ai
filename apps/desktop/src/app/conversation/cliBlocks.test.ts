@@ -1790,3 +1790,153 @@ test("a worker paused before the answer and resumed and ended after it read in t
   assert.deepEqual(stepKinds(belowAnswer(activity, 0, true)), ["resumed", "stopped"]);
   assert.deepEqual(belowAnswer(activity, 0, false), []);
 });
+
+/**
+ * A session whose first turn ended past the point: Brigadier's `/compact` (hidden), then a worker's
+ * wake-up. That is a hidden input and opens no turn, so what it says lands under the `/compact`.
+ */
+const REFRESH = "/compact Besides your usual summary, keep these exactly";
+const refreshed = (over: Partial<ThreadTurn>, block: NonNullable<ThreadView["block"]>): ThreadView => ({
+  entries: [
+    user("u1", "Fix the bug", 1000),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "A worker is on it." }, 2000),
+    compactionEnded(false, 4000),
+    sent("c1", REFRESH, 3000, { by: "brigadier" }),
+    at({ type: "message", itemId: "a2", role: "assistant", text: "The worker reported." }, 5000),
+    at(tool("t1", "Read", '{"file_path":"/repo/a.ts"}', "completed", "1\tcode"), 5100),
+    at({ type: "command", itemId: "x1", command: "git status", cwd: null, status: "completed", exitCode: 0, output: "ok", durationMs: 5 }, 5200),
+    at({ type: "fileChanges", itemId: "f1", changes: [{ path: "a.ts", kind: "update", diff: "-a\n+b" }], status: "completed" }, 5300),
+    at({ type: "message", itemId: "a3", role: "assistant", text: "Merged." }, 5400),
+  ],
+  turns: [{ ...turn("u1", 1000, 2500, "done"), requests: ["m1"] }, { ...turn("c1", 3000, 5500, "done"), ...over }],
+  block,
+});
+const running = { endedAtMs: null, end: null };
+
+for (const [name, thread] of [
+  ["its wake-up turn running in the work block", refreshed(running, { startedAtMs: 1100 })],
+  ["its wake-up turn just ended, a worker still running", refreshed({}, { startedAtMs: 1100 })],
+  ["its wake-up turn running, in a work block opened after the turn before ended", refreshed(running, { startedAtMs: 2600 })],
+  ["everything over", refreshed({}, { startedAtMs: 1100, endedAtMs: 6000 })],
+] as const) {
+  test(`every row after a context refresh stays shown: ${name}`, () => {
+    const blocks = cliBlocks(thread, "conv", undefined, true);
+    assert.deepEqual(blocks.map((block) => block.key), ["u1"]);
+    assert.deepEqual(blocks[0]?.texts.map((text) => text.text), ["A worker is on it.", "The worker reported.", "Merged."]);
+    assert.deepEqual(blocks[0]?.orchestratorSteps.map((step) => step.position), [5, 6, 7]);
+    assert.deepEqual(blocks[0]?.compactions.map((each) => each.state), ["done"]);
+  });
+}
+
+test("the first of two context refreshes keeps its rows while a later turn runs", () => {
+  const first = refreshed({}, { startedAtMs: 1100 });
+  const blocks = cliBlocks(
+    {
+      ...first,
+      entries: [...first.entries, compactionEnded(false, 8000), sent("c2", REFRESH, 7000, { by: "brigadier" }), at({ type: "message", itemId: "a4", role: "assistant", text: "Still going." }, 9000)],
+      turns: [...first.turns, turn("c2", 7000, null, null)],
+    },
+    "conv",
+    undefined,
+    true,
+  );
+  assert.deepEqual(blocks[0]?.texts.map((text) => text.text), ["A worker is on it.", "The worker reported.", "Merged.", "Still going."]);
+  assert.equal(blocks[0]?.compactions.length, 2);
+});
+
+test("a refresh with no work in it stays hidden: its failure, a blank reply or its compaction's own word changes nothing of the block before", () => {
+  for (const inside of [
+    at({ type: "error", error: { kind: "other", message: "Not enough messages to compact.", willRetry: false, limit: null, code: null } }, 3500),
+    at({ type: "message", itemId: "blank", role: "assistant", text: "  " }, 3500),
+    compactionEnded(false, 3500),
+  ]) {
+    const blocks = cliBlocks(
+      {
+        entries: [user("u1", "Fix the bug", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Done." }, 2000), sent("c1", REFRESH, 3000, { by: "brigadier" }), inside],
+        turns: [{ ...turn("u1", 1000, 2500, "done"), requests: ["m1"] }, turn("c1", 3000, 3600, "failed", "Not enough messages to compact.")],
+      },
+      "conv",
+      undefined,
+      true,
+    );
+    assert.deepEqual(blocks.map((block) => [block.key, block.state, block.error, block.endedAtMs]), [["u1", "done", null, 2500]], JSON.stringify(inside));
+  }
+});
+
+test("the user's next message after a refresh that held work shows where it came, with its own work under it", () => {
+  const thread = refreshed({}, { startedAtMs: 1100 });
+  const blocks = cliBlocks(
+    {
+      ...thread,
+      entries: [...thread.entries, sent("u2", "How is it going?", 7000, { by: "user" }), at({ type: "message", itemId: "a4", role: "assistant", text: "Nearly there." }, 7100)],
+      // The daemon's word: sent while the work block held.
+      turns: [...thread.turns, { ...turn("u2", 7000, 7200, "done"), requests: ["m2"], joins: true }],
+    },
+    "conv",
+    undefined,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => block.key), ["u1"]);
+  const [block] = blocks;
+  assert.deepEqual(block?.steers.map((steer) => steer.message.text), ["How is it going?"]);
+  const steerAt = block!.steers[0]!.position;
+  assert.deepEqual(block?.texts.map((text) => [text.text, text.position > steerAt]), [["A worker is on it.", false], ["The worker reported.", false], ["Merged.", false], ["Nearly there.", true]]);
+  assert.ok(block?.requestIds.includes("m2"));
+});
+
+test("a block's clock takes in a refresh's work: from its first message to that work's end, the wait between counted", () => {
+  const over = cliBlocks(refreshed({}, { startedAtMs: 1100, endedAtMs: 6000 }), "conv", undefined, true)[0];
+  assert.deepEqual(over?.worked, [{ fromMs: 1000, toMs: 2500 }, { fromMs: 3000, toMs: 5500 }]);
+  assert.equal(over?.startedAtMs, 1000);
+  assert.equal(over?.endedAtMs, 5500);
+});
+
+test("the user's message steered into a refresh's turn shows before any work does", () => {
+  const thread = refreshed(running, { startedAtMs: 1100, endedAtMs: 2500 });
+  const [block] = cliBlocks({ ...thread, entries: [...thread.entries.slice(0, 4), sent("s1", "Stop that", 4500, { by: "user" }, { steer: true })] }, "conv", undefined, true);
+  assert.deepEqual(block?.steers.map((steer) => steer.message.text), ["Stop that"]);
+});
+
+test("a worker's question after a refresh with no work in it shows in the block its request names", () => {
+  const question = { id: "q1", requestId: "m1", position: 0, createdAtMs: 5350, answer: null, answeredAtMs: null, kind: { type: "worker", taskId: "t1" } };
+  const thread = refreshed({}, { startedAtMs: 1100 });
+  const [block] = cliBlocks({ ...thread, entries: thread.entries.slice(0, 4) }, "conv", { ...NO_BOARD, questions: { q1: question } } as unknown as BoardDigest, true);
+  assert.deepEqual(block?.cards.map((card) => card.id), ["q1"]);
+});
+
+test("a question asked in a refresh's turn shows in the thread", () => {
+  const question = { id: "q1", requestId: "m1", position: 0, createdAtMs: 5350, answer: null, answeredAtMs: null, kind: { type: "orchestrator" } };
+  const [block] = cliBlocks(refreshed(running, { startedAtMs: 2600 }), "conv", { ...NO_BOARD, questions: { q1: question } } as unknown as BoardDigest, true);
+  assert.deepEqual(block?.cards.map((card) => card.id), ["q1"]);
+  assert.equal(block?.cardWait, true);
+});
+
+test("an old Codex thread's checkpoint turn keeps its reply unseen", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Fill", 1000),
+        user("u2", "[Brigadier · checkpoint] The conversation is about to be compacted.", 3000),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "Checkpoint noted." }, 3500),
+      ],
+      turns: [turn("u1", 1000, 2000, "done"), turn("u2", 3000, 4000, "done")],
+    },
+    "conv",
+    undefined,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => [block.key, block.texts.length]), [["u1", 0]]);
+});
+
+test("a /compact the user typed keeps its own block with its work", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [user("u1", "Grow", 1000), reply1, sent("k1", "/compact", 3000, { by: "user" }), at({ type: "message", itemId: "a2", role: "assistant", text: "Compacted." }, 3500)],
+      turns: [{ ...turn("u1", 1000, 1500, "done"), requests: ["r1"] }, { ...turn("k1", 3000, 3600, "done"), requests: ["r2"] }],
+    },
+    "conv",
+    NO_BOARD,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => [block.user?.kind === "message" ? block.user.text : null, block.texts.length]), [["Grow", 1], ["/compact", 1]]);
+});

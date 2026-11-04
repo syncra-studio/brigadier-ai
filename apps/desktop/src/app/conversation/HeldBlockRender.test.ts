@@ -57,15 +57,28 @@ test("a turn that fails while its worker works, nothing following the worker's e
 type SeenRefresh = Seen & { refresh: { gap: number | null; lineUnder: boolean | null; wokenUnder: boolean | null } };
 
 test("a context refresh while a block is held leaves its live line under the divider, and the divider where it is when the wait ends", async (t) => {
-  const woke = JSON.parse(await renderFixturePage(t, "held-block.html?refresh=wake", "held-block-result", 10000)) as Record<"held" | "woken" | "closed", SeenRefresh>;
-  assert.deepEqual(woke.held.waits, [["Waiting for First bug"]]);
+  const woke = JSON.parse(await renderFixturePage(t, "held-block.html?refresh=wake", "held-block-result", 10000)) as Record<"held" | "woken" | "over" | "asked" | "closed", SeenRefresh>;
+  assert.deepEqual(woke.held.waits, [["Waiting for 2 workers"]]);
   assert.equal(woke.held.refresh.lineUnder, true, JSON.stringify(woke.held));
   assert.ok(woke.held.refresh.gap !== null && woke.held.refresh.gap >= 0, JSON.stringify(woke.held));
   // The wait over, the thread goes on under the divider, and the divider stays under its reply.
   assert.equal(woke.woken.blocks, 1, JSON.stringify(woke.woken));
   assert.equal(woke.woken.refresh.gap, woke.held.refresh.gap, JSON.stringify(woke.woken));
   assert.equal(woke.woken.refresh.wokenUnder, true, JSON.stringify(woke.woken));
+  // Its wake-up's turn over with a worker still working: its rows stay, and the block still works on the clock.
+  assert.equal(woke.over.blocks, 1, JSON.stringify(woke.over));
+  assert.equal(woke.over.refresh.wokenUnder, true, JSON.stringify(woke.over));
+  assert.match(woke.over.headers[0] ?? "", /^Working for /);
+  assert.deepEqual(woke.over.waits, [["Waiting for Second bug"]]);
+  // What the user sends then shows in the block, and what answers it comes under it.
+  assert.equal(woke.asked.blocks, 1, JSON.stringify(woke.asked));
+  assert.deepEqual(woke.asked.steers, [["How is it going?"]], JSON.stringify(woke.asked));
+  assert.equal(woke.asked.refresh.wokenUnder, true, JSON.stringify(woke.asked));
+  assert.equal(woke.closed.blocks, 1, JSON.stringify(woke.closed));
+  assert.deepEqual(woke.closed.steers, [["How is it going?"]], JSON.stringify(woke.closed));
   assert.equal(woke.closed.refresh.wokenUnder, true, JSON.stringify(woke.closed));
+  // Over: on the clock from its first message to its last turn's end.
+  assert.equal(woke.closed.headers[0], "Worked for 4m 12s");
   // Nothing follows the worker's end: the block closes with the divider under its answer, as after any finished turn.
   const quiet = JSON.parse(await renderFixturePage(t, "held-block.html?refresh=quiet", "held-block-result", 10000)) as Record<"held" | "closed", SeenRefresh>;
   assert.equal(quiet.held.refresh.lineUnder, true, JSON.stringify(quiet.held));

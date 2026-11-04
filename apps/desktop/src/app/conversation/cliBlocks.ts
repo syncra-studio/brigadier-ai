@@ -555,6 +555,24 @@ function startsTurn(entry: FileEntry): boolean {
   return entry.event.type === "message" && entry.event.role === "user" && !entry.parent && !entry.steer;
 }
 
+/** Whether the thread draws this entry as work: no compaction, failure or blank word of the CLI's. */
+function showsWork({ event, steer, said }: FileEntry): boolean {
+  switch (event.type) {
+    case "message":
+      return event.role === "assistant" ? !!event.text.trim() : !!steer && said?.by !== "brigadier";
+    case "messageDelta":
+      return !!event.text.trim();
+    case "toolCall":
+    case "command":
+    case "fileChanges":
+    case "image":
+    case "taskNotice":
+      return true;
+    default:
+      return false;
+  }
+}
+
 /**
  * A turn's state, start and end set on its block, from how the CLI ended it. `earlier`: the
  * block's turns before it (Brigadier's word of its workers joined it): it started with the
@@ -747,12 +765,13 @@ export function cliBlocks(
   };
   const internal = new Set<Block>();
   const waited = waitOutputs(view);
-  // The turns, by place, the CLI told a background job's end in: Claude tells it in the next turn
-  // it runs, which may be Brigadier's own `/compact`.
-  const noticed = new Set<number>();
+  // The turns, by place, that hold anything the thread shows. Brigadier's own `/compact` can: Claude
+  // tells a background job's end in the next turn it runs, and a worker's wake-up is a hidden input
+  // that opens no turn, so what it says goes on under the `/compact`.
+  const worked = new Set<number>();
   view.entries.reduce((at, entry) => {
     const next = !entry.parent && startsTurn(entry) ? at + 1 : at;
-    if (!entry.parent && entry.event.type === "taskNotice") noticed.add(next);
+    if (!entry.parent && showsWork(entry)) worked.add(next);
     return next;
   }, -1);
   let maintenance: "turn" | "steered" | "upkeep" | null = null;
@@ -890,9 +909,10 @@ export function cliBlocks(
         !internal.has(before) &&
         ((!!news && startedIn(before, asked.text)) ||
           (woke && carries.some((request) => before.requestIds.includes(request))) ||
-          // Brigadier's `/compact` that Claude told a background command's end in: one more turn
-          // of the block before, as Codex's word of its command's end is (D44, D52).
-          (compacting && noticed.has(turn)) ||
+          // Brigadier's `/compact` that holds work (a background command's end Claude told in it,
+          // what a worker's wake-up said): one more turn of the block before, as Codex's word of
+          // its command's end is (D44, D52). An old Codex thread's checkpoint reply stays unseen.
+          (compacting && worked.has(turn) && !asked.text.startsWith(CHECKPOINT_MARK)) ||
           // A queued message still in the rail that woke the session to judge it while the
           // block before held: that block's, no bubble until it joins.
           goesOn(before, entry.requests ?? []));

@@ -8,8 +8,9 @@
  * `?failed=wake`, `?failed=nothing`: its lead's turn fails while its worker works; the worker's
  * end then wakes the thread, or nothing follows it. Each step reads the same way, with its error.
  *
- * `?refresh=wake`, `?refresh=quiet`: its lead's turn ends, Brigadier refreshes its context while the
- * worker works; the worker's end then wakes the thread, or nothing follows it.
+ * `?refresh=wake`, `?refresh=quiet`: its lead's turn ends, Brigadier refreshes its context while two
+ * workers work; a worker's end then wakes the thread as a real session's does, a hidden input that
+ * opens no turn, so its work goes on under the `/compact`; or nothing follows it.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -86,8 +87,8 @@ const refreshed: FileEntry[] = [
 if (refreshing) {
   view = {
     entries: refreshed,
-    turns: [turn("u1", 0, 3_000, ["r1"]), turn("c1", 10_000, 20_000, [], true)],
-    workers: [worker("aa11bb22", "First bug", 1_000, false)],
+    turns: [turn("u1", 0, 3_000, ["r1"]), turn("c1", 10_000, 20_000, [])],
+    workers: [worker("aa11bb22", "First bug", 1_000, false), worker("cc33dd44", "Second bug", 2_000, false)],
     block: { startedAtMs: at(100) },
   };
 }
@@ -225,17 +226,29 @@ async function driveFailed() {
 async function driveRefresh() {
   await settled();
   const held = seen();
-  const worked = [worker("aa11bb22", "First bug", 1_000, true)];
+  const worked = [worker("aa11bb22", "First bug", 1_000, true), worker("cc33dd44", "Second bug", 2_000, true)];
   const steps: Record<string, unknown> = { held };
   if (refreshing === "wake") {
-    show({
-      ...view,
-      entries: [...refreshed, news("n1", "aa11bb22", 200_000), said("a4", "assistant", "The first bug is fixed.", 201_000)],
-      turns: [...view.turns, { ...turn("n1", 200_000, 0, ["r1"], true), endedAtMs: null, end: null }],
-      workers: worked,
-    });
+    const woke = [...refreshed, said("a4", "assistant", "The first bug is fixed.", 201_000)];
+    const before = view.turns[0]!;
+    const oneWorks = [worker("aa11bb22", "First bug", 1_000, true), worker("cc33dd44", "Second bug", 2_000, false)];
+    // The first worker's end wakes it, under the `/compact`.
+    show({ ...view, entries: woke, turns: [before, { ...turn("c1", 10_000, 0, []), endedAtMs: null, end: null }], workers: oneWorks });
     await settled();
     steps.woken = seen();
+    // That turn ends with the second still working.
+    const over = turn("c1", 10_000, 202_000, []);
+    show({ ...view, turns: [before, over] });
+    await settled();
+    steps.over = seen();
+    // The user writes meanwhile: their message joins the block, its own work under it.
+    show({
+      ...view,
+      entries: [...woke, said("u9", "user", "How is it going?", 250_000), said("a9", "assistant", "One still works.", 251_000)],
+      turns: [before, over, turn("u9", 250_000, 252_000, ["r9"], true)],
+    });
+    await settled();
+    steps.asked = seen();
   }
   show({ ...view, workers: worked, block: { startedAtMs: at(100), endedAtMs: at(300_000) } });
   await settled();
