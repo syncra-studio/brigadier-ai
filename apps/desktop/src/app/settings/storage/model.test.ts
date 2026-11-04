@@ -75,6 +75,23 @@ test("when a project was used, and when the page last looked", () => {
   assert.equal(checkedWords(NOW - 3 * 60_000, NOW), "Checked 3m ago");
 });
 
+// Calendar days, not 24-hour blocks, across a DST change: 23:30 on Helsinki's 25-hour day (DST
+// ends, 2026-10-25) and 00:30 that same day are the same day; 23:30 the night before is
+// yesterday (#642, #658).
+test("when a project was used counts calendar days across a clock change", (t) => {
+  const zone = process.env.TZ;
+  process.env.TZ = "Europe/Helsinki";
+  t.after(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+  const now = Date.parse("2026-10-25T21:30:00Z");
+  assert.equal(new Date(now).getHours(), 23, "the zone took");
+  assert.equal(usedWords(Date.parse("2026-10-24T21:30:00Z"), now), "Used today");
+  assert.equal(usedWords(Date.parse("2026-10-24T20:30:00Z"), now), "Used yesterday");
+  assert.equal(usedWords(Date.parse("2026-10-21T20:30:00Z"), now), "Used 4 days ago");
+});
+
 test("projects sort by size, last use or name, and search by name or folder", () => {
   const projects = [project("b", 1, 9), project("a", 3, 2), project("c", 2, 0)];
   assert.deepEqual(listProjects(projects, "largest").map((p) => p.name), ["a", "c", "b"]);

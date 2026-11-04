@@ -475,6 +475,11 @@ type LiveOptions = {
   latencyMs?: number;
   /** The request whose URL holds `url` (a module loaded on first use) is answered `ms` late. */
   slow?: { url: string; ms: number };
+  /**
+   * The page's clock and time zone: `Date` starts at `nowMs` (and runs on from there) in the IANA
+   * zone `timezone`, whenever and wherever the test runs.
+   */
+  clock?: { timezone: string; nowMs: number };
 };
 
 /**
@@ -487,7 +492,7 @@ export async function renderFixtureLive(
   page: string,
   resultId: string,
   timeoutMs = 60000,
-  { reducedMotion = false, latencyMs = 0, slow }: LiveOptions = {},
+  { reducedMotion = false, latencyMs = 0, slow, clock }: LiveOptions = {},
 ): Promise<string> {
   const { url, scratch, log, stopFirst } = await serveFixtures(t);
   const deadline = Date.now() + timeoutMs;
@@ -561,6 +566,21 @@ export async function renderFixtureLive(
       setTimeout(() => void call("Fetch.continueRequest", { requestId }).catch(() => {}), slow.ms);
     });
     await call("Fetch.enable", { patterns: [{ urlPattern: `*${slow.url}*` }] });
+  }
+  if (clock) {
+    await call("Emulation.setTimezoneOverride", { timezoneId: clock.timezone });
+    // Before any of the page's scripts: `Date` reads the pinned instant, and time goes on from it.
+    await call("Page.enable", {});
+    await call("Page.addScriptToEvaluateOnNewDocument", {
+      source: `(() => {
+        const Real = Date;
+        const shift = ${clock.nowMs} - Real.now();
+        globalThis.Date = class extends Real {
+          constructor(...args) { if (args.length === 0) super(Real.now() + shift); else super(...args); }
+          static now() { return Real.now() + shift; }
+        };
+      })();`,
+    });
   }
   await call("Page.navigate", { url: `${url}fixtures/${page}` });
   while (Date.now() < deadline) {

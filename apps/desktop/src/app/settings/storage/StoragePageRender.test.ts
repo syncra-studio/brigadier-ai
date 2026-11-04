@@ -7,10 +7,14 @@ import { renderFixtureLive } from "@/fixtures/headless";
 // uses, Free up space reviewed, removed and done right in its card, a project opened and freed
 // up alone, all projects searched and paged, the projects not in use freed up after a confirm,
 // Manage and Uninstall.
+// Its clock is pinned to half an hour before midnight on a day DST ends, a 25-hour day (Helsinki,
+// 2026-10-25 23:30 EET), so "yesterday" and "4 days ago" are calendar days whenever it runs (#642, #658).
+const DST_END_NIGHT = { timezone: "Europe/Helsinki", nowMs: Date.parse("2026-10-25T21:30:00Z") };
 test("Storage reviews, frees up and shows each project, in the design's words", { timeout: 90000 }, async (t) => {
-  const dump = await renderFixtureLive(t, "storage.html?drive=1", "storage-result", 60000);
+  const dump = await renderFixtureLive(t, "storage.html?drive=1", "storage-result", 60000, { clock: DST_END_NIGHT });
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.equal(seen.error, undefined);
+  assert.equal(seen.clock, "Sun Oct 25 2026 Europe/Helsinki");
   assert.equal(seen.title, "Storage");
   assert.deepEqual(seen.sections, ["This computer", "Free up space", "Disk use by project", "Archived", "Uninstall"]);
   assert.deepEqual(seen.legend, [
