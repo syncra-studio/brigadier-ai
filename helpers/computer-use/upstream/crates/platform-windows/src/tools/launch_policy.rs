@@ -198,12 +198,13 @@ pub(crate) fn foreign_notepad_windows(open: &[u64], own: &[u64]) -> Vec<u64> {
 /// Who opened the windows that block a launch, as the refusal states it. An
 /// earlier launch that did not answer in time may still have opened a window
 /// after its reply, so such a window cannot be called the user's for sure.
-/// Nothing ties a late window to that launch (the app runs all its windows,
-/// the user's too, in one process, and Windows activates it through a
-/// broker), so the helper never adopts it as its own either.
+/// Nothing ties a late window to that launch (one process of the app serves
+/// the user and the helper alike, and Windows activates it through a
+/// broker), so the helper never adopts it as its own either. The wording
+/// holds for Settings too, which shows only one window.
 fn blocking_window_owner(app: &str, which: &str, unconfirmed_launch: bool) -> String {
     if unconfirmed_launch {
-        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer within 15 s, and Windows may have opened that window for it afterwards. {app} runs all its windows, the user's too, in one process, so the helper cannot tell such a late window from one the user opened and never puts anything into it")
+        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer within 15 s, and Windows may have opened that window for it afterwards. Nothing ties that window to the launch, because one {app} process serves the user and this helper alike, so the helper cannot tell such a late window from one the user opened and never puts anything into it")
     } else {
         format!("a window this helper did not open{which}")
     }
@@ -381,6 +382,9 @@ mod fresh_document_tests {
         ] {
             assert!(refusal.contains("Windows may have opened that window for it afterwards"));
             assert!(refusal.contains("cannot tell such a late window from one the user opened"));
+            assert!(refusal.contains(&format!(
+                "one {app} process serves the user and this helper alike"
+            )));
             assert!(refusal.contains(&format!(
                 "Every {app} launch is refused this way until no {app} window is open; closing {app} clears it."
             )));

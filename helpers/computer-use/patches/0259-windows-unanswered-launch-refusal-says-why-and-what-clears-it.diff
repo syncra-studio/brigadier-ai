@@ -1,20 +1,21 @@
-Why: After a Notepad or Settings launch did not answer within 15 s, the refusal of a later launch that finds a window of that app says why it stays and what ends it: Windows may have opened that window for the earlier launch afterwards, nothing ties it to that launch (the app runs the user's windows in the same process), so the helper never treats it as its own, and every launch of that app is refused until no window of it is open.
+Why: After a Notepad or Settings launch did not answer within 15 s, the refusal of a later launch that finds a window of that app says why it stays and what ends it: Windows may have opened that window for the earlier launch afterwards, nothing ties it to that launch (one process of the app serves the user and the helper alike), so the helper never treats it as its own, and every launch of that app is refused until no window of it is open.
 
 diff --git a/crates/platform-windows/src/tools/launch_policy.rs b/crates/platform-windows/src/tools/launch_policy.rs
-index 84d3caea6..b679ee870 100644
+index 84d3caea6..4121dd894 100644
 --- a/crates/platform-windows/src/tools/launch_policy.rs
 +++ b/crates/platform-windows/src/tools/launch_policy.rs
-@@ -198,14 +198,27 @@ pub(crate) fn foreign_notepad_windows(open: &[u64], own: &[u64]) -> Vec<u64> {
+@@ -198,14 +198,28 @@ pub(crate) fn foreign_notepad_windows(open: &[u64], own: &[u64]) -> Vec<u64> {
  /// Who opened the windows that block a launch, as the refusal states it. An
  /// earlier launch that did not answer in time may still have opened a window
  /// after its reply, so such a window cannot be called the user's for sure.
-+/// Nothing ties a late window to that launch (the app runs all its windows,
-+/// the user's too, in one process, and Windows activates it through a
-+/// broker), so the helper never adopts it as its own either.
++/// Nothing ties a late window to that launch (one process of the app serves
++/// the user and the helper alike, and Windows activates it through a
++/// broker), so the helper never adopts it as its own either. The wording
++/// holds for Settings too, which shows only one window.
  fn blocking_window_owner(app: &str, which: &str, unconfirmed_launch: bool) -> String {
      if unconfirmed_launch {
 -        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer in time, so that window may come from it or may be the user's")
-+        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer within 15 s, and Windows may have opened that window for it afterwards. {app} runs all its windows, the user's too, in one process, so the helper cannot tell such a late window from one the user opened and never puts anything into it")
++        format!("a window this helper cannot confirm it opened{which}. An earlier {app} launch by this helper did not answer within 15 s, and Windows may have opened that window for it afterwards. Nothing ties that window to the launch, because one {app} process serves the user and this helper alike, so the helper cannot tell such a late window from one the user opened and never puts anything into it")
      } else {
          format!("a window this helper did not open{which}")
      }
@@ -33,7 +34,7 @@ index 84d3caea6..b679ee870 100644
  /// `in_front`: one of the blocking windows is the user's front window.
  pub(crate) fn notepad_open_refusal(
      titles: &[String],
-@@ -230,7 +243,7 @@ pub(crate) fn notepad_open_refusal(
+@@ -230,7 +244,7 @@ pub(crate) fn notepad_open_refusal(
      } else {
          ""
      };
@@ -42,7 +43,7 @@ index 84d3caea6..b679ee870 100644
  }
  
  /// A window counts as the user's open window unless DWM reports it cloaked
-@@ -255,7 +268,7 @@ pub(crate) fn settings_open_refusal(titles: &[String], unconfirmed_launch: bool)
+@@ -255,7 +269,7 @@ pub(crate) fn settings_open_refusal(titles: &[String], unconfirmed_launch: bool)
      };
      let owner = blocking_window_owner("Settings", &which, unconfirmed_launch);
      let would = if unconfirmed_launch { "could" } else { "would" };
@@ -51,7 +52,7 @@ index 84d3caea6..b679ee870 100644
  }
  
  pub(crate) fn fresh_window_argument(target: &str) -> Option<&'static str> {
-@@ -347,12 +360,36 @@ mod fresh_document_tests {
+@@ -347,12 +361,39 @@ mod fresh_document_tests {
          ] {
              assert!(refusal.starts_with("No app was launched"));
              assert!(refusal.contains("cannot confirm it opened"));
@@ -77,6 +78,9 @@ index 84d3caea6..b679ee870 100644
 +        ] {
 +            assert!(refusal.contains("Windows may have opened that window for it afterwards"));
 +            assert!(refusal.contains("cannot tell such a late window from one the user opened"));
++            assert!(refusal.contains(&format!(
++                "one {app} process serves the user and this helper alike"
++            )));
 +            assert!(refusal.contains(&format!(
 +                "Every {app} launch is refused this way until no {app} window is open; closing {app} clears it."
 +            )));
