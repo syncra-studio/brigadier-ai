@@ -128,6 +128,12 @@ applyActivityNews({ conversationId: id, entries: [], ended: "done" });
 useCliThread.setState((state) => ({ views: { ...state.views, [id]: view } }));
 
 const pause = () => new Promise((resolve) => setTimeout(resolve, 300));
+// A reply waits on its renderer, late on a first load: measured, it is the reply itself.
+const settled = async () => {
+  await pause();
+  while (document.querySelector('[data-slot="reply-loading"]')) await pause();
+};
+const placeOf = (words: string) => [...document.querySelectorAll("main *")].findLast((each) => each.textContent?.trim() === words)?.getBoundingClientRect();
 const show = (next: ThreadView) => {
   view = next;
   useCliThread.setState((state) => ({ views: { ...state.views, [id]: next } }));
@@ -159,10 +165,9 @@ function seen() {
     // A refresh's divider: how far under the reply before it, and whether the live line is under it.
     refresh: (() => {
       const divider = document.querySelector('[data-slot="compaction"]')?.getBoundingClientRect();
-      const said = (words: string) => [...document.querySelectorAll("main *")].findLast((each) => each.textContent?.trim() === words)?.getBoundingClientRect();
-      const reply = said("A worker is on the first.");
+      const reply = placeOf("A worker is on the first.");
       const line = document.querySelector('[data-slot="thread-status"]')?.getBoundingClientRect();
-      const lower = said("The first bug is fixed.");
+      const lower = placeOf("The first bug is fixed.");
       return {
         gap: divider && reply ? Math.round(divider.top - reply.bottom) : null,
         lineUnder: divider && line ? line.top >= divider.bottom : null,
@@ -218,11 +223,6 @@ async function driveFailed() {
 
 /** A block held through a refresh, step by step: its worker works, then its end wakes the thread or nothing follows. */
 async function driveRefresh() {
-  // A reply waits on its renderer, late on a first load: measured, it is the reply itself.
-  const settled = async () => {
-    await pause();
-    while (document.querySelector('[data-slot="reply-loading"]')) await pause();
-  };
   await settled();
   const held = seen();
   const worked = [worker("aa11bb22", "First bug", 1_000, true)];
