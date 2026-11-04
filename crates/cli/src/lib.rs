@@ -24,7 +24,7 @@ use std::io::Write;
 use serde::de::DeserializeOwned;
 
 use args::Invocation;
-use protocol::{CliError, CliReply, ErrorCode, ErrorOutput};
+use protocol::{CliError, CliReply, CliRequest, ErrorCode, ErrorOutput};
 
 /// Runs `brigadier` with the words after its name; returns the exit code.
 pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
@@ -96,7 +96,25 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             words.push(text);
         }
     }
+    // `--out`, for text output (`--json` saves nothing): sent with the call, so the daemon
+    // refuses it before anything runs where this session may not write.
+    let out = match args.flag("out").filter(|_| !json).map(out_path) {
+        None => None,
+        Some(Ok(out)) => Some(out),
+        Some(Err(message)) => {
+            let message = format!("{message}\nusage: {}", command.usage());
+            return fail(ErrorCode::Usage, &message, json, stdout, stderr);
+        }
+    };
     let request = match args::request(command, &args) {
+        Ok(Some(CliRequest::Tool {
+            tool, action, args, ..
+        })) => CliRequest::Tool {
+            tool,
+            action,
+            args,
+            out: out.as_ref().map(|out| out.display().to_string()),
+        },
         Ok(Some(request)) => request,
         Ok(None) => {
             let message = format!(
@@ -115,16 +133,16 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
         }
     };
     let answered = match (client::Caller::from_env(), client::daemon_paths()) {
-        (Err(refused), _) => return print(refused, command.name, &args, json, stdout, stderr),
+        (Err(refused), _) => return print(refused, command.name, None, json, stdout, stderr),
         (_, Err(unreachable)) => {
-            return print(unreachable, command.name, &args, json, stdout, stderr);
+            return print(unreachable, command.name, None, json, stdout, stderr);
         }
         (Ok(caller), Ok(paths)) => client::call(&paths, &caller, &client::wrap(request)),
     };
     let code = print(
         answered.reply.clone(),
         command.name,
-        &args,
+        out.as_deref(),
         json,
         stdout,
         stderr,
@@ -140,7 +158,7 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
 fn print(
     reply: CliReply,
     command: &str,
-    args: &args::Parsed,
+    out: Option<&std::path::Path>,
     json: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -178,10 +196,9 @@ fn print(
             present(output, json, render::tool)
         }
         name if protocol::Tool::of_command(name).is_some() => {
-            let out = args.flag("out").map(std::path::PathBuf::from);
             serde_json::from_value::<protocol::ToolOutput>(output)
                 .map_err(|err| err.to_string())
-                .and_then(|output| render::saved_images(output, out.as_deref()))
+                .and_then(|output| render::saved_images(output, out))
                 .map(|output| render::tool(&output))
         }
         other => Err(format!("no output for {other}")),
@@ -216,6 +233,19 @@ fn text_from_stdin(command: &str, action: Option<&str>) -> Option<(&'static str,
         ("session", "propose") => Some(("task", 0)),
         _ => None,
     }
+}
+
+/// `--out`'s file as an absolute path from this shell's folder, its names as given: no link is
+/// followed here, so the daemon sees `.claude/…` where it was written (Windows drops `..` and
+/// fills in a drive-relative `C:x` as it would to open it). A path that isn't text, or names
+/// no file (`..`, a drive), is refused.
+fn out_path(given: &str) -> Result<std::path::PathBuf, String> {
+    let path =
+        std::path::absolute(given).map_err(|err| format!("--out {given:?} is no path: {err}"))?;
+    if path.file_name().is_none() || path.to_str().is_none() {
+        return Err(format!("--out {given:?} names no file"));
+    }
+    Ok(path)
 }
 
 /// The output as JSON (decoded first, so `--json` only ever prints the documented shape) or

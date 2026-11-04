@@ -11,8 +11,8 @@
 use serde::{Deserialize, Serialize};
 
 /// The version of this protocol. The daemon refuses a call of another version, saying which
-/// it speaks.
-pub const PROTOCOL: u32 = 2;
+/// it speaks. 3: a tool's call carries the file `--out` saves to, which the daemon checks.
+pub const PROTOCOL: u32 = 3;
 
 /// What `brigadier wait` sends once it printed the events of its answer: they were heard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +112,11 @@ pub enum CliRequest {
         tool: Tool,
         action: String,
         args: serde_json::Value,
+        /// The file `--out` saves the output's screenshots to: an absolute path, made from the
+        /// caller's folder with its names kept as given (`.claude/…` stays `.claude/…`). The
+        /// daemon refuses it, before the tool runs, where the caller may not write.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        out: Option<String>,
     },
     /// Which session turn wrote a line of a file (S39).
     Why {
@@ -1367,6 +1372,7 @@ mod tests {
                     tool: *tool,
                     action: "search".into(),
                     args: serde_json::json!({"query": "x"}),
+                    out: None,
                 },
             };
             let json = serde_json::to_value(&call).unwrap();

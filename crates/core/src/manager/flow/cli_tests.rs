@@ -1720,6 +1720,7 @@ pub(super) fn tool(tool: brigadier_cli::protocol::Tool, action: &str, args: Valu
         tool,
         action: action.into(),
         args,
+        out: None,
     }
 }
 

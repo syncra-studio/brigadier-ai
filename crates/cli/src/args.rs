@@ -1039,10 +1039,12 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             Tool::Approval
         }
     };
+    // `--out` is the CLI's own: it saves what the tool answers (`lib.rs` adds it to the call).
     Ok(CliRequest::Tool {
         tool,
         action,
         args: Value::Object(out),
+        out: None,
     })
 }
 
@@ -1405,7 +1407,9 @@ mod tests {
 
     fn tool(words: &[&str]) -> (Tool, String, Value) {
         match run(words).0 {
-            CliRequest::Tool { tool, action, args } => (tool, action, args),
+            CliRequest::Tool {
+                tool, action, args, ..
+            } => (tool, action, args),
             other => panic!("not a tool: {other:?}"),
         }
     }

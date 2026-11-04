@@ -477,9 +477,14 @@ impl SessionManager {
             CliRequest::ContinueOn { agent, after_turn } => {
                 Ok(self.cli_continue_on(caller, agent, after_turn).await)
             }
-            CliRequest::Tool { tool, action, args } => {
-                Ok(self.cli_tool(caller, tool, &action, args).await)
-            }
+            CliRequest::Tool {
+                tool,
+                action,
+                args,
+                out,
+            } => Ok(self
+                .cli_tool(caller, tool, &action, args, out.as_deref())
+                .await),
             CliRequest::Ask { questions, title } => self.cli_ask(caller, questions, title).await,
             CliRequest::Why { path, line } => self.cli_why(&path, line).await,
             CliRequest::Context {

@@ -2607,6 +2607,7 @@ mod chat_workers_tests;
 mod cli_cards_tests;
 #[cfg(unix)]
 mod cli_moved_tools_tests;
+mod cli_out_tests;
 #[cfg(unix)]
 mod cli_tests;
 mod cli_thread_tests;
