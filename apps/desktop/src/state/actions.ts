@@ -38,7 +38,8 @@ import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { useAgentPageAsk } from "@/state/agentSignIn";
 import { providerForSetting } from "@/state/providerDestination";
-import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
+import { tabsIdOf } from "@/state/draftTabs";
+import { carryDraftTabs, CHAT_TAB, openSideChatTab, selectTab, sessionTabs } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { onRealActivity, realActivity, rowActivity, useActivity, workHolds } from "@/state/activity";
@@ -683,6 +684,8 @@ export async function send(
   } else if (selection.type === "conversation") {
     conversationId = selection.id;
   } else if (selection.type === "draft" && draft) {
+    const draftTabs = tabsIdOf(selection);
+    const sentWith = draftTabs ? new Set(sessionTabs(draftTabs).tabs.map((tab) => tab.id)) : null;
     const { conversation } = await request({
       method: "createConversation",
       kind: draft.kind,
@@ -692,6 +695,9 @@ export async function send(
     });
     storeConversation(conversation);
     conversationId = conversation.id;
+    // The tabs go with the conversation, even if the user has left the draft. Having left and come
+    // back, what they opened since is the draft's own and stays.
+    if (draftTabs && sentWith) carryDraftTabs(draftTabs, conversationId, useApp.getState().selection === selection ? undefined : sentWith);
     // A new session's first send opens its card, once and however it was left on the draft:
     // floating where the pane is too narrow to keep it beside the thread. The user's show or
     // hide decides from then on.

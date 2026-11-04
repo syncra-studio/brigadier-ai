@@ -17,6 +17,7 @@ const ID = "new-tab-fixture";
 const GLYPH = "glyph-fixture";
 const ICON = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="red"/></svg>';
 const params = new URLSearchParams(location.search);
+const DRAFT = "draft:fixture-project";
 const calls: unknown[] = [];
 let history: BrowserVisit[] = params.has("empty") ? [] : [
   { id: 3, url: "https://one.test/latest", title: "Latest site", atMs: 3, agent: false },
@@ -58,7 +59,8 @@ const rows = () => [...document.querySelectorAll<HTMLButtonElement>('[aria-label
 function Fixture() {
   const [result, setResult] = useState("");
   const workspace = useWorkspacePane(ID, "fixture-project", true);
-  const tabId = useSessionTabs((s) => s.sessions[ID]?.tabs[0]?.id ?? "");
+  const [owner, setOwner] = useState(ID);
+  const tabId = useSessionTabs((s) => s.sessions[owner]?.tabs[0]?.id ?? "");
   useEffect(() => {
     if (!params.has("drive")) return;
     if (params.has("pages")) {
@@ -125,6 +127,13 @@ function Fixture() {
       button("Terminal")?.click(); await wait(100); seen.terminal = currentTab()?.kind;
       useSessionTabs.setState({ sessions: {} }); newSessionTab(ID, "newTab"); await wait(100);
       button("Side chat")?.click(); await wait(100); seen.sideChat = currentTab()?.kind;
+      useSessionTabs.setState({ sessions: {} }); newSessionTab(DRAFT, "newTab"); setOwner(DRAFT); await wait(100);
+      const off = button("Side chat") as HTMLButtonElement | undefined;
+      off?.click(); await wait(50);
+      off?.parentElement?.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+      await until(() => document.querySelector('[role="tooltip"]') !== null);
+      seen.draftSideChat = { shown: !!off, disabled: off?.disabled, stillNewTab: useSessionTabs.getState().sessions[DRAFT]?.tabs[0]?.kind === "newTab", tooltip: document.querySelector('[role="tooltip"]')?.textContent };
+      setOwner(ID); useSessionTabs.setState({ sessions: {} }); await wait(50);
       if (!params.has("empty")) {
         useSessionTabs.setState({ sessions: {} }); newSessionTab(ID, "newTab"); await wait(100);
         one<HTMLAnchorElement>('.new-tab-site-link')?.click(); await wait(100); seen.siteTab = currentTab();
@@ -148,7 +157,7 @@ function Fixture() {
     })();
   }, []);
   return <TooltipProvider><WorkspacePaneContext.Provider value={workspace}>
-    <main className="bg-background text-foreground flex h-screen flex-col"><NewTabTools conversationId={ID} tabId={tabId} /><div className="absolute bottom-4 left-4"><BrowserTabIcon tabId={GLYPH} /></div></main>
+    <main className="bg-background text-foreground flex h-screen flex-col"><NewTabTools conversationId={owner} tabId={tabId} /><div className="absolute bottom-4 left-4"><BrowserTabIcon tabId={GLYPH} /></div></main>
     {result && <pre id="new-tab-result">{result}</pre>}
   </WorkspacePaneContext.Provider></TooltipProvider>;
 }

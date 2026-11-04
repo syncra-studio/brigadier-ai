@@ -6,9 +6,10 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   const seen = JSON.parse(await renderFixtureLive(t, "toolbar.html?live=1", "toolbar-result", 30000)) as Record<string, unknown>;
   assert.equal(seen.error, undefined);
   assert.deepEqual(seen.sessionControls, ["Context", "Terminal", "Right sidebar"]);
-  assert.deepEqual(seen.draftControls, ["Context", "Terminal", "Right sidebar"]);
+  assert.deepEqual(seen.draftControls, ["New tab", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.views, ["Files", "Search", "Source"]);
-  assert.deepEqual(seen.chatControls, ["Chat actions", "Context", "Terminal"]);
+  assert.deepEqual(seen.chatControls, ["Chat actions", "New tab", "Context", "Terminal"]);
+  assert.deepEqual(seen.toolbarNewTab, ["newTab"]);
   assert.equal(seen.actionsRest, seen.contextRest, "the actions button shares the toolbar's muted color");
   for (const field of ["actionsHover", "actionsFocus", "actionsOpen"]) assert.equal(seen[field], seen.contextHover, field);
   assert.notEqual(seen.actionsRest, seen.actionsHover);
@@ -63,8 +64,9 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.previewReturned, true, "the context pill returns when previews arrive");
   assert.equal(seen.draftFiles, "files");
   assert.match(String(seen.draftTree), /src.*package\.json/);
-  assert.equal(seen.draftComposer, "@package.json ");
-  assert.deepEqual(seen.draftMention, [{ type: "file", path: "package.json" }]);
+  // A click opens a preview tab and leaves the message alone.
+  assert.equal(seen.draftComposer, "");
+  assert.deepEqual(seen.draftOpened, [["package.json", true]]);
   // Before a session, Source works on the project folder whichever way it will start, with no note.
   assert.ok((seen.draftSource as string[]).includes("Stage All Changes"), "a draft stages in the project folder");
   assert.equal(seen.draftCommitBox, true);

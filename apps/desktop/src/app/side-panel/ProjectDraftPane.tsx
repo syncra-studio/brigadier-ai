@@ -1,11 +1,10 @@
-import { useAui } from "@/components/conversation";
-import { useContext, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
-import { COMPOSER_EDITABLE, ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { ProjectFiles } from "@/app/side-panel/FilesTab";
 import { SearchPanel } from "@/app/side-panel/SearchPanel";
 import { SourceHeader } from "@/app/side-panel/SourceHeader";
 import { SourcePanel } from "@/app/side-panel/SourcePanel";
+import { openFileTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { useUserWorktrees } from "@/state/workspaceCache";
 import type { WorkspacePaneTab } from "@/state/workspacePane";
@@ -15,30 +14,23 @@ export type ProjectDraftPaneProps = {
   tab: WorkspacePaneTab;
   searchRequest: number;
   onSearchHandled: () => void;
+  replaceTabId?: string | undefined;
+  onFileOpened?: (() => void) | undefined;
 };
 
 /**
- * Files, Search and Source before a session starts: its project folder. A draft has no tabs, so
- * a file goes into the message as `@path`. Stage, discard, commit, Search and Replace work on the
+ * Files, Search and Source before a session starts: its project folder. A file or a change opens
+ * in the draft's tabs, which carry over when the session starts. Stage, discard, commit, Search and Replace work on the
  * folder as it is, whichever way the session will start; Source lists the worktrees the user made
  * beside it.
  */
-export function ProjectDraftPane({ projectId, tab, searchRequest, onSearchHandled }: ProjectDraftPaneProps) {
-  const aui = useAui();
-  const target = useContext(ComposerTargetContext);
+export function ProjectDraftPane({ projectId, tab, searchRequest, onSearchHandled, replaceTabId, onFileOpened }: ProjectDraftPaneProps) {
   const searchTarget = useMemo(() => ({ type: "project", projectId }) as const, [projectId]);
-  const mention = (path: string) => {
-    // Remembered as the `@` menu does, so it shows as a file chip and is sent as one.
-    target?.mentions.record({ type: "file", path }, path);
-    const composer = aui.composer();
-    const text = composer.getState().text;
-    composer.setText(`${text}${text && !text.endsWith(" ") ? " " : ""}@${path} `);
-    requestAnimationFrame(() => document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus());
-  };
+  const openResult = useCallback((path: string, line: number, keep: boolean) => openFileTab(`draft:${projectId}`, path, { line, preview: !keep }), [projectId]);
   return tab === "files" ? (
-    <ProjectFiles projectId={projectId} searchRequest={searchRequest} onSearchHandled={onSearchHandled} onOpen={mention} />
+    <ProjectFiles projectId={projectId} searchRequest={searchRequest} onSearchHandled={onSearchHandled} replaceTabId={replaceTabId} onFileOpened={onFileOpened} />
   ) : tab === "search" ? (
-    <SearchPanel target={searchTarget} onOpen={mention} />
+    <SearchPanel target={searchTarget} onOpen={openResult} />
   ) : (
     <DraftSource projectId={projectId} />
   );

@@ -316,6 +316,87 @@ async fn session_worktree(flow: &Flow) -> PathBuf {
     }
 }
 
+/// A draft's file and Review tabs read each checkout on its own: two worktrees and the project's
+/// folder with the same path each give their own, and a session's copy goes through the one
+/// resolver and is refused.
+#[tokio::test]
+async fn a_targets_file_and_review_read_that_checkout_alone() {
+    use crate::work::ReviewScope;
+
+    let (flow, project) = flow("target-file-review").await;
+    let WorkspaceTarget::Project { project_id } = project.clone() else {
+        unreachable!()
+    };
+    let session = session_worktree(&flow).await;
+    let (one, other) = (
+        user_worktree(&flow, "tab-one"),
+        user_worktree(&flow, "tab-other"),
+    );
+    let worktree = |path: &Path| WorkspaceTarget::Worktree {
+        project_id: project_id.clone(),
+        path: text(path),
+    };
+    let places = [
+        (project.clone(), flow.repo.clone(), "folder"),
+        (worktree(&one), one.clone(), "one"),
+        (worktree(&other), other.clone(), "other"),
+    ];
+    for (_, checkout, name) in &places {
+        std::fs::write(checkout.join("README.md"), format!("# {name}\n")).unwrap();
+    }
+    std::fs::write(flow.repo.join("only-here.txt"), "folder\n").unwrap();
+    git(&other, &["add", "README.md"]);
+    let manager = &flow.manager;
+    for (target, _, name) in &places {
+        let file = manager
+            .read_target_file(target, "README.md".into())
+            .await
+            .unwrap();
+        assert_eq!(file.text.as_deref(), Some(format!("# {name}\n").as_str()));
+        let review = |scope| manager.target_review_diff(target, scope, true, false);
+        let staged = review(ReviewScope::Staged).await.unwrap();
+        let unstaged = review(ReviewScope::Unstaged).await.unwrap();
+        let (holds, empty) = if *name == "other" {
+            (staged, unstaged)
+        } else {
+            (unstaged, staged)
+        };
+        assert!(holds.patch.contains(&format!("+# {name}")), "{name}");
+        assert!(empty.files.is_empty(), "{name}");
+        // Nothing a session's history answers can be asked of a checkout.
+        let branch = review(ReviewScope::Branch).await.unwrap_err();
+        assert!(branch.to_string().contains("uncommitted"), "{branch}");
+    }
+    // A file only in the project's folder is missing from the worktree, as a missing file is.
+    assert!(matches!(
+        manager
+            .read_target_file(&worktree(&one), "only-here.txt".into())
+            .await,
+        Err(crate::Error::NotFound(_))
+    ));
+    // Leaving the checkout is refused here too.
+    assert!(
+        manager
+            .read_target_file(&project, "../outside".into())
+            .await
+            .is_err()
+    );
+    let refused = worktree(&session);
+    for err in [
+        manager
+            .read_target_file(&refused, "README.md".into())
+            .await
+            .unwrap_err(),
+        manager
+            .target_review_diff(&refused, ReviewScope::Unstaged, true, false)
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(err.to_string().contains("not a worktree you made"), "{err}");
+    }
+    flow.stop().await;
+}
+
 /// The user's worktrees are listed, and one's discard and commit leave every other checkout as
 /// it was: the other worktree, and the project's folder.
 #[tokio::test]

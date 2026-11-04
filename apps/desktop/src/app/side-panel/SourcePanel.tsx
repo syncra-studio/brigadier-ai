@@ -26,7 +26,8 @@ import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
 import { noteSourceState } from "@/state/review";
-import { openConflictTab, openFileTab, openReviewTab } from "@/state/sessionTabs";
+import { tabsOfTarget } from "@/state/draftTabs";
+import { activeRow, openConflictTab, openFileTab, openReviewTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /**
@@ -135,7 +136,6 @@ export type SourceRowInfo = { name: string; title: string; rowKey: string; start
 /** `row` draws it as one of a Source's stacked rows, under a title of the caller's. */
 export function SourcePanel({ target, row }: { target: SourceTarget; row?: SourceRowInfo }) {
   const { state, error, set, reload, cacheTarget } = useSourceState(target);
-  const conversationId = sessionOf(target);
   const calls = sourceCalls(target);
   const stageAll = useStageAll((s) => s.choice);
   const [rowOpen, setRowOpen] = useRowOpen(row?.rowKey ?? "", row?.startOpen ?? true);
@@ -152,10 +152,14 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
   const [gitOutput, setGitOutput] = useState<SourceGitRun[] | null | "closed">("closed");
   const [branches, setBranches] = useState<SourceBranch[] | null>(null);
   const [nowMs, setNowMs] = useState(0);
-  // A diff opens in the session's Review tab; before it starts there is none.
-  const review = conversationId
-    ? (path: string, staged: boolean) => openReviewTab(conversationId, { type: "file", path, staged })
-    : null;
+  // A diff opens in the Review tab, and a file in its own, before a session starts too: a
+  // worktree's rows name their checkout.
+  const { owner, checkout } = tabsOfTarget(target);
+  // The row of the tab in front lights up, only in the checkout that tab reads.
+  const shownRow = activeRow(useSessionTabsOf(owner), checkout);
+  const shows = (path: string, staged: boolean | null) =>
+    shownRow?.path === path && (staged === null || shownRow.staged === undefined || shownRow.staged === staged);
+  const review = (path: string, staged: boolean) => openReviewTab(owner, { type: "file", path, staged }, undefined, checkout);
   // Checkout is for the project folder: a session works on its own branch.
   const canCheckout = target.type !== "conversation";
 
@@ -177,7 +181,7 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
     const first = paths[0];
     toast(CONFLICTS_LEFT, {
       tone: "error",
-      actions: conversationId && first ? [{ label: "Show Changes", run: () => openConflictTab(conversationId, first) }] : [],
+      actions: first ? [{ label: "Show Changes", run: () => openConflictTab(owner, first, "conflict", checkout) }] : [],
     });
   };
   /**
@@ -321,9 +325,9 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
   // Nothing to commit and nothing under way: the message box and Commit show, off.
   const clean = state !== null && staged.length === 0 && all.length === 0 && !resolving;
   const openGroup = (scope: "staged" | "unstaged") => {
-    if (conversationId) openReviewTab(conversationId, { type: "changes", staged: scope === "staged" });
+    openReviewTab(owner, { type: "changes", staged: scope === "staged" }, undefined, checkout);
   };
-  const openFile = conversationId ? (path: string) => openFileTab(conversationId, path) : null;
+  const openFile = (path: string) => openFileTab(owner, path, { checkout });
   const commitRef = useRef<((how: CommitHow) => void) | null>(null);
 
   const action = mainAction(state, stageAll);
@@ -464,9 +468,10 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
                   <FileRow
                     key={`merge:${file.path}`}
                     file={file}
-                    onOpen={conversationId ? () => openConflictTab(conversationId, file.path) : null}
+                    selected={shows(file.path, null)}
+                    onOpen={() => openConflictTab(owner, file.path, "conflict", checkout)}
                   >
-                    {openFile && <OpenFileButton onClick={() => openFile(file.path)} />}
+                    <OpenFileButton onClick={() => openFile(file.path)} />
                     <TooltipIconButton
                       tooltip="Stage Changes"
                       size="icon-xs"
@@ -485,11 +490,9 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
                 count={staged.length}
                 actions={
                   <>
-                    {conversationId && (
-                      <TooltipIconButton tooltip="Open Staged Changes" size="icon-xs" onClick={() => openGroup("staged")}>
-                        <FileDocument />
-                      </TooltipIconButton>
-                    )}
+                    <TooltipIconButton tooltip="Open Staged Changes" size="icon-xs" onClick={() => openGroup("staged")}>
+                      <FileDocument />
+                    </TooltipIconButton>
                     <TooltipIconButton tooltip="Unstage All Changes" size="icon-xs" disabled={locked} onClick={() => unstage(null)}>
                       <Minus />
                     </TooltipIconButton>
@@ -497,8 +500,8 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
                 }
               >
                 {staged.map((file) => (
-                  <FileRow key={`staged:${file.path}`} file={file} onOpen={review ? () => review(file.path, true) : null}>
-                    {openFile && file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
+                  <FileRow key={`staged:${file.path}`} file={file} selected={shows(file.path, true)} onOpen={() => review(file.path, true)}>
+                    {file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
                     <TooltipIconButton
                       tooltip="Unstage Changes"
                       size="icon-xs"
@@ -518,11 +521,9 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
                 actions={
                   changes.length > 0 && (
                     <>
-                      {conversationId && (
-                        <TooltipIconButton tooltip="Open Changes" size="icon-xs" onClick={() => openGroup("unstaged")}>
-                          <FileDocument />
-                        </TooltipIconButton>
-                      )}
+                      <TooltipIconButton tooltip="Open Changes" size="icon-xs" onClick={() => openGroup("unstaged")}>
+                        <FileDocument />
+                      </TooltipIconButton>
                       <TooltipIconButton
                         tooltip="Discard All Changes"
                         size="icon-xs"
@@ -544,8 +545,8 @@ export function SourcePanel({ target, row }: { target: SourceTarget; row?: Sourc
                 }
               >
                 {changes.map((file) => (
-                  <FileRow key={`changes:${file.path}`} file={file} onOpen={review ? () => review(file.path, false) : null}>
-                    {openFile && file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
+                  <FileRow key={`changes:${file.path}`} file={file} selected={shows(file.path, false)} onOpen={() => review(file.path, false)}>
+                    {file.status !== "deleted" && <OpenFileButton onClick={() => openFile(file.path)} />}
                     <TooltipIconButton
                       tooltip="Discard Changes"
                       size="icon-xs"
@@ -673,9 +674,10 @@ const OpenFileButton: FC<{ onClick: () => void }> = ({ onClick }) => (
  * A changed file: click to open its diff (once there is a Review tab); its actions show on hover,
  * its `counts` (a worker's file's +N −N) before its letter.
  */
-export const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; counts?: ReactNode; children?: ReactNode }> = ({
+export const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; selected?: boolean; counts?: ReactNode; children?: ReactNode }> = ({
   file,
   onOpen,
+  selected = false,
   counts,
   children,
 }) => {
@@ -700,7 +702,7 @@ export const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; counts
   // Inset as the Files tree's rows are.
   const look = "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm ps-2 text-start text-sm";
   return (
-    <li className="group/source-row hover:bg-muted rounded-control flex h-control-sm items-center gap-1 pe-1">
+    <li aria-current={selected || undefined} className={cn("group/source-row hover:bg-muted rounded-control flex h-control-sm items-center gap-1 pe-1", selected && "bg-muted")}>
       {onOpen ? (
         <button type="button" title={title} onClick={onOpen} className={look}>
           {name}

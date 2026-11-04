@@ -27,7 +27,7 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   const size = useSidebarWidth(WORKSPACE_PANE_WIDTH_KEY);
   const [searchRequest, setSearchRequest] = useState(0);
   const [placeholder, setPlaceholder] = useState<{ id: string; tabId: string } | null>(null);
-  const sessionActive = useSessionTabs((s) => conversationId ? s.sessions[conversationId]?.active ?? CHAT_TAB : CHAT_TAB);
+  const sessionActive = useSessionTabs((s) => s.sessions[id]?.active ?? CHAT_TAB);
   if (placeholder && (!open || active !== "files" || sessionActive !== placeholder.tabId || id !== placeholder.id)) setPlaceholder(null);
   const fileOpened = useCallback(() => setPlaceholder(null), []);
   const searchHandled = useCallback(() => setSearchRequest(0), []);
@@ -231,7 +231,7 @@ export function WorkspacePane() {
                 : pane.active === "search" ? <SessionSearch key={pane.conversationId} conversationId={pane.conversationId} />
                   : <SessionSource key={pane.conversationId} conversationId={pane.conversationId} />
             ) : pane.projectId && <ProjectDraftPane key={`project:${pane.projectId}`} projectId={pane.projectId} tab={pane.active}
-              searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} />)}
+              searchRequest={pane.searchRequest} onSearchHandled={pane.searchHandled} replaceTabId={pane.filePlaceholder} onFileOpened={pane.fileOpened} />)}
           </div>
         </div>
       </SidebarReveal>

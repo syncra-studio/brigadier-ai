@@ -20,7 +20,7 @@ import { TerminalPane } from "@/app/side-panel/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/shell/ChatActions";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
-import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
+import { SessionTabBar, SessionTabViews, useNewTabKey } from "@/app/shell/SessionTabBar";
 import { PastedTextPane } from "@/app/side-panel/PastedTextPane";
 import { reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
@@ -47,6 +47,7 @@ import {
   pulledSlots,
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
+import type { ToolbarKind } from "@/state/workspacePane";
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import { canDrawVisuals, VisualsContext } from "@/components/conversation/visuals";
 import { openLink as openVisualLink } from "@/state/links";
@@ -109,6 +110,7 @@ import { useBoard } from "@/state/board";
 import { loadWorkerThread, readSessionImageBlob, sessionImageOf, unreadSince, useThreadUnreadable, useThreadView, useWorkerRows } from "@/state/cliThread";
 import { markSeen, useFinishedAt } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
+import { tabsIdOf } from "@/state/draftTabs";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { turnStopping, useStopping } from "@/state/stopping";
@@ -521,10 +523,10 @@ function useMentionTargets(conversationId: string | null): MentionTarget[] {
 
 /* The session's tabs and its summary: drawn again only as the session itself changes, not with the
    view around them, which draws on every streamed word. */
-const SessionTop = memo(function SessionTop({ conversation, kind, onRename }: { conversation: Conversation; kind: "session" | "chat"; onRename: () => void }) {
+const SessionTop = memo(function SessionTop({ id, conversation, kind, onRename }: { id: string; conversation: Conversation | null; kind: ToolbarKind; onRename: () => void }) {
   return (
-    <SessionTabBar conversation={conversation} onRename={onRename}>
-      <ConversationToolbar kind={kind} onContext={() => selectTab(conversation.id, CHAT_TAB)} />
+    <SessionTabBar id={id} conversation={conversation} onRename={onRename}>
+      <ConversationToolbar kind={kind} tabsId={id} tabbed onContext={() => selectTab(id, CHAT_TAB)} />
     </SessionTabBar>
   );
 });
@@ -1067,23 +1069,25 @@ export function ConversationView({
   const workHeld = useBlockHold(conversation?.id ?? null, newest).held && newest?.state === "done";
   const workFrom = (newest?.endedAtMs === null || workHeld) && newest?.worked.length ? Math.min(...newest.worked.map((span) => span.fromMs)) : undefined;
   const view = useMemo(() => ({ selection, conversation, embedded, draftModel, workFrom, workHeld }), [selection, conversation, embedded, draftModel, workFrom, workHeld]);
-  // Every standalone conversation and draft can show its context card.
-  const summary = !embedded;
+  // What has started has a context card: none in a draft.
+  const summary = !embedded && conversation !== null;
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
-  // A Chat has them once an agent opens a Browser tab in it, so the user can see and take it (#361).
-  const standalone = !embedded && (conversation?.kind === "session" || conversation?.kind === "chat");
-  const { tabs: openTabs, active: activeTab } = useSessionTabsOf(standalone ? conversationId : null);
-  const tabbed = standalone && (conversation?.kind === "session" || openTabs.length > 0);
+  // A draft and a Chat have them once one is opened.
+  const tabsId = embedded ? null : tabsIdOf(selection);
+  const { tabs: openTabs, active: activeTab } = useSessionTabsOf(tabsId);
+  const tabbed = tabsId !== null && (conversation?.kind === "session" || openTabs.length > 0);
+  useNewTabKey(tabbed ? null : tabsId);
+  const toolbarKind: ToolbarKind = conversation?.kind === "session" ? "session" : conversation ? "chat" : workspace.enabled ? "draft" : "chatDraft";
   // A pasted text a chip opened in a Chat or a draft, which have no tabs: over the thread (#427).
   const place = conversationId ?? "draft";
   const [pastedOver, setPastedOver] = useState<{ place: string; n: number | null; paste: AttachmentRef | null } | null>(null);
   const pasted = !tabbed && pastedOver?.place === place ? pastedOver : null;
   const openPasted = useCallback<OpenPastedText>(
     (n, paste) => {
-      if (tabbed && conversationId) openPastedTab(conversationId, n, paste);
+      if (tabbed && tabsId) openPastedTab(tabsId, n, paste);
       else setPastedOver({ place, n, paste });
     },
-    [tabbed, conversationId, place],
+    [tabbed, tabsId, place],
   );
   const covered = tabbed ? activeTab !== CHAT_TAB : pasted !== null;
   // A file link in an answer opens in a tab of its own when it is one of the session's files.
@@ -1126,16 +1130,15 @@ export function ConversationView({
                     {/* The top bar spans the window to its end edge, over the right panels too, so
                         opening or closing one never moves its controls; the panels open below it. */}
                     <div className="flex h-full min-h-0 min-w-0 flex-col">
-                    {tabbed && conversation ? (
-                      <SessionTop conversation={conversation} onRename={rename}
-                        kind={conversation.kind === "session" || workspace.enabled ? "session" : "chat"} />
+                    {tabbed && tabsId ? (
+                      <SessionTop id={tabsId} conversation={conversation} onRename={rename} kind={toolbarKind} />
                     ) : (
                       !embedded && (
                         <TopBar onRename={conversation && !archived ? () => setRenaming(true) : undefined}>
                           {conversation && (
                             <ChatActions conversation={conversation} onRename={() => setRenaming(true)} />
                           )}
-                          <ConversationToolbar kind={workspace.enabled ? "session" : "chat"} />
+                          <ConversationToolbar kind={toolbarKind} tabsId={tabsId} tabbed={false} />
                         </TopBar>
                       )
                     )}
@@ -1172,7 +1175,7 @@ export function ConversationView({
                                 </VisualsContext.Provider>
                               </SummaryPane>
                             </div>
-                            {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}
+                            {tabbed && tabsId && <SessionTabViews conversationId={tabsId} />}
                             {pasted && (
                               <PastedTextPane n={pasted.n} paste={pasted.paste} onClose={() => setPastedOver(null)} />
                             )}

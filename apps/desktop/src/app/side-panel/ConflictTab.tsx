@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/overlays";
 import { request } from "@/ipc/client";
 import type { ConflictFile, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { tabTarget } from "@/state/draftTabs";
 import { closeTab, type ConflictTabState, openConflictTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, type WorkspaceTarget } from "@/state/workspaceCache";
@@ -35,7 +36,7 @@ import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, type WorkspaceTar
  * incoming one green.
  */
 export function ConflictTab({ conversationId, tab }: { conversationId: string; tab: ConflictTabState }) {
-  const target = useMemo<WorkspaceTarget>(() => ({ type: "conversation", conversationId }), [conversationId]);
+  const target = useMemo<WorkspaceTarget>(() => tabTarget(conversationId, tab.checkout), [conversationId, tab.checkout]);
   const { file, error, load } = useConflictFile(target, tab.path);
   if (!file) {
     return (
@@ -55,7 +56,7 @@ export function ConflictTab({ conversationId, tab }: { conversationId: string; t
       </div>
     )
   ) : (
-    <ConflictView target={target} conversationId={conversationId} path={tab.path} file={file} onWritten={load} />
+    <ConflictView target={target} conversationId={conversationId} path={tab.path} checkout={tab.checkout} file={file} onWritten={load} />
   );
 }
 
@@ -184,9 +185,10 @@ const ConflictView: FC<{
   target: WorkspaceTarget;
   conversationId: string;
   path: string;
+  checkout: string | undefined;
   file: ConflictFile;
   onWritten: () => void;
-}> = ({ target, conversationId, path, file, onWritten }) => {
+}> = ({ target, conversationId, path, checkout, file, onWritten }) => {
   const root = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const segments = useMemo(() => parseConflicts(file.text ?? ""), [file.text]);
@@ -220,7 +222,7 @@ const ConflictView: FC<{
             { label: "Accept Current Change", run: () => accept(index, "current"), disabled: busy },
             { label: "Accept Incoming Change", run: () => accept(index, "incoming"), disabled: busy },
             { label: "Accept Both Changes", run: () => accept(index, "both"), disabled: busy },
-            { label: "Compare Changes", run: () => openConflictTab(conversationId, path, "compare") },
+            { label: "Compare Changes", run: () => openConflictTab(conversationId, path, "compare", checkout) },
           ]}
         />
       ),
@@ -242,7 +244,7 @@ const ConflictView: FC<{
         <Code rows={rows} />
       )}
       {editorSegments(file.text, file.merged) && (
-        <Button size="sm" className="absolute end-4 bottom-4" onClick={() => openConflictTab(conversationId, path, "merge")}>
+        <Button size="sm" className="absolute end-4 bottom-4" onClick={() => openConflictTab(conversationId, path, "merge", checkout)}>
           Resolve in Merge Editor
         </Button>
       )}

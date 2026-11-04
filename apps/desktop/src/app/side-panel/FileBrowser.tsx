@@ -191,6 +191,7 @@ export function FileBrowser({
   scope,
   target,
   list,
+  shown = null,
   search: searchFiles,
   onOpen,
   searchRequest,
@@ -200,6 +201,8 @@ export function FileBrowser({
   scope: string;
   target: WorkspaceTarget;
   list: FileList | null;
+  /** The file the tab in front shows: its row lights up. */
+  shown?: string | null;
   search: Search;
   onOpen: OnOpen;
   searchRequest: number;
@@ -310,6 +313,7 @@ export function FileBrowser({
               <TreeRow
                 key={`${row.kind}:${row.path}`}
                 row={row}
+                selected={row.kind !== "folder" && row.path === shown}
                 onToggle={toggle}
                 onOpen={onOpen}
               />
@@ -355,17 +359,19 @@ function useSearchedFiles(scope: string, search: Search, truncated: boolean, que
 
 const TreeRow = memo(function TreeRow({
   row,
+  selected,
   onToggle,
   onOpen,
 }: {
   row: Row;
+  selected: boolean;
   onToggle: (path: string) => void;
   onOpen: OnOpen;
 }) {
   const folder = row.kind === "folder";
   const mark = row.status ? LETTERS[row.status] : null;
   return (
-    <li role="treeitem" aria-expanded={folder ? row.open : undefined} aria-selected={false}>
+    <li role="treeitem" aria-expanded={folder ? row.open : undefined} aria-selected={selected}>
       <button
         type="button"
         title={mark ? `${row.path} · ${mark.label}` : row.ignored ? `${row.path} · Ignored` : row.path}
@@ -377,6 +383,7 @@ const TreeRow = memo(function TreeRow({
           "hover:bg-muted rounded-control flex h-control-sm w-full items-center gap-1.5 pe-2 text-start text-sm",
           mark ? mark.className : "text-foreground",
           row.ignored && "opacity-50",
+          selected && "bg-muted",
         )}
       >
         {folder ? (

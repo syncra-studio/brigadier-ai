@@ -26,6 +26,7 @@ export function SessionTab({
   conversationId,
   tab,
   name,
+  note,
   selected,
   separator,
   closing,
@@ -37,6 +38,8 @@ export function SessionTab({
   conversationId: string;
   tab: Tab;
   name: string;
+  /** What tells it from another open tab of the same name. */
+  note: string | null;
   selected: boolean;
   separator: true | undefined;
   closing: boolean;
@@ -70,7 +73,7 @@ export function SessionTab({
           role="tab"
           aria-selected={selected}
           tabIndex={selected ? 0 : -1}
-          title={tab.kind === "file" ? tab.path : tab.kind === "sideChat" && tab.title ? `Side chat · ${tab.title}` : name}
+          title={tab.kind === "file" ? (tab.checkout ? `${tab.checkout}/${tab.path}` : tab.path) : tab.kind === "sideChat" && tab.title ? `Side chat · ${tab.title}` : name}
           onPointerDown={handlers.onPointerDown}
           onPointerMove={handlers.onPointerMove}
           onPointerUp={handlers.onPointerUp}
@@ -98,6 +101,7 @@ export function SessionTab({
           )}
           <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic", tab.kind === "conflict" && tab.view !== "compare" && "text-destructive")}>
             {name}
+            {note && <span data-slot="tab-name-note" className="text-muted-foreground ms-1.5 text-xs not-italic">{note}</span>}
             {tab.kind === "mockup" && <MockupTabStatus conversationId={conversationId} />}
           </span>
           {tab.unseen && <span data-slot="tab-unseen" role="img" aria-label="New" className="bg-link size-2 shrink-0 rounded-full" />}

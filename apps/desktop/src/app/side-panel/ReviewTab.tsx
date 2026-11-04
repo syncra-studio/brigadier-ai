@@ -29,14 +29,17 @@ import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
 import { type DiffLine, fileSides, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
 import { type DiffSource, DiffView } from "@/app/side-panel/diffView";
 import { OpenInMenu } from "@/app/side-panel/OpenInMenu";
-import { ReviewContext } from "@/app/side-panel/reviewContext";
+import { ReviewContext, ReviewPlaceContext } from "@/app/side-panel/reviewContext";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { type ReviewOptions, setReviewOption, useReview } from "@/state/review";
+import { tabTarget } from "@/state/draftTabs";
+import { useTabRoot } from "@/state/tabRoot";
+import { useCachedEntry, useCheckoutKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import { CHAT_TAB, closeTab, REVIEW_TAB, type ReviewTarget, reviewScope, selectTab, sessionTabs } from "@/state/sessionTabs";
 
 /**
- * A session's Review tab, opened from the Source panel: a group's diffs ("Open Changes"), each
+ * The Review tab, opened from the Source panel, before a session starts too: a group's diffs ("Open Changes"), each
  * file's under a sticky header, or one file's staged or unstaged diff. It only reads; a line's
  * "+" adds it to the chat.
  */
@@ -61,11 +64,16 @@ function useChangeKey(conversationId: string): string {
  * of the checkout or `tick` change it. While a refetch loads, the last review stays only if it
  * shows the same scope: another scope's patch must not sit under this one's label.
  */
-function useReviewDiff(conversationId: string, scope: ReviewScope, tick: number) {
+function useReviewDiff(conversationId: string, target: WorkspaceTarget, scope: ReviewScope, tick: number) {
   const changeKey = useChangeKey(conversationId);
-  const checkout = useReview((s) => s.checkouts[conversationId] ?? "");
-  const view = JSON.stringify([conversationId, scope]);
-  const key = JSON.stringify([view, tick, changeKey, checkout]);
+  const noted = useReview((s) => s.checkouts[conversationId] ?? "");
+  // Before a session there is no board: what Source last read of the checkout says it changed.
+  const place = useCheckoutKey(target);
+  const source = useCachedEntry(place)?.source;
+  const checkout = target.type === "conversation" ? noted : JSON.stringify([source?.staged, source?.changes]);
+  const view = JSON.stringify([target, scope]);
+  // A session moving to its own copy reads another checkout.
+  const key = JSON.stringify([view, tick, changeKey, checkout, place]);
   const [state, setState] = useState<{
     key: string | null;
     view: string | null;
@@ -76,14 +84,11 @@ function useReviewDiff(conversationId: string, scope: ReviewScope, tick: number)
   }>({ key: null, view: null, review: null, error: null });
   useEffect(() => {
     let live = true;
-    const [id, wanted] = JSON.parse(view) as [string, ReviewScope];
-    request({
-      method: "getReviewDiff",
-      conversationId: id,
-      scope: wanted,
-      wholeFiles: true,
-      ignoreWhitespace: false,
-    })
+    const [read, wanted] = JSON.parse(view) as [WorkspaceTarget, ReviewScope];
+    const options = { scope: wanted, wholeFiles: true, ignoreWhitespace: false };
+    (read.type === "conversation"
+      ? request({ method: "getReviewDiff", conversationId: read.conversationId, ...options })
+      : request({ method: "getCheckoutReviewDiff", target: read, ...options }))
       .then(({ review }) => {
         if (live) setState({ key, view, review, error: null });
       })
@@ -115,9 +120,12 @@ export function ReviewTab({
   conversationId,
   target,
   active = true,
+  checkout,
 }: {
   conversationId: string;
   target: ReviewTarget;
+  /** The worktree it reads, opened from that worktree's row before a session starts. */
+  checkout?: string | undefined;
   /** In front: it shows changes made meanwhile when it comes to the front again. */
   active?: boolean;
 }) {
@@ -134,7 +142,10 @@ export function ReviewTab({
     setWasActive(active);
     if (active) setTick(tick + 1);
   }
-  const { review: fullReview, error, gone, loading } = useReviewDiff(conversationId, scope, tick);
+  const place = useMemo(() => tabTarget(conversationId, checkout), [conversationId, checkout]);
+  const root = useTabRoot(conversationId, checkout);
+  const opensIn = useMemo(() => ({ checkout, root }), [checkout, root]);
+  const { review: fullReview, error, gone, loading } = useReviewDiff(conversationId, place, scope, tick);
   // A worker's diff whose worker is gone closes quietly, as a deleted session's view goes Home.
   const workerGone = gone && target.type === "worker" ? target.taskId : null;
   useEffect(() => {
@@ -219,6 +230,7 @@ export function ReviewTab({
       </div>
       <div className="flex min-h-0 flex-1">
         <ReviewContext.Provider value={conversationId}>
+        <ReviewPlaceContext.Provider value={opensIn}>
           <div data-slot="review-diffs" className="min-w-0 flex-1 overflow-auto">
             {error && !workerGone ? (
               <p className="text-destructive p-4 text-sm">{error}</p>
@@ -246,6 +258,7 @@ export function ReviewTab({
               ))
             )}
           </div>
+        </ReviewPlaceContext.Provider>
         </ReviewContext.Provider>
       </div>
     </div>

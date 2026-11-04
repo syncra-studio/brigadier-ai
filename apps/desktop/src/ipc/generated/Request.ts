@@ -65,6 +65,10 @@ path: string, } | { "method": "watchWorkspace", targets: Array<WorkspaceTarget>,
 /**
  * Relative to the checkout's root.
  */
+path: string, } | { "method": "readCheckoutFile", target: WorkspaceTarget, 
+/**
+ * Relative to the checkout's root.
+ */
 path: string, } | { "method": "openTerminal", conversationId?: ConversationId, projectId?: ProjectId, 
 /**
  * Independent shell session; omitted for the original default shell.
@@ -103,7 +107,7 @@ attachments?: Array<AttachmentRef>, } | { "method": "regenerate", conversationId
 /**
  * Only its newest this many turns: what it shows at once when it opens (D46).
  */
-newestTurns?: number, } | { "method": "continueWaiting", conversationId: ConversationId, } | { "method": "dontResume", conversationId: ConversationId, } | { "method": "getModelRules" } | { "method": "setModelRules", revision: string, rows: Array<GuidanceRow>, rules: Array<ModelRule>, } | { "method": "readModelRules", text: string, } | { "method": "workerThread", conversationId: ConversationId, taskId: TaskId, } | { "method": "readSessionFileImage", conversationId: ConversationId, image: FileImage, } | { "method": "getReviewDiff", conversationId: ConversationId, scope: ReviewScope, wholeFiles: boolean, ignoreWhitespace: boolean, } | { "method": "getGitState", conversationId: ConversationId, } | { "method": "getBackgroundHistory", conversationId: ConversationId, before?: string, limit: number, 
+newestTurns?: number, } | { "method": "continueWaiting", conversationId: ConversationId, } | { "method": "dontResume", conversationId: ConversationId, } | { "method": "getModelRules" } | { "method": "setModelRules", revision: string, rows: Array<GuidanceRow>, rules: Array<ModelRule>, } | { "method": "readModelRules", text: string, } | { "method": "workerThread", conversationId: ConversationId, taskId: TaskId, } | { "method": "readSessionFileImage", conversationId: ConversationId, image: FileImage, } | { "method": "getReviewDiff", conversationId: ConversationId, scope: ReviewScope, wholeFiles: boolean, ignoreWhitespace: boolean, } | { "method": "getCheckoutReviewDiff", target: WorkspaceTarget, scope: ReviewScope, wholeFiles: boolean, ignoreWhitespace: boolean, } | { "method": "getGitState", conversationId: ConversationId, } | { "method": "getBackgroundHistory", conversationId: ConversationId, before?: string, limit: number, 
 /**
  * Include live records when resolving an invocation's Output tab.
  */

@@ -238,3 +238,10 @@ can't draw. What it saw goes to `#thread-images-result`.
 rows of the Inbox mockups (`src/fixtures/inbox.tsx`). Query: `view=archived`, `view=projects`,
 `view=settings`. Buttons in the main area start and end a turn and send a message, to see which rows
 move. `drive=1` backs `src/app/shell/InboxRender.test.ts`.
+
+# Tab names and active rows
+
+`http://localhost:1426/fixtures/tab-names-rows.html` backs `src/app/shell/TabNamesRowsRender.test.ts`
+(`?drive=1`): two open tabs of one name say their checkout, dim, only while they clash, and the row
+of the tab in front lights up in Files and Source, on stacked rows only in that tab's own checkout.
+`?shot=clash|worktree|folder|files|session` holds one state for a screenshot.

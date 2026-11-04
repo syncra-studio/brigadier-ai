@@ -312,6 +312,13 @@ pub enum Request {
         /// Relative to the checkout's root.
         path: String,
     },
+    /// One file of a checkout by its target: a project's folder or a worktree the user made
+    /// before a session starts. A worktree's path is checked on every call.
+    ReadCheckoutFile {
+        target: WorkspaceTarget,
+        /// Relative to the checkout's root.
+        path: String,
+    },
     /// A bottom-pane shell, started if none runs, sized `cols` × `rows`. A conversation's runs
     /// in its checkout, else its project's first repository, else the home folder; without a
     /// conversation it is Home's, in `project_id`'s first repository, else the home folder. Its
@@ -769,6 +776,14 @@ pub enum Request {
     /// off, whitespace changes left out with `ignore_whitespace`.
     GetReviewDiff {
         conversation_id: ConversationId,
+        scope: ReviewScope,
+        whole_files: bool,
+        ignore_whitespace: bool,
+    },
+    /// A checkout's uncommitted changes by its target, for a Review tab before a session
+    /// starts: staged, unstaged or both. A worktree's path is checked on every call.
+    GetCheckoutReviewDiff {
+        target: WorkspaceTarget,
         scope: ReviewScope,
         whole_files: bool,
         ignore_whitespace: bool,
@@ -1596,6 +1611,9 @@ pub enum Response {
     ReadFile {
         file: CheckoutFile,
     },
+    ReadCheckoutFile {
+        file: CheckoutFile,
+    },
     OpenTerminal {
         terminal: TerminalInfo,
     },
@@ -1760,6 +1778,9 @@ pub enum Response {
         output: String,
     },
     GetReviewDiff {
+        review: ReviewDiff,
+    },
+    GetCheckoutReviewDiff {
         review: ReviewDiff,
     },
     GetGitState {

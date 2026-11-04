@@ -14,14 +14,14 @@ import {
 import { TooltipIconButton, Badge } from "@/components/controls";
 import { useCheckoutRoot } from "@/components/conversation";
 import { UNTITLED } from "@/app/shell/TopBar";
-import { Plus } from "@/components/icons";
+import { Chat, Plus } from "@/components/icons";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/side-panel/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";
 import { undoTabClose } from "@/state/terminalPlaces";
 import { BarDivider } from "@/app/shell/BarDivider";
 import { ChatTab } from "@/app/shell/ChatTab";
-import { SessionTab } from "@/app/shell/SessionTab";
+import { noAutoscroll, SessionTab, TAB } from "@/app/shell/SessionTab";
 import { OutputTab } from "@/app/side-panel/OutputTab";
 import { useMockupTab } from "@/app/conversation/MockupTab";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
@@ -47,7 +47,10 @@ import {
   useSessionTabsOf,
 } from "@/state/sessionTabs";
 import { useBrowserOn } from "@/state/links";
-import { tabTitle } from "@/state/sessionTabTitle";
+import { tabNameNote, tabTitle } from "@/state/sessionTabTitle";
+import { useTabRoot } from "@/state/tabRoot";
+import { HOME_PLACE } from "@/state/terminalPlaces";
+import { isDraftTabs } from "@/state/draftTabs";
 import { useApp } from "@/state/store";
 import { NewTabTools } from "../side-panel/NewTabTools";
 
@@ -58,6 +61,7 @@ const CLOSE_LOCK_MS = 300;
  * terminal keeps its shell Ctrl keys. Cmd+T always creates a main tab on macOS. An archived session
  * opens no terminal tabs, so its Ctrl+` goes on to the bottom-terminal toggle. */
 function useTabKeys(conversationId: string, archived: boolean, create: (kind: NewTabKind) => void): void {
+  const draft = isDraftTabs(conversationId);
   const mac = useApp((s) => s.info?.platform === "macos");
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -69,13 +73,16 @@ function useTabKeys(conversationId: string, archived: boolean, create: (kind: Ne
       const command = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
       if (command && !event.altKey && event.shiftKey && event.code === "KeyT") {
         event.preventDefault(); event.stopPropagation();
-        const closed = takePaneClose(conversationId);
+        // A draft's bottom terminal is Home's, and its closes are noted there.
+        const closed = takePaneClose(conversationId) ?? (draft ? takePaneClose(HOME_PLACE) : null);
         if (closed === "tab") reopenTab(conversationId, useApp.getState().conversations[conversationId]?.lifecycle !== "archived");
-        else if (closed === "terminal") undoTabClose(`conv:${conversationId}`);
+        else if (closed === "terminal") undoTabClose(draft ? HOME_PLACE : `conv:${conversationId}`);
         return;
       }
       const action = sessionTabKey(event, mac);
       if (!action || (archived && action.type === "new" && action.kind === "terminal")) return;
+      // A draft's Chat tab has no session to close.
+      if (draft && action.type === "close" && sessionTabs(conversationId).active === CHAT_TAB) return;
       event.preventDefault(); event.stopPropagation();
       if (action.type === "new") create(action.kind);
       if (action.type === "close" && sessionTabs(conversationId).active === CHAT_TAB) closeSession(conversationId);
@@ -86,7 +93,40 @@ function useTabKeys(conversationId: string, archived: boolean, create: (kind: Ne
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [conversationId, archived, mac, create]);
+  }, [conversationId, draft, archived, mac, create]);
+}
+
+/**
+ * The tab bar's "+": a New tab after the one in front. The toolbar shows the same button before
+ * the tab bar does (a draft, a welcome page, a plain chat).
+ */
+export function NewTabButton({ tabsId, className, onClick }: { tabsId: string; className?: string; onClick?: () => void }) {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const cwd = useCheckoutRoot();
+  return (
+    <TooltipIconButton look="toolbar" tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className={className}
+      onClick={() => { onClick?.(); newSessionTab(tabsId, "newTab", cwd); }}><Plus /></TooltipIconButton>
+  );
+}
+
+/** ⌘T where the toolbar's "+" stands for the tab bar's, which has the rest of the session's keys. */
+export function useNewTabKey(tabsId: string | null): void {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  const cwd = useCheckoutRoot();
+  useEffect(() => {
+    if (!tabsId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : document.activeElement;
+      if (!mac && target?.closest('[data-slot="terminal-pane"]')) return;
+      const action = sessionTabKey(event, mac);
+      if (action?.type !== "new" || action.kind !== "newTab") return;
+      event.preventDefault(); event.stopPropagation();
+      newSessionTab(tabsId, "newTab", cwd);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [tabsId, mac, cwd]);
 }
 
 /**
@@ -99,29 +139,33 @@ function useTabKeys(conversationId: string, archived: boolean, create: (kind: Ne
  * ("web · Running · Stop") follows. `children` sit at the end: the conversation's toolbar.
  */
 export function SessionTabBar({
+  id,
   conversation,
   onRename,
   children,
 }: {
-  conversation: Conversation;
-  onRename: () => void;
+  id: string;
+  /** None yet: a draft's tabs, under a Chat tab with nothing to rename, close or act on. */
+  conversation: Conversation | null;
+  onRename?: () => void;
   children?: ReactNode;
 }) {
-  const id = conversation.id;
   const { tabs, active } = useSessionTabsOf(id);
   useMockupTab(id);
   const connection = useApp((s) => s.connection.status);
-  const archived = conversation.lifecycle === "archived";
+  const archived = conversation?.lifecycle === "archived";
   const strip = useRef<HTMLDivElement>(null);
-  const mac = useApp((s) => s.info?.platform === "macos");
   const cwd = useCheckoutRoot();
   const browserOn = useBrowserOn();
+  const root = useTabRoot(id);
   const create = useCallback((kind: NewTabKind) => {
     if (archived && (kind === "terminal" || kind === "sideChat")) return;
+    // A side chat is about a conversation: there is none yet.
+    if (!conversation && kind === "sideChat") return;
     // Off, the built-in browser doesn't exist: ⇧⌘B and its menu item do nothing.
     if (kind === "browser" && !browserOn) return;
     newSessionTab(id, kind, cwd);
-  }, [id, archived, cwd, browserOn]);
+  }, [id, conversation, archived, cwd, browserOn]);
   useTabKeys(id, archived, create);
   const presence = useTabPresence(tabs);
   const lock = useCloseLock(presence.tabs.length === 0);
@@ -177,16 +221,14 @@ export function SessionTabBar({
     holdWidths();
     closeTab(id, tab);
   };
-  const newTab = (
-    <TooltipIconButton look="toolbar" tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className="ms-0.5"
-      onClick={() => { lock.release(); create("newTab"); }}><Plus /></TooltipIconButton>
-  );
+  const newTab = <NewTabButton tabsId={id} className="ms-0.5" onClick={lock.release} />;
   const connecting = connection !== "connected" && (
     <Badge variant="warning" role="status" className="shrink-0">
       {connection === "connecting" ? "Connecting to core…" : "Reconnecting to core…"}
     </Badge>
   );
-  const chatTitle = UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
+  const chatTitle = !conversation || UNTITLED.has(conversation.title) ? "Chat" : conversation.title;
+  const chatSeparator = active !== CHAT_TAB && tabs.length > 0 && tabs[0]?.id !== active || undefined;
 
   return (
     <header
@@ -245,13 +287,15 @@ export function SessionTabBar({
           });
         }}
       >
-        <ChatTab
-          conversation={conversation}
-          title={chatTitle}
-          active={active === CHAT_TAB}
-          separator={active !== CHAT_TAB && tabs.length > 0 && tabs[0]?.id !== active || undefined}
-          onRename={onRename}
-        />
+        {conversation ? (
+          <ChatTab
+            conversation={conversation}
+            title={chatTitle}
+            active={active === CHAT_TAB}
+            separator={chatSeparator}
+            onRename={onRename ?? noRename}
+          />
+        ) : <DraftChatTab id={id} active={active === CHAT_TAB} separator={chatSeparator} />}
         <div
           ref={strip}
           data-tauri-drag-region
@@ -269,6 +313,7 @@ export function SessionTabBar({
                   conversationId={id}
                   tab={tab}
                   name={name}
+                  note={tabNameNote(tab, tabs, root)}
                   selected={selected}
                   separator={!selected && index < tabs.length - 1 && tabs[index + 1]?.id !== active || undefined}
                   closing={presence.closing.has(tab.id)}
@@ -291,6 +336,34 @@ export function SessionTabBar({
       <BarDivider hidden={!full} />
       {children}
     </header>
+  );
+}
+
+const noRename = () => {};
+
+/** A draft's Chat tab: it keeps the message being written, with no conversation yet to act on. */
+function DraftChatTab({ id, active, separator }: { id: string; active: boolean; separator: true | undefined }) {
+  return (
+    <div
+      data-tab-id={CHAT_TAB}
+      data-separator={separator}
+      data-active={active || undefined}
+      className={cn(TAB, active ? "bg-panel-tab shadow-session-tab text-foreground" : "text-toolbar-foreground hover:bg-toolbar-hover")}
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        tabIndex={active ? 0 : -1}
+        title="Chat"
+        onMouseDown={noAutoscroll}
+        onClick={() => selectTab(id, CHAT_TAB)}
+        className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
+      >
+        <Chat aria-hidden className="size-icon-sm shrink-0" />
+        <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">Chat</span>
+      </button>
+    </div>
   );
 }
 
@@ -412,7 +485,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                   <FileTabView conversationId={conversationId} tab={tab} active={shown} />
                 </TabWithChat>
               ) : tab.kind === "review" ? (
-                <ReviewTab conversationId={conversationId} target={tab.target} active={shown} />
+                <ReviewTab conversationId={conversationId} target={tab.target} active={shown} checkout={tab.checkout} />
               ) : tab.kind === "newTab" && !browserOn ? (
                 // Off, a New tab offers its tools without an address bar.
                 <div className="@container/new-tab flex min-h-0 flex-1 flex-col">

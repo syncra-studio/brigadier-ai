@@ -6,9 +6,19 @@ export type WorkspacePaneState = { open: boolean; tabs: Record<string, Workspace
 export const WORKSPACE_PANE_KEY = "brigadier.workspacePane";
 export const WORKSPACE_PANE_WIDTH_KEY = "brigadier.workspacePaneWidth";
 
-/** The toolbar's toggles, in order: a session or project draft adds its right sidebar's. */
-export function toolbarToggles(kind: "chat" | "session"): readonly ("context" | "terminal" | "right-sidebar")[] {
-  return kind === "session" ? ["context", "terminal", "right-sidebar"] : ["context", "terminal"];
+/** A session; a project's draft; a chat that has started; a new chat or welcome page. */
+export type ToolbarKind = "session" | "draft" | "chat" | "chatDraft";
+
+/**
+ * The toolbar's controls, in order: a session or project draft adds its right sidebar's. What has
+ * started has the Context card. A New tab button comes first until the tab bar, with its own,
+ * shows; before anything has started it stands where Context would, and a session has the tab bar always.
+ */
+export function toolbarToggles(kind: ToolbarKind, tabbed: boolean): readonly ("context" | "new-tab" | "terminal" | "right-sidebar")[] {
+  const newTab = kind !== "session" && !tabbed ? ["new-tab" as const] : [];
+  const context = kind === "session" || kind === "chat" ? ["context" as const] : [];
+  const sidebar = kind === "session" || kind === "draft" ? ["right-sidebar" as const] : [];
+  return [...newTab, ...context, "terminal", ...sidebar];
 }
 
 /**

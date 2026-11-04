@@ -276,7 +276,7 @@ function Fixture() {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
     <main className="bg-background text-foreground flex h-screen w-full min-w-0 flex-col">
-      <SessionTabBar conversation={conversation} onRename={() => {}} />
+      <SessionTabBar id={conversation.id} conversation={conversation} onRename={() => {}} />
       <div className="relative min-h-0 flex-1">
         <div className="mx-auto max-w-xl space-y-4 px-6 py-12 text-sm">
           <p>Here is a mockup of the compact density toggle: two screens, the sidebar as it is and with compact rows.</p>

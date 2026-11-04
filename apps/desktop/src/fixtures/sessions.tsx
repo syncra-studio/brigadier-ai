@@ -426,7 +426,7 @@ function OpenBar() {
   if (!conversation) return null;
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <SessionTabBar conversation={conversation} onRename={() => {}} />
+      <SessionTabBar id={conversation.id} conversation={conversation} onRename={() => {}} />
     </AssistantRuntimeProvider>
   );
 }

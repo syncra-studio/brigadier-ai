@@ -9,7 +9,9 @@ use brigadier_git::{ChangeKind, Oid, Repo};
 use super::worker_source::worker_range;
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
-use crate::work::{ReviewCommit, ReviewDiff, ReviewFile, ReviewFileStatus, ReviewScope};
+use crate::work::{
+    ReviewCommit, ReviewDiff, ReviewFile, ReviewFileStatus, ReviewScope, WorkspaceTarget,
+};
 use crate::{Error, Result};
 
 /// Context lines that make git's patch carry whole files, so unchanged lines can be expanded.
@@ -80,6 +82,62 @@ impl SessionManager {
             }
             other => other,
         };
+        self.review_in(
+            (checkout, branch, base),
+            session,
+            snapshot_turn,
+            scope,
+            whole_files,
+            ignore_whitespace,
+        )
+        .await
+    }
+
+    /// A target's uncommitted changes in `scope`, for a Review tab before a session starts: a
+    /// project's folder, or a worktree the user made (checked now, as every worktree call is).
+    /// They have no session's history, so nothing else can be asked of them.
+    pub async fn target_review_diff(
+        &self,
+        target: &WorkspaceTarget,
+        scope: ReviewScope,
+        whole_files: bool,
+        ignore_whitespace: bool,
+    ) -> Result<ReviewDiff> {
+        if !matches!(
+            scope,
+            ReviewScope::Uncommitted | ReviewScope::Unstaged | ReviewScope::Staged
+        ) {
+            return Err(Error::Invalid(
+                "only uncommitted changes can be reviewed before a session starts".into(),
+            ));
+        }
+        let checkout = self
+            .workspace_dir(target)
+            .await?
+            .to_string_lossy()
+            .into_owned();
+        self.review_in(
+            (checkout, None, None),
+            String::new(),
+            None,
+            scope,
+            whole_files,
+            ignore_whitespace,
+        )
+        .await
+    }
+
+    /// The changes in `scope` read in `place`: a checkout, its branch and the branch it left.
+    async fn review_in(
+        &self,
+        place: (String, Option<String>, Option<String>),
+        session: String,
+        snapshot_turn: Option<u64>,
+        scope: ReviewScope,
+        whole_files: bool,
+        ignore_whitespace: bool,
+    ) -> Result<ReviewDiff> {
+        let (checkout, branch, base) = place;
         let git = self.git.clone();
         blocking(move || {
             let repo = git.open(Path::new(&checkout)).map_err(git_error)?;

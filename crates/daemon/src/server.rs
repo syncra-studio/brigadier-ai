@@ -1381,6 +1381,8 @@ fn read_beside(request: &Request) -> bool {
             | Request::GetWorkerSource { .. }
             | Request::GetPendingChanges { .. }
             | Request::GetReviewDiff { .. }
+            | Request::GetCheckoutReviewDiff { .. }
+            | Request::ReadCheckoutFile { .. }
             | Request::GetWorkspaceTree { .. }
             | Request::ListWorkspaceFolder { .. }
             | Request::ListFiles { .. }
@@ -1688,6 +1690,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             path,
         } => Response::ReadFile {
             file: heap(|| sessions.read_file(&conversation_id, path)).await?,
+        },
+        Request::ReadCheckoutFile { target, path } => Response::ReadCheckoutFile {
+            file: heap(|| sessions.read_target_file(&target, path)).await?,
         },
         Request::OpenTerminal { .. }
         | Request::AddAccount { .. }
@@ -2274,6 +2279,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::GetReviewDiff {
             review: heap(|| {
                 sessions.review_diff(&conversation_id, scope, whole_files, ignore_whitespace)
+            })
+            .await?,
+        },
+        Request::GetCheckoutReviewDiff {
+            target,
+            scope,
+            whole_files,
+            ignore_whitespace,
+        } => Response::GetCheckoutReviewDiff {
+            review: heap(|| {
+                sessions.target_review_diff(&target, scope, whole_files, ignore_whitespace)
             })
             .await?,
         },
@@ -3099,6 +3115,16 @@ mod tests {
             },
             Request::GetWorkspaceTree { target: target() },
             Request::ListSourceBranches { target: target() },
+            Request::ReadCheckoutFile {
+                target: target(),
+                path: "README.md".into(),
+            },
+            Request::GetCheckoutReviewDiff {
+                target: target(),
+                scope: brigadier_core::ReviewScope::Unstaged,
+                whole_files: true,
+                ignore_whitespace: false,
+            },
         ] {
             assert!(read_beside(&request), "{request:?} is read beside");
         }
