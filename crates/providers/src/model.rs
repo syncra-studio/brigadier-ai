@@ -1101,7 +1101,8 @@ pub enum ProviderEvent {
         item_id: String,
         text: String,
     },
-    /// The model looked in on a command it went on from, reading its output (Codex's poll).
+    /// The model wrote to a command it went on from, or polled it and found it still running
+    /// (Codex's `terminalInteraction`). An empty poll that reads the command's end sends none.
     CommandPolled {
         item_id: String,
     },

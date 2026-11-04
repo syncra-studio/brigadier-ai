@@ -240,9 +240,17 @@ async fn a_codex_command_outliving_its_turn_tells_the_thread_when_it_ends() {
     flow.stop().await;
 }
 
-/// A Codex `brigadier ask` the turn went on from, answered while the turn still runs. `polled`:
-/// whether its model looked in on it. What each turn was sent, and the flow's first request.
-async fn a_codex_ask_ending_in_its_turn(name: &str, polled: bool) -> (Flow, Vec<String>, String) {
+/// When Codex said its model looked in on a command (`terminalInteraction`).
+#[derive(Clone, Copy, PartialEq)]
+enum Look {
+    Never,
+    WhileRunning,
+    AfterItsEnd,
+}
+
+/// A Codex `brigadier ask` the turn went on from, answered while the turn still runs. What each
+/// turn was sent, and the flow's first request.
+async fn a_codex_ask_ending_in_its_turn(name: &str, look: Look) -> (Flow, Vec<String>, String) {
     use brigadier_providers::{
         BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
     };
@@ -301,8 +309,20 @@ async fn a_codex_ask_ending_in_its_turn(name: &str, polled: bool) -> (Flow, Vec<
                     command(ItemStatus::InProgress, None, None),
                     terminal(BackgroundTaskStatus::Running),
                 ];
-                if polled {
-                    events.push(poll);
+                // The model carries on with a command of its own: the answer comes during it.
+                let carry_on = |status, exit_code| ProviderEvent::Command {
+                    item_id: "cmd-2".into(),
+                    command: "sleep 25".into(),
+                    cwd: None,
+                    status,
+                    exit_code,
+                    output: None,
+                    duration_ms: None,
+                    kept: None,
+                };
+                if look == Look::WhileRunning {
+                    events.push(poll.clone());
+                    events.push(carry_on(ItemStatus::InProgress, None));
                 }
                 events.extend([
                     terminal(BackgroundTaskStatus::Completed),
@@ -311,9 +331,14 @@ async fn a_codex_ask_ending_in_its_turn(name: &str, polled: bool) -> (Flow, Vec<
                         Some(0),
                         Some("Which colour?: blue\n"),
                     ),
-                    usage.clone(),
-                    usage,
                 ]);
+                if look == Look::WhileRunning {
+                    events.push(carry_on(ItemStatus::Completed, Some(0)));
+                }
+                if look == Look::AfterItsEnd {
+                    events.push(poll);
+                }
+                events.extend([usage.clone(), usage]);
                 for event in events {
                     let _ = turn.events.send(event).await;
                 }
@@ -334,7 +359,8 @@ async fn a_codex_ask_ending_in_its_turn(name: &str, polled: bool) -> (Flow, Vec<
 /// same request: Codex never says it (D177).
 #[tokio::test]
 async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
-    let (flow, inputs, root) = a_codex_ask_ending_in_its_turn("codex-unread-end", false).await;
+    let (flow, inputs, root) =
+        a_codex_ask_ending_in_its_turn("codex-unread-end", Look::Never).await;
     assert!(
         inputs.iter().any(|input| input.contains(
             "[your background command `brigadier ask \"Which colour?\"` finished after your turn · exit 0]"
@@ -349,10 +375,25 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
     flow.stop().await;
 }
 
-/// One its model looked in on read its end itself: no turn is started to say it again.
+/// One its model polled while it still ran, and then went on from, read no end: the answer that
+/// came after that poll is told, once.
 #[tokio::test]
-async fn a_codex_command_its_model_polled_is_not_told_again() {
-    let (flow, inputs, _) = a_codex_ask_ending_in_its_turn("codex-polled-end", true).await;
+async fn a_codex_ask_polled_while_running_then_answered_is_told_once() {
+    let (flow, inputs, _) =
+        a_codex_ask_ending_in_its_turn("codex-polled-early", Look::WhileRunning).await;
+    let told = inputs
+        .iter()
+        .filter(|input| input.contains("finished after your turn") && input.contains("blue"))
+        .count();
+    assert_eq!(told, 1, "{inputs:#?}");
+    flow.stop().await;
+}
+
+/// One its model looked in on after its end read that end: no turn is started to say it again.
+#[tokio::test]
+async fn a_codex_command_looked_in_on_after_its_end_is_not_told_again() {
+    let (flow, inputs, _) =
+        a_codex_ask_ending_in_its_turn("codex-looked-after-end", Look::AfterItsEnd).await;
     assert_eq!(inputs.len(), 1, "{inputs:#?}");
     flow.stop().await;
 }
