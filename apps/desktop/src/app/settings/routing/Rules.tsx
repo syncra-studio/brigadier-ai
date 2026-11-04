@@ -85,7 +85,9 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
 function undoAdd(before: readonly ModelRule[]): Promise<void> {
   const view = useModelRules.getState().view;
   if (!view) return Promise.resolve();
-  return saveModelRules(view, view.rows, before).catch(() => toast("Couldn't undo: your rules changed."));
+  return saveModelRules(view, view.rows, before).catch(() => {
+    toast("Couldn't undo: your rules changed.");
+  });
 }
 
 /** One rule: its sentence, "advice" in grey if it is only advice, a × to remove it; a warning line when it stops something. */
