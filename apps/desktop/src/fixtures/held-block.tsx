@@ -7,6 +7,9 @@
  *
  * `?failed=wake`, `?failed=nothing`: its lead's turn fails while its worker works; the worker's
  * end then wakes the thread, or nothing follows it. Each step reads the same way, with its error.
+ *
+ * `?refresh=wake`, `?refresh=quiet`: its lead's turn ends, Brigadier refreshes its context while the
+ * worker works; the worker's end then wakes the thread, or nothing follows it.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -63,11 +66,27 @@ let view: ThreadView = {
 };
 
 const failing = new URLSearchParams(location.search).get("failed");
+const refreshing = new URLSearchParams(location.search).get("refresh");
 const failedTurn: ThreadTurn = { ...turn("u1", 0, 3_000, ["r1"]), end: "failed", error: "The agent could not start." };
 if (failing) {
   view = {
     entries: entries.slice(0, 2),
     turns: [failedTurn],
+    workers: [worker("aa11bb22", "First bug", 1_000, false)],
+    block: { startedAtMs: at(100) },
+  };
+}
+
+const refreshed: FileEntry[] = [
+  ...entries.slice(0, 2),
+  // The CLI writes the compaction before the `/compact` it echoes.
+  { event: { type: "compactionEnded", automatic: false, tokensBefore: 900, tokensAfter: 40, error: null } as ProviderEvent, atMs: at(20_000) },
+  said("c1", "user", "/compact Besides your usual summary, keep these exactly", 10_000),
+];
+if (refreshing) {
+  view = {
+    entries: refreshed,
+    turns: [turn("u1", 0, 3_000, ["r1"]), turn("c1", 10_000, 20_000, [], true)],
     workers: [worker("aa11bb22", "First bug", 1_000, false)],
     block: { startedAtMs: at(100) },
   };
@@ -137,6 +156,19 @@ function seen() {
       while (above && above.getBoundingClientRect().height === 0) above = above.previousElementSibling;
       return line && above ? [Math.round(line.getBoundingClientRect().top - above.getBoundingClientRect().bottom)] : [];
     }),
+    // A refresh's divider: how far under the reply before it, and whether the live line is under it.
+    refresh: (() => {
+      const divider = document.querySelector('[data-slot="compaction"]')?.getBoundingClientRect();
+      const said = (words: string) => [...document.querySelectorAll("main *")].findLast((each) => each.textContent?.trim() === words)?.getBoundingClientRect();
+      const reply = said("A worker is on the first.");
+      const line = document.querySelector('[data-slot="thread-status"]')?.getBoundingClientRect();
+      const lower = said("The first bug is fixed.");
+      return {
+        gap: divider && reply ? Math.round(divider.top - reply.bottom) : null,
+        lineUnder: divider && line ? line.top >= divider.bottom : null,
+        wokenUnder: divider && lower ? lower.top >= divider.bottom : null,
+      };
+    })(),
   };
 }
 
@@ -184,6 +216,36 @@ async function driveFailed() {
   document.body.append(result);
 }
 
+/** A block held through a refresh, step by step: its worker works, then its end wakes the thread or nothing follows. */
+async function driveRefresh() {
+  // A reply waits on its renderer, late on a first load: measured, it is the reply itself.
+  const settled = async () => {
+    await pause();
+    while (document.querySelector('[data-slot="reply-loading"]')) await pause();
+  };
+  await settled();
+  const held = seen();
+  const worked = [worker("aa11bb22", "First bug", 1_000, true)];
+  const steps: Record<string, unknown> = { held };
+  if (refreshing === "wake") {
+    show({
+      ...view,
+      entries: [...refreshed, news("n1", "aa11bb22", 200_000), said("a4", "assistant", "The first bug is fixed.", 201_000)],
+      turns: [...view.turns, { ...turn("n1", 200_000, 0, ["r1"], true), endedAtMs: null, end: null }],
+      workers: worked,
+    });
+    await settled();
+    steps.woken = seen();
+  }
+  show({ ...view, workers: worked, block: { startedAtMs: at(100), endedAtMs: at(300_000) } });
+  await settled();
+  steps.closed = seen();
+  const result = document.createElement("pre");
+  result.id = "held-block-result";
+  result.textContent = JSON.stringify(steps);
+  document.body.append(result);
+}
+
 async function drive() {
   await pause();
   const bothWork = seen();
@@ -213,4 +275,4 @@ async function drive() {
 }
 
 createRoot(document.getElementById("root")!).render(<Page />);
-void (failing ? driveFailed() : drive());
+void (refreshing ? driveRefresh() : failing ? driveFailed() : drive());

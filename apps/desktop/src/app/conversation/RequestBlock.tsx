@@ -186,7 +186,9 @@ export const RequestBlock: FC = () => {
 
   const live = isLive(meta.state) || held || quotaWait !== null || (quotaRecovered && turnRuns);
   const last = meta.texts.length - 1;
-  const sequence = blockSequence(meta);
+  // Live, a refresh is in its work wherever it came, where work after it would keep it: its live
+  // line stays last, and nothing moves when the wait ends.
+  const sequence = blockSequence(live ? { ...meta, compactions: meta.compactions.map((compaction) => ({ ...compaction, inTurn: true })) } : meta);
   // Its CLI's turn is over and nothing it started still works: only then does its work fold, the
   // same moment on every CLI (D21, D24).
   const done = blockFinished(meta.state) && !held && quotaWait === null && !(quotaRecovered && turnRuns);
@@ -385,7 +387,7 @@ export const RequestBlock: FC = () => {
         </div>
       ))}
       <ContinuedFrom forkId={meta.forkId} />
-      {meta.compactions
+      {!live && meta.compactions
         .filter((compaction) => !compaction.inTurn)
         .map((compaction) => (
           <CompactionBlock key={compaction.id} compaction={compaction} />

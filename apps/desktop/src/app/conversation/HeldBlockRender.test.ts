@@ -53,3 +53,22 @@ test("a turn that fails while its worker works, nothing following the worker's e
   assert.deepEqual(result.closed.errors, [true]);
   assert.deepEqual(result.closed.buttons, [["Try again"]]);
 });
+
+type SeenRefresh = Seen & { refresh: { gap: number | null; lineUnder: boolean | null; wokenUnder: boolean | null } };
+
+test("a context refresh while a block is held leaves its live line under the divider, and the divider where it is when the wait ends", async (t) => {
+  const woke = JSON.parse(await renderFixturePage(t, "held-block.html?refresh=wake", "held-block-result", 10000)) as Record<"held" | "woken" | "closed", SeenRefresh>;
+  assert.deepEqual(woke.held.waits, [["Waiting for First bug"]]);
+  assert.equal(woke.held.refresh.lineUnder, true, JSON.stringify(woke.held));
+  assert.ok(woke.held.refresh.gap !== null && woke.held.refresh.gap >= 0, JSON.stringify(woke.held));
+  // The wait over, the thread goes on under the divider, and the divider stays under its reply.
+  assert.equal(woke.woken.blocks, 1, JSON.stringify(woke.woken));
+  assert.equal(woke.woken.refresh.gap, woke.held.refresh.gap, JSON.stringify(woke.woken));
+  assert.equal(woke.woken.refresh.wokenUnder, true, JSON.stringify(woke.woken));
+  assert.equal(woke.closed.refresh.wokenUnder, true, JSON.stringify(woke.closed));
+  // Nothing follows the worker's end: the block closes with the divider under its answer, as after any finished turn.
+  const quiet = JSON.parse(await renderFixturePage(t, "held-block.html?refresh=quiet", "held-block-result", 10000)) as Record<"held" | "closed", SeenRefresh>;
+  assert.equal(quiet.held.refresh.lineUnder, true, JSON.stringify(quiet.held));
+  assert.deepEqual(quiet.closed.waits, [[]]);
+  assert.ok(quiet.closed.refresh.gap !== null && quiet.closed.refresh.gap >= 0, JSON.stringify(quiet.closed));
+});
