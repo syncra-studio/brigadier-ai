@@ -344,6 +344,7 @@ function useItems(
             };
           }),
           state: block.state,
+          error: block.error,
           startedAtMs: block.startedAtMs,
           endedAtMs: block.endedAtMs,
           worked: block.worked,
@@ -1064,7 +1065,7 @@ export function ConversationView({
   const draftModel = resolved.model;
   const newest = tree.nodes.findLast((node) => node.kind === "block")?.block;
   // Its turn over, what it started still holds it open: the composer says it works too (D94).
-  const workHeld = useBlockHold(conversation?.id ?? null, newest).held && newest?.state === "done";
+  const workHeld = useBlockHold(conversation?.id ?? null, newest).held;
   const workFrom = (newest?.endedAtMs === null || workHeld) && newest?.worked.length ? Math.min(...newest.worked.map((span) => span.fromMs)) : undefined;
   const view = useMemo(() => ({ selection, conversation, embedded, draftModel, workFrom, workHeld }), [selection, conversation, embedded, draftModel, workFrom, workHeld]);
   // Every standalone conversation and draft can show its context card.

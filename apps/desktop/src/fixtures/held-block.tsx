@@ -4,6 +4,9 @@
  * the workers work (the second turn starts another), each message a turn that joins the block;
  * then the workers finish one by one, and their word joins it too. Each step's work headers
  * and blocks are read into `#held-block-result`.
+ *
+ * `?failed=wake`, `?failed=nothing`: its lead's turn fails while its worker works; the worker's
+ * end then wakes the thread, or nothing follows it. Each step reads the same way, with its error.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -59,6 +62,17 @@ let view: ThreadView = {
   block: { startedAtMs: at(100) },
 };
 
+const failing = new URLSearchParams(location.search).get("failed");
+const failedTurn: ThreadTurn = { ...turn("u1", 0, 3_000, ["r1"]), end: "failed", error: "The agent could not start." };
+if (failing) {
+  view = {
+    entries: entries.slice(0, 2),
+    turns: [failedTurn],
+    workers: [worker("aa11bb22", "First bug", 1_000, false)],
+    block: { startedAtMs: at(100) },
+  };
+}
+
 const conversation = {
   id, kind: "session", projectId: null, title: "Fix the two bugs", pinnedAtMs: null, createdAtMs: t0, updatedAtMs: at(123_000),
   lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
@@ -108,6 +122,8 @@ function seen() {
     // Every line of the block that says what it waits for: the header's, the live line's.
     waits: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-work-label"], [data-slot="thread-status"], [data-slot="group-live-line"]')]
       .map((line) => line.textContent ?? "").filter((text) => text.startsWith("Waiting"))),
+    errors: blocks.map((block) => !!block.querySelector('[data-slot="error-state"]')),
+    buttons: blocks.map((block) => [...block.querySelectorAll('[data-slot="error-state"] button')].filter((button) => !button.closest("details")).map((button) => button.textContent ?? "")),
     steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*(?:Yesterday|\d).*$/, "").trim() ?? "")),
     // The gap over each block's live line, from what shows above it (demo12: one gap everywhere).
     gaps: blocks.flatMap((block) => {
@@ -132,6 +148,35 @@ function Page() {
       </SidebarProvider>
     </TooltipProvider>
   );
+}
+
+/** A failed turn's block, step by step: its worker works, then its end wakes the thread or nothing follows. */
+async function driveFailed() {
+  await pause();
+  const works = seen();
+  const worked = [worker("aa11bb22", "First bug", 1_000, true)];
+  const closed = { startedAtMs: at(100), endedAtMs: at(202_000) };
+  const steps: Record<string, unknown> = { works };
+  if (failing === "wake") {
+    const woke = [...entries.slice(0, 2), news("n1", "aa11bb22", 200_000)];
+    show({ ...view, entries: woke, turns: [failedTurn, { ...turn("n1", 200_000, 0, ["r1"]), endedAtMs: null, end: null }], workers: worked });
+    await pause();
+    steps.woken = seen();
+    show({
+      ...view,
+      entries: [...woke, said("a4", "assistant", "The first bug is fixed.", 201_000)],
+      turns: [failedTurn, turn("n1", 200_000, 202_000, ["r1"])],
+      block: closed,
+    });
+  } else {
+    show({ ...view, workers: worked, block: closed });
+  }
+  await pause();
+  steps.closed = seen();
+  const result = document.createElement("pre");
+  result.id = "held-block-result";
+  result.textContent = JSON.stringify(steps);
+  document.body.append(result);
 }
 
 async function drive() {
@@ -163,4 +208,4 @@ async function drive() {
 }
 
 createRoot(document.getElementById("root")!).render(<Page />);
-void drive();
+void (failing ? driveFailed() : drive());

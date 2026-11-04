@@ -561,6 +561,9 @@ function startsTurn(entry: FileEntry): boolean {
  */
 function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly ThreadTurn[] = []): void {
   const { state, error } = turnState(turn ?? { end: null, error: null });
+  // A turn of it failed and a later one went on (a worker's end woke it): the failure stays said.
+  // A limit's is no failure: the switch goes on from it (goal 1).
+  const failed = earlier.findLast((each) => (each.end === "failed" || each.end === "interrupted") && each.errorKind !== "usageLimit" && !each.limit);
   const first = earlier[0] ? (earlier[0].startedAtMs ?? block.startedAtMs) : null;
   const own = turn?.startedAtMs ?? first ?? block.startedAtMs;
   const endedAtMs = turn?.end ? (turn.endedAtMs ?? own) : null;
@@ -570,7 +573,7 @@ function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly Th
   });
   Object.assign(block, {
     state,
-    error,
+    error: error ?? (failed ? turnState(failed).error : null),
     startedAtMs: first ?? own,
     endedAtMs,
     worked: [...before, { fromMs: own, toMs: endedAtMs }],

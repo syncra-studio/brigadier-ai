@@ -76,7 +76,7 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
       ? String(status.error ?? "The reply failed.")
       : null;
   });
-  const read = useBlockError(meta, failed);
+  const read = useBlockError(meta, failed ?? meta.error);
   const kind = useBlockTurn(meta, (turn) => turn?.errorKind ?? null);
   const turnProvider = useBlockTurn(meta, (turn) => turn?.provider ?? null);
   const latest = useAuiState((s) => s.message.isLast);
@@ -94,6 +94,8 @@ export const BlockError: FC<{ meta: BlockMeta; live: boolean; quotaCovered?: boo
   // Brigadier quit while it ran: Continue picks the request up (UI audit H1).
   const interrupted = interruptedByQuit(error);
   const again = (() => {
+    // A later turn of its block went on: there is nothing to try again.
+    if (failed === null) return undefined;
     if (interrupted) {
       if (!resumable || live || !latest || !conversation || conversation.lifecycle === "archived" || action.busy) return undefined;
       const id = conversation.id;

@@ -88,6 +88,8 @@ export type BlockMeta = {
   /** Quiet lines of what its workers did, and of background jobs' ends its CLI took up, by position. */
   taskNotices: BlockTaskNotice[];
   state: BlockState;
+  /** What failed in it, kept once a later turn of it goes on (`settle`). */
+  error: string | null;
   startedAtMs: number;
   endedAtMs: number | null;
   /** When its turn worked, for "Worked for …". */
@@ -256,7 +258,7 @@ export const RequestBlock: FC = () => {
             foldable={foldable}
             quota={quotaWait !== null}
             // Over, it works on while what it started runs (L3, D24).
-            held={held && meta.state === "done"}
+            held={held && quotaWait === null}
             heldUntil={heldUntil}
             onToggle={() => fold.set(!open)}
             denied={deniedCount}
