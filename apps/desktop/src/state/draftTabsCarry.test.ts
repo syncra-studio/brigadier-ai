@@ -51,6 +51,13 @@ beforeEach(() => {
   });
 });
 
+/** A creation that ends when told. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 /** README in a preview tab, the worktree's copy and a Review tab; Review in front. */
 function openDraftTabs(): void {
   openFileTab(DRAFT, "README.md", { preview: true });
@@ -131,7 +138,7 @@ test("navigating while it is made: the tabs go with the draft that started it, a
   const other = "draft:other";
   openFileTab(other, "theirs.ts");
   const theirs = sessionTabs(other);
-  const creating = Promise.withResolvers<void>();
+  const creating = deferred();
   daemon.create = () => creating.promise;
   const sending = send(outgoing, target);
   const elsewhere = { type: "draft", kind: "session", projectId: "other" } as const;
@@ -146,7 +153,7 @@ test("navigating while it is made: the tabs go with the draft that started it, a
 
 test("a draft revisited while it is made keeps what was opened since; a later draft starts its own", async () => {
   openDraftTabs();
-  const creating = Promise.withResolvers<void>();
+  const creating = deferred();
   daemon.create = () => creating.promise;
   const sending = send(outgoing, target);
   // Left and came back: a selection of its own, its own new tab.
