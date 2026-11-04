@@ -1204,11 +1204,11 @@ mod tests {
         };
         assert!(start.local);
         assert_eq!(start.repo, None);
-        let CliRequest::Start(by_work) = run(&["start", "--work", "Independent review", "go"]).0
+        let CliRequest::Start(by_work) = run(&["start", "--work", "Adversarial review", "go"]).0
         else {
             panic!("not a start");
         };
-        assert_eq!(by_work.work.as_deref(), Some("Independent review"));
+        assert_eq!(by_work.work.as_deref(), Some("Adversarial review"));
         assert!(by_work.reviewing.is_empty());
         // Whose work a review covers: workers by id, or the session's own (harness D22).
         let CliRequest::Start(review) = run(&[

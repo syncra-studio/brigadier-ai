@@ -52,6 +52,13 @@ export function workRows(rules: ModelRules | null): WorkRow[] {
   });
 }
 
+/** Who picks's words for Automatic: a row from the ratings says "Rated …" (as the daemon marks them); the rest are the app's own, by family word. */
+export function automaticLine(row: WorkRow): string {
+  return row.shipped.some((found) => found.reason.startsWith("Rated "))
+    ? "Automatic: the best-rated models, researched daily"
+    : "Automatic: set by the app, always a current model";
+}
+
 /** The user's rows with `work`'s order replaced by `order`, in the place of its first row (a new kind's last; empty drops it). */
 export function withOrder(rows: readonly GuidanceRow[], work: string, order: readonly GuidanceRow[]): GuidanceRow[] {
   const at = rows.findIndex((row) => row.work === work);

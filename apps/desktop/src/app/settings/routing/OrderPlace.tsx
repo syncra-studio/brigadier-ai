@@ -50,6 +50,7 @@ export function OrderPlace({
   onEffort,
   onModel,
   onRemove,
+  role,
 }: {
   row: GuidanceRow;
   position: number;
@@ -59,10 +60,12 @@ export function OrderPlace({
   rules: readonly ModelRule[];
   groups: readonly ModelGroup[];
   dragging: boolean;
-  grip: ReturnType<ReturnType<typeof useDragReorder>["grip"]>;
+  grip?: ReturnType<ReturnType<typeof useDragReorder>["grip"]>;
   onEffort: (effort: string | null) => void;
   onModel: (target: OverrideTarget) => void;
-  onRemove: () => void;
+  onRemove?: () => void;
+  /** A fixed role has no place to reorder or remove, and stays on its agent. */
+  role?: string;
 }) {
   const name = rowModelName(groups, row.agent, row.model);
   const [actions, setActions] = useState(false);
@@ -75,20 +78,25 @@ export function OrderPlace({
     },
     taken: [rowTarget(groups, row.agent, row.model), ...taken],
     opensOn: row.agent,
+    ...(role ? { provider: row.agent } : {}),
   });
   return (
     <li data-slot="ranked-place" className={cn("flex h-11 items-center gap-3 rounded-lg", dragging && "bg-foreground/8")}>
-      <button
-        type="button"
-        aria-label={`Move ${name} (${position} of ${count}); drag, or press up and down`}
-        title="Drag to reorder, or focus and press ↑ ↓"
-        disabled={count < 2}
-        className="flex h-full cursor-grab touch-none items-center gap-3 active:cursor-grabbing disabled:cursor-default"
-        {...grip}
-      >
-        <GripIcon className="text-muted-foreground" />
-        <span className="text-xs text-muted-foreground w-2 font-mono">{position}</span>
-      </button>
+      {role ? (
+        <span className="text-xs text-muted-foreground w-44 shrink-0 truncate">{role}</span>
+      ) : (
+        <button
+          type="button"
+          aria-label={`Move ${name} (${position} of ${count}); drag, or press up and down`}
+          title="Drag to reorder, or focus and press ↑ ↓"
+          disabled={count < 2}
+          className="flex h-full cursor-grab touch-none items-center gap-3 active:cursor-grabbing disabled:cursor-default"
+          {...grip}
+        >
+          <GripIcon className="text-muted-foreground" />
+          <span className="text-xs text-muted-foreground w-2 font-mono">{position}</span>
+        </button>
+      )}
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <ProviderGlyph provider={row.agent} className="shrink-0 size-3.5" />
         <span className="text-label text-foreground truncate">{name}</span>
@@ -134,8 +142,12 @@ export function OrderPlace({
               <ModelPickerPanel ref={picker} {...target} onClose={() => setActions(false)} />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={onRemove}>Remove</DropdownMenuItem>
+          {onRemove && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onRemove}>Remove</DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </li>

@@ -317,8 +317,8 @@ pub const COMMANDS: &[Command] = &[
             Arg::Flag {
                 long: "reviewing",
                 value: Some("ID"),
-                help: "An independent review of a worker's work, or `session` for this \
-                       session's own (its plan): the work \"Independent review\" on another \
+                help: "An adversarial review of a worker's work, or `session` for this \
+                       session's own (its plan): the work \"Adversarial review\" on another \
                        ready CLI than the author's, else a fresh session of the author's. Its \
                        brief is told to read `brigadier show <id>` and `brigadier context`.",
                 choices: &[],
@@ -1102,7 +1102,11 @@ pub const COMMANDS: &[Command] = &[
         name: "models",
         summary: "Models, usage and guidance for picking a worker's model.",
         details: "What each CLI reports, usage and reset times per account, the shipped \
-                  guidance and the user's own rules, in one view.",
+                  guidance, the user's own rules and their advice notes, in one view. A rule \
+                  capping or raising effort (for every model, one agent or one model) moves a \
+                  start's effort to its limit; a start is refused only by a model rule, or when \
+                  a cap and a minimum can't both be met. Advice restricts nothing: weigh it \
+                  when you pick.",
         args: &[],
         available: true,
         schema: include_str!("../schemas/models.schema.json"),

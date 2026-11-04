@@ -248,6 +248,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 rule: "forbid: fable".into(),
             }],
             rules_path: "/Users/me/.brigadier/models.md".into(),
+            advice: vec!["prefer Codex when Claude is busy".into()],
         }),
         CliRequest::Sessions { all } => CliReply::ok(&SessionsOutput {
             project: (!all).then(|| "brigadier-ai".into()),
@@ -857,7 +858,7 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["read", "0000", "--screen", "--json"],
         &["start", "--json", "write", "a", "file"],
         &["start", "--local", "--permission", "ask", "--json", "go"],
-        &["start", "--work", "Independent review", "--json", "go"],
+        &["start", "--work", "Adversarial review", "--json", "go"],
         &["start", "--reviewing", "a1b2", "--json", "go"],
         &["send", "a1b2", "keep", "going", "--json"],
         &["send", "a1b2", "--allow", "--json"],
@@ -1129,12 +1130,12 @@ fn text_output_reads_well() {
             "--model",
             "codex-model-1",
             "--work",
-            "Independent review",
+            "Adversarial review",
             "go",
         ],
     ));
     assert!(
-        by_work.contains("\nYour row \"Independent review\" picked its agent and effort.\n"),
+        by_work.contains("\nYour row \"Adversarial review\" picked its agent and effort.\n"),
         "{by_work}"
     );
     // A pick off the routing still starts; the receipt says what the routing names (D77).

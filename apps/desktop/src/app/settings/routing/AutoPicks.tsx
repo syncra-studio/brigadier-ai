@@ -1,9 +1,9 @@
+import { ModelEffort } from "@/app/settings/routing/ModelEffort";
 import { Badge, HAIRLINE_TOP } from "@/app/settings/routing/parts";
 import { useListedModels } from "@/app/settings/routing/pickers";
 import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
 import { rowModelName, type WorkRow } from "@/app/settings/routing/words";
-import { effortLabel, type ModelGroup } from "@/components/shared";
-import { ProviderGlyph } from "@/components/icons";
+import type { ModelGroup } from "@/components/shared";
 import type { ModelRule } from "@/ipc/generated";
 import { joinWords } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -28,9 +28,8 @@ export function AutoPicks({ row, rules, groups }: { row: WorkRow; rules: readonl
       {eligible.map((found, index) => (
         <div key={`${found.agent}/${found.model}`} data-slot="auto-pick" className="flex h-10 items-center gap-3">
           <span className="text-xs text-muted-foreground w-2 shrink-0 font-mono">{index + 1}</span>
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <ProviderGlyph provider={found.agent} className="shrink-0 size-3.5" />
-            <span className="text-label text-foreground truncate">{name(found)}</span>
+          <span className="flex min-w-0 flex-1 items-center">
+            <ModelEffort row={found} groups={groups} />
           </span>
           {index === picked ? (
             <Badge tone="success">Picked now</Badge>
@@ -40,7 +39,6 @@ export function AutoPicks({ row, rules, groups }: { row: WorkRow; rules: readonl
               <span className="text-xs text-muted-foreground truncate">Next if {name(eligible[picked]!)} can't run</span>
             )
           )}
-          <span className="text-xs text-muted-foreground shrink-0">{found.effort ? `${effortLabel(found.effort)} effort` : "Default effort"}</span>
         </div>
       ))}
       {skipped.length > 0 && (

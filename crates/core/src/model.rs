@@ -482,6 +482,14 @@ impl Setup {
             Self::Chat { model, .. } => model,
         }
     }
+
+    /// The model it runs on, to change.
+    pub fn choice_mut(&mut self) -> &mut ModelChoice {
+        match self {
+            Self::Session { orchestrator, .. } => orchestrator,
+            Self::Chat { model, .. } => model,
+        }
+    }
 }
 
 /// Changes to a project; absent fields stay as they are.
@@ -2922,7 +2930,7 @@ pub enum ModelRule {
     /// `forbid: fable`: no matching model.
     Forbid {
         names: Vec<String>,
-        /// `forbid for Independent review: sonnet`: only for that kind of work (a row's Work),
+        /// `forbid for Adversarial review: sonnet`: only for that kind of work (a row's Work),
         /// so only a `brigadier start --work` of it. Absent: everywhere.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -2936,13 +2944,38 @@ pub enum ModelRule {
         #[ts(optional)]
         work: Option<String>,
     },
-    /// `effort-ceiling: high`: no effort above it.
+    /// `effort-ceiling: high`: a start asking for more runs at this effort instead. For one
+    /// agent (`effort-ceiling claude: high`) or one model (`effort-ceiling opus: medium`).
     EffortCeiling {
         effort: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
+        agent: Option<ProviderKind>,
+        /// A model name as rules match one: a family word or an exact id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         work: Option<String>,
     },
+    /// `effort-floor for Adversarial review: high`: a start asking for less runs at this effort
+    /// instead. Scoped as a ceiling is.
+    EffortFloor {
+        effort: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        agent: Option<ProviderKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        work: Option<String>,
+    },
+    /// `advice: prefer Codex when Claude is busy`: words no rule can hold, kept for sessions to
+    /// read where they read routing. Never refuses or changes a start.
+    Advice { text: String },
 }
 
 impl ModelRule {
@@ -2951,7 +2984,9 @@ impl ModelRule {
         match self {
             Self::Forbid { work, .. }
             | Self::Allow { work, .. }
-            | Self::EffortCeiling { work, .. } => work.as_deref(),
+            | Self::EffortCeiling { work, .. }
+            | Self::EffortFloor { work, .. } => work.as_deref(),
+            Self::Advice { .. } => None,
         }
     }
 }
@@ -2962,6 +2997,7 @@ impl ModelRule {
 #[serde(rename_all = "camelCase")]
 pub struct ModelRules {
     pub path: String,
+    pub revision: String,
     /// The automatic guidance, read only: per kind of work, each agent's best-rated model in
     /// rating order; the shipped table's rows for a kind nothing is rated for.
     pub shipped: Vec<GuidanceRow>,

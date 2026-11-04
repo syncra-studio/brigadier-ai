@@ -442,6 +442,11 @@ impl SessionManager {
             .and_then(|plain| plain.quota_policy.as_ref());
         let mut allowed = Vec::new();
         for choice in choices {
+            let work = policy.and_then(|p| p.work.as_deref());
+            let moving = choice.provider != task.route.choice.provider;
+            let Ok(choice) = self.ruled_quota_choice(choice, work, moving) else {
+                continue;
+            };
             if allowed.contains(&choice) {
                 continue;
             }
@@ -460,26 +465,17 @@ impl SessionManager {
                             .model
                             .as_ref()
                             .is_some_and(|model| choice.model.as_ref() != Some(model))
-                        || pin
-                            .effort
-                            .as_ref()
-                            .is_some_and(|effort| choice.effort.as_ref() != Some(effort))
+                        || pin.effort.as_ref().is_some_and(|effort| {
+                            let mut pinned = choice.clone();
+                            pinned.effort = Some(effort.clone());
+                            self.ruled_quota_choice(pinned, work, moving)
+                                .map_or(true, |pinned| pinned.effort != choice.effort)
+                        })
                 })
             {
                 continue;
             }
             if policy.is_some_and(|policy| policy.avoid_providers.contains(&choice.provider)) {
-                continue;
-            }
-            if self
-                .model_refusal(
-                    choice.provider,
-                    choice.model.as_deref(),
-                    choice.effort.as_deref(),
-                    policy.and_then(|p| p.work.as_deref()),
-                )
-                .map_or(true, |rule| rule.is_some())
-            {
                 continue;
             }
             if choice.provider != task.route.choice.provider
@@ -1062,5 +1058,114 @@ impl SessionManager {
             return Err(err);
         }
         Ok((target, account))
+    }
+}
+
+#[cfg(test)]
+mod rules_tests {
+    use crate::manager::flow::{Flow, Options, Reply};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn quota_moves_adjust_effort_and_obey_fallback_rules() {
+        let flow = Flow::start(
+            "quota-model-rules",
+            Options::default(),
+            Arc::new(|turn| {
+                Box::pin(async move {
+                    if turn.input.contains("Start a worker.") {
+                        turn.start_worker("worker", "Reply once.").await;
+                    }
+                    Reply::text("Done.")
+                })
+            }),
+        )
+        .await;
+        flow.say("Start a worker.").await;
+        let board = flow.settled().await;
+        let mut task = Flow::task(&board, 1).clone();
+        task.route.choice.model = Some("opus".into());
+        task.route.choice.effort = Some("high".into());
+        // An effort that was pinned at start still yields to a newly set cap on a move.
+        task.plain
+            .as_mut()
+            .unwrap()
+            .quota_policy
+            .as_mut()
+            .unwrap()
+            .pin
+            .effort = Some("high".into());
+        std::fs::write(
+            flow.manager.models_rules_path(),
+            "- effort-ceiling: medium\n",
+        )
+        .unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty(), "the cap refused the pinned worker");
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.effort.as_deref() == Some("medium")),
+            "effort cap bypassed: {choices:?}"
+        );
+
+        task.plain
+            .as_mut()
+            .unwrap()
+            .quota_policy
+            .as_mut()
+            .unwrap()
+            .pin
+            .effort = None;
+        std::fs::write(
+            flow.manager.models_rules_path(),
+            "- forbid for Fallback: *\n",
+        )
+        .unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty());
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.provider == task.route.choice.provider),
+            "fallback rule bypassed: {choices:?}"
+        );
+        // A named work used to bypass Fallback entirely.
+        task.plain
+            .as_mut()
+            .unwrap()
+            .quota_policy
+            .as_mut()
+            .unwrap()
+            .work = Some("Docs".into());
+        std::fs::write(flow.manager.models_rules_path(), "| Docs | claude | opus | high | Own |\n| Docs | codex | default | high | Other |\n- forbid for Fallback: *\n").unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty());
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.provider == task.route.choice.provider),
+            "named work bypassed Fallback: {choices:?}"
+        );
+        std::fs::write(flow.manager.models_rules_path(), "| Docs | claude | opus | high | Own |\n| Docs | codex | default | high | Other |\n- effort-ceiling for Docs: medium\n- effort-floor for Fallback: high\n").unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert!(!choices.is_empty());
+        assert!(
+            choices
+                .iter()
+                .all(|choice| choice.provider == task.route.choice.provider
+                    && choice.effort.as_deref() == Some("medium")),
+            "conflicting move bounds ignored: {choices:?}"
+        );
+        // Floors also adjust an already-running worker on its own agent.
+        task.route.choice.effort = Some("medium".into());
+        std::fs::write(
+            flow.manager.models_rules_path(),
+            "- effort-floor for Docs: high\n",
+        )
+        .unwrap();
+        let choices = flow.manager.worker_quota_choices(&task).await;
+        assert_eq!(choices[0].effort.as_deref(), Some("high"));
+        flow.stop().await;
     }
 }

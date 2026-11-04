@@ -1093,17 +1093,25 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             g.source
         ));
     }
-    lines.push(format!("Your rules ({}):", output.rules_path));
+    // The user's rules and advice notes always show: the 25-line cut takes guidance rows.
+    let mut tail = vec![format!("Your rules ({}):", output.rules_path)];
     for rule in &output.rules {
-        lines.push(format!("  {}", rule.rule));
+        tail.push(format!("  {}", rule.rule));
     }
     if output.rules.is_empty() {
-        lines.push("  None.".into());
+        tail.push("  None.".into());
     }
-    if lines.len() > 25 {
-        lines.truncate(24);
+    if !output.advice.is_empty() {
+        tail.push("Your advice (weigh it when picking; it restricts nothing):".into());
+        for advice in &output.advice {
+            tail.push(format!("  {advice}"));
+        }
+    }
+    if lines.len() + tail.len() > 25 {
+        lines.truncate(24usize.saturating_sub(tail.len()).max(2));
         lines.push("More rows: brigadier models --json".into());
     }
+    lines.extend(tail);
     lines.join("\n") + "\n"
 }
 
@@ -1199,6 +1207,7 @@ mod tests {
             guidance: vec![],
             rules: vec![],
             rules_path: "/tmp/dev-data/models.md".into(),
+            advice: vec![],
         };
         let text = models(&output);
         assert!(
@@ -1220,5 +1229,41 @@ mod tests {
         assert_eq!(ordinal(1), "1st");
         assert_eq!(ordinal(12), "12th");
         assert_eq!(ordinal(22), "22nd");
+    }
+
+    #[test]
+    fn rules_and_advice_survive_the_cut() {
+        let row = crate::models::Guidance {
+            work: "Docs".into(),
+            agent: ProviderKind::Claude,
+            model: "sonnet".into(),
+            effort: None,
+            reason: "Mine.".into(),
+            source: "user".into(),
+        };
+        let output = ModelsOutput {
+            workers_at_once: 4,
+            models: vec![],
+            agents: vec![],
+            switch_providers: false,
+            accounts: vec![],
+            guidance: vec![row; 40],
+            rules: vec![crate::models::Rule {
+                rule: "effort-ceiling opus: medium".into(),
+            }],
+            rules_path: "/Users/me/.brigadier/models.md".into(),
+            advice: vec!["prefer Codex when Claude is busy".into()],
+        };
+        let text = models(&output);
+        assert!(text.lines().count() <= 25, "{text}");
+        assert!(
+            text.contains("More rows: brigadier models --json"),
+            "{text}"
+        );
+        assert!(text.contains("  effort-ceiling opus: medium"), "{text}");
+        assert!(
+            text.ends_with("Your advice (weigh it when picking; it restricts nothing):\n  prefer Codex when Claude is busy\n"),
+            "{text}"
+        );
     }
 }

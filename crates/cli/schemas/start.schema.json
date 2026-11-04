@@ -61,7 +61,7 @@
     },
     "review": {
       "type": "object",
-      "description": "With --reviewing, or the work \"Independent review\": whose work it reviews and whether it runs on another CLI than theirs (else a fresh session of theirs).",
+      "description": "With --reviewing, or the work \"Adversarial review\": whose work it reviews and whether it runs on another CLI than theirs (else a fresh session of theirs).",
       "required": [
         "of",
         "authors",

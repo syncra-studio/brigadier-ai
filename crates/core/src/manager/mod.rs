@@ -39,6 +39,7 @@ mod computer_host;
 mod models;
 mod open_in_app;
 mod orphans;
+mod rule_reading;
 mod terminal_run;
 mod titles;
 pub use computer_host::ComputerNews;
@@ -766,15 +767,15 @@ impl SessionManager {
         kind: ConversationKind,
         project_id: Option<ProjectId>,
         title: Option<String>,
-        setup: Option<SetupRequest>,
+        mut setup: Option<SetupRequest>,
     ) -> Result<Conversation> {
-        let orchestrator = match &setup {
+        let orchestrator = match &mut setup {
             Some(SetupRequest::Session { orchestrator, .. }) => Some(orchestrator),
             Some(SetupRequest::Chat { model, .. }) => Some(model),
             None => None,
         };
         if let Some(choice) = orchestrator {
-            self.check_choice(choice)?;
+            self.rule_choice(choice)?;
         }
         let _admitting = self.shared_workspaces.lock().await;
         let existing = match &setup {
@@ -945,6 +946,14 @@ impl SessionManager {
         }
     }
 
+    /// `choice` as the user's model rules let it run: refused by a rule it breaks, else its
+    /// effort moved to a cap or minimum (D-L38).
+    fn rule_choice(&self, choice: &mut ModelChoice) -> Result<()> {
+        self.check_choice(choice)?;
+        *choice = self.ruled_choice(choice.clone(), None);
+        Ok(())
+    }
+
     /// Only the user's model rules can refuse a chosen model or effort.
     fn check_choice(&self, choice: &ModelChoice) -> Result<()> {
         if let Some(rule) = self.model_refusal(
@@ -959,14 +968,14 @@ impl SessionManager {
     }
 
     /// Changes a conversation's setup ([`Core::set_setup`]), respecting the user's model rules.
-    pub async fn set_setup(&self, id: ConversationId, setup: Setup) -> Result<Conversation> {
+    pub async fn set_setup(&self, id: ConversationId, mut setup: Setup) -> Result<Conversation> {
         let current = self.core.conversation(&id)?.setup;
         let same_model = current.as_ref().is_some_and(|current| {
             let (now, next) = (current.choice(), setup.choice());
             now.provider == next.provider && now.model == next.model && now.effort == next.effort
         });
         if !same_model {
-            self.check_choice(setup.choice())?;
+            self.rule_choice(setup.choice_mut())?;
         }
         let before = current.as_ref().map(|setup| setup.choice().clone());
         let selected = setup.choice().clone();
