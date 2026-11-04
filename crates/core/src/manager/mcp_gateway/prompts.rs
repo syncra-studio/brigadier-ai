@@ -270,7 +270,7 @@ impl Session<'_> {
         };
         let value = tokio::select! {
             _ = cancelled.cancelled() => return Err(()),
-            value = response_value(response, id, MAX_RESPONSE) => value?,
+            value = response_value(response, id, MAX_RESPONSE, |_| {}) => value?,
         };
         if !self.valid() || value.get("error").is_some() {
             return Err(());
@@ -345,11 +345,13 @@ impl Session<'_> {
 }
 
 /// Read JSON or SSE until this RPC's response, ignoring notifications and other event IDs.
+/// The server's own requests in the stream (with a `method` and an `id`) go to `asked`.
 /// Incremental line parsing handles CRLF, multiline data, and arbitrary HTTP chunk splits.
 pub(in crate::manager) async fn response_value(
     mut response: reqwest::Response,
     id: u64,
     max: usize,
+    mut asked: impl FnMut(&Value),
 ) -> Result<Value, ()> {
     let sse = response
         .headers()
@@ -380,10 +382,12 @@ pub(in crate::manager) async fn response_value(
                 line.pop();
             }
             if line.is_empty() {
-                if let Ok(value) = serde_json::from_slice::<Value>(&event)
-                    && value.get("id").and_then(Value::as_u64) == Some(id)
-                {
-                    return Ok(value);
+                if let Ok(value) = serde_json::from_slice::<Value>(&event) {
+                    if value.get("method").is_some() && value.get("id").is_some() {
+                        asked(&value);
+                    } else if value.get("id").and_then(Value::as_u64) == Some(id) {
+                        return Ok(value);
+                    }
                 }
                 event.clear();
             } else if let Some(data) = line.strip_prefix(b"data:") {

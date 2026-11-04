@@ -93,11 +93,16 @@ impl Failure {
     }
 }
 
+/// A stdio server's input, shared by the calls and [`read_stdio`]; `None` once closed.
+type Input = Arc<tokio::sync::Mutex<Option<ChildStdin>>>;
+
 enum Link {
     Stdio {
         child: Box<Child>,
-        stdin: Option<ChildStdin>,
-        stdout: BufReader<ChildStdout>,
+        stdin: Input,
+        /// The server's answers, from [`read_stdio`]: an `Err` ends the connection.
+        answers: tokio::sync::mpsc::UnboundedReceiver<Result<Value, String>>,
+        reader: tokio::task::JoinHandle<()>,
     },
     Http {
         client: reqwest::Client,
@@ -167,10 +172,14 @@ impl Conn {
                 let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
                     return Err("the server's pipes didn't open".into());
                 };
+                let stdin: Input = Arc::new(tokio::sync::Mutex::new(Some(stdin)));
+                let (sender, answers) = tokio::sync::mpsc::unbounded_channel();
+                let reader = tokio::spawn(read_stdio(stdout, stdin.clone(), sender));
                 Link::Stdio {
                     child: Box::new(child),
-                    stdin: Some(stdin),
-                    stdout: BufReader::new(stdout),
+                    stdin,
+                    answers,
+                    reader,
                 }
             }
             McpTransport::Http { url } => Link::Http {
@@ -266,53 +275,20 @@ impl Conn {
     async fn send(&mut self, message: Value, id: Option<u64>) -> Result<Option<Value>, Failure> {
         let version = self.version.clone();
         match &mut self.link {
-            Link::Stdio { stdin, stdout, .. } => {
-                let Some(input) = stdin.as_mut() else {
-                    return Err(Failure::Broken("the server is closed".into()));
-                };
-                let line = format!("{message}\n");
-                input
-                    .write_all(line.as_bytes())
+            Link::Stdio { stdin, answers, .. } => {
+                write_line(stdin, &message)
                     .await
                     .map_err(|err| Failure::Broken(format!("the server's input closed: {err}")))?;
-                input.flush().await.ok();
                 let Some(id) = id else { return Ok(None) };
                 loop {
-                    let mut line = Vec::new();
-                    let read = (&mut *stdout)
-                        .take(MAX_RESPONSE as u64)
-                        .read_until(b'\n', &mut line)
-                        .await
-                        .map_err(|err| {
-                            Failure::Broken(format!("couldn't read the server: {err}"))
-                        })?;
-                    if read == 0 {
-                        return Err(Failure::Broken("the server exited".into()));
-                    }
-                    if !line.ends_with(b"\n") && line.len() >= MAX_RESPONSE {
-                        return Err(Failure::Broken("the server's answer is too big".into()));
-                    }
-                    let Ok(value) = serde_json::from_slice::<Value>(&line) else {
-                        continue; // a server's stray log line
-                    };
-                    if value.get("method").is_some() {
-                        // A request of the server's own: Brigadier offers none of its asks.
-                        if let Some(asked) = value.get("id") {
-                            let answer = if value["method"] == "ping" {
-                                json!({"jsonrpc": "2.0", "id": asked, "result": {}})
-                            } else {
-                                json!({"jsonrpc": "2.0", "id": asked,
-                                    "error": {"code": -32601, "message": "not supported"}})
-                            };
-                            input
-                                .write_all(format!("{answer}\n").as_bytes())
-                                .await
-                                .map_err(|err| Failure::Broken(err.to_string()))?;
+                    match answers.recv().await {
+                        None => return Err(Failure::Broken("the server exited".into())),
+                        Some(Err(message)) => return Err(Failure::Broken(message)),
+                        Some(Ok(value)) if value.get("id").and_then(Value::as_u64) == Some(id) => {
+                            return Ok(Some(value));
                         }
-                        continue;
-                    }
-                    if value.get("id").and_then(Value::as_u64) == Some(id) {
-                        return Ok(Some(value));
+                        // An answer to a request given up on: the connection was dropped then.
+                        Some(Ok(_)) => {}
                     }
                 }
             }
@@ -357,7 +333,30 @@ impl Conn {
                         .map(str::to_owned);
                 }
                 let Some(id) = id else { return Ok(None) };
-                super::mcp_gateway::response_value(response, id, MAX_RESPONSE)
+                // A request of the server's own inside the answer's event stream: answered
+                // on the side, as the server may hold the answer until it has this reply.
+                let reply_to = |asked: &Value| {
+                    let Some(answer) = own_request_answer(asked) else {
+                        return;
+                    };
+                    let mut request = client
+                        .post(url.as_str())
+                        .header("accept", "application/json, text/event-stream")
+                        .json(&answer);
+                    for (name, value) in headers.iter() {
+                        request = request.header(name.as_str(), value.as_str());
+                    }
+                    if let Some(session) = session.as_deref() {
+                        request = request.header("mcp-session-id", session);
+                    }
+                    if let Some(version) = &version {
+                        request = request.header("mcp-protocol-version", version);
+                    }
+                    tokio::spawn(async move {
+                        let _ = request.timeout(START).send().await;
+                    });
+                };
+                super::mcp_gateway::response_value(response, id, MAX_RESPONSE, reply_to)
                     .await
                     .map(Some)
                     .map_err(|()| Failure::Broken("an answer Brigadier couldn't read".into()))
@@ -369,8 +368,14 @@ impl Conn {
     /// session is ended; a lease is released.
     async fn close(mut self) {
         match &mut self.link {
-            Link::Stdio { child, stdin, .. } => {
-                drop(stdin.take());
+            Link::Stdio {
+                child,
+                stdin,
+                reader,
+                ..
+            } => {
+                drop(stdin.lock().await.take());
+                reader.abort();
                 let pid = child.id();
                 if tokio::time::timeout(Duration::from_secs(2), child.wait())
                     .await
@@ -415,10 +420,80 @@ impl Drop for Conn {
     /// A connection dropped mid-call (its caller hung up) never went back to the pool: its
     /// server's tree ends here.
     fn drop(&mut self) {
-        if let Link::Stdio { child, .. } = &self.link
-            && let Some(pid) = child.id()
+        if let Link::Stdio { child, reader, .. } = &self.link {
+            reader.abort();
+            if let Some(pid) = child.id() {
+                let _ = self.platform.processes().kill_tree(pid);
+            }
+        }
+    }
+}
+
+/// The answer to a request of a server's own (one with an `id`): Brigadier offers none of
+/// the asks, so only a `ping` is answered with a result.
+fn own_request_answer(asked: &Value) -> Option<Value> {
+    let id = asked.get("id")?;
+    Some(if asked["method"] == "ping" {
+        json!({"jsonrpc": "2.0", "id": id, "result": {}})
+    } else {
+        json!({"jsonrpc": "2.0", "id": id,
+            "error": {"code": -32601, "message": "not supported"}})
+    })
+}
+
+async fn write_line(stdin: &Input, message: &Value) -> std::io::Result<()> {
+    let mut input = stdin.lock().await;
+    let Some(input) = input.as_mut() else {
+        return Err(std::io::Error::other("the server is closed"));
+    };
+    input.write_all(format!("{message}\n").as_bytes()).await?;
+    input.flush().await
+}
+
+/// Reads a stdio server's output for as long as it runs, between calls too: answers its own
+/// requests at once (a server may drop a client that doesn't answer its `ping`) and passes
+/// every other message on to the call waiting for it. Ends at the server's end of output,
+/// closing `answers`, or on an error it passes on.
+async fn read_stdio(
+    stdout: ChildStdout,
+    stdin: Input,
+    answers: tokio::sync::mpsc::UnboundedSender<Result<Value, String>>,
+) {
+    let mut stdout = BufReader::new(stdout);
+    loop {
+        let mut line = Vec::new();
+        let read = match (&mut stdout)
+            .take(MAX_RESPONSE as u64)
+            .read_until(b'\n', &mut line)
+            .await
         {
-            let _ = self.platform.processes().kill_tree(pid);
+            Ok(read) => read,
+            Err(err) => {
+                let _ = answers.send(Err(format!("couldn't read the server: {err}")));
+                return;
+            }
+        };
+        if read == 0 {
+            return;
+        }
+        if !line.ends_with(b"\n") && line.len() >= MAX_RESPONSE {
+            let _ = answers.send(Err("the server's answer is too big".into()));
+            return;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+            continue; // a server's stray log line
+        };
+        if value.get("method").is_some() {
+            if let Some(answer) = own_request_answer(&value)
+                && let Err(err) = write_line(&stdin, &answer).await
+            {
+                let _ = answers.send(Err(format!("the server's input closed: {err}")));
+                return;
+            }
+            continue;
+        }
+        if answers.send(Ok(value)).is_err() {
+            return;
         }
     }
 }

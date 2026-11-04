@@ -343,6 +343,238 @@ async fn an_http_server_keeps_its_session_across_calls_and_is_ended_on_close() {
     served.abort();
 }
 
+/// Set in the copy of this test binary that plays a stdio MCP server.
+const PINGING_SERVER: &str = "BRIGADIER_TEST_PINGING_MCP_SERVER";
+/// How long that server waits for the answer to its `ping` before it drops its client.
+const PING_WAIT: Duration = Duration::from_millis(800);
+
+/// A stdio MCP server in this binary, on any platform: `remember` keeps a value, `recall`
+/// returns it, `pid` names the process. After every call it pings its client and, like a
+/// server that drops a client that doesn't answer, exits when no answer comes in time.
+fn pinging_server() {
+    use std::io::Write;
+    let (sender, lines) = std::sync::mpsc::channel::<Value>();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lines() {
+            let Ok(line) = line else { break };
+            let Ok(message) = serde_json::from_str(&line) else {
+                continue;
+            };
+            if sender.send(message).is_err() {
+                break;
+            }
+        }
+    });
+    let send = |message: Value| {
+        let mut out = std::io::stdout().lock();
+        // On a line of its own, whatever the test harness printed before it.
+        writeln!(out, "\n{message}").unwrap();
+        out.flush().unwrap();
+    };
+    let mut kept = String::new();
+    let mut pings = 0;
+    // What came while it waited for a ping's answer, taken in turn after it.
+    let mut backlog = std::collections::VecDeque::new();
+    // Ends when Brigadier closes the server's input.
+    while let Some(message) = backlog.pop_front().or_else(|| lines.recv().ok()) {
+        let Some(id) = message.get("id").cloned() else {
+            continue;
+        };
+        let p = &message["params"];
+        let result = match message["method"].as_str() {
+            Some("initialize") => {
+                json!({"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}})
+            }
+            Some("tools/call") => {
+                let text = match p["name"].as_str() {
+                    Some("remember") => {
+                        kept = p["arguments"]["value"].as_str().unwrap_or_default().into();
+                        "kept".to_owned()
+                    }
+                    Some("recall") => kept.clone(),
+                    _ => std::process::id().to_string(),
+                };
+                json!({"content": [{"type": "text", "text": text}]})
+            }
+            _ => {
+                send(
+                    json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "no"}}),
+                );
+                continue;
+            }
+        };
+        send(json!({"jsonrpc": "2.0", "id": id, "result": result}));
+        if message["method"] != "tools/call" {
+            continue;
+        }
+        pings += 1;
+        let ping = format!("ping-{pings}");
+        send(json!({"jsonrpc": "2.0", "id": ping, "method": "ping"}));
+        let deadline = Instant::now() + PING_WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match lines.recv_timeout(left) {
+                Ok(answer) if answer["id"] == ping && answer.get("result").is_some() => break,
+                Ok(other) => backlog.push_back(other),
+                Err(_) => std::process::exit(3),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_stdio_server_gets_its_ping_answered_between_calls() {
+    if std::env::var_os(PINGING_SERVER).is_some() {
+        pinging_server();
+        return;
+    }
+    let name = format!(
+        "{}::a_stdio_server_gets_its_ping_answered_between_calls",
+        module_path!().split_once("::").unwrap().1
+    );
+    let server = McpServer {
+        gateway: None,
+        name: "pinging".into(),
+        transport: McpTransport::Stdio {
+            command: std::env::current_exe().unwrap(),
+            args: vec![
+                "--exact".into(),
+                name,
+                "--nocapture".into(),
+                "--quiet".into(),
+            ],
+            cwd: None,
+        },
+        env: vec![(PINGING_SERVER.into(), "1".into())],
+        tool_timeout_secs: None,
+        trusted: false,
+        always_load: false,
+    };
+    let env: Vec<_> = std::env::vars().collect();
+    let mut conn = Conn::open(server, platform(), &std::env::temp_dir(), &env, None)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    async fn text(conn: &mut Conn, tool: &str, arguments: Value) -> String {
+        let params = json!({"name": tool, "arguments": arguments});
+        match conn
+            .request("tools/call", params, Duration::from_secs(10))
+            .await
+        {
+            Ok(result) => result_text(&result).0,
+            Err(failure) => panic!("{tool}: {}", failure.message()),
+        }
+    }
+    let pid = text(&mut conn, "pid", json!({})).await;
+    assert_eq!(
+        text(&mut conn, "remember", json!({"value": "v1"})).await,
+        "kept\n"
+    );
+    // No call runs now: the server's ping must still be answered, or it leaves.
+    tokio::time::sleep(PING_WAIT * 3).await;
+    assert_eq!(text(&mut conn, "recall", json!({})).await, "v1\n");
+    assert_eq!(text(&mut conn, "pid", json!({})).await, pid);
+    conn.close().await;
+}
+
+#[derive(Default)]
+struct Asking {
+    answered: tokio::sync::Notify,
+    answers: Mutex<Vec<(Value, Option<String>)>>,
+}
+
+/// A streamable-HTTP server that, inside a call's event stream, first asks Brigadier a `ping`
+/// of its own and holds the call's answer until that ping is answered.
+async fn asking_server(state: State<Arc<Asking>>, request: Request<Body>) -> Response<Body> {
+    let session = request
+        .headers()
+        .get("mcp-session-id")
+        .map(|value| value.to_str().unwrap().to_owned());
+    let body = axum::body::to_bytes(request.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    if body.is_empty() {
+        return Response::builder().status(204).body(Body::empty()).unwrap();
+    }
+    let message: Value = serde_json::from_slice(&body).unwrap();
+    if message.get("method").is_none() {
+        state.answers.lock().unwrap().push((message, session));
+        state.answered.notify_one();
+        return Response::builder().status(202).body(Body::empty()).unwrap();
+    }
+    let Some(id) = message.get("id").cloned() else {
+        return Response::builder().status(202).body(Body::empty()).unwrap();
+    };
+    if message["method"] == "initialize" {
+        let answer = json!({"jsonrpc": "2.0", "id": id, "result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}}}});
+        return Response::builder()
+            .header("mcp-session-id", "s-ask")
+            .header("content-type", "application/json")
+            .body(Body::from(answer.to_string()))
+            .unwrap();
+    }
+    let state = state.0.clone();
+    let ask = futures_util::stream::once(async move {
+        Ok::<_, std::io::Error>(format!(
+            "event: message\ndata: {}\n\n",
+            json!({"jsonrpc": "2.0", "id": "srv-1", "method": "ping"})
+        ))
+    });
+    let answer = futures_util::stream::once(async move {
+        state.answered.notified().await;
+        let answer = json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": "done"}]}});
+        Ok(format!("event: message\ndata: {answer}\n\n"))
+    });
+    Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(Body::from_stream(futures_util::StreamExt::chain(
+            ask, answer,
+        )))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_http_server_gets_its_own_request_answered_during_a_call() {
+    let state = Arc::new(Asking::default());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let router = Router::new()
+        .route("/mcp", any(asking_server))
+        .with_state(state.clone());
+    let served = tokio::spawn(async move { axum::serve(listener, router).await });
+    let server = McpServer {
+        gateway: None,
+        name: "asking".into(),
+        transport: McpTransport::Http { url },
+        env: Vec::new(),
+        tool_timeout_secs: None,
+        trusted: false,
+        always_load: false,
+    };
+    let mut conn = Conn::open(server, platform(), Path::new("/"), &[], None)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    let answer = conn
+        .request(
+            "tools/call",
+            json!({"name": "slow", "arguments": {}}),
+            Duration::from_secs(5),
+        )
+        .await;
+    match answer {
+        Ok(result) => assert_eq!(result_text(&result).0, "done\n"),
+        Err(failure) => panic!("{}", failure.message()),
+    }
+    assert_eq!(
+        *state.answers.lock().unwrap(),
+        [(
+            json!({"jsonrpc": "2.0", "id": "srv-1", "result": {}}),
+            Some("s-ask".to_owned())
+        )]
+    );
+    conn.close().await;
+    served.abort();
+}
+
 #[tokio::test]
 async fn a_gateway_server_is_reached_through_its_own_lease_released_on_close() {
     use super::super::mcp_gateway::{
