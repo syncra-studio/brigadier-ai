@@ -476,6 +476,113 @@ async fn a_stdio_server_gets_its_ping_answered_between_calls() {
     conn.close().await;
 }
 
+/// Set in the copy of this test binary that plays a stdio server that stops reading.
+const DEAF_SERVER: &str = "BRIGADIER_TEST_DEAF_MCP_SERVER";
+
+/// A stdio MCP server in this binary that starts up, then never reads its input again and
+/// pings its client without end, so the client's answers fill the pipe to it.
+fn deaf_server() {
+    use std::io::{BufRead, Write};
+    let mut out = std::io::stdout().lock();
+    for line in std::io::stdin().lock().lines() {
+        let Ok(message) = serde_json::from_str::<Value>(&line.unwrap_or_default()) else {
+            continue;
+        };
+        if message["method"] == "initialize" {
+            let answer = json!({"jsonrpc": "2.0", "id": message["id"],
+                "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}});
+            writeln!(out, "\n{answer}").unwrap();
+            out.flush().unwrap();
+        }
+        if message["method"] == "notifications/initialized" {
+            break;
+        }
+    }
+    for n in 0u64.. {
+        let ping = json!({"jsonrpc": "2.0", "id": format!("ping-{n}"), "method": "ping"});
+        if writeln!(out, "{ping}").and_then(|()| out.flush()).is_err() {
+            return;
+        }
+    }
+}
+
+#[tokio::test]
+async fn closing_never_waits_for_a_server_that_stopped_reading() {
+    if std::env::var_os(DEAF_SERVER).is_some() {
+        deaf_server();
+        return;
+    }
+    let name = format!(
+        "{}::closing_never_waits_for_a_server_that_stopped_reading",
+        module_path!().split_once("::").unwrap().1
+    );
+    let server = McpServer {
+        gateway: None,
+        name: "deaf".into(),
+        transport: McpTransport::Stdio {
+            command: std::env::current_exe().unwrap(),
+            args: vec![
+                "--exact".into(),
+                name,
+                "--nocapture".into(),
+                "--quiet".into(),
+            ],
+            cwd: None,
+        },
+        env: vec![(DEAF_SERVER.into(), "1".into())],
+        tool_timeout_secs: None,
+        trusted: false,
+        always_load: false,
+    };
+    let env: Vec<_> = std::env::vars().collect();
+    let conn = Conn::open(server, platform(), &std::env::temp_dir(), &env, None)
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    // Long enough for the answers to its pings to fill the pipe the server no longer reads.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // A dropped close still ends the server's tree (Conn's Drop), so a failure leaks nothing.
+    tokio::time::timeout(Duration::from_secs(20), conn.close())
+        .await
+        .expect("closing waited on the server's full input");
+}
+
+/// A server that logs JSON lines and keeps answering requests no call waits for any more.
+#[tokio::test]
+async fn a_stdio_server_s_output_is_held_by_its_pipe_while_no_call_reads_it() {
+    let mut output = String::new();
+    for n in 0..1000 {
+        output.push_str(&format!("{}\n", json!({"level": "info", "line": n})));
+        output.push_str(&format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "method": "notifications/message", "params": {"n": n}})
+        ));
+    }
+    for id in 1..=40u64 {
+        output.push_str(&format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "id": id, "result": {}})
+        ));
+    }
+    let (sender, mut answers) = tokio::sync::mpsc::channel(ANSWERS_WAITING);
+    let reader = tokio::spawn(read_stdio(
+        std::io::Cursor::new(output.into_bytes()),
+        Arc::new(tokio::sync::Mutex::new(None)),
+        sender,
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Only answers wait, and only so many: the rest stays unread until a call takes them.
+    assert_eq!(answers.len(), ANSWERS_WAITING);
+    assert!(!reader.is_finished());
+    let mut ids = Vec::new();
+    while let Some(answer) = answers.recv().await {
+        let answer = answer.unwrap();
+        assert!(answer.get("result").is_some(), "{answer}");
+        ids.push(answer["id"].as_u64().unwrap());
+    }
+    assert_eq!(ids, (1..=40).collect::<Vec<_>>());
+    reader.await.unwrap();
+}
+
 #[derive(Default)]
 struct Asking {
     answered: tokio::sync::Notify,

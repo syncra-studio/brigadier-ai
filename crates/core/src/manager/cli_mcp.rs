@@ -18,7 +18,7 @@ use brigadier_cli::protocol::{CliReply, ErrorCode, ToolOutput};
 use brigadier_providers::{McpServer, McpTransport};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{Child, ChildStdin};
 
 use super::SessionManager;
 use super::cli::CliCaller;
@@ -95,13 +95,16 @@ impl Failure {
 
 /// A stdio server's input, shared by the calls and [`read_stdio`]; `None` once closed.
 type Input = Arc<tokio::sync::Mutex<Option<ChildStdin>>>;
+/// How many of a stdio server's answers wait for a call. When it is full, [`read_stdio`]
+/// stops reading until a call takes them, so an idle server's output is held by its pipe.
+const ANSWERS_WAITING: usize = 16;
 
 enum Link {
     Stdio {
         child: Box<Child>,
         stdin: Input,
         /// The server's answers, from [`read_stdio`]: an `Err` ends the connection.
-        answers: tokio::sync::mpsc::UnboundedReceiver<Result<Value, String>>,
+        answers: tokio::sync::mpsc::Receiver<Result<Value, String>>,
         reader: tokio::task::JoinHandle<()>,
     },
     Http {
@@ -173,7 +176,7 @@ impl Conn {
                     return Err("the server's pipes didn't open".into());
                 };
                 let stdin: Input = Arc::new(tokio::sync::Mutex::new(Some(stdin)));
-                let (sender, answers) = tokio::sync::mpsc::unbounded_channel();
+                let (sender, answers) = tokio::sync::mpsc::channel(ANSWERS_WAITING);
                 let reader = tokio::spawn(read_stdio(stdout, stdin.clone(), sender));
                 Link::Stdio {
                     child: Box::new(child),
@@ -374,8 +377,11 @@ impl Conn {
                 reader,
                 ..
             } => {
-                drop(stdin.lock().await.take());
+                // The reader first: a reply it is writing into a server that has stopped
+                // reading holds the input, and closing must not wait for that.
                 reader.abort();
+                let _ = (&mut *reader).await;
+                drop(stdin.lock().await.take());
                 let pid = child.id();
                 if tokio::time::timeout(Duration::from_secs(2), child.wait())
                     .await
@@ -452,12 +458,13 @@ async fn write_line(stdin: &Input, message: &Value) -> std::io::Result<()> {
 
 /// Reads a stdio server's output for as long as it runs, between calls too: answers its own
 /// requests at once (a server may drop a client that doesn't answer its `ping`) and passes
-/// every other message on to the call waiting for it. Ends at the server's end of output,
-/// closing `answers`, or on an error it passes on.
+/// the answers to Brigadier's own requests on to the call waiting for them; anything else (a
+/// log line, a notification) is dropped. Ends at the server's end of output, closing
+/// `answers`, or on an error it passes on.
 async fn read_stdio(
-    stdout: ChildStdout,
+    stdout: impl tokio::io::AsyncRead + Unpin,
     stdin: Input,
-    answers: tokio::sync::mpsc::UnboundedSender<Result<Value, String>>,
+    answers: tokio::sync::mpsc::Sender<Result<Value, String>>,
 ) {
     let mut stdout = BufReader::new(stdout);
     loop {
@@ -469,7 +476,9 @@ async fn read_stdio(
         {
             Ok(read) => read,
             Err(err) => {
-                let _ = answers.send(Err(format!("couldn't read the server: {err}")));
+                let _ = answers
+                    .send(Err(format!("couldn't read the server: {err}")))
+                    .await;
                 return;
             }
         };
@@ -477,7 +486,9 @@ async fn read_stdio(
             return;
         }
         if !line.ends_with(b"\n") && line.len() >= MAX_RESPONSE {
-            let _ = answers.send(Err("the server's answer is too big".into()));
+            let _ = answers
+                .send(Err("the server's answer is too big".into()))
+                .await;
             return;
         }
         let Ok(value) = serde_json::from_slice::<Value>(&line) else {
@@ -487,12 +498,17 @@ async fn read_stdio(
             if let Some(answer) = own_request_answer(&value)
                 && let Err(err) = write_line(&stdin, &answer).await
             {
-                let _ = answers.send(Err(format!("the server's input closed: {err}")));
+                let _ = answers
+                    .send(Err(format!("the server's input closed: {err}")))
+                    .await;
                 return;
             }
             continue;
         }
-        if answers.send(Ok(value)).is_err() {
+        // Brigadier numbers its requests; anything else is no answer a call waits for.
+        let answer = value.get("id").is_some_and(Value::is_u64)
+            && (value.get("result").is_some() || value.get("error").is_some());
+        if answer && answers.send(Ok(value)).await.is_err() {
             return;
         }
     }
