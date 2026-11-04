@@ -8,12 +8,12 @@ import { foldsAway, type SequenceEntry as Entry } from "@/app/conversation/block
 export type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answer?: Entry; kept?: Entry[] } | { type: "between"; entry: Entry };
 
 /**
- * Whether an entry cuts the work: a follow-up steered in, a compaction's divider, or a line of
- * what a worker did, unless it came with a turn that joined the block that started the worker
- * (that is the same work).
+ * Whether an entry cuts the work: a follow-up steered in, a compaction's divider, where a turn
+ * of it failed, or a line of what a worker did, unless it came with a turn that joined the block
+ * that started the worker (that is the same work).
  */
 function cuts(entry: Entry): boolean {
-  return entry.kind === "steer" || entry.kind === "compaction" || (entry.kind === "taskNotice" && !entry.inWork);
+  return entry.kind === "steer" || entry.kind === "compaction" || entry.kind === "turnError" || (entry.kind === "taskNotice" && !entry.inWork);
 }
 
 /**
@@ -26,8 +26,8 @@ function keepJoinedAnswers(parts: WorkPart[], done: boolean, answers: (index: nu
   if (!done) return parts;
   return parts.map((part, index) => {
     const next = parts[index + 1];
-    // A compaction mid-turn is no new turn: the reply before it folds with the work.
-    if (part.type !== "work" || next?.type !== "between" || next.entry.kind === "compaction") return part;
+    // A compaction mid-turn is no new turn, nor is a failure a follow-up: the reply before it folds with the work.
+    if (part.type !== "work" || next?.type !== "between" || next.entry.kind === "compaction" || next.entry.kind === "turnError") return part;
     const last = part.items.at(-1);
     if (last?.type !== "entry" || last.entry.kind !== "text" || !answers(last.entry.index)) return part;
     return { ...part, items: part.items.slice(0, -1), answer: last.entry };

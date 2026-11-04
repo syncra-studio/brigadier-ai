@@ -90,6 +90,8 @@ export type BlockMeta = {
   state: BlockState;
   /** What failed in it, kept once a later turn of it goes on (`settle`). */
   error: string | null;
+  /** Where that turn failed, when a later one of the block went on: its line stays there (D16). */
+  errorAt: number | null;
   startedAtMs: number;
   endedAtMs: number | null;
   /** When its turn worked, for "Worked for …". */
@@ -200,7 +202,7 @@ export const RequestBlock: FC = () => {
     return !!text && !text.commentary && !text.update;
   });
   // Bubbles the user sent before any work came sit under their message, above the header.
-  const leading = allParts.findIndex((part) => part.type !== "between");
+  const leading = allParts.findIndex((part) => part.type !== "between" || part.entry.kind === "turnError");
   const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
   const parts = allParts.slice(before.length);
   const foldable = foldsWork(done, answer, parts.some((part) => part.type === "work" && part.items.length > 0));
@@ -229,6 +231,8 @@ export const RequestBlock: FC = () => {
     // Over, its line says what it waits on: its workers, then its commands; a subagent's own row says it runs (D96).
     ...(held && { workers: holding, commands, subagents, named }),
   };
+
+  const blockError = <BlockError meta={meta} live={live} quotaCovered={quotaWait !== null || quotaRecovered} />;
 
   return (
     <MessagePrimitive.Root
@@ -274,7 +278,7 @@ export const RequestBlock: FC = () => {
         {parts.map((part, index) =>
           part.type === "between" ? (
             <div key={entryKey(part.entry)} className={cn("flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}>
-              <SequenceEntry entry={part.entry} streaming={false} />
+              {part.entry.kind === "turnError" ? blockError : <SequenceEntry entry={part.entry} streaming={false} />}
             </div>
           ) : (
             <Fragment key={partKey(parts, index)}>
@@ -351,7 +355,7 @@ export const RequestBlock: FC = () => {
             </div>
           ) : (
             <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
-              <SequenceEntry entry={entry} streaming={false} />
+              {entry.kind === "turnError" ? blockError : <SequenceEntry entry={entry} streaming={false} />}
             </div>
           ),
         )}
@@ -360,7 +364,7 @@ export const RequestBlock: FC = () => {
       </StoppedBy.Provider>
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
       {!live && <TurnEnd meta={meta} />}
-      <BlockError meta={meta} live={live} quotaCovered={quotaWait !== null || quotaRecovered} />
+      {meta.errorAt === null && blockError}
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />
       )}

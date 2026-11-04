@@ -30,5 +30,7 @@ export function entryKey(entry: Entry): string {
       return `task:${entry.row.taskId}:${entry.position}`;
     case "gap":
       return `gap:${entry.position}`;
+    case "turnError":
+      return "turn-error";
   }
 }

@@ -468,6 +468,7 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
     requestIds: requestIds.length > 0 ? [...requestIds] : [key],
     state: "working",
     error: null,
+    errorAt: null,
     startedAtMs,
     endedAtMs: null,
     worked: [{ fromMs: startedAtMs, toMs: null }],
@@ -559,7 +560,7 @@ function startsTurn(entry: FileEntry): boolean {
  * block's turns before it (Brigadier's word of its workers joined it): it started with the
  * first, and worked in each.
  */
-function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly ThreadTurn[] = []): void {
+function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly ThreadTurn[] = [], cutAt?: ReadonlyMap<ThreadTurn, number>): void {
   const { state, error } = turnState(turn ?? { end: null, error: null });
   // A turn of it failed and a later one went on (a worker's end woke it): the failure stays said.
   // A limit's is no failure: the switch goes on from it (goal 1).
@@ -574,6 +575,8 @@ function settle(block: Block, turn: ThreadTurn | undefined, earlier: readonly Th
   Object.assign(block, {
     state,
     error: error ?? (failed ? turnState(failed).error : null),
+    // Its own turn's failure comes last by itself; an earlier one's stays where it happened (D16).
+    errorAt: error === null && failed ? (cutAt?.get(failed) ?? null) : null,
     startedAtMs: first ?? own,
     endedAtMs,
     worked: [...before, { fromMs: own, toMs: endedAtMs }],
@@ -685,7 +688,9 @@ export function cliBlocks(
     read && (read.errorKind === "usageLimit" || read.limit) && read.requests.some((request) => (board?.requests?.[request] as { state?: { type?: string } } | undefined)?.state?.type === "working")
       ? { ...read, end: null, endedAtMs: null, error: null }
       : read;
-  const close = (each: Block) => settle(each, switching(turnOf.get(each)), joined.get(each));
+  // Where each turn that another joined stopped: after all it said, before what the next one did.
+  const cutAt = new Map<ThreadTurn, number>();
+  const close = (each: Block) => settle(each, switching(turnOf.get(each)), joined.get(each), cutAt);
   // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
   // The block each message that joined one went on in (a seam's successor may start in one).
   const joinedBy = new Map<string, Block>();
@@ -693,6 +698,7 @@ export function cliBlocks(
     const item = view.entries[position]?.event;
     if (item?.type === "message") joinedBy.set(item.itemId, each);
     const last = turnOf.get(each);
+    if (last) cutAt.set(last, position - 0.25);
     joined.set(each, [...(joined.get(each) ?? []), ...(last ? [last] : [])]);
     turnOf.set(each, view.turns[turn]);
     for (const request of view.turns[turn]?.requests ?? []) if (!each.requestIds.includes(request)) each.requestIds.push(request);

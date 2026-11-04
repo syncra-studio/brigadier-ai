@@ -25,7 +25,7 @@ test("messages sent while a block's workers work stay in that one block, which w
   assert.equal(result.done.headers[0], "Worked for 5m 2s");
 });
 
-type SeenFailed = Seen & { errors: boolean[]; buttons: string[][] };
+type SeenFailed = Seen & { errors: boolean[]; afterError: (number | null)[]; buttons: string[][] };
 
 test("a turn that fails while its worker works stays open and working with its error shown, and closes as it really ended once the worker's end wakes the thread: one block throughout, the error kept (D24, D155)", async (t) => {
   const result = JSON.parse(await renderFixturePage(t, "held-block.html?failed=wake", "held-block-result", 10000)) as Record<"works" | "woken" | "closed", SeenFailed>;
@@ -40,6 +40,8 @@ test("a turn that fails while its worker works stays open and working with its e
   assert.match(result.closed.headers[0] ?? "", /^Worked for /);
   // The thread went on after it: nothing is left to try again.
   assert.deepEqual(result.closed.buttons, [[]]);
+  // The error stays where that turn failed, above what the thread said once it went on (D16).
+  assert.deepEqual(result.closed.afterError, [1], JSON.stringify(result.closed));
 });
 
 test("a turn that fails while its worker works, nothing following the worker's end, closes as failed with Try again only then", async (t) => {

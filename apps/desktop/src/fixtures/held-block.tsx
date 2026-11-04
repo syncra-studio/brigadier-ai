@@ -123,6 +123,11 @@ function seen() {
     waits: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-work-label"], [data-slot="thread-status"], [data-slot="group-live-line"]')]
       .map((line) => line.textContent ?? "").filter((text) => text.startsWith("Waiting"))),
     errors: blocks.map((block) => !!block.querySelector('[data-slot="error-state"]')),
+    // What the thread said after the error, in time order: above is only what came before it.
+    afterError: blocks.map((block) => {
+      const error = block.querySelector('[data-slot="error-state"]');
+      return error ? [...block.querySelectorAll('[data-slot="aui_assistant-message-content"]')].filter((text) => !!(error.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING)).length : null;
+    }),
     buttons: blocks.map((block) => [...block.querySelectorAll('[data-slot="error-state"] button:not([data-slot="error-state-details"])')].map((button) => button.textContent ?? "")),
     steers: blocks.map((block) => [...block.querySelectorAll('[data-slot="request-steer"]')].map((steer) => steer.textContent?.replace(/\s*(?:Yesterday|\d).*$/, "").trim() ?? "")),
     // The gap over each block's live line, from what shows above it (demo12: one gap everywhere).
