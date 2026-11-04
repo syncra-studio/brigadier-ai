@@ -1158,14 +1158,16 @@ impl SessionManager {
         if !provider_on(&settings, agent) {
             return false;
         }
+        let catalog = self.runtime.overview(agent).and_then(|o| o.models);
+        // The catalog's own id: what Providers records a model made unavailable as.
         let id = if model.trim().is_empty() || model.eq_ignore_ascii_case("default") {
-            let catalog = self.runtime.overview(agent).and_then(|o| o.models);
             match listed(catalog.as_ref(), None) {
                 Some(default) => default.id.clone(),
                 None => return true,
             }
         } else {
-            self.listed_model(agent, model)
+            let name = self.listed_model(agent, model);
+            listed(catalog.as_ref(), Some(&name)).map_or(name, |entry| entry.id.clone())
         };
         model_available(&settings, agent, &id)
     }
