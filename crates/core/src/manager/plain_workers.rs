@@ -1175,6 +1175,8 @@ impl SessionManager {
                         if !t.state.is_final() {
                             t.state = TaskState::Reported;
                             t.blocked_reason = None;
+                            // Its turn is over, as a cut-off one's is (#636).
+                            t.mockup_drawing = false;
                         }
                     })
                     .await;

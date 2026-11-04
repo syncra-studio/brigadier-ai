@@ -221,3 +221,111 @@ async fn a_mockup_reads_drawing_only_while_a_turn_draws_it() {
     assert_eq!(Flow::task(&board, 1).rework_rounds, 2);
     flow.stop().await;
 }
+
+/// A notes turn a restart cuts off goes on by itself, still drawing; cut off again, it waits
+/// for its session's message, and that message's turn draws no mockup (#636).
+#[tokio::test]
+async fn a_notes_turn_cut_off_twice_leaves_the_mockup_drawn() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+    let script: Script = {
+        let heard = heard.clone();
+        Arc::new(move |turn| {
+            let heard = heard.clone();
+            Box::pin(async move {
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if let Some(Role::Worker { .. }) = worker {
+                    heard.lock().unwrap().push(turn.input.clone());
+                    // The notes' turn, and its going on after a restart, run until cut off.
+                    if turn.input.starts_with("Notes on the mockup")
+                        || turn
+                            .input
+                            .contains("Brigadier restarted while you were working")
+                    {
+                        let stops: &AtomicBool = &turn.stops.0;
+                        while !stops.load(Ordering::SeqCst) {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+                        return Reply::text("Cut off.");
+                    }
+                    if turn.input.starts_with("Go on") {
+                        return Reply::text("Went on.");
+                    }
+                    let folder = turn
+                        .input
+                        .split_once("mockup-2.png… in ")
+                        .and_then(|(_, rest)| rest.split_once("; they show"))
+                        .map(|(folder, _)| std::path::PathBuf::from(folder))
+                        .expect("the folder is named");
+                    std::fs::write(folder.join("mockup-1.png"), b"png").unwrap();
+                    return Reply::text("Made it.");
+                }
+                let started = start_mockup(&turn, "Mock the density toggle.").await;
+                assert!(started.get("error").is_none(), "{started:#}");
+                Reply::text("Started the mockup.")
+            })
+        })
+    };
+    let mut flow = Flow::start("mockup-drawing-cut", Options::default(), script).await;
+    let heard_with = |words: &str| {
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|input| input.contains(words))
+            .count()
+    };
+    flow.say("Mock it.").await;
+    super::eventually("the worker to start its mockup", || {
+        !heard.lock().unwrap().is_empty()
+    })
+    .await;
+    let board = flow
+        .until("the mockup's screen is kept", |board| {
+            let task = Flow::task(board, 1);
+            task.state == TaskState::Reported && !task.outputs.is_empty()
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    flow.manager
+        .send_mockup_notes(
+            task.id.clone(),
+            "Notes on the mockup (version 1): make it blue.".into(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    super::eventually("the worker to hear the notes", || {
+        heard_with("Notes on the mockup") == 1
+    })
+    .await;
+    flow.settled().await;
+
+    // Cut off once: the notes' turn goes on by itself, still drawing.
+    flow.crash().await;
+    super::eventually("the notes' turn to go on", || {
+        heard_with("Brigadier restarted while you were working") == 1
+    })
+    .await;
+    let board = flow.settled().await;
+    assert!(
+        Flow::task(&board, 1).mockup_drawing,
+        "the notes' turn goes on drawing"
+    );
+
+    // Cut off again: it waits for a message, its turn over.
+    flow.crash().await;
+    let board = flow
+        .until("the worker waits for a message", |board| {
+            Flow::task(board, 1).state == TaskState::Reported
+        })
+        .await;
+    assert!(
+        !Flow::task(&board, 1).mockup_drawing,
+        "a turn cut off for good draws no more"
+    );
+    assert_eq!(heard_with("Brigadier restarted while you were working"), 1);
+    flow.stop().await;
+}
