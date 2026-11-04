@@ -20,15 +20,15 @@ use brigadier_core::{
     ConflictFile, ConnectView, ContinueWhen, ConventionsExport, Conversation, ConversationActivity,
     ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
     FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
-    ForkPlace, GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches,
-    MessagePage, MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst,
-    Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage,
-    Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
+    ForkPlace, GitHubSignIn, GitState, GuidanceRow, Mention, Message, MessageMatches, MessagePage,
+    MessageQueue, ModelChoice, ModelRule, ModelRules, PendingChanges, ProbeBurst, Project,
+    ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating,
+    RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
     RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
     SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
     SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TrackedPullRequest, TrackedWork,
-    UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn, WorkerDiff,
-    WorkerPage, WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView, WaitingOn, WorkerPage,
+    WorkerSource, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, CliCommand, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -39,7 +39,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -156,13 +156,6 @@ pub enum Request {
     GetActivity,
     /// The open tabs that are ready or merged (their tab and workspace row states).
     GetSettledTabs,
-    /// What became of a session's merge on its base since it merged: when it was reverted,
-    /// and redone after that (the Changes card's "Undone on main · ‹time›"), and whether it is
-    /// pushed.
-    GetMergeUndo {
-        conversation_id: ConversationId,
-        merge_commit: String,
-    },
     /// Creates a project. With `repo` (a repository's top-level folder, from the native
     /// picker or typed), an empty `name` names it after the folder.
     CreateProject {
@@ -448,11 +441,6 @@ pub enum Request {
     /// What a worktree session's branch changed against its base (the pinned summary card).
     GetSessionDiff {
         id: ConversationId,
-    },
-    /// What each worker at work on a change has changed in its worktree so far: its +N −N in
-    /// the Workers summary while it works.
-    GetWorkerDiffs {
-        conversation_id: ConversationId,
     },
     /// The files a worker of the conversation changed, as its +N −N counts them: the Source
     /// panel's worker scope. It only reads.
@@ -1004,11 +992,6 @@ pub enum Request {
         #[ts(optional, as = "Option<Vec<brigadier_core::FeedbackSent>>")]
         results: Vec<brigadier_core::FeedbackSent>,
     },
-    /// The user clicked "Merge into main" on the side panel: the thread is told to merge the
-    /// session branch into its base.
-    MergeSession {
-        conversation_id: ConversationId,
-    },
     /// "Close workspace": removes the session's own worktree, its uncommitted changes kept as
     /// a commit on its branch first. The next change makes a fresh one in the same folder.
     CloseWorkspace {
@@ -1554,13 +1537,6 @@ pub enum Response {
         /// Open sessions whose pull request the board last saw merged.
         merged: Vec<ConversationId>,
     },
-    GetMergeUndo {
-        /// None: never reverted.
-        undo: Option<MergeUndo>,
-        /// The merge is on its base's upstream: pushed since, if it was made on this Mac.
-        #[serde(default)]
-        pushed: bool,
-    },
     CreateProject {
         project: Box<Project>,
     },
@@ -1667,9 +1643,6 @@ pub enum Response {
         /// changes nothing. 0 without a stat.
         #[serde(default)]
         commits: u32,
-    },
-    GetWorkerDiffs {
-        diffs: Vec<WorkerDiff>,
     },
     GetWorkerSource {
         source: WorkerSource,
@@ -1923,10 +1896,6 @@ pub enum Response {
     WaitGitHubSignIn,
     CancelGitHubSignIn,
     AnswerFeedbackOffer,
-    /// What the click set going, for the user.
-    MergeSession {
-        text: String,
-    },
     /// What went and what stayed, for the user.
     CloseWorkspace {
         text: String,

@@ -830,10 +830,12 @@ fn help_lists_every_subcommand_and_every_schema_has_one() {
         let on_disk = std::fs::read_to_string(schemas.join(&file)).unwrap();
         assert_eq!(on_disk, schema_of(name), "{file} is the one compiled in");
     }
+    // `state` prints what `context` does with no part, so it shares that schema.
+    assert_eq!(schema_of("state"), schema_of("context"));
     assert_eq!(
         files,
-        COMMANDS.len() + 1,
-        "one schema per command, and error's"
+        COMMANDS.len(),
+        "one schema per command but state, and error's"
     );
 
     // Each command's own help names its arguments.

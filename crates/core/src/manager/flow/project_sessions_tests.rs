@@ -295,7 +295,7 @@ fn said(turn: &Turn, words: &str) -> bool {
 pub(super) type Inputs = Arc<std::sync::Mutex<Vec<(PathBuf, String)>>>;
 
 /// A thread that, besides [`writing`], commits `shared.txt` on "Share." and removes it on
-/// "Unshare.", and merges on the user's click. Every thread input is logged by worktree.
+/// "Unshare.", and merges with git on "Merge it.". Every thread input is logged by worktree.
 pub(super) fn sharing(inputs: Inputs) -> Script {
     let write = writing(None);
     script(move |turn| {
@@ -308,7 +308,7 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
                 .lock()
                 .unwrap()
                 .push((turn.cwd.clone(), turn.input.clone()));
-            if turn.input.contains("[merge] The user clicked") {
+            if said(&turn, "Merge it.") {
                 super::thread_tests::merge_with_git(&turn);
                 return Reply::text("Merged.");
             }
@@ -402,10 +402,7 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         .count();
     assert_eq!(recorded, 1);
 
-    flow.manager
-        .merge_session(&a, super::click())
-        .await
-        .unwrap();
+    flow.say_to(&a, "Merge it.").await;
     flow.settled_in(&a).await;
     super::eventually_async("the tab to read merged", || async {
         state(&a).await == Some(crate::work::TabState::Merged)

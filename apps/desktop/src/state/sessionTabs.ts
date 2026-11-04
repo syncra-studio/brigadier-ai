@@ -23,14 +23,14 @@ export type ReviewTarget =
   | { type: "file"; path: string; staged: boolean }
   /**
    * One commit's own change: a merge's, from its turn's View changes; a fast-forward's `commits`
-   * all. With `path`, only that file's part (a Changes card's file row).
+   * all. With `path`, only that file's part.
    */
   | { type: "commit"; commit: string; commits?: number; path?: string; staged: false }
   /** The session's branch since it left its base: the context card's Changes row. */
   | { type: "branch"; staged: false }
   /**
    * What the latest request that changed anything changed, every landing of it (Q90). With
-   * `path`, only that file's part (a Changes card's file row).
+   * `path`, only that file's part.
    */
   | { type: "lastTurn"; requestId: string | null; path?: string; staged: false }
   /** Everything not committed: staged, unstaged and new files together (Q90). */

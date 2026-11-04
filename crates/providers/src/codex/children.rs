@@ -12,14 +12,6 @@ use crate::TokenUsage;
 use crate::adapters::ChildThread;
 use crate::cli::CliEnv;
 
-/// `$CODEX_HOME`, by default `~/.codex`.
-fn codex_home(env: &CliEnv) -> Option<PathBuf> {
-    match env.var("CODEX_HOME") {
-        Some(home) if !home.is_empty() => Some(PathBuf::from(home)),
-        _ => Some(env.home()?.join(".codex")),
-    }
-}
-
 /// The child threads of `thread` among the rollouts in `$CODEX_HOME/sessions`
 /// ([`child_threads_since`]).
 pub(crate) fn child_usage(
@@ -27,7 +19,7 @@ pub(crate) fn child_usage(
     thread: &str,
     since: Option<std::time::SystemTime>,
 ) -> Vec<ChildThread> {
-    codex_home(env)
+    super::home(env)
         .map(|home| child_threads_since(&home.join("sessions"), thread, since))
         .unwrap_or_default()
 }

@@ -134,7 +134,7 @@ export function ReviewTab({
   /** In front: it shows changes made meanwhile when it comes to the front again. */
   active?: boolean;
 }) {
-  // One file's diff: the file's own, or its part of a commit's or a turn's (a Changes card's row).
+  // One file's diff: the file's own, or its part of a commit's, a turn's or a worker's.
   const path = target.type === "file" ? target.path : target.type === "commit" || target.type === "lastTurn" || target.type === "worker" ? (target.path ?? null) : null;
   const staged = target.staged;
   const commit = target.type === "commit" ? target.commit : null;

@@ -303,13 +303,16 @@ fn installer_folder(env: &CliEnv) -> Option<PathBuf> {
     env.local_bin()
 }
 
+/// `$CODEX_HOME`, by default `~/.codex` (an empty `CODEX_HOME` counts as unset): the user's own
+/// Codex home, as their terminal's `codex` finds it.
+fn home(env: &CliEnv) -> Option<PathBuf> {
+    crate::accounts::main_home(ProviderKind::Codex, env)
+}
+
 /// Where Codex keeps its login: `<CODEX_HOME>/auth.json`, unless `config.toml` keeps it in the
 /// system's keyring instead (`cli_auth_credentials_store`), which isn't watched.
 fn login_mark(env: &CliEnv) -> Option<crate::login_mark::LoginMark> {
-    let home = match env.var("CODEX_HOME").filter(|dir| !dir.is_empty()) {
-        Some(dir) => PathBuf::from(dir),
-        None => env.home()?.join(".codex"),
-    };
+    let home = home(env)?;
     let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
     crate::login_mark::codex_stores_in_file(&config)
         .then(|| crate::login_mark::LoginMark::file(home.join("auth.json")))
@@ -612,12 +615,9 @@ impl Codex {
         }
     }
 
-    /// `$CODEX_HOME`, by default `~/.codex`.
+    /// `$CODEX_HOME`, by default `~/.codex` ([`home`]).
     fn codex_home(&self) -> Option<PathBuf> {
-        match self.env.var("CODEX_HOME") {
-            Some(home) if !home.is_empty() => Some(PathBuf::from(home)),
-            _ => Some(self.env.home()?.join(".codex")),
-        }
+        home(&self.env)
     }
 
     /// The model and effort `codex` runs with when not told, from `config.toml`.
@@ -3553,6 +3553,76 @@ async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every reader of the user's Codex home finds the same one: `CODEX_HOME` when set and not
+    /// empty, else `.codex` in the home folder (#723). The rollouts, the trust file, the login
+    /// mark and the adapter's own home all read it through [`home`].
+    #[test]
+    fn every_reader_finds_the_same_codex_home() {
+        let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
+        let set = dir.join("custom");
+        let default = dir.join(".codex");
+        let cases = [
+            (
+                vec![("CODEX_HOME", set.clone()), ("HOME", dir.clone())],
+                &set,
+            ),
+            (
+                vec![("CODEX_HOME", PathBuf::new()), ("HOME", dir.clone())],
+                &default,
+            ),
+            (vec![("HOME", dir.clone())], &default),
+        ];
+        for (vars, expected) in cases {
+            let env = CliEnv::from_vars(
+                vars.iter()
+                    .map(|(key, value)| ((*key).into(), value.as_os_str().to_owned())),
+            );
+            let what = format!("{vars:?}");
+            assert_eq!(home(&env).as_ref(), Some(expected), "{what}");
+            assert_eq!(
+                trust::file(&env),
+                Some(expected.join("config.toml")),
+                "{what}"
+            );
+            assert_eq!(
+                login_mark(&env),
+                Some(crate::login_mark::LoginMark::file(
+                    expected.join("auth.json")
+                )),
+                "{what}"
+            );
+            let codex = Codex::new(
+                brigadier_sandbox::native(brigadier_sandbox::PlatformOptions::default()).unwrap(),
+                Arc::new(env.clone()),
+            );
+            assert_eq!(codex.codex_home().as_ref(), Some(expected), "{what}");
+            // A child thread's rollout in that home's `sessions` is found.
+            let sessions = expected.join("sessions");
+            let day = sessions.join("2026/10/07");
+            std::fs::create_dir_all(&day).unwrap();
+            let parent = "01a116c2-7168-7023-a3d9-75ca70387e74";
+            std::fs::write(
+                day.join(format!("rollout-2026-10-07T17-26-44-{parent}.jsonl")),
+                format!(r#"{{"type":"session_meta","payload":{{"id":"{parent}"}}}}"#),
+            )
+            .unwrap();
+            std::fs::write(
+                day.join("rollout-2026-10-07T17-26-44-01a116c2-71f5.jsonl"),
+                format!(
+                    r#"{{"type":"session_meta","payload":{{"id":"01a116c2-71f5","parent_thread_id":"{parent}"}}}}"#
+                ),
+            )
+            .unwrap();
+            let found: Vec<String> = children::child_usage(&env, parent, None)
+                .into_iter()
+                .map(|child| child.id)
+                .collect();
+            assert_eq!(found, ["01a116c2-71f5"], "{what}");
+            std::fs::remove_dir_all(&sessions).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A live session's thread can be forked (D69's fork, `fork_session`): `thread/unarchive`
     /// refuses it as open in another app-server (0.166.0, live), which only means not archived.

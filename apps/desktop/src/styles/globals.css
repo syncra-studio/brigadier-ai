@@ -592,12 +592,6 @@
   }
 }
 
-/* Fade the older edge of a live summary while keeping its newest two lines visible. */
-/* A settled thought taller than its box fades out at the bottom edge (THREAD-UX-PLAN.md §3.3). */
-@utility thinking-fade {
-  mask-image: linear-gradient(to bottom, black calc(100% - var(--spacing) * 6), transparent);
-}
-
 /* A terminal tab's name too long for it fades out at its end. */
 @utility terminal-label-fade {
   mask-image: linear-gradient(to right, black calc(100% - var(--spacing-terminal-label-fade)), transparent);

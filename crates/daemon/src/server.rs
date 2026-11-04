@@ -772,18 +772,6 @@ impl Session {
                     .map(|()| Response::AnswerQuestion)
                     .map_err(IpcError::from)
             }
-            Request::MergeSession { conversation_id } => {
-                let origin = brigadier_core::work::AnswerOrigin {
-                    input: Some(brigadier_core::work::AnswerInput::Click),
-                    client: self.client.name.clone(),
-                    pid: self.client.pid,
-                };
-                let sessions = self.daemon.sessions.clone();
-                heap(|| sessions.merge_session(&conversation_id, origin))
-                    .await
-                    .map(|text| Response::MergeSession { text })
-                    .map_err(IpcError::from)
-            }
             other => handle_request(&self.daemon, other).await,
         };
         self.respond(id, outcome).await?;
@@ -1363,15 +1351,6 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 merged,
             }
         }
-        Request::GetMergeUndo {
-            conversation_id,
-            merge_commit,
-        } => Response::GetMergeUndo {
-            undo: sessions.merge_undo(&conversation_id, &merge_commit).await?,
-            pushed: sessions
-                .merge_pushed(&conversation_id, &merge_commit)
-                .await?,
-        },
         _ => unreachable!("only tab requests come here"),
     })
 }
@@ -1429,7 +1408,6 @@ fn answered_beside(request: &Request) -> bool {
             | Request::PreviewUninstall { .. }
             | Request::Uninstall { .. }
             | Request::GetSettledTabs
-            | Request::GetMergeUndo { .. }
             | Request::RestartPreview { .. }
             | Request::WriteUpFeedback { .. }
             | Request::FileFeedback { .. }
@@ -1440,11 +1418,11 @@ fn answered_beside(request: &Request) -> bool {
 }
 
 /// Reads of a checkout or a diff: git and the disk, a few hundred milliseconds each on a big
-/// repository, and the side panels and the Changes card ask for several on every change while
-/// a session works. In the connection's turn they held up a message sent meanwhile, a Stop and
-/// every event for seconds (#491). They are answered in turn with each other, so an older
-/// read's answer never comes after a newer one's, beside the connection's other requests;
-/// their git takes no locks, so a write beside them still goes.
+/// repository, and the side panels ask for several on every change while a session works. In
+/// the connection's turn they held up a message sent meanwhile, a Stop and every event for
+/// seconds (#491). They are answered in turn with each other, so an older read's answer never
+/// comes after a newer one's, beside the connection's other requests; their git takes no locks,
+/// so a write beside them still goes.
 fn read_beside(request: &Request) -> bool {
     matches!(
         request,
@@ -1453,7 +1431,6 @@ fn read_beside(request: &Request) -> bool {
             | Request::ListUserWorktrees { .. }
             | Request::GetWorktreeSourceState { .. }
             | Request::GetSessionDiff { .. }
-            | Request::GetWorkerDiffs { .. }
             | Request::GetWorkerSource { .. }
             | Request::GetPendingChanges { .. }
             | Request::GetReviewDiff { .. }
@@ -1510,8 +1487,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         request @ (Request::StartSession { .. }
         | Request::StartOfferedFusion { .. }
         | Request::StartOfferedSession { .. }
-        | Request::GetSettledTabs
-        | Request::GetMergeUndo { .. }) => heap(|| open_session(sessions, request)).await?,
+        | Request::GetSettledTabs) => heap(|| open_session(sessions, request)).await?,
         Request::ForkConversation {
             conversation_id,
             message_id,
@@ -1925,9 +1901,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 stat: diff.map(|(stat, _)| stat),
             }
         }
-        Request::GetWorkerDiffs { conversation_id } => Response::GetWorkerDiffs {
-            diffs: heap(|| sessions.worker_diffs(&conversation_id)).await?,
-        },
         Request::GetWorkerSource {
             conversation_id,
             task_id,
@@ -2378,9 +2351,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::AnswerCard
         }
         // Answered by the connection, which keeps who sent it with the answer.
-        Request::AnswerQuestion { .. } | Request::MergeSession { .. } => {
+        Request::AnswerQuestion { .. } => {
             return Err(IpcError::from(brigadier_core::Error::Invalid(
-                "an answer or a merge click comes through a client's connection".into(),
+                "an answer comes through a client's connection".into(),
             )));
         }
         Request::WriteUpFeedback { text } => Response::WriteUpFeedback {
@@ -3272,9 +3245,9 @@ mod tests {
     }
 
     /// #491: a message sent while a session works showed nowhere for seconds. Its send waited
-    /// in the connection's turn behind the side panels' and the Changes card's reads of the
-    /// checkout (12 of them held a request 2.1 s on an idle Mac). Those reads go beside; the
-    /// send, a Stop and the queue's changes stay in turn.
+    /// in the connection's turn behind the side panels' reads of the checkout (12 of them held a
+    /// request 2.1 s on an idle Mac). Those reads go beside; the send, a Stop and the queue's
+    /// changes stay in turn.
     #[test]
     fn a_checkouts_reads_hold_up_no_send() {
         let id = || ConversationId("c1".into());
@@ -3286,9 +3259,6 @@ mod tests {
                 conversation_id: id(),
             },
             Request::GetSessionDiff { id: id() },
-            Request::GetWorkerDiffs {
-                conversation_id: id(),
-            },
             Request::GetWorkerSource {
                 conversation_id: id(),
                 task_id: brigadier_core::TaskId("t1".into()),
