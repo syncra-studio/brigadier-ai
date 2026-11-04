@@ -508,6 +508,26 @@ test("the tree chains the turns, then the messages on their way", () => {
   ]);
 });
 
+/** The user bubbles of stored message `m1` a tree draws. */
+const promptsOfM1 = (tree: ReturnType<typeof cliThreadTree>) =>
+  tree.nodes.filter((node) => node.kind === "user" && node.block.user?.kind === "message" && node.block.user.message.id === "m1");
+
+test("a session turn that failed to launch keeps its prompt's one bubble, failed, then as the turn that answers it again (issue 660)", () => {
+  const first = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0"] }] };
+  const kept = [stored("m0", 900), stored("m1", 2000)];
+  // Its launch failed: the CLI never had it, and its prompt shows once, failed.
+  const failed = cliThreadTree(first, "conv", kept, {}, [], NO_BOARD, { state: "failed", error: "The CLI did not start." });
+  assert.deepEqual(promptsOfM1(failed).map((node) => [node.id, node.block.state]), [["m1", "failed"]]);
+  // Try again answers the request again: the CLI's next turn is its own, with its prompt.
+  const retried = {
+    entries: [...first.entries, user("u2", "stored m1", 6000), at({ type: "message", itemId: "a2", role: "assistant", text: "Added." }, 6200)],
+    turns: [...first.turns, { ...turn("u2", 6000, 6500, "done"), requests: ["m1"] }],
+  };
+  const tree = cliThreadTree(retried, "conv", kept, {}, [], NO_BOARD, { state: "idle", error: null });
+  assert.deepEqual(promptsOfM1(tree).map((node) => [node.id, node.block.state]), [["m1", "done"]]);
+  assert.equal(tree.nodes.filter((node) => node.kind === "user").length, 2, "the first prompt and this one, nothing else");
+});
+
 test("a thread opened again before its view is read invents no live turns from the messages kept", () => {
   // A reconnect dropped the view of a session not shown; opened again, Brigadier's messages are
   // read before the CLI's view of its ended turns lands.

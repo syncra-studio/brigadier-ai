@@ -3,7 +3,9 @@
  * second request failed): the calm error row, its Details, Try again, and the notice that no
  * longer repeats the error above the composer. A bare ErrorState sits under it. `?drive=1`
  * writes what it saw into `#turn-error-result`; requests never reach a daemon. With
- * `?interrupted=1` the turn was cut off by Brigadier quitting instead (UI audit H1).
+ * `?interrupted=1` the turn was cut off by Brigadier quitting instead (UI audit H1). With
+ * `?launch=1` its CLI never began it (its launch failed): the CLI's thread is read and has no
+ * turn of it, and Try again answers the request again instead of sending "Try again." (#660).
  */
 // oxlint-disable-next-line import/no-unassigned-import
 import "@/fixtures/flow";
@@ -11,10 +13,14 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ErrorState } from "@/components/conversation";
-import type { Notice, Request } from "@/ipc/generated";
+import type { Notice, Request, ThreadView } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
+import { useCliThread } from "@/state/cliThread";
 
 const INTERRUPTED = new URLSearchParams(location.search).has("interrupted");
+const LAUNCH = new URLSearchParams(location.search).has("launch");
+/** The CLI's thread with no turn yet: none of the session's messages ever reached it. */
+const NOTHING_HEARD: ThreadView = { entries: [], turns: [] };
 const RAW = INTERRUPTED
   ? "Brigadier quit while this was running."
   : 'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}';
@@ -29,6 +35,7 @@ mockIPC((command, payload) => {
   if (req.method === "sendMessage") return new Promise(() => {});
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "listFiles") return { method: req.method, files: [], truncated: false };
+  if (LAUNCH && req.method === "threadView") return { method: req.method, view: NOTHING_HEARD };
   return { method: req.method };
 });
 
@@ -37,6 +44,10 @@ mockIPC((command, payload) => {
 useBoard.setState(({ board }) => {
   if (!board) return {};
   const failed = board.requests["r2"]!;
+  const ended = { ...failed, state: { type: "failed" as const, error: RAW }, endedAtMs: failed.startedAtMs + 34_000 };
+  // As the daemon has it, a request's id is its user message's (`m10` here): the CLI never
+  // having had the message, its block is that message's.
+  const { r2: _launched, ...others } = board.requests;
   const notices: Notice[] = [
     { level: "info", text: OTHER, atMs: Date.now() - 20_000 },
     { level: "warning", text: RAW, atMs: Date.now() - 10_000 },
@@ -44,7 +55,7 @@ useBoard.setState(({ board }) => {
   return {
     board: {
       ...board,
-      requests: { ...board.requests, r2: { ...failed, state: { type: "failed", error: RAW }, endedAtMs: failed.startedAtMs + 34_000 } },
+      requests: LAUNCH ? { ...others, m10: { ...ended, id: "m10" } } : { ...board.requests, r2: ended },
       run: INTERRUPTED ? "idle" : "failed",
       runError: INTERRUPTED ? null : RAW,
       runRequest: null,
@@ -52,6 +63,8 @@ useBoard.setState(({ board }) => {
     },
   };
 });
+
+if (LAUNCH) useCliThread.setState((state) => ({ views: { ...state.views, "flow-session": NOTHING_HEARD } }));
 
 const bare = document.createElement("div");
 bare.className = "bg-background text-foreground w-160 p-4";
@@ -105,6 +118,7 @@ async function drive() {
   await pause(300);
   seen.sent = calls.flatMap((call) => (call.method === "sendMessage" ? [call.text] : []));
   seen.resumed = calls.filter((call) => call.method === "resume").length;
+  seen.regenerated = calls.flatMap((call) => (call.method === "regenerate" ? [call.requestId] : []));
   const plain = document.querySelector<HTMLElement>('[data-fixture="bare"]');
   seen.bare = {
     text: plain?.innerText ?? null,

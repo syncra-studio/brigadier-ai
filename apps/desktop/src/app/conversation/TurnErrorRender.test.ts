@@ -63,3 +63,12 @@ test("a turn Brigadier quit during reads interrupted, never as answered, and Con
   assert.deepEqual(seen.sent, []);
   assert.equal(seen.resumed, 1);
 });
+
+test("Try again on a session turn whose launch failed answers its request again: the user's prompt goes once more, never \"Try again.\" (issue 660)", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(
+    await renderFixturePage(t, "turn-error.html?view=done&approvals=0&summary=0&sidebar=0&drive=1&launch=1", "turn-error-result", 10000),
+  ) as { tryAgain: boolean; sent: string[]; regenerated: string[] };
+  assert.equal(seen.tryAgain, true);
+  assert.deepEqual(seen.regenerated, ["m10"]);
+  assert.deepEqual(seen.sent, []);
+});
