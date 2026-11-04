@@ -217,6 +217,11 @@ pub enum QuotaSource {
     /// Reported by a running session as it worked (`rate_limit_event`,
     /// `account/rateLimits/updated`): may be partial.
     Event,
+    /// Asked for, but the provider keeps no usage to tell (OpenCode): it says nothing of a
+    /// limit a session met. A usage-window limit whose reset is known stands until it, so do
+    /// the windows a scoped one used up; one with no known reset is lifted, so work tries
+    /// again.
+    Unavailable,
 }
 
 /// Remaining quota as last reported by a provider.
@@ -235,6 +240,8 @@ pub struct QuotaSnapshot {
 impl QuotaSnapshot {
     /// Takes in what a running session reported (`Event`) or a fresh read (`Read`):
     /// - a read replaces everything, its limit included;
+    /// - a read with nothing to tell (`Unavailable`) does too, but keeps a usage-window limit
+    ///   and the used-up windows whose reset is still to come;
     /// - an event updates the windows it names and keeps the others (Codex's rolling updates
     ///   are sparse: a window left out is unknown, not gone); it sets a limit, and lifts a
     ///   usage-window limit only
@@ -243,6 +250,25 @@ impl QuotaSnapshot {
     pub fn merge(&mut self, incoming: &QuotaSnapshot) {
         if incoming.source == QuotaSource::Read {
             *self = incoming.clone();
+            return;
+        }
+        if incoming.source == QuotaSource::Unavailable {
+            let ahead = |at: Option<i64>| at.is_some_and(|at| at > incoming.observed_at_ms);
+            let limit = self
+                .limit
+                .take()
+                .filter(|limit| limit.kind == LimitKind::UsageWindow && ahead(limit.resets_at_ms));
+            let windows: Vec<QuotaWindow> = std::mem::take(&mut self.windows)
+                .into_iter()
+                .filter(|window| window.used_percent >= 100.0 && ahead(window.resets_at_ms))
+                .collect();
+            *self = incoming.clone();
+            self.limit = self.limit.take().or(limit);
+            for window in windows {
+                if !self.windows.iter().any(|known| known.id == window.id) {
+                    self.windows.push(window);
+                }
+            }
             return;
         }
         self.windows

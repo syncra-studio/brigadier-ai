@@ -3,4 +3,4 @@
 /**
  * Where a quota snapshot came from.
  */
-export type QuotaSource = "read" | "event";
+export type QuotaSource = "read" | "event" | "unavailable";

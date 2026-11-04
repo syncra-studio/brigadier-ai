@@ -3,7 +3,8 @@
 //!
 //! - **Sources.** A read (`get_usage`, `account/rateLimits/read`) replaces what is known; a
 //!   running session's rate-limit events update the windows they name
-//!   ([`QuotaSnapshot::merge`]).
+//!   ([`QuotaSnapshot::merge`]). OpenCode keeps no usage to read: its read says so
+//!   (`Unavailable`) and keeps a limit a session met until that limit's known reset.
 //! - **Limits lift on time.** A used-up window's limit counts until its reset time; then the
 //!   window reads as unused until the next read says otherwise. A spend control or a credits
 //!   stop is lifted only by a fresh read.
@@ -465,6 +466,77 @@ mod tests {
 
     fn used(quota: Option<QuotaSnapshot>) -> Option<f64> {
         quota.map(|quota| quota.windows[0].used_percent)
+    }
+
+    fn nothing(provider: ProviderKind, source: QuotaSource, at_ms: i64) -> QuotaSnapshot {
+        QuotaSnapshot {
+            provider,
+            windows: Vec::new(),
+            limit: None,
+            observed_at_ms: at_ms,
+            source,
+        }
+    }
+
+    /// OpenCode's read knows nothing of a limit a session met: one with its reset hours away
+    /// holds until then, not until the next poll (#747); one with no known reset is lifted by
+    /// it, so work tries again.
+    #[tokio::test]
+    async fn a_read_with_nothing_to_tell_keeps_a_limit_until_its_reset() {
+        const HOUR: i64 = 60 * 60 * 1000;
+        let monitor = QuotaMonitor::load(None, 0).await;
+        let own = AccountRef::own(ProviderKind::OpenCode);
+        let hit = |resets_at_ms| LimitHit {
+            window: None,
+            resets_at_ms,
+            kind: LimitKind::UsageWindow,
+        };
+        monitor.note_limit(&own, hit(Some(2 * HOUR)), 0);
+        let empty = nothing(ProviderKind::OpenCode, QuotaSource::Unavailable, 5 * 60_000);
+        monitor.note(&own, &empty, 5 * 60_000);
+        let held = monitor.current_for(&own, 5 * 60_000).unwrap().limit;
+        assert_eq!(held.and_then(|limit| limit.resets_at_ms), Some(2 * HOUR));
+        assert!(monitor.current_for(&own, 2 * HOUR).unwrap().limit.is_none());
+        // Past its reset, the next read drops it for good.
+        monitor.note(
+            &own,
+            &nothing(ProviderKind::OpenCode, QuotaSource::Unavailable, 3 * HOUR),
+            3 * HOUR,
+        );
+        monitor.note_limit(&own, hit(None), 3 * HOUR);
+        assert!(monitor.current_for(&own, 3 * HOUR).unwrap().limit.is_some());
+        monitor.note(
+            &own,
+            &nothing(ProviderKind::OpenCode, QuotaSource::Unavailable, 4 * HOUR),
+            4 * HOUR,
+        );
+        assert!(monitor.current_for(&own, 4 * HOUR).unwrap().limit.is_none());
+    }
+
+    /// A full read that names no window (Claude's or Codex's) still replaces what was known:
+    /// a used-up window and its limit are gone, reset or not.
+    #[tokio::test]
+    async fn a_full_read_with_no_windows_clears_a_used_up_window() {
+        const HOUR: i64 = 60 * 60 * 1000;
+        let monitor = QuotaMonitor::load(None, 0).await;
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let own = AccountRef::own(provider);
+            let mut used_up = read(provider, 100.0, 0);
+            used_up.windows[0].resets_at_ms = Some(2 * HOUR);
+            used_up.limit = Some(LimitHit {
+                window: Some("five_hour".into()),
+                resets_at_ms: Some(2 * HOUR),
+                kind: LimitKind::UsageWindow,
+            });
+            monitor.note(&own, &used_up, 0);
+            assert!(monitor.current_for(&own, 60_000).unwrap().limit.is_some());
+            monitor.note(&own, &nothing(provider, QuotaSource::Read, 60_000), 60_000);
+            let now = monitor.current_for(&own, 60_000).unwrap();
+            assert!(
+                now.limit.is_none() && now.windows.is_empty(),
+                "{provider:?}: {now:?}"
+            );
+        }
     }
 
     #[tokio::test]
