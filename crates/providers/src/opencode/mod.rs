@@ -7,11 +7,11 @@
 //! the session and `.env` files, which ask):
 //!
 //! - Ask: edits and commands ask, but commands that only read (`ls`, `cat`, `git status`, …).
-//!   Accept edits: those and `brigadier …` run too, any other command asks. Full access: nothing
-//!   asks.
+//!   Accept edits: those and Brigadier's own (`brigadier wait …`, never `mcp run` or `secret`)
+//!   run too, any other command asks. Full access: nothing asks.
 //! - Read-only (Brigadier's own readers): edits, commands, sub-agents and anything outside the
 //!   folder are declined, never asked about. A side chat's and a tab chat's shell runs
-//!   `brigadier …` and nothing else, as on the other CLIs.
+//!   Brigadier's own commands and nothing else, as on the other CLIs.
 //!
 //! Every request OpenCode asks reaches the user as a card ([`ProviderEvent::ApprovalRequested`]).
 //!

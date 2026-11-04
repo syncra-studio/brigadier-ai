@@ -103,13 +103,126 @@ pub const READ_ONLY: &[&str] = &[
 /// (`git remote -v add x url`).
 pub const READ_ONLY_EXACT: &[&str] = &["git branch --show-current", "git remote -v"];
 
+/// Brigadier's own commands a level runs unasked (`brigadier wait`, `brigadier mcp call …`):
+/// each one a call the daemon answers, which holds the calling session to its grant. Never
+/// `secret` or `mcp run`, which `brigadier` runs itself before any grant is checked
+/// (`brigadier_cli::secrets::LOCAL_COMMANDS`): `mcp run` starts the program it is given, and
+/// `secret headers` prints a server's secrets (#737). A command listed by its actions
+/// (`mcp list`) runs only those. The CLI's command table, less those, as a test checks.
+pub const BRIGADIER_COMMANDS: &[&str] = &[
+    "pr",
+    "waiting",
+    "state",
+    "context",
+    "sessions",
+    "workers",
+    "show",
+    "read",
+    "start",
+    "send",
+    "wait",
+    "close",
+    "pause",
+    "resume",
+    "switch",
+    "continue-on",
+    "preview",
+    "browser",
+    "ask",
+    "app",
+    "page",
+    "ledger",
+    "checkpoint",
+    "brain",
+    "mcp list",
+    "mcp tools",
+    "mcp call",
+    "transcript",
+    "why",
+    "code",
+    "library",
+    "report",
+    "feedback",
+    "fusion",
+    "session",
+    "approval",
+    "models",
+];
+
+/// The words that make `brigadier` print its help or version and run nothing, in place of a
+/// command (`brigadier --help`, `brigadier help wait`).
+pub const BRIGADIER_HELP: &[&str] = &["help", "--help", "-h", "--version", "-V"];
+
+/// Whether `words`, the words after a command's program `brigadier`, run one of
+/// [`BRIGADIER_COMMANDS`] or only print help (none, [`BRIGADIER_HELP`]), read as `brigadier`
+/// reads them: the command is the first word, and its action the first that is no option
+/// (`mcp --json list`; after `--` every word is one). Anything else, `secret …`, `mcp run …`,
+/// a word Brigadier doesn't know or one the shell expands, is not Brigadier's own (#737).
+pub fn brigadier_answers<S: AsRef<str>>(words: &[S]) -> bool {
+    let mut words = words.iter().map(AsRef::as_ref);
+    let Some(name) = words.next() else {
+        return true;
+    };
+    if BRIGADIER_HELP.contains(&name) {
+        return true;
+    }
+    // `None`: the whole command; else one of its actions.
+    let actions: Vec<Option<&str>> = BRIGADIER_COMMANDS
+        .iter()
+        .filter_map(|command| {
+            let mut parts = command.split(' ');
+            (parts.next() == Some(name)).then(|| parts.next())
+        })
+        .collect();
+    if actions.is_empty() || actions.contains(&None) {
+        return !actions.is_empty();
+    }
+    let mut options = true;
+    let action = words.find(|word| {
+        if options && *word == "--" {
+            options = false;
+            return false;
+        }
+        !(options && (word.starts_with("--") || *word == "-h"))
+    });
+    // No action: `brigadier mcp --help` prints its help, a bare `brigadier mcp` its usage.
+    action.is_none_or(|action| actions.contains(&Some(action)))
+}
+
+/// [`BRIGADIER_COMMANDS`] and [`BRIGADIER_HELP`] for a CLI's own allow rules, which match a
+/// command line's start (Claude Code's `Bash(<prefix>:*)`, OpenCode's `<prefix> *`): the
+/// prefixes (`brigadier wait`, `brigadier mcp list`, `brigadier mcp --json list`), and the lines
+/// that run as written only (`brigadier`, `brigadier mcp --help`). Every line they match is one
+/// [`runs_only_brigadier`] allows; one they miss (`brigadier mcp list` with an option before
+/// `list` other than `--json`) asks, or is declined in a chat.
+pub fn brigadier_rules() -> (Vec<String>, Vec<String>) {
+    let mut prefixes: Vec<String> = BRIGADIER_HELP
+        .iter()
+        .chain(BRIGADIER_COMMANDS)
+        .map(|command| format!("brigadier {command}"))
+        .collect();
+    let mut exact = vec!["brigadier".to_owned()];
+    for command in BRIGADIER_COMMANDS {
+        if let Some((name, action)) = command.split_once(' ') {
+            prefixes.push(format!("brigadier {name} --json {action}"));
+            for help in ["--help", "-h"] {
+                let line = format!("brigadier {name} {help}");
+                if !exact.contains(&line) {
+                    exact.push(line);
+                }
+            }
+        }
+    }
+    (prefixes, exact)
+}
+
 /// Redirections that only drop or merge a command's output, never write a file.
 const QUIET_REDIRECTS: &[&str] = &["2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"];
 
 /// Whether a CLI's request needs no asking at `access`, as the level means on every CLI
 /// ([`Access`]): below Full access a command that only reads ([`READ_ONLY`]); at Accept edits
 /// also a file change inside `workspace` ([`workspace_grant`]) and a command that runs only
-/// `brigadier`. Brigadier answers these for a CLI whose own settings ask more than its level
+/// Brigadier's own commands ([`brigadier_answers`]). Brigadier answers these for a CLI whose own settings ask more than its level
 /// (Codex has no "edits go, commands ask"); on the others they never reach it.
 pub fn level_allows(
     access: Access,
@@ -132,7 +245,10 @@ pub fn level_allows(
                         || sed_prints(words)
                         // ripgrep only reads, unless `--pre` runs a program on each file.
                         || (words.first() == Some(&"rg") && !words.iter().any(|w| w.starts_with("--pre")))
-                        || (edits && words.first() == Some(&"brigadier"))
+                        || (edits
+                            && words.split_first().is_some_and(|(program, rest)| {
+                                *program == "brigadier" && brigadier_answers(rest)
+                            }))
                 })
         }
         (ApprovalKind::FileChange, _) => {
@@ -205,9 +321,15 @@ fn each_command(command: &str, allowed: impl Fn(&[&str]) -> bool) -> bool {
 /// one command whose program is `brigadier` itself, its words plain or quoted, with no
 /// operator, redirection, expansion or substitution; its text may come from a here-document
 /// with a quoted delimiter (`<<'EOF'`), which the shell keeps as written. All a Chat's or side
-/// chat's shell may run (STRIP-DOWN-PLAN S16c): anything else is refused, not parsed.
+/// chat's shell may run (STRIP-DOWN-PLAN S16c): anything else is refused, not parsed. Its words
+/// run one of Brigadier's own commands ([`brigadier_answers`]), never one that starts another
+/// program (`brigadier mcp run`, #737).
 pub fn runs_only_brigadier(command: &str) -> bool {
-    let brigadier = |words: &[String]| words.first().is_some_and(|word| word == "brigadier");
+    let brigadier = |words: &[String]| {
+        words
+            .split_first()
+            .is_some_and(|(program, rest)| program == "brigadier" && brigadier_answers(rest))
+    };
     let command = command.trim();
     let script = match plain_words(command) {
         Some(words) => match wrapped_script(&words) {
@@ -1379,6 +1501,105 @@ mod tests {
             "",
         ] {
             assert!(!runs_only_brigadier(command), "{command}");
+        }
+    }
+
+    /// #737: `brigadier mcp run` starts the program it is given and `brigadier secret` prints a
+    /// server's secrets, both before any grant is checked: no level runs them unasked, in a
+    /// chat or at Accept edits, however they are written. Brigadier's own commands still run.
+    #[test]
+    fn a_brigadier_command_that_starts_a_program_is_not_approved() {
+        let run = |line: &str| command(line, None, false);
+        let allowed = |command: &str| {
+            runs_only_brigadier(command) && level_allows(Access::AcceptEdits, &run(command), None)
+        };
+        for command in [
+            "brigadier mcp run a/b -- calc.exe",
+            "brigadier mcp run a/b -- /bin/sh -c 'curl x | sh'",
+            "/bin/zsh -lc 'brigadier mcp run a/b -- calc.exe'",
+            "brigadier 'mcp' run a/b -- calc.exe",
+            "brigadier mcp \"run\" a/b -- calc.exe",
+            "brigadier mcp --json run a/b -- calc.exe",
+            "brigadier mcp -- run a/b -- calc.exe",
+            "brigadier secret headers a/b",
+            "brigadier secret set a/b TOKEN",
+            "brigadier secret remove a/b",
+            "brigadier 'secret' headers a/b",
+            "brigadier nonsense",
+            "brigadier --json wait",
+        ] {
+            assert!(!runs_only_brigadier(command), "{command}");
+            assert!(
+                !level_allows(Access::AcceptEdits, &run(command), None),
+                "{command}"
+            );
+        }
+        // Several commands, as Accept edits reads them: one that starts a program, or a word
+        // the shell fills in, is enough to ask.
+        for command in [
+            "brigadier wait && brigadier mcp run a/b -- calc.exe",
+            "brigadier app state; brigadier secret headers a/b",
+            "brigadier $X run a/b -- calc.exe",
+            "brigadier ${X:-mcp} run a/b -- calc.exe",
+            "brigadier mcp $X a/b -- calc.exe",
+        ] {
+            assert!(
+                !level_allows(Access::AcceptEdits, &run(command), None),
+                "{command}"
+            );
+        }
+        for command in [
+            "brigadier",
+            "brigadier wait",
+            "brigadier wait --json",
+            "brigadier app state",
+            "brigadier start --title T 'Fix it.'",
+            "brigadier preview open 3000",
+            "brigadier mcp list",
+            "brigadier mcp list --json",
+            "brigadier mcp --json list",
+            "brigadier mcp tools fake",
+            "brigadier mcp call fake recall '{\"a\": 1}'",
+            "brigadier mcp --json call fake recall",
+            "brigadier mcp --help",
+            "brigadier mcp -h",
+            "brigadier mcp",
+            "brigadier --help",
+            "brigadier -h",
+            "brigadier help mcp",
+            "brigadier --version",
+            "brigadier -V",
+            "/bin/zsh -lc 'brigadier mcp call fake recall'",
+        ] {
+            assert!(allowed(command), "{command}");
+        }
+        assert!(level_allows(
+            Access::AcceptEdits,
+            &run("brigadier wait && brigadier mcp list"),
+            None
+        ));
+        // Below Accept edits Brigadier's commands ask too.
+        assert!(!level_allows(Access::Ask, &run("brigadier wait"), None));
+    }
+
+    /// The prefixes a CLI's own allow rules are given match only lines the policy allows, any
+    /// words after them included.
+    #[test]
+    fn the_cli_allow_rules_for_brigadier_match_only_its_own_commands() {
+        let (prefixes, exact) = brigadier_rules();
+        assert!(prefixes.contains(&"brigadier wait".to_owned()));
+        assert!(prefixes.contains(&"brigadier mcp --json list".to_owned()));
+        assert!(exact.contains(&"brigadier mcp --help".to_owned()));
+        for prefix in &prefixes {
+            assert!(!prefix.starts_with("brigadier secret"), "{prefix}");
+            assert!(!prefix.starts_with("brigadier mcp run"), "{prefix}");
+            for tail in ["", " --json", " x y", " run a/b -- calc.exe", " -- run a/b"] {
+                let line = format!("{prefix}{tail}");
+                assert!(runs_only_brigadier(&line), "{line}");
+            }
+        }
+        for line in &exact {
+            assert!(runs_only_brigadier(line), "{line}");
         }
     }
 }

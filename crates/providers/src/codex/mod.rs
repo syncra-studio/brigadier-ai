@@ -9,8 +9,8 @@
 //!   freely but asks before commands (`on-request` runs every command in the sandbox unasked;
 //!   `granular` runs as `on-request`; exec-policy rules load only from `.rules` files), so what
 //!   the level allows on every CLI is answered by Brigadier (`policy::level_allows`): read-only
-//!   commands at both, edits in the workspace and `brigadier` at Accept edits. In a terminal,
-//!   where the user answers Codex's own prompts, Accept edits stays `on-request`.
+//!   commands at both, edits in the workspace and Brigadier's own commands at Accept edits. In a
+//!   terminal, where the user answers Codex's own prompts, Accept edits stays `on-request`.
 //! - Full access: `never` with `danger-full-access`: Codex never asks.
 //! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox. A side chat's
 //!   and a tab chat's has network on, for `brigadier`'s socket ([`sandbox_policy`]). A Chat runs

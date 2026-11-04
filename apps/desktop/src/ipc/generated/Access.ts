@@ -8,10 +8,11 @@
  * | Level | Claude Code | Codex | OpenCode |
  * |---|---|---|---|
  * | Ask | `--permission-mode default` | approval `untrusted`, sandbox `workspace-write`; read-only commands answered | edits and commands ask, read-only commands run |
- * | Accept edits | `--permission-mode acceptEdits`, `Bash(brigadier:*)` | approval `untrusted`, sandbox `workspace-write`; edits, read-only commands and `brigadier` answered | edits, read-only commands and `brigadier` run, other commands ask |
+ * | Accept edits | `--permission-mode acceptEdits`, `Bash(brigadier wait:*)` and the like for each of Brigadier's own commands (`policy::BRIGADIER_COMMANDS`, never `mcp run` or `secret`) | approval `untrusted`, sandbox `workspace-write`; edits, read-only commands and Brigadier's own answered | edits, read-only commands and Brigadier's own run, other commands ask |
  * | Full access | `--permission-mode bypassPermissions` | approval `never`, sandbox `danger-full-access` | everything allowed |
  *
  * [`Access::ReadOnly`] is for Brigadier's own one-shot readers (a commit message, a Brain
- * pass) and side and tab chats, never a user's level: a chat's shell runs `brigadier` only.
+ * pass) and side and tab chats, never a user's level: a chat's shell runs Brigadier's own
+ * commands only.
  */
 export type Access = { "type": "ask" } | { "type": "acceptEdits" } | { "type": "full" } | { "type": "readOnly" };
