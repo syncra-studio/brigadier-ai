@@ -1441,6 +1441,17 @@ mod tests {
         assert_eq!(gates.in_flight(), 0);
     }
 
+    /// The workers started so far, once at least `expected` have started (or
+    /// after 2 s). A timed-out caller can return before its worker thread has
+    /// run at all, so counting straight away would race a slow thread start.
+    fn starts_after_waiting_for(starts: &AtomicUsize, expected: usize) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while starts.load(Ordering::Acquire) < expected && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        starts.load(Ordering::Acquire)
+    }
+
     fn quick(
         gates: &Arc<UiaGates>,
         key: GateKey,
@@ -1468,7 +1479,7 @@ mod tests {
             quick(&gates, GateKey::Desktop, "desktop enumeration"),
             Ok(7)
         ));
-        assert_eq!(starts.load(Ordering::Acquire), 1);
+        assert_eq!(starts_after_waiting_for(&starts, 1), 1);
 
         drop(release);
         wait_until_idle(&gates);
@@ -1530,7 +1541,10 @@ mod tests {
             quick(&gates, GateKey::Desktop, "desktop enumeration"),
             Err(UiaDeadlineError::Saturated)
         ));
-        assert_eq!(starts.load(Ordering::Acquire), UIA_WORKER_BUDGET);
+        assert_eq!(
+            starts_after_waiting_for(&starts, UIA_WORKER_BUDGET),
+            UIA_WORKER_BUDGET
+        );
         assert_eq!(gates.in_flight(), UIA_WORKER_BUDGET);
 
         // Capacity comes back only as the stuck workers really return.

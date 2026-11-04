@@ -474,7 +474,7 @@ index 070d0db39..642f897c7 100644
          move |cancelled| invoke_inner(hwnd, &path, &cancelled),
      ).map_err(|error| format!("Menu action not confirmed because {}. No fallback input was sent; read fresh state before retrying.", super::click::deadline_reason(error)))?
 diff --git a/crates/platform-windows/src/uia/windows_enum.rs b/crates/platform-windows/src/uia/windows_enum.rs
-index 6741d82a3..ffbe8df6e 100644
+index 6741d82a3..f7ee58963 100644
 --- a/crates/platform-windows/src/uia/windows_enum.rs
 +++ b/crates/platform-windows/src/uia/windows_enum.rs
 @@ -18,13 +18,12 @@
@@ -609,11 +609,6 @@ index 6741d82a3..ffbe8df6e 100644
 +    fn drop(&mut self) {
 +        self.gates.lock().remove(&self.key);
 +    }
-+}
-+
-+fn uia_gates() -> &'static Arc<UiaGates> {
-+    static GATES: OnceLock<Arc<UiaGates>> = OnceLock::new();
-+    GATES.get_or_init(|| Arc::new(UiaGates::new(UIA_WORKER_BUDGET)))
  }
  
 -/// Run `f` on a dedicated thread under `gate`. `f` receives the flag that is
@@ -621,6 +616,11 @@ index 6741d82a3..ffbe8df6e 100644
 -/// caller will no longer observe.
 -fn run_uia_single_flight<T, F>(
 -    gate: &Arc<SingleFlight>,
++fn uia_gates() -> &'static Arc<UiaGates> {
++    static GATES: OnceLock<Arc<UiaGates>> = OnceLock::new();
++    GATES.get_or_init(|| Arc::new(UiaGates::new(UIA_WORKER_BUDGET)))
++}
++
 +/// Run `f` on a dedicated thread admitted under `key`. `f` receives the flag
 +/// that is set when the caller's deadline fires, so it can skip side effects
 +/// the caller will no longer observe.
@@ -835,7 +835,7 @@ index 6741d82a3..ffbe8df6e 100644
                  let starts = Arc::clone(&starts);
                  let active = Arc::clone(&active);
                  let max_active = Arc::clone(&max_active);
-@@ -1271,11 +1393,159 @@ mod tests {
+@@ -1271,11 +1393,173 @@ mod tests {
                      active.fetch_sub(1, Ordering::AcqRel);
                      42
                  }
@@ -888,6 +888,17 @@ index 6741d82a3..ffbe8df6e 100644
 +        assert_eq!(gates.in_flight(), 0);
 +    }
 +
++    /// The workers started so far, once at least `expected` have started (or
++    /// after 2 s). A timed-out caller can return before its worker thread has
++    /// run at all, so counting straight away would race a slow thread start.
++    fn starts_after_waiting_for(starts: &AtomicUsize, expected: usize) -> usize {
++        let deadline = Instant::now() + Duration::from_secs(2);
++        while starts.load(Ordering::Acquire) < expected && Instant::now() < deadline {
++            thread::sleep(Duration::from_millis(1));
++        }
++        starts.load(Ordering::Acquire)
++    }
++
 +    fn quick(
 +        gates: &Arc<UiaGates>,
 +        key: GateKey,
@@ -915,7 +926,7 @@ index 6741d82a3..ffbe8df6e 100644
 +            quick(&gates, GateKey::Desktop, "desktop enumeration"),
 +            Ok(7)
 +        ));
-+        assert_eq!(starts.load(Ordering::Acquire), 1);
++        assert_eq!(starts_after_waiting_for(&starts, 1), 1);
 +
 +        drop(release);
 +        wait_until_idle(&gates);
@@ -977,7 +988,10 @@ index 6741d82a3..ffbe8df6e 100644
 +            quick(&gates, GateKey::Desktop, "desktop enumeration"),
 +            Err(UiaDeadlineError::Saturated)
 +        ));
-+        assert_eq!(starts.load(Ordering::Acquire), UIA_WORKER_BUDGET);
++        assert_eq!(
++            starts_after_waiting_for(&starts, UIA_WORKER_BUDGET),
++            UIA_WORKER_BUDGET
++        );
 +        assert_eq!(gates.in_flight(), UIA_WORKER_BUDGET);
 +
 +        // Capacity comes back only as the stuck workers really return.
@@ -996,7 +1010,7 @@ index 6741d82a3..ffbe8df6e 100644
  }
  
  /// Hit chain (nearest first), each node's bounds `[x, y, w, h]`, and whether
-@@ -1304,6 +1574,7 @@ const POINT_SHAPE_DOCUMENT_DEPTH: usize = 16;
+@@ -1304,6 +1588,7 @@ const POINT_SHAPE_DOCUMENT_DEPTH: usize = 16;
  /// `None` when UIA is unavailable, busy with another call, or over budget.
  pub(crate) fn point_shape_chain(sx: i32, sy: i32) -> Option<PointShapeChain> {
      run_uia_with_deadline(
