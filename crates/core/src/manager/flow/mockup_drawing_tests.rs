@@ -107,6 +107,11 @@ async fn a_mockup_reads_drawing_only_while_a_turn_draws_it() {
                     std::fs::write(folder.join("mockup-1.png"), b"png").unwrap();
                     return Reply::text("Made it.");
                 }
+                // Only the user's message starts it: a turn that hears a worker's report
+                // starts no other mockup.
+                if !turn.input.contains("Mock it.") {
+                    return Reply::text("Heard.");
+                }
                 let started = start_mockup(&turn, "Mock the density toggle.").await;
                 assert!(started.get("error").is_none(), "{started:#}");
                 Reply::text("Started the mockup.")
@@ -219,6 +224,11 @@ async fn a_mockup_reads_drawing_only_while_a_turn_draws_it() {
         .await;
     assert!(!Flow::task(&board, 1).mockup_drawing);
     assert_eq!(Flow::task(&board, 1).rework_rounds, 2);
+    assert_eq!(
+        flow.board().await.tasks.len(),
+        1,
+        "one mockup, its one worker"
+    );
     flow.stop().await;
 }
 
@@ -261,6 +271,11 @@ async fn a_notes_turn_cut_off_twice_leaves_the_mockup_drawn() {
                         .expect("the folder is named");
                     std::fs::write(folder.join("mockup-1.png"), b"png").unwrap();
                     return Reply::text("Made it.");
+                }
+                // Only the user's message starts it: a turn that hears a worker's report
+                // starts no other mockup.
+                if !turn.input.contains("Mock it.") {
+                    return Reply::text("Heard.");
                 }
                 let started = start_mockup(&turn, "Mock the density toggle.").await;
                 assert!(started.get("error").is_none(), "{started:#}");
@@ -327,5 +342,10 @@ async fn a_notes_turn_cut_off_twice_leaves_the_mockup_drawn() {
         "a turn cut off for good draws no more"
     );
     assert_eq!(heard_with("Brigadier restarted while you were working"), 1);
+    assert_eq!(
+        flow.board().await.tasks.len(),
+        1,
+        "one mockup, its one worker"
+    );
     flow.stop().await;
 }
