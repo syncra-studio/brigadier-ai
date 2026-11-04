@@ -10,11 +10,15 @@ import { useNow } from "@/hooks/use-now";
 import { cn } from "@/lib/utils";
 import { useWorkerRows } from "@/state/cliThread";
 
+/** A lone row's quiet hover: its words turn white under the pointer or the keyboard's focus. */
+const BRIGHTENS = "group-hover/strip-row:text-foreground group-focus-visible/strip-row:text-foreground";
+
 /**
  * One worker: `[g] Name · what it does · 1m 2s · +12 −3`, from its row (its CLI's events and git):
  * while it works its call at work, shimmering, else its state. Its pause/resume and End while
  * its CLI runs (D199).
- * Opens its thread. A `lone` row (the strip's only one) has no hover fill.
+ * Opens its thread. A `lone` row (the strip's only one) has no hover fill: under the pointer its
+ * words brighten instead, as a thread row's do (#735).
  */
 export const StripRow = memo(function StripRow({
   conversationId,
@@ -40,13 +44,13 @@ export const StripRow = memo(function StripRow({
         data-slot="workers-strip-row"
         data-worker-state={state.kind}
         onClick={() => setPanel(taskId)}
-        className={cn("rounded-control flex min-w-0 flex-1 flex-col items-stretch px-2 text-start text-sm", !lone && "hover:bg-foreground/5")}
+        className={cn("group/strip-row rounded-control flex min-w-0 flex-1 cursor-pointer flex-col items-stretch px-2 text-start text-sm", !lone && "hover:bg-foreground/5")}
       >
         <span className="min-h-row flex min-w-0 items-center gap-1.5">
           <WorkerGlyph taskId={taskId} className="size-4 shrink-0" />
-          <span className="text-foreground/80 max-w-1/3 shrink-0 truncate">{name}</span>
+          <span className={cn("text-foreground/80 max-w-1/3 shrink-0 truncate", lone && BRIGHTENS)}>{name}</span>
           <span aria-hidden className="text-foreground/40">·</span>
-          <span className={cn("min-w-0 flex-1 truncate", state.kind === "working" ? "shimmer" : "text-foreground/60")}>
+          <span className={cn("min-w-0 flex-1 truncate", state.kind === "working" ? "shimmer" : cn("text-foreground/60", lone && BRIGHTENS))}>
             {state.word}
           </span>
           <RowTime row={row} />
