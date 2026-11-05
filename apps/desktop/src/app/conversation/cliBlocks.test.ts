@@ -1848,6 +1848,29 @@ for (const [name, thread] of [
   });
 }
 
+test("two context refreshes in a row: the empty one goes and the second's rows join the block before", () => {
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Fix the bug", 1000),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "A worker is on it." }, 2000),
+        compactionEnded(false, 4000),
+        sent("c1", REFRESH, 3000, { by: "brigadier" }),
+        compactionEnded(false, 6000),
+        sent("c2", REFRESH, 5000, { by: "brigadier" }),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "The worker reported." }, 7000),
+      ],
+      turns: [{ ...turn("u1", 1000, 2500, "done"), requests: ["m1"] }, turn("c1", 3000, 4500, "done"), turn("c2", 5000, 7500, "done")],
+    },
+    "conv",
+    undefined,
+    true,
+  );
+  assert.deepEqual(blocks.map((block) => block.key), ["u1"]);
+  assert.deepEqual(blocks[0]?.texts.map((text) => text.text), ["A worker is on it.", "The worker reported."]);
+  assert.equal(blocks[0]?.endedAtMs, 7500);
+});
+
 test("the first of two context refreshes keeps its rows while a later turn runs", () => {
   const first = refreshed({}, { startedAtMs: 1100 });
   const blocks = cliBlocks(

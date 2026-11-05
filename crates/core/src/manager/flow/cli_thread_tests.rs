@@ -1024,6 +1024,178 @@ async fn brigadiers_compact_is_a_turn_of_its_own_never_one_more_of_the_turn_befo
     flow.stop().await;
 }
 
+/// A Read of `picture` in Claude Code's session file `file`, its result holding the picture.
+#[cfg(unix)]
+fn read_with_image(file: &str, item: &str, picture: &std::path::Path) {
+    use std::io::Write as _;
+    let data = brigadier_providers::image_base64(super::chat_images_tests::PNG);
+    let lines = [
+        serde_json::json!({"type": "assistant", "message": {"id": format!("msg_{item}"), "role": "assistant",
+            "content": [{"type": "tool_use", "id": item, "name": "Read", "input": {"file_path": picture}}]}}),
+        serde_json::json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": item,
+            "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}]}]}}),
+    ];
+    let mut file = std::fs::OpenOptions::new().append(true).open(file).unwrap();
+    for line in lines {
+        writeln!(file, "{line}").unwrap();
+    }
+}
+
+/// #792: a fork reads its copied thread's images: the one a session file of its source holds
+/// and the copy its source kept of one viewed, whose file is gone. A file its thread never
+/// named stays refused.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_fork_reads_the_images_of_the_thread_it_copied() {
+    use crate::model::{ForkPlace, MessageRole};
+    use brigadier_providers::{ItemStatus, ProviderEvent, session_file::FileImage};
+    let folder = std::env::temp_dir().join(format!("fork-images-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let picture = folder.join("viewed.png");
+    std::fs::write(&picture, super::chat_images_tests::PNG).unwrap();
+    let input = serde_json::json!({ "file_path": picture }).to_string();
+    let flow = Flow::start(
+        "cli-thread-fork-images",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let input = input.clone();
+            async move {
+                turn.emit(ProviderEvent::ToolCall {
+                    item_id: "view_1".into(),
+                    name: "Read".into(),
+                    input: Some(input),
+                    status: ItemStatus::Completed,
+                    output: None,
+                    kept: None,
+                })
+                .await;
+                Reply::text("Looked.")
+            }
+        }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    flow.say("Look.").await;
+    eventually("the turn ends", || {
+        let view = flow.manager.thread_view(&id).unwrap();
+        view.turns.len() == 1 && view.turns[0].end.is_some()
+    })
+    .await;
+    flow.settled().await;
+    let record = flow.manager.session_dir(&id).record();
+    let file = crate::manager::session_dir::read_lineage(&record)
+        .last()
+        .and_then(|session| session.file.clone())
+        .unwrap();
+    read_with_image(&file, "view_1", &picture);
+    let answer = flow
+        .core
+        .all_messages(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .rfind(|message| message.role == MessageRole::Assistant)
+        .unwrap()
+        .id;
+    let fork = flow
+        .manager
+        .fork(id.clone(), answer, ForkPlace::NewWorktree)
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&folder).unwrap();
+
+    let view = flow.manager.thread_view(&fork.id).unwrap();
+    let image = view
+        .entries
+        .iter()
+        .find_map(|entry| entry.images.first().cloned())
+        .expect("its copied thread names the image");
+    let data = brigadier_providers::image_base64(super::chat_images_tests::PNG);
+    let (read, _) = flow.manager.thread_image(&fork.id, &image).unwrap();
+    assert_eq!(read, data);
+    let (read, _) = flow
+        .manager
+        .read_thread_image(&fork.id, "view_1")
+        .await
+        .unwrap();
+    assert_eq!(read, data);
+    let elsewhere = FileImage {
+        file: "/elsewhere/session.jsonl".into(),
+        ..image
+    };
+    assert!(flow.manager.thread_image(&fork.id, &elsewhere).is_err());
+}
+
+/// #792: a worker's own transcript reads its images through its session: the one its session
+/// file holds and the one at the path its item names. Another session's item stays refused.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_workers_transcript_reads_its_images() {
+    use super::cli_tests::{brigadier, id_of, start, wait_for};
+    use brigadier_cli::protocol::CliRequest;
+    let folder = std::env::temp_dir().join(format!("worker-images-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let picture = folder.join("viewed.png");
+    std::fs::write(&picture, super::chat_images_tests::PNG).unwrap();
+    let flow = Flow::start(
+        "cli-thread-worker-images",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if !turn.input.contains("Start one.") {
+                return Reply::text("Noted.");
+            }
+            let started = brigadier(&turn, CliRequest::Start(Box::new(start("Write it.")))).await;
+            wait_for(&turn, &[&id_of(&started)], 1).await;
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    flow.say("Start one.").await;
+    flow.until("its worker exists", |board| !board.tasks.is_empty())
+        .await;
+    flow.settled().await;
+    let board = flow.board().await;
+    let task = board.tasks.values().next().unwrap();
+    let record = flow.manager.session_dir(&id).worker(task).join("record");
+    let file = crate::manager::session_dir::read_lineage(&record)
+        .last()
+        .and_then(|session| session.file.clone())
+        .expect("its session file");
+    read_with_image(&file, "view_w", &picture);
+
+    let view = flow.manager.worker_thread(&id, &task.id).await.unwrap();
+    let image = view
+        .entries
+        .iter()
+        .find_map(|entry| entry.images.first().cloned())
+        .expect("its transcript names the image");
+    let data = brigadier_providers::image_base64(super::chat_images_tests::PNG);
+    let (read, _) = flow.manager.thread_image(&id, &image).unwrap();
+    assert_eq!(read, data);
+    let (read, _) = flow.manager.read_thread_image(&id, "view_w").await.unwrap();
+    assert_eq!(read, data);
+    assert!(
+        flow.manager
+            .read_thread_image(&id, "no_such_item")
+            .await
+            .is_err()
+    );
+    std::fs::remove_dir_all(&folder).unwrap();
+}
+
 /// #648: a fork's thread is the source's, as its CLI kept it, up to the answer it forks: its
 /// messages and answers, each turn ended as it did, and nothing after. It stays so after a
 /// restart, and the fork's own turns follow it.

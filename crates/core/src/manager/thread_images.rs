@@ -65,6 +65,22 @@ impl SessionManager {
         self.data_dir.join("thread-images").join(&id.0)
     }
 
+    /// Where conversation `id`'s kept images are: its own folder, then, for a fork, those of the
+    /// sessions the thread it copied came from.
+    fn kept_image_dirs(&self, id: &ConversationId) -> Vec<PathBuf> {
+        let origin = |id: &ConversationId| {
+            let conversation = self.core.conversation(id).ok()?;
+            conversation.forked_from.map(|from| from.conversation_id)
+        };
+        let mut dirs = vec![self.thread_images_dir(id)];
+        let mut source = origin(id);
+        while let Some(from) = source {
+            dirs.push(self.thread_images_dir(&from));
+            source = origin(&from);
+        }
+        dirs
+    }
+
     /// Capture image bytes before recording the event, while a worker's temp folder exists.
     pub(super) async fn retain_thread_image(
         &self,
@@ -133,10 +149,16 @@ impl SessionManager {
         if !source.is_absolute() {
             return Err(Error::Invalid("An image needs an absolute path".into()));
         }
-        let retained =
-            crate::thread_image_files::retained_path(&self.thread_images_dir(id), &source);
+        let retained: Vec<_> = self
+            .kept_image_dirs(id)
+            .iter()
+            .map(|dir| crate::thread_image_files::retained_path(dir, &source))
+            .collect();
         blocking(move || {
-            let path = if retained.is_file() { retained } else { source };
+            let path = retained
+                .into_iter()
+                .find(|path| path.is_file())
+                .unwrap_or(source);
             let (bytes, mime) = crate::thread_image_files::read_image(&path)?;
             Ok((brigadier_providers::image_base64(&bytes), mime.to_owned()))
         })
@@ -146,11 +168,31 @@ impl SessionManager {
     /// The copy kept of generated image `item` ([`Self::retain_thread_image`]), if there is one.
     fn kept_image(&self, id: &ConversationId, item: &str) -> Option<PathBuf> {
         let name = kept_name(item);
-        std::fs::read_dir(self.thread_images_dir(id))
-            .ok()?
-            .flatten()
-            .map(|entry| entry.path())
-            .find(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(name.as_str()))
+        self.kept_image_dirs(id).iter().find_map(|dir| {
+            std::fs::read_dir(dir)
+                .ok()?
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(name.as_str()))
+        })
+    }
+
+    /// Item `item` of one of conversation `id`'s workers' threads, as its CLI's files keep it.
+    async fn worker_item(&self, id: &ConversationId, item: &str) -> Result<Option<ProviderEvent>> {
+        for task in self.core.tasks(id).await? {
+            let record = self.session_dir(id).worker(&task).join("record");
+            for session in super::session_dir::read_lineage(&record) {
+                let Some(file) = session.file else { continue };
+                let entries = self.session_files.read(session.provider, Path::new(&file));
+                let found = entries.iter().find(|entry| {
+                    brigadier_providers::session_file::item_id(&entry.event) == Some(item)
+                });
+                if let Some(entry) = found {
+                    return Ok(Some(entry.event.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub(super) async fn image_row(
@@ -189,9 +231,9 @@ impl SessionManager {
         .await;
     }
 
-    /// Returns the image an item of this conversation's CLI thread names (its own image, or a
-    /// `view_image` or `Read` of one), or a proof the thread attached, bounded before and
-    /// during read.
+    /// Returns the image an item of this conversation's CLI thread, or of one of its workers',
+    /// names (its own image, or a `view_image` or `Read` of one), or a proof the thread attached,
+    /// bounded before and during read.
     pub async fn read_thread_image(
         &self,
         id: &ConversationId,
@@ -213,14 +255,17 @@ impl SessionManager {
         }
         // An image the CLI looked at or made, at the path its item names.
         let view = self.thread_view(id)?;
-        let entry = view
+        let own = view
             .entries
             .iter()
             .find(|entry| brigadier_providers::session_file::item_id(&entry.event) == Some(item))
-            .ok_or_else(|| {
-                Error::Invalid("This item is not an image of this conversation".into())
-            })?;
-        let path = match &entry.event {
+            .map(|entry| entry.event.clone());
+        let event = match own {
+            Some(event) => Some(event),
+            None => self.worker_item(id, item).await?,
+        }
+        .ok_or_else(|| Error::Invalid("This item is not an image of this conversation".into()))?;
+        let path = match &event {
             // The copy Brigadier kept outlasts the CLI's own file.
             ProviderEvent::Image { path, .. } => self
                 .kept_image(id, item)
