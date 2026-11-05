@@ -358,6 +358,7 @@ async fn run(
     daemon
         .sessions
         .set_browser(std::sync::Arc::new(crate::connect::open_in_browser));
+    daemon.sessions.start_mcp_account_spread();
     supervisor.spawn_critical(
         "ipc accept loop",
         server::accept_loop(daemon.clone(), listener, token),

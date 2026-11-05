@@ -926,9 +926,9 @@ fn fallback_spreads_only_the_cli_that_finished_before_reporting_success() {
 fn a_failed_account_spread_is_reported_instead_of_claiming_all_accounts_signed_in() {
     let fake = fake::fake("spread-error");
     let logins = Arc::new(McpLogins::default());
-    let _ = logins
-        .spread
-        .set(Arc::new(|_| Err("Account store unavailable".into())));
+    let _ = logins.spread.set(Arc::new(|_| {
+        Err(io::Error::other("Account store unavailable"))
+    }));
     let (open, _) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     let progress = fake::wait(&logins, &id, |progress| progress.finished);
@@ -938,4 +938,57 @@ fn a_failed_account_spread_is_reported_instead_of_claiming_all_accounts_signed_i
             .iter()
             .any(|agent| matches!(agent.state, AgentSignInState::Failed { .. }))
     );
+}
+
+#[test]
+fn a_keychain_refusal_stops_the_account_spread_until_the_next_sign_in() {
+    use brigadier_providers::adapters::kinds;
+    let logins = McpLogins::default();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let refusing = Arc::new(AtomicBool::new(true));
+    let (seen, refuses) = (calls.clone(), refusing.clone());
+    let _ = logins.spread.set(Arc::new(move |kind| {
+        seen.lock().unwrap().push(kind);
+        if refuses.load(Ordering::SeqCst) && kind == ProviderKind::Claude {
+            return Err(io::Error::other(Blocked::KeychainRefused));
+        }
+        Ok(())
+    }));
+    let count = |kind| calls.lock().unwrap().iter().filter(|k| **k == kind).count();
+    logins.spread_pass();
+    logins.spread_pass();
+    // Asked once however many passes come; another CLI keeps going.
+    assert_eq!(count(ProviderKind::Claude), 1);
+    assert_eq!(count(ProviderKind::Codex), 2);
+    assert_eq!(calls.lock().unwrap().len(), 2 * kinds().count() - 1);
+    // Signing in asks again, and says why when the answer is still no.
+    assert!(
+        logins
+            .spread_after_sign_in(ProviderKind::Claude)
+            .unwrap_err()
+            .contains("Keychain")
+    );
+    assert_eq!(count(ProviderKind::Claude), 2);
+    logins.spread_pass();
+    assert_eq!(count(ProviderKind::Claude), 2);
+    // Allowed this time: the passes come back.
+    refusing.store(false, Ordering::SeqCst);
+    logins.spread_after_sign_in(ProviderKind::Claude).unwrap();
+    logins.spread_pass();
+    assert_eq!(count(ProviderKind::Claude), 4);
+}
+
+#[tokio::test]
+async fn the_account_spread_starts_at_boot_without_a_sign_in() {
+    use crate::manager::flow::{Flow, Options, Reply};
+    // No extra account is set up here, so a pass ends before any credential store.
+    let flow = Flow::start(
+        "account-spread-at-boot",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    assert!(flow.manager.mcp_logins.spread.get().is_none());
+    flow.manager.start_mcp_account_spread();
+    assert!(flow.manager.mcp_logins.spread.get().is_some());
 }
