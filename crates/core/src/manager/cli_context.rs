@@ -673,7 +673,7 @@ fn skills_output(
             .find(|skill| skill.display == name || skill.invocation == name || skill.row_id == name)
             .ok_or_else(|| {
                 Error::Invalid(format!(
-                    "no skill {name:?} here; `brigadier context skills` lists them"
+                    "no skill {name:?} here; `brigadier skill` lists them"
                 ))
             })?;
         let text = std::fs::read_to_string(&skill.path)
@@ -852,9 +852,9 @@ fn items_text(items: &[ContextItem], title: &str, none: &str, worker: bool) -> S
     }
     if title == "Skills" {
         text.push_str(if worker {
-            "\n`brigadier context skills <name>` prints one whole; follow it as written.\n"
+            "\n`brigadier skill <name>` prints one whole; follow it as written.\n"
         } else {
-            "\n`brigadier context skills <name>` prints one whole.\n"
+            "\n`brigadier skill <name>` prints one whole.\n"
         });
     } else {
         text.push_str(
