@@ -85,3 +85,35 @@ test("a context refresh while a block is held leaves its live line under the div
   assert.deepEqual(quiet.closed.waits, [[]]);
   assert.ok(quiet.closed.refresh.gap !== null && quiet.closed.refresh.gap >= 0, JSON.stringify(quiet.closed));
 });
+
+type SeenSeam = Seen & { liveLines: number[]; composer: string | null; order: string[][] };
+type SeamSteps = Record<"running" | "over" | "closed" | "nothingHeld", SeenSeam>;
+
+test("a hand-off while a block is held leaves one block with one live line, its divider and rows in order, the composer's clock the same as its header's, and no split when the block closes", async (t) => {
+  const seam = JSON.parse(await renderFixturePage(t, "held-block.html?seam=held", "held-block-result", 20000)) as SeamSteps;
+  const order = ["A worker is on the first.", "divider", "Picking up where the last session stoppe", "Messaged First bug", "The worker has what it needs."];
+  for (const step of [seam.running, seam.over]) {
+    assert.equal(step.blocks, 1, JSON.stringify(step));
+    assert.deepEqual(step.liveLines, [1], JSON.stringify(step));
+    assert.deepEqual(step.order, [order], JSON.stringify(step));
+    assert.match(step.headers[0] ?? "", /^Working for /);
+    assert.equal(step.composer, step.headers[0], JSON.stringify(step));
+  }
+  assert.deepEqual(seam.over.waits, [["Waiting for 2 workers"]]);
+  assert.equal(seam.closed.blocks, 1, JSON.stringify(seam.closed));
+  assert.match(seam.closed.headers[0] ?? "", /^Worked for /);
+  // Nothing held, the block open only through the hand-off's own turns: the later block alone is live.
+  assert.equal(seam.nothingHeld.blocks, 2, JSON.stringify(seam.nothingHeld));
+  assert.deepEqual(seam.nothingHeld.liveLines, [0, 1], JSON.stringify(seam.nothingHeld));
+  assert.match(seam.nothingHeld.headers[0] ?? "", /^Worked for /);
+  assert.match(seam.nothingHeld.headers[1] ?? "", /^Working for /);
+});
+
+test("a hand-off to another CLI that joins the block says so in the work where it happened; one that doesn't says so after its block", async (t) => {
+  const seam = JSON.parse(await renderFixturePage(t, "held-block.html?seam=moved", "held-block-result", 20000)) as SeamSteps;
+  const order = ["A worker is on the first.", "divider", "moved", "Picking up where the last session stoppe", "Messaged First bug", "The worker has what it needs."];
+  for (const step of [seam.running, seam.over]) assert.deepEqual(step.order, [order], JSON.stringify(step));
+  assert.deepEqual(seam.closed.order[0]?.filter((each) => each === "moved"), ["moved"], JSON.stringify(seam.closed));
+  assert.equal(seam.nothingHeld.order[0]?.at(-1), "moved", JSON.stringify(seam.nothingHeld));
+  assert.ok(!seam.nothingHeld.order[1]?.includes("moved"), JSON.stringify(seam.nothingHeld));
+});

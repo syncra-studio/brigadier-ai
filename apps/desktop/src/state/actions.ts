@@ -41,8 +41,8 @@ import { providerForSetting } from "@/state/providerDestination";
 import { tabsIdOf } from "@/state/draftTabs";
 import { carryDraftTabs, CHAT_TAB, openSideChatTab, selectTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
-import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
-import { onRealActivity, realActivity, rowActivity, useActivity, workHolds } from "@/state/activity";
+import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, turnStopping, useStopping } from "@/state/stopping";
+import { onRealActivity, realActivity, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
 import { loadThreadView, useCliThread, useUnreadThreads } from "@/state/cliThread";
 import { workerDone } from "@/app/conversation/workerPresentation";
 import {
@@ -748,9 +748,12 @@ export async function send(
   // Asked to queue with no slot: last.
   const slot = steer ? null : (queueIndex ?? (lane === "queue" ? (queue?.items.length ?? 0) : null));
   const paused = slot !== null && !!queue?.paused;
+  // After the user's Stop, its turn still ending or not, a session's or a Chat's message goes
+  // right in, whatever still holds: the daemon judges nothing until the next turn starts.
+  const stopped = brigade && (turnStopping(useStopping.getState().stops, conversationId) || stoppedOf(activity));
   // A message that waits shows in the queue at once, not the thread; a steered one arrives
   // as an event.
-  const waits = running || starting || working || paused;
+  const waits = paused || (!stopped && (running || starting || working));
   const queued = waits && !steer;
   const localId = waits && steer ? null : crypto.randomUUID();
   // Whatever a Stop just showed, what it sends now shows as it really is.
@@ -788,6 +791,8 @@ export async function send(
     });
     if (outcome.type === "sent") {
       if (localId && !queued) confirmSent(conversationId, outcome.message, localId);
+      // Shown as waiting, it went right in all the same: its turn is placed as a sent one's is.
+      if (localId && queued) expectSentTurn(conversationId, outcome.message.id);
       updateThread(conversationId, (thread) => ({
         ...thread,
         items: mergeMessages(thread.items, [outcome.message]),

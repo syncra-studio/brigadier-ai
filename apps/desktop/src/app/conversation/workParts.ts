@@ -13,7 +13,7 @@ export type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answe
  * that started the worker (that is the same work).
  */
 function cuts(entry: Entry): boolean {
-  return entry.kind === "steer" || entry.kind === "compaction" || entry.kind === "turnError" || (entry.kind === "taskNotice" && !entry.inWork);
+  return entry.kind === "steer" || entry.kind === "compaction" || entry.kind === "seam" || entry.kind === "turnError" || (entry.kind === "taskNotice" && !entry.inWork);
 }
 
 /**
@@ -27,7 +27,7 @@ function keepJoinedAnswers(parts: WorkPart[], done: boolean, answers: (index: nu
   return parts.map((part, index) => {
     const next = parts[index + 1];
     // A compaction mid-turn is no new turn, nor is a failure a follow-up: the reply before it folds with the work.
-    if (part.type !== "work" || next?.type !== "between" || next.entry.kind === "compaction" || next.entry.kind === "turnError") return part;
+    if (part.type !== "work" || next?.type !== "between" || next.entry.kind === "compaction" || next.entry.kind === "seam" || next.entry.kind === "turnError") return part;
     const last = part.items.at(-1);
     if (last?.type !== "entry" || last.entry.kind !== "text" || !answers(last.entry.index)) return part;
     return { ...part, items: part.items.slice(0, -1), answer: last.entry };

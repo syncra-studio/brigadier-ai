@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::cli_tests::{brigadier, wait};
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
-use crate::manager::seam::SeamConfig;
+use crate::manager::seam::{CARRY_ON, SeamConfig};
 use crate::model::PermissionLevel;
 use crate::thread_view::NUDGE_MARK;
 
@@ -34,6 +34,9 @@ struct Seen {
     hold_resumes: AtomicBool,
     /// Every worker's input, in order.
     worker_inputs: Mutex<Vec<String>>,
+    /// A successor's word to carry on hangs until `carry_on_goes`, once this is set.
+    hold_carry_on: AtomicBool,
+    carry_on_goes: AtomicBool,
 }
 
 impl Seen {
@@ -225,6 +228,11 @@ async fn parent(turn: Turn, seen: Arc<Seen>) -> Reply {
         turn.env(SESSION_ENV).unwrap().to_owned(),
         turn.env(GRANT_ENV).unwrap().to_owned(),
     ));
+    if seen.hold_carry_on.load(Ordering::SeqCst) && turn.input.trim_end().ends_with(CARRY_ON) {
+        while !seen.carry_on_goes.load(Ordering::SeqCst) && !turn.stops.0.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
     if turn.input.starts_with(NUDGE_MARK) {
         let note = turn
             .input
@@ -236,6 +244,13 @@ async fn parent(turn: Turn, seen: Arc<Seen>) -> Reply {
         return Reply::text("Handed off.");
     }
     let said = crate::manager::seam::without_handoff(&turn.input);
+    if said.contains("Big-turn.") {
+        return Reply {
+            text: "Big.".into(),
+            context_tokens: Some(70_000),
+            ..Reply::default()
+        };
+    }
     if said.contains("Grow.") {
         turn.report_context(70_000).await;
         turn.until_steered().await;
@@ -747,6 +762,118 @@ async fn an_event_after_the_parents_seam_reaches_its_successor_once() {
         "the net went to the CLI session before the seam"
     );
     assert_eq!(seen.told(), [("Hang-on".into(), "finished".into())]);
+    flow.stop().await;
+}
+
+/// A successor that starts by itself while its generation's worker still works goes on in that
+/// work's block, and the join is on record, so the block stays one once it closes (D163).
+#[tokio::test]
+async fn a_successors_own_turn_while_a_worker_works_is_recorded_as_joining() {
+    let (mut flow, seen) = flow("events-seam-join", PermissionLevel::Full).await;
+    let config = SeamConfig {
+        tokens: 60_000,
+        hold: Duration::from_millis(200),
+        long: None,
+        tokens_set: false,
+    };
+    flow.seam = Some(config);
+    flow.manager.set_seam(config);
+    flow.say("Start Hang-on.").await;
+    flow.settled().await;
+    let first = seen.inputs.lock().unwrap()[0].0.clone();
+    flow.say("Grow.").await;
+    super::eventually("the successor's turn", || {
+        seen.inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(native, _)| *native != first)
+    })
+    .await;
+    flow.idle().await;
+    let id = flow.conversation.clone();
+    let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
+    let last = records.last().expect("the successor's turn is noted");
+    assert!(last.joins, "{records:#?}");
+    // A thread recorded before the engine noted that join reads the same, from recorded times.
+    let record = flow.manager.session_dir(&id).record();
+    let path = record.join("turns.jsonl");
+    let lines = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, lines.replace("\"joins\":true", "\"joins\":false")).unwrap();
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(view.turns.last().unwrap().joins, "{view:#?}");
+    seen.release.store(true, Ordering::SeqCst);
+    flow.stop().await;
+}
+
+/// While a successor's own first turn joins held work the tab and composer read working, as the
+/// block's header does; a message sent meanwhile still waits in the queue for that turn's end
+/// (D193). The hand-off's note turn stays quiet though the worker holds.
+#[tokio::test]
+async fn a_successors_joined_turn_reads_working_and_a_message_still_waits() {
+    // The nudge goes as a turn of its own, so the word to carry on serves no request and is quiet.
+    let seen = Arc::new(Seen::default());
+    let mut flow = Flow::start(
+        "events-seam-working",
+        Options {
+            permission: PermissionLevel::Full,
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                refuse_steers: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(seen.clone()),
+    )
+    .await;
+    seen.hold_carry_on.store(true, Ordering::SeqCst);
+    let config = SeamConfig {
+        tokens: 60_000,
+        hold: Duration::from_millis(200),
+        long: None,
+        tokens_set: false,
+    };
+    flow.seam = Some(config);
+    flow.manager.set_seam(config);
+    flow.say("Start Hang-on.").await;
+    flow.settled().await;
+    flow.say("Big-turn.").await;
+    super::eventually("the successor's word to carry on", || {
+        seen.inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, input)| input.trim_end().ends_with(CARRY_ON))
+    })
+    .await;
+    let id = flow.conversation.clone();
+    super::eventually_async("the run state shown", || async {
+        flow.board().await.run == crate::work::RunState::Running
+    })
+    .await;
+    flow.say("While it carries on.").await;
+    let queue = flow.board().await.queue;
+    assert_eq!(queue.items.len(), 1, "{queue:#?}");
+    // Each of the user's two turns and the successor's: starting and running. None for the note's.
+    let shown = flow
+        .events_of(&id)
+        .await
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                crate::model::DomainEvent::RunStateChanged {
+                    state: crate::work::RunState::Starting | crate::work::RunState::Running,
+                    step: None,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(shown, 6, "the note's turn stays quiet");
+    seen.carry_on_goes.store(true, Ordering::SeqCst);
+    seen.release.store(true, Ordering::SeqCst);
     flow.stop().await;
 }
 

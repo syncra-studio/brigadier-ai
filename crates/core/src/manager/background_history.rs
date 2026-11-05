@@ -488,6 +488,27 @@ fn tail(path: &Path) -> std::io::Result<(Vec<u8>, u64)> {
     Ok((bytes, size))
 }
 
+/// Whether a background job of the session or a worker ran across `at_ms`, by the journal in the
+/// `record` folder of the session. A job with no end observed says nothing, one still running does.
+/// A persistent app (a preview, a dev server) holds no work.
+pub(super) fn job_ran_across(record: &Path, at_ms: i64) -> bool {
+    let _guard = DISK.lock().unwrap();
+    let Ok(journal) = Journal::load(&record.join("background-history")) else {
+        return false;
+    };
+    journal.records.iter().any(|Entry { record, .. }| {
+        record.kind != "preview"
+            && record.started_at_ms <= at_ms
+            && record
+                .ended_at_ms
+                .map_or(record.status == "running", |ended| ended > at_ms)
+            && !record
+                .command
+                .as_deref()
+                .is_some_and(crate::thread_view::persistent_app)
+    })
+}
+
 /// What became of a job a restart caught, as far as can be known.
 #[derive(Debug, PartialEq)]
 enum JobEnd {
@@ -1292,6 +1313,49 @@ fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_job_known_to_run_across_a_time_counts() {
+        let dir = std::env::temp_dir().join(format!("bg-across-{}", uuid::Uuid::now_v7()));
+        let history = dir.join("background-history");
+        std::fs::create_dir_all(&history).unwrap();
+        let write = |kind: &str, status: &str, started: i64, ended: Option<i64>, command: &str| {
+            let mut journal = Journal::default();
+            journal.records.push(Entry {
+                record: serde_json::from_value(serde_json::json!({
+                    "id": "j", "conversationId": "c", "workerId": "w", "provider": null,
+                    "nativeSessionId": null, "generation": "g", "taskId": "t", "callId": null,
+                    "kind": kind, "purpose": "p", "command": command, "cwd": null,
+                    "status": status, "startedAtMs": started, "endedAtMs": ended, "exitCode": null,
+                    "stopActor": null, "summary": null, "outputAvailable": false,
+                    "outputTruncated": false, "outputBytes": 0,
+                }))
+                .unwrap(),
+                epoch: epoch().to_owned(),
+                source: None,
+                preview_log: None,
+                detached: false,
+                owed: false,
+                followed: false,
+            });
+            journal.save(&history).unwrap();
+        };
+        write("shell", "completed", 0, Some(100), "gh run watch 1");
+        assert!(job_ran_across(&dir, 50));
+        assert!(!job_ran_across(&dir, 100));
+        assert!(!job_ran_across(&dir, 150));
+        write("shell", "running", 0, None, "gh run watch 1");
+        assert!(job_ran_across(&dir, 50));
+        // No end observed: it says nothing.
+        write("shell", "unknown", 0, None, "gh run watch 1");
+        assert!(!job_ran_across(&dir, 50));
+        // An app left running holds no work.
+        write("preview", "running", 0, None, "gh run watch 1");
+        assert!(!job_ran_across(&dir, 50));
+        write("shell", "running", 0, None, "pnpm dev");
+        assert!(!job_ran_across(&dir, 50));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     use brigadier_providers::{BackgroundTask, BackgroundTaskStatus};
     struct Temp(PathBuf);
     impl Temp {
