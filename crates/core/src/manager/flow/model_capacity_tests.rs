@@ -514,6 +514,36 @@ async fn a_worker_goes_past_a_target_that_fails_to_launch() {
     bench.flow.stop().await;
 }
 
+/// #748: the CLI it moved to started and refused its first message: no turn runs, so the worker
+/// isn't left busy and Running, and the next model goes on.
+#[tokio::test]
+async fn a_worker_goes_past_a_target_that_refuses_its_first_message() {
+    let bench = bench(
+        "capacity-worker-refused",
+        &[
+            ("One", "claude", "claude-a"),
+            ("Fallback", "codex", "gpt-b"),
+            ("Fallback", "claude", "claude-c"),
+        ],
+        true,
+        &["claude-a"],
+        Some(work("One")),
+    )
+    .await;
+    bench
+        .flow
+        .behavior
+        .refuse_sends
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Codex);
+    bench.flow.say("Start one.").await;
+    let task = bench.reported(2).await;
+    assert_eq!(bench.worker_models(), strings(&["claude-a", "claude-c"]));
+    assert_eq!(task.route.choice.model.as_deref(), Some("claude-c"));
+    bench.flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_worker_whose_last_target_fails_to_launch_goes_back_and_says_so() {
     let bench = bench(

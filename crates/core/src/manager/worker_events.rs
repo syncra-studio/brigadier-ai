@@ -709,6 +709,9 @@ fn net_text(message: &str, held: &[Kept], titles: &HashMap<TaskId, String>) -> S
                     }
                 })
                 .unwrap_or_default();
+            let resets = kept.event.resets_at_ms.map_or_else(String::new, |at| {
+                format!(" · resets {}", brigadier_cli::render::local_time(at))
+            });
             // As `brigadier wait` says it: only the session answers its worker's prompt (D48).
             let answer = if kept.event.event == EventKind::NeedsInput {
                 format!(
@@ -719,7 +722,7 @@ fn net_text(message: &str, held: &[Kept], titles: &HashMap<TaskId, String>) -> S
                 String::new()
             };
             format!(
-                "Worker \"{title}\" ({}): {}{what}{answer}{}",
+                "Worker \"{title}\" ({}): {}{what}{resets}{answer}{}",
                 kept.event.id,
                 net_word(kept.event.event),
                 super::work_facts::net_facts(&kept.event)
@@ -1087,6 +1090,27 @@ mod tests {
 
     fn none(_: &Kept) -> bool {
         false
+    }
+
+    /// #710: the net's line says when the limit resets, as the event does.
+    #[test]
+    fn the_nets_limit_line_says_when_it_resets() {
+        let dir = Scratch::new();
+        let events = WorkerEvents::default();
+        let (me, task) = (ConversationId("c1".into()), TaskId("t-a".into()));
+        let record = dir.0.as_path().join("c1");
+        let mut limit = event(EventKind::UsageLimit);
+        limit.message = Some("a usage limit".into());
+        limit.resets_at_ms = Some(1_792_783_200_000);
+        events.push(&me, &record, &task, None, limit);
+        let holder = events.wait_holder();
+        let held = events.hold(&me, &record, &holder, all, none);
+        let text = net_text("x", &held, &HashMap::new());
+        let at = brigadier_cli::render::local_time(1_792_783_200_000);
+        assert!(
+            text.contains(&format!("a usage limit · resets {at}")),
+            "{text}"
+        );
     }
 
     #[test]

@@ -1569,8 +1569,13 @@ impl SessionManager {
         let input = self
             .direct_input(conversation_id, scratch, text, attachments, mentions)
             .await?;
-        self.deliver_to_worker(conversation_id, &task, input)
-            .await?;
+        let wait = self.message_takes_quota_wait(&live, &task).await?;
+        if let Err(err) = self.deliver_to_worker(conversation_id, &task, input).await {
+            if let Some(wait) = wait {
+                self.put_back_quota_wait(&task, wait).await;
+            }
+            return Err(err);
+        }
         drop(settled);
         // It reached the worker: the record and the note only log their failures.
         let shown = super::brains::cut(text.trim(), crate::work::STEP_TEXT_MAX);

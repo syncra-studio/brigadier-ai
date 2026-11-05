@@ -368,6 +368,51 @@ impl SessionManager {
         .await
     }
 
+    /// The user's message gives the worker a turn, so that turn replaces its quota wait (#749):
+    /// the wait, to [`Self::put_back_quota_wait`] if the message doesn't get through. A turn
+    /// still running (ending at its limit, or a relaunch's) leaves the wait to its end.
+    pub(in crate::manager) async fn message_takes_quota_wait(
+        &self,
+        live: &TaskLive,
+        task: &Task,
+    ) -> Result<Option<Box<QuotaWait>>> {
+        let Some(wait) = task.quota_wait.clone() else {
+            return Ok(None);
+        };
+        if live.busy().await {
+            return Ok(None);
+        }
+        self.cancel_worker_quota(live, task).await?;
+        live.state.lock().await.quota_cancelled = false;
+        Ok(Some(wait))
+    }
+
+    /// The message that took `wait` didn't reach the worker: it goes on waiting, as before.
+    pub(in crate::manager) async fn put_back_quota_wait(&self, task: &Task, wait: Box<QuotaWait>) {
+        let path = self.worker_record(task).join("quota-cancelled.json");
+        let _ = blocking(move || match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(Error::Invalid(err.to_string())),
+        })
+        .await;
+        let restored = self
+            .update_task_if(
+                &task.conversation_id,
+                &task.id,
+                |task| !task.state.is_final() && task.quota_wait.is_none(),
+                |task| task.quota_wait = Some(wait),
+            )
+            .await;
+        match restored {
+            Ok(Some(task)) => self.arm_worker_quota_retry(&task).await,
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not keep a worker's quota wait");
+            }
+        }
+    }
+
     /// The choices of a `Work`'s routing rows, in its order.
     fn work_choices(&self, work: &str) -> Vec<ModelChoice> {
         self.work_rows(work)
@@ -525,13 +570,16 @@ impl SessionManager {
             {
                 return;
             }
-            if self
+            // A session asleep still has its wait: it wakes below if the worker can go on (#750).
+            let Some(lifecycle) = self
                 .core
                 .conversation(&task.conversation_id)
-                .map_or(true, |conv| conv.lifecycle != Lifecycle::Active)
-            {
+                .ok()
+                .map(|conv| conv.lifecycle)
+                .filter(|lifecycle| *lifecycle != Lifecycle::Archived)
+            else {
                 return;
-            }
+            };
             let cancelled_at = self.worker_record(&task).join("quota-cancelled.json");
             if std::fs::read_to_string(cancelled_at)
                 .ok()
@@ -615,6 +663,9 @@ impl SessionManager {
                 }
                 return;
             };
+            if lifecycle == Lifecycle::Hibernated {
+                self.wake_for_worker(&task).await;
+            }
             let mut from = wait
                 .model
                 .clone()
@@ -679,6 +730,19 @@ impl SessionManager {
         })
     }
 
+    /// Its worker goes on, so the session that slept while it waited is awake again.
+    async fn wake_for_worker(&self, task: &Task) {
+        let id = &task.conversation_id;
+        match self.core.set_lifecycle(id.clone(), Lifecycle::Active).await {
+            Ok(_) => {
+                self.set_run(id, crate::work::RunState::Idle, None).await;
+            }
+            Err(err) => {
+                tracing::warn!(task = %task.id, error = %err, "could not wake the session of a worker going on");
+            }
+        }
+    }
+
     pub(in crate::manager) async fn arm_worker_quota_retry(&self, task: &Task) {
         let Some(wait) = task.quota_wait.as_ref() else {
             return;
@@ -710,7 +774,7 @@ impl SessionManager {
 
     pub(in crate::manager) async fn retry_waiting_workers(&self) {
         for conversation in self.core.catalog().conversations {
-            if conversation.lifecycle != Lifecycle::Active {
+            if conversation.lifecycle == Lifecycle::Archived {
                 continue;
             }
             if let Ok(tasks) = self.core.tasks(&conversation.id).await {
