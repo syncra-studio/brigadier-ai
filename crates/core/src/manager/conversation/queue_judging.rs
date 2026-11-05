@@ -196,7 +196,7 @@ impl SessionManager {
             ))
             .await?;
         if queue_index.is_some() {
-            // As a judge's answer ends: only paused workers hold, and nothing else sends it.
+            // As a judge's answer ends: the hold may have ended meanwhile, and nothing else sends it.
             self.kick(conv);
         } else {
             self.judge_now(conv, &item);

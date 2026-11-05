@@ -1423,7 +1423,11 @@ impl SessionManager {
         }
         let mut state = conv.state.lock().await;
         state.last_activity_ms = now_ms();
-        if state.busy && !state.compacting {
+        // A turn the user's Stop is ending has no work left to judge against: as with none. A
+        // side chat keeps the plain queue.
+        let stopping =
+            state.interrupted && !steer && !paused && queue_judging::judges_queue(&conversation);
+        if state.busy && !state.compacting && !stopping {
             if steer {
                 // In the running turn's block from the first frame: marked in the write that stores it.
                 let message = self
@@ -1494,18 +1498,18 @@ impl SessionManager {
         }
         // No turn runs, but the Chat's work still holds (its workers, its CLI's background
         // commands): as a session's, the message waits in the queue, judged in the background.
-        // A Steer still goes straight in.
+        // Paused workers alone don't make it wait: it goes right in. A Steer always does.
         let mut holds = false;
         let mut into = None;
         if !paused && queue_judging::judges_queue(&conversation) {
             drop(state);
             holds = self.work_holds(&conv).await;
-            if !steer && holds {
+            if !steer && holds && self.queue_holds(&conv).await {
                 return self
                     .queue_to_judge(&conv, text, attachments, mentions, queue_index)
                     .await;
             }
-            if steer && holds {
+            if holds {
                 into = self.request_for(&id).await;
             }
             state = conv.state.lock().await;
@@ -1518,8 +1522,8 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
-        // Steered into the work that holds with no turn running: it takes it (D25), in its
-        // open block from the first frame.
+        // Into the work that holds with no turn running: it takes it (D25), in its open block
+        // from the first frame.
         let message = self
             .core
             .append_steered_message(id.clone(), text, attachments, mentions, into)
@@ -1677,7 +1681,7 @@ impl SessionManager {
         let id = &conv.id;
         // A reply instead of "Build it" closes the plan's card (harness D7).
         self.plan_replied(id).await;
-        let (busy, held, compacting, quiet) = {
+        let (busy, held, compacting, quiet, stopping) = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
             (
@@ -1685,6 +1689,7 @@ impl SessionManager {
                 state.seam.held,
                 state.compacting,
                 state.busy && state.seam.quiet,
+                state.busy && state.interrupted,
             )
         };
         // No steer while compacting: it waits in the queue and goes once compaction is done.
@@ -1730,23 +1735,24 @@ impl SessionManager {
             .await;
             return Ok(SendOutcome::Sent(message));
         }
-        if busy && !paused {
+        // A turn the user's Stop is ending has no work left to judge against: as with none.
+        if busy && !stopping && !paused {
             // It waits in the queue, judged in the background (D157).
             return self
                 .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
         // No turn runs, but the session's work still holds (its workers, its CLI's background
-        // commands): the message waits in the queue all the same, judged in the background. A
-        // Steer still goes straight in.
+        // commands): the message waits in the queue all the same, judged in the background.
+        // Paused workers alone don't make it wait: it goes right in. A Steer always does.
         let holds = !paused && self.work_holds(conv).await;
-        if !steer && holds {
+        if !steer && holds && self.queue_holds(conv).await {
             return self
                 .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
-        if busy || paused {
-            // A turn runs, or the queue is paused: it waits for its own turn.
+        if paused {
+            // The queue is paused: it waits for its own turn.
             let item = conv
                 .user_write(
                     self.core
@@ -1755,9 +1761,9 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
-        // Steered into the work that holds with no turn running: it takes it (D25), in its
-        // open block from the first frame.
-        let into = if steer && holds {
+        // Into the work that holds with no turn running: it takes it (D25), in its open block
+        // from the first frame. Behind a turn being stopped, the next turn carries it.
+        let into = if holds {
             self.request_for(id).await
         } else {
             None
@@ -2238,6 +2244,9 @@ impl SessionManager {
             .is_empty();
         if waiting {
             self.core.set_queue_paused(&id, true).await?;
+            // Its rows stay put whatever a judge still out would say: none reads Deciding now.
+            conv.judging.lock().unwrap().clear();
+            self.end_deciding(&id, None).await;
         }
         // The thread first, so it starts nothing more; then what it runs: its commands (when
         // the turn ends, see `end_commands`), its previews, a start of one still under way
