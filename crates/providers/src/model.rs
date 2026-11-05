@@ -1553,6 +1553,52 @@ pub struct McpServer {
     /// tools behind its tool search, and a model that has to look a tool up first tends to
     /// fall back to its built-in ones.
     pub always_load: bool,
+    /// Where the CLI itself reads its values from, instead of [`Self::env`].
+    pub sources: McpSources,
+}
+
+/// One piece of a value the CLI reads from its environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpValuePart {
+    /// Literal text, which may be a secret, so it is never on a command line.
+    Text(String),
+    /// The name of a variable the CLI expands itself.
+    Var(String),
+}
+
+/// What a CLI reads for itself, so a rotated value is the CLI's to pick up. Claude reads all of
+/// these and Codex those it can name; [`McpServer::env`] keeps the same entries' values as of
+/// the launch for what can't (the rest of Codex's, Brigadier's own client, OpenCode). `Debug`
+/// shows names only.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct McpSources {
+    /// Entries of [`McpServer::env`] by name, each with at least one variable.
+    pub references: Vec<(String, Vec<McpValuePart>)>,
+    /// A shell command that prints an HTTP server's headers (Claude's `headersHelper`).
+    pub headers_helper: Option<String>,
+}
+
+impl std::fmt::Debug for McpSources {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpSources")
+            .field(
+                "references",
+                &self
+                    .references
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
+            .field("headers_helper", &self.headers_helper.is_some())
+            .finish()
+    }
+}
+
+impl McpSources {
+    /// Whether the CLI reads entry `name` itself, rather than being given its value.
+    pub fn references(&self, name: &str) -> bool {
+        self.references.iter().any(|(own, _)| own == name)
+    }
 }
 
 /// The local gateway authority. Its secret is never included in Debug output.

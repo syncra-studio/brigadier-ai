@@ -797,8 +797,17 @@ fn session_env(spec: &SessionSpec, hooks_on: bool, backstop: Option<i64>) -> Vec
                 .env
                 .iter()
                 .enumerate()
+                .filter(|(_, (name, _))| !server.sources.references(name))
                 .map(|(key, (_, value))| (mcp_alias(index, key), value.clone())),
         );
+        for (key, (_, parts)) in server.sources.references.iter().enumerate() {
+            env.extend(parts.iter().enumerate().filter_map(|(part, value)| {
+                let McpValuePart::Text(text) = value else {
+                    return None;
+                };
+                Some((mcp_part_alias(index, key, part), text.clone()))
+            }));
+        }
     }
     if let Some(hook) = spec
         .output_hook
@@ -858,12 +867,21 @@ fn mcp_alias(server: usize, key: usize) -> String {
     format!("BRIGADIER_MCP_{server}_{key}")
 }
 
+/// The variable that holds literal part `part` of the session's server `server`'s reference
+/// `key`.
+fn mcp_part_alias(server: usize, key: usize, part: usize) -> String {
+    format!("BRIGADIER_MCP_{server}_{key}_{part}")
+}
+
 /// Claude's `--mcp-config` for the session's servers.
 ///
 /// The config is on Claude's command line, which any process of the user can read, so a
 /// server's values (a grant, a token, a header) are not in it: they are in Claude's own
 /// environment under aliases ([`mcp_alias`]), and the config names them (`${ALIAS}`, expanded
-/// by Claude in `env` and `headers`). Claude ignores a stdio server's `cwd` (2.1.306,
+/// by Claude in `env` and `headers`). A value that reads a variable names that variable beside
+/// the aliases of its literal parts, so Claude reads it itself; a headers helper is Claude's to
+/// run. An unset variable would reach the server as literal text (2.1.318), so the resolver
+/// leaves such a server out. Claude ignores a stdio server's `cwd` (2.1.306,
 /// docs/research/phase7-probes.md (g)), so on Unix a server with a folder of its own starts
 /// through a shell that changes to it first.
 fn mcp_config(servers: &[McpServer]) -> Value {
@@ -871,15 +889,29 @@ fn mcp_config(servers: &[McpServer]) -> Value {
         .iter()
         .enumerate()
         .map(|(index, server)| {
-            let values: Map<String, Value> = server
+            let mut values: Map<String, Value> = server
                 .env
                 .iter()
                 .enumerate()
+                .filter(|(_, (name, _))| !server.sources.references(name))
                 .map(|(key, (name, _))| {
                     let alias = mcp_alias(index, key);
                     (name.clone(), Value::String(format!("${{{alias}}}")))
                 })
                 .collect();
+            for (key, (name, parts)) in server.sources.references.iter().enumerate() {
+                let text: String = parts
+                    .iter()
+                    .enumerate()
+                    .map(|(part, value)| match value {
+                        McpValuePart::Text(_) => {
+                            format!("${{{}}}", mcp_part_alias(index, key, part))
+                        }
+                        McpValuePart::Var(var) => format!("${{{var}}}"),
+                    })
+                    .collect();
+                values.insert(name.clone(), Value::String(text));
+            }
             let mut config = match &server.transport {
                 McpTransport::Stdio { command, args, cwd } => {
                     let command = command.display().to_string();
@@ -908,6 +940,9 @@ fn mcp_config(servers: &[McpServer]) -> Value {
                     "headers": values,
                 }),
             };
+            if let Some(helper) = &server.sources.headers_helper {
+                config["headersHelper"] = json!(helper);
+            }
             if let Some(secs) = server.tool_timeout_secs {
                 config["timeout"] = json!(secs * 1000);
             }
@@ -4185,6 +4220,7 @@ for line in sys.stdin:
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
         };
         let naked = SessionSpec {
             naked_worker: true,
@@ -4442,6 +4478,7 @@ for line in sys.stdin:
                 tool_timeout_secs: None,
                 trusted: true,
                 always_load: true,
+                sources: Default::default(),
             }],
             ..spec(cwd.path(), &[])
         };
@@ -4921,6 +4958,7 @@ for line in sys.stdin:
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
         };
         let spec = SessionSpec {
             mcp_servers: vec![
@@ -5000,6 +5038,67 @@ for line in sys.stdin:
         );
     }
 
+    /// #809: a reference stays one, its literal parts are in aliases, and a headers helper is
+    /// Claude's to run: only variable names and the helper's command are on the command line.
+    #[test]
+    fn header_sources_stay_references_with_no_value_on_the_command_line() {
+        let dir = std::env::temp_dir();
+        let mut web = McpServer {
+            gateway: None,
+            name: "web".into(),
+            transport: McpTransport::Http {
+                url: "https://mcp.example.com/mcp".into(),
+            },
+            env: vec![
+                ("Authorization".into(), "Bearer frozen-value".into()),
+                ("X-Plain".into(), "plain-secret".into()),
+            ],
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+            sources: Default::default(),
+        };
+        web.sources.references = vec![(
+            "Authorization".into(),
+            vec![
+                McpValuePart::Text("Bearer ".into()),
+                McpValuePart::Var("TOKEN_VAR".into()),
+            ],
+        )];
+        web.sources.headers_helper = Some("print-headers".into());
+        let spec = SessionSpec {
+            mcp_servers: vec![web],
+            tools: ToolSet::Lean,
+            ..spec(&dir, &[])
+        };
+        let args = Claude::session_flags(&spec, &dir, false, None);
+        let at = args.iter().position(|arg| arg == "--mcp-config").unwrap();
+        let config: Value = serde_json::from_str(&args[at + 1]).unwrap();
+        assert_eq!(
+            config["mcpServers"]["web"],
+            json!({"type": "http", "url": "https://mcp.example.com/mcp",
+                   "headersHelper": "print-headers",
+                   "headers": {"Authorization": "${BRIGADIER_MCP_0_0_0}${TOKEN_VAR}",
+                               "X-Plain": "${BRIGADIER_MCP_0_1}"}})
+        );
+        for value in ["frozen-value", "plain-secret", "Bearer "] {
+            assert!(!args[at + 1].contains(value), "{value}");
+        }
+        let env = session_env(&spec, true, None);
+        let aliases: Vec<_> = env
+            .iter()
+            .filter(|(key, _)| key.starts_with("BRIGADIER_MCP_"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            aliases,
+            [
+                ("BRIGADIER_MCP_0_1".to_owned(), "plain-secret".to_owned()),
+                ("BRIGADIER_MCP_0_0_0".to_owned(), "Bearer ".to_owned()),
+            ]
+        );
+    }
+
     /// What the user switched off for Brigadier: a server's tools are denied by name, and a
     /// skill is turned off by name (phase7-probes.md (a), (b)).
     #[test]
@@ -5063,6 +5162,7 @@ for line in sys.stdin:
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
         }];
         session.switched_off.servers = vec!["native-user".into()];
         let strict = Claude::session_flags(&session, &session.cwd, false, None);

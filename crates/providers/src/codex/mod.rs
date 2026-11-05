@@ -2239,6 +2239,37 @@ fn header_alias(server: &str, header: &str) -> String {
     format!("BRIGADIER_MCP_HEADER_{key}")
 }
 
+/// How Codex reads a value from its own environment: only by a variable's name.
+enum ByName<'a> {
+    Header(&'a str),
+    Bearer(&'a str),
+    Env(&'a str),
+}
+
+fn by_name<'a>(http: bool, key: &str, parts: &'a [McpValuePart]) -> Option<ByName<'a>> {
+    match parts {
+        [McpValuePart::Var(var)] if http => Some(ByName::Header(var)),
+        [McpValuePart::Var(var)] if var == key => Some(ByName::Env(var)),
+        [McpValuePart::Text(text), McpValuePart::Var(var)]
+            if http && text == "Bearer " && key.eq_ignore_ascii_case("authorization") =>
+        {
+            Some(ByName::Bearer(var))
+        }
+        _ => None,
+    }
+}
+
+/// Whether Codex reads `server`'s entry `key` from a variable by name. One it can't name keeps
+/// the launch's value from [`McpServer::env`].
+fn read_by_name(server: &McpServer, key: &str) -> bool {
+    let http = matches!(server.transport, McpTransport::Http { .. });
+    server
+        .sources
+        .references
+        .iter()
+        .any(|(own, parts)| own == key && by_name(http, own, parts).is_some())
+}
+
 fn mcp_header_env(spec: &SessionSpec) -> Vec<(String, String)> {
     let mut variables = vec![(EMPTY_HEADER_VAR.to_owned(), String::new())];
     for server in spec
@@ -2246,17 +2277,18 @@ fn mcp_header_env(spec: &SessionSpec) -> Vec<(String, String)> {
         .iter()
         .filter(|server| matches!(server.transport, McpTransport::Http { .. }))
     {
-        variables.extend(
+        // What Codex reads by name needs no alias holding the launch's value.
+        let given = || {
             server
                 .env
                 .iter()
-                .map(|(key, value)| (header_alias(&server.name, key), value.clone())),
-        );
+                .filter(|(key, _)| !read_by_name(server, key))
+        };
+        variables
+            .extend(given().map(|(key, value)| (header_alias(&server.name, key), value.clone())));
         // Codex refuses an empty inherited bearer-token variable. Replace its source with
         // the resolved bearer (when present), otherwise an inert non-credential value.
-        let bearer = server
-            .env
-            .iter()
+        let bearer = given()
             .find_map(|(key, value)| {
                 (key.eq_ignore_ascii_case("Authorization"))
                     .then(|| value.strip_prefix("Bearer "))
@@ -2291,9 +2323,21 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
     // The thread's config goes over the app-server's stdin, and Codex keeps none of it on
     // disk (docs/research/phase7-probes.md (i)): each server's values are in its own entry.
     for server in &spec.mcp_servers {
+        let http = matches!(server.transport, McpTransport::Http { .. });
+        // A referenced header is never a literal one: Codex reads it by name, or from an alias
+        // holding the launch's value. A stdio value it can't name stays a value: Codex passes
+        // variables on only under their own names.
+        let in_values = |name: &str| {
+            if http {
+                !server.sources.references(name)
+            } else {
+                !read_by_name(server, name)
+            }
+        };
         let mut values: Map<String, Value> = server
             .env
             .iter()
+            .filter(|(name, _)| in_values(name))
             .map(|(name, value)| (name.clone(), Value::String(value.clone())))
             .collect();
         // Thread overrides merge inherited maps. Clear stale values while retaining the
@@ -2311,6 +2355,7 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
             .and_then(Value::as_object)
             .into_iter()
             .flat_map(|map| map.keys())
+            .filter(|key| in_values(key))
         {
             values.entry(key.clone()).or_insert_with(|| json!(""));
         }
@@ -2328,11 +2373,27 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
             }
             McpTransport::Http { url } => json!({ "url": url, "http_headers": values }),
         };
-        if matches!(server.transport, McpTransport::Http { .. }) {
+        let by_name_reads: Vec<(&str, ByName<'_>)> = server
+            .sources
+            .references
+            .iter()
+            .filter_map(|(key, parts)| Some((key.as_str(), by_name(http, key, parts)?)))
+            .collect();
+        let env_vars: Vec<&str> = by_name_reads
+            .iter()
+            .filter_map(|(_, read)| match read {
+                ByName::Env(var) => Some(*var),
+                _ => None,
+            })
+            .collect();
+        if !env_vars.is_empty() {
+            config["env_vars"] = json!(env_vars);
+        }
+        if http {
             let inherited_env = inherited
                 .and_then(|entry| entry.get("env_http_headers"))
                 .and_then(Value::as_object);
-            let env_headers: Map<String, Value> = inherited_env
+            let mut env_headers: Map<String, Value> = inherited_env
                 .into_iter()
                 .flat_map(|headers| headers.keys())
                 .map(|key| {
@@ -2344,8 +2405,26 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
                     (key.clone(), json!(source))
                 })
                 .collect();
+            for (key, _) in &server.sources.references {
+                if !read_by_name(server, key) {
+                    env_headers.insert(key.clone(), json!(header_alias(&server.name, key)));
+                }
+            }
+            let mut bearer = None;
+            for (key, read) in &by_name_reads {
+                env_headers.remove(*key);
+                match read {
+                    ByName::Header(var) => {
+                        env_headers.insert((*key).to_owned(), json!(var));
+                    }
+                    ByName::Bearer(var) => bearer = Some(*var),
+                    ByName::Env(_) => {}
+                }
+            }
             config["env_http_headers"] = json!(env_headers);
-            if inherited
+            if let Some(var) = bearer {
+                config["bearer_token_env_var"] = json!(var);
+            } else if inherited
                 .and_then(|entry| entry.get("bearer_token_env_var"))
                 .and_then(Value::as_str)
                 .is_some()
@@ -4818,6 +4897,117 @@ mod tests {
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
+        }
+    }
+
+    /// #809: Codex reads the original variables, with no value frozen beside them.
+    #[test]
+    fn header_sources_name_the_original_variables() {
+        let var = |name: &str| McpValuePart::Var(name.into());
+        let mut web = server(
+            "web",
+            McpTransport::Http {
+                url: "https://r.example.com".into(),
+            },
+            &[
+                ("Authorization", "Bearer frozen-bearer"),
+                ("X-Key", "frozen-key"),
+                ("X-Plain", "plain"),
+            ],
+        );
+        web.sources.references = vec![
+            (
+                "Authorization".into(),
+                vec![McpValuePart::Text("Bearer ".into()), var("TOKEN_VAR")],
+            ),
+            ("X-Key".into(), vec![var("KEY_VAR")]),
+        ];
+        let mut tool = server(
+            "tool",
+            stdio("/bin/tool", None),
+            &[("TOOL_VAR", "frozen-tool"), ("MODE", "dev")],
+        );
+        tool.sources.references = vec![("TOOL_VAR".into(), vec![var("TOOL_VAR")])];
+        let mut session = spec(ToolSet::Thread, None);
+        session.mcp_servers = vec![web, tool];
+        // Its own entry's variables are replaced, not kept as frozen aliases.
+        let effective = json!({"config":{"mcp_servers":{"web":{"url":"https://r.example.com",
+            "env_http_headers":{"X-Key":"KEY_VAR"},"bearer_token_env_var":"TOKEN_VAR"}}}});
+        let config = mcp_config(&effective, &session);
+        assert_eq!(config["web"]["bearer_token_env_var"], "TOKEN_VAR");
+        assert_eq!(
+            config["web"]["env_http_headers"],
+            json!({"X-Key": "KEY_VAR"})
+        );
+        assert_eq!(config["web"]["http_headers"], json!({"X-Plain": "plain"}));
+        assert_eq!(config["tool"]["env_vars"], json!(["TOOL_VAR"]));
+        assert_eq!(config["tool"]["env"], json!({"MODE": "dev"}));
+        let env = format!("{:?}", mcp_header_env(&session));
+        assert!(
+            !env.contains("frozen"),
+            "no frozen value in the environment"
+        );
+    }
+
+    /// #809: what Codex can't read by name (it has no way to rename a variable or join text to
+    /// one) keeps the launch's value: a header in an env alias, a stdio value in the thread's
+    /// config, and neither on a terminal's command line.
+    #[test]
+    fn a_value_codex_cant_name_keeps_the_launchs_value_off_the_command_line() {
+        let mut web = server(
+            "web",
+            McpTransport::Http {
+                url: "https://r.example.com".into(),
+            },
+            &[("X-Mixed", "a-launch-header")],
+        );
+        web.sources.references = vec![(
+            "X-Mixed".into(),
+            vec![
+                McpValuePart::Text("a-".into()),
+                McpValuePart::Var("HEADER_VAR".into()),
+            ],
+        )];
+        let mut tool = server(
+            "tool",
+            stdio("/bin/tool", None),
+            &[("API_KEY", "launch-token")],
+        );
+        tool.sources.references = vec![(
+            "API_KEY".into(),
+            vec![McpValuePart::Var("TOKEN_VAR".into())],
+        )];
+        let mut session = spec(ToolSet::Lean, None);
+        session.mcp_servers = vec![web, tool];
+        let servers = mcp_config(&json!({}), &session);
+        let alias = header_alias("web", "X-Mixed");
+        assert_eq!(
+            servers["web"]["env_http_headers"],
+            json!({"X-Mixed": alias})
+        );
+        assert_eq!(servers["web"]["http_headers"], json!({}));
+        assert!(
+            mcp_header_env(&session).contains(&(alias, "a-launch-header".to_owned())),
+            "the alias holds the launch's value"
+        );
+        assert_eq!(servers["tool"]["env"], json!({"API_KEY": "launch-token"}));
+        assert!(servers["tool"].get("env_vars").is_none());
+
+        let mut config = Map::new();
+        config.insert("mcp_servers".into(), Value::Object(servers));
+        let env = CliEnv::from_vars([("PATH".into(), "/usr/bin".into())]);
+        let command = terminal_command(
+            "/usr/local/bin/codex".into(),
+            &session,
+            "thread-1",
+            "/tmp".into(),
+            config,
+            &env,
+        );
+        let line = command.args.join(" ");
+        for value in ["launch-header", "launch-token"] {
+            assert!(!line.contains(value), "{value} on the command line");
         }
     }
 
