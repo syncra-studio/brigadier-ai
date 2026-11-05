@@ -666,12 +666,7 @@ fn opencode_server(
     let oauth = config.get("oauth");
     server.signs_in &= oauth != Some(&Value::Bool(false));
     server.oauth = oauth.and_then(Value::as_object).and_then(|oauth| {
-        let field = |key: &str| {
-            oauth
-                .get(key)
-                .and_then(Value::as_str)
-                .map(&expand)
-        };
+        let field = |key: &str| oauth.get(key).and_then(Value::as_str).map(&expand);
         let client_id = field("clientId");
         let client_secret = field("clientSecret").map(Secret::new);
         (client_id.is_some() || client_secret.is_some()).then_some(OAuthClient {
