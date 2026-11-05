@@ -36,6 +36,11 @@ const ID_LEN: usize = 32;
 const CHANGES: usize = 256;
 /// How long the watcher gathers a burst of file events before reading the pages they touch.
 const SETTLE: Duration = Duration::from_millis(100);
+/// When every page is read again with no event saying so, first after the watcher starts and
+/// then over and over: macOS drops file events on a busy machine and in a new watch's first
+/// seconds, and a change it drops is never told.
+const FIRST_REREAD: Duration = Duration::from_secs(5);
+const REREAD: Duration = Duration::from_secs(60);
 
 /// Why a page request failed.
 #[derive(Debug, thiserror::Error)]
@@ -131,11 +136,12 @@ struct Inner {
 }
 
 impl Pages {
-    /// The pages in `dir` (made if missing), watched for changes made by other programs. A
-    /// folder that can't be made or watched is logged; reads still find outside edits.
+    /// The pages in `dir` (made if missing), watched for changes made by other programs, and
+    /// read again soon after and then once a minute in case an event was dropped. A folder that
+    /// can't be made or watched is logged; reads still find outside edits.
     pub fn open(dir: impl Into<PathBuf>) -> Self {
         let pages = Self::unwatched(dir.into());
-        match watch(pages.inner.clone()) {
+        match watch(pages.inner.clone(), FIRST_REREAD, REREAD) {
             Ok(watch) => *lock(&pages.watch) = Some(watch),
             Err(error) => {
                 tracing::warn!(%error, dir = %pages.inner.dir.display(), "pages are not watched");
@@ -152,7 +158,7 @@ impl Pages {
         let (inner, slot) = (pages.inner.clone(), pages.watch.clone());
         let spawned = thread::Builder::new()
             .name("pages-watch".into())
-            .spawn(move || match watch(inner.clone()) {
+            .spawn(move || match watch(inner.clone(), FIRST_REREAD, REREAD) {
                 Ok(watch) => *lock(&slot) = Some(watch),
                 Err(error) => {
                     tracing::warn!(%error, dir = %inner.dir.display(), "pages are not watched");
@@ -474,6 +480,22 @@ impl Inner {
         }
     }
 
+    /// Notes every page as it is now and tells no new ones: what is already in the folder isn't
+    /// news to a re-read later.
+    fn note_all(&self) {
+        let on_disk = self.ids_on_disk().unwrap_or_else(|error| {
+            tracing::debug!(%error, "could not list the pages folder");
+            Vec::new()
+        });
+        for id in on_disk {
+            let page_lock = self.page_lock(&id);
+            let _held = lock(&page_lock);
+            if let Ok(bytes) = self.read_bytes(&id) {
+                self.observe(&id, Some(&revision(&bytes)), false);
+            }
+        }
+    }
+
     fn rescan_all(&self) {
         let mut ids: HashSet<String> = lock(&self.known).keys().cloned().collect();
         match self.ids_on_disk() {
@@ -544,20 +566,41 @@ impl Drop for Watch {
     }
 }
 
-fn watch(inner: Arc<Inner>) -> notify::Result<Watch> {
+fn watch(inner: Arc<Inner>, first_reread: Duration, reread: Duration) -> notify::Result<Watch> {
     use notify::Watcher as _;
 
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = tx.send(event);
     })?;
+    // Before it watches, so the first re-read also finds what changes while it starts.
+    inner.note_all();
     watcher.watch(&inner.dir, notify::RecursiveMode::NonRecursive)?;
+    let mut watch = listen(inner, rx, first_reread, reread)?;
+    watch.watcher = Some(watcher);
+    Ok(watch)
+}
+
+/// Reads the pages `rx` reports, and every page on the given times.
+fn listen(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<notify::Result<notify::Event>>,
+    first_reread: Duration,
+    reread: Duration,
+) -> notify::Result<Watch> {
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
     let thread = thread::Builder::new()
         .name("pages-watcher".into())
         .spawn(move || {
+            let mut reread_at = std::time::Instant::now() + first_reread;
             while !thread_stop.load(Ordering::SeqCst) {
+                // Here and not on a quiet wait: on a busy machine, where events get dropped,
+                // the folder may never be quiet.
+                if std::time::Instant::now() >= reread_at {
+                    inner.rescan_all();
+                    reread_at = std::time::Instant::now() + reread;
+                }
                 let first = match rx.recv_timeout(Duration::from_millis(200)) {
                     Ok(event) => event,
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -593,7 +636,7 @@ fn watch(inner: Arc<Inner>) -> notify::Result<Watch> {
         })
         .map_err(|error| notify::Error::generic(&error.to_string()))?;
     Ok(Watch {
-        watcher: Some(watcher),
+        watcher: None,
         stop,
         thread: Some(thread),
     })
