@@ -8,7 +8,7 @@ import { Button, ErrorLine } from "@/components/controls";
 import { ChevronRight, ProviderGlyph } from "@/components/icons";
 import { StateDot } from "@/components/shared";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
-import { used, windowTitle } from "@/lib/quota";
+import { tightest, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 import { oneRowPerAccount } from "@/state/accounts";
 import { setProviderOn } from "@/state/providers";
@@ -19,7 +19,7 @@ export function busiestWindow(views: readonly AccountView[]): QuotaWindow | null
   const rows = oneRowPerAccount(views);
   const inUse = rows.find(({ view }) => view.inUse)?.view ?? rows[0]?.view;
   const windows = inUse?.status?.loggedIn ? (inUse.quota?.windows ?? []) : [];
-  return windows.reduce<QuotaWindow | null>((top, window) => (top && used(top) >= used(window) ? top : window), null);
+  return tightest(windows);
 }
 
 /** One agent: its mark, name and plan, how it stands, its busiest limit, its switch and ›. */

@@ -1,7 +1,7 @@
 import type { UsageEntry } from "@/app/shell/BarStatus";
 import { Button } from "@/components/controls";
 import { ProviderGlyph } from "@/components/icons";
-import { Share, StateDot } from "@/components/shared";
+import { PlanLimit, Share, StateDot } from "@/components/shared";
 import { formatCountdown } from "@/lib/format";
 import { used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,7 @@ import { cliFacts } from "@/lib/providerKinds";
 /**
  * One provider: its mark and name, then its account in use's tightest limit ("Weekly · resets in
  * 1d 8h", a bar and the share used), saying so when its limit is reached; clicking it opens the provider's
- * page. Needing a sign-in, that and Sign in.
+ * page. At a plan's limit, only that in grey. Needing a sign-in, that and Sign in.
  */
 export function ProviderUsage({
   entry,
@@ -49,7 +49,7 @@ export function ProviderUsage({
       </div>
     );
   }
-  const { top, limitReached } = entry;
+  const { top, limitReached, quiet } = entry;
   const resets = top.resetsAtMs === null ? null : `resets in ${formatCountdown(top.resetsAtMs, now)}`;
   return (
     <button
@@ -60,11 +60,17 @@ export function ProviderUsage({
       className={cn(row, "hover:bg-foreground/8 text-start")}
     >
       {mark}
-      <span className="truncate">{name}</span>
-      <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-        {[limitReached ? "At limit" : windowTitle(top), resets].filter(Boolean).join(" · ")}
-      </span>
-      <Share percent={used(top)} limitReached={limitReached} />
+      <span className={cn("truncate", quiet && "text-muted-foreground")}>{name}</span>
+      {quiet ? (
+        <PlanLimit window={top} now={now} className="min-w-0 flex-1" />
+      ) : (
+        <>
+          <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+            {[limitReached ? "At limit" : windowTitle(top), resets].filter(Boolean).join(" · ")}
+          </span>
+          <Share percent={used(top)} limitReached={limitReached} />
+        </>
+      )}
     </button>
   );
 }

@@ -1,5 +1,6 @@
 import { UsageBar } from "@/components/shared/usage-bar";
-import { levelTone, USAGE_DANGER_FROM, type UsageLevel } from "@/lib/quota";
+import type { QuotaWindow } from "@/ipc/generated";
+import { levelTone, planLimitWords, USAGE_DANGER_FROM, type UsageLevel } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 
 /** Used % past which a provider's usage turns amber in the list (the user's design). */
@@ -26,5 +27,14 @@ export function Share({ percent, limitReached = false }: { percent: number; limi
         {percent}% used
       </span>
     </>
+  );
+}
+
+/** A plan's limit, where a window's share would be: its words in grey ("Go plan · back in 3d"). */
+export function PlanLimit({ window, now, className }: { window: QuotaWindow; now: number; className?: string }) {
+  return (
+    <span data-slot="plan-limit" className={cn("text-muted-foreground truncate text-xs", className)}>
+      {planLimitWords(window, now)}
+    </span>
   );
 }

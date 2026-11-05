@@ -5,7 +5,7 @@ import type { Selection } from "@/state/store";
 
 type Snapshot = {
   selection: Selection;
-  history: { entries: Selection[]; index: number };
+  history: { forward: Selection[] };
   title: string;
   dialog: string;
 };
@@ -37,10 +37,11 @@ test("deferred plugin removal refreshes after dismissal or navigation without re
   assert.deepEqual(seen.cancel!.after.selection, detail);
   assert.deepEqual(seen["close-general"]!.after.selection, general);
   for (const scenario of ["close-back", "navigate-back"]) {
-    assert.deepEqual(seen[scenario]!.after.history, { entries: [list, detail, general], index: 1 });
+    assert.deepEqual(seen[scenario]!.after.selection, detail);
+    assert.deepEqual(seen[scenario]!.after.history, { forward: [] });
   }
   const active = seen.active!;
   assert.deepEqual(active.after.selection, list);
   assert.equal(active.after.title, "Plugins");
-  assert.deepEqual(active.after.history, { entries: [list, list, general], index: 1 });
+  assert.deepEqual(active.after.history, { forward: [] });
 });

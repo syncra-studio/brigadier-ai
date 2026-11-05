@@ -107,11 +107,7 @@ export function ProjectCombobox({
     setOpen(false);
     // The model the composer shows stays: another project's last pick doesn't replace it.
     if (draftModel && id !== (project?.id ?? null)) updateDraft(id, { model: draftModel });
-    // The same draft, for another project: no new place to go back from.
-    select(
-      id ? { type: "draft", kind: "session", projectId: id } : { type: "draft", kind: "chat" },
-      "replace",
-    );
+    select(id ? { type: "draft", kind: "session", projectId: id } : { type: "draft", kind: "chat" });
   };
   const rows: ProjectRow[] = [
     ...shown.map((entry) => ({ key: entry.id, run: () => choose(entry.id) })),

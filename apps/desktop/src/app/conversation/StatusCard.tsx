@@ -1,8 +1,10 @@
 import { createContext, type FC, useEffect, useState } from "react";
 
+import { useNow } from "@/hooks/use-now";
+
 import type { ContextUsage, ConversationStatus, QuotaWindow } from "@/ipc/generated";
 
-import { usageTone } from "@/lib/quota";
+import { isPlanLimit, planLimitWords, usageTone } from "@/lib/quota";
 
 import { getConversationStatus } from "@/state/actions";
 
@@ -57,6 +59,7 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
   conversationId,
   onClose,
 }) => {
+  const now = useNow(30_000);
   // Read once per conversation the card opens on.
   const [read, setRead] = useState<{
     conversationId: string;
@@ -123,6 +126,13 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
               </StatusCardRow>
             )}
             {status?.quota?.windows.map((window) => {
+              if (isPlanLimit(window)) {
+                return (
+                  <StatusCardRow key={window.id} label="Plan limit:">
+                    <span className="text-muted-foreground truncate">{planLimitWords(window, now)}</span>
+                  </StatusCardRow>
+                );
+              }
               const left = Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
               return (
                 <StatusCardRow key={window.id} label={`${windowName(window)} limit:`}>
