@@ -1510,6 +1510,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .map_err(brigadier_core::Error::Invalid)?
                 .0,
         },
+        Request::MoveNow { id } => {
+            heap(|| sessions.move_now(&id))
+                .await
+                .map_err(brigadier_core::Error::Invalid)?;
+            Response::MoveNow {}
+        }
         Request::GetConversation { id, limit } => Response::GetConversation {
             view: Box::new(heap(|| sessions.conversation_view(id, limit)).await?),
         },

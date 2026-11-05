@@ -498,6 +498,10 @@ pub enum Request {
         provider: ProviderKind,
         model: Option<ModelChoice>,
     },
+    /// The move asked for goes without waiting for its CLI's background jobs, which may end.
+    MoveNow {
+        id: ConversationId,
+    },
     /// Messages (newest `limit`), tasks, cards, queue and run state in one read.
     GetConversation {
         id: ConversationId,
@@ -1670,6 +1674,7 @@ pub enum Response {
     ContinueOn {
         when: ContinueWhen,
     },
+    MoveNow {},
     GetConversation {
         view: Box<ConversationView>,
     },

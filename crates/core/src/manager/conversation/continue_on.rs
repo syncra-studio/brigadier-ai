@@ -50,6 +50,7 @@ impl SessionManager {
                 self.write_seam_of(id, file)
                     .await
                     .map_err(|err| err.to_string())?;
+                conv.state.lock().await.seam.cut_jobs = false;
             }
             return Ok((ContinueWhen::Already, orchestrator.clone()));
         }
@@ -118,6 +119,32 @@ impl SessionManager {
         let cli = conv.state.lock().await.cli.clone();
         self.begin_move(&conv, cli.as_ref()).await;
         Ok((ContinueWhen::Now, choice))
+    }
+
+    /// The user's Switch now (#794): the move asked for stops waiting for the CLI's background
+    /// jobs, which may end as it closes (the app warned them first). A running turn still ends
+    /// first. Its successor is told of those that were running, as after any CLI's end.
+    pub async fn move_now(&self, id: &ConversationId) -> Result<(), String> {
+        let conv = self.conv(id).map_err(|err| err.to_string())?;
+        let _retrying = conv.retry.lock().await;
+        let file = self.read_seam_of(id).await;
+        if file.moving.is_none() {
+            return Err("no switch is coming".into());
+        }
+        if file.phase != Phase::Live {
+            return Ok(());
+        }
+        let cli = {
+            let mut state = conv.state.lock().await;
+            state.seam.cut_jobs = true;
+            if state.busy || state.unowned_turn || state.hand_over.is_some() {
+                return Ok(());
+            }
+            state.cli.clone()
+        };
+        crate::logging::private_trace!(conv.private_logs, info, "asked to continue on another CLI now, over its jobs"; conversation = %id);
+        self.begin_move(&conv, cli.as_ref()).await;
+        Ok(())
     }
 
     /// Why `provider` can't take a session now, in plain words; `None` when it can.

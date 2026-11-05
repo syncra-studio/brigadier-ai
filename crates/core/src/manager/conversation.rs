@@ -544,9 +544,10 @@ impl ConvState {
 
     /// Native process ownership: app-only CLIs must not be retired while their apps run.
     fn has_cli_jobs(&self) -> bool {
-        self.background.as_ref().is_some_and(Background::waits)
-            || !self.lingering.is_empty()
-            || self.lingering_request.is_some()
+        !self.seam.cut_jobs
+            && (self.background.as_ref().is_some_and(Background::waits)
+                || !self.lingering.is_empty()
+                || self.lingering_request.is_some())
     }
 
     /// [`Self::has_cli_jobs`] but for ended jobs whose turn is still owed (their end was told
@@ -1060,10 +1061,21 @@ impl ConvLive {
     /// start kept for the next try isn't: its request is over, and nothing sends it by itself.
     pub(super) async fn work_under_way(&self) -> bool {
         let state = self.state.lock().await;
+        Self::under_way(&state, state.busy)
+    }
+
+    /// [`Self::work_under_way`] as the user's work reads: a hand-off's own turn is none of it
+    /// (core-goals D193, #794).
+    pub(super) async fn users_work_under_way(&self) -> bool {
+        let state = self.state.lock().await;
+        Self::under_way(&state, state.busy && !state.seam.quiet)
+    }
+
+    fn under_way(state: &ConvState, running: bool) -> bool {
         let over = |request: Option<&String>| {
             request.is_some_and(|request| state.outcomes.contains_key(request))
         };
-        state.busy
+        running
             || state.unowned_turn
             || state.hand_over.is_some()
             || state

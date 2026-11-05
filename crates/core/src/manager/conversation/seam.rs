@@ -67,6 +67,9 @@ pub(super) struct SeamLive {
     pub(super) seen: bool,
     /// The note turn is being stopped: when it ends, the seam closes whatever it wrote.
     force: bool,
+    /// The user's Switch now (#794): the move asked for goes though the CLI's jobs still run,
+    /// and it closes over them, until that CLI is gone.
+    pub(super) cut_jobs: bool,
     /// Counts the hold timers armed; only the newest acts.
     hold_timer: u64,
     /// The session was asked to fix its note this many times (goal 13).
@@ -149,6 +152,7 @@ impl SeamLive {
     pub(super) fn cli_gone(&mut self) {
         self.fix_turn = FixTurn::None;
         self.turns_open = 0;
+        self.cut_jobs = false;
     }
 }
 
@@ -188,7 +192,10 @@ impl SessionManager {
         file: SeamFile,
     ) -> crate::Result<()> {
         let record = self.session_dir(id).record();
-        crate::manager::blocking(move || write_seam(&record, &file)).await
+        let to = file.moving.as_ref().map(|to| to.provider);
+        crate::manager::blocking(move || write_seam(&record, &file)).await?;
+        self.move_due(id, to);
+        Ok(())
     }
 
     /// The CLI said how full its context is: past the threshold, the nudge.
@@ -267,10 +274,11 @@ impl SessionManager {
         let mut file = self.read_seam_of(&conv.id).await;
         // A job that ended inside the turn asking for a move owes a turn for a while: it never
         // holds the move (demo9, every CLI).
-        if file.phase != Phase::Live
-            || conv.state.lock().await.runs_cli_jobs()
-            || self.open_permission(&conv.id).await
-        {
+        let jobs_hold = {
+            let state = conv.state.lock().await;
+            state.runs_cli_jobs() && !state.seam.cut_jobs
+        };
+        if file.phase != Phase::Live || jobs_hold || self.open_permission(&conv.id).await {
             return None;
         }
         let record = self.session_dir(&conv.id).record();
