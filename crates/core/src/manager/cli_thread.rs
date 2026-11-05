@@ -1196,17 +1196,28 @@ impl SessionManager {
         Ok(view)
     }
 
-    /// An image a CLI session file of conversation `id` holds.
-    /// Base64, with its media type.
+    /// An image a CLI session file of conversation `id` or of one of its workers holds, or that
+    /// the thread a fork copied names (its source's file). Base64, with its media type.
     pub fn thread_image(&self, id: &ConversationId, image: &FileImage) -> Result<(String, String)> {
-        let ours = read_lineage(&self.session_dir(id).record())
-            .iter()
-            .filter_map(|session| session.file.as_deref())
+        let dir = self.session_dir(id);
+        let workers = std::fs::read_dir(dir.root().join("workers"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|worker| worker.path().join("record"));
+        let ours = std::iter::once(dir.record())
+            .chain(workers)
+            .flat_map(|record| read_lineage(&record))
+            .filter_map(|session| session.file)
             .any(|file| {
-                let file = std::path::Path::new(file);
+                let file = std::path::Path::new(&file);
                 let image = std::path::Path::new(&image.file);
                 image == file || image.starts_with(file.with_extension("").join("subagents"))
-            });
+            })
+            || thread_view::read_forked(&dir.record())
+                .entries
+                .iter()
+                .any(|entry| entry.images.contains(image));
         if !ours {
             return Err(Error::NotFound(format!("image in {}", image.file)));
         }
