@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 
+import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { findModel, ModelSelector, SettingsCard, SettingsRow } from "@/components/shared";
@@ -23,6 +24,7 @@ import {
 import { branchPrefixProblem } from "@/lib/refname";
 import { builtInDefault, useAvailableModelGroups, useModelGroups, withChoice } from "@/lib/setup";
 import { cn } from "@/lib/utils";
+import { useModelRulesRead } from "@/state/modelRules";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
@@ -149,6 +151,9 @@ export function GitPage() {
 function WriterRow() {
   const groups = useAvailableModelGroups();
   const all = useModelGroups();
+  // What the user's rules keep out everywhere; none names this work on its own.
+  useModelRulesRead(true);
+  const refusals = useRuleRefusals(all);
   const value = useApp((s) => s.settings.gitWriter);
   const save = useAction();
   const change = (choice: ModelChoice | null) => save.run(() => setSetting("gitWriter", choice));
@@ -165,8 +170,8 @@ function WriterRow() {
         label={GIT_ROWS.writer.label}
         groups={value ? withChoice(groups, all, value) : groups}
         value={value ?? builtInDefault(groups)}
-        defaultChoice={builtInDefault(groups)}
         onChange={change}
+        refused={refusals.refused}
         automatic={{ chosen: value === null, hint: AUTOMATIC_HINT, onChoose: () => change(null) }}
         className={cn(selectTrigger, "text-foreground")}
       />

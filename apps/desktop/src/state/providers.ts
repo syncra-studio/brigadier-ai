@@ -43,3 +43,14 @@ export function setModelAvailable(model: ModelRef, available: boolean): Promise<
     };
   });
 }
+
+/** Stars a model in the model picker, or takes its star off. */
+export function setModelFavorite(model: ModelRef, favorite: boolean): Promise<Settings> {
+  return editSettings((settings) => {
+    const others = settings.favoriteModels.filter((entry) => !sameRef(entry, model));
+    return {
+      ...settings,
+      favoriteModels: favorite ? [...others, { provider: model.provider, id: model.id }] : others,
+    };
+  });
+}

@@ -5,6 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 /** A model's line in the picker when it's already in the order. */
 const IN_THE_ORDER = "In the order";
+const EFFORTS_UNDER_CEILING = ["Low", "Medium", "High"];
 const opusLine = (work: string) => `Opus 5.5 now rates higher for ${work} · 9.1 against Sonnet 5.5's 8.5Use itDismiss`;
 
 // The real Routing page in Chromium over a faked daemon and rules file (S32): who does what from
@@ -54,34 +55,34 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     reason: "Strong default for work that needs judgment across a codebase.",
   };
   assert.deepEqual((seen.afterMine as unknown[]).at(-1), architecture);
-  assert.deepEqual(seen.mine, ["1Opus 5.5High effort"]);
+  assert.deepEqual(seen.mine, ["1Opus 5.5 · HighRemove"]);
   // Alone, its grip doesn't drag.
   assert.equal(seen.aloneGripDisabled, true);
-  // Its effort menu stops at the ceiling the rules set; a pick writes the row.
-  assert.deepEqual(seen.efforts, ["Defaultthe CLI picks", "Low effort", "Medium effort", "High effort"]);
+  // Its picker lists the levels its model lists, none above this ceiling here; a press writes the row.
+  assert.deepEqual(seen.efforts, EFFORTS_UNDER_CEILING);
   assert.deepEqual(seen.afterEffort, { ...architecture, effort: "medium" });
   // Add model opens the model picker: each agent, its own default, then its models (no family
-  // rows, no ids); one already in the order is greyed with why.
+  // rows, no ids); one already in the order or kept out by a rule is greyed with why.
   assert.deepEqual(seen.addModelAgents, ["Claude Code", "Codex"]);
   assert.deepEqual(seen.addModelItems, {
-    claude: ["Claude's defaultClaude picks", `Opus 5.5${IN_THE_ORDER}`, "Sonnet 5.5", "Fable 5.1"],
-    codex: ["Codex's defaultCodex picks", "GPT-6", "GPT-6 Luna", "GPT-5.5"],
+    claude: ["Claude's default", `Opus 5.5${IN_THE_ORDER}`, "Sonnet 5.5", "Fable 5.1Never use Fable"],
+    codex: ["Codex's default", "GPT-6", "GPT-6 Luna", "GPT-5.5"],
   });
-  assert.deepEqual(seen.order, ["1Opus 5.5Medium effort", "2GPT-6Default effort"]);
+  assert.deepEqual(seen.order, ["1Opus 5.5 · MediumRemove", "2GPT-6 · DefaultRemove"]);
   assert.equal(seen.kindLine, "Architecture and broad changesYour order · Opus 5.5, then GPT-6Opus 5.5 · Medium");
   // Moved up from its grip, the order is written first to last.
   assert.deepEqual(seen.afterMove, ["gpt-6", "opus"]);
-  // Change model opens the picker beside the ⋯ menu, on the row's agent with the search focused;
-  // its keys stay in it (← to the agents, ↑ browses, typing searches every agent), Escape clears
-  // the search first, and a pick replaces the row and closes the whole menu.
+  // A row's picker opens on its agent with the search focused; its keys stay in it (← to the
+  // agents, ↑ browses, typing searches every agent), Escape clears the search first, and a pick
+  // replaces the row and keeps it open.
   assert.deepEqual(seen.changeModel, {
     searchFocused: true,
-    codex: ["Codex's defaultCodex picks", `GPT-6${IN_THE_ORDER}`, "GPT-6 Luna", "GPT-5.5"],
+    codex: ["Codex's default", "GPT-6", "GPT-6 Luna", "GPT-5.5"],
     typed: "s",
-    searched: ["Opus 5.5Claude Code · In the order", "Sonnet 5.5Claude Code", "Opus 4.6Claude Code"],
+    searched: [`Opus 5.5, Claude Code${IN_THE_ORDER}`, "Sonnet 5.5, Claude Code", "Opus 4.6, Claude Code"],
     afterEscape: { open: true, typed: "" },
-    menuClosed: true,
-    order: ["1Sonnet 5.5Default effort", "2Opus 5.5Medium effort"],
+    stillOpen: true,
+    order: ["1Sonnet 5.5 · DefaultRemove", "2Opus 5.5 · MediumRemove"],
   });
   // Its last model removed, the kind is Automatic again.
   assert.deepEqual(seen.afterRemove, ["Bounded implementation", "Release notes"]);
