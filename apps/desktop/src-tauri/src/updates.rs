@@ -19,10 +19,16 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
+use tokio::sync::Notify;
 
 /// The first check after launch, then how often.
 const FIRST_CHECK: Duration = Duration::from_secs(60);
 const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+/// A download that gets no new bytes for this long has stalled. It limits the wait between
+/// bytes, not the whole download, which may be slow.
+const DOWNLOAD_STALL: Duration = Duration::from_secs(60);
+/// How long the feed gets to answer the read just before a download.
+const RECHECK_LIMIT: Duration = Duration::from_secs(30);
 
 /// Sent to the window with the update as it now shows ([`Shown`]).
 pub const EVENT: &str = "app-update";
@@ -98,13 +104,14 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
             // The feed read again: a nightly published since the offer deletes the offered
             // build's archive, so its address would no longer answer.
             let update = match app.updater() {
-                Ok(updater) => updater.check().await.ok().flatten().unwrap_or(offered),
+                Ok(updater) => newest_or(RECHECK_LIMIT, updater.check(), offered).await,
                 Err(_) => offered,
             };
             tracing::info!(version = %update.version, "downloading a nightly update");
-            let bytes = update
-                .download(|_, _| {}, || {})
-                .await
+            let progress = Notify::new();
+            let download = update.download(|_, _| progress.notify_one(), || {});
+            let bytes = unless_stalled(DOWNLOAD_STALL, &progress, download)
+                .await?
                 .map_err(|err| err.to_string())?;
             Ok(Box::new(move |reopen| {
                 // Windows runs the installer and exits here; it opens the app again after
@@ -121,6 +128,41 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
         emit(app, &shown);
     }
     Ok(())
+}
+
+/// What a read of the feed found, or `offered` when it finds nothing, fails or takes past `limit`.
+async fn newest_or<T, E>(
+    limit: Duration,
+    check: impl Future<Output = Result<Option<T>, E>>,
+    offered: T,
+) -> T {
+    tokio::time::timeout(limit, check)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+        .unwrap_or(offered)
+}
+
+/// Runs `work` for as long as `progress` is told of new bytes at least every `limit`. Dropping
+/// `work` on a stall closes its connection.
+async fn unless_stalled<T>(
+    limit: Duration,
+    progress: &Notify,
+    work: impl Future<Output = T>,
+) -> Result<T, String> {
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            biased;
+            output = &mut work => return Ok(output),
+            moved = tokio::time::timeout(limit, progress.notified()) => {
+                if moved.is_err() {
+                    return Err(format!("no new bytes for {} s", limit.as_secs()));
+                }
+            }
+        }
+    }
 }
 
 fn emit(app: &AppHandle, shown: &Shown) {
@@ -578,6 +620,52 @@ mod tests {
         assert_eq!(installs.load(Ordering::Acquire), 0);
         tauri::async_runtime::block_on(updates.take(|_| {}));
         assert_eq!(downloads.load(Ordering::Acquire), 2, "tried again");
+    }
+
+    /// A download that stops getting bytes fails and can be tried again, instead of staying on
+    /// Updating until a restart; a slow one that keeps getting them finishes (#772).
+    #[test]
+    fn a_stalled_download_fails_and_a_slow_one_finishes() {
+        const STALL: Duration = Duration::from_millis(500);
+        let stalled: Download = Arc::new(|| {
+            Box::pin(async {
+                let progress = Notify::new();
+                let bytes = async {
+                    progress.notify_one();
+                    std::future::pending::<()>().await;
+                };
+                unless_stalled(STALL, &progress, bytes).await?;
+                Ok(Box::new(|_| Ok(())) as Install)
+            })
+        });
+        let updates = Updates::new();
+        updates.offer(V1.into(), stalled);
+        tauri::async_runtime::block_on(async {
+            let _ = tokio::time::timeout(STALL * 6, updates.take(|_| {})).await;
+        });
+        assert_eq!(updates.shown(), shown(ShownState::Failed, V1));
+
+        let progress = Notify::new();
+        let slow = async {
+            for _ in 0..7 {
+                tokio::time::sleep(STALL / 5).await;
+                progress.notify_one();
+            }
+        };
+        let finished = tauri::async_runtime::block_on(unless_stalled(STALL, &progress, slow));
+        assert_eq!(finished, Ok(()), "longer than the limit in all, but moving");
+    }
+
+    /// A feed that never answers the read before a download leaves the offered build to fetch
+    /// (#772).
+    #[test]
+    fn a_feed_that_never_answers_leaves_the_offered_build() {
+        const LIMIT: Duration = Duration::from_millis(100);
+        let silent = std::future::pending::<Result<Option<&str>, ()>>();
+        let picked = tauri::async_runtime::block_on(async {
+            tokio::time::timeout(LIMIT * 20, newest_or(LIMIT, silent, V1)).await
+        });
+        assert_eq!(picked, Ok(V1));
     }
 
     /// A daemon that keeps going leaves the update uninstalled.
