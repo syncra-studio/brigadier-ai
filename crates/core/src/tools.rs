@@ -176,6 +176,11 @@ pub struct StartPreview {
     /// check or show your change, so that merge stops it.
     #[serde(default)]
     pub purpose: Option<PreviewPurpose>,
+    /// The page to open on a web preview: a path on its own server starting with one "/", query
+    /// and fragment allowed ("/docs/page.html?x=1"). Its address is always the server's origin
+    /// plus this, whatever the server prints; refused for any other kind.
+    #[serde(default)]
+    pub open: Option<String>,
 }
 
 /// Why a preview runs, which decides whether a merge of the session's work stops it (#335).

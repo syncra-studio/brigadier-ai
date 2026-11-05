@@ -100,15 +100,68 @@ function askedWords(question: Question): string {
   }
 }
 
+/** One piece of a card line: plain text, a `code` span, or a web link to `href`. */
+export type CardPart = { text: string; code: boolean; href?: string };
+
+/** `[label](url)` with a web address, or a bare web address. */
+const LINK = /\[([^[\]\n]+)\]\((https?:\/\/[^\s()]+(?:\([^\s()]*\)[^\s()]*)*)\)|https?:\/\/[^\s<>"'`]+/gi;
+
+/** A bare address without what follows it in the sentence: "see https://a.b/c)." is https://a.b/c. */
+function bareAddress(found: string): string {
+  let address = found;
+  for (;;) {
+    const last = address.at(-1) ?? "";
+    const opener = { ")": "(", "]": "[", "}": "{" }[last];
+    const unmatched = opener !== undefined && address.split(last).length > address.split(opener).length;
+    if (!unmatched && !".,;:!?*".includes(last)) return address;
+    address = address.slice(0, -1);
+  }
+}
+
+function isWebAddress(address: string): boolean {
+  try {
+    return /^https?:$/.test(new URL(address).protocol);
+  } catch {
+    return false;
+  }
+}
+
+function linkParts(text: string, exact: boolean): CardPart[] {
+  const parts: CardPart[] = [];
+  let from = 0;
+  for (const { 0: found, 1: label, 2: labelled, index } of text.matchAll(LINK)) {
+    const href = labelled ?? bareAddress(found);
+    if (!isWebAddress(href)) continue;
+    const end = index + (labelled ? found.length : href.length);
+    parts.push({ text: text.slice(from, index), code: false });
+    parts.push({ text: exact ? text.slice(index, end) : (label ?? href), code: false, href });
+    from = end;
+  }
+  parts.push({ text: text.slice(from), code: false });
+  return parts;
+}
+
 /**
- * A card line's parts: plain text, and the `code` spans written in backticks (a branch, a
- * file), without the backticks. An unclosed backtick stays as written.
+ * A card line's parts: plain text, the `code` spans written in backticks (a branch, a file)
+ * without the backticks, and web links, bare or `[label](url)`, the only links there are (no link
+ * inside code). An unclosed backtick stays as written.
+ *
+ * `exact`: for text that must read character for character (a command asked about). Its backticks
+ * and `[label](url)` keep their characters, the link's whole text clickable.
  */
-export function codeParts(text: string): { text: string; code: boolean }[] {
+export function codeParts(text: string, exact = false): CardPart[] {
   return text
     .split(/`([^`\n]+)`/)
-    .map((part, index) => ({ text: part, code: index % 2 === 1 }))
+    .flatMap((part, index) =>
+      index % 2 === 1 ? [{ text: exact ? `\`${part}\`` : part, code: true }] : linkParts(part, exact),
+    )
     .filter((part) => part.text !== "");
+}
+
+/** Whether the user's selection reaches into `element`: a drag over its words left it, or a double-click. */
+export function selectedWithin(element: Element): boolean {
+  const selection = element.ownerDocument.getSelection();
+  return !!selection && !selection.isCollapsed && selection.containsNode(element, true);
 }
 
 /** What an answer's copy button copies: the `code` spans its words name (a command), one a line; none without. */

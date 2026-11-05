@@ -9,6 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
+import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { PlanText, planTitle } from "@/app/conversation/cards/planCard";
 import { QuestionAction } from "@/app/conversation/QuestionAction";
 import { ReplyButton } from "@/app/conversation/ReplyButton";
@@ -240,7 +241,7 @@ function describe(
         title: request.reason || fallback,
         body: request.command ? (
           <ToolBox clamp className="mx-3">
-            {shownCommand(request.command)}
+            <CodeSpans exact text={shownCommand(request.command)} />
             {cwd && <span className="text-foreground/35 block">in {cwd}</span>}
             {/* What the command asks for beyond its sandbox (`write /path`, `network`). */}
             {request.paths.length > 0 && (
@@ -250,7 +251,7 @@ function describe(
         ) : request.paths.length > 0 ? (
           <ActionFileList files={request.paths.map((path) => ({ path }))} />
         ) : (
-          request.input && <ToolBox clamp className="mx-3">{request.input}</ToolBox>
+          request.input && <ToolBox clamp className="mx-3"><CodeSpans exact text={request.input} /></ToolBox>
         ),
       };
     }
@@ -259,7 +260,7 @@ function describe(
         icon: <Dock />,
         kind: "Terminal",
         title: "Allow this command? It reaches outside this computer.",
-        body: <ToolBox clamp className="mx-3">{shownCommand(subject.argv.map(quote).join(" "))}</ToolBox>,
+        body: <ToolBox clamp className="mx-3"><CodeSpans exact text={shownCommand(subject.argv.map(quote).join(" "))} /></ToolBox>,
       };
     case "landing":
       return {
@@ -280,14 +281,14 @@ function describe(
         icon: <Key />,
         kind: "Ask permission",
         title: subject.action,
-        body: subject.details && <ToolBox prose className="mx-3">{subject.details}</ToolBox>,
+        body: subject.details && <ToolBox prose className="mx-3"><CodeSpans text={subject.details} /></ToolBox>,
       };
     case "outline":
       return {
         icon: <Sparkle />,
         kind: "Plan",
         title: `Start this plan? ${subject.title}`,
-        body: <ToolBox prose className="mx-3">{subject.outline}</ToolBox>,
+        body: <ToolBox prose className="mx-3"><CodeSpans text={subject.outline} /></ToolBox>,
         allow: "Yes, start it",
       };
     case "peerMessage":
@@ -295,7 +296,7 @@ function describe(
         icon: <Sparkle />,
         kind: "Message",
         title: `Send a message to ${subject.title} in ${subject.project}?`,
-        body: <ToolBox prose className="mx-3">{subject.text}</ToolBox>,
+        body: <ToolBox prose className="mx-3"><CodeSpans text={subject.text} /></ToolBox>,
         allow: "Send",
         deny: "Don't send",
       };
@@ -304,7 +305,7 @@ function describe(
         icon: <Globe />,
         kind: "Browser",
         title: subject.question,
-        body: <ToolBox prose className="mx-3">{subject.details}</ToolBox>,
+        body: <ToolBox prose className="mx-3"><CodeSpans text={subject.details} /></ToolBox>,
         allow: "Go ahead",
         deny: "Don't",
       };
@@ -428,7 +429,7 @@ export function ApprovalAction({
           )}
         </div>
         <div role="alert" aria-atomic="true">
-          <ActionCardTitle>{shown.title}</ActionCardTitle>
+          <ActionCardTitle>{typeof shown.title === "string" ? <CodeSpans text={shown.title} /> : shown.title}</ActionCardTitle>
         </div>
       </div>
       {shown.body}

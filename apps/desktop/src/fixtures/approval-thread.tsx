@@ -97,7 +97,7 @@ function measure(id: string) {
   const body = card.querySelector<HTMLElement>("[data-slot=approval-card-body]");
   const footer = card.querySelector<HTMLElement>("[data-slot=approval-card-footer]");
   const footerStyle = footer ? getComputedStyle(footer) : null;
-  const text = body?.querySelector<HTMLElement>("[data-selectable]");
+  const text = body?.querySelector<HTMLElement>("[data-slot=approval-card-text], [data-slot=tool-card] [data-selectable]");
   const textStyle = text ? getComputedStyle(text) : null;
   const firstLetter = document.createRange();
   if (text?.firstChild) {
@@ -131,7 +131,7 @@ async function drive() {
   const cards = Object.fromEntries(CARDS.map(([id]) => [id, measure(id)]));
   // Exercise long prose and an unbroken path in the real body, without changing screenshot copy.
   const longProse = Object.fromEntries(["action", "outline", "peer", "browser"].map((id) => {
-    const text = document.querySelector(`[data-case="${id}"] [data-selectable]`);
+    const text = document.querySelector(`[data-case="${id}"] [data-slot=approval-card-text]`);
     if (text) text.textContent = `${"A long explanation that must wrap and remain fully visible. ".repeat(100)}\nhttps://example.com/${"long-path-".repeat(100)}`;
     return [id, measure(id)];
   }));

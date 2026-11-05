@@ -664,6 +664,7 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                     put("workdir", flag("workdir"));
                     put("target", flag("target"));
                     put("purpose", flag("purpose"));
+                    put("open", flag("open"));
                     let mut env = Map::new();
                     for pair in args.all("env") {
                         let Some((name, value)) = pair.split_once('=') else {
@@ -1412,6 +1413,25 @@ mod tests {
             } => (tool, action, args),
             other => panic!("not a tool: {other:?}"),
         }
+    }
+
+    #[test]
+    fn preview_start_carries_the_page_to_open() {
+        assert_eq!(
+            tool(&[
+                "preview",
+                "start",
+                "--open",
+                "/a.html?x=1#top",
+                "pnpm",
+                "dev"
+            ]),
+            (
+                Tool::Preview,
+                "start".into(),
+                json!({"command": "pnpm dev", "open": "/a.html?x=1#top"})
+            )
+        );
     }
 
     #[test]
