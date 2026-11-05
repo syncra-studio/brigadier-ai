@@ -589,12 +589,15 @@ impl SessionManager {
         self.fallback_rows()
             .into_iter()
             .filter(|choice| {
+                let model = self
+                    .runs_as(choice.provider, choice.model.as_deref(), None)
+                    .0;
                 choice.provider != from.provider
                     && crate::routing::availability::provider_on(&settings, choice.provider)
                     && crate::accounts::ready(
                         &settings,
                         choice.provider,
-                        choice.model.as_deref(),
+                        model.as_deref(),
                         &self.runtime.account_candidates(choice.provider),
                         &[],
                         now,
@@ -624,10 +627,13 @@ impl SessionManager {
                         && crate::routing::availability::provider_on(&settings, choice.provider))
             })
             .filter(|choice| {
+                let model = self
+                    .runs_as(choice.provider, choice.model.as_deref(), None)
+                    .0;
                 crate::accounts::ready(
                     &settings,
                     choice.provider,
-                    choice.model.as_deref(),
+                    model.as_deref(),
                     &self.runtime.account_candidates(choice.provider),
                     &[],
                     now,
@@ -1034,8 +1040,29 @@ impl SessionManager {
             }
             _ => None,
         };
+        // Where this session's work lands, for the Map's line on what hasn't (#616).
+        let git = self.git.clone();
+        let landing = match self.core.conversation(&id).ok().and_then(|c| c.setup) {
+            Some(Setup::Session {
+                repo, environment, ..
+            }) => Some((repo, environment)),
+            _ => None,
+        };
         crate::manager::blocking(move || {
             let record = dir.record();
+            let unlanded = landing.and_then(|(repo, environment)| {
+                let repo = git.open(std::path::Path::new(&repo)).ok()?;
+                let (branch, base) = match environment {
+                    crate::model::Environment::LocalCheckout { branch } => {
+                        let base = repo.default_branch().ok().flatten();
+                        (branch, base)
+                    }
+                    crate::model::Environment::NewWorktree { base, branch, .. } => {
+                        (branch, Some(base))
+                    }
+                };
+                crate::manager::seam::unlanded_line(&repo, &branch, base.as_deref())
+            });
             let lineage: Vec<_> = read_lineage(&record)
                 .into_iter()
                 .filter(|session| session.session_id != own)
@@ -1077,6 +1104,7 @@ impl SessionManager {
                 entries: &entries,
                 blobs: &blobs,
             });
+            let text = crate::manager::seam::with_unlanded(text, unlanded.as_deref());
             let text = match &workers {
                 Some(workers) => with_workers(text, workers),
                 None => text,

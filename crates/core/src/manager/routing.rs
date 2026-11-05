@@ -87,7 +87,8 @@ impl SessionManager {
     /// Whether the model `choice` names can run now: its provider ready, and no window that
     /// limits that model used up (a model's own weekly window included). A model the catalog
     /// doesn't list is judged by its provider. Whether the user switched it off is not asked:
-    /// this is about a conversation already running on it.
+    /// this is about a conversation already running on it. A choice of the CLI's default is
+    /// that model, whose own windows count too (#741).
     pub(crate) async fn choice_available(&self, choice: &ModelChoice) -> bool {
         let candidates: Vec<_> = self
             .runtime
@@ -100,10 +101,13 @@ impl SessionManager {
                     .is_none_or(|account| account == &candidate.account.choice_id())
             })
             .collect();
+        let model = self
+            .runs_as(choice.provider, choice.model.as_deref(), None)
+            .0;
         crate::accounts::ready(
             &self.core.settings(),
             choice.provider,
-            choice.model.as_deref(),
+            model.as_deref(),
             &candidates,
             &[],
             crate::now_ms(),
@@ -134,7 +138,10 @@ impl SessionManager {
         choice: &ModelChoice,
         account: Option<&crate::accounts::AccountRef>,
     ) -> bool {
-        let Some(id) = choice.model.as_deref() else {
+        let model = self
+            .runs_as(choice.provider, choice.model.as_deref(), None)
+            .0;
+        let Some(id) = model.as_deref() else {
             return true;
         };
         let now = crate::now_ms();

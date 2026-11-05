@@ -375,7 +375,8 @@ impl SessionManager {
             .into_iter()
             .map(|row| ModelChoice {
                 provider: row.agent,
-                model: (!row.model.eq_ignore_ascii_case("default")).then(|| row.model.clone()),
+                model: (!row.model.eq_ignore_ascii_case("default"))
+                    .then(|| self.listed_model(row.agent, &row.model)),
                 effort: row.effort,
                 fast: None,
                 account: None,

@@ -623,6 +623,58 @@ pub(crate) struct Boot<'a> {
     pub blobs: &'a Path,
 }
 
+/// How many commits of `branch` aren't on `base` nor on `base`'s upstream, as the Map says it;
+/// without a `base` other than `branch`, those not on `branch`'s own upstream. Nothing when all
+/// of it landed (a squash or a cherry-pick included), or git can't tell.
+pub(crate) fn unlanded_line(
+    repo: &brigadier_git::Repo,
+    branch: &str,
+    base: Option<&str>,
+) -> Option<String> {
+    let tip = repo.branch_tip(branch).ok()??;
+    let (name, tips) = match base.filter(|base| *base != branch) {
+        Some(base) => {
+            if repo.landed_in(&tip, base).ok()? {
+                return None;
+            }
+            let tips: Vec<_> = repo
+                .branch_tip(base)
+                .ok()?
+                .into_iter()
+                .chain(repo.upstream_tip(base).ok()?)
+                .collect();
+            (base.to_owned(), tips)
+        }
+        None => {
+            let upstream = repo.upstream_tip(branch).ok()??;
+            let name = repo
+                .remote_state(branch)
+                .ok()?
+                .upstream
+                .unwrap_or_else(|| format!("origin/{branch}"));
+            (name, vec![upstream])
+        }
+    };
+    let tips: Vec<_> = tips.iter().collect();
+    match repo.count_commits_beyond(&tips, &tip).ok()? {
+        0 => None,
+        1 => Some(format!("1 commit on {branch} isn't on {name}")),
+        n => Some(format!("{n} commits on {branch} aren't on {name}")),
+    }
+}
+
+/// `text`, a hand-off, with `line` first under its Map; one without a Map stays as it is.
+pub(crate) fn with_unlanded(text: String, line: Option<&str>) -> String {
+    const MAP: &str = "\n## Map\n";
+    match (line, text.find(MAP)) {
+        (Some(line), Some(at)) => {
+            let at = at + MAP.len();
+            format!("{}- {line}\n{}", &text[..at], &text[at..])
+        }
+        _ => text,
+    }
+}
+
 /// Seam `n`'s hand-off, as the successor's first lines. On the same CLI (a compaction count, a
 /// failed or looping compaction, a size seam): the successor lines with the `brigadier context`
 /// pointer, and the note, or why there is none (D13, D14, D16). A move to another CLI (a

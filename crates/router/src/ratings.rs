@@ -32,11 +32,21 @@ impl RatingPatch {
         !model.excluded && self.provider == model.provider && self.model == model.rating_identity()
     }
 
+    /// Whether whoever researched this patch makes the model it rates: run on that model's CLI,
+    /// or on the CLI of the maker of a model listed through another CLI (#745).
+    fn by_its_maker(&self) -> bool {
+        self.researched_by.is_some_and(|by| {
+            by == self.provider
+                || cli_maker(by)
+                    .is_some_and(|maker| model_maker(self.provider, &self.model) == Some(maker))
+        })
+    }
+
     pub fn apply(&self, model: &mut MergedModel) {
         if !self.applies(model) {
             return;
         }
-        if self.researched_by == Some(model.provider) {
+        if self.by_its_maker() {
             // Its own vendor's research can only lower a model's ratings.
             if let Some(tier) = self.tier {
                 model.tier = model.tier.min(tier);
@@ -69,7 +79,7 @@ impl RatingPatch {
     /// Drops the ratings this patch would raise on its own vendor's model: they never apply.
     /// Returns the dropped field paths.
     pub fn drop_self_raises(&mut self, model: &MergedModel) -> Vec<String> {
-        if self.researched_by != Some(model.provider) {
+        if !self.by_its_maker() {
             return Vec::new();
         }
         let mut dropped = Vec::new();
@@ -135,7 +145,7 @@ impl RatingPatch {
     /// lower), this patch's value comes down to it instead, so the lower value still applies
     /// on top of this patch's raise.
     pub fn give_way(&mut self, newer: &RatingPatch) {
-        let lowers = newer.researched_by == Some(newer.provider);
+        let lowers = newer.by_its_maker();
         if let Some(tier) = newer.tier {
             self.tier = self.tier.filter(|_| lowers).map(|_| tier);
         }
@@ -164,6 +174,34 @@ impl RatingPatch {
             && self.area_strengths.is_empty()
             && self.default_effort.is_empty()
     }
+}
+
+/// Who makes the models a CLI runs itself. OpenCode runs anyone's.
+fn cli_maker(cli: ProviderKind) -> Option<&'static str> {
+    match cli {
+        ProviderKind::Claude => Some("anthropic"),
+        ProviderKind::Codex => Some("openai"),
+        _ => None,
+    }
+}
+
+/// Who makes `model` as `cli` lists it; through a CLI that runs anyone's, from its id's words
+/// (`anthropic/claude-sonnet-5`, `openrouter/openai/gpt-6`).
+fn model_maker(cli: ProviderKind, model: &str) -> Option<&'static str> {
+    cli_maker(cli).or_else(|| {
+        model
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .find_map(|word| {
+                let word = word.to_ascii_lowercase();
+                if word == "anthropic" || word.starts_with("claude") {
+                    Some("anthropic")
+                } else if word == "openai" || word.starts_with("gpt") {
+                    Some("openai")
+                } else {
+                    None
+                }
+            })
+    })
 }
 
 fn name(key: &impl Serialize) -> String {
@@ -283,6 +321,49 @@ mod tests {
             &[],
             &[],
         )
+    }
+
+    /// #745: the guard compares makers, not CLIs: research run on Claude can't raise an
+    /// Anthropic model listed through OpenCode, and can still rate another maker's there.
+    #[test]
+    fn research_cant_raise_its_makers_model_listed_through_another_cli() {
+        let merged = |id: &str| {
+            merge(
+                &Registry::bundled(),
+                &[(ProviderKind::OpenCode, &[info(id, None)])],
+                &[],
+                &[],
+            )
+            .remove(0)
+        };
+        let rating = |id: &str| RatingPatch {
+            provider: ProviderKind::OpenCode,
+            model: id.into(),
+            sources: Vec::new(),
+            tier: None,
+            strengths: BTreeMap::from([(TaskCategory::Research, 9.0)]),
+            area_strengths: BTreeMap::new(),
+            default_effort: BTreeMap::new(),
+            researched_by: Some(ProviderKind::Claude),
+        };
+        let ours = "openrouter/anthropic/claude-sonnet-5";
+        let mut own = rating(ours);
+        assert_eq!(
+            own.drop_self_raises(&merged(ours)),
+            vec!["strengths.research".to_owned()]
+        );
+        let mut model = merged(ours);
+        let before = model.strengths.get(&TaskCategory::Research).copied();
+        rating(ours).apply(&mut model);
+        assert_eq!(
+            model.strengths.get(&TaskCategory::Research).copied(),
+            before
+        );
+
+        let theirs = "openai/gpt-6";
+        let mut model = merged(theirs);
+        rating(theirs).apply(&mut model);
+        assert_eq!(model.strengths[&TaskCategory::Research], 9.0);
     }
 
     fn patch(model: &str) -> serde_json::Value {

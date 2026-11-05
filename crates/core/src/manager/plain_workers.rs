@@ -367,10 +367,16 @@ impl SessionManager {
                             self.row_available(row.agent, &row.model)
                         }
                 };
+                // A row whose CLI has no signed-in account can't run. With `--agent` the worker
+                // runs on that agent, whichever row it takes from.
+                let runnable = |row: &Guidance| {
+                    usable(row)
+                        && (start.agent.is_some() || self.runtime.provider_signed_in(row.agent))
+                };
                 // None fits now: the order's first that can run, still the `--agent` one (D34).
                 let first = order
                     .iter()
-                    .find(|row| usable(row))
+                    .find(|row| runnable(row))
                     .map(|row| (*row).clone());
                 let mut fit = None;
                 for row in order {
@@ -410,9 +416,11 @@ impl SessionManager {
                         break;
                     }
                 }
-                let last = || rows.iter().find(|row| usable(row)).cloned();
+                let last = || rows.iter().find(|row| runnable(row)).cloned();
                 match fit.or(first).or_else(last) {
                     Some(row) => Some(row),
+                    // Every row that may run has no signed-in CLI: the session's own agent (#745).
+                    None if rows.iter().any(&usable) => None,
                     None if !rows.is_empty() => {
                         return Ok(refused(format!(
                             "refused: every row of the work \"{work}\" names an agent or a model \
