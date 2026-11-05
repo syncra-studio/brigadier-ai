@@ -24,14 +24,18 @@ pub(crate) fn marked_once(text: &str, id: &str) -> String {
     format!("{text}\n\n{}", once_mark(id))
 }
 
-/// A message's text as it was written, without its mark at the end.
-pub(crate) fn without_mark(text: &str) -> &str {
-    let trimmed = text.trim_end();
-    match trimmed.rfind(MARK) {
-        Some(at) if trimmed.ends_with(']') && !trimmed[at..].contains('\n') => {
-            trimmed[..at].trim_end()
+/// A message's text as it was written, without its mark: on a line of its own after the words,
+/// with what Brigadier added for the message's files, if any, after it.
+pub(crate) fn without_mark(text: &str) -> String {
+    let start = format!("\n\n{MARK}");
+    let Some(at) = text.find(&start) else {
+        return text.to_owned();
+    };
+    match text[at + 2..].find(']') {
+        Some(len) if !text[at + 2..at + 2 + len].contains('\n') => {
+            format!("{}{}", &text[..at], &text[at + 2 + len + 1..])
         }
-        _ => text,
+        _ => text.to_owned(),
     }
 }
 
@@ -66,6 +70,10 @@ mod tests {
         assert_eq!(
             without_mark("Use [Worker message row-1] here"),
             "Use [Worker message row-1] here"
+        );
+        assert_eq!(
+            without_mark(&format!("{marked}\n\nThe files: a.png")),
+            "Use blue.\n\nThe files: a.png"
         );
         assert_eq!(marked_once("/compact", "row-1"), "/compact");
     }

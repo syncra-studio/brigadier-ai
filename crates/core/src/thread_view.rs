@@ -234,6 +234,10 @@ pub struct WorkerRow {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub paused: bool,
+    /// Its CLI ended on its own and its next message continues it: the words saying so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cli_ended: Option<String>,
     /// When its CLI last said anything.
     pub last_event_at_ms: Option<i64>,
     /// The usage limit its model hit, while it holds.

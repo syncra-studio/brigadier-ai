@@ -109,6 +109,11 @@ async fn a_worker_whose_cli_died_is_kept_and_its_next_message_resumes_it() {
     let error = task.error.as_deref().unwrap();
     assert!(error.contains("the next message continues it"), "{error}");
     assert!(error.contains("signal 15"), "{error}");
+    let rows = (flow.manager)
+        .worker_rows_of(&flow.conversation, false)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].cli_ended.as_deref(), Some(error));
     let worktree = task
         .workspace
         .as_ref()

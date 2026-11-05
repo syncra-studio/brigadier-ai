@@ -40,6 +40,8 @@ test("a kept worker whose CLI ended says so and how it goes on, not Finished", (
   const worker = task({ state: "reported", error });
   assert.equal(taskState(worker).word, "CLI ended");
   assert.equal(taskActivityLines({ task: worker }, 41000, false).first, error);
+  assert.equal(workerDone(worker), false);
+  assert.equal(workerPreview(worker), error);
   // A failed turn's error still reads as it did.
   const failed = task({ state: "reported", error: "The API said no." });
   assert.notEqual(taskState(failed).word, "CLI ended");
