@@ -60,6 +60,10 @@ pub struct RankingsRefresh {
     pub model: Option<String>,
     /// The CLI provider running the research model.
     pub provider: Option<ProviderKind>,
+    /// Whether the research model had no research rating of its own: none that had one could
+    /// run, so it ran on the user's own model (#745).
+    #[serde(default)]
+    pub researcher_unrated: bool,
     /// The host-captured curated revision researched by this job.
     pub base_revision: Option<u64>,
     /// Accepted model patches and their changed fields and sources.
@@ -137,6 +141,7 @@ impl RegistryHolder {
         id: &str,
         catalogs: &[(ProviderKind, &[brigadier_providers::ModelInfo])],
         producer: (ProviderKind, &str),
+        producer_unrated: bool,
         research: &[brigadier_router::ResearchNote],
     ) -> Option<(u64, Vec<MergedModel>)> {
         let mut state = self.state();
@@ -159,6 +164,7 @@ impl RegistryHolder {
         state.refresh.base_revision = Some(revision);
         state.refresh.provider = Some(producer.0);
         state.refresh.model = Some(producer.1.to_owned());
+        state.refresh.researcher_unrated = producer_unrated;
         Some((revision, models))
     }
 
@@ -185,12 +191,16 @@ impl RegistryHolder {
         };
         // No vendor rates its own models up: those raises are dropped here and never applied.
         let producer = state.refresh.provider;
+        let researcher = state.refresh.model.clone();
         patches.retain_mut(|patch| {
             patch.researched_by = producer;
             let Some(model) = models.iter().find(|model| patch.applies(model)) else {
                 return true;
             };
-            let dropped = patch.drop_self_raises(model);
+            let dropped = match producer.zip(researcher.as_deref()) {
+                Some(researcher) => patch.drop_raises_by(model, researcher),
+                None => patch.drop_self_raises(model),
+            };
             if !dropped.is_empty() {
                 errors.push(format!(
                     "{}: a model's own maker can't raise its ratings, so {} stayed as before",
@@ -416,7 +426,7 @@ mod tests {
         }))
         .unwrap();
         holder
-            .capture_refresh(id, &[(ProviderKind::Codex, &[info])], producer, &[])
+            .capture_refresh(id, &[(ProviderKind::Codex, &[info])], producer, false, &[])
             .unwrap()
     }
     fn reply() -> Result<String, String> {
@@ -432,6 +442,82 @@ mod tests {
         let (revision, models) = capture(holder, &id);
         holder.finish_refresh(&id, revision, &models, reply());
         assert_eq!(holder.rankings_refresh().state, RankingsRefreshState::Done);
+    }
+
+    /// #745: a run on the user's own unrated model rates what it read about, says it's unrated,
+    /// and raises neither itself nor its maker's models.
+    #[test]
+    fn a_fallback_run_rates_something() {
+        let cache = Cache::new();
+        let holder = cache.holder();
+        let (id, _) = holder.admit_refresh();
+        let info = |model: &str| {
+            serde_json::from_value::<brigadier_providers::ModelInfo>(serde_json::json!({
+                "id":model, "displayName":model, "description":"", "efforts":["low","medium","high"],
+                "isDefault":false, "inputModalities":["text"], "legacy":false
+            }))
+            .unwrap()
+        };
+        let (kimi, glm, claude, gpt) = (
+            "opencode-go/kimi-k2",
+            "opencode-go/glm-5",
+            "anthropic/claude-sonnet-5",
+            "openai/gpt-6",
+        );
+        let catalog = [info(kimi), info(glm), info(claude), info(gpt)];
+        let researcher = (ProviderKind::OpenCode, claude);
+        let (revision, models) = holder
+            .capture_refresh(
+                &id,
+                &[(ProviderKind::OpenCode, &catalog)],
+                researcher,
+                true,
+                &[],
+            )
+            .unwrap();
+        let patches: Vec<_> = [kimi, glm, claude, gpt]
+            .map(|model| {
+                serde_json::json!({"provider":"opencode", "model":model,
+                    "sources":["https://example.com/model"], "tier":"strong",
+                    "strengths":{"research":8}})
+            })
+            .to_vec();
+        holder.finish_refresh(
+            &id,
+            revision,
+            &models,
+            Ok(serde_json::json!({ "patches": patches }).to_string()),
+        );
+        let refresh = holder.rankings_refresh();
+        assert_eq!(refresh.state, RankingsRefreshState::Done);
+        assert!(refresh.researcher_unrated);
+        let changed: Vec<_> = refresh.changes.iter().map(|c| c.model.as_str()).collect();
+        assert_eq!(changed, [kimi, glm, gpt], "{:?}", refresh.errors);
+        // What it found counts for routing, and the researcher's own maker stays unrated.
+        let (_, overlay) = holder.rating_snapshot();
+        let score = |id: &str| {
+            let mut model = models.iter().find(|m| m.id == id).unwrap().clone();
+            for patch in &overlay {
+                patch.apply(&mut model);
+            }
+            brigadier_router::picks::score(
+                &model,
+                brigadier_router::Rating::Categories(&[brigadier_router::TaskCategory::Research]),
+            )
+        };
+        assert_eq!(score(kimi), Some(8.0));
+        assert_eq!(score(claude), None);
+    }
+
+    /// A rated researcher's run says nothing of being unrated, and rates as it always did.
+    #[test]
+    fn a_rated_run_is_not_called_unrated() {
+        let cache = Cache::new();
+        let holder = cache.holder();
+        commit(&holder);
+        let refresh = holder.rankings_refresh();
+        assert!(!refresh.researcher_unrated);
+        assert_eq!(refresh.changes.len(), 1);
     }
 
     #[test]
