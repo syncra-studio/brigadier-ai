@@ -13,9 +13,12 @@ test("the model picker: a star goes to Settings and Favorites, a pick stays open
   // A star is saved in Settings, and goes first in its agent's list.
   assert.deepEqual(seen.starred, [{ provider: "claude", id: "sonnet" }]);
   assert.deepEqual(seen.starredFirst, ["Sonnet 5.5", "Opus 5.5", "Fable 5.1", "Haiku 5.5"]);
-  // With a favorite it opens on Favorites.
-  assert.equal(seen.reopensOn, "Favorites");
-  assert.deepEqual(seen.favorites, ["Sonnet 5.5, Claude Code"]);
+  // Another model's star leaves it on the checked model's agent; the checked model's star opens Favorites.
+  assert.equal(seen.otherStarredOpensOn, "Claude Code");
+  assert.equal(seen.checkedStarredOpensOn, "Favorites");
+  assert.deepEqual(seen.favorites, ["Opus 5.5, Claude Code", "Sonnet 5.5, Claude Code"]);
+  // The search offers no autocorrect, capitals, spelling, autofill or predictions.
+  assert.deepEqual(seen.searchField, ["off", "off", "false", "off", "false"]);
   // A pick keeps it open, on the picked model's levels.
   assert.deepEqual(seen.afterPick, { open: true, focused: "Max", levels: ["Max"] });
   assert.equal(seen.noEfforts, "No effort levels");
@@ -30,8 +33,13 @@ test("the model picker: a star goes to Settings and Favorites, a pick stays open
     "opencode/claude-opus-5-5, OpenCode",
     "opencode-go/kimi-k3, OpenCode",
     "opencode/big-pickle, OpenCode",
+    "opencode-go/kimi-k3.1-pro, OpenCode",
   ]);
   assert.equal(seen.older, "Older models · 1");
-  assert.deepEqual(seen.unfolded, ["Sonnet 5.5", "Opus 5.5", "Fable 5.1", "Haiku 5.5", "Opus 4.6"]);
+  assert.deepEqual(seen.unfolded, ["Opus 5.5", "Sonnet 5.5", "Fable 5.1", "Haiku 5.5", "Opus 4.6"]);
   assert.equal(seen.asked, 0);
+  // With no level checked, none looks selected: the keyboard is on the column.
+  assert.deepEqual(seen.noneChecked, { focused: "Effort", checked: 0, levels: ["Low", "Medium", "High"] });
+  // A pick that comes back late lands on its own checked level.
+  assert.deepEqual(seen.lateAnswer, { focused: "Medium", state: "on", levels: ["Low", "Medium"] });
 });
