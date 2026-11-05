@@ -83,12 +83,12 @@ const key = (target: Element, name: string) =>
 const trigger = () => document.querySelector<HTMLElement>("[data-slot=model-selector-trigger]");
 const picker = () => document.querySelector<HTMLElement>("[data-slot=model-picker-popover]");
 const agent = (label: string) =>
-  [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-agent]")].find((row) => row.textContent === label);
+  [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-agent]")].find((row) => row.getAttribute("aria-label") === label);
 const models = () => [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-model]")];
 const line = () => document.querySelector("[data-slot=model-picker-continue]")?.textContent ?? null;
 const focused = () => {
   const active = document.activeElement as HTMLElement | null;
-  return active?.matches("input") ? `search:${(active as HTMLInputElement).value}` : (active?.textContent ?? null);
+  return active?.matches("input") ? `search:${(active as HTMLInputElement).value}` : (active?.getAttribute("aria-label") ?? active?.textContent ?? null);
 };
 
 async function open(): Promise<void> {

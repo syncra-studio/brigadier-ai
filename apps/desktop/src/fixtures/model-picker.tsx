@@ -1,6 +1,7 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: the one model picker
- * where it is used, with IPC mocked. `?shot=` leaves it open for a screenshot: codex (a started
+ * where it is used, with IPC mocked. `?shot=` leaves it open for a screenshot: claude (the session's
+ * own agent), long (a session on OpenCode with its long list), codex (a started
  * Claude session, gpt-6.1-sol picked at Ultra, Fast), opencode (a model with no efforts), rule
  * (Opus 5.5 at High under "Never go above High effort"), search, automatic (Settings › Git), or
  * routing (a row of an order). `?drive=1` writes what it saw to #model-picker-result
@@ -33,7 +34,7 @@ let conversation = {
   id, kind: "session", projectId: null, title: "Tax helpers", pinnedAtMs: null, createdAtMs: start, updatedAtMs: start,
   lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
   setup: {
-    type: "session", orchestrator: { provider: "claude", model: "opus", effort: "high" }, permission: "acceptEdits", planMode: false,
+    type: "session", orchestrator: shot === "long" ? { provider: "opencode", model: "opencode-go/kimi-k3.1-pro", effort: "high" } : { provider: "claude", model: "opus", effort: "high" }, permission: "acceptEdits", planMode: false,
     workersSeeUncommitted: null, environment: { type: "localCheckout", repoPath: "/repo", branch: null },
   },
 } as unknown as Conversation;
@@ -103,13 +104,22 @@ useApp.setState({
           model("gpt-6-astra", "gpt-6-astra", codex),
           model("gpt-6.1-terra", "gpt-6.1-terra", codex),
         ]),
-        overview("opencode", [
-          model("opencode/claude-opus-5-5", "opencode/claude-opus-5-5", claude),
-          model("opencode-go/kimi-k3", "opencode-go/kimi-k3", { efforts: ["max"], defaultEffort: "max" }),
-          model("opencode/big-pickle", "opencode/big-pickle"),
-          // Its levels name no default of their own: none is checked.
-          model("opencode-go/kimi-k3.1-pro", "opencode-go/kimi-k3.1-pro", { efforts: ["low", "medium", "high"] }),
-        ]),
+        overview(
+          "opencode",
+          shot === "long"
+            ? [
+                model("opencode-go/kimi-k3.1-pro", "Kimi K3.1 Pro", { efforts: ["low", "high", "max"] }),
+                model("opencode/big-pickle", "Big Pickle"),
+                ...["Kimi K3", "GLM-5.3", "DeepSeek V4 Pro", "DeepSeek V4 Flash", "Qwen 4 Max", "Qwen 4 Coder", "MiniMax M3", "Grok Code 2", "Gemini 3.5 Pro", "Mimo V3", "Devstral 3", "Llama 5 Scout"].map((name) => model(name, name)),
+              ]
+            : [
+                model("opencode/claude-opus-5-5", "opencode/claude-opus-5-5", claude),
+                model("opencode-go/kimi-k3", "opencode-go/kimi-k3", { efforts: ["max"], defaultEffort: "max" }),
+                model("opencode/big-pickle", "opencode/big-pickle"),
+                // Its levels name no default of their own: none is checked.
+                model("opencode-go/kimi-k3.1-pro", "opencode-go/kimi-k3.1-pro", { efforts: ["low", "medium", "high"] }),
+              ],
+        ),
       ],
       sessions: [],
       fixtures: [],
@@ -150,8 +160,14 @@ const typeSearch = (words: string) => {
   input.focus();
 };
 
+const opensOn = () => document.querySelector("[data-picker-part=agents] [aria-selected=true]")?.getAttribute("aria-label");
+
 async function screenshot() {
   switch (shot) {
+    case "claude":
+    case "long":
+      await open();
+      break;
     case "codex":
       await open();
       await browseAndPick("codex", "gpt-6.1-sol");
@@ -186,7 +202,7 @@ async function drive() {
   const seen: Record<string, unknown> = {};
   try {
     await open();
-    seen.opensOn = text(document.querySelector("[data-picker-part=agents] [aria-selected=true]"));
+    seen.opensOn = opensOn();
     seen.claude = models().map(text);
     seen.levels = levels().map((row) => [text(row), row.dataset.state]);
     // The star: it writes Settings, and the model goes first in its agent's list and on Favorites.
@@ -197,7 +213,6 @@ async function drive() {
     trigger()!.click();
     await until("the picker closed", () => !picker());
     // A star on another model: it still opens on the checked model's agent.
-    const opensOn = () => text(document.querySelector("[data-picker-part=agents] [aria-selected=true]"));
     await open();
     seen.otherStarredOpensOn = opensOn();
     // The search is plain typing: no autocorrect bubble.
@@ -228,7 +243,7 @@ async function drive() {
     search.focus();
     search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
     seen.underKeys = await until("its levels", () => (levels().length > 0 ? levels().map(text) : null));
-    // Search hides the rail and finds every agent's models.
+    // Search hides the sidebar and finds every agent's models.
     typeSearch("o");
     seen.searchRail = agent("claude") !== null;
     seen.searched = await until("matches", () => (models().length > 1 ? models().map(text) : null));
@@ -239,9 +254,9 @@ async function drive() {
     document.querySelector<HTMLElement>("[data-picker-older]")!.click();
     seen.unfolded = await until("the older model", () => (modelNamed("Opus 4.6") ? models().map(text) : null));
     seen.asked = asked.length;
-    // No level of the new model is checked: nothing looks selected, the keyboard waits on the column.
+    // No level of the new model is checked: nothing looks selected, the keyboard waits on the row.
     await browseAndPick("opencode", "opencode-go/kimi-k3.1-pro");
-    seen.noneChecked = await until("the keyboard on the column", () =>
+    seen.noneChecked = await until("the keyboard on the row", () =>
       document.activeElement?.getAttribute("role") === "radiogroup"
         ? { focused: document.activeElement.getAttribute("aria-label"), checked: levels().filter((row) => row.dataset.state === "on").length, levels: levels().map(text) }
         : null,
@@ -253,6 +268,24 @@ async function drive() {
         ? { focused: text(document.activeElement), state: (document.activeElement as HTMLElement).dataset.state, levels: levels().map(text) }
         : null,
     );
+    // The footer's keys: ← → through the levels, ← from the first back to the models, ↑ too.
+    const press = async (key: string) => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      await sleep(30);
+      return text(document.activeElement);
+    };
+    const pressAll = async (keys: string[]) => {
+      const landed: string[] = [];
+      for (const key of keys) landed.push(await press(key));
+      return landed;
+    };
+    seen.footerKeys = await pressAll(["ArrowLeft", "ArrowRight", "ArrowRight", "ArrowLeft", "ArrowLeft"]);
+    await press("ArrowRight");
+    seen.upToModels = await press("ArrowUp");
+    // A model with a fast tier has Speed under its levels: ↓ to it, ← → in it, ↑ back to the level.
+    await browseAndPick("claude", "Opus 5.5");
+    await until("Opus's levels", () => document.activeElement?.getAttribute("role") === "radio" && levels().length === 5);
+    seen.speedKeys = await pressAll(["ArrowDown", "ArrowRight", "ArrowLeft", "ArrowUp"]);
   } catch (error) {
     seen.error = String(error);
   }

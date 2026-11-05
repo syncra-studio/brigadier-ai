@@ -220,7 +220,7 @@ export function ModelSelector({
         shown={auto ? [`${id}-name`] : [fast && `${id}-fast`, `${id}-name`, word && `${id}-effort`]}
         disabled={disabled}
         data-slot="model-selector-trigger"
-        onKeyDown={openOnArrows(open, change)}
+        onKeyDown={(event) => openOnArrows(open, change)(event)}
         className={cn(composerPill, "text-muted-foreground gap-1", className)}
       >
         {auto ? (

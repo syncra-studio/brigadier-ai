@@ -38,8 +38,12 @@ test("the model picker: a star goes to Settings and Favorites, a pick stays open
   assert.equal(seen.older, "Older models · 1");
   assert.deepEqual(seen.unfolded, ["Opus 5.5", "Sonnet 5.5", "Fable 5.1", "Haiku 5.5", "Opus 4.6"]);
   assert.equal(seen.asked, 0);
-  // With no level checked, none looks selected: the keyboard is on the column.
+  // With no level checked, none looks selected: the keyboard is on the row.
   assert.deepEqual(seen.noneChecked, { focused: "Effort", checked: 0, levels: ["Low", "Medium", "High"] });
   // A pick that comes back late lands on its own checked level.
   assert.deepEqual(seen.lateAnswer, { focused: "Medium", state: "on", levels: ["Low", "Medium"] });
+  // The footer's keys: ← → through the levels, ← from the first and ↑ back to the models; Speed under them.
+  assert.deepEqual(seen.footerKeys, ["Low", "Medium", "Medium", "Low", "Haiku 5.5"]);
+  assert.equal(seen.upToModels, "Haiku 5.5");
+  assert.deepEqual(seen.speedKeys, ["Standard", "Fast", "Standard", "Medium"]);
 });

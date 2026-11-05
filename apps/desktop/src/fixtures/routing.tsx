@@ -243,11 +243,11 @@ const type = (words: string) => {
 const note = () => text(form()?.querySelector('[role="status"], [role="alert"], [data-slot="routing-rule-read"]'));
 const lastWrite = () => writes.at(-1);
 /** The open model picker's agent row, by its name. */
-const agentRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-agent"]').find((row) => text(row) === name);
+const agentRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-agent"]').find((row) => row.getAttribute("aria-label") === name);
 /** The open model picker's model rows: name, then line. */
 const modelRows = () => all('[data-slot="model-picker-model"]').map(text);
 const modelRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-model"]').find((row) => text(row).startsWith(name));
-/** The open model picker's effort rows, and one by its name. */
+/** The open model picker's effort levels, and one by its name. */
 const effortRows = () => all('[data-slot="model-picker-effort"] [role="radio"]');
 const effortRow = (name: string) => effortRows().find((row) => text(row).startsWith(name));
 /** The steps that show the Rules section at `stage`, for screenshots. */
@@ -341,7 +341,7 @@ function Fixture() {
           () => effortRow("Medium")?.click(),
           () => {
             record.afterEffort = lastWrite()?.rows;
-            record.agents = all('[data-slot="model-picker-agent"]').map(text);
+            record.agents = all('[data-slot="model-picker-agent"]').map((row) => row.getAttribute("aria-label") ?? "");
             modelRow(work === "Adversarial review" ? "GPT-6 Luna" : "Sonnet 5.5")?.click();
           },
           () => {
@@ -421,7 +421,7 @@ function Fixture() {
         },
         () => button("Add model", openKind() ?? document)?.click(),
         () => {
-          seen.addModelAgents = all('[data-slot="model-picker-agent"]').map(text);
+          seen.addModelAgents = all('[data-slot="model-picker-agent"]').map((row) => row.getAttribute("aria-label") ?? "");
           seen.addModelItems = { claude: modelRows() };
           agentRow("Codex")?.click();
         },

@@ -165,9 +165,9 @@ function Fixture() {
         seen.gone = text(row("Write with")?.querySelector(".text-xs"));
         return openMenu("Write with");
       },
-      // Automatic is a band over the columns, with its own switch; the rail has only the agents.
+      // Automatic is a band over the columns, with its own switch; the sidebar has only Favorites and the agents.
       () => {
-        seen.writerAgents = all('[data-slot="model-picker-agent"]').map(text);
+        seen.writerAgents = all('[data-slot="model-picker-agent"]').map((agent) => agent.getAttribute("aria-label") ?? "");
         // What the rules keep out everywhere shows greyed with their words, as in the composer.
         useModelRules.setState({ view: { rules: [{ type: "forbid", names: ["opus"], work: null }] } as unknown as ModelRules, error: null });
       },
