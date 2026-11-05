@@ -2007,6 +2007,33 @@ impl SessionManager {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
+        // Its CLI ended and it was kept (#811): a note is its next message, which resumes its CLI
+        // session; with none, nothing starts and the reply says it is ready.
+        if !task.state.is_final()
+            && task.quota_wait.is_none()
+            && !super::workers::explicitly_paused(&task)
+            && task.error.as_deref().is_some_and(cli_ended)
+        {
+            let note = note.filter(|note| !note.trim().is_empty());
+            let done = note.is_some();
+            if let Some(note) = note {
+                self.send_plain(&task, note).await?;
+                self.orchestrator_step(
+                    &task.conversation_id,
+                    crate::work::OrchestratorStepKind::Resumed {
+                        task_id: task.id.clone(),
+                    },
+                )
+                .await;
+            }
+            return Ok(CliReply::ok(&ManageOutput {
+                id: short(&task.id.0),
+                done,
+                to: None,
+                off_routing: None,
+                worker: self.worker_now(&task).await,
+            }));
+        }
         // Held as a message to the paused worker is, and goes with the resume: no row of its own.
         if let Some(note) = note
             && super::workers::explicitly_paused(&task)

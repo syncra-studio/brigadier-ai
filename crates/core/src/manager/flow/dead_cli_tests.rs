@@ -5,9 +5,11 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use brigadier_cli::protocol::{CliRequest, ManageOutput};
 use brigadier_providers::model::{ApprovalKind, Origin, ToolSet};
 use brigadier_providers::{ApprovalDecision, ApprovalRequest};
 
+use super::cli_tests::brigadier;
 use super::{Flow, Options, Reply, Script};
 use crate::model::{PermissionLevel, Setup};
 use crate::work::{ApprovalSubject, CardId, CardState, Task, TaskState};
@@ -30,6 +32,21 @@ fn script(said: Inputs) -> Script {
                     return Reply::text(format!("Answered: {answer:?}."));
                 }
                 return Reply::text("Done.");
+            }
+            // With whatever else its turn carries, its worker's news among it.
+            if let Some(resume) = turn
+                .input
+                .lines()
+                .find_map(|line| line.strip_prefix("Resume: "))
+            {
+                let (id, note) = resume.split_once('|').unwrap_or((resume, ""));
+                let request = CliRequest::Resume {
+                    id: id.to_owned(),
+                    note: (!note.is_empty()).then(|| note.to_owned()),
+                };
+                let reply = brigadier(&turn, request).await;
+                said.lock().unwrap().push(format!("reply: {reply}"));
+                return Reply::text("Noted.");
             }
             if let Some(prompt) = turn.input.strip_prefix("Start: ") {
                 turn.start_worker("Worker", prompt).await;
@@ -154,6 +171,59 @@ async fn a_worker_whose_cli_died_is_kept_and_its_next_message_resumes_it() {
     flow.manager.stop_task(task.id.clone()).await.unwrap();
     let board = flow.board().await;
     assert!(Flow::task(&board, 1).state.is_final());
+    flow.stop().await;
+}
+
+/// #811: `brigadier resume` on a kept worker: with a note it goes as its next message does, the
+/// same CLI session resumed; with none it starts nothing and says the worker is ready.
+#[tokio::test]
+async fn resume_on_a_kept_worker_is_its_next_message_and_an_empty_one_says_it_is_ready() {
+    let (flow, said) = flow("dead-cli-resume", PermissionLevel::Full).await;
+    flow.say("Start: Crash.").await;
+    let board = flow
+        .until("its CLI's end to be noted", |board| {
+            board.tasks.values().any(|task| task.error.is_some())
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    let id = crate::manager::cli::short(&task.id.0);
+    flow.idle().await;
+    let reply = |said: &Inputs| {
+        let said = said.lock().unwrap();
+        let reply = said
+            .iter()
+            .rfind(|line| line.starts_with("reply: "))
+            .cloned();
+        reply.map(|line| line["reply: ".len()..].to_owned())
+    };
+
+    flow.say(&format!("Resume: {id}")).await;
+    super::eventually("its reply", || reply(&said).is_some()).await;
+    let empty = reply(&said).expect("its reply");
+    let output: ManageOutput = serde_json::from_str(&empty).expect(&empty);
+    assert!(!output.done, "{empty}");
+    let words = brigadier_cli::render::resume(&output);
+    assert!(words.contains("next message continues it"), "{words}");
+    assert_eq!(
+        worker_starts(&flow).len(),
+        1,
+        "an empty resume starts nothing"
+    );
+
+    flow.say(&format!("Resume: {id}|Use blue.")).await;
+    flow.until("its next turn's end", |board| {
+        Flow::task(board, 1).state == TaskState::Reported && Flow::task(board, 1).error.is_none()
+    })
+    .await;
+    let starts = worker_starts(&flow);
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    assert!(matches!(&starts[1], Origin::Resume { .. }), "{starts:?}");
+    assert!(
+        said.lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("Use blue.") && !input.starts_with("Resume: "))
+    );
     flow.stop().await;
 }
 

@@ -87,6 +87,8 @@ pub enum CliRequest {
         note: Option<String>,
     },
     /// Resumes a paused worker: what waited and `note`, then "Continue where you stopped."
+    /// A worker kept after its CLI ended takes `note` as its next message; with none, nothing
+    /// starts and `done` is false.
     Resume {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1106,7 +1108,8 @@ pub struct CloseOutput {
 #[serde(rename_all = "camelCase")]
 pub struct ManageOutput {
     pub id: String,
-    /// False when there was nothing to do: a `pause` of a worker paused already.
+    /// False when there was nothing to do: a `pause` of a worker paused already, a `resume`
+    /// without a note of a worker whose CLI ended.
     pub done: bool,
     /// `switch`: where it runs now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
