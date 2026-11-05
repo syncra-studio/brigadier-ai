@@ -49,7 +49,7 @@ const look = params.get("drive") === "look";
 /** A card's, a select's and a chosen pill's look, under `root`; the pill in `choices` if given. */
 const looks = (root: ParentNode, cards: string, choices = "") => ({
   cards: all(cards, root).map(surface),
-  select: surface(root.querySelector('[data-slot="settings-page"] button[aria-haspopup]')),
+  select: surface(root.querySelector('[data-slot="settings-page"] button[aria-haspopup="menu"]')),
   chosen: surface(root.querySelector(`[data-slot="settings-page"] ${choices} button[role="radio"][data-state="on"]`)),
 });
 useApp.setState((state) => ({
@@ -223,6 +223,14 @@ const button = (name: string, root: ParentNode = document) =>
   all<HTMLButtonElement>("button", root).find(
     (element) => text(element) === name || element.getAttribute("aria-label") === name,
   );
+/** Opens a menu's trigger the way a pointer does (Radix opens menus on pointer down). */
+const press = (element: Element | undefined | null) => {
+  element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+};
+const menuItem = (name: string) =>
+  all<HTMLElement>('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]').find((item) =>
+    text(item).startsWith(name),
+  );
 /** A kind of work's row in Who does what, by its name. */
 const kindButton = (name: string) =>
   all<HTMLButtonElement>('[data-slot="routing-kind"] > button').find((element) => text(element).startsWith(name));
@@ -247,9 +255,6 @@ const agentRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-ag
 /** The open model picker's model rows: name, then line. */
 const modelRows = () => all('[data-slot="model-picker-model"]').map(text);
 const modelRow = (name: string) => all<HTMLElement>('[data-slot="model-picker-model"]').find((row) => text(row).startsWith(name));
-/** The open model picker's effort rows, and one by its name. */
-const effortRows = () => all('[data-slot="model-picker-effort"] [role="radio"]');
-const effortRow = (name: string) => effortRows().find((row) => text(row).startsWith(name));
 /** The steps that show the Rules section at `stage`, for screenshots. */
 const roleSuggestionLine = (work: string) => document.querySelector(`[data-work="${work}"] [data-slot="routing-suggestion"]`);
 
@@ -336,29 +341,32 @@ function Fixture() {
           () => {
             record.initial = lastWrite()?.rows;
             record.canReorder = Boolean(roleRoot().querySelector('button[aria-label^="Move "]'));
-            roleOrder()[0]?.querySelector<HTMLElement>('[data-slot="order-place-model"]')?.click();
+            const trigger = roleOrder()[0]?.querySelector('button[aria-label$=": effort"]');
+            press(trigger);
           },
-          () => effortRow("Medium")?.click(),
+          () => menuItem("Medium")?.click(),
           () => {
             record.afterEffort = lastWrite()?.rows;
+            press(roleOrder()[0]?.querySelector('button[aria-label$=": actions"]'));
+          },
+          () => menuItem("Change model")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+          () => {
             record.agents = all('[data-slot="model-picker-agent"]').map(text);
             modelRow(work === "Adversarial review" ? "GPT-6 Luna" : "Sonnet 5.5")?.click();
           },
           () => {
             record.afterFirstModel = lastWrite()?.rows;
-            roleOrder()[0]?.querySelector<HTMLElement>('[data-slot="order-place-model"]')?.click();
+            press(roleOrder()[1]?.querySelector('button[aria-label$=": effort"]'));
           },
-          () => roleOrder()[1]?.querySelector<HTMLElement>('[data-slot="order-place-model"]')?.click(),
-          () => effortRow("Low")?.click(),
+          () => menuItem("Low")?.click(),
           () => {
             record.afterSecondEffort = lastWrite()?.rows;
-            modelRow(work === "Adversarial review" ? "Sonnet 5.5" : "GPT-6 Luna")?.click();
+            press(roleOrder()[1]?.querySelector('button[aria-label$=": actions"]'));
           },
+          () => menuItem("Change model")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+          () => modelRow(work === "Adversarial review" ? "Sonnet 5.5" : "GPT-6 Luna")?.click(),
           () => {
             record.afterBothModels = lastWrite()?.rows;
-            roleOrder()[1]?.querySelector<HTMLElement>('[data-slot="order-place-model"]')?.click();
-          },
-          () => {
             record.labelsAfterEdit = roleOrder().map(text);
             button("Automatic", openKind() ?? document)?.click();
           },
@@ -408,18 +416,17 @@ function Fixture() {
           seen.afterMine = lastWrite()?.rows;
           seen.mine = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
           seen.aloneGripDisabled = all<HTMLButtonElement>('[data-slot="ranked-place"] button', openKind() ?? document)[0]?.disabled;
-          button("Opus 5.5: model and effort")?.click();
+          press(button("Opus 5.5: effort"));
         },
         () => {
-          // What the user's ceiling keeps out shows greyed, with its words.
-          seen.efforts = effortRows().map(text);
-          effortRow("Medium")?.click();
+          // The effort menu stops at the user's ceiling.
+          seen.efforts = all('[role="menuitemradio"]').map(text);
+          menuItem("Medium")?.click();
         },
         () => {
           seen.afterEffort = lastWrite()?.rows.find((row) => row.work === "Architecture and broad changes");
-          button("Opus 5.5: model and effort")?.click();
+          button("Add model", openKind() ?? document)?.click();
         },
-        () => button("Add model", openKind() ?? document)?.click(),
         () => {
           seen.addModelAgents = all('[data-slot="model-picker-agent"]').map(text);
           seen.addModelItems = { claude: modelRows() };
@@ -429,8 +436,6 @@ function Fixture() {
           (seen.addModelItems as Record<string, string[]>).codex = modelRows();
           modelRow("GPT-6")?.click();
         },
-        // A pick keeps it open; Add model closes it.
-        () => button("Add model", openKind() ?? document)?.click(),
         () => {
           seen.order = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
           seen.kindLine = text(kindButton("Architecture and broad changes"));
@@ -441,11 +446,12 @@ function Fixture() {
         },
         () => {
           seen.afterMove = lastWrite()?.rows.filter((row) => row.work === "Architecture and broad changes").map((row) => row.model);
-          button("GPT-6: model and effort")?.click();
+          press(button("GPT-6: actions"));
         },
-        // Its picker opens on its own agent; the keys stay in it and a pick keeps it open.
+        // Change model opens the picker beside the menu; the keys stay in it and a pick closes the menu.
+        () => menuItem("Change model")?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
         () => {
-          const search = document.querySelector<HTMLInputElement>('[data-slot="model-picker"] input');
+          const search = document.querySelector<HTMLInputElement>('[data-slot="model-picker-submenu"] input');
           seen.changeModel = {
             searchFocused: document.activeElement === search,
             codex: modelRows(),
@@ -457,23 +463,24 @@ function Fixture() {
         },
         () => {
           const changeModel = seen.changeModel as Record<string, unknown>;
-          changeModel.typed = document.querySelector<HTMLInputElement>('[data-slot="model-picker"] input')?.value;
+          changeModel.typed = document.querySelector<HTMLInputElement>('[data-slot="model-picker-submenu"] input')?.value;
           changeModel.searched = modelRows();
           document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
         },
         () => {
           const changeModel = seen.changeModel as Record<string, unknown>;
-          changeModel.afterEscape = { open: Boolean(document.querySelector('[data-slot="model-picker"]')), typed: document.querySelector<HTMLInputElement>('[data-slot="model-picker"] input')?.value };
+          changeModel.afterEscape = { open: Boolean(document.querySelector('[data-slot="model-picker-submenu"]')), typed: document.querySelector<HTMLInputElement>('[data-slot="model-picker-submenu"] input')?.value };
           modelRow("Sonnet 5.5")?.click();
         },
         () => {
           const changeModel = seen.changeModel as Record<string, unknown>;
-          changeModel.stillOpen = Boolean(document.querySelector('[data-slot="model-picker"]'));
+          changeModel.menuClosed = !document.querySelector('[role="menu"]');
           changeModel.order = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
-          button("Sonnet 5.5: model and effort")?.click();
+          press(button("Sonnet 5.5: actions"));
         },
-        () => button("Remove Sonnet 5.5")?.click(),
-        () => button("Remove Opus 5.5")?.click(),
+        () => menuItem("Remove")?.click(),
+        () => press(button("Opus 5.5: actions")),
+        () => menuItem("Remove")?.click(),
         () => {
           // Its last model removed, the kind is Automatic again.
           seen.afterRemove = lastWrite()?.rows.map((row) => row.work);

@@ -1,5 +1,4 @@
 
-import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { findModel, ModelSelector, type ModelGroup, SettingsCard, SettingsRow } from "@/components/shared";
@@ -15,7 +14,6 @@ import {
   withChoice,
 } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { useModelRulesRead } from "@/state/modelRules";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
@@ -145,9 +143,6 @@ function DefaultModelRow({
 }) {
   const save = useAction();
   const all = useModelGroups();
-  // New sessions and chats: the rules the composer judges a pick by.
-  useModelRulesRead(true);
-  const refusals = useRuleRefusals(all);
   const change = (choice: ModelChoice | null) => save.run(() => setSetting(setting, choice));
   // A saved model made unavailable on Providers stays saved; new conversations skip it.
   const gone = value !== null && findModel(all, value) !== null && findModel(groups, value) === null;
@@ -161,8 +156,8 @@ function DefaultModelRow({
         label={row.label}
         groups={value ? withChoice(groups, all, value) : groups}
         value={value ?? fallback}
+        defaultChoice={fallback}
         onChange={change}
-        refused={refusals.refused}
         automatic={{
           chosen: value === null,
           label: `Automatic (${modelName(groups, fallback)})`,

@@ -20,10 +20,9 @@ export function RolePicks({ row, kind, groups, rules, onSave }: {
   return (
     <div data-slot="role-picks" className={cn(HAIRLINE_TOP, "flex flex-col pt-1 pb-3")}>
       <ul>
-        {row.rows.map((found, place) => onSave ? (
+        {row.rows.map((found) => onSave ? (
           <OrderPlace
-            // The place, not the model: the picker open on it stays open as its model changes.
-            key={place}
+            key={`${found.work}/${found.agent}/${found.model}`}
             row={found}
             role={kind.role(found)}
             groups={groups}
@@ -33,7 +32,7 @@ export function RolePicks({ row, kind, groups, rules, onSave }: {
             taken={[]}
             dragging={false}
             onEffort={(effort) => replace(found, { ...found, effort })}
-            onModel={(target, effort) => replace(found, { ...found, model: targetModel(target), effort, reason: "Your choice." })}
+            onModel={(target) => replace(found, { ...found, model: targetModel(target), effort: null, reason: "Your choice." })}
           />
         ) : (
           <li key={`${found.work}/${found.agent}/${found.model}`} data-slot="role-pick" className="flex h-10 items-center gap-3">

@@ -166,14 +166,8 @@ function Fixture() {
       () => document.querySelector<HTMLButtonElement>('[data-slot="model-picker-agent"][data-agent="claude"]')?.click(),
       () => pickModel("Opus"),
       () => {
-        seen.modelForbidden = {
-          saves: modelSaves.length,
-          error: text(row("Model for computer use")?.querySelector('[role="alert"]')),
-          greyed: all('[data-slot="model-picker-model"]').find((element) => text(element).startsWith("Opus"))?.dataset.refused,
-        };
+        seen.modelForbidden = { saves: modelSaves.length, error: text(row("Model for computer use")?.querySelector('[role="alert"]')) };
       },
-      // A pick keeps the picker open: its trigger closes it.
-      () => button("Model for computer use")?.click(),
       // Moving an existing model first keeps its effort: judge that effort before saving.
       () => useModelRules.setState({ view: { ...modelRules, rules: [{ type: "effortCeiling", effort: "low", work: "Computer use" }] } }),
       () => button("Model for computer use")?.click(),
@@ -182,7 +176,6 @@ function Fixture() {
       () => {
         seen.modelAboveCeiling = { saves: modelSaves.length, error: text(row("Model for computer use")?.querySelector('[role="alert"]')) };
       },
-      () => button("Model for computer use")?.click(),
       // A model the user picked on either page: their own row of the work.
       () => useModelRules.setState({ view: { ...modelRules, rows: [cuRow("codex", "gpt-6-luna", "low")] } }),
       () => {

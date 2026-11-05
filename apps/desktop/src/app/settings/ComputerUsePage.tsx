@@ -8,7 +8,7 @@ import { rowModelName, targetModel, withFirst, withOrder, workRows } from "@/app
 import { Badge, Button, SettingsSelectTrigger } from "@/components/controls";
 import { ProviderGlyph } from "@/components/icons";
 import { effortLabel, SettingsCard, SettingsRow } from "@/components/shared";
-import type { ComputerPermission, ComputerUseStatus, GuidanceRow, OverrideTarget, PermissionState } from "@/ipc/generated";
+import type { ComputerPermission, ComputerUseStatus, OverrideTarget, PermissionState } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";
 import {
   checkUnreadOnce,
@@ -189,13 +189,9 @@ function ModelRow() {
   const now = rules && work?.rows.find((found) =>
     accounts?.some((account) => account.account.provider === found.agent && account.inUse && account.status?.loggedIn) &&
     !refusingRule(rules.rules, rowChoice(found, models), found.work));
-  const pick = (target: OverrideTarget, effort: string | null) => {
+  const pick = (target: OverrideTarget) => {
     if (!rules || !work) return;
-    const picked = { work: work.work, agent: target.provider, model: targetModel(target), effort, reason: "Your choice." };
-    saveFirst(picked);
-  };
-  const saveFirst = (picked: GuidanceRow) => {
-    if (!rules || !work) return;
+    const picked = { work: work.work, agent: target.provider, model: targetModel(target), effort: null, reason: "Your choice." };
     save.run(async () => {
       const order = withFirst(work.rows, picked);
       const refusal = refusingRule(rules.rules, rowChoice(order[0]!, models), work.work);
@@ -205,16 +201,7 @@ function ModelRow() {
   };
   return (
     <SettingsRow label={row.label} description={row.description} error={save.error ?? (rules ? null : error)}>
-      <TargetPicker
-        label={row.label}
-        onPick={pick}
-        align="end"
-        chosen={now || null}
-        onEffort={(effort) => now && saveFirst({ ...now, effort })}
-        work={COMPUTER_USE_WORK}
-        rules={rules?.rules}
-        {...(now && { opensOn: now.agent })}
-      >
+      <TargetPicker label={row.label} onPick={pick} align="end" {...(now && { opensOn: now.agent })}>
         <SettingsSelectTrigger
           label={row.label}
           data-slot="computer-use-model"

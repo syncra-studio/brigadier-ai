@@ -234,7 +234,6 @@ export const useApp = create<AppState>()(() => ({
     disabledProviders: [],
     agentPaths: [],
     hiddenModels: [],
-    favoriteModels: [],
     knownModels: [],
     olderModelsOff: [],
     omitAiCoauthors: true,

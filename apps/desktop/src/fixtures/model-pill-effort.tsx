@@ -56,7 +56,7 @@ async function drive() {
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     {pills.map(([name, value]) => (
-      <ModelSelector key={name} groups={groups} value={value} onChange={() => {}} />
+      <ModelSelector key={name} groups={groups} value={value} defaultChoice={pills[0]![1]} onChange={() => {}} />
     ))}
   </TooltipProvider>,
 );

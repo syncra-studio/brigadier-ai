@@ -1,31 +1,34 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import {
+  forwardRef,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 
 import { Button } from "@/components/controls/button";
 import { Segmented } from "@/components/controls/segmented";
-import { Switch } from "@/components/controls/switch";
-import { Bolt, Check, ChevronRight, MagnifyingGlassSmSearch, ProviderGlyph, Sparkles, Star, StarFilled } from "@/components/icons";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { Bolt, Check, ChevronRight, MagnifyingGlassSmSearch, ProviderGlyph, Sparkles } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import type { ModelGroup } from "@/components/shared/model-selector";
 import type { ModelInfo, ProviderKind } from "@/ipc/generated";
+import { openSettings } from "@/state/actions";
 import { shippedModelNames } from "@/lib/shippedModels";
 import { cn } from "@/lib/utils";
-import { openSettings } from "@/state/actions";
-import { setModelFavorite } from "@/state/providers";
-import { useApp } from "@/state/store";
 
 /*
- * The model picker: a rail of Favorites and the agents, the browsed agent's models with a search
- * across every agent on top, and the effort of the model in hand, in one popup of a fixed height.
- * Every place that picks a model opens this one panel; each use switches on only the parts it
- * needs. A pick keeps it open and moves the keyboard to the efforts.
+ * The model picker (Pen: Model picker, S2): agents on the left, the browsed agent's models on the
+ * right with one plain line each, a search across every agent on top, and the picked model's
+ * effort (and Fast) underneath. Every place that picks a model opens this one panel; each use
+ * switches on only the parts it needs.
  */
 
 /** A row the picker checks: an agent's model by id, or (`model` null) the agent's own default. */
 export type PickerChoice = { provider: ProviderKind; model: string | null };
-
-/** What a press in the effort column or the footer picks along with a model not yet picked. */
-export type PickedWith = { effort?: string; fast?: boolean };
 
 export type ModelPickerProps = {
   groups: readonly ModelGroup[];
@@ -33,32 +36,35 @@ export type ModelPickerProps = {
   checked: PickerChoice | null;
   /** The agent it opens on when no row is checked (the first otherwise). */
   opensOn?: ProviderKind | undefined;
-  /** Only ever one agent's models: it opens there, not on Favorites. */
-  locked?: boolean | undefined;
-  /** A model picked (`model` null: the agent's default row), with what was pressed to pick it. */
-  onPick: (provider: ProviderKind, model: ModelInfo | null, also?: PickedWith) => void;
-  /** The checked model's effort. */
-  effort?: { value: string | null; onChange: (level: string) => void } | undefined;
-  /** Why the rules keep one of a model's efforts out, in their words; it shows greyed with them. */
-  refused?: ((provider: ProviderKind, model: ModelInfo, level: string) => string | null) | undefined;
-  /** The checked model's fast tier; no footer Speed without it. */
+  /** A model picked (`model` null: the agent's default row). */
+  onPick: (provider: ProviderKind, model: ModelInfo | null) => void;
+  /**
+   * The model a new conversation starts on when nothing is picked: marked Default. Every other
+   * agent's list marks its own default, the model a new session there starts on.
+   */
+  defaultModel?: PickerChoice | null | undefined;
+  /** The checked model's efforts, under the models while its agent is shown. */
+  effort?:
+    | { levels: readonly string[]; value: string | null; onChange: (level: string) => void; refused?: ((level: string) => string | null) | undefined }
+    | undefined;
+  /** The checked model's fast tier, a round toggle at the end of the effort line. */
   fast?: { on: boolean; onChange: (on: boolean) => void } | undefined;
-  /** A setting Brigadier may pick for: a switch over the columns, and picking a model turns it off. */
-  automatic?: { chosen: boolean; label: string; hint: string; onChoose: () => void; onTurnOff: () => void } | undefined;
-  /** Each agent's own default first among its models, by the agent's name: "Claude's default". */
+  /** "Automatic" above the agents: a setting Brigadier may pick for. */
+  automatic?: { chosen: boolean; label: string; hint: string; onChoose: () => void } | undefined;
+  /** Each agent's own default first among its models, by the agent's name: "Claude's default · Claude picks". */
   agentDefault?: ((provider: ProviderKind) => string) | undefined;
-  /** Why a row can't be picked ("In the order", a rule's words); it shows greyed with that. */
+  /** Why a row can't be picked ("In the order", a rule's words); it shows greyed with that line. */
   greyed?: ((provider: ProviderKind, model: ModelInfo | null) => string | null) | undefined;
-  /** A started session on this agent: the footer says what picking another agent's model does. */
+  /** A started session on this agent: another agent's models say a pick continues there. */
   continuesFrom?: ProviderKind | null | undefined;
   /** Closes the picker (Set up opens Settings). */
   onClose?: (() => void) | undefined;
 };
 
-/** The picker's Escape: `true` when it only cleared the search, and the picker stays open. */
-type EscapeRef = { current: (() => boolean) | null };
+/** What the panel's holder asks it: Escape clears the search first (`true`: it did). */
+export type ModelPickerHandle = { escape: () => boolean };
 
-const FAVORITES = "favorites";
+const AUTOMATIC = "automatic";
 
 /** "xhigh" → "Extra high", "medium" → "Medium". */
 export function effortLabel(effort: string): string {
@@ -80,13 +86,12 @@ type Row = { provider: ProviderKind; model: ModelInfo | null };
 const sameRow = (row: Row, choice: PickerChoice | null | undefined) =>
   Boolean(choice) && row.provider === choice!.provider && (row.model?.id ?? null) === choice!.model;
 
-const RAIL_BUTTON =
-  "rounded-toolbar-button hover:bg-foreground/10 focus-visible:bg-foreground/10 relative grid size-9 shrink-0 cursor-default place-items-center outline-hidden";
+/** An agent row and a model row: rounded, filled while picked or under the keyboard. */
+const AGENT_ROW =
+  "flex h-8 w-full shrink-0 cursor-default items-center gap-2.5 rounded-xl px-2.5 text-start text-sm outline-hidden hover:bg-toolbar-hover focus-visible:bg-toolbar-hover aria-selected:bg-toolbar-active";
 const MODEL_ROW =
-  "group-hover/row:bg-toolbar-hover focus-visible:bg-toolbar-hover flex h-8 w-full shrink-0 cursor-default items-center gap-2.5 rounded-xl ps-2.5 pe-8 text-start text-sm outline-hidden aria-disabled:group-hover/row:bg-transparent";
-const EFFORT_ROW =
-  "hover:bg-toolbar-hover focus-visible:bg-toolbar-hover flex min-h-8 w-full shrink-0 cursor-default items-center gap-2 rounded-xl px-2 py-1.5 text-start text-sm outline-hidden aria-disabled:hover:bg-transparent";
-const COLUMN_HEAD = "border-divider flex h-11 shrink-0 items-center gap-2 border-b";
+  "flex w-full shrink-0 cursor-default items-center gap-2.5 rounded-xl px-2.5 py-1.75 text-start outline-hidden hover:bg-toolbar-hover focus-visible:bg-toolbar-hover aria-disabled:opacity-45 aria-disabled:hover:bg-transparent";
+const SEPARATOR = "bg-foreground/10 my-1 h-px shrink-0";
 
 /** `name` with the part that matches `query` in bold. */
 function Matched({ name, query }: { name: string; query: string }) {
@@ -103,8 +108,18 @@ function Matched({ name, query }: { name: string; query: string }) {
 
 /** A list's rows the arrow keys move through. */
 const options = (list: HTMLElement | null) => [...(list?.querySelectorAll<HTMLElement>("[role=option], [data-picker-older]") ?? [])];
-/** The effort rows the keys and a press can take. */
-const levels = (column: HTMLElement | null) => [...(column?.querySelectorAll<HTMLElement>("[role=radio]:not([aria-disabled=true])") ?? [])];
+
+/** The models pane's heading: what it lists, and how many on the right. */
+function header(title: string, aside?: string) {
+  return (
+    <div className="flex items-center gap-2 px-2.5 pt-2 pb-1 text-xs">
+      <span className="text-muted-foreground min-w-0 flex-1 truncate font-medium">{title}</span>
+      {aside && <span className="text-muted-foreground shrink-0">{aside}</span>}
+    </div>
+  );
+}
+
+const count = (n: number) => `${n} ${n === 1 ? "model" : "models"}`;
 
 /** Whether a key types a character into the search. */
 // Space stays the focused row's activation.
@@ -112,61 +127,37 @@ const typed = (event: KeyboardEvent) =>
   event.key.length === 1 && event.key !== " " && !event.metaKey && !event.ctrlKey && !event.altKey;
 
 /**
- * The picker's open content. It opens as T3 Code's does: on Favorites when there are any, but on
- * the agent in use when it is one agent's models or that agent isn't set up. ↑ ↓ move through a
- * column, ← → between them (→ from a model not picked yet picks it), Enter picks, typing searches
- * and Escape clears the search before the picker closes. The effort column follows the model
- * under the keyboard, else the checked one; a level of a model not picked yet picks it at that level.
+ * The picker's open content. It opens on the checked row's agent (Automatic when that is
+ * chosen). ↑ ↓ move through a column, ← → between the two, Enter picks, typing searches and
+ * Escape clears the search before the picker closes.
  */
-function ModelPickerPanel({
-  groups,
-  checked,
-  opensOn,
-  locked,
-  onPick,
-  effort,
-  refused,
-  fast,
-  automatic,
-  agentDefault,
-  greyed,
-  continuesFrom,
-  onClose,
-  escapeRef,
-}: ModelPickerProps & { escapeRef: EscapeRef }) {
+export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(function ModelPickerPanel(
+  { groups, checked, opensOn, onPick, defaultModel, effort, fast, automatic, agentDefault, greyed, continuesFrom, onClose },
+  ref,
+) {
   const id = useId();
-  const favorites = useApp((s) => s.settings.favoriteModels);
-  const isFavorite = (provider: ProviderKind, model: ModelInfo) =>
-    favorites.some((entry) => entry.provider === provider && entry.id === model.id);
-  const usable = groups.filter((entry) => entry.unavailable === null);
-  const favoriteRows: Row[] = usable.flatMap((entry) =>
-    entry.models.filter((model) => isFavorite(entry.provider, model)).map((model) => ({ provider: entry.provider, model })),
-  );
-  const active = groups.find((group) => group.provider === (checked?.provider ?? opensOn)) ?? groups[0];
-  const [browsed, setBrowsing] = useState<ProviderKind | typeof FAVORITES>(() =>
-    !locked && (active?.unavailable ?? null) === null && favoriteRows.length > 0 ? FAVORITES : (active?.provider ?? FAVORITES),
-  );
+  const opening = automatic?.chosen
+    ? AUTOMATIC
+    : (groups.find((group) => group.provider === (checked?.provider ?? opensOn)) ?? groups[0])?.provider ?? AUTOMATIC;
+  const [browsed, setBrowsing] = useState<ProviderKind | typeof AUTOMATIC>(opening);
   // Agents still loading when it opened (or one gone since): it shows where it would open now.
   const browsing =
-    browsed === FAVORITES || groups.some((group) => group.provider === browsed) ? browsed : (active?.provider ?? FAVORITES);
+    browsed === AUTOMATIC ? (automatic ? browsed : opening) : groups.some((group) => group.provider === browsed) ? browsed : opening;
   const [query, setQuery] = useState("");
   const [older, setOlder] = useState<ReadonlySet<ProviderKind>>(new Set());
   const [inSearch, setInSearch] = useState(false);
-  const [underKeys, setUnderKeys] = useState<Row | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const agents = useRef<HTMLDivElement>(null);
   const models = useRef<HTMLDivElement>(null);
-  const column = useRef<HTMLDivElement>(null);
-  const footer = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    escapeRef.current = () => {
+  useImperativeHandle(ref, () => ({
+    escape: () => {
       if (!query) return false;
       setQuery("");
       search.current?.focus();
       return true;
-    };
-  });
+    },
+  }));
   // The search takes the keyboard once the picker is open, after its holder's own focus moves
   // (a menu focuses itself on opening); a timer, as a frame never comes in a hidden window. A key
   // pressed as it opened may have moved it within the picker already: there it stays (#598).
@@ -180,40 +171,29 @@ function ModelPickerPanel({
   const searching = query.trim() !== "";
   const needle = query.trim().toLowerCase();
   const group = groups.find((entry) => entry.provider === browsing) ?? null;
-  const matches = (entry: ModelGroup) => entry.models.filter((model) => model.displayName.toLowerCase().includes(needle));
-  // An older model sits under Older models unless it is picked, a default or starred.
+  const matches = (entry: ModelGroup) =>
+    entry.unavailable === null ? entry.models.filter((model) => model.displayName.toLowerCase().includes(needle)) : [];
+  // An older model sits under Older models unless it is picked or a default.
   const pinned = (provider: ProviderKind, model: ModelInfo) =>
-    model.isDefault || isFavorite(provider, model) || sameRow({ provider, model }, checked);
-  const shownOf = (entry: ModelGroup) =>
-    entry.models.filter((model) => !model.legacy || pinned(entry.provider, model) || older.has(entry.provider));
-  // Stars first, as T3 Code's list has them.
-  const starredFirst = (entry: ModelGroup) => {
-    const shown = shownOf(entry);
-    return [...shown.filter((model) => isFavorite(entry.provider, model)), ...shown.filter((model) => !isFavorite(entry.provider, model))];
-  };
+    model.isDefault || sameRow({ provider, model }, checked) || sameRow({ provider, model }, defaultModel);
   const rows: Row[] = searching
-    ? usable.flatMap((entry) => matches(entry).map((model) => ({ provider: entry.provider, model })))
-    : browsing === FAVORITES
-      ? favoriteRows
-      : group && group.unavailable === null
-        ? [
-            ...(agentDefault ? [{ provider: group.provider, model: null }] : []),
-            ...starredFirst(group).map((model) => ({ provider: group.provider, model })),
-          ]
-        : [];
+    ? groups.flatMap((entry) => matches(entry).map((model) => ({ provider: entry.provider, model })))
+    : group && group.unavailable === null
+      ? [
+          ...(agentDefault ? [{ provider: group.provider, model: null }] : []),
+          ...group.models
+            .filter((model) => !model.legacy || pinned(group.provider, model) || older.has(group.provider))
+            .map((model) => ({ provider: group.provider, model })),
+        ]
+      : [];
   const olderCount = !searching && group ? group.models.filter((model) => model.legacy && !pinned(group.provider, model)).length : 0;
   const label = (provider: ProviderKind) => groups.find((entry) => entry.provider === provider)?.label ?? provider;
   const reason = (row: Row) => greyed?.(row.provider, row.model) ?? null;
   // While the search has the keyboard, Enter picks the first match: it shows as the one under the keyboard.
   const first = searching ? rows.find((row) => !reason(row)) : undefined;
   const rowId = (row: Row) => `${id}-model-${row.provider}-${row.model?.id ?? "default"}`;
-
-  // The effort column's model: the one under the keyboard, else the checked one.
-  const checkedModel = checked && groups.find((entry) => entry.provider === checked.provider)?.models.find((model) => model.id === checked.model);
-  // A checked id no agent lists now has no row, and no levels to show.
-  const checkedRow: Row | null = checked && (checkedModel || checked.model === null) ? { provider: checked.provider, model: checkedModel ?? null } : null;
-  const inHand = (inSearch && first) || underKeys || checkedRow;
-  const inHandChecked = Boolean(inHand) && sameRow(inHand!, checked);
+  const showsEffort =
+    !searching && browsing !== AUTOMATIC && browsing === checked?.provider && (Boolean(effort?.levels.length) || Boolean(fast));
 
   const focusModels = () => {
     const all = options(models.current);
@@ -223,57 +203,38 @@ function ModelPickerPanel({
     options(agents.current)
       .find((option) => option.getAttribute("aria-selected") === "true")
       ?.focus();
-  const focusEffort = () => {
-    const all = levels(column.current);
-    (all.find((level) => level.getAttribute("aria-checked") === "true") ?? all[0])?.focus();
-  };
-  const browse = (next: ProviderKind | typeof FAVORITES) => {
+  const browse = (next: ProviderKind | typeof AUTOMATIC) => {
     setQuery("");
-    setUnderKeys(null);
     setBrowsing(next);
   };
-  const pick = (row: Row, also?: PickedWith) => {
+  const pick = (row: Row) => {
     if (reason(row)) return;
-    setUnderKeys(null);
-    setInSearch(false);
-    onPick(row.provider, row.model, also);
-    // On the new model's levels once they show: a timer, as a frame never comes in a hidden window.
-    if (!also) setTimeout(focusEffort);
+    onPick(row.provider, row.model);
   };
-  // Focus leaving for the effort column or the footer keeps the model they act on.
-  const keepsInHand = (to: EventTarget | null) => to instanceof Node && Boolean(column.current?.contains(to) || footer.current?.contains(to));
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // The panel's keys are its own, also inside a menu.
+    // The panel's keys are its own, also inside a menu (a sub-menu's typeahead, its ←).
     if (event.key !== "Escape") event.stopPropagation();
     const target = event.target as HTMLElement;
     const part = target.closest<HTMLElement>("[data-picker-part]")?.dataset.pickerPart;
     if (part === "search") {
-      const input = target as HTMLInputElement;
       if (event.key === "ArrowDown") {
         event.preventDefault();
         focusModels();
       } else if (event.key === "Enter" && first) {
         event.preventDefault();
         pick(first);
-      } else if (event.key === "ArrowRight" && input.selectionStart === query.length) {
-        event.preventDefault();
-        if (first && !sameRow(first, checked)) pick(first);
-        else focusEffort();
-      } else if (event.key === "ArrowLeft" && !query) {
-        event.preventDefault();
-        focusAgent();
       }
       return;
     }
-    if (part !== "agents" && part !== "models" && part !== "effort") return;
+    if (part !== "agents" && part !== "models") return;
     if (typed(event) || event.key === "Backspace") {
       event.preventDefault();
       setQuery((current) => (event.key === "Backspace" ? current.slice(0, -1) : current + event.key));
       search.current?.focus();
       return;
     }
-    const list = part === "agents" ? options(agents.current) : part === "models" ? options(models.current) : levels(column.current);
+    const list = options(part === "agents" ? agents.current : models.current);
     const at = list.indexOf(target);
     const move = (to: number) => {
       const next = list[Math.max(0, Math.min(list.length - 1, to))];
@@ -299,21 +260,20 @@ function ModelPickerPanel({
         move(list.length - 1);
         return;
       case "ArrowRight":
-        event.preventDefault();
-        if (part === "agents") focusModels();
-        else if (part === "models") {
-          if (underKeys && !sameRow(underKeys, checked)) pick(underKeys);
-          else focusEffort();
+        if (part === "agents") {
+          event.preventDefault();
+          focusModels();
         }
         return;
       case "ArrowLeft":
-        event.preventDefault();
-        if (part === "models") focusAgent();
-        else if (part === "effort") focusModels();
+        if (part === "models") {
+          event.preventDefault();
+          focusAgent();
+        }
         return;
       case "Enter":
       case " ":
-        if (target.dataset.pickerOlder !== undefined || at < 0) return;
+        if (target.dataset.pickerOlder !== undefined) return;
         event.preventDefault();
         if (part === "agents") focusModels();
         else target.click();
@@ -321,100 +281,72 @@ function ModelPickerPanel({
     }
   };
 
-  const railButton = ({
-    value,
-    name,
-    slot,
-    dim,
-    children,
-  }: {
-    value: ProviderKind | typeof FAVORITES;
-    name: string;
-    slot: string;
-    dim?: boolean;
-    children: ReactNode;
-  }) => {
-    const selected = browsing === value;
+  const agentRow = (provider: ProviderKind | typeof AUTOMATIC) => {
+    const entry = groups.find((candidate) => candidate.provider === provider);
+    const found = searching && entry ? matches(entry).length : 0;
+    const selected = !searching && browsing === provider;
     return (
-      <Tooltip key={value}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            role="option"
-            id={`${id}-agent-${value}`}
-            data-slot={slot}
-            data-agent={value}
-            aria-selected={selected}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => {
-              browse(value);
-              search.current?.focus();
-            }}
-            className={cn(RAIL_BUTTON, dim && "opacity-50")}
-          >
-            {children}
-            <span className="sr-only">{name}</span>
-            {selected && <span aria-hidden className="bg-primary rounded-capsule absolute end-px top-2 h-5 w-0.75" />}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="left" sideOffset={8}>
-          {name}
-        </TooltipContent>
-      </Tooltip>
+      <button
+        type="button"
+        key={provider}
+        role="option"
+        id={`${id}-agent-${provider}`}
+        data-slot="model-picker-agent"
+        data-agent={provider}
+        aria-selected={selected}
+        tabIndex={selected ? 0 : -1}
+        onClick={() => browse(provider)}
+        className={cn(AGENT_ROW, searching && found === 0 && "opacity-45")}
+      >
+        {provider === AUTOMATIC ? (
+          <Sparkles aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
+        ) : (
+          <ProviderGlyph provider={provider} className="size-3.5 shrink-0" />
+        )}
+        <span className={cn("min-w-0 flex-1 truncate", entry?.unavailable && "text-muted-foreground")}>
+          {provider === AUTOMATIC ? "Automatic" : entry?.label}
+        </span>
+        {found > 0 && <span className="text-muted-foreground shrink-0 text-xs">{found}</span>}
+      </button>
     );
   };
+
+  const isDefault = (row: Row) =>
+    !!defaultModel && (row.provider === defaultModel.provider ? sameRow(row, defaultModel) : row.model?.isDefault === true);
 
   const modelRow = (row: Row) => {
     const rule = reason(row);
     const isChecked = sameRow(row, checked);
     const own = rowId(row);
     const name = row.model ? row.model.displayName : `${agentDefault?.(row.provider)}'s default`;
-    const favorite = row.model !== null && isFavorite(row.provider, row.model);
+    const line = rule ?? (row.model ? row.model.description : `${agentDefault?.(row.provider)} picks`);
     return (
-      <div key={`${row.provider}:${row.model?.id ?? ""}`} className="group/row relative shrink-0">
-        <button
-          type="button"
-          role="option"
-          id={own}
-          data-slot="model-picker-model"
-          data-refused={rule ?? undefined}
-          aria-selected={isChecked}
-          aria-disabled={rule ? true : undefined}
-          title={rule ?? undefined}
-          tabIndex={-1}
-          onClick={() => pick(row)}
-          onFocus={() => {
-            if (!rule) setUnderKeys(row);
-          }}
-          onBlur={(event) => {
-            if (!keepsInHand(event.relatedTarget)) setUnderKeys(null);
-          }}
-          className={cn(MODEL_ROW, inSearch && row === first && "bg-toolbar-hover")}
-        >
-          <ProviderGlyph provider={row.provider} className={cn("size-icon-md shrink-0", rule && "opacity-45")} />
-          <span className={cn("min-w-0 truncate", rule && "opacity-45")}>
-            {searching ? <Matched name={name} query={query.trim()} /> : name}
-            {(searching || browsing === FAVORITES) && <span className="sr-only">, {label(row.provider)}</span>}
-          </span>
-          {isChecked && <Check aria-hidden className="size-icon-sm shrink-0" />}
-          {rule && <span className="text-muted-foreground ms-auto min-w-0 truncate text-xs">{rule}</span>}
-        </button>
-        {row.model && !rule && (
-          <button
-            type="button"
-            data-slot="model-picker-star"
-            aria-label={favorite ? `Remove ${name} from favorites` : `Add ${name} to favorites`}
-            aria-pressed={favorite}
-            onClick={() => void setModelFavorite({ provider: row.provider, id: row.model!.id }, !favorite).catch(() => undefined)}
-            className={cn(
-              "rounded-toolbar-button hover:bg-foreground/10 focus-visible:bg-foreground/10 absolute end-1.5 top-1.5 grid size-5 place-items-center outline-hidden",
-              favorite ? "text-warning" : "text-muted-foreground opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
-            )}
-          >
-            {favorite ? <StarFilled aria-hidden className="size-icon-xs" /> : <Star aria-hidden className="size-icon-xs" />}
-          </button>
-        )}
-      </div>
+      <button
+        type="button"
+        key={`${row.provider}:${row.model?.id ?? ""}`}
+        role="option"
+        id={own}
+        data-slot="model-picker-model"
+        data-refused={rule ?? undefined}
+        aria-selected={isChecked}
+        aria-disabled={rule ? true : undefined}
+        aria-describedby={line || searching ? `${own}-line` : undefined}
+        tabIndex={-1}
+        onClick={() => pick(row)}
+        className={cn(MODEL_ROW, inSearch && row === first && "bg-toolbar-hover")}
+      >
+        {searching && <ProviderGlyph provider={row.provider} className="size-3.5 shrink-0" />}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-foreground truncate text-sm">{searching ? <Matched name={name} query={query.trim()} /> : name}</span>
+          {(line || searching) && (
+            <span id={`${own}-line`} className="text-muted-foreground truncate text-xs">
+              {searching ? [label(row.provider), line].filter(Boolean).join(" · ") : line}
+            </span>
+          )}
+        </span>
+        {isDefault(row) && <span className="text-muted-foreground shrink-0 text-xs">Default</span>}
+        {isChecked && <Check aria-hidden className="size-icon-md shrink-0" />}
+      </button>
     );
   };
 
@@ -445,226 +377,161 @@ function ModelPickerPanel({
     );
   };
 
-  const chooseLevel = (level: string) => {
-    if (inHand && !inHandChecked) pick(inHand, { effort: level });
-    else effort?.onChange(level);
-  };
-  const auto = automatic?.chosen === true;
-  // An agent's own default row has the levels of the model it runs.
-  const levelModel =
-    inHand?.model ?? (inHand && agentDefault ? groups.find((entry) => entry.provider === inHand.provider)?.models.find((model) => model.isDefault) : null);
-  const levelsOf = auto ? [] : (levelModel?.efforts ?? []);
-  const columnName = auto ? automatic?.label : inHand?.model?.displayName ?? (inHand && agentDefault ? `${agentDefault(inHand.provider)}'s default` : null);
-  const noLevels =
-    !auto && inHand && !inHand.model && agentDefault
-      ? `${agentDefault(inHand.provider)} picks`
-      : auto || inHand
-        ? "No effort levels"
-        : "Pick a model";
-  const hasFast = !auto && Boolean(fast) && Boolean(inHand?.model?.fast);
-  const fastOn = inHandChecked && fast?.on === true;
-  const note =
-    continuesFrom && checked && checked.provider !== continuesFrom
-      ? `Continues on ${label(checked.provider)}: fresh context, with a hand-off note`
-      : continuesFrom && !searching && browsing !== FAVORITES && browsing !== continuesFrom && group?.unavailable === null
-        ? `Picking a model continues on ${group.label}: fresh context, with a hand-off note`
-        : null;
-
   return (
-    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- the keys of the search and the lists inside it
-    <div
-      ref={panel}
-      data-slot="model-picker"
-      className="w-model-picker h-model-picker-height flex max-h-(--radix-popover-content-available-height) max-w-full flex-col overflow-hidden"
-      onKeyDown={onKeyDown}
-    >
-      {automatic && (
-        <div data-slot="model-picker-band" className="border-divider flex shrink-0 items-start gap-2.5 border-b px-4 py-3">
-          <Sparkles aria-hidden className="text-muted-foreground size-icon-md mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="text-sm">{automatic.label}</div>
-            <div className="text-muted-foreground mt-0.5 text-xs">{automatic.hint}</div>
-          </div>
-          <Switch
-            data-slot="model-picker-automatic"
-            aria-label="Automatic"
-            checked={auto}
-            onCheckedChange={(on) => (on ? automatic.onChoose() : automatic.onTurnOff())}
-            className="mt-0.5"
-          />
-        </div>
-      )}
-      <div className="flex min-h-0 flex-1">
-        {!searching && (
-          <div
-            ref={agents}
-            role="listbox"
-            aria-label="Agents"
-            data-picker-part="agents"
-            className="bg-foreground/3 border-divider flex w-11 shrink-0 flex-col items-center gap-1 overflow-y-auto border-e p-1 pt-1.5"
-          >
-            {railButton({ value: FAVORITES, name: "Favorites", slot: "model-picker-favorites", children: <StarFilled aria-hidden className="text-muted-foreground size-4.5" /> })}
-            <div role="presentation" className="bg-divider h-px w-8 shrink-0" />
-            {groups.map((entry) =>
-              railButton({
-                value: entry.provider,
-                name: entry.label,
-                slot: "model-picker-agent",
-                dim: entry.unavailable !== null,
-                children: <ProviderGlyph provider={entry.provider} className="size-icon-lg" />,
-              }),
-            )}
-          </div>
-        )}
-        <div className={cn("flex min-w-0 flex-1 flex-col", auto && "opacity-50")}>
-          <label data-picker-part="search" className={cn(COLUMN_HEAD, "px-4")}>
-            <MagnifyingGlassSmSearch aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
-            <input
-              ref={search}
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search models"
-              aria-label="Search models"
-              aria-controls={`${id}-models`}
-              aria-activedescendant={inSearch && first ? rowId(first) : undefined}
-              onFocus={() => setInSearch(true)}
-              onBlur={(event) => {
-                if (!keepsInHand(event.relatedTarget)) setInSearch(false);
-              }}
-              className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-hidden [&::-webkit-search-cancel-button]:hidden"
-            />
-          </label>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-1.5">
-            <div
-              ref={models}
-              id={`${id}-models`}
-              role="listbox"
-              aria-label={searching ? "Matching models" : browsing === FAVORITES ? "Favorites" : `${group?.label ?? ""} models`}
-              data-picker-part="models"
-              className="flex flex-col gap-0.5"
-            >
-              {rows.map(modelRow)}
-              {olderCount > 0 && (
-                <button
-                  type="button"
-                  data-picker-older=""
-                  aria-expanded={older.has(group!.provider)}
-                  onClick={() =>
-                    setOlder((current) => {
-                      const next = new Set(current);
-                      if (next.has(group!.provider)) next.delete(group!.provider);
-                      else next.add(group!.provider);
-                      return next;
-                    })
-                  }
-                  className="text-muted-foreground hover:text-foreground focus-visible:bg-toolbar-hover group flex h-8 shrink-0 items-center gap-2 rounded-xl px-2.5 text-xs outline-hidden"
-                >
-                  <ChevronRight aria-hidden className="size-icon-sm transition-transform group-aria-expanded:rotate-90 motion-reduce:transition-none" />
-                  Older models · {olderCount}
-                </button>
-              )}
-            </div>
-            {searching && rows.length === 0 && (
-              <p className="text-muted-foreground px-2.5 py-1.75 text-xs">No models match “{query.trim()}”</p>
-            )}
-            {!searching && browsing === FAVORITES && rows.length === 0 && (
-              <p className="text-muted-foreground px-2.5 py-1.75 text-xs">No favorites yet</p>
-            )}
-            {!searching && group && group.unavailable !== null && notSetUp(group)}
-            {!searching && group && group.unavailable === null && group.models.length === 0 && !agentDefault && (
-              <p className="text-muted-foreground px-2.5 py-1.75 text-xs">No models listed yet</p>
-            )}
-          </div>
-        </div>
-        <div className={cn("border-divider w-model-picker-effort flex shrink-0 flex-col border-s", auto && "opacity-50")}>
-          <div className={cn(COLUMN_HEAD, "text-muted-foreground px-3 text-sm")}>
-            <span>Effort</span>
-            {columnName && <span className="ms-auto min-w-0 truncate text-xs">{columnName}</span>}
-          </div>
-          <div
-            ref={column}
-            role="radiogroup"
-            aria-label="Effort"
-            data-slot="model-picker-effort"
-            data-picker-part="effort"
-            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5 px-1"
-          >
-            {levelsOf.length === 0 ? (
-              <div className="text-muted-foreground flex h-8 items-center px-2 text-sm">{noLevels}</div>
-            ) : (
-              levelsOf.map((level) => {
-                const rule = inHand && levelModel ? (refused?.(inHand.provider, levelModel, level) ?? null) : null;
-                const selected = inHandChecked && effort?.value === level;
-                return (
-                  <button
-                    type="button"
-                    key={level}
-                    role="radio"
-                    aria-checked={selected}
-                    aria-disabled={rule ? true : undefined}
-                    data-state={selected ? "on" : "off"}
-                    tabIndex={-1}
-                    onClick={() => {
-                      if (!rule) chooseLevel(level);
-                    }}
-                    className={EFFORT_ROW}
-                  >
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className={cn("truncate", rule && "opacity-45")}>{effortLabel(level)}</span>
-                      {rule && <span className="text-muted-foreground truncate text-xs">{rule}</span>}
-                    </span>
-                    {selected ? (
-                      <Check aria-hidden className="size-icon-sm shrink-0" />
-                    ) : (
-                      !rule && levelModel?.defaultEffort === level && <span className="text-muted-foreground shrink-0 text-xs">Default</span>
-                    )}
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-      </div>
-      {(hasFast || note) && (
-        <div ref={footer} className="border-divider flex h-10.25 shrink-0 items-center gap-3 border-t px-3">
-          {hasFast && (
-            <Segmented
-              label="Speed"
-              value={fastOn ? "fast" : "standard"}
-              options={[
-                { value: "standard", label: "Standard" },
-                {
-                  value: "fast",
-                  label: (
-                    <span className="flex items-center gap-1">
-                      <Bolt aria-hidden className="size-icon-xs" />
-                      Fast
-                    </span>
-                  ),
-                },
-              ]}
-              onChange={(speed) => {
-                if (inHandChecked) fast?.onChange(speed === "fast");
-                else if (inHand) pick(inHand, { fast: speed === "fast" });
-              }}
-              className="shrink-0"
-            />
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- the keys of the search and the two lists inside it
+    <div ref={panel} data-slot="model-picker" className="w-model-picker flex max-w-full flex-col" onKeyDown={onKeyDown}>
+      <label data-picker-part="search" className="flex h-9 shrink-0 items-center gap-2 px-2.5">
+        <MagnifyingGlassSmSearch aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
+        <input
+          ref={search}
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search models"
+          aria-label="Search models"
+          aria-controls={`${id}-models`}
+          aria-activedescendant={inSearch && first ? rowId(first) : undefined}
+          onFocus={() => setInSearch(true)}
+          onBlur={() => setInSearch(false)}
+          className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-hidden [&::-webkit-search-cancel-button]:hidden"
+        />
+      </label>
+      <div className={SEPARATOR} />
+      <div className="max-h-model-picker-panes flex min-h-0">
+        <div
+          ref={agents}
+          role="listbox"
+          aria-label="Agents"
+          data-picker-part="agents"
+          className="w-model-picker-agents border-divider flex shrink-0 flex-col overflow-y-auto border-e py-1 pe-1"
+        >
+          {automatic && (
+            <>
+              {agentRow(AUTOMATIC)}
+              <div role="presentation" className={SEPARATOR} />
+            </>
           )}
-          {note && (
-            <p data-slot="model-picker-continue" className="text-muted-foreground min-w-0 truncate text-xs" title={note}>
-              {note}
+          {groups.map((entry) => agentRow(entry.provider))}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto py-1 ps-1">
+          {!searching && continuesFrom && browsing !== AUTOMATIC && browsing !== continuesFrom && group?.unavailable === null && (
+            <p data-slot="model-picker-continue" className="text-muted-foreground px-2.5 pt-2 pb-1.5 text-xs">
+              Picking a model continues on {group.label}: fresh context, with a hand-off note.
             </p>
           )}
+          {searching ? (
+            header(count(rows.length))
+          ) : browsing === AUTOMATIC ? (
+            header("Automatic")
+          ) : group && group.unavailable === null ? (
+            header(group.label, count(group.models.length))
+          ) : null}
+          <div
+            ref={models}
+            id={`${id}-models`}
+            role="listbox"
+            aria-label={searching ? "Matching models" : browsing === AUTOMATIC ? "Automatic" : `${group?.label ?? ""} models`}
+            data-picker-part="models"
+            className="flex flex-col"
+          >
+            {!searching && browsing === AUTOMATIC && automatic ? (
+              <>
+                <button
+                  type="button"
+                  role="option"
+                  data-slot="model-picker-automatic"
+                  aria-selected={automatic.chosen}
+                  tabIndex={-1}
+                  onClick={automatic.onChoose}
+                  className={MODEL_ROW}
+                >
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="text-foreground truncate text-sm">{automatic.label}</span>
+                    <span className="text-muted-foreground text-xs">{automatic.hint}</span>
+                  </span>
+                  {automatic.chosen && <Check aria-hidden className="size-icon-md shrink-0" />}
+                </button>
+                <div className="flex flex-col gap-0.5 px-2.5 py-1.75">
+                  <span className="text-muted-foreground text-sm">Pick a model yourself</span>
+                  <span className="text-muted-foreground text-xs">Choose an agent on the left</span>
+                </div>
+              </>
+            ) : (
+              rows.map(modelRow)
+            )}
+            {olderCount > 0 && (
+              <button
+                type="button"
+                data-picker-older=""
+                aria-expanded={older.has(group!.provider)}
+                onClick={() =>
+                  setOlder((current) => {
+                    const next = new Set(current);
+                    if (next.has(group!.provider)) next.delete(group!.provider);
+                    else next.add(group!.provider);
+                    return next;
+                  })
+                }
+                className="text-muted-foreground hover:text-foreground focus-visible:bg-toolbar-hover group flex shrink-0 items-center gap-2 rounded-xl px-2.5 py-1.75 text-xs outline-hidden"
+              >
+                <ChevronRight aria-hidden className="size-icon-sm transition-transform group-aria-expanded:rotate-90 motion-reduce:transition-none" />
+                Older models · {olderCount}
+              </button>
+            )}
+          </div>
+          {searching && rows.length === 0 && (
+            <p className="text-muted-foreground px-2.5 py-1.75 text-xs">No models match “{query.trim()}”</p>
+          )}
+          {!searching && group && group.unavailable !== null && notSetUp(group)}
+          {!searching && group && group.unavailable === null && group.models.length === 0 && !agentDefault && (
+            <p className="text-muted-foreground px-2.5 py-1.75 text-xs">No models listed yet</p>
+          )}
         </div>
+      </div>
+      {showsEffort && (
+        <>
+          <div className={SEPARATOR} />
+          <div data-slot="model-picker-effort" className="flex flex-col gap-2 px-2 pt-1.5 pb-2">
+            {effort && effort.levels.length > 0 && <span className="text-muted-foreground text-xs font-medium">Effort</span>}
+            <div className="flex items-center gap-2">
+              {effort && effort.levels.length > 0 && (
+                <Segmented
+                  label="Effort"
+                  fill
+                  value={effort.value ?? ""}
+                  options={effort.levels.map((level) => ({
+                    value: level,
+                    label: effortLabel(level),
+                    reason: effort.refused?.(level) ?? null,
+                  }))}
+                  onChange={effort.onChange}
+                  className="min-w-0 flex-1"
+                />
+              )}
+              {fast && (
+                <TooltipIconButton
+                  tooltip="Fast"
+                  side="top"
+                  aria-label="Fast"
+                  pressed={fast.on}
+                  data-slot="model-picker-fast"
+                  onClick={() => fast.onChange(!fast.on)}
+                  className="rounded-capsule bg-foreground/5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground aria-pressed:bg-toggle-on aria-pressed:text-foreground aria-pressed:hover:bg-toggle-on ms-auto size-7 shrink-0 active:scale-100"
+                >
+                  <Bolt className="size-3.5" />
+                </TooltipIconButton>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
-}
+});
 
 /**
- * The picker in its popover, opened from `children` (the trigger, as it is). A pick keeps it open.
- * Escape clears the search first; `onEscape` hears the Escape that closes it, before it closes.
+ * The picker in its popover, opened from `children` (the trigger, as it is). A pick closes it;
+ * Escape clears the search first.
  */
 export function ModelPicker({
   children,
@@ -673,7 +540,6 @@ export function ModelPicker({
   side = "bottom",
   align = "start",
   label,
-  onEscape,
   ...panel
 }: ModelPickerProps & {
   children: ReactNode;
@@ -683,9 +549,8 @@ export function ModelPicker({
   align?: "start" | "end";
   /** Names the open picker for a screen reader ("Model", "Write with"). */
   label: string;
-  onEscape?: (() => void) | undefined;
 }) {
-  const escape = useRef<() => boolean>(null);
+  const handle = useRef<ModelPickerHandle>(null);
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
@@ -694,12 +559,9 @@ export function ModelPicker({
         align={align}
         aria-label={label}
         data-slot="model-picker-popover"
-        className="max-w-(--radix-popover-content-available-width) overflow-hidden p-0"
-        // The search takes the keyboard (the panel), not the first button in it.
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        className="max-w-(--radix-popover-content-available-width) p-1"
         onEscapeKeyDown={(event) => {
-          if (escape.current?.()) event.preventDefault();
-          else onEscape?.();
+          if (handle.current?.escape()) event.preventDefault();
         }}
         // Closed, it gives the keyboard back to its trigger, a moment later: not when a picker
         // opened since has it by then (#598).
@@ -707,7 +569,24 @@ export function ModelPicker({
           if (document.activeElement?.closest("[data-slot=model-picker]")) event.preventDefault();
         }}
       >
-        <ModelPickerPanel {...panel} escapeRef={escape} onClose={() => onOpenChange(false)} />
+        <ModelPickerPanel
+          ref={handle}
+          {...panel}
+          automatic={
+            panel.automatic && {
+              ...panel.automatic,
+              onChoose: () => {
+                onOpenChange(false);
+                panel.automatic?.onChoose();
+              },
+            }
+          }
+          onClose={() => onOpenChange(false)}
+          onPick={(provider, model) => {
+            onOpenChange(false);
+            panel.onPick(provider, model);
+          }}
+        />
       </PopoverContent>
     </Popover>
   );

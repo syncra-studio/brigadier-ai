@@ -252,14 +252,12 @@ export function pickRefusal(
   provider: ProviderKind,
   model: ModelInfo,
   effort: string | null,
-  /** The kind of work the pick is for, for its own rules too; none: a chat or session. */
-  work: string | null = null,
 ): string | null {
   const pick = modelPick(provider, model, effort);
-  const rule = refusingRule(rules, pick, work);
+  const rule = refusingRule(rules, pick, null);
   if (rule) return ruleTitle(rule, names);
   if (effort === null) return null;
-  const { ceiling, floor } = effortLimits(rules, pick, work);
+  const { ceiling, floor } = effortLimits(rules, pick, null);
   const rank = effortRank(effort);
   const outside = ceiling && (rank < 0 || rank > effortRank(ceiling.effort)) ? ceiling : floor && rank < effortRank(floor.effort) ? floor : null;
   return outside ? ruleTitle(outside, names) : null;

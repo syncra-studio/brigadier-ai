@@ -1,9 +1,9 @@
-import { useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 
 import { PickerButton } from "@/components/controls/picker-button";
 import { composerPill } from "@/components/conversation/elements/surfaces";
 import { Bolt, ChevronDown, ProviderGlyph } from "@/components/icons";
-import { effortLabel, ModelPicker, openOnArrows, type PickedWith } from "@/components/shared/model-picker";
+import { effortLabel, ModelPicker, openOnArrows } from "@/components/shared/model-picker";
 import type { ModelChoice, ModelInfo, ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 
@@ -73,15 +73,17 @@ export function effortFor(model: ModelInfo | null, effort: string | null): strin
 export type Refused = (provider: ProviderKind, model: ModelInfo, effort: string | null) => string | null;
 
 /**
- * The model and effort picker, the one every place that picks a model uses. The trigger reads
- * "Opus 5.5 High" after its agent's logo: the model and effort the conversation runs with, the
- * CLI's defaults spelled out. A pick comes to `onChange` and the picker stays open on its efforts.
- * With `continues` (a started session), a pick on another agent stays in the picker and comes to
- * `onChange`, which moves the session, as it closes; Escape closes it without moving.
+ * The model and effort picker. The trigger reads "Opus 5.5 High" after its agent's logo: the
+ * model and effort the conversation runs with, the CLI's defaults spelled out. It opens the model
+ * picker on the agent in use, its model checked and its efforts (and Fast) underneath.
+ * `defaultChoice`, what a new conversation starts with when nothing is picked, is marked Default.
+ * With `continues` (a started session), another agent's models say a pick continues there; the
+ * pick still comes to `onChange`, which moves the session.
  */
 export function ModelSelector({
   groups,
   value,
+  defaultChoice,
   onChange,
   label = "Model",
   disabled,
@@ -91,11 +93,10 @@ export function ModelSelector({
   automatic,
   refused,
   continues,
-  agentDefault,
-  noFast,
 }: {
   groups: readonly ModelGroup[];
   value: ModelChoice;
+  defaultChoice: ModelChoice;
   onChange: (choice: ModelChoice) => void;
   label?: string | undefined;
   disabled?: boolean | undefined;
@@ -104,106 +105,65 @@ export function ModelSelector({
   open?: boolean | undefined;
   onOpenChange?: ((open: boolean) => void) | undefined;
   /**
-   * "Automatic" over the columns (a setting Brigadier may pick for): `chosen` shows it on the
-   * button, and `value` is then only where the picker would open on a manual pick, and what
-   * turning it off takes. `label` names it, with what it picks now ("Automatic (Opus 5.5)").
+   * An "Automatic" choice above the agents (a setting Brigadier may pick for): `chosen` shows
+   * it on the button, and `value` is then only where the picker would open on a manual pick.
+   * `label` names it, with what it picks now ("Automatic (Opus 5.5)").
    */
   automatic?: { chosen: boolean; hint: string; onChoose: () => void; label?: string } | undefined;
   /** What the user's rules keep out: shown, but it can't be picked, with the rule's words. */
   refused?: Refused | undefined;
   /** A started session: picking another agent's model continues the session there (S38c). */
   continues?: boolean | undefined;
-  /** The agent's own default first among its models (a null model), by the agent's name. */
-  agentDefault?: ((provider: ProviderKind) => string) | undefined;
-  /** What this place runs has no fast tier to offer. */
-  noFast?: boolean | undefined;
 }) {
   const auto = automatic?.chosen === true;
   const [own, setOwn] = useState(false);
   const open = shown ?? own;
   const setOpen = onOpenChange ?? setOwn;
-  // A pick on another agent, waiting for the picker to close (`continues`).
-  const [waiting, setWaiting] = useState<ModelChoice | null>(null);
-  const escaped = useRef(false);
-  const change = (next: boolean) => {
-    if (!next && waiting && !escaped.current) onChange(waiting);
-    if (!next) setWaiting(null);
-    escaped.current = false;
-    setOpen(next);
-  };
-  const shownValue = waiting ?? value;
-  const onItsDefault = Boolean(agentDefault) && shownValue.model === null;
-  const current = onItsDefault ? null : findModel(groups, shownValue);
-  const effort = effortFor(current, shownValue.effort);
-  const word = onItsDefault ? (shownValue.effort && effortLabel(shownValue.effort)) : effortWord(current, effort);
-  const name = onItsDefault
-    ? `${agentDefault?.(shownValue.provider)}'s default`
-    : (current?.displayName ?? (shownValue.model && shownValue.model !== "default" ? shownValue.model : "Default model"));
-  const fast = shownValue.fast === true && Boolean(current?.fast);
-  /** The choice as it changes: held while it waits for the close, else at once. */
-  const edit = (next: ModelChoice) => {
-    if (continues && next.provider !== value.provider) setWaiting(next);
-    else {
-      setWaiting(null);
-      onChange(next);
-    }
-  };
-  /** The level a model starts at: its default, or the highest the rules allow when they refuse that. */
-  const allowedLevel = (provider: ProviderKind, model: ModelInfo, level: string | null) =>
-    level && refused?.(provider, model, level)
-      ? (model.efforts.toReversed().find((other) => !refused(provider, model, other)) ?? level)
-      : level;
-  const pick = (provider: ProviderKind, model: ModelInfo | null, also?: PickedWith) => {
-    const same = provider === shownValue.provider;
-    if (!model) {
-      edit({ provider, model: null, effort: also?.effort ?? null, ...(same && shownValue.account ? { account: shownValue.account } : {}) });
-      return;
-    }
-    const wantsFast = also?.fast ?? shownValue.fast;
-    edit({
+  const current = findModel(groups, value);
+  const defaultModel = findModel(groups, defaultChoice);
+  const effort = effortFor(current, value.effort);
+  const word = effortWord(current, effort);
+  const name =
+    current?.displayName ?? (value.model && value.model !== "default" ? value.model : "Default model");
+  const fast = value.fast === true && Boolean(current?.fast);
+  const pick = (provider: ProviderKind, model: ModelInfo) =>
+    onChange({
       provider,
       model: model.id,
-      effort: also?.effort ?? allowedLevel(provider, model, effortFor(model, same ? shownValue.effort : null)),
+      effort: effortFor(model, provider === value.provider ? value.effort : null),
       // Fast carries over to a model that has a fast tier too.
-      ...(model.fast && wantsFast ? { fast: true } : {}),
+      ...(model.fast && value.fast ? { fast: true } : {}),
       // So does the account, to a model of the same agent.
-      ...(same && shownValue.account ? { account: shownValue.account } : {}),
+      ...(provider === value.provider && value.account ? { account: value.account } : {}),
     });
-  };
   const id = useId();
   return (
     <ModelPicker
       label={label}
       open={open}
-      onOpenChange={change}
-      onEscape={() => {
-        escaped.current = true;
-      }}
+      onOpenChange={setOpen}
       side="top"
       align="end"
       groups={groups}
-      checked={auto ? null : onItsDefault ? { provider: shownValue.provider, model: null } : current && { provider: shownValue.provider, model: current.id }}
-      opensOn={shownValue.provider}
-      agentDefault={agentDefault}
-      onPick={pick}
+      checked={auto || !current ? null : { provider: value.provider, model: current.id }}
+      defaultModel={defaultModel && { provider: defaultChoice.provider, model: defaultModel.id }}
+      onPick={(provider, model) => model && pick(provider, model)}
       greyed={refused && ((provider, model) => (model ? refused(provider, model, null) : null))}
       continuesFrom={continues ? value.provider : null}
       effort={
-        auto
-          ? undefined
-          : onItsDefault
-            ? { value: shownValue.effort, onChange: (level) => edit({ ...shownValue, effort: level }) }
-            : current
-              ? { value: effort, onChange: (level) => edit({ ...shownValue, model: current.id, effort: level }) }
-              : undefined
+        !auto && current && current.efforts.length > 0
+          ? {
+              levels: current.efforts,
+              value: effort,
+              onChange: (level) => onChange({ ...value, model: current.id, effort: level }),
+              refused: refused && ((level) => refused(value.provider, current, level)),
+            }
+          : undefined
       }
-      refused={refused}
       fast={
-        !noFast && !auto && current?.fast
-          ? { on: fast, onChange: (on) => edit({ ...shownValue, model: current.id, fast: on }) }
-          : !noFast
-            ? { on: false, onChange: () => undefined }
-            : undefined
+        !auto && current?.fast
+          ? { on: fast, onChange: (on) => onChange({ ...value, model: current.id, fast: on }) }
+          : undefined
       }
       automatic={
         automatic && {
@@ -211,7 +171,6 @@ export function ModelSelector({
           label: automatic.label ?? "Automatic",
           hint: automatic.hint,
           onChoose: automatic.onChoose,
-          onTurnOff: () => onChange(value),
         }
       }
     >
@@ -220,14 +179,14 @@ export function ModelSelector({
         shown={auto ? [`${id}-name`] : [fast && `${id}-fast`, `${id}-name`, word && `${id}-effort`]}
         disabled={disabled}
         data-slot="model-selector-trigger"
-        onKeyDown={openOnArrows(open, change)}
+        onKeyDown={openOnArrows(open, setOpen)}
         className={cn(composerPill, "text-muted-foreground gap-1", className)}
       >
         {auto ? (
           <span id={`${id}-name`} className="text-foreground truncate">{automatic?.label ?? "Automatic"}</span>
         ) : (
           <>
-            <ProviderGlyph provider={shownValue.provider} className="size-icon-sm shrink-0" />
+            <ProviderGlyph provider={value.provider} className="size-icon-sm shrink-0" />
             {fast && <Bolt id={`${id}-fast`} aria-label="Fast" className="text-foreground" />}
             <span id={`${id}-name`} className="text-foreground truncate">{name}</span>
             {word && <span id={`${id}-effort`} className="shrink-0">{word}</span>}

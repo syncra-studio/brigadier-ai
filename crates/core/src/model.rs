@@ -1012,9 +1012,6 @@ pub struct Settings {
     pub agent_paths: Vec<AgentPath>,
     /// Models the Providers page makes unavailable: hidden from every picker and never used.
     pub hidden_models: Vec<ModelRef>,
-    /// Models the user starred in the model picker: its Favorites tab, and first in their agent's
-    /// list.
-    pub favorite_models: Vec<ModelRef>,
     /// Every model Brigadier has seen in its agent's list: startup doesn't wait for an agent
     /// whose every known model is made unavailable.
     pub known_models: Vec<ModelRef>,
@@ -1296,7 +1293,6 @@ impl Default for Settings {
             disabled_providers: Vec::new(),
             agent_paths: Vec::new(),
             hidden_models: Vec::new(),
-            favorite_models: Vec::new(),
             known_models: Vec::new(),
             older_models_off: Vec::new(),
             accounts: Vec::new(),

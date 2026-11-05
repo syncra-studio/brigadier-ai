@@ -369,13 +369,14 @@ export function ConversationModelPicker({
       <ModelSelector
         groups={shown}
         value={shownChoice}
+        // Default is Settings' default, else the CLI's own, never the project's last pick.
+        defaultChoice={resolveModel(null, conversation.kind, null, settings, groups)}
         disabled={fixed || action.busy}
         open={open}
         onOpenChange={onOpenChange}
         label="Model"
         refused={refusals.refused}
-        // A started session moves to another CLI at a seam, never by a setup change (S38c): the
-        // pick comes here as the picker closes.
+        // A started session moves to another CLI at a seam, never by a setup change (S38c).
         continues={setup?.type === "session"}
         onChange={(picked) => {
           // A model whose efforts the rules cap starts at the highest they allow.
