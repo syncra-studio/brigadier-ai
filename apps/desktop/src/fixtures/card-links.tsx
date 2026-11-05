@@ -44,7 +44,7 @@ const QUESTIONS: Question[] = [
   asking("question"),
   { ...asking("decided-question"), answer: decidedAnswer, answers: [decidedAnswer], answeredAtMs: 1 },
   // A fresh card for each case the drive runs.
-  ...["drag", "across", "short-drag", "double", "triple", "click", "link", "description", "link-drag", "into-link", "link-enter", "enter", "space"].map((id) => asking(id)),
+  ...["drag", "across", "square-drag", "double", "triple", "click", "link", "description", "link-drag", "into-link", "link-enter", "enter", "space"].map((id) => asking(id)),
   ...["multi-double", "multi-triple", "multi-click"].map((id) => asking(id, true)),
 ];
 
@@ -170,19 +170,27 @@ function wordBox(within: Element, word: string): DOMRect {
   throw new Error(`no "${word}" on the card`);
 }
 const middle = (box: DOMRect) => ({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
+/**
+ * On whole pixels, as a mouse at this scale is. Headless Chromium collapses a drag at every move
+ * when its press lands on some fractions of a pixel (bare text with nothing mounted does it too,
+ * and no script touches the selection), and text's fractions change with the system's fonts.
+ */
+const whole = ({ x, y }: { x: number; y: number }) => ({ x: Math.round(x), y: Math.round(y) });
 /** One click, or a double- or triple-click as the browser counts them, at a point. */
-async function clicks(point: { x: number; y: number }, times = 1) {
+async function clicks(at: { x: number; y: number }, times = 1) {
+  const point = whole(at);
   await fixtureInput({ type: "pointer", ...point });
   for (let count = 1; count <= times; count += 1) {
     await fixtureInput({ type: "pointerDown", ...point, count });
     await fixtureInput({ type: "pointerUp", ...point, count });
   }
 }
-async function drag(from: { x: number; y: number }, to: { x: number; y: number }) {
+async function drag(start: { x: number; y: number }, end: { x: number; y: number }) {
+  const [from, to] = [whole(start), whole(end)];
   await fixtureInput({ type: "pointer", ...from });
   await fixtureInput({ type: "pointerDown", ...from });
   for (const step of [0.25, 0.5, 0.75, 1]) {
-    await fixtureInput({ type: "pointer", x: from.x + (to.x - from.x) * step, y: from.y + (to.y - from.y) * step });
+    await fixtureInput({ type: "pointer", ...whole({ x: from.x + (to.x - from.x) * step, y: from.y + (to.y - from.y) * step }) });
   }
   await fixtureInput({ type: "pointerUp", ...to });
 }
@@ -247,8 +255,12 @@ if (new URLSearchParams(location.search).get("drive") === "1") {
     const first = () => rows()[0]!;
     const canary = () => rows()[1]!;
     results.drag = await run("drag", () => drag({ x: wordBox(first(), "Deploy").left + 1, y: middle(wordBox(first(), "Deploy")).y }, { x: wordBox(first(), "now").right - 1, y: middle(wordBox(first(), "now")).y }).then(() => undefined));
-    results.across = await run("across", () => drag(middle(wordBox(first(), "Deploy")), middle(wordBox(canary(), "Follow"))).then(() => undefined));
-    results.shortDrag = await run("short-drag", () => drag(middle(wordBox(first(), "staging")), middle(wordBox(first(), "now"))).then(() => undefined));
+    results.across = await run("across", () => drag({ x: wordBox(first(), "Deploy").left + 1, y: middle(wordBox(first(), "Deploy")).y }, { x: wordBox(canary(), "Follow").right - 1, y: middle(wordBox(canary(), "Follow")).y }).then(() => undefined));
+    // On the number square, which selects nothing: pressed and let go on the row, it is still a drag.
+    results.squareDrag = await run("square-drag", () => {
+      const box = first().querySelector("[data-slot=action-marker]")!.getBoundingClientRect();
+      return drag({ x: box.left + 3, y: middle(box).y }, { x: box.right - 3, y: middle(box).y });
+    });
     results.double = await run("double", () => clicks(middle(wordBox(first(), "staging")), 2));
     results.triple = await run("triple", () => clicks(middle(wordBox(first(), "staging")), 3));
     results.click = await run("click", () => clicks(middle(wordBox(first(), "staging"))));

@@ -68,10 +68,11 @@ test("card text selects and links everywhere, and only a plain click or Enter on
   // A drag selects without answering, within a row or across rows.
   assert.equal(seen.drag!.selected, "Deploy to staging now");
   nothing(seen.drag!, "a drag");
-  assert.match(seen.across!.selected, /^loy to staging now[\s\S]*Fol/);
+  assert.match(seen.across!.selected, /^Deploy to staging now[\s\S]*Follow$/);
   nothing(seen.across!, "a drag across rows");
-  // A drag never picks, whatever it left selected.
-  nothing(seen.shortDrag!, "a short drag");
+  // A drag never picks, even one that selected nothing.
+  assert.equal(seen.squareDrag!.selected, "");
+  nothing(seen.squareDrag!, "a drag on a number square");
   // A double-click selects a word, a triple-click its line, and neither answers.
   assert.equal(seen.double!.selected, "staging");
   nothing(seen.double!, "a double-click");

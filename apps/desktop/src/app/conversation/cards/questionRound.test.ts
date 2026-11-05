@@ -30,9 +30,10 @@ test("a card line shows its backticked names as code, without the backticks", ()
   assert.deepEqual(codeParts("An unclosed ` stays"), [{ text: "An unclosed ` stays", code: false }]);
 });
 
+const link = (text: string, href = text) => ({ text, code: false, href });
+const plain = (text: string) => ({ text, code: false });
+
 test("a card line's web addresses are links, bare or labelled, and nothing else is", () => {
-  const link = (text: string, href = text) => ({ text, code: false, href });
-  const plain = (text: string) => ({ text, code: false });
   assert.deepEqual(codeParts("See https://a.example/x, or [the docs](http://b.example/y_(z)?q=1#f)."), [
     plain("See "),
     link("https://a.example/x"),
