@@ -2032,9 +2032,9 @@ test("the board's row of a joined successor lands by its time among the block's 
   const board: BoardDigest = { ...NO_BOARD, orchestratorSteps: [{ requestId: "r1", atMs: 4200, position: 0, kind: { type: "messaged", taskId: "w1", text: "Go on." } }] };
   const [only, ...more] = cliBlocks(handOff({ joins: true }), "conv", board, true);
   assert.deepEqual(more, []);
-  const row = only!.orchestratorSteps.find((step) => step.kind.type === "messaged")!;
+  const messagedRow = only!.orchestratorSteps.find((step) => step.kind.type === "messaged")!;
   const textAt = (words: string) => only!.texts.find((text) => text.text === words)!.position;
-  assert.ok(textAt("Picking up.") < row.position && row.position < textAt("Told the worker."), JSON.stringify(row));
+  assert.ok(textAt("Picking up.") < messagedRow.position && messagedRow.position < textAt("Told the worker."), JSON.stringify(messagedRow));
 });
 
 test("with no join from the core a successor stays its own block, open core block or not, and the block before never reads held once one follows it", () => {
@@ -2048,23 +2048,24 @@ test("with no join from the core a successor stays its own block, open core bloc
 });
 
 test("a message still on its way doesn't close the block before: it may yet join it", () => {
-  const view: ThreadView = { entries: [user("u1", "Fix it", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "A worker is on it." }, 1100)], turns: [{ ...turn("u1", 1000, 1200, "done"), requests: ["r1"] }], block: { startedAtMs: 1000 } };
-  const message = { id: "m2", conversationId: "conv", role: "user", text: "Also this", attachments: [], mentions: [], createdAtMs: 2000, requestId: "m2" } as unknown as Message;
-  const tree = cliThreadTree(view, "conv", [message], {}, [], NO_BOARD, { state: "running", error: null }, true);
+  const heldView: ThreadView = { entries: [user("u1", "Fix it", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "A worker is on it." }, 1100)], turns: [{ ...turn("u1", 1000, 1200, "done"), requests: ["r1"] }], block: { startedAtMs: 1000 } };
+  const onItsWay = { id: "m2", conversationId: "conv", role: "user", text: "Also this", attachments: [], mentions: [], createdAtMs: 2000, requestId: "m2" } as unknown as Message;
+  const tree = cliThreadTree(heldView, "conv", [onItsWay], {}, [], NO_BOARD, { state: "running", error: null }, true);
   const blocks = tree.nodes.flatMap((node) => (node.kind === "block" ? [node.block] : []));
   assert.equal(blocks.length, 2, JSON.stringify(tree.nodes.map((node) => node.kind)));
   assert.equal(blocks[0]!.followed, undefined);
 });
 
+// Its bubbles, which these have none of, are all that differ from what its message metadata carries.
+const sequenceOf = (block: Block) => blockSequence({ ...block, steers: [] });
+const seamsIn = (block: Block) => sequenceOf(block).flatMap((entry) => (entry.kind === "seam" ? [entry.position] : []));
+
 test("a move to another CLI whose successor joined the block draws its divider in the work where it happened; any other seam stays out of the work", () => {
-  // Its bubbles, which these have none of, are all that differ from what its message metadata carries.
-  const sequence = (block: Block) => blockSequence({ ...block, steers: [] });
-  const seamsIn = (block: Block) => sequence(block).flatMap((entry) => (entry.kind === "seam" ? [entry.position] : []));
   const [joined] = cliBlocks(handOff({ joins: true }, "codex"), "conv", undefined, true);
   // At the successor's first message: after what came before it, before what it did.
-  const at = joined!.seams[0]!.position!;
-  assert.deepEqual(seamsIn(joined!), [at]);
-  const kinds = sequence(joined!).map((entry) => (entry.kind === "text" ? joined!.texts[entry.index]!.text : entry.kind));
+  const firstMessage = joined!.seams[0]!.position!;
+  assert.deepEqual(seamsIn(joined!), [firstMessage]);
+  const kinds = sequenceOf(joined!).map((entry) => (entry.kind === "text" ? joined!.texts[entry.index]!.text : entry.kind));
   assert.deepEqual(kinds.slice(-3), ["seam", "Picking up.", "Told the worker."]);
   // Not joined: after its block, as ever.
   const [apart] = cliBlocks(handOff({}, "codex"), "conv", undefined, true);
@@ -2074,6 +2075,6 @@ test("a move to another CLI whose successor joined the block draws its divider i
   const [same] = cliBlocks(handOff({ joins: true }), "conv", undefined, true);
   assert.deepEqual(seamsIn(same!), []);
   // A switch's row that says the move covers it.
-  const row: BlockOrchestratorStep = { requestId: "r1", atMs: 3900, position: 0, kind: { type: "providerTransition", id: "t", from: { provider: "claude" }, to: { provider: "codex" } } as unknown as BlockOrchestratorStep["kind"] };
-  assert.deepEqual(seamsIn({ ...joined!, orchestratorSteps: [row] }), []);
+  const switchRow: BlockOrchestratorStep = { requestId: "r1", atMs: 3900, position: 0, kind: { type: "providerTransition", id: "t", from: { provider: "claude" }, to: { provider: "codex" } } as unknown as BlockOrchestratorStep["kind"] };
+  assert.deepEqual(seamsIn({ ...joined!, orchestratorSteps: [switchRow] }), []);
 });

@@ -307,6 +307,8 @@ async function driveRefresh() {
   document.body.append(result);
 }
 
+const turnNews = (word: { opened?: boolean; ended?: "done" }) => applyActivityNews({ conversationId: id, entries: [], ...word } as Parameters<typeof applyActivityNews>[0]);
+
 /** A block held through a hand-off, step by step: the successor's turn runs, ends, and the block closes. */
 async function driveSeam() {
   const steps: Record<string, unknown> = {};
@@ -318,7 +320,6 @@ async function driveSeam() {
   };
   const worked = [worker("aa11bb22", "First bug", 1_000, true), worker("cc33dd44", "Second bug", 2_000, true)];
   const closed = { startedAtMs: at(100), endedAtMs: at(300_000) };
-  const turnNews = (news: { opened?: boolean; ended?: "done" }) => applyActivityNews({ conversationId: id, entries: [], ...news } as Parameters<typeof applyActivityNews>[0]);
   // The tab and composer's word that it works, for the steps its turn runs.
   turnNews({ opened: true });
   const running = await step("running");
