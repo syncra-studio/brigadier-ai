@@ -5,16 +5,17 @@ import { renderFixtureLive } from "@/fixtures/headless";
 import type { QuotaWindow } from "@/ipc/generated";
 import { isPlanLimit, planLimitWords, tightest } from "@/lib/quota";
 
+const quotaWindow = (id: string, usedPercent: number, resetsAtMs: number | null): QuotaWindow =>
+  ({ id, label: "Usage limit", usedPercent, resetsAtMs, windowMinutes: null, bucket: null, model: null });
+
 // The engine's `limit.<scope>` window is a plan's limit, not a reading: a real window at 100% is not one.
 test("a plan's limit is told from a real window at its limit", () => {
-  const window = (id: string, usedPercent: number, resetsAtMs: number | null): QuotaWindow =>
-    ({ id, label: "Usage limit", usedPercent, resetsAtMs, windowMinutes: null, bucket: null, model: null });
-  const plan = window("limit.opencode-go", 100, 72 * 3_600_000);
-  const week = window("seven_day", 12, null);
+  const plan = quotaWindow("limit.opencode-go", 100, 72 * 3_600_000);
+  const week = quotaWindow("seven_day", 12, null);
   assert.equal(isPlanLimit(plan), true);
-  assert.equal(isPlanLimit(window("seven_day", 100, null)), false);
+  assert.equal(isPlanLimit(quotaWindow("seven_day", 100, null)), false);
   assert.equal(planLimitWords(plan, 0), "Go plan · back in 3d");
-  assert.equal(planLimitWords(window("limit.opencode-go", 100, null), 0), "Go plan limit");
+  assert.equal(planLimitWords(quotaWindow("limit.opencode-go", 100, null), 0), "Go plan limit");
   assert.equal(tightest([plan, week]), week);
 });
 

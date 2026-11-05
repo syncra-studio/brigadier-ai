@@ -1,5 +1,7 @@
 import { createContext, type FC, useEffect, useState } from "react";
 
+import { useNow } from "@/hooks/use-now";
+
 import type { ContextUsage, ConversationStatus, QuotaWindow } from "@/ipc/generated";
 
 import { isPlanLimit, planLimitWords, usageTone } from "@/lib/quota";
@@ -57,6 +59,7 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
   conversationId,
   onClose,
 }) => {
+  const now = useNow(30_000);
   // Read once per conversation the card opens on.
   const [read, setRead] = useState<{
     conversationId: string;
@@ -126,7 +129,7 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
               if (isPlanLimit(window)) {
                 return (
                   <StatusCardRow key={window.id} label="Plan limit:">
-                    <span className="text-muted-foreground truncate">{planLimitWords(window, Date.now())}</span>
+                    <span className="text-muted-foreground truncate">{planLimitWords(window, now)}</span>
                   </StatusCardRow>
                 );
               }

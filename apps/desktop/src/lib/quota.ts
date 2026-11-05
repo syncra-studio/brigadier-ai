@@ -25,9 +25,12 @@ export function planLimitWords(window: QuotaWindow, now: number): string {
     : `${plan} limit`;
 }
 
+function fullness(window: QuotaWindow): number {
+  return isPlanLimit(window) ? -1 : used(window);
+}
+
 /** The window nearest its limit; a plan limit only when there is no reading to show. */
 export function tightest(windows: readonly QuotaWindow[]): QuotaWindow | null {
-  const fullness = (window: QuotaWindow) => (isPlanLimit(window) ? -1 : used(window));
   return windows.reduce<QuotaWindow | null>(
     (top, window) => (top && fullness(top) >= fullness(window) ? top : window),
     null,
