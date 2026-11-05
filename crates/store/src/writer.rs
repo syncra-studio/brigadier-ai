@@ -19,6 +19,9 @@ const STOP_CHECK_STEPS: i32 = 1000;
 /// How long an automatic compaction's TRUNCATE checkpoint waits for a reader still on the
 /// snapshot from before the `VACUUM`, holding up every write meanwhile.
 const AUTOMATIC_CHECKPOINT_WAIT: Duration = Duration::from_millis(50);
+/// How many times a scrub's checkpoint tries past a reader, each waiting
+/// [`AUTOMATIC_CHECKPOINT_WAIT`], every write behind it: half a second at worst.
+const SCRUB_TRIES: u32 = 10;
 
 pub(crate) struct WriteCommand {
     pub(crate) op: WriteOp,
@@ -464,6 +467,11 @@ impl Writer {
     }
 
     fn checkpoint(&self, mode: &str) -> Result<()> {
+        self.checkpoint_held_up(mode).map(|_| ())
+    }
+
+    /// Runs a checkpoint: whether a reader kept it from completing.
+    fn checkpoint_held_up(&self, mode: &str) -> Result<bool> {
         let (busy, _log, _done): (i64, i64, i64) =
             self.conn
                 .query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |row| {
@@ -477,17 +485,28 @@ impl Writer {
         }
         self.counters.checkpoints.fetch_add(1, Ordering::Relaxed);
         self.record_wal_size();
-        Ok(())
+        Ok(busy != 0)
     }
 
-    /// Empties the WAL, waiting for readers only briefly (a reader holds every write behind
-    /// it): with `secure_delete` on, rows deleted before it then leave no copy in either file.
-    /// What a reader kept from being copied goes at the next full checkpoint.
+    /// Empties the WAL, trying again past readers for a moment (a reader holds every write
+    /// behind it): with `secure_delete` on, rows deleted before it then leave no copy in either
+    /// file. What a reader still keeps from being copied goes at the next full checkpoint.
     fn scrub(&self) -> Result<()> {
         self.conn.busy_timeout(AUTOMATIC_CHECKPOINT_WAIT)?;
-        let scrubbed = self.checkpoint("TRUNCATE");
+        let mut scrubbed = self.checkpoint_held_up("TRUNCATE");
+        for _ in 1..SCRUB_TRIES {
+            if !matches!(scrubbed, Ok(true)) {
+                break;
+            }
+            scrubbed = self.checkpoint_held_up("TRUNCATE");
+        }
         self.conn.busy_timeout(schema::WRITER_BUSY_TIMEOUT)?;
-        scrubbed
+        if matches!(scrubbed, Ok(true)) {
+            tracing::warn!(
+                "a reader kept the write-ahead log from emptying; the next full checkpoint does"
+            );
+        }
+        scrubbed.map(|_| ())
     }
 
     /// `VACUUM` (outside any transaction: the batch's has committed), then a TRUNCATE
@@ -716,4 +735,48 @@ fn append(
         }
     }
     Ok(stored)
+}
+
+#[cfg(test)]
+mod scrub_tests {
+    use super::*;
+    use crate::{Store, StoreConfig};
+
+    fn event(n: u32) -> NewEvent {
+        NewEvent::new("stream", "step", 1, &serde_json::json!({ "n": n })).unwrap()
+    }
+
+    /// A reader on an older snapshot, gone just after the scrub's first try: the scrub tries
+    /// again, so no copy of what was deleted stays in the WAL.
+    #[tokio::test]
+    async fn a_scrub_held_up_by_a_reader_tries_again_and_empties_the_wal() {
+        let dir = std::env::temp_dir().join(format!("store-scrub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("db.sqlite");
+        let store = Store::open(StoreConfig {
+            db_path: db_path.clone(),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        store.append(vec![event(1)]).await.unwrap();
+        let reader = Connection::open(&db_path).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT count(*) FROM events;")
+            .unwrap();
+        store.append(vec![event(2)]).await.unwrap();
+        let before = store.stats().checkpoints;
+        let (scrubbed, ()) = tokio::join!(store.scrub(), async {
+            while store.stats().checkpoints == before {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            drop(reader);
+        });
+        scrubbed.unwrap();
+        let wal = std::fs::metadata(db_path.with_file_name("db.sqlite-wal")).unwrap();
+        assert_eq!(wal.len(), 0, "the WAL still holds what the reader held up");
+        store.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
