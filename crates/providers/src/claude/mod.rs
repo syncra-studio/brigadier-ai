@@ -875,6 +875,21 @@ fn mcp_part_alias(server: usize, key: usize, part: usize) -> String {
     format!("BRIGADIER_MCP_{server}_{key}_{part}")
 }
 
+/// An extra account's CLI runs without the variables [`HOME`] removes and its flag settings
+/// blank its login ones, so a value reading one by name would reach the server without it.
+/// Such a value goes by its alias instead, holding the launch's value ([`McpServer::env`]).
+fn alias_what_an_account_removes(spec: &mut SessionSpec) {
+    for server in &mut spec.mcp_servers {
+        server.sources.references.retain(|(_, parts)| {
+            !parts.iter().any(|part| {
+                matches!(part, McpValuePart::Var(var)
+                    if HOME.auth_vars.contains(&var.as_str())
+                        || HOME.unset.contains(&var.as_str()))
+            })
+        });
+    }
+}
+
 /// Claude's `--mcp-config` for the session's servers.
 ///
 /// The config is on Claude's command line, which any process of the user can read, so a
@@ -1262,17 +1277,30 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     settings
 }
 
+/// Where under `run_dir` sessions' settings layers are.
+const SETTINGS_DIR: &str = "claude-settings";
+
+/// A session's settings layer on disk: it can hold a naked worker's user-settings env, so it
+/// goes however the start or the session ends.
+struct SettingsFile(PathBuf);
+
+impl Drop for SettingsFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Moves `--settings` out of Claude's command line into a private file under `run_dir`, which
 /// `--settings` also takes: the layer names the daemon's socket and binary, and a broad `pkill -f`
 /// matching those would end every session (#811). The file's name is new for each start: an
 /// old process still exiting removes only its own. One that can't be written leaves the layer
 /// where it was: a session that starts matters more.
-fn settings_in_file(args: &mut [String], run_dir: &Path, native_id: &str) -> Option<PathBuf> {
+fn settings_in_file(args: &mut [String], run_dir: &Path, native_id: &str) -> Option<SettingsFile> {
     let at = args.iter().position(|arg| arg == "--settings")? + 1;
     let layer = args.get(at)?;
     let tag = uuid::Uuid::new_v4().simple().to_string();
     let file = run_dir
-        .join("claude-settings")
+        .join(SETTINGS_DIR)
         .join(format!("{native_id}-{}.json", &tag[..8]));
     let written = file
         .parent()
@@ -1288,13 +1316,20 @@ fn settings_in_file(args: &mut [String], run_dir: &Path, native_id: &str) -> Opt
     match written {
         Ok(()) => {
             args[at] = file.display().to_string();
-            Some(file)
+            Some(SettingsFile(file))
         }
         Err(err) => {
             tracing::warn!(error = %err, "could not write the session's settings file");
             None
         }
     }
+}
+
+/// Clears the settings files a crashed daemon left ([`settings_in_file`]). For a daemon's boot,
+/// once its crash sweep has ended the CLIs recorded and before any session can start: none
+/// that remains still has a daemon to talk to, and each read its file as it started.
+pub fn sweep_settings_files(run_dir: &Path) {
+    let _ = std::fs::remove_dir_all(run_dir.join(SETTINGS_DIR));
 }
 
 /// Whether the settings sources this session loads disable hooks. Read only this switch:
@@ -1658,8 +1693,15 @@ impl Provider for Claude {
         })
     }
 
-    fn start(&self, spec: SessionSpec, ledger: Arc<dyn Ledger>) -> BoxFuture<'_, Result<Started>> {
+    fn start(
+        &self,
+        mut spec: SessionSpec,
+        ledger: Arc<dyn Ledger>,
+    ) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
+            if self.main_config.is_some() {
+                alias_what_an_account_removes(&mut spec);
+            }
             let binary = self.binary()?;
             let cwd = spec.cwd.canonicalize().map_err(|err| {
                 Error::Invalid(format!("working directory {}: {err}", spec.cwd.display()))
@@ -1934,8 +1976,15 @@ impl Provider for Claude {
         })
     }
 
-    fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
+    fn terminal(
+        &self,
+        mut spec: SessionSpec,
+        cwd: PathBuf,
+    ) -> BoxFuture<'_, Result<TerminalCommand>> {
         Box::pin(async move {
+            if self.main_config.is_some() {
+                alias_what_an_account_removes(&mut spec);
+            }
             let Origin::Resume { native_id } = &spec.origin else {
                 return Err(Error::Invalid(
                     "only a session that exists can open in a terminal".into(),
@@ -2545,7 +2594,7 @@ struct SessionFiles {
     /// later is the session's own, removed with it ([`files::owned_plan_file`]).
     plans: Option<(PathBuf, HashSet<std::ffi::OsString>)>,
     /// Its settings layer ([`settings_in_file`]), removed when it has exited.
-    settings_file: Option<PathBuf>,
+    settings_file: Option<SettingsFile>,
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps
@@ -2661,9 +2710,7 @@ async fn read_loop(
     let exit = process.exited().await;
     session_files.memory.record(true).await;
     drop(session_files.in_folder);
-    if let Some(file) = session_files.settings_file {
-        let _ = std::fs::remove_file(file);
-    }
+    drop(session_files.settings_file);
     lock(&shared.pending).clear();
     shared.turn_active.store(false, Ordering::Release);
     shared
@@ -5137,6 +5184,22 @@ for line in sys.stdin:
         for text in [NOT_INSTALLED, SIGNED_OUT] {
             assert!(!text.contains('`') && !text.contains("terminal"), "{text}");
         }
+    }
+
+    /// A crashed daemon removed nothing: the next one's boot clears what it left, and only that.
+    #[test]
+    fn the_settings_files_a_crashed_daemon_left_are_swept() {
+        let temp = Temp::new();
+        let left = temp.path().join("claude-settings").join("session-tag.json");
+        std::fs::create_dir_all(left.parent().unwrap()).unwrap();
+        std::fs::write(&left, "{}").unwrap();
+        let token = temp.path().join("ipc.token");
+        std::fs::write(&token, "made-up").unwrap();
+        sweep_settings_files(temp.path());
+        assert!(!left.exists());
+        assert!(token.exists());
+        // Nothing left to sweep is fine too.
+        sweep_settings_files(temp.path());
     }
 
     /// Two servers may give one variable different values: each value is in Claude's
