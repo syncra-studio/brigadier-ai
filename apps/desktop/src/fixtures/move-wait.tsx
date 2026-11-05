@@ -1,6 +1,6 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a session's switch to
- * Codex waiting for its background jobs, IPC mocked (#794). The composer says so; Switch now warns
+ * Codex waiting for its background jobs, IPC mocked. The composer says so; Switch now warns
  * first, Keep waiting asks nothing of the daemon, and Switch now in the warning does. With
  * `?stop=row` or `?stop=dialog` it stays there, to be looked at. What it saw goes as JSON into
  * `<pre id="move-wait-result">`.

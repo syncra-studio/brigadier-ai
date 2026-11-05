@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
 
-test("a switch waiting for background jobs says so on the composer, and Switch now warns first (#794)", { timeout: 120000 }, async (t) => {
+test("a switch waiting for background jobs says so on the composer, and Switch now warns first", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "move-wait.html", "move-wait-result", 90000));
   assert.equal(seen.error, undefined, String(seen.error));
   assert.equal(seen.row, "Switching to Codex once background jobs endSwitch now");
