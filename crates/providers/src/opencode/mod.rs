@@ -1603,10 +1603,13 @@ impl ProviderSession for OpenCodeSession {
                 &format!("/api/shell/{task_id}"),
                 &[("location[directory]", &folder)],
             );
-            self.server
-                .call(Method::DELETE, &path, None)
-                .await
-                .map(drop)
+            // Noted first: OpenCode may say the end before it answers.
+            lock(&self.parser).stopping.insert(task_id.clone());
+            let stopped = self.server.call(Method::DELETE, &path, None).await;
+            if stopped.is_err() {
+                lock(&self.parser).stopping.remove(&task_id);
+            }
+            stopped.map(drop)
         })
     }
 
@@ -2093,6 +2096,7 @@ sys.stdin.read()
         let folder = root.display().to_string();
         let query = with_query("/api/shell/sh_1", &[("location[directory]", &folder)]);
         assert!(requests.contains(&format!("DELETE {query}")), "{requests}");
+        assert!(lock(&session.parser).stopping.contains("sh_1"));
         assert!(
             requests.contains("POST /api/session/ses_child/interrupt"),
             "{requests}"

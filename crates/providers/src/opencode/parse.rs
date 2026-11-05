@@ -36,6 +36,9 @@ pub struct Parser {
     /// Background commands whose end came before their call's result (a command that ends at
     /// once): their call starts none.
     ended_early: HashSet<String>,
+    /// Background commands the user asked to stop ([`crate::ProviderSession::stop_task`]):
+    /// OpenCode says the end of one as an error, as removing its shell removes what it waits on.
+    pub(crate) stopping: HashSet<String>,
     /// Each running shell's output file (`shell.created`), by its id.
     shell_files: HashMap<String, String>,
     /// Each sub-agent's session → the `subagent` call it runs for, whose row it is (D69).
@@ -257,9 +260,11 @@ impl Parser {
                     return Vec::new();
                 };
                 let mut task = self.background.remove(at);
+                let stopped = self.stopping.remove(shell);
                 task.status = match (metadata["state"].as_str(), metadata["exit"].as_i64()) {
                     (Some("completed"), Some(0) | None) => BackgroundTaskStatus::Completed,
                     (Some("cancelled"), _) => BackgroundTaskStatus::Stopped,
+                    (Some("error"), _) if stopped => BackgroundTaskStatus::Stopped,
                     _ => BackgroundTaskStatus::Failed,
                 };
                 task.ended_at_ms = Some(created.unwrap_or_else(crate::now_ms));
@@ -1011,6 +1016,53 @@ mod tests {
             .concat(),
         );
         assert!(events.iter().any(|event| matches!(event, ProviderEvent::BackgroundTask { task } if task.status == BackgroundTaskStatus::Failed)), "{events:#?}");
+    }
+
+    /// A command the user stopped ends as OpenCode's `error`, seen live on 2.2.5: it reads
+    /// stopped. Another command's error stays a failure.
+    #[test]
+    fn a_stopped_command_reads_stopped_and_another_error_failed() {
+        let mut parser = Parser::new(Some(S.into()), None);
+        let at = |kind: &str, data: Value| {
+            json!({"id": "evt", "created": 1_000, "type": kind, "data": data}).to_string()
+        };
+        let mut end_of = |shell: &str| {
+            let id = format!("call_{shell}");
+            let status = feed(
+                &mut parser,
+                &[
+                    at(
+                        "session.tool.input.started",
+                        json!({"sessionID": S, "id": id, "name": "shell"}),
+                    ),
+                    at(
+                        "session.tool.called",
+                        json!({"sessionID": S, "id": id, "input": {"command": "sleep 300"}}),
+                    ),
+                    at(
+                        "session.tool.success",
+                        json!({"sessionID": S, "id": id, "content": [], "metadata": {"shellID": shell, "status": "running"}}),
+                    ),
+                ],
+            );
+            assert!(!status.is_empty());
+            if shell == "sh_1" {
+                parser.stopping.insert(shell.to_owned());
+            }
+            let ended = feed(
+                &mut parser,
+                &[at(
+                    "session.inbox.enqueued",
+                    json!({"inboxID": "msg_s", "sessionID": S, "item": {"type": "synthetic", "payload": {"text": "<shell>Shell.NotFoundError</shell>", "metadata": {"source": "shell", "shellID": shell, "state": "error"}}}}),
+                )],
+            );
+            ended.iter().find_map(|event| match event {
+                ProviderEvent::BackgroundTask { task } => Some(task.status),
+                _ => None,
+            })
+        };
+        assert_eq!(end_of("sh_1"), Some(BackgroundTaskStatus::Stopped));
+        assert_eq!(end_of("sh_2"), Some(BackgroundTaskStatus::Failed));
     }
 
     /// A subagent OpenCode runs in the background is a background agent task from its call's
