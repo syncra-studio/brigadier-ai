@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/p
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import type { ModelGroup } from "@/components/shared/model-selector";
 import type { ModelInfo, ProviderKind } from "@/ipc/generated";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 import { shippedModelNames } from "@/lib/shippedModels";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
@@ -112,8 +113,9 @@ const typed = (event: KeyboardEvent) =>
   event.key.length === 1 && event.key !== " " && !event.metaKey && !event.ctrlKey && !event.altKey;
 
 /**
- * The picker's open content. It opens as T3 Code's does: on Favorites when there are any, but on
- * the agent in use when it is one agent's models or that agent isn't set up. ↑ ↓ move through a
+ * The picker's open content. It opens on Favorites when the checked model is starred, otherwise on
+ * its agent; with nothing checked, on Favorites when there are any, otherwise on the first agent;
+ * and always on the agent in use when it is one agent's models or that agent isn't set up. ↑ ↓ move through a
  * column, ← → between them (→ from a model not picked yet picks it), Enter picks, typing searches
  * and Escape clears the search before the picker closes. The effort column follows the model
  * under the keyboard, else the checked one; a level of a model not picked yet picks it at that level.
@@ -143,9 +145,12 @@ function ModelPickerPanel({
     entry.models.filter((model) => isFavorite(entry.provider, model)).map((model) => ({ provider: entry.provider, model })),
   );
   const active = groups.find((group) => group.provider === (checked?.provider ?? opensOn)) ?? groups[0];
-  const [browsed, setBrowsing] = useState<ProviderKind | typeof FAVORITES>(() =>
-    !locked && (active?.unavailable ?? null) === null && favoriteRows.length > 0 ? FAVORITES : (active?.provider ?? FAVORITES),
-  );
+  const [browsed, setBrowsing] = useState<ProviderKind | typeof FAVORITES>(() => {
+    const onFavorites = checked
+      ? favorites.some((entry) => entry.provider === checked.provider && entry.id === checked.model)
+      : favoriteRows.length > 0;
+    return !locked && (active?.unavailable ?? null) === null && onFavorites ? FAVORITES : (active?.provider ?? FAVORITES);
+  });
   // Agents still loading when it opened (or one gone since): it shows where it would open now.
   const browsing =
     browsed === FAVORITES || groups.some((group) => group.provider === browsed) ? browsed : (active?.provider ?? FAVORITES);
@@ -153,6 +158,8 @@ function ModelPickerPanel({
   const [older, setOlder] = useState<ReadonlySet<ProviderKind>>(new Set());
   const [inSearch, setInSearch] = useState(false);
   const [underKeys, setUnderKeys] = useState<Row | null>(null);
+  // The model just picked: the keyboard goes to its levels once it is the checked one.
+  const [keysAfterPick, setKeysAfterPick] = useState<Row | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const agents = useRef<HTMLDivElement>(null);
   const models = useRef<HTMLDivElement>(null);
@@ -223,13 +230,24 @@ function ModelPickerPanel({
     options(agents.current)
       .find((option) => option.getAttribute("aria-selected") === "true")
       ?.focus();
+  // The checked level; with none, the column itself, so no level looks selected and ↓ goes to the
+  // first. A model with no levels leaves the keyboard where it is.
   const focusEffort = () => {
     const all = levels(column.current);
-    (all.find((level) => level.getAttribute("aria-checked") === "true") ?? all[0])?.focus();
+    if (all.length === 0) return;
+    (all.find((level) => level.getAttribute("aria-checked") === "true") ?? column.current)?.focus();
   };
+  // A pick can take a while to come back (a session's setup, a rules file): until then the column
+  // still shows the last model.
+  useEffect(() => {
+    if (!keysAfterPick || !sameRow(keysAfterPick, checked)) return;
+    setKeysAfterPick(null);
+    focusEffort();
+  });
   const browse = (next: ProviderKind | typeof FAVORITES) => {
     setQuery("");
     setUnderKeys(null);
+    setKeysAfterPick(null);
     setBrowsing(next);
   };
   const pick = (row: Row, also?: PickedWith) => {
@@ -237,8 +255,7 @@ function ModelPickerPanel({
     setUnderKeys(null);
     setInSearch(false);
     onPick(row.provider, row.model, also);
-    // On the new model's levels once they show: a timer, as a frame never comes in a hidden window.
-    if (!also) setTimeout(focusEffort);
+    setKeysAfterPick(also ? null : row);
   };
   // Focus leaving for the effort column or the footer keeps the model they act on.
   const keepsInHand = (to: EventTarget | null) => to instanceof Node && Boolean(column.current?.contains(to) || footer.current?.contains(to));
@@ -246,6 +263,8 @@ function ModelPickerPanel({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // The panel's keys are its own, also inside a menu.
     if (event.key !== "Escape") event.stopPropagation();
+    // A key pressed while a pick comes back keeps the keyboard where the user took it.
+    setKeysAfterPick(null);
     const target = event.target as HTMLElement;
     const part = target.closest<HTMLElement>("[data-picker-part]")?.dataset.pickerPart;
     if (part === "search") {
@@ -522,6 +541,7 @@ function ModelPickerPanel({
             <input
               ref={search}
               type="search"
+              {...PLAIN_FIELD}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search models"
@@ -588,7 +608,8 @@ function ModelPickerPanel({
             aria-label="Effort"
             data-slot="model-picker-effort"
             data-picker-part="effort"
-            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5 px-1"
+            tabIndex={-1}
+            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5 px-1 outline-hidden"
           >
             {levelsOf.length === 0 ? (
               <div className="text-muted-foreground flex h-8 items-center px-2 text-sm">{noLevels}</div>
