@@ -127,7 +127,7 @@ impl SessionManager {
                 .unwrap_or(&cwd);
             let native = Catalog::read(&effective, trusted.then_some(checkout));
             suppress_native_plugin_servers(&mut resolved, &native, agent);
-            resolved.warnings = warnings;
+            resolved.warnings.extend(warnings);
             Ok(resolved)
         })
         .await
@@ -1093,6 +1093,9 @@ fn hydrate_library_definition(
         }
     }
     server.signs_in = false;
+    // Its helper and variables only named these values, which are now filled in.
+    server.written.references.clear();
+    server.written.headers_helper = None;
     Ok(())
 }
 
@@ -1159,6 +1162,53 @@ mod secret_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, value.to_string()).unwrap();
     }
+    /// #809: launch's own warnings used to replace the resolver's, so a server left out for an
+    /// unset variable said nothing.
+    #[tokio::test]
+    async fn a_server_left_out_for_an_unset_variable_warns_at_launch() {
+        use crate::manager::flow::{Flow, Options, Reply, Script};
+        let script: Script = std::sync::Arc::new(|_| Box::pin(async { Reply::text("Done.") }));
+        let flow = Flow::start(
+            "plugins-left-out-warning",
+            Options {
+                thread: ProviderKind::Claude,
+                ..Options::default()
+            },
+            script,
+        )
+        .await;
+        write(
+            &flow.manager.registry().roots().claude_json,
+            serde_json::json!({"mcpServers":{"unset":{"url":"https://unset.invalid/mcp",
+                "headers":{"Authorization":"Bearer ${FIXTURE_MISSING}"}}}}),
+        );
+        let resolved = flow
+            .manager
+            .resolve_plugins(
+                &flow
+                    .manager
+                    .runtime
+                    .launch_account(ProviderKind::Claude, None),
+                Some(&flow.repo),
+                &flow.repo,
+                true,
+                Role::Thread,
+            )
+            .await
+            .unwrap();
+        assert!(!resolved.servers.iter().any(|server| server.name == "unset"));
+        assert!(
+            resolved
+                .warnings
+                .iter()
+                .any(|warning| warning.server == "unset"
+                    && warning.message.contains("FIXTURE_MISSING")),
+            "{:?}",
+            resolved.warnings
+        );
+        flow.stop().await;
+    }
+
     #[test]
     fn library_http_values_stay_in_memory_and_missing_values_omit_the_server_with_a_warning() {
         let dir = std::env::temp_dir().join(format!("launch-secrets-{}", uuid::Uuid::new_v4()));
@@ -1212,6 +1262,8 @@ mod secret_tests {
                 gateway: None,
             });
             assert_eq!(resolved.servers.len(), 1);
+            // Its helper only names the saved values, which are filled in by now.
+            assert_eq!(resolved.servers[0].sources, Default::default());
             let found: Values = resolved.servers[0].env.iter().cloned().collect();
             assert_eq!(found, values);
         }
@@ -1276,6 +1328,7 @@ mod lease_grant_tests {
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
         };
         let mut spec = super::overlay_tests::test_spec(Path::new("/unused"));
         // Brigadier's own computer-use server: its values are no secrets.
@@ -1291,6 +1344,7 @@ mod lease_grant_tests {
             tool_timeout_secs: None,
             trusted: true,
             always_load: false,
+            sources: Default::default(),
         };
         spec.mcp_servers.push(own.clone());
         spec.mcp_servers.push(server.clone());

@@ -120,6 +120,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
             tool_timeout_secs: Some(120),
             trusted: true,
             always_load: true,
+            sources: Default::default(),
         }],
         tools: ToolSet::Lean,
         add_dirs: Vec::new(),

@@ -8,13 +8,16 @@ use serde_json::{Map, Value};
 
 use crate::{
     AsWritten, OAuthClient, Plugin, Problem, ProviderKind, Roots, Secret, Server, Source,
-    Transport, plugins, server_id,
+    Transport, WrittenPart, plugins, server_id,
 };
 
 /// Whether `text` names a variable: `${…}`.
 fn names_variable(text: &str) -> bool {
     text.contains("${")
 }
+
+/// Variables Claude Code fills in itself for what it starts, which no environment of ours holds.
+const SET_BY_CLAUDE: [&str; 2] = ["CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"];
 
 /// How a source writes variables in its values.
 #[derive(Clone, Copy)]
@@ -366,6 +369,7 @@ fn json_servers(
                 .collect(),
             url: raw("url"),
             cwd: raw("cwd"),
+            ..AsWritten::default()
         };
         let templated = !matches!(origin.variables, Variables::None)
             && (written.command.as_deref().is_some_and(names_variable)
@@ -443,9 +447,39 @@ fn json_servers(
             problem(name, None, "It has no command or url".into());
             continue;
         };
+        let values_key = if matches!(transport, Transport::Http { .. }) {
+            "headers"
+        } else {
+            "env"
+        };
+        let references = string_map(config.get(values_key))
+            .filter_map(|(key, value)| {
+                let parts = parts(&value, origin, roots);
+                parts
+                    .iter()
+                    .any(|part| matches!(part, WrittenPart::Var { .. }))
+                    .then_some((key, parts))
+            })
+            .collect();
+        // Only Claude Code has one, and its command is the shell's to expand, not ours.
+        let headers_helper = raw("headersHelper")
+            .filter(|_| {
+                matches!(origin.variables, Variables::Claude)
+                    && matches!(transport, Transport::Http { .. })
+            })
+            .map(|helper| match origin.plugin_root {
+                Some(root) => helper.replace("${CLAUDE_PLUGIN_ROOT}", &root.display().to_string()),
+                None => helper,
+            });
         let mut server = server(name, origin.source, origin.project, origin.file, transport);
         server.disabled = disabled;
-        server.written = written;
+        // Its helper supplies its credentials: nothing to sign in to.
+        server.signs_in &= headers_helper.is_none();
+        server.written = AsWritten {
+            references,
+            headers_helper,
+            ..written
+        };
         server.templated = templated;
         server.oauth = config
             .get("oauth")
@@ -522,6 +556,12 @@ fn toml_servers_with(
         let Some(config) = config.as_table() else {
             continue;
         };
+        // What Codex reads from its own environment, by name.
+        let mut references: Vec<(String, Vec<WrittenPart>)> = Vec::new();
+        let var = |name: &str| WrittenPart::Var {
+            name: name.to_owned(),
+            default: None,
+        };
         let disabled = config.get("enabled").and_then(toml::Value::as_bool) == Some(false);
         if disabled && !keep_disabled {
             continue;
@@ -543,15 +583,22 @@ fn toml_servers_with(
             headers.extend(
                 strings("env_http_headers")
                     .into_iter()
-                    .map(|(header, var)| (header, Secret::new(env_var(&var)))),
+                    .map(|(header, name)| {
+                        references.push((header.clone(), vec![var(&name)]));
+                        (header, Secret::new(env_var(&name)))
+                    }),
             );
-            if let Some(var) = config
+            if let Some(name) = config
                 .get("bearer_token_env_var")
                 .and_then(toml::Value::as_str)
             {
+                references.push((
+                    "Authorization".into(),
+                    vec![WrittenPart::Text(Secret::new("Bearer ")), var(name)],
+                ));
                 headers.push((
                     "Authorization".into(),
-                    Secret::new(format!("Bearer {}", env_var(var))),
+                    Secret::new(format!("Bearer {}", env_var(name))),
                 ));
             }
             Transport::Http {
@@ -576,6 +623,10 @@ fn toml_servers_with(
                 if let Some(name) = name
                     && let Some(value) = roots.vars.get(name)
                 {
+                    // Passing on an unset one passes nothing, so it needs no variable.
+                    if !value.is_empty() {
+                        references.push((name.to_owned(), vec![var(name)]));
+                    }
                     env.push((name.to_owned(), Secret::new(value.clone())));
                 }
             }
@@ -632,6 +683,8 @@ fn toml_servers_with(
                 .collect(),
             url: raw("url"),
             cwd: raw("cwd"),
+            references,
+            headers_helper: None,
         };
         server.templated = ["env_vars", "env_http_headers", "bearer_token_env_var"]
             .iter()
@@ -789,51 +842,99 @@ fn absolute(path: &str, base: Option<&Path>) -> PathBuf {
 /// `text` with the source's variables expanded from the CLIs' environment. An unset variable
 /// without a default expands to nothing.
 fn expand(text: &str, origin: &Origin<'_>, roots: &Roots) -> String {
-    let (variables, project) = (origin.variables, origin.project);
-    if matches!(variables, Variables::None) || !text.contains("${") {
-        return text.to_owned();
+    parts(text, origin, roots)
+        .iter()
+        .map(|part| match part {
+            WrittenPart::Text(text) => text.expose().to_owned(),
+            WrittenPart::Var { name, default } => {
+                value_of(roots, name, default.as_ref().map(Secret::expose))
+            }
+        })
+        .collect()
+}
+
+/// A variable's value: `default`, when there is one, also stands in for an empty value.
+fn value_of(roots: &Roots, name: &str, default: Option<&str>) -> String {
+    match default {
+        Some(default) => roots
+            .vars
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| default.to_owned(), Clone::clone),
+        None => roots.vars.get(name).cloned().unwrap_or_default(),
     }
-    let mut out = String::with_capacity(text.len());
+}
+
+/// `text` split at the variables a CLI's environment supplies. What the source itself fills in
+/// (a plugin's folder, Cursor's `${userHome}`) is text.
+fn parts(text: &str, origin: &Origin<'_>, roots: &Roots) -> Vec<WrittenPart> {
+    fn push(parts: &mut Vec<WrittenPart>, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(WrittenPart::Text(last)) = parts.last_mut() {
+            *last = Secret::new(format!("{}{text}", last.expose()));
+        } else {
+            parts.push(WrittenPart::Text(Secret::new(text)));
+        }
+    }
+    let mut parts = Vec::new();
+    let (variables, project) = (origin.variables, origin.project);
+    if matches!(variables, Variables::None) {
+        push(&mut parts, text);
+        return parts;
+    }
     let mut rest = text;
     while let Some(start) = rest.find("${") {
-        out.push_str(&rest[..start]);
+        push(&mut parts, &rest[..start]);
         let after = &rest[start + 2..];
         let Some(end) = after.find('}') else {
-            out.push_str(&rest[start..]);
-            return out;
+            push(&mut parts, &rest[start..]);
+            return parts;
         };
         let inner = &after[..end];
-        let var = |name: &str| match origin.plugin_root {
-            Some(root) if name == "CLAUDE_PLUGIN_ROOT" => Some(root.display().to_string()),
-            _ => roots.vars.get(name).cloned(),
-        };
-        let value = match variables {
+        rest = &after[end + 1..];
+        let (name, default) = match variables {
             Variables::Claude => match inner.split_once(":-") {
-                Some((name, default)) => var(name)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| default.to_owned()),
-                None => var(inner).unwrap_or_default(),
+                Some((name, default)) => (name, Some(default)),
+                None => (inner, None),
             },
-            Variables::Cursor => match inner {
-                "userHome" => roots.home.display().to_string(),
-                "workspaceFolder" => project.map(|p| p.display().to_string()).unwrap_or_default(),
-                "workspaceFolderBasename" => project
-                    .and_then(Path::file_name)
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                "pathSeparator" | "/" => std::path::MAIN_SEPARATOR.to_string(),
-                _ => match inner.strip_prefix("env:") {
-                    Some(name) => var(name).unwrap_or_default(),
-                    None => format!("${{{inner}}}"),
-                },
+            Variables::Cursor => match inner.strip_prefix("env:") {
+                Some(name) => (name, None),
+                None => {
+                    let filled = match inner {
+                        "userHome" => roots.home.display().to_string(),
+                        "workspaceFolder" => {
+                            project.map(|p| p.display().to_string()).unwrap_or_default()
+                        }
+                        "workspaceFolderBasename" => project
+                            .and_then(Path::file_name)
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        "pathSeparator" | "/" => std::path::MAIN_SEPARATOR.to_string(),
+                        _ => format!("${{{inner}}}"),
+                    };
+                    push(&mut parts, &filled);
+                    continue;
+                }
             },
             Variables::None => unreachable!(),
         };
-        out.push_str(&value);
-        rest = &after[end + 1..];
+        match origin.plugin_root {
+            Some(root) if name == "CLAUDE_PLUGIN_ROOT" => {
+                push(&mut parts, &root.display().to_string());
+            }
+            _ if SET_BY_CLAUDE.contains(&name) => {
+                push(&mut parts, &value_of(roots, name, default));
+            }
+            _ => parts.push(WrittenPart::Var {
+                name: name.to_owned(),
+                default: default.map(Secret::new),
+            }),
+        }
     }
-    out.push_str(rest);
-    out
+    push(&mut parts, rest);
+    parts
 }
 
 /// A server entry of `file` that can't be used.

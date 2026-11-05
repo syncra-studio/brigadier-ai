@@ -271,6 +271,23 @@ pub struct AsWritten {
     pub args: Vec<String>,
     pub url: Option<String>,
     pub cwd: Option<String>,
+    /// The headers or environment values that read a variable (`${VAR}`, Codex's
+    /// `env_http_headers`, `bearer_token_env_var`, `env_vars`), by name. Their literal parts
+    /// may be secrets, so unlike the fields above these are never shown or copied.
+    pub references: Vec<(String, Vec<WrittenPart>)>,
+    /// The command Claude Code runs for an HTTP server's headers (`headersHelper`).
+    pub headers_helper: Option<String>,
+}
+
+/// One piece of a value as its config writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WrittenPart {
+    Text(Secret),
+    Var {
+        name: String,
+        /// `${VAR:-default}`: used when the variable is unset or empty.
+        default: Option<Secret>,
+    },
 }
 
 impl Server {

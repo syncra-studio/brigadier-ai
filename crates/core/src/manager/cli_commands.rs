@@ -1108,6 +1108,7 @@ mod tests {
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
         };
         resolved.servers.push(server);
         let before = command_version(&resolved);

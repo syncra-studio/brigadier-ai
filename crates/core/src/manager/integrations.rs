@@ -173,6 +173,7 @@ pub(crate) fn granted_servers(
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
         });
     }
     Ok(granted)

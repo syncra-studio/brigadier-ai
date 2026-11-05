@@ -1835,6 +1835,7 @@ mod tests {
             tool_timeout_secs: Some(600),
             trusted: true,
             always_load: true,
+            sources: Default::default(),
         }];
         assert!(sealed(&worker));
         let env = session_env(&worker, Some(Path::new("/data/opencode-1")));
