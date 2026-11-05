@@ -46,6 +46,7 @@ import { FusionChip } from "@/app/conversation/FusionChip";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
 import { ToWorkerChip } from "@/app/conversation/ToWorkerChip";
 import { HeldDirectMessages } from "@/app/conversation/HeldDirect";
+import { MoveWaitNotice } from "@/app/conversation/MoveWait";
 import { useWorkerName } from "@/app/conversation/WorkerChip";
 import { type ModelGroup, ModelSelector } from "@/components/shared";
 import { formatDuration } from "@/lib/format";
@@ -155,6 +156,7 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
             <StatusCard conversationId={conversation.id} onClose={() => statusCard.setOpen(false)} />
           )}
           {conversation && !archived && <ComposerStatusSlot conversationId={conversation.id} />}
+          {conversation && !archived && <MoveWaitNotice conversationId={conversation.id} groups={resolved.groups} />}
           {conversation && <Notices conversationId={conversation.id} />}
           {conversation && !archived && <QueueCard conversationId={conversation.id} />}
           {conversation && !archived && <HeldDirectMessages conversationId={conversation.id} />}

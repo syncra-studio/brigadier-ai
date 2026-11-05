@@ -1,12 +1,14 @@
 //! The seam in the conversation driver (S22, [`crate::manager::seam`]): the nudge, closing the
 //! predecessor, starting the successor from its hand-off, the held messages and recovery.
 //!
-//! - **Nudge.** Past the threshold, with no background job or open permission card, the one
+//! - **Nudge.** Past the threshold, with no command or background job running and no open
+//!   permission card, the one
 //!   message is steered into the running turn; with none running it starts a turn of its own.
 //!   `seam.json` says `nudged` before it is sent.
 //! - **Hold.** While nudged nothing else reaches the thread: a user message waits in the queue
 //!   (persisted), anything else in memory, for the successor. If the note turn is still going
-//!   a minute after a message came, it is stopped and the seam closes without waiting.
+//!   a minute after a message came, it is stopped and the seam closes without waiting. One
+//!   queued before the nudge never stops it (#606): it waited for that turn already.
 //! - **Close.** The turn that read the nudge ends: with a note or without, the seam closes
 //!   (`closed`) and the predecessor's CLI goes.
 //! - **Successor.** It starts at once, carrying the messages that waited (or, with none, told
@@ -65,6 +67,9 @@ pub(super) struct SeamLive {
     pub(super) seen: bool,
     /// The note turn is being stopped: when it ends, the seam closes whatever it wrote.
     force: bool,
+    /// The user's Switch now (#794): the move asked for goes though the CLI's jobs still run,
+    /// and it closes over them, until that CLI is gone.
+    pub(super) cut_jobs: bool,
     /// Counts the hold timers armed; only the newest acts.
     hold_timer: u64,
     /// The session was asked to fix its note this many times (goal 13).
@@ -73,6 +78,8 @@ pub(super) struct SeamLive {
     /// The turns the CLI's stream started and hasn't ended.
     turns_open: u32,
     hold_armed: bool,
+    /// A message came since the nudge: the hold stays once the nudge is heard.
+    hold_for_message: bool,
     /// The session id the next CLI starts under (a successor's, reserved in `seam.json`).
     pub(super) reserved: Option<String>,
     /// The seam closed and its successor starts by itself, when no message starts it first.
@@ -89,6 +96,11 @@ pub(super) struct SeamLive {
 }
 
 impl SeamLive {
+    /// The seam's hold is stopping the note turn.
+    pub(super) fn forced(&self) -> bool {
+        self.force
+    }
+
     /// The fix ask's send begins.
     pub(super) fn fix_sending(&mut self) {
         if self.fix_turn == FixTurn::Taken {
@@ -140,6 +152,7 @@ impl SeamLive {
     pub(super) fn cli_gone(&mut self) {
         self.fix_turn = FixTurn::None;
         self.turns_open = 0;
+        self.cut_jobs = false;
     }
 }
 
@@ -179,7 +192,10 @@ impl SessionManager {
         file: SeamFile,
     ) -> crate::Result<()> {
         let record = self.session_dir(id).record();
-        crate::manager::blocking(move || write_seam(&record, &file)).await
+        let to = file.moving.as_ref().map(|to| to.provider);
+        crate::manager::blocking(move || write_seam(&record, &file)).await?;
+        self.move_due(id, to);
+        Ok(())
     }
 
     /// The CLI said how full its context is: past the threshold, the nudge.
@@ -258,10 +274,11 @@ impl SessionManager {
         let mut file = self.read_seam_of(&conv.id).await;
         // A job that ended inside the turn asking for a move owes a turn for a while: it never
         // holds the move (demo9, every CLI).
-        if file.phase != Phase::Live
-            || conv.state.lock().await.runs_cli_jobs()
-            || self.open_permission(&conv.id).await
-        {
+        let jobs_hold = {
+            let state = conv.state.lock().await;
+            state.runs_cli_jobs() && !state.seam.cut_jobs
+        };
+        if file.phase != Phase::Live || jobs_hold || self.open_permission(&conv.id).await {
             return None;
         }
         let record = self.session_dir(&conv.id).record();
@@ -284,21 +301,12 @@ impl SessionManager {
             predecessor,
         };
         // Held before the file says so: a message that finds the seam nudged waits for the
-        // successor, at most a minute.
+        // successor, stopping the note turn after a minute at most.
         conv.state.lock().await.seam.held = true;
         if let Err(err) = self.write_seam_of(&conv.id, file).await {
             conv.state.lock().await.seam.held = false;
             crate::logging::private_trace!(conv.private_logs, warn, "could not record the seam"; conversation = %conv.id, error = %err);
             return None;
-        }
-        // So does one queued just before.
-        if self
-            .core
-            .conversation_view(conv.id.clone(), 1)
-            .await
-            .is_ok_and(|view| !view.queue.items.is_empty())
-        {
-            self.arm_seam_hold(conv).await;
         }
         let mut text = nudge(&note);
         if self.seam_config().long.is_some() {
@@ -382,15 +390,10 @@ impl SessionManager {
             return;
         }
         // A hold armed while the nudge was on its way ends with its arrival: the note turn runs
-        // to its own end, which checks the note. One for a waiting message stays.
-        let waiting = self
-            .core
-            .conversation_view(conv.id.clone(), 1)
-            .await
-            .is_ok_and(|view| !view.queue.items.is_empty());
+        // to its own end, which checks the note. One for a message that came since stays.
         let mut state = conv.state.lock().await;
         state.seam.seen = true;
-        if !waiting && state.seam.hold_armed {
+        if !state.seam.hold_for_message && state.seam.hold_armed {
             state.seam.hold_armed = false;
             state.seam.hold_timer += 1;
         }
@@ -422,13 +425,13 @@ impl SessionManager {
                 let written = note.is_file();
                 if !(written || seen || force) {
                     // The nudge is still on its way into the CLI: its own turn takes it.
-                    self.arm_seam_hold(conv).await;
+                    self.hold_until_heard(conv).await;
                     return false;
                 }
                 // Another turn's end (a nudge steered in late started its own) with the fix ask
                 // on its way, or its turn running: that turn's own end checks the note.
                 if !force && why == NO_NOTE && conv.state.lock().await.seam.fix_on_its_way() {
-                    self.arm_seam_hold(conv).await;
+                    self.hold_until_heard(conv).await;
                     return false;
                 }
                 // Goal 13 (core-goals D9): a note that leaves out an open item, or no note, is
@@ -558,6 +561,7 @@ impl SessionManager {
         // A fix still due belongs to the generation that ended, never to its successor.
         state.seam.nudge_due = None;
         state.seam.hold_armed = false;
+        state.seam.hold_for_message = false;
         state.seam.hold_timer += 1;
         state.seam.carry_on = !stopped;
         // Jobs that ended before the note turn were told by then: their owed turns never hold
@@ -835,9 +839,21 @@ impl SessionManager {
             .await;
     }
 
-    /// A message came while the note turn runs, or the turn ended before its CLI took the
-    /// nudge in: a minute on, the seam closes whatever the CLI is doing.
+    /// A message came while the note turn runs: a minute on, the seam closes whatever the CLI
+    /// is doing.
     pub(super) async fn arm_seam_hold(&self, conv: &Arc<ConvLive>) {
+        {
+            let mut state = conv.state.lock().await;
+            if state.seam.held {
+                state.seam.hold_for_message = true;
+            }
+        }
+        self.hold_until_heard(conv).await;
+    }
+
+    /// The nudge isn't taken in yet (the turn ended first, or its send failed): a minute on, the
+    /// seam closes whatever the CLI is doing, unless it is heard by then.
+    pub(super) async fn hold_until_heard(&self, conv: &Arc<ConvLive>) {
         let timer = {
             let mut state = conv.state.lock().await;
             if !state.seam.held || state.seam.hold_armed {
@@ -1019,6 +1035,13 @@ impl SessionManager {
             *provider = cli.provider;
             self.write_seam_of(&id, file).await?;
         }
+        // A CLI its jobs kept up took the hand-off: the next one resumes it, as a new one would
+        // resume this successor.
+        {
+            let mut state = conv.state.lock().await;
+            state.fresh = false;
+            state.seam.reserved = None;
+        }
         let dir = self.session_dir(&id);
         let key = id.short().to_owned();
         let blobs = self.core.store().blobs().root().to_path_buf();
@@ -1167,6 +1190,15 @@ impl SessionManager {
         }
         let record = self.session_dir(id).record();
         let mut file = self.read_seam_of(id).await;
+        // An earlier recovery found the successor took these: a turn the restart cut off before
+        // it was seen starting had begun all the same (#641).
+        if let Ok(board) = self.core.board(id).await
+            && board
+                .cut_off_request
+                .is_some_and(|cut| file.began.contains(&cut.request))
+        {
+            self.core.cut_off_request_began(id).await;
+        }
         match file.phase.clone() {
             // A move to another CLI asked for in the turn the restart cut off comes now, from its
             // note: the accounts' state isn't read yet, and a limit hit in the note turn moves it
@@ -1210,6 +1242,7 @@ impl SessionManager {
                 let line = handoff_line(file.generation, id.short());
                 if self.runtime.took_input(provider, &successor, &line).await {
                     let n = file.generation;
+                    file.began.clone_from(&messages);
                     complete(&mut file, &record, n, successor, provider, end, messages);
                     let _ = self.write_seam_of(id, file).await;
                     // Its turn began in the successor, with its messages: the turn the restart

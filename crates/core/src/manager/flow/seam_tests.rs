@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brigadier_providers::session_file::Said;
-use brigadier_providers::{ErrorKind, ProviderError, ProviderEvent};
+use brigadier_providers::{ErrorKind, ItemStatus, ProviderError, ProviderEvent};
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
 use crate::manager::seam::{CARRY_ON, Phase, SeamConfig, SeamFile, read_seam, without_handoff};
@@ -22,6 +22,20 @@ where
     Fut: std::future::Future<Output = Reply> + Send + 'static,
 {
     Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+/// A shell command's item, as a CLI reports it.
+fn command(item: &str, status: ItemStatus) -> ProviderEvent {
+    ProviderEvent::Command {
+        item_id: item.into(),
+        command: "sleep 600".into(),
+        cwd: None,
+        status,
+        exit_code: (status != ItemStatus::InProgress).then_some(0),
+        output: None,
+        duration_ms: None,
+        kept: None,
+    }
 }
 
 /// What each turn of the thread was given, with its CLI session.
@@ -307,6 +321,63 @@ async fn a_message_during_the_note_turn_reaches_the_successor_once() {
     flow.stop().await;
 }
 
+/// #607: a message steered in while the successor's first turn is still on its way waits for
+/// that turn: nothing reaches the new CLI ahead of its hand-off.
+#[tokio::test]
+async fn a_message_steered_while_the_successor_starts_comes_after_its_handoff() {
+    let inputs: Inputs = Arc::default();
+    let mut flow = Flow::start(
+        "seam-start-order",
+        options(),
+        thread(inputs.clone(), Arc::default()),
+    )
+    .await;
+    seam_on(&mut flow, Duration::from_secs(60));
+    flow.say("Grow.").await;
+    until_nudged(&flow).await;
+    // The next turn's send is the successor's.
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_send_entry.lock().unwrap() = Some((reached.clone(), release.clone()));
+    tokio::time::timeout(*super::PATIENCE, reached.notified())
+        .await
+        .expect("the successor's turn on its way");
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Steered.".into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    release.notify_one();
+    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    flow.until("the steered message read", |_| {
+        !given(&inputs, "Steered.").is_empty()
+    })
+    .await;
+    flow.idle().await;
+    let successor = file.seams[0].successor.clone();
+    let of_successor: Vec<String> = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(id, _)| *id == successor)
+        .map(|(_, input)| input.clone())
+        .collect();
+    assert!(
+        of_successor[0].starts_with(HANDOFF_MARK),
+        "the new CLI's first input isn't its hand-off: {of_successor:#?}"
+    );
+    assert_eq!(given(&inputs, "Steered.").len(), 1, "{of_successor:#?}");
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_note_turn_still_working_a_minute_after_a_message_is_stopped() {
     let inputs: Inputs = Arc::default();
@@ -352,8 +423,10 @@ async fn a_note_turn_still_working_a_minute_after_a_message_is_stopped() {
     flow.stop().await;
 }
 
+/// #606: a message queued before the nudge doesn't cut the note turn short: however long that
+/// turn takes, it writes its note, and the message waits for the successor.
 #[tokio::test]
-async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
+async fn a_message_queued_before_the_nudge_leaves_the_note_turn_to_write_its_note() {
     let inputs: Inputs = Arc::default();
     let base = thread(inputs.clone(), Arc::default());
     let reached = Arc::new(tokio::sync::Notify::new());
@@ -366,8 +439,11 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
             let (base, at_grow, go) = (base.clone(), at_grow.clone(), go.clone());
             async move {
                 if turn.input.starts_with(NUDGE_MARK) {
-                    turn.stopped().await;
-                    return Reply::text("");
+                    // It finishes something first, for longer than the hold.
+                    tokio::select! {
+                        _ = turn.stopped() => return Reply::text(""),
+                        () = tokio::time::sleep(Duration::from_millis(900)) => {}
+                    }
                 }
                 if turn.input == "Grow." {
                     at_grow.notify_one();
@@ -403,16 +479,168 @@ async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
     release.notify_one();
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
     flow.idle().await;
-    assert_eq!(
-        file.seams[0].end.death.as_deref(),
-        Some("it was still working a minute after a message came")
-    );
+    assert_eq!(file.seams[0].end.death, None, "{file:?}");
+    assert!(file.seams[0].note.is_some(), "{file:?}");
     // It waited in the queue and starts the successor's work on its own turn (D157).
     let meanwhile = given(&inputs, "Meanwhile.");
     assert_eq!(meanwhile.len(), 1, "{meanwhile:#?}");
     assert_eq!(meanwhile[0].0, file.seams[0].successor, "{meanwhile:#?}");
     // The message starts the successor's work: no bare carry-on.
     assert!(given(&inputs, CARRY_ON).is_empty());
+    flow.stop().await;
+}
+
+/// #605: a command running as the context passes the threshold holds the nudge; the next report
+/// after it ended brings it.
+#[tokio::test]
+async fn a_running_command_holds_the_nudge_until_it_ends() {
+    let (at_command, go) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let inputs: Inputs = Arc::default();
+    let base = thread(inputs.clone(), Arc::default());
+    let (at, release) = (at_command.clone(), go.clone());
+    let mut flow = Flow::start(
+        "seam-command",
+        options(),
+        script(move |turn| {
+            let (base, at, release) = (base.clone(), at.clone(), release.clone());
+            async move {
+                if turn.input == "Check." {
+                    turn.emit(command("cmd-1", ItemStatus::InProgress)).await;
+                    turn.report_context(70_000).await;
+                    at.notify_one();
+                    release.notified().await;
+                    turn.emit(command("cmd-1", ItemStatus::Completed)).await;
+                    turn.report_context(71_000).await;
+                    turn.until_steered().await;
+                    return Reply::text("Checked.");
+                }
+                base(turn).await
+            }
+        }),
+    )
+    .await;
+    seam_on(&mut flow, Duration::from_secs(60));
+    flow.say("Check.").await;
+    at_command.notified().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let held = seam_file(&flow);
+    assert_eq!(held.phase, Phase::Live, "nudged over a running command");
+    go.notify_one();
+    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    assert!(file.seams[0].note.is_some(), "{file:?}");
+    flow.idle().await;
+    flow.stop().await;
+}
+
+/// #605: a note turn the hold stops with a command running: the command goes on as its CLI's
+/// job, so that CLI stays up, and its end still reaches the thread.
+#[tokio::test]
+async fn a_command_running_through_a_forced_stop_goes_on_and_its_end_is_told() {
+    let inputs: Inputs = Arc::default();
+    let base = thread(inputs.clone(), Arc::default());
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let mut flow = Flow::start(
+        "seam-forced-command",
+        Options {
+            thread: brigadier_providers::ProviderKind::Codex,
+            ..options()
+        },
+        script(move |turn| {
+            let (base, kept) = (base.clone(), kept.clone());
+            async move {
+                if turn.input.starts_with(NUDGE_MARK) {
+                    *kept.lock().unwrap() = Some(turn.events.clone());
+                    turn.emit(command("cmd-1", ItemStatus::InProgress)).await;
+                    turn.stopped().await;
+                    return Reply::text("");
+                }
+                base(turn).await
+            }
+        }),
+    )
+    .await;
+    seam_on(&mut flow, Duration::from_millis(300));
+    flow.say("Grow.").await;
+    until_nudged(&flow).await;
+    super::eventually("the note turn's command", || {
+        events.lock().unwrap().is_some()
+    })
+    .await;
+    flow.say("Meanwhile.").await;
+    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    assert_eq!(
+        file.seams[0].end.predecessor.as_deref(),
+        Some(file.seams[0].successor.as_str()),
+        "the CLI running the command was closed: {file:?}"
+    );
+    let events = events.lock().unwrap().clone().unwrap();
+    events
+        .send(command("cmd-1", ItemStatus::Completed))
+        .await
+        .unwrap();
+    super::eventually("the command's end told", || {
+        !given(&inputs, "finished after your turn").is_empty()
+    })
+    .await;
+    flow.stop().await;
+}
+
+/// #641: the mark that the successor took its message outlives a second crash, before the turn
+/// going on from the first was seen starting: the message never goes again.
+#[tokio::test]
+async fn a_second_crash_never_sends_what_the_successor_took_again() {
+    let inputs: Inputs = Arc::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let note = Arc::new(tokio::sync::Notify::new());
+    let base = thread(inputs.clone(), Arc::default());
+    let mut flow = Flow::start(
+        "seam-crash-twice",
+        options(),
+        gate_note(base, note.clone(), release.clone()),
+    )
+    .await;
+    seam_on(&mut flow, Duration::from_secs(60));
+    flow.say("Grow.").await;
+    note.notified().await;
+    flow.say("After.").await;
+    // The successor took its input, and Brigadier dies before it heard so.
+    let took = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_send.lock().unwrap() =
+        Some((took.clone(), Arc::new(tokio::sync::Notify::new())));
+    release.notify_one();
+    took.notified().await;
+    // The turn going on from the first crash is cut off on its way.
+    let going_on = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_send_entry.lock().unwrap() =
+        Some((going_on.clone(), Arc::new(tokio::sync::Notify::new())));
+    flow.crash().await;
+    until_seam(&flow, "the seam to complete", |file| file.generation == 2).await;
+    going_on.notified().await;
+    flow.crash().await;
+    // Twice cut off, it waits for the user's Continue, which never sends the message again.
+    flow.until("the turn interrupted", |board| {
+        board.latest_request().is_some_and(|request| {
+            matches!(request.state, crate::work::RequestState::Failed { .. })
+        })
+    })
+    .await;
+    flow.manager
+        .resume(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the turn gone on", |board| {
+        board
+            .latest_request()
+            .is_some_and(|request| request.state == crate::work::RequestState::Done)
+    })
+    .await;
+    flow.idle().await;
+    let after = given(&inputs, "After.");
+    assert!(after.is_empty(), "sent again: {after:#?}");
     flow.stop().await;
 }
 

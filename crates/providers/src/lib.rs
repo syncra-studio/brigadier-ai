@@ -300,6 +300,12 @@ pub trait ProviderSession: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Runs the session at `access` from its next turn on, with no restart. Answers whether it
+    /// will; a CLI that can't (the default) keeps its level until it starts again.
+    fn set_access(&self, _access: model::Access) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Ends the CLI process and reaps it, killing its process group if it does not exit in
     /// time. Bounded; safe to call more than once.
     fn close(&self) -> BoxFuture<'_, ()>;

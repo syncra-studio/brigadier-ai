@@ -925,3 +925,173 @@ async fn a_move_takes_the_fallback_row_the_rules_allow_and_never_another_model()
     assert!(file.moving.is_none() && file.seams.is_empty(), "{file:?}");
     flow.stop().await;
 }
+
+/// A CLI turn that starts a job and asks to move, the job then running on; the nudge writes the
+/// note. Codex answers.
+fn with_a_job(
+    turns: Turns,
+    gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+) -> Script {
+    Arc::new(move |turn: Turn| {
+        let (turns, gate) = (turns.clone(), gate.clone());
+        Box::pin(async move {
+            turns
+                .lock()
+                .unwrap()
+                .push((turn.provider, turn.native_id.clone(), turn.input.clone()));
+            if turn.provider == ProviderKind::Codex {
+                return Reply::text("Carrying on, on Codex.");
+            }
+            if turn.input.starts_with(NUDGE_MARK) {
+                if let Some((reached, release)) = gate {
+                    reached.notify_one();
+                    release.notified().await;
+                }
+                std::fs::write(note_of(&turn.input), "Doing now: nothing.").unwrap();
+                return Reply::text("Handed off.");
+            }
+            if turn.input.contains("Start the job.") {
+                turn.emit(brigadier_providers::ProviderEvent::BackgroundTask {
+                    task: brigadier_providers::BackgroundTask {
+                        command: None,
+                        provider: None,
+                        id: "job".into(),
+                        item_id: None,
+                        kind: brigadier_providers::BackgroundTaskKind::Shell,
+                        label: "the checks".into(),
+                        status: brigadier_providers::BackgroundTaskStatus::Running,
+                        started_at_ms: 1,
+                        ended_at_ms: None,
+                        output_file: None,
+                        summary: None,
+                        last_line: None,
+                    },
+                })
+                .await;
+                turn.emit(brigadier_providers::ProviderEvent::BackgroundJobs {
+                    running: vec!["job".to_owned()],
+                })
+                .await;
+            }
+            Reply::text("A job watches it.")
+        })
+    })
+}
+
+/// #794: a move asked for while a job runs waits for it and says so; Switch now goes at once:
+/// the note, the CLI closed over its job, and the successor told of that job.
+#[tokio::test]
+async fn a_move_waits_for_a_job_says_so_and_switch_now_goes() {
+    let turns = Turns::default();
+    let flow = Flow::start(
+        "continue-on-switch-now",
+        options(),
+        with_a_job(turns.clone(), None),
+    )
+    .await;
+    flow.say("Start the job.").await;
+    let moves = |flow: &Flow| flow.manager.thread_view(&flow.conversation).unwrap().jobs;
+    super::eventually("the job", || !moves(&flow).holding.is_empty()).await;
+    flow.until("its turn over", |board| {
+        board.run == crate::work::RunState::Idle
+    })
+    .await;
+    assert_eq!(moves(&flow).move_to, None);
+    let (when, _) = flow
+        .manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap();
+    assert_eq!(when, ContinueWhen::AfterTurn);
+    assert_eq!(moves(&flow).move_to, Some(ProviderKind::Codex));
+    // It keeps waiting: no note is asked for, and its job goes on.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        turns.lock().unwrap().len(),
+        1,
+        "{:#?}",
+        turns.lock().unwrap()
+    );
+    assert_eq!(flow.specs().len(), 1);
+
+    flow.manager.move_now(&flow.conversation).await.unwrap();
+    flow.until("a turn on Codex", |_| {
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(provider, ..)| *provider == ProviderKind::Codex)
+    })
+    .await;
+    let turns = turns.lock().unwrap().clone();
+    assert!(turns[1].2.starts_with(NUDGE_MARK), "{turns:#?}");
+    let (_, _, input) = turns.last().unwrap();
+    assert!(input.starts_with(HANDOFF_MARK), "{input}");
+    assert!(
+        input.contains("## Hand-off note\nDoing now: nothing."),
+        "{input}"
+    );
+    assert!(input.contains("stopped when your CLI ended"), "{input}");
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
+    flow.stop().await;
+}
+
+/// #794: a move's hidden note turn reads as no work: neither the turn, the run nor the block
+/// that ended before it is open while the old CLI writes its note, so the composer's Working
+/// doesn't come back under a closed block.
+#[tokio::test]
+async fn a_moves_hidden_note_turn_never_reads_working() {
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let (long, go) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let turns = Turns::default();
+    let base = with_a_job(turns.clone(), Some((reached.clone(), release.clone())));
+    let (in_turn, end_turn) = (long.clone(), go.clone());
+    let script: Script = Arc::new(move |turn: Turn| {
+        let (base, in_turn, end_turn) = (base.clone(), in_turn.clone(), end_turn.clone());
+        Box::pin(async move {
+            if turn.input.contains("Long.") {
+                in_turn.notify_one();
+                end_turn.notified().await;
+            }
+            base(turn).await
+        })
+    });
+    let flow = Flow::start("continue-on-quiet-note", options(), script).await;
+    let block = |flow: &Flow| flow.manager.thread_view(&flow.conversation).unwrap().block;
+    flow.say("Long.").await;
+    long.notified().await;
+    super::eventually("the turn's block open", || {
+        block(&flow).is_some_and(|block| block.ended_at_ms.is_none())
+    })
+    .await;
+    flow.manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap();
+    go.notify_one();
+    reached.notified().await;
+    let activity = flow.manager.activity().await;
+    let own = activity
+        .iter()
+        .find(|entry| entry.conversation_id == flow.conversation)
+        .unwrap();
+    assert!(!own.turn_open, "{own:?}");
+    assert!(!own.commands_working, "{own:?}");
+    // The block reads again in the note turn, as it does after each news of the thread.
+    flow.manager.block_soon(&flow.conversation);
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while block(&flow).is_none_or(|block| block.ended_at_ms.is_none()) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the block stays open in the note turn");
+    release.notify_one();
+    flow.stop().await;
+}

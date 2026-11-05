@@ -498,3 +498,71 @@ async fn a_chat_raised_to_full_its_inheriting_workers_ask_nothing() {
         }
     }
 }
+
+/// #603: a level changed while the session's CLI runs a job holds from the next turn, with the
+/// CLI (and its job) still up: lowered from Full access, that turn asks the user again.
+#[tokio::test]
+async fn a_level_lowered_while_a_job_runs_holds_from_the_next_turn() {
+    let answers: Answers = Arc::default();
+    let log = answers.clone();
+    let job = Arc::new(tokio::sync::Notify::new());
+    let job_ran = job.clone();
+    let flow = Flow::start(
+        "level-with-job",
+        Options {
+            permission: PermissionLevel::Full,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (log, ran) = (log.clone(), job_ran.clone());
+            async move {
+                if turn.input.contains("Start the job.") {
+                    turn.emit(brigadier_providers::ProviderEvent::BackgroundJobs {
+                        running: vec!["job".to_owned()],
+                    })
+                    .await;
+                    ran.notify_one();
+                    return Reply::text("A job runs.");
+                }
+                if turn.input.contains("Fetch.") {
+                    let answer = turn.ask_approval("curl https://example.com", "curl").await;
+                    log.lock().unwrap().push(answer);
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start the job.").await;
+    job.notified().await;
+    flow.until("its turn over", |board| {
+        board.run == crate::work::RunState::Idle
+    })
+    .await;
+    set_level(&flow, &flow.conversation, PermissionLevel::Ask).await;
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Fetch.".into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    let card = pending_card(&flow, &flow.conversation).await;
+    assert_eq!(
+        *flow.behavior.access_sets.lock().unwrap(),
+        [Access::Ask],
+        "the level never reached the CLI"
+    );
+    assert_eq!(flow.specs().len(), 1, "its CLI started again over its job");
+    flow.manager
+        .answer_card(flow.conversation.clone(), card, ApprovalDecision::Allow)
+        .await
+        .unwrap();
+    flow.until("the answer", |_| !answers.lock().unwrap().is_empty())
+        .await;
+    flow.stop().await;
+}

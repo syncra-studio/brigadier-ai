@@ -1016,6 +1016,7 @@ impl SessionManager {
             grants: vec![grant],
             ended: CancellationToken::new(),
             launch: None,
+            runs_at: std::sync::Mutex::new(None),
         });
         {
             let mut state = live.state.lock().await;

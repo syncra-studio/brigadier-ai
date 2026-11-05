@@ -420,6 +420,111 @@ async fn a_codex_command_ending_unread_in_its_turn_still_reaches_the_model() {
     flow.stop().await;
 }
 
+/// #795: a command that ended unread in a turn the user stopped, or that failed, starts no turn
+/// of its own, and the model is told with the next message: nothing else would tell it.
+#[tokio::test]
+async fn a_codex_command_ending_unread_in_a_cut_turn_is_told_with_the_next_message() {
+    use brigadier_providers::{
+        BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, ProviderEvent,
+    };
+    for failed in [false, true] {
+        let inputs: Log = Log::default();
+        let log = inputs.clone();
+        let flow = Flow::start(
+            if failed {
+                "codex-unread-failed"
+            } else {
+                "codex-unread-stopped"
+            },
+            Options {
+                thread: brigadier_providers::ProviderKind::Codex,
+                ..Options::default()
+            },
+            script(move |turn| {
+                let log = log.clone();
+                async move {
+                    log.lock().unwrap().push(turn.input.clone());
+                    if !turn.input.contains("Ask me.") {
+                        return Reply::text("Wrote blue.");
+                    }
+                    let command =
+                        |status, exit_code, output: Option<&str>| ProviderEvent::Command {
+                            item_id: "cmd-1".into(),
+                            command: "brigadier ask \"Which colour?\"".into(),
+                            cwd: None,
+                            status,
+                            exit_code,
+                            output: output.map(str::to_owned),
+                            duration_ms: None,
+                            kept: None,
+                        };
+                    let terminal = |status| ProviderEvent::BackgroundTask {
+                        task: BackgroundTask {
+                            command: None,
+                            provider: None,
+                            id: "4242".into(),
+                            item_id: Some("cmd-1".into()),
+                            kind: BackgroundTaskKind::Terminal,
+                            label: "brigadier ask".into(),
+                            status,
+                            started_at_ms: 1,
+                            ended_at_ms: None,
+                            output_file: None,
+                            summary: None,
+                            last_line: None,
+                        },
+                    };
+                    for event in [
+                        command(ItemStatus::InProgress, None, None),
+                        terminal(BackgroundTaskStatus::Running),
+                        terminal(BackgroundTaskStatus::Completed),
+                        command(
+                            ItemStatus::Completed,
+                            Some(0),
+                            Some("Which colour?: blue\n"),
+                        ),
+                    ] {
+                        let _ = turn.events.send(event).await;
+                    }
+                    if failed {
+                        return Reply {
+                            error: Some("The reply broke off.".into()),
+                            ..Reply::default()
+                        };
+                    }
+                    turn.stopped().await;
+                    Reply::text("")
+                }
+            }),
+        )
+        .await;
+        flow.say("Ask me.").await;
+        if !failed {
+            flow.until("the turn", |_| !inputs.lock().unwrap().is_empty())
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            flow.manager
+                .interrupt(flow.conversation.clone())
+                .await
+                .unwrap();
+            flow.manager
+                .resume_queue(flow.conversation.clone())
+                .await
+                .unwrap();
+        }
+        flow.settled().await;
+        assert_eq!(inputs.lock().unwrap().len(), 1, "a turn started by itself");
+        flow.say("Go on.").await;
+        flow.until("the next turn", |_| inputs.lock().unwrap().len() == 2)
+            .await;
+        flow.settled().await;
+        let inputs = inputs.lock().unwrap().clone();
+        assert_eq!(told_of_blue(&inputs), 1, "{inputs:#?}");
+        assert!(inputs[1].contains("Go on."), "{inputs:#?}");
+        flow.stop().await;
+    }
+}
+
 /// One its model polled while it still ran, and then went on from, read no end: the answer that
 /// came after that poll is told, once.
 #[tokio::test]
