@@ -795,6 +795,13 @@ async fn a_successors_own_turn_while_a_worker_works_is_recorded_as_joining() {
     let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
     let last = records.last().expect("the successor's turn is noted");
     assert!(last.joins, "{records:#?}");
+    // A thread recorded before the engine noted that join reads the same, from recorded times.
+    let record = flow.manager.session_dir(&id).record();
+    let path = record.join("turns.jsonl");
+    let lines = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, lines.replace("\"joins\":true", "\"joins\":false")).unwrap();
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(view.turns.last().unwrap().joins, "{view:#?}");
     seen.release.store(true, Ordering::SeqCst);
     flow.stop().await;
 }

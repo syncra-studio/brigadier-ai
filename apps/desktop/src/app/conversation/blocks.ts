@@ -1,6 +1,6 @@
 import { toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
-import { transitionSteps } from "@/app/conversation/providerTransitions";
+import { leadTransitions, transitionCoversSeam, transitionSteps } from "@/app/conversation/providerTransitions";
 import type {
   AttachmentRef,
   Compaction,
@@ -196,6 +196,8 @@ export type BlockSeam = {
   death: string | null;
   /** The other CLI it continued on, as asked (S38c). */
   movedTo: ProviderKind | null;
+  /** Its successor's first message, when that joined the block: a move's divider goes there, in the work. */
+  position?: number;
 };
 
 /**
@@ -593,6 +595,7 @@ export type SequenceSource = {
   cards: readonly BlockCard[];
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
+  seams?: readonly BlockSeam[];
   nudges?: readonly number[];
   taskNotices?: readonly BlockTaskNotice[];
   orchestratorSteps: readonly BlockOrchestratorStep[];
@@ -610,6 +613,8 @@ export type SequenceEntry =
   | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; requestId?: string; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
+  /** A hand-off to another CLI whose successor joined the block: its divider, where that happened. */
+  | { kind: "seam"; seam: BlockSeam; position: number }
   /** Brigadier asked the thread for its hand-off note (G12): its line, not a user's bubble. */
   | { kind: "nudge"; position: number }
   /** A quiet line of what a worker did ("Worker "…" finished · …"). */
@@ -642,6 +647,12 @@ function imageEntry(entry: SequenceEntry): "viewed" | "made" | null {
  * "started working" rows share one sentence, adjacent images the thread looked at one row
  * ("Viewed 3 images"). The lead's work steps are grouped by `activity/group.ts`.
  */
+/** The moves to another CLI drawn in the block's work, none a switch's row says already. */
+function movesInWork(source: SequenceSource): BlockSeam[] {
+  const transitions = leadTransitions(source.orchestratorSteps);
+  return (source.seams ?? []).filter((seam) => seam.position !== undefined && seamMove(seam) !== null && !transitions.some((transition) => transitionCoversSeam(transition, seam)));
+}
+
 export function blockSequence(source: SequenceSource): SequenceEntry[] {
   const entries: SequenceEntry[] = [
     ...(source.thinking ?? []).map((segment) => ({ kind: "thinking" as const, segment, live: false, position: segment.position })),
@@ -657,6 +668,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     ...source.compactions
       .filter((compaction) => compaction.inTurn)
       .map((compaction) => ({ kind: "compaction" as const, compaction, position: compaction.position })),
+    ...movesInWork(source).map((seam) => ({ kind: "seam" as const, seam, position: seam.position! })),
     ...(source.nudges ?? []).map((position) => ({ kind: "nudge" as const, position })),
     ...(source.taskNotices ?? []).map((notice) => ({ kind: "taskNotice" as const, ...notice })),
     // A proof shows with the merge message, under the answer, not in the work.

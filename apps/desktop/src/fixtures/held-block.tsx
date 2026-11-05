@@ -14,10 +14,9 @@
  *
  * `?seam=held`: its lead's turn ends and Brigadier hands the session on while its workers work: a
  * hidden `/compact`, a hidden note turn, then a successor that carries on by itself and messages a
- * worker, as a thread recorded before the engine noted that join reads; then the same turn with the
- * join noted, its block closed; then no worker with the block still open through the hand-off's
- * own turns: two blocks, the later one alone live. `&stop=<step>` leaves the page at that step,
- * for a screenshot.
+ * worker, its turn joining the block; its turn ends, then the block closes. Then the same with
+ * nothing held: no join, the block open only through the hand-off's own turns. `?seam=moved`: the
+ * same, the hand-off going to another CLI. `&stop=<step>` leaves the page at that step.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -117,14 +116,14 @@ const handedOnTurns = (last: Partial<ThreadTurn>): ThreadTurn[] => [
   turn("u1", 0, 3_000, ["r1"]),
   turn("c1", 10_000, 20_000, []),
   turn("n1", 30_000, 35_000, []),
-  { ...turn("s1", 40_000, 44_000, []), ...last },
+  { ...turn("s1", 40_000, 44_000, [], true), ...last },
 ];
 if (seaming) {
   view = {
     entries: handedOn,
     turns: handedOnTurns({ endedAtMs: null, end: null }),
     workers: [worker("aa11bb22", "First bug", 1_000, false), worker("cc33dd44", "Second bug", 2_000, false)],
-    seams: [{ n: 1, open: false, at: "s1", carried: true, nudge: "n1", note: null, start: null, death: null, movedTo: null }],
+    seams: [{ n: 1, open: false, at: "s1", carried: true, nudge: "n1", note: null, start: null, death: null, movedTo: seaming === "moved" ? "codex" : null }],
     block: { startedAtMs: at(100) },
   };
 }
@@ -209,9 +208,9 @@ function seen() {
     // Every line that says the block is live, and what the composer says of it.
     liveLines: blocks.map((block) => block.querySelectorAll('[data-slot="thread-status"]').length),
     composer: [...document.querySelectorAll("main *")].find((each) => !each.closest('[data-slot="aui_assistant-message-root"]') && each.children.length === 0 && each.textContent?.startsWith("Working for"))?.textContent ?? null,
-    // What the block shows in order, top to bottom: its divider, its replies, its row of a message to a worker.
-    order: blocks.map((block) => [...block.querySelectorAll('[data-slot="compaction"], [data-slot="orchestrator-step"], [data-slot="aui_assistant-message-content"]')]
-      .map((each) => (each.getAttribute("data-slot") === "compaction" ? "divider" : (each.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 40)))),
+    // What the block shows in order, top to bottom: its dividers, its replies, its row of a message to a worker.
+    order: blocks.map((block) => [...block.querySelectorAll('[data-slot="compaction"], [data-slot="seam"], [data-slot="orchestrator-step"], [data-slot="aui_assistant-message-content"]')]
+      .map((each) => (each.getAttribute("data-slot") === "seam" ? "moved" : each.getAttribute("data-slot") === "compaction" ? "divider" : (each.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 40)))),
     // A refresh's divider: how far under the reply before it, and whether the live line is under it.
     refresh: (() => {
       const divider = document.querySelector('[data-slot="compaction"]')?.getBoundingClientRect();
@@ -327,10 +326,8 @@ async function driveSeam() {
   const done =
     running ||
     (await step("over", { ...view, turns: handedOnTurns({}) })) ||
-    (await step("recordedClosed", { ...view, workers: worked, block: closed })) ||
-    (await step("joinedRunning", { ...view, workers: view.workers!.map((row) => ({ ...row, working: true, lastEnd: null })), turns: handedOnTurns({ endedAtMs: null, end: null, joins: true }), block: { startedAtMs: at(100) } })) ||
-    (await step("joinedClosed", { ...view, workers: worked, turns: handedOnTurns({ joins: true }), block: closed })) ||
-    (await step("nothingHeld", { ...view, workers: worked, turns: handedOnTurns({ endedAtMs: null, end: null }), block: { startedAtMs: at(100) } }));
+    (await step("closed", { ...view, workers: worked, block: closed })) ||
+    (await step("nothingHeld", { ...view, turns: handedOnTurns({ endedAtMs: null, end: null, joins: false }), block: { startedAtMs: at(100) } }));
   void done;
   const result = document.createElement("pre");
   result.id = "held-block-result";

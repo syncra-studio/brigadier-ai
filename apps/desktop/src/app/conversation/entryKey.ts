@@ -22,6 +22,8 @@ export function entryKey(entry: Entry): string {
     }
     case "compaction":
       return `compaction:${entry.compaction.id}`;
+    case "seam":
+      return `seam:${entry.seam.n}`;
     case "nudge":
       return `nudge:${entry.position}`;
     case "taskNotice":

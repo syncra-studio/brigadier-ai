@@ -1193,7 +1193,45 @@ impl SessionManager {
         {
             view.next_model = self.declined_next(id);
         }
+        // Past `cli_threads`' lock: this may read worker files.
+        drop(threads);
+        self.join_held_successors(id, &record, &mut view);
         Ok(view)
+    }
+
+    /// A successor's first turn no join is noted for (a thread from before the engine noted them)
+    /// joins all the same if work ran across its start: read from recorded times, so the thread
+    /// reads the same before and after that work ends.
+    fn join_held_successors(
+        &self,
+        id: &ConversationId,
+        record: &std::path::Path,
+        view: &mut ThreadView,
+    ) {
+        for seam in view.seams.iter().filter(|seam| !seam.open) {
+            let Some(at) = &seam.at else { continue };
+            let Some(turn) = view.turns.iter_mut().find(|turn| turn.user_message == *at) else {
+                continue;
+            };
+            let Some(start) = turn.started_at_ms.filter(|_| !turn.joins) else {
+                continue;
+            };
+            let key = (id.clone(), at.clone());
+            let known = self.seam_holds.lock().unwrap().get(&key).copied();
+            turn.joins = known.unwrap_or_else(|| {
+                let held = super::background_history::job_ran_across(record, start)
+                    || self
+                        .session_dir(id)
+                        .worker_records()
+                        .iter()
+                        .any(|worker| worker_ran_across(&self.session_files, worker, start));
+                // Its start only just past, what it says may not be written yet: read again.
+                if now_ms() - start > HOLDS_SETTLE_MS {
+                    self.seam_holds.lock().unwrap().insert(key, held);
+                }
+                held
+            });
+        }
     }
 
     /// An image a CLI session file of conversation `id` or of one of its workers holds, or that
@@ -1529,9 +1567,71 @@ fn shown_live(event: &ProviderEvent) -> bool {
     )
 }
 
+/// How long after a successor's start what work ran across it may still be unwritten.
+const HOLDS_SETTLE_MS: i64 = 60_000;
+
+/// Whether the worker recorded in `record` was in a turn at `at_ms`. Its later turns, a turn its
+/// session sent it back to work in, are no such thing.
+fn worker_ran_across(files: &thread_view::FileCache, record: &std::path::Path, at_ms: i64) -> bool {
+    let records = thread_view::read_turns(record);
+    // Reading its CLI's file is for a worker whose records say it might have.
+    let might = records.last().is_some_and(|last| last.end.is_none())
+        || records
+            .iter()
+            .any(|turn| turn.ended_at_ms.is_some_and(|ended| ended > at_ms));
+    if !might {
+        return false;
+    }
+    let entries = read_lineage(record)
+        .into_iter()
+        .filter_map(|session| {
+            let file = session.file?;
+            Some(files.read(session.provider, std::path::Path::new(&file)))
+        })
+        .collect();
+    let mut turns = thread_view::view(entries, None, &records).turns;
+    // Its last record has no end: that turn is still open, whatever the file said last.
+    if let (Some(open), Some(turn)) = (records.last(), turns.last_mut())
+        && open.end.is_none()
+        && open.user_message.as_deref() == Some(turn.user_message.as_str())
+    {
+        turn.ended_at_ms = None;
+    }
+    turn_ran_across(&turns, at_ms)
+}
+
+/// Whether one of `turns` was running at `at_ms`: begun by then, and not over. Still open counts.
+fn turn_ran_across(turns: &[thread_view::ThreadTurn], at_ms: i64) -> bool {
+    turns.iter().any(|turn| {
+        turn.started_at_ms.is_some_and(|start| start <= at_ms)
+            && turn.ended_at_ms.is_none_or(|ended| ended > at_ms)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worker_idle_at_a_time_and_sent_back_later_did_not_run_across_it() {
+        let turn = |start, end| {
+            let mut turn: thread_view::ThreadTurn = serde_json::from_value(serde_json::json!({
+                "userMessage": "m", "startedAtMs": null, "endedAtMs": null, "end": null,
+                "error": null, "requests": [],
+            }))
+            .unwrap();
+            turn.started_at_ms = Some(start);
+            turn.ended_at_ms = end;
+            turn
+        };
+        let turns = [turn(0, Some(10)), turn(20, Some(30))];
+        assert!(!turn_ran_across(&turns, 15));
+        assert!(turn_ran_across(&turns, 25));
+        // Ended just as it began: over.
+        assert!(!turn_ran_across(&turns, 10));
+        assert!(turn_ran_across(&[turn(0, None)], 15));
+        assert!(!turn_ran_across(&[turn(20, None)], 15));
+    }
 
     fn task(id: &str, kind: BackgroundTaskKind, status: BackgroundTaskStatus) -> BackgroundTask {
         BackgroundTask {

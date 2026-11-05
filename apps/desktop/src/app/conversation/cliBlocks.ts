@@ -712,9 +712,14 @@ export function cliBlocks(
   // The turn at `position` goes on with `each`, one more turn of it: its turn before joined it.
   // The block each message that joined one went on in (a seam's successor may start in one).
   const joinedBy = new Map<string, Block>();
+  // Where each of those messages came in its block: a move's divider goes there.
+  const joinedAt = new Map<string, number>();
   const join = (each: Block, position: number, atMs: number | undefined) => {
     const item = view.entries[position]?.event;
-    if (item?.type === "message") joinedBy.set(item.itemId, each);
+    if (item?.type === "message") {
+      joinedBy.set(item.itemId, each);
+      joinedAt.set(item.itemId, position);
+    }
     const last = turnOf.get(each);
     if (last) cutAt.set(last, position - 0.25);
     joined.set(each, [...(joined.get(each) ?? []), ...(last ? [last] : [])]);
@@ -785,11 +790,6 @@ export function cliBlocks(
   const carried = new Set(seams.flatMap((seam) => (seam.carried && seam.at ? [seam.at] : [])));
   // Each successor's first message, carried on by itself or not.
   const successors = new Set(seams.flatMap((seam) => (seam.at ? [seam.at] : [])));
-  // A thread recorded before the engine noted a successor's join says it only by what still
-  // works: a worker from before the successor. The core's block alone is no word of it, as the
-  // hand-off's own turns keep it open with nothing held.
-  const workedOn = (startedAtMs: number | null | undefined) =>
-    (view.workers ?? []).some((row) => (row.working || !!row.paused || row.waiting.length > 0) && row.startedAtMs <= (startedAtMs ?? Number.POSITIVE_INFINITY));
   // A queued message shows once (run2-D44): in the rail while the CLI has it there, else
   // where the CLI first read it in the turn that took it (a message that waited for its own
   // turn, or was steered in after it waited, was read before; until the CLI reads it again it is
@@ -919,12 +919,13 @@ export function cliBlocks(
         block = blocks.at(-1) ?? null;
       }
     }
-    // A successor's first turn while the block it continues still holds goes on in that block (D163),
-    // past the hidden blocks of the hand-off, which go with their times: `place` reads them by index.
+    // A successor's first turn that the core says went on with work still held goes on in the block
+    // it continues (D163), past the hidden blocks of the hand-off, which go with their times: `place`
+    // reads them by index. The core's word, from times that never change: no flip when the work ends.
     let heldOn = false;
-    if (asked && startsTurn(entry) && successors.has(asked.itemId)) {
+    if (asked && startsTurn(entry) && successors.has(asked.itemId) && view.turns[turn]?.joins) {
       const shown = blocks.findLast((each) => !emptyCompacts.has(each) && !noteTurns.has(each));
-      if (shown && !internal.has(shown) && (view.turns[turn]?.joins || (holds(shown) && workedOn(view.turns[turn]?.startedAtMs ?? entry.atMs)))) {
+      if (shown && !internal.has(shown)) {
         while (block !== shown) {
           blocks.pop();
           times.pop();
@@ -1130,13 +1131,15 @@ export function cliBlocks(
   // turn while the successor is still to come.
   for (const seam of seams) {
     if (seam.open) continue;
-    // A successor whose first message joined a block that still held: after that block.
+    // A successor whose first message joined a block that still held: that block's, its divider
+    // in the work at that message (`position`) when it moved to another CLI; else after the block.
     const into = seam.at === null ? undefined : joinedBy.get(seam.at);
     const next = seam.at === null ? blocks.length : into ? blocks.indexOf(into) + 1 : blocks.findIndex((each) => each.key === seam.at);
     // Never the note turn's own block, which the thread doesn't show.
     const before = next < 0 ? undefined : blocks.slice(0, next).findLast((each) => !internal.has(each));
     if (!before) continue;
-    before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death, movedTo: seam.movedTo });
+    const at = seam.at === null || !into ? undefined : joinedAt.get(seam.at);
+    before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death, movedTo: seam.movedTo, ...(at !== undefined && { position: at }) });
   }
   const shownBlocks = blocks.filter((each) => !internal.has(each));
   // One live block at most: the CLI's turns went on past each but the last. A message still on its

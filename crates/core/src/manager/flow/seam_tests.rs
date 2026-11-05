@@ -177,6 +177,8 @@ async fn a_successors_own_turn_with_nothing_held_is_not_recorded_as_joining() {
     let id = flow.conversation.clone();
     let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
     assert!(records.iter().all(|record| !record.joins), "{records:#?}");
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(view.turns.iter().all(|turn| !turn.joins), "{view:#?}");
     flow.stop().await;
 }
 

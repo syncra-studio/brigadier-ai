@@ -394,7 +394,7 @@ export const RequestBlock: FC = () => {
         .map((compaction) => (
           <CompactionBlock key={compaction.id} compaction={compaction} />
         ))}
-      {meta.seams.filter((seam) => !transitions.some((transition) => transitionCoversSeam(transition, seam))).map((seam) => (
+      {meta.seams.filter((seam) => seam.position === undefined && !transitions.some((transition) => transitionCoversSeam(transition, seam))).map((seam) => (
         <SeamDivider key={seam.n} seam={seam} />
       ))}
     </MessagePrimitive.Root>
