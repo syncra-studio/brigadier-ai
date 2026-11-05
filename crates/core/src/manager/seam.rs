@@ -668,15 +668,21 @@ pub(crate) fn unlanded_line(
     }
 }
 
-/// `text`, a hand-off, with `line` first under its Map; one without a Map stays as it is.
+/// `text`, a hand-off, with `line` first under its Map; a same-CLI one has no Map, only perhaps
+/// a note that quotes one, and takes the line last.
 pub(crate) fn with_unlanded(text: String, line: Option<&str>) -> String {
     const MAP: &str = "\n## Map\n";
-    match (line, text.find(MAP)) {
-        (Some(line), Some(at)) => {
-            let at = at + MAP.len();
-            format!("{}- {line}\n{}", &text[..at], &text[at..])
-        }
-        _ => text,
+    let Some(line) = line else {
+        return text;
+    };
+    let note = text.find("\n## Hand-off note\n").unwrap_or(text.len());
+    if let Some(at) = text.find(MAP).filter(|at| *at < note) {
+        let at = at + MAP.len();
+        return format!("{}- {line}\n{}", &text[..at], &text[at..]);
+    }
+    match text.rfind(&format!("\n{HANDOFF_END}")) {
+        Some(end) => format!("{}\n{line}.\n{}", &text[..end], &text[end..]),
+        None => text,
     }
 }
 

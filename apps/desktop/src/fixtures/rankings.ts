@@ -14,4 +14,5 @@ export const IDLE_RESEARCH: RankingsRefresh = {
   found: [],
   overlayApplied: false,
   overlayAtMs: null,
+  researcherUnrated: false,
 };
