@@ -15,6 +15,10 @@ name: Nightly
 # builds read their feed at releases/latest; the nightly and its feed are left alone. Started by
 # hand on a tag (Run workflow › the tag) it does the same.
 #
+# Nothing is built or published until CI (ci.yml) has passed on the commit: a failure stops the
+# run, and while CI is still running a nightly skips to the next night and a release waits up to
+# 60 minutes (apps/desktop/scripts/publish-gate.mjs).
+#
 # A failed run opens one issue labelled `nightly`, or comments on the one already open; the next
 # good run closes it.
 on:
@@ -56,30 +60,27 @@ jobs:
   gate:
     name: Anything new
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # A release may wait up to 60 minutes for CI.
+    timeout-minutes: 70
     permissions:
       actions: read
+      contents: read
     outputs:
       run: ${{ steps.check.outputs.run }}
       stamp: ${{ steps.check.outputs.stamp }}
     steps:
+      - uses: actions/checkout@v7
       - id: check
-        # A scheduled run skips a commit the last good nightly already built. The stamp is the
-        # nightly's version for every platform: the feed has one version, and an updater whose
-        # build carries another would offer the same update again after installing it.
+        # A scheduled run skips a commit a good nightly already built, and every run asks CI about
+        # the commit. The stamp is the nightly's version for every platform: the feed has one
+        # version, and an updater whose build carries another would offer the same update again
+        # after installing it.
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
         run: |
           echo "stamp=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
-          last="$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main \
-            --status success --limit 1 --json headSha --jq '.[0].headSha // ""')"
-          if [ "$EVENT" = schedule ] && [ "$last" = "$GITHUB_SHA" ]; then
-            echo "The last good nightly already built $GITHUB_SHA"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
+          node apps/desktop/scripts/publish-gate.mjs
 
   macos:
     name: macOS app, clippy, smoke, signing
@@ -98,15 +99,15 @@ jobs:
       UNIVERSAL: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ startsWith(github.ref, 'refs/tags/v') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: nightly-macOS
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -427,14 +428,14 @@ jobs:
         with:
           path: ${{ runner.temp }}/apt-cache
           key: ${{ steps.apt-cache.outputs.cache-primary-key }}
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: nightly-${{ matrix.name }}
           workspaces: . -> ${{ runner.os == 'Windows' && '../dev-drive/target' || 'target' }}
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -685,47 +686,36 @@ jobs:
   perf-regressions:
     name: Perf regression report (never a gate)
     needs: [macos, others]
-    # §5 of docs/STRIP-DOWN-PLAN.md: benchmarks are a report, not a gate. This only files or
-    # updates a tracking issue from any "PERF REGRESSION" line the smoke check printed; it
-    # never fails the run.
+    # §5 of docs/STRIP-DOWN-PLAN.md: benchmarks are a report, not a gate. This keeps one tracking
+    # issue per metric from the "PERF REGRESSION" lines the smoke checks printed, and closes a
+    # metric's issue after a run where all three finished without it.
     if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      contents: read
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: smoke-log-*
           path: ${{ runner.temp }}/smoke-logs
           merge-multiple: false
       - run: |
-          set -euo pipefail
-          lines="$(find "$RUNNER_TEMP/smoke-logs" -type f -name smoke.log -exec grep -h '^PERF REGRESSION:' {} + || true)"
-          if [ -z "$lines" ]; then
-            echo "No perf regressions."
-            exit 0
-          fi
-          metrics="$(printf '%s\n' "$lines" | sed -E 's/^PERF REGRESSION: (.*) [^ ]+ vs limit .*/\1/' | sort -u | paste -sd, -)"
-          title="Nightly perf regression: $metrics"
-          repo="$GITHUB_REPOSITORY"
-          found="$(gh issue list -R "$repo" --state open --search "$title in:title" --json number,title)"
-          open="$(echo "$found" | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -n1)"
-          body="$RUN_URL"$'\n\n'"$lines"
-          if [ -n "$open" ]; then
-            gh issue comment "$open" -R "$repo" --body "$body"
-          else
-            gh issue create -R "$repo" --title "$title" --body "$body"
-          fi
+          logs="$RUNNER_TEMP/smoke-logs"
+          node apps/desktop/scripts/perf-report.mjs --close-fixed \
+            "$logs/smoke-log-macOS/smoke.log" "$logs/smoke-log-Windows/smoke.log" "$logs/smoke-log-Linux/smoke.log"
 
   report:
     name: Failure issue
     needs: [gate, macos, others, publish]
     # Main's runs only: a run started by hand on another branch, or a tag's, never touches it.
-    if: always() && needs.gate.outputs.run == 'true' && github.ref == 'refs/heads/main'
+    # A gate that failed counts: CI didn't pass, so nothing was built. One that skipped doesn't.
+    if: always() && (needs.gate.outputs.run == 'true' || needs.gate.result == 'failure') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -733,6 +723,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+      GATE_FAILED: ${{ needs.gate.result == 'failure' }}
       MACOS_CANCELLED: ${{ needs.macos.result == 'cancelled' }}
       PASSED: ${{ needs.macos.result == 'success' && needs.others.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -743,6 +734,9 @@ jobs:
           open="$(gh issue list -R "$repo" --label nightly --state open --limit 1 --json number --jq '.[0].number // ""')"
           if [ "$FAILED" = true ]; then
             body="The nightly build of $GITHUB_SHA failed: $RUN_URL"
+            if [ "$GATE_FAILED" = true ]; then
+              body="The nightly stopped before building $GITHUB_SHA, because CI hasn't passed on it (the gate job says why): $RUN_URL"
+            fi
             if [ "$MACOS_CANCELLED" = true ]; then
               body="$body"$'\n\n'"macOS job was cancelled, likely GitHub failing to hand out a hosted macOS runner (capacity), not a code regression. Re-run with: gh workflow run nightly.yml --ref main"
             fi

@@ -185,7 +185,7 @@ launch on a new data directory, then a second launch on the same directory.
 `apps/desktop/scripts/judge-smoke.mjs` judges them:
 
 - first launch by the **median** of the three first launches (3 s × tolerance), and cold start
-  by the median of the three second launches (1 s × tolerance);
+  by the median of the three second launches (3500 ms);
 - every other check on the first launch, exactly as the app judged it.
 
 A budget miss there never fails the job: benchmarks are a report, not a gate (§5 of
