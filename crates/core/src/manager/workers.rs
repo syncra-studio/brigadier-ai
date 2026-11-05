@@ -235,7 +235,7 @@ impl TaskLive {
     }
 
     /// Tests: holds its state lock, to order what waits for it.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn state_guard(&self) -> impl Sized + '_ {
         self.state.lock().await
     }
