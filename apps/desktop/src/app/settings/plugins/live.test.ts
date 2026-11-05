@@ -348,7 +348,7 @@ test("collisions within one project or plugin keep distinct readable names", () 
   }
 });
 
-test("#707: a plugin's CLI-only parts show on its items, a CLI's own on the page", () => {
+test("a plugin's CLI-only parts show on its items, a CLI's own on the page", () => {
   const row = server("bundled");
   row.definitions = [{ ...row.definitions[0]!, agent: "claude", plugin: "bundle@market" }];
   const page = catalogPage({

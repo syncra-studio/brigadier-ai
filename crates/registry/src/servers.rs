@@ -670,7 +670,7 @@ fn opencode_server(
             oauth
                 .get(key)
                 .and_then(Value::as_str)
-                .map(|value| expand(value))
+                .map(&expand)
         };
         let client_id = field("clientId");
         let client_secret = field("clientSecret").map(Secret::new);
