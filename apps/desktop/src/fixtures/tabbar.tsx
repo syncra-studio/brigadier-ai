@@ -86,15 +86,18 @@ function Fixture() {
     // One step after another, each its time after the last: on a busy machine timers set from
     // the start fire late and together, with no time between a step and what reads its result.
     let disposed = false;
-    let last = 0;
+    let previous = 0;
     let steps = Promise.resolve();
     const at = (ms: number, action: () => void) => {
-      const after = ms - last;
-      last = ms;
+      const after = ms - previous;
+      previous = ms;
       steps = steps.then(async () => {
         await wait(after);
         // A closed tab stays for its slide, on a timer of its own: the steps read the tabs left.
-        while (!disposed && document.querySelector("[data-closing]")) await wait(16);
+        while (document.querySelector("[data-closing]")) {
+          if (disposed) return;
+          await wait(16);
+        }
         if (disposed) return;
         // Animations are finished first: these geometry checks inspect the settled strip.
         for (const animation of document.getAnimations()) animation.finish();
