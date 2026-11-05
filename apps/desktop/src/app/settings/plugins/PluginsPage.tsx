@@ -152,6 +152,7 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
           onFlip={flip}
           onAdd={() => setDialog({ type: "add" })}
         />
+        {view.cliOnly?.map((line) => <p key={line} data-slot="cli-only" className="text-foreground/65 text-xs">{line}</p>)}
       </SettingsPage>
     );
   }

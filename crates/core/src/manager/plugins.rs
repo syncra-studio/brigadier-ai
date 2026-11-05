@@ -11,7 +11,7 @@ pub mod ops;
 pub mod resolve;
 use brigadier_providers::ProviderKind;
 use brigadier_registry::library::Library;
-pub use model::{CatalogDefinition, CatalogRow, CatalogSignIn, CatalogView};
+pub use model::{CatalogCliOnly, CatalogDefinition, CatalogRow, CatalogSignIn, CatalogView};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use ts_rs::TS;

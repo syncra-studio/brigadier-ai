@@ -1976,3 +1976,176 @@ fn rows_exclude_claude_synced_skills_but_keep_user_copies() {
     }
     assert_eq!(std::fs::read(source).unwrap(), before);
 }
+
+/// #707: OpenCode's own setup, in the shapes `opencode debug config` 2.2.5 reads.
+#[test]
+fn opencode_setup_is_read_from_jsonc_in_either_shape_and_never_written() {
+    let home = fixture("opencode-setup");
+    let project = home.join("project");
+    let config = home.join(".config/opencode/opencode.jsonc");
+    let text = r#"{
+        // a comment, "with quotes"
+        "mcp": {
+            "flat": {"type": "local", "command": ["flat-server", "--x"], "environment": {"KEY": "{env:FLAT_KEY}"}},
+            "off": {"type": "remote", "url": "https://off.test", "enabled": false},
+            "servers": {
+                "nested": {"type": "remote", "url": "https://nested.test/*not-a-comment*/", "oauth": false},
+            },
+        },
+    }"#;
+    write(&config, text);
+    write(
+        &project.join("opencode.json"),
+        r#"{"mcp": {"here": {"type": "remote", "url": "https://root.test"}}}"#,
+    );
+    write(
+        &project.join(".opencode/opencode.json"),
+        r#"{"mcp": {"here": {"type": "remote", "url": "https://dot.test"}}}"#,
+    );
+    skill(&home.join(".config/opencode/skills/mine"), "mine", "Own.");
+    skill(&project.join(".opencode/skills/ours"), "ours", "Ours.");
+    let catalog = Catalog::read(&roots(&home, &[("FLAT_KEY", "k")]), Some(&project));
+
+    let flat = catalog.server("opencode:user:flat").unwrap();
+    assert_eq!(flat.source.label(), "OpenCode (user)");
+    let Transport::Stdio {
+        command, args, env, ..
+    } = &flat.transport
+    else {
+        panic!("{:?}", flat.transport)
+    };
+    assert_eq!(
+        (command.as_str(), args.as_slice()),
+        ("flat-server", ["--x".to_owned()].as_slice())
+    );
+    assert_eq!(env[0].1.expose(), "k");
+    assert_eq!(flat.written.references[0].0, "KEY");
+    let nested = catalog.server("opencode:user:nested").unwrap();
+    assert!(!nested.signs_in);
+    assert!(
+        matches!(&nested.transport, Transport::Http { url, .. } if url.ends_with("/*not-a-comment*/"))
+    );
+    assert!(catalog.servers.iter().all(|server| server.name != "off"));
+    assert!(
+        catalog
+            .off
+            .servers
+            .iter()
+            .any(|server| server.name == "off")
+    );
+    let here: Vec<&Server> = catalog
+        .servers
+        .iter()
+        .filter(|server| server.name == "here")
+        .collect();
+    assert_eq!(here.len(), 1);
+    assert!(matches!(&here[0].transport, Transport::Http { url, .. } if url == "https://dot.test"));
+    for name in ["mine", "ours"] {
+        assert!(
+            catalog.skills.iter().any(|skill| skill.name == name),
+            "{name}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+}
+
+/// #707: one server set up alike in two CLIs stays one row.
+#[test]
+fn a_server_opencode_shares_with_another_cli_stays_one_row() {
+    let home = fixture("opencode-one-row");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers": {"pencil": {"type": "stdio", "command": "pencil-server", "args": ["--x"]}}}"#,
+    );
+    write(
+        &home.join(".config/opencode/opencode.json"),
+        r#"{"mcp": {"pencil": {"type": "local", "command": ["pencil-server", "--x"]}}}"#,
+    );
+    let rows = Catalog::read_rows(&roots(&home, &[]), &[]);
+    let pencil: Vec<_> = rows.iter().filter(|row| row.name == "pencil").collect();
+    assert_eq!(pencil.len(), 1, "{pencil:?}");
+    assert_eq!(pencil[0].definitions.len(), 2);
+}
+
+/// #707: what no other CLI could take stays out of the rows, on the page as a problem.
+#[test]
+fn an_opencode_entry_no_cli_could_take_is_a_problem_and_no_row() {
+    let home = fixture("opencode-problems");
+    write(
+        &home.join(".config/opencode/opencode.json"),
+        r#"{"mcp": {
+            "good": {"type": "local", "command": ["good-server"]},
+            "bad.name": {"type": "local", "command": ["x"]},
+            "no-command": {"type": "local", "command": []},
+            "no-type": {"url": "https://x.test"},
+            "reads-file": {"type": "remote", "url": "https://x.test", "headers": {"A": "{file:/secret}"}},
+            "bad-scheme": {"type": "remote", "url": "ftp://x.test"}
+        }}"#,
+    );
+    let roots = roots(&home, &[]);
+    let catalog = Catalog::read(&roots, None);
+    let rows = Catalog::rows(std::slice::from_ref(&catalog));
+    let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+    assert_eq!(names, ["good"]);
+    let mut problems: Vec<&str> = catalog
+        .problems
+        .iter()
+        .map(|problem| problem.name.as_str())
+        .collect();
+    problems.sort_unstable();
+    assert_eq!(
+        problems,
+        [
+            "bad-scheme",
+            "bad.name",
+            "no-command",
+            "no-type",
+            "reads-file"
+        ]
+    );
+
+    write(&home.join(".config/opencode/opencode.json"), "{ not json");
+    let catalog = Catalog::read(&roots, None);
+    assert!(catalog.servers.is_empty());
+    assert_eq!(catalog.problems[0].name, "opencode.json");
+}
+
+/// #707: the rest of a plugin's bundle, and what a CLI has of its own, are listed to show.
+#[test]
+fn a_plugins_hooks_commands_and_agents_are_listed_read_only() {
+    let home = fixture("cli-only");
+    let plugin = home.join("bundle");
+    write(
+        &plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name": "bundle", "hooks": {"Stop": []}}"#,
+    );
+    write(
+        &plugin.join("hooks/hooks.json"),
+        r#"{"hooks": {"PreToolUse": []}}"#,
+    );
+    write(&plugin.join("commands/deploy.md"), "# Deploy");
+    write(&plugin.join("commands/.hidden.md"), "# No");
+    write(&plugin.join("agents/reviewer.md"), "# Reviewer");
+    let parts = Plugin {
+        agent: ProviderKind::Claude,
+        id: "bundle@market".into(),
+        name: "bundle".into(),
+        root: plugin,
+        project: None,
+    }
+    .cli_only();
+    assert_eq!(parts.hooks, ["PreToolUse", "Stop"]);
+    assert_eq!(parts.commands, ["deploy"]);
+    assert_eq!(parts.agents, ["reviewer"]);
+
+    let project = home.join("project");
+    write(&home.join(".config/opencode/plugins/status.js"), "x");
+    write(&home.join(".config/opencode/commands/polish.md"), "x");
+    write(&project.join(".opencode/commands/ship.md"), "x");
+    let own = Catalog::cli_only(&roots(&home, &[]), std::slice::from_ref(&project));
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert_eq!(own[0].agent, Some(ProviderKind::OpenCode));
+    assert_eq!(own[0].plugin, None);
+    assert_eq!(own[0].plugins, ["status"]);
+    assert_eq!(own[0].commands, ["polish", "ship"]);
+}

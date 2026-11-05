@@ -79,6 +79,7 @@ export type { Capability } from "./Capability";
 export type { CardId } from "./CardId";
 export type { CardState } from "./CardState";
 export type { Catalog } from "./Catalog";
+export type { CatalogCliOnly } from "./CatalogCliOnly";
 export type { CatalogDefinition } from "./CatalogDefinition";
 export type { CatalogRow } from "./CatalogRow";
 export type { CatalogSignIn } from "./CatalogSignIn";

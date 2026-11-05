@@ -226,7 +226,7 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
     let cli = brigadier_registry::adapter::adapter(ctx.agent);
     let cwd_root = checkout(ctx.cwd);
     let catalog = Catalog::read(ctx.account_home, ctx.trusted.then_some(cwd_root));
-    let native_rows = Catalog::rows(std::slice::from_ref(&catalog));
+    let native_rows = catalog.rows_loaded_by(ctx.account_home, ctx.agent);
     let native: Vec<(&Row, &Definition)> = native_rows
         .iter()
         .flat_map(|row| {
@@ -1023,5 +1023,88 @@ mod tests {
                 native_http
             );
         }
+    }
+
+    /// #707: OpenCode's items reach the other CLIs; what no CLI could take reaches none, and a
+    /// broken file of its own leaves their launches as they were.
+    #[test]
+    fn an_opencode_server_reaches_every_cli_and_a_bad_one_none() {
+        let fixture = Fixture::new();
+        let config = fixture.roots.opencode_dir.join("opencode.jsonc");
+        write(
+            &config,
+            r#"{ // mine
+                "mcp": {
+                    "good": {"type": "local", "command": ["good-server", "--x"]},
+                    "bad.name": {"type": "local", "command": ["x"]},
+                    "no-command": {"type": "local", "command": []},
+                },
+            }"#,
+        );
+        let rows = fixture.rows();
+        let names = |agent| {
+            fixture
+                .resolve(agent, &rows, &Choices::default())
+                .servers
+                .into_iter()
+                .map(|server| server.name)
+                .collect::<Vec<_>>()
+        };
+        for agent in [
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::OpenCode,
+        ] {
+            assert_eq!(names(agent), ["good"], "{agent:?}");
+        }
+        write(&config, "{ not json");
+        let rows = fixture.rows();
+        for agent in [
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::OpenCode,
+        ] {
+            let resolved = fixture.resolve(agent, &rows, &Choices::default());
+            assert!(resolved.servers.is_empty(), "{agent:?}");
+        }
+    }
+
+    /// #707: a skill in a folder OpenCode loads by itself isn't given to it a second time; a CLI
+    /// that doesn't load that folder still gets it.
+    #[test]
+    fn a_skill_opencode_loads_by_itself_is_not_given_again() {
+        let fixture = Fixture::new();
+        skill(&fixture.roots.home.join(".claude/skills/example"), "One.");
+        let rows = fixture.rows();
+        let resolved = fixture.resolve(ProviderKind::OpenCode, &rows, &Choices::default());
+        assert_eq!(resolved.skills.len(), 1);
+        assert!(resolved.skills[0].native);
+        let resolved = fixture.resolve(ProviderKind::Codex, &rows, &Choices::default());
+        assert!(!resolved.skills[0].native);
+    }
+
+    /// #707: OpenCode's own server, switched off in Brigadier, is on its off list.
+    #[test]
+    fn an_opencode_server_switched_off_is_suppressed_there() {
+        let fixture = Fixture::new();
+        write(
+            &fixture.roots.opencode_dir.join("opencode.json"),
+            r#"{"mcp": {"own": {"type": "local", "command": ["own-server"]}}}"#,
+        );
+        let rows = fixture.rows();
+        let choices = Choices(
+            rows.iter()
+                .map(|row| {
+                    let off = Choice {
+                        on: false,
+                        ..Choice::default_for(row)
+                    };
+                    (row.id.clone(), off)
+                })
+                .collect(),
+        );
+        let resolved = fixture.resolve(ProviderKind::OpenCode, &rows, &choices);
+        assert!(resolved.servers.is_empty());
+        assert_eq!(resolved.off.servers, ["own"]);
     }
 }

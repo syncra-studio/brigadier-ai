@@ -463,6 +463,87 @@ async fn the_third_compaction_in_a_row_hands_off_to_a_fresh_session() {
     flow.stop().await;
 }
 
+/// core-goals D9: the fresh session after the third compaction runs on the model and effort the
+/// thread chose, the same agent; only workers were pinned (`worker_seam_tests.rs`).
+#[tokio::test]
+async fn a_threads_successor_after_the_third_compaction_keeps_its_model_and_effort() {
+    let (flow, _) = codex_compacting("long-successor-model", None, 25_000).await;
+    flow.idle().await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    let id = flow
+        .manager
+        .create_conversation(
+            crate::model::ConversationKind::Session,
+            project,
+            Some("Chosen effort".into()),
+            Some(crate::model::SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: crate::model::EnvironmentRequest::NewWorktree {
+                    base: "main".into(),
+                    branch: None,
+                },
+                permission: flow.permission,
+                orchestrator: crate::model::ModelChoice {
+                    provider: ProviderKind::Codex,
+                    model: Some("gpt-6-astra".into()),
+                    effort: Some("medium".into()),
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    for _ in 0..crate::manager::long_sessions::HANDOFF_AFTER {
+        flow.say_to(&id, "Grow.").await;
+        flow.idle_in(&id).await;
+    }
+    let dir = flow.manager.session_dir(&id).record();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while read_seam(&dir).generation < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the successor");
+    flow.idle_in(&id).await;
+
+    let specs: Vec<_> = flow
+        .specs()
+        .into_iter()
+        .filter(|(_, spec)| {
+            spec.env
+                .iter()
+                .any(|(key, value)| key == brigadier_cli::protocol::SESSION_ENV && *value == id.0)
+        })
+        .collect();
+    assert_eq!(specs.len(), 2, "{specs:#?}");
+    let ((first_kind, first), (next_kind, next)) = (&specs[0], &specs[1]);
+    assert_eq!(*first_kind, ProviderKind::Codex);
+    assert_eq!(next_kind, first_kind);
+    assert_eq!(first.model.as_deref(), Some("gpt-6-astra"));
+    assert_eq!(next.model, first.model);
+    assert_eq!(first.effort.as_deref(), Some("medium"));
+    assert_eq!(next.effort, first.effort);
+    assert_eq!(next.fast, first.fast);
+    // A session of its own under the id its seam reserved, not the old one resumed.
+    assert!(
+        matches!(
+            next.origin,
+            brigadier_providers::model::Origin::NewAs { .. }
+        ),
+        "{:?}",
+        next.origin
+    );
+    flow.stop().await;
+}
+
 /// A Claude session whose turns on "Overflow." fail as too long, `overflows` times, or with
 /// Claude's thrash stop.
 async fn claude_overflowing(name: &str, overflows: u32, message: &'static str) -> (Flow, Inputs) {

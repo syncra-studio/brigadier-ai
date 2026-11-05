@@ -40,6 +40,14 @@ export type PluginItemView = {
   skillCount: number;
   files: string[];
   differentPerAgent?: boolean;
+  /** What its plugin also has that runs only on its own CLI, read-only. */
+  cliOnly?: string[];
   signIn?: CatalogSignIn;
 };
-export type PluginsView = { projects: PluginProjectView[]; items: PluginItemView[]; elsewhere: PluginElsewhereView[] };
+export type PluginsView = {
+  projects: PluginProjectView[];
+  items: PluginItemView[];
+  elsewhere: PluginElsewhereView[];
+  /** What each CLI has of its own that only it can run, read-only. */
+  cliOnly?: string[];
+};

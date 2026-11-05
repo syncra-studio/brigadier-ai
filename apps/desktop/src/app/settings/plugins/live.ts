@@ -1,10 +1,18 @@
 import { usePlugins, type PluginDraft, type PluginsAdapter } from "./adapter";
 import { pickFolder, request } from "@/ipc/client";
-import type { CatalogSignIn, CatalogView } from "@/ipc/generated";
+import type { CatalogCliOnly, CatalogSignIn, CatalogView } from "@/ipc/generated";
 import { cliFacts, PROVIDERS } from "@/lib/providerKinds";
 import { useApp } from "@/state/store";
 import type { PluginProjectView, PluginsView } from "./types";
 import { signingIn } from "./model";
+
+/** A CLI-only part as a line: `Claude Code only. Hooks: PreToolUse. Commands: deploy.` */
+const partsLine = (part: CatalogCliOnly) => {
+  const groups = ([["Hooks", part.hooks], ["Commands", part.commands], ["Agents", part.agents], ["Plugins", part.plugins]] as const)
+    .filter(([, names]) => names.length > 0)
+    .map(([label, names]) => `${label}: ${names.join(", ")}.`);
+  return `${part.agent ? cliFacts(part.agent).label : ""} only. ${groups.join(" ")}`;
+};
 
 const agentName = (row: CatalogView["rows"][number]) => {
   const agents = new Set(row.definitions.map((definition) => definition.agent));
@@ -27,8 +35,11 @@ export function catalogPage(catalog: CatalogView, projects: PluginProjectView[])
     const duplicates = qualified.flatMap((other, position) => other === name && rows[position]!.kind === rows[index]!.kind ? [position] : []);
     return duplicates.length > 1 ? `${name} (${duplicates.indexOf(index) + 1})` : name;
   });
+  const parts = catalog.cliOnly ?? [];
+  const ownParts = parts.filter((part) => part.plugin === null).map(partsLine);
   return {
     projects,
+    ...(ownParts.length > 0 ? { cliOnly: ownParts } : {}),
     elsewhere: offers.map((row) => {
       const definition = row.definitions[0]!;
       return { key: row.id, name: row.name, detail: definition.endpoint ?? definition.file, url: definition.transport === "http" ? definition.endpoint : null,
@@ -40,7 +51,9 @@ export function catalogPage(catalog: CatalogView, projects: PluginProjectView[])
       const projectIds = projects.filter((project) => paths?.includes(project.path)).map((project) => project.id);
       const files = [...new Set(row.definitions.map((definition) => definition.file))];
       const library = files.some((file) => /\/library\/(skills|servers|plugins)\//.test(file));
+      const cliOnly = parts.filter((part) => part.plugin !== null && row.definitions.some((definition) => definition.plugin === part.plugin && definition.agent === part.agent)).map(partsLine);
       return {
+        ...(cliOnly.length > 0 ? { cliOnly } : {}),
         key: row.id, kind: row.kind, name: readableNames[index]!, description: "", detail: first?.endpoint ?? first?.file.replace(/\/SKILL\.md$/, "") ?? "",
         url: first?.transport === "http" ? first.endpoint : null, icon: null,
         on: row.choice.on,

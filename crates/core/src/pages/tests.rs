@@ -576,6 +576,67 @@ impl Pages {
     }
 }
 
+/// A dropped event is never told, so every page is read again anyway: soon after the watcher
+/// starts and then every so often, also while other files in the folder keep changing.
+#[test]
+fn a_change_with_no_event_of_it_is_told_soon_after_the_start_and_later() {
+    let folder = Folder::new();
+    let pages = folder.pages();
+    let page = pages.create().unwrap();
+    let mut changes = pages.subscribe();
+    let (events, rx) = mpsc::channel();
+    let listening = listen(
+        pages.inner.clone(),
+        rx,
+        Duration::from_millis(50),
+        Duration::from_millis(200),
+    )
+    .unwrap();
+    let noise = thread::spawn(move || {
+        let temporary =
+            notify::Event::new(notify::EventKind::Any).add_path(PathBuf::from("/pages/.page.tmp"));
+        while events.send(Ok(temporary.clone())).is_ok() {
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+    for text in ["soon after the start\n", "the next one\n"] {
+        fs::write(pages.inner.path(&page.id), text).unwrap();
+        let expected = PageChange {
+            id: page.id.clone(),
+            revision: Some(revision(text.as_bytes())),
+        };
+        assert!(
+            told(&mut changes, &expected, Duration::from_secs(30)),
+            "{text}"
+        );
+    }
+    drop(listening);
+    noise.join().unwrap();
+}
+
+/// Pages already in the folder when it starts being watched aren't news, and the re-reads don't
+/// say they are.
+#[test]
+fn the_rereads_tell_nothing_of_pages_that_were_already_there() {
+    let folder = Folder::new();
+    let before = folder.pages();
+    before.create().unwrap();
+    drop(before);
+    let pages = folder.pages();
+    let mut changes = pages.subscribe();
+    let _watch = watch(
+        pages.inner.clone(),
+        Duration::from_millis(20),
+        Duration::from_millis(50),
+    )
+    .unwrap();
+    thread::sleep(Duration::from_millis(400));
+    assert!(matches!(
+        changes.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    ));
+}
+
 #[test]
 fn opening_in_the_background_returns_before_its_watcher_and_then_watches() {
     let folder = Folder::new();

@@ -26,6 +26,26 @@ const GATHER: Duration = Duration::from_millis(25);
 const SETTLE: Duration = Duration::from_millis(250);
 /// How often a checkout that can't be watched is read again anyway.
 const POLL: Duration = Duration::from_secs(10);
+/// When a watched checkout is read again with no event saying so: macOS drops file events on a
+/// busy machine and in a new watch's first seconds, and a change it drops is never told.
+#[derive(Clone, Copy)]
+struct Rereads {
+    /// After the watch starts, once.
+    first: Duration,
+    /// From then on.
+    every: Duration,
+}
+#[cfg(not(test))]
+const REREADS: Rereads = Rereads {
+    first: Duration::from_secs(5),
+    every: Duration::from_secs(60),
+};
+/// A test's watch says what it hears and nothing else; one test sets its own [`Rereads`].
+#[cfg(test)]
+const REREADS: Rereads = Rereads {
+    first: Duration::from_secs(3600),
+    every: Duration::from_secs(3600),
+};
 
 impl SessionManager {
     /// The folder a target's checkout is in: a session's, a project's folder, or a worktree the
@@ -78,8 +98,9 @@ impl SessionManager {
 
     /// Watches a target's checkout: the watch's `changed` resolves after its files, its index,
     /// its HEAD or its branch change, a burst of changes once. What happens only in ignored folders (a
-    /// build's output) doesn't count. A checkout that can't be watched is read again every
-    /// so often instead.
+    /// build's output) doesn't count. It also resolves shortly after the watch starts and then
+    /// once a minute, in case an event was dropped. A checkout that can't be watched is read
+    /// again every so often instead.
     pub async fn watch_workspace(&self, target: &WorkspaceTarget) -> Result<WorkspaceWatch> {
         let dir = self.workspace_dir(target).await?;
         let git = self.git.clone();
@@ -232,11 +253,19 @@ impl WorkspaceWatch {
         let watcher = watcher(&root, &status_files, events_tx)
             .inspect_err(|err| tracing::warn!(%err, root = %root.display(), "watching a checkout failed; reading it again every so often"))
             .ok();
-        Self::read(root, status_files, ignored, reread, events, watcher)
+        Self::read(
+            root,
+            status_files,
+            ignored,
+            reread,
+            events,
+            watcher,
+            REREADS,
+        )
     }
 
-    /// Says a change for what `events` reports; without a `watcher` it also says one every
-    /// [`POLL`].
+    /// Says a change for what `events` reports, and also on `rereads`; without a `watcher`,
+    /// every [`POLL`] instead.
     fn read(
         root: PathBuf,
         status_files: Vec<PathBuf>,
@@ -244,6 +273,7 @@ impl WorkspaceWatch {
         reread: impl Fn() -> Option<(Vec<String>, Vec<PathBuf>)> + Send + 'static,
         events: std_mpsc::Receiver<notify::Result<notify::Event>>,
         watcher: Option<notify::RecommendedWatcher>,
+        rereads: Rereads,
     ) -> Self {
         // One pending change is enough: the reader reads the whole checkout again.
         let (changes_tx, changes) = mpsc::channel(1);
@@ -257,27 +287,23 @@ impl WorkspaceWatch {
             .spawn(move || {
                 let mut filter = ChangeFilter::new(root, status_files, &ignored);
                 let mut polled = Instant::now();
+                let mut next_read = if watching { rereads.first } else { POLL };
                 while !thread_stop.load(Ordering::SeqCst) {
+                    // Here and not on a quiet wait: a build's ignored writes leave none, and a
+                    // busy machine is where events get dropped.
+                    if polled.elapsed() >= next_read {
+                        polled = Instant::now();
+                        next_read = if watching { rereads.every } else { POLL };
+                        if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
+                            return;
+                        }
+                    }
                     let first = match events.recv_timeout(SETTLE) {
                         Ok(event) => event,
-                        Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                            if !watching && polled.elapsed() >= POLL {
-                                polled = Instant::now();
-                                if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
-                                    return;
-                                }
-                            }
-                            continue;
-                        }
+                        Err(std_mpsc::RecvTimeoutError::Timeout) => continue,
                         // Without a watcher there is nothing to hear: wait out the poll instead.
                         Err(std_mpsc::RecvTimeoutError::Disconnected) if !watching => {
                             thread::sleep(SETTLE);
-                            if polled.elapsed() >= POLL {
-                                polled = Instant::now();
-                                if changes_tx.try_send(()).is_err() && changes_tx.is_closed() {
-                                    return;
-                                }
-                            }
                             continue;
                         }
                         Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
@@ -296,6 +322,7 @@ impl WorkspaceWatch {
                         if batch.iter().any(|event| event.is_err()) {
                             // A backend that fails after starting must also get the poll fallback.
                             watching = false;
+                            next_read = POLL;
                         }
                         let counted = batch.iter().any(|event| filter.counts(event));
                         batch.clear();
@@ -537,6 +564,7 @@ mod tests {
             || None,
             events,
             None,
+            REREADS,
         );
         let mut quickest = Duration::MAX;
         for round in 0..3 {
@@ -570,6 +598,7 @@ mod tests {
             || None,
             events,
             None,
+            REREADS,
         );
         let (tx, mut said) = tokio::sync::mpsc::unbounded_channel();
         let listening = tokio::spawn(async move {
@@ -614,6 +643,40 @@ mod tests {
             times.last().is_some_and(|last| *last >= last_sent),
             "said after the burst's last event"
         );
+    }
+
+    /// A dropped event is never told, so a live watch reads the checkout again anyway: soon
+    /// after it starts and then every so often, also while a build's ignored writes keep coming.
+    #[tokio::test]
+    async fn a_live_watch_says_a_change_with_no_event_of_one() {
+        let (events_tx, events) = std_mpsc::channel();
+        let idle = notify::recommended_watcher(|_: notify::Result<notify::Event>| {}).unwrap();
+        let mut watch = WorkspaceWatch::read(
+            "/repo".into(),
+            Vec::new(),
+            vec!["target/".into()],
+            || None,
+            events,
+            Some(idle),
+            Rereads {
+                first: Duration::from_millis(50),
+                every: Duration::from_millis(200),
+            },
+        );
+        let build = tokio::spawn(async move {
+            while events_tx.send(event(&["/repo/target/out.o"])).is_ok() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        for read in ["soon after the start", "the next one", "the one after"] {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(30), watch.changed())
+                    .await
+                    .is_ok(),
+                "{read}"
+            );
+        }
+        build.abort();
     }
 
     #[tokio::test]

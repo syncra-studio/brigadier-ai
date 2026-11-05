@@ -43,7 +43,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-pub use plugins::Plugin;
+pub use plugins::{CliOnly, Plugin};
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
@@ -82,6 +82,8 @@ pub struct Roots {
     pub claude_json: PathBuf,
     /// `CODEX_HOME`, else `~/.codex`.
     pub codex_home: PathBuf,
+    /// OpenCode's config folder: `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`.
+    pub opencode_dir: PathBuf,
     /// Claude Desktop's `claude_desktop_config.json`, where this platform keeps it.
     pub desktop_config: Option<PathBuf>,
     /// `~/.cursor`.
@@ -127,6 +129,9 @@ impl Roots {
             claude_dir,
             claude_json,
             codex_home: var("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
+            opencode_dir: var("XDG_CONFIG_HOME")
+                .unwrap_or_else(|| home.join(".config"))
+                .join("opencode"),
             desktop_config,
             cursor_dir: home.join(".cursor"),
             agents_skills: home.join(".agents").join("skills"),
@@ -160,6 +165,10 @@ pub enum Source {
     ClaudePlugin,
     /// A Codex plugin's servers ([`Server::plugin`]).
     CodexPlugin,
+    /// OpenCode's own `opencode.json(c)`.
+    OpenCodeUser,
+    /// A project's `opencode.json(c)` or `.opencode/opencode.json(c)`.
+    OpenCodeProject,
 }
 
 impl Source {
@@ -176,6 +185,8 @@ impl Source {
             Self::CursorProject => "Cursor (project)",
             Self::ClaudePlugin => "Claude Code (plugin)",
             Self::CodexPlugin => "Codex (plugin)",
+            Self::OpenCodeUser => "OpenCode (user)",
+            Self::OpenCodeProject => "OpenCode (project)",
         }
     }
 
@@ -192,6 +203,8 @@ impl Source {
             Self::CursorProject => "cursor:project",
             Self::ClaudePlugin => "claude:plugin",
             Self::CodexPlugin => "codex:plugin",
+            Self::OpenCodeUser => "opencode:user",
+            Self::OpenCodeProject => "opencode:project",
         }
     }
 }
@@ -494,6 +507,9 @@ impl Catalog {
         }
         catalog.off = Self::switched_off(roots, codex.as_ref());
         catalog.off.servers.extend(disabled);
+        for cli in adapter::adapters() {
+            cli.read_user(roots, &mut catalog);
+        }
         catalog
     }
 
@@ -557,6 +573,9 @@ impl Catalog {
         }
         self.add_codex_layer(roots, project);
         self.add_claude_entry(roots, project);
+        for cli in adapter::adapters() {
+            cli.read_project(roots, project, self);
+        }
     }
 
     /// What the project's entry in Claude Code's config file switches: its servers off there,
@@ -711,6 +730,8 @@ impl Catalog {
                 .plugin
                 .as_ref()
                 .is_some_and(|plugin| plugin.counts_in(session.project)),
+            (Source::OpenCodeUser, ProviderKind::OpenCode) => true,
+            (Source::OpenCodeProject, ProviderKind::OpenCode) => project == session.project,
             _ => false,
         }
     }
@@ -768,8 +789,8 @@ impl Catalog {
 fn precedence(source: Source) -> u8 {
     match source {
         Source::ClaudeLocal => 3,
-        Source::ClaudeProject | Source::CodexProject => 2,
-        Source::ClaudeUser | Source::CodexUser => 1,
+        Source::ClaudeProject | Source::CodexProject | Source::OpenCodeProject => 2,
+        Source::ClaudeUser | Source::CodexUser | Source::OpenCodeUser => 1,
         Source::Desktop
         | Source::CursorUser
         | Source::CursorProject
@@ -835,7 +856,12 @@ impl Registry {
         keep_server: impl Fn(&str) -> bool,
         keep_skill: impl Fn(&str) -> bool,
     ) {
-        let servers = servers::project(&self.roots, project, &mut Vec::new());
+        let mut own = Catalog::default();
+        for cli in adapter::adapters() {
+            cli.read_project(&self.roots, project, &mut own);
+        }
+        let mut servers = servers::project(&self.roots, project, &mut Vec::new());
+        servers.append(&mut own.servers);
         for server in servers {
             if !server.disabled && keep_server(&server.id) && catalog.server(&server.id).is_none() {
                 catalog.servers.push(server);
@@ -843,6 +869,7 @@ impl Registry {
         }
         let mut skills = Vec::new();
         skills::add_project(&mut skills, project);
+        skills.append(&mut own.skills);
         for skill in skills {
             if keep_skill(&skill.id) && !catalog.skills.iter().any(|known| known.id == skill.id) {
                 skills::merge(&mut catalog.skills, skill);
@@ -959,12 +986,15 @@ impl Registry {
                 .join("plugins")
                 .join("installed_plugins.json"),
             roots.claude_dir.join("settings.json"),
+            roots.opencode_dir.join("opencode.json"),
+            roots.opencode_dir.join("opencode.jsonc"),
         ];
         files.extend(roots.desktop_config.clone());
         let mut trees = vec![
             roots.claude_dir.join("skills"),
             roots.agents_skills.clone(),
             roots.codex_home.join("skills"),
+            roots.opencode_dir.join("skills"),
         ];
         // A plugin's manifest, servers and skills folder; a Codex plugin's versions, of which
         // the newest is read.
@@ -997,6 +1027,11 @@ impl Registry {
             files.push(project.join(".claude").join("settings.local.json"));
             trees.push(project.join(".claude").join("skills"));
             trees.push(project.join(".agents").join("skills"));
+            for folder in [project.to_owned(), project.join(".opencode")] {
+                files.push(folder.join("opencode.json"));
+                files.push(folder.join("opencode.jsonc"));
+            }
+            trees.push(project.join(".opencode").join("skills"));
         }
         let mut project_skills = Vec::new();
         for project in self

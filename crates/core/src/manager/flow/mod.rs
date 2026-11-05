@@ -679,6 +679,8 @@ pub(crate) struct FakeBehavior {
     pub hold_compaction: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Each thread turn's plan mode, as Brigadier set it on its CLI before the turn.
     pub plan_modes: Mutex<Vec<bool>>,
+    /// The levels the session's CLI was set to with no restart, in order.
+    pub access_sets: Mutex<Vec<brigadier_providers::model::Access>>,
     /// CLI starts fail while this is set.
     pub fail_starts: std::sync::atomic::AtomicBool,
     /// How many CLI starts failed so.
@@ -1667,6 +1669,14 @@ impl ProviderSession for FakeSession {
     fn set_plan_mode(&self, on: bool) -> BoxFuture<'_, brigadier_providers::Result<()>> {
         self.behavior.plan_modes.lock().unwrap().push(on);
         Box::pin(async { Ok(()) })
+    }
+
+    fn set_access(
+        &self,
+        access: brigadier_providers::model::Access,
+    ) -> BoxFuture<'_, brigadier_providers::Result<bool>> {
+        self.behavior.access_sets.lock().unwrap().push(access);
+        Box::pin(async { Ok(true) })
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {

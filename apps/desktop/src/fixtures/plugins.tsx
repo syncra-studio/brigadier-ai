@@ -159,11 +159,14 @@ const adapter: PluginsAdapter = {
   read: async () => {
     reads++;
     const current = view();
-    const catalog: CatalogView = { version: String(reads), rows: current.items.map((entry) => ({
+    const catalog: CatalogView = { version: String(reads), cliOnly: [
+      { agent: "claude", plugin: "design@market", hooks: ["PreToolUse"], commands: ["polish"], agents: [], plugins: [] },
+      { agent: "opencode", plugin: null, hooks: [], commands: ["impeccable"], agents: [], plugins: ["status-line"] },
+    ], rows: current.items.map((entry) => ({
       id: entry.key, kind: entry.kind, name: entry.name, differentPerAgent: !!entry.differentPerAgent,
       choice: { on: entry.on, scope: entry.scope.type === "allProjects" ? "global" : entry.scope.projectIds.map((id) => projects.find((project) => project.id === id)!.path) },
       signIn: entry.signIn ?? { type: "notRequired" },
-      definitions: entry.files.map((file) => ({ agent: "claude", file, plugin: null, project: null, native: entry.name, aliases: [entry.name], fingerprint: entry.key, transport: entry.kind === "skill" ? null : entry.url ? "http" : "stdio", endpoint: entry.kind === "skill" ? null : entry.detail })),
+      definitions: entry.files.map((file) => ({ agent: "claude", file, plugin: entry.name === "frontend-design" ? "design@market" : null, project: null, native: entry.name, aliases: [entry.name], fingerprint: entry.key, transport: entry.kind === "skill" ? null : entry.url ? "http" : "stdio", endpoint: entry.kind === "skill" ? null : entry.detail })),
     })) };
     const mapped = catalogPage(catalog, projects);
     return { ...mapped, elsewhere: current.elsewhere };

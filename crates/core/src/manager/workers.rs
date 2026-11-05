@@ -1018,6 +1018,7 @@ impl SessionManager {
             grants: vec![grant],
             ended: CancellationToken::new(),
             launch: None,
+            runs_at: std::sync::Mutex::new(None),
         });
         {
             let mut state = live.state.lock().await;
@@ -1276,7 +1277,7 @@ impl SessionManager {
     /// `repo` (best effort; see `warm`): from `parent` first, else from another worktree of the
     /// project or its checkout. Registered at once, so removing the worktree stops it and
     /// waits for it first; it also stops once `cut_off` says so. It runs when awaited, and
-    /// resolves to the folders copied in.
+    /// resolves to the folders copied in and the ones left out ([`warm::Warmed::left_out`]).
     fn warm_job(
         &self,
         repo: &Path,
@@ -1284,7 +1285,7 @@ impl SessionManager {
         parent: Option<PathBuf>,
         label: String,
         cut_off: impl Fn() -> bool + Send + Sync + 'static,
-    ) -> impl std::future::Future<Output = Vec<String>> + Send + 'static {
+    ) -> impl std::future::Future<Output = (Vec<String>, Vec<String>)> + Send + 'static {
         let warming = warm::Warming::begin(worktree);
         let (git, repo, path) = (self.git.clone(), repo.to_owned(), worktree.to_owned());
         let platform = self.runtime.platform().clone();
@@ -1313,12 +1314,12 @@ impl SessionManager {
                     ms = started.elapsed().as_millis() as u64,
                     "warmed a worktree"
                 );
-                Ok(warmed.folders())
+                Ok((warmed.folders(), warmed.left_out(&path)))
             })
             .await
             .unwrap_or_else(|err| {
                 tracing::warn!(%err, "couldn't warm a worktree");
-                Vec::new()
+                Default::default()
             })
         }
     }
@@ -1562,14 +1563,14 @@ impl SessionManager {
             held.cut_off()
         });
         self.spawn(async move {
-            let warmed = warming.await;
-            if !warmed.is_empty()
+            let (warmed, left_out) = warming.await;
+            if !(warmed.is_empty() && left_out.is_empty())
                 && !guard.cut_off()
                 && let Ok(conv) = manager.conv(&id)
             {
                 conv.note(format!(
                     "[workspace] {}",
-                    super::prompts::copied_in_line(&warmed)
+                    super::prompts::copied_in_line(&warmed, &left_out)
                 ))
                 .await;
             }

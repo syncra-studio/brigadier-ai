@@ -114,6 +114,7 @@ pub const BRIGADIER_COMMANDS: &[&str] = &[
     "waiting",
     "state",
     "context",
+    "skill",
     "sessions",
     "workers",
     "show",

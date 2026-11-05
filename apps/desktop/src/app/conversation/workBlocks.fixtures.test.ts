@@ -82,21 +82,23 @@ function noRunningRowAfterItsTurn(view: ThreadView, where: string) {
   }
 }
 
-/** The newest block's calls in the order drawn, and its groups' keys. */
-function newestShape(view: ThreadView): { order: string[]; groups: Map<string, string> } {
+/** The newest block's calls in the order drawn, its groups' keys, and the group each call is in. */
+function newestShape(view: ThreadView): { order: string[]; groups: Map<string, string>; groupOf: Map<string, string> } {
   const block = cliBlocks(view, "recorded-thread").at(-1);
-  if (!block) return { order: [], groups: new Map() };
+  if (!block) return { order: [], groups: new Map(), groupOf: new Map() };
   const steers = block.steers.map((steer) => ({ position: steer.position, text: steer.text, atMs: steer.message.createdAtMs, attachments: steer.message.attachments }));
   const activity = turnActivity(blockSequence({ ...block, steers }), false);
   const groups = new Map<string, string>();
+  const groupOf = new Map<string, string>();
   const order: string[] = [];
   for (const item of activity) {
     if (item.type !== "group") continue;
     const ids = item.items.flatMap((each) => (each.step.kind.type === "tool" ? [each.step.kind.itemId] : []));
     order.push(...ids);
     if (ids[0] !== undefined) groups.set(ids[0], item.key);
+    for (const id of ids) groupOf.set(id, item.key);
   }
-  return { order, groups };
+  return { order, groups, groupOf };
 }
 
 /** The calls of `order` that `other` has too, in the order of `order`. */
@@ -112,6 +114,17 @@ function keepsItsPlace(live: ReturnType<typeof newestShape>, reread: ReturnType<
   assert.deepEqual(both(reread.order, live.order), both(live.order, reread.order), `${where}: a call moved`);
   for (const [first, key] of live.groups) {
     if (reread.groups.has(first)) assert.equal(reread.groups.get(first), key, `${where}: group of ${first}`);
+  }
+}
+
+/**
+ * One live frame against the one before: no call changes place, and each call stays in the group
+ * it was drawn in under the same key, so a group opened mid-turn stays open as the turn goes on.
+ */
+function holdsBetweenFrames(before: ReturnType<typeof newestShape>, after: ReturnType<typeof newestShape>, where: string) {
+  assert.deepEqual(both(after.order, before.order), both(before.order, after.order), `${where}: a call moved`);
+  for (const [call, key] of before.groupOf) {
+    if (after.groupOf.has(call)) assert.equal(after.groupOf.get(call), key, `${where}: group of ${call}`);
   }
 }
 
@@ -152,6 +165,7 @@ for (const folder of folders) {
         const shape = newestShape(view);
         const reread = frame.endsWith("reread)");
         if (reread && live) keepsItsPlace(live, shape, frame);
+        if (!reread && live) holdsBetweenFrames(live, shape, frame);
         live = reread ? null : shape;
       }
       const path = new URL(`${name}.work.json`, base);

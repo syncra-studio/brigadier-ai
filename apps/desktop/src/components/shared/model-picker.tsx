@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/p
 import type { ModelGroup } from "@/components/shared/model-selector";
 import type { ModelInfo, ProviderKind } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
+import { shippedModelNames } from "@/lib/shippedModels";
 import { cn } from "@/lib/utils";
 
 /*
@@ -351,6 +352,7 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
 
   const notSetUp = (entry: ModelGroup) => {
     const missing = entry.unavailable === "not installed";
+    const names = new Intl.ListFormat("en-GB").format(shippedModelNames(entry.provider));
     return (
       <div data-slot="model-picker-not-set-up" className="flex flex-col items-center gap-2.5 px-5 py-7 text-center">
         <ProviderGlyph provider={entry.provider} tile="md" idle />
@@ -358,7 +360,8 @@ export const ModelPickerPanel = forwardRef<ModelPickerHandle, ModelPickerProps>(
           {entry.label} {missing ? "isn't installed" : "isn't signed in"}
         </p>
         <p className="text-muted-foreground max-w-2xs text-xs">
-          {missing ? "Install it and its models show here." : "Sign in and its models show here."}
+          {missing ? "Install it and its models show here" : "Sign in and its models show here"}
+          {names ? `: ${names}.` : "."}
         </p>
         <Button
           variant="soft"

@@ -373,17 +373,40 @@ pub(crate) const NO_AI_COAUTHORS: &str =
     "Don't add Co-authored-by trailers that name an AI to commit messages.";
 
 /// What a worker or the thread is told about the dependency installs and build caches copied
-/// into its worktree from the project's checkout or another of its worktrees (`warm`).
-pub(crate) fn copied_in_line(warmed: &[String]) -> String {
-    format!(
-        "Dependencies are already installed: {} {} copied in from another checkout of this project. Don't reinstall them.",
-        warmed
+/// into its worktree from the project's checkout or another of its worktrees (`warm`), and the
+/// ones that weren't (`left_out`). At least one of the two has folders.
+pub(crate) fn copied_in_line(warmed: &[String], left_out: &[String]) -> String {
+    let names = |folders: &[String]| {
+        folders
             .iter()
             .map(|folder| format!("`{folder}`"))
             .collect::<Vec<_>>()
-            .join(", "),
-        if warmed.len() == 1 { "was" } else { "were" }
-    )
+            .join(", ")
+    };
+    let (was, them) = if warmed.len() == 1 {
+        ("was", "it")
+    } else {
+        ("were", "them")
+    };
+    let (wasnt, they) = if left_out.len() == 1 {
+        ("wasn't", "it")
+    } else {
+        ("weren't", "they")
+    };
+    let (copied, missing) = (names(warmed), names(left_out));
+    if left_out.is_empty() {
+        format!(
+            "Dependencies are already installed: {copied} {was} copied in from another checkout of this project. Don't reinstall them."
+        )
+    } else if warmed.is_empty() {
+        format!(
+            "{missing} {wasnt} copied in from another checkout of this project, so {they} may need installing or building."
+        )
+    } else {
+        format!(
+            "Some dependencies are installed: {copied} {was} copied in from another checkout of this project, so don't reinstall {them}. {missing} {wasnt} copied, so {they} may need installing or building."
+        )
+    }
 }
 
 /// The repository's tracked script that sets up a new worktree.
@@ -448,6 +471,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn regression_warm_note_names_the_caches_left_out() {
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            copied_in_line(&names(&["node_modules"]), &[]),
+            "Dependencies are already installed: `node_modules` was copied in from another checkout of this project. Don't reinstall them."
+        );
+        assert_eq!(
+            copied_in_line(
+                &names(&["node_modules"]),
+                &names(&["apps/desktop/node_modules"])
+            ),
+            "Some dependencies are installed: `node_modules` was copied in from another checkout of this project, so don't reinstall it. `apps/desktop/node_modules` wasn't copied, so it may need installing or building."
+        );
+        assert_eq!(
+            copied_in_line(&names(&["a", "b"]), &names(&["c", "d"])),
+            "Some dependencies are installed: `a`, `b` were copied in from another checkout of this project, so don't reinstall them. `c`, `d` weren't copied, so they may need installing or building."
+        );
+        assert_eq!(
+            copied_in_line(&[], &names(&["node_modules"])),
+            "`node_modules` wasn't copied in from another checkout of this project, so it may need installing or building."
+        );
+    }
+
+    #[test]
     fn regression_opencode_asks_before_merging_base() {
         let text = session_instructions(&Settings::default(), ProviderKind::OpenCode);
         assert!(text.contains("OpenCode: use `brigadier ask` for every question"));
@@ -499,7 +551,8 @@ mod tests {
     /// subagent only for a quick lookup (D167): 6,314. A worker's start and its five-line brief
     /// with no help read first (D156, D170): 6,638. A mockup the user asked to see goes to a
     /// `--mockup` worker, never drawn as text in a card: 6,763. A demo the user sees before any
-    /// tests or suites (the user, 11-03): 6,904, the cap.
+    /// tests or suites (the user, 11-03): 6,904. Where to look when asked what it has, `brigadier skill`
+    /// and `brigadier mcp list` (#707, Codex's naked worker answered "none" without looking): 7,099.
     #[test]
     fn the_standing_instructions_stay_short() {
         let full = standing_text(&session_instructions(
@@ -516,7 +569,7 @@ mod tests {
             "`brigadier --help`",
             "run `brigadier help <topic>` for it first",
             // D13: everything about the job is pulled, never put in.
-            "`brigadier state` gives workers, brief, decisions, open questions and routing, and lists the rest (ledger, transcript, skills, MCP servers, project); call any of those MCP servers with `brigadier mcp`.",
+            "`brigadier state` gives workers, brief, decisions, open questions and routing, and lists the rest (ledger, transcript, skills, MCP servers, project); `brigadier mcp` calls any. What you have: `brigadier skill`, `brigadier mcp list`.",
             "Run it after any compaction.",
             // Disposable output goes in the session's $TMPDIR, never its record, which is for
             // resuming; a file the user asks for goes where they say.
@@ -659,7 +712,7 @@ mod tests {
             "| `brigadier session propose --title \"2-4 words\" \"<self-contained brief>\"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise. |",
             "| `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |",
             "| `brigadier preview start --purpose user [--open /page] [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. `--open`: the page to show, not the server's root. A web one opens its own tab; don't open it again. |",
-            "A worker is naked: its CLI loads none of your setup but the project's instruction file, MCP servers only by `--mcp` (for heavy use), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`, and calls any MCP server of the setup with `brigadier mcp`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.",
+            "A worker is naked: its CLI loads none of your setup but the project's instruction file, MCP servers only by `--mcp` (for heavy use), `--with computer-use` to see an app; it pulls skills with `brigadier skill`, decisions and the rest with `brigadier context`, and calls any MCP server of the setup with `brigadier mcp`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.",
             // Pick the model.
             "The user's routing decides each worker's agent, model and effort. The rows are in `brigadier state` (routing), read once: no `brigadier models` before each start. Pass `--work \"<Work>\"` of the row that fits; that row (the user's, else the shipped) picks all three. `brigadier start` skips a row whose account is out of quota by itself; never name a model or effort the rows don't.",
             // Brief.

@@ -87,7 +87,13 @@ impl Fixture {
         }
     }
     fn sync(&self, kind: ProviderKind) -> io::Result<()> {
-        sync_with(kind, &self.env, &self.homes, &self.keyring)
+        let binary = self.root.join("claude-checked");
+        fs::write(&binary, b"binary .storage-write binary").unwrap();
+        let cli = InstalledCli {
+            version: CLAUDE_LOCK_SINCE,
+            binary: &binary,
+        };
+        sync_with(kind, &self.env, &self.homes, Some(cli), &self.keyring)
     }
 }
 impl Drop for Fixture {
@@ -476,7 +482,13 @@ fn a_keychain_refresh_after_the_scan_wins_over_the_scanned_candidate() {
         service: own.keychain.as_ref().unwrap().0.clone(),
         reads: Cell::new(0),
     };
-    sync_with(ProviderKind::Claude, &f.env, &f.homes, &racing).unwrap();
+    let binary = f.root.join("claude-checked");
+    fs::write(&binary, CLAUDE_LOCK_NAME).unwrap();
+    let cli = InstalledCli {
+        version: CLAUDE_LOCK_SINCE,
+        binary: &binary,
+    };
+    sync_with(ProviderKind::Claude, &f.env, &f.homes, Some(cli), &racing).unwrap();
     let got = own.read(&f.keyring).unwrap();
     assert_eq!(got["mcpOAuth"]["jira|fixture"]["accessToken"], "newest");
     assert_eq!(
@@ -583,7 +595,13 @@ fn a_secure_storage_override_cannot_redirect_managed_writes_into_the_default_sto
         f.main.as_os_str().to_owned(),
     ));
     let env = f.env.with_vars(vars);
-    let result = sync_with(ProviderKind::Claude, &env, &f.homes, &f.keyring);
+    let binary = f.root.join("claude-checked");
+    fs::write(&binary, CLAUDE_LOCK_NAME).unwrap();
+    let cli = InstalledCli {
+        version: CLAUDE_LOCK_SINCE,
+        binary: &binary,
+    };
+    let result = sync_with(ProviderKind::Claude, &env, &f.homes, Some(cli), &f.keyring);
     // When account environments strip this override, copying is safe. Otherwise fail
     // closed. In both cases the user's default store is byte-for-byte untouched.
     if env
@@ -596,4 +614,85 @@ fn a_secure_storage_override_cannot_redirect_managed_writes_into_the_default_sto
         result.unwrap();
     }
     assert_eq!(store.read(&f.keyring).unwrap(), original);
+}
+
+#[test]
+fn claudes_credentials_are_rewritten_only_for_a_checked_claude() {
+    let f = Fixture::new(ProviderKind::Claude);
+    f.put(
+        &f.store(ProviderKind::Claude, &f.main),
+        &json!({"claudeAiOauth":{"accessToken":"login"},"mcpOAuth":{"jira|fixture":claude_token("mcp",100)}}),
+    );
+    f.keyring.writes.borrow_mut().clear();
+    let names_it = f.root.join("names-it");
+    fs::write(&names_it, b"binary .storage-write binary").unwrap();
+    let silent = f.root.join("silent");
+    fs::write(&silent, b"binary without the lock").unwrap();
+    let gone = f.root.join("gone");
+    let cli = |version, binary| InstalledCli { version, binary };
+    let sync = |cli| sync_with(ProviderKind::Claude, &f.env, &f.homes, cli, &f.keyring);
+    let own = f.store(ProviderKind::Claude, &f.homes[0]);
+    for unchecked in [
+        None,
+        Some(cli("2.1.310", names_it.as_path())),
+        Some(cli("not a version", names_it.as_path())),
+        Some(cli("2.1.318", silent.as_path())),
+        Some(cli("2.1.318", gone.as_path())),
+    ] {
+        let error = sync(unchecked).unwrap_err();
+        assert_eq!(blocked(&error), Some(&Blocked::UncheckedCli));
+        assert!(f.keyring.writes.borrow().is_empty());
+        assert!(!own.file().exists());
+    }
+    sync(Some(cli("2.1.318", names_it.as_path()))).unwrap();
+    assert_eq!(
+        own.read(&f.keyring).unwrap()["mcpOAuth"]["jira|fixture"]["accessToken"],
+        "mcp"
+    );
+    // Only Claude's item holds a login beside its MCP sign-ins.
+    sync_with(ProviderKind::Codex, &f.env, &f.homes, None, &f.keyring).unwrap();
+}
+
+#[test]
+fn the_lock_name_is_found_across_two_pieces_of_a_big_binary() {
+    let f = Fixture::new(ProviderKind::Claude);
+    let binary = f.root.join("big");
+    let mut bytes = vec![b'x'; (1 << 20) - 4];
+    bytes.extend_from_slice(CLAUDE_LOCK_NAME);
+    fs::write(&binary, &bytes).unwrap();
+    assert!(names_lock(&binary).unwrap());
+    fs::write(&binary, vec![b'x'; 3 << 20]).unwrap();
+    assert!(!names_lock(&binary).unwrap());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_keychain_refusal_stops_the_pass_at_the_first_item() {
+    use std::cell::Cell;
+    struct Refusing(Cell<usize>);
+    impl Keyring for Refusing {
+        fn get(&self, _: &str, _: &str) -> io::Result<Option<Vec<u8>>> {
+            self.0.set(self.0.get() + 1);
+            Err(io::Error::other(Blocked::KeychainRefused))
+        }
+        fn set(&self, _: &str, _: &str, _: &[u8]) -> io::Result<()> {
+            panic!("nothing is written after a refusal");
+        }
+        fn insert(&self, _: &str, _: &str, _: &[u8]) -> io::Result<Vec<u8>> {
+            panic!("nothing is written after a refusal");
+        }
+    }
+    let f = Fixture::new(ProviderKind::Claude);
+    let binary = f.root.join("names-it");
+    fs::write(&binary, CLAUDE_LOCK_NAME).unwrap();
+    let cli = InstalledCli {
+        version: CLAUDE_LOCK_SINCE,
+        binary: &binary,
+    };
+    let refusing = Refusing(Cell::new(0));
+    let error =
+        sync_with(ProviderKind::Claude, &f.env, &f.homes, Some(cli), &refusing).unwrap_err();
+    assert_eq!(blocked(&error), Some(&Blocked::KeychainRefused));
+    // One prompt at most, not one per account.
+    assert_eq!(refusing.0.get(), 1);
 }

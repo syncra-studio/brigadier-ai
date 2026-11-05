@@ -5,10 +5,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use brigadier_cli::protocol::{CliRequest, ContextPart, Tool};
+use brigadier_cli::protocol::{CliRequest, ContextPart, StartRequest, Tool};
 use serde_json::{Value, json};
 
-use super::cli_tests::{brigadier, tool};
+use super::cli_tests::{brigadier, start, tool};
 use super::{Flow, Options, Reply, Script};
 use crate::manager::prompts::LEDGER_ENV;
 
@@ -428,13 +428,80 @@ async fn context_reports_the_same_worktree_and_cross_agent_set_as_launch() {
     }
 }
 
+/// A worker granted a server, end to end: `brigadier start --mcp` launches it with that server
+/// alone, and its own `brigadier context mcps` says it has that one and not the other.
+#[tokio::test]
+async fn a_granted_worker_reads_its_grant_in_context_mcps() {
+    let pulled: Arc<Mutex<Option<Value>>> = Arc::default();
+    let script: Script = {
+        let pulled = pulled.clone();
+        Arc::new(move |turn| {
+            let pulled = pulled.clone();
+            Box::pin(async move {
+                if turn.is_orchestrator() {
+                    let started = brigadier(
+                        &turn,
+                        CliRequest::Start(Box::new(StartRequest {
+                            mcps: vec!["pencil".into()],
+                            ..start("Read your servers.")
+                        })),
+                    )
+                    .await;
+                    assert!(started.get("error").is_none(), "{started:#}");
+                    return Reply::text("Started.");
+                }
+                let mcps = brigadier(&turn, context(Some(ContextPart::Mcps))).await;
+                *pulled.lock().unwrap() = Some(mcps);
+                Reply::text("Read.")
+            })
+        })
+    };
+    let flow = Flow::start("context-mcps-grant", Options::default(), script).await;
+    write(
+        &flow
+            .manager
+            .runtime
+            .platform()
+            .paths()
+            .data_dir
+            .join("integrations-home/.claude.json"),
+        r#"{"mcpServers": {"pencil": {"command": "/bin/pencil"},
+                           "railway": {"command": "/bin/railway"}}}"#,
+    );
+    flow.manager.registry().refresh();
+    flow.say("Start a worker.").await;
+    super::eventually("the worker's read", || pulled.lock().unwrap().is_some()).await;
+    let mcps = pulled.lock().unwrap().clone().unwrap();
+    let has = |name: &str| {
+        mcps["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == name)
+            .unwrap_or_else(|| panic!("no {name}: {mcps:#}"))["has"]
+            .clone()
+    };
+    assert_eq!(has("pencil"), true, "{mcps:#}");
+    assert_eq!(has("railway"), false, "{mcps:#}");
+    let specs = flow.specs();
+    let (_, worker) = specs
+        .iter()
+        .find(|(_, spec)| spec.naked_worker)
+        .expect("the worker's launch");
+    let given: Vec<_> = worker.mcp_servers.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(given, ["pencil"]);
+    flow.settled().await;
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn context_uses_the_callers_active_account_home_for_per_agent_skill_versions() {
     // Only a CLI whose skills folder moves with its account home (OpenCode's home is just its
     // database, its skills are shared).
-    for provider in brigadier_providers::adapters::kinds()
-        .filter(|kind| brigadier_registry::adapter::adapter(*kind).is_some())
-    {
+    for provider in brigadier_providers::adapters::kinds().filter(|kind| {
+        brigadier_registry::adapter::adapter(*kind).is_some()
+            && *kind != brigadier_providers::ProviderKind::OpenCode
+    }) {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let script: Script = {
             let captured = captured.clone();

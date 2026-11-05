@@ -545,6 +545,15 @@ fn config_content(spec: &SessionSpec) -> Value {
         }
         servers.insert(server.name.clone(), entry);
     }
+    // What the user switched off of its own: an entry here replaces its own whole, and one with
+    // only `disabled` is ignored (2.2.5). A sealed session has none of its own to switch.
+    if !sealed(spec) {
+        for name in &spec.switched_off.servers {
+            servers.entry(name.clone()).or_insert_with(
+                || json!({ "type": "remote", "url": "http://127.0.0.1:9", "disabled": true }),
+            );
+        }
+    }
     let mut config = json!({ "mcp": { "servers": servers } });
     let skills: Vec<String> = spec
         .skill_plugins
@@ -1867,6 +1876,22 @@ mod tests {
         let config: Value =
             serde_json::from_str(var(&env, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
         assert_eq!(config["compaction"], json!({"auto": false}));
+        // #707: a server of its own the user switched off stays off, whole entry or nothing.
+        thread.switched_off.servers = vec!["own".to_owned()];
+        let env = session_env(&thread, None);
+        let config: Value =
+            serde_json::from_str(var(&env, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
+        assert_eq!(
+            config["mcp"]["servers"]["own"],
+            json!({"type": "remote", "url": "http://127.0.0.1:9", "disabled": true})
+        );
+        // A sealed session has none of its own: no entries it would only list as off.
+        let mut sealed_off = worker.clone();
+        sealed_off.switched_off.servers = vec!["own".to_owned()];
+        let env = session_env(&sealed_off, Some(Path::new("/data/opencode-1")));
+        let config: Value =
+            serde_json::from_str(var(&env, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
+        assert!(config["mcp"]["servers"].get("own").is_none());
         // A one-shot reader never loads the user's setup.
         let mut reader = spec();
         reader.tools = ToolSet::Review;

@@ -174,7 +174,7 @@ const MAX_PROBE_BYTES: u64 = 64 << 10;
 const MAX_PROBED_FILES: usize = 500_000;
 const MAX_PROBED_BYTES: u64 = 2 << 30;
 
-/// What warming did, for the log.
+/// What warming did, for the log and the session's note.
 #[derive(Debug, Default)]
 pub struct Warmed {
     /// Repo-relative folders copied in, each with the place it came from and how long it took
@@ -188,6 +188,24 @@ impl Warmed {
     /// The repo-relative folders copied in.
     pub fn folders(&self) -> Vec<String> {
         self.copied.iter().map(|(rel, ..)| rel.clone()).collect()
+    }
+
+    /// The repo-relative caches that weren't copied and that `worktree` doesn't have now. The
+    /// units dropped from a copied `target` aren't among them, and neither is `.`, a skip of
+    /// the whole worktree that names no cache.
+    pub fn left_out(&self, worktree: &Path) -> Vec<String> {
+        self.skipped
+            .iter()
+            .map(|(rel, _)| rel)
+            .filter(|rel| {
+                !self
+                    .copied
+                    .iter()
+                    .any(|(copied, ..)| Path::new(rel).starts_with(copied))
+                    && worktree.join(rel).symlink_metadata().is_err()
+            })
+            .cloned()
+            .collect()
     }
 }
 
@@ -3069,6 +3087,23 @@ mod tests {
         assert_eq!(Fixture::why(&warmed, "node_modules"), "out of time");
         assert!(!fx.worktree.join("node_modules").exists());
         assert!(fx.leftovers().is_empty());
+    }
+
+    #[test]
+    fn left_out_is_the_caches_that_are_missing_not_parts_of_a_copy() {
+        // This crate's folder stands in for the worktree: it has `src`.
+        let worktree = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let skipped = |rel: &str| (rel.to_owned(), "out of time".to_owned());
+        let warmed = Warmed {
+            copied: vec![("target".into(), PathBuf::new(), 0)],
+            skipped: vec![
+                skipped("."),
+                skipped("target/debug/.fingerprint/a-0123456789abcdef"),
+                skipped("src"),
+                skipped("apps/desktop/node_modules"),
+            ],
+        };
+        assert_eq!(warmed.left_out(worktree), ["apps/desktop/node_modules"]);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

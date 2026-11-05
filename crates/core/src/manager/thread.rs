@@ -254,8 +254,8 @@ impl SessionManager {
             .and_then(|launch| launch.workspace.as_ref())
             .map(|workspace| workspace.path.as_path());
         // What its level allows on every CLI goes, where its CLI asks more (Codex).
-        let level_allows = cli.launch.as_ref().is_some_and(|launch| {
-            brigadier_providers::policy::level_allows(launch.access, &request, workspace)
+        let level_allows = cli.level().is_some_and(|level| {
+            brigadier_providers::policy::level_allows(level.access(), &request, workspace)
         });
         if level_allows || self.allowed_before(&conv.id, &mut request, workspace) {
             self.answer_thread(conv, cli, request, ApprovalDecision::Allow)
@@ -270,14 +270,36 @@ impl SessionManager {
         }
     }
 
-    /// Whether the session went to Full access while `cli` runs at a lower level. Its mode is
-    /// fixed when it starts, and it starts again at Full access only between turns
+    /// Whether the session went to Full access while `cli` runs at a lower level. It takes the
+    /// level between turns ([`Self::apply_level`]), or starts again at it
     /// ([`Self::retire_moved_thread`]); until then what it asks goes, as Full access lets it.
     fn raised_to_full(&self, id: &ConversationId, cli: &Cli) -> bool {
-        cli.launch
-            .as_ref()
-            .is_some_and(|launch| launch.permission != PermissionLevel::Full)
+        cli.level()
+            .is_some_and(|level| level != PermissionLevel::Full)
             && self.permission(id) == PermissionLevel::Full
+    }
+
+    /// The thread's next turn runs at the session's level. A CLI with no job holding it started
+    /// again for a new level already ([`Self::retire_moved_thread`]); one kept up by its jobs
+    /// takes it here, if it can (#603), and starts again once they end all the same.
+    pub(crate) async fn apply_level(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>) {
+        let Some(level) = cli.level() else {
+            return;
+        };
+        let now = self.permission(&conv.id);
+        if now == level {
+            return;
+        }
+        match cli.session.set_access(now.access()).await {
+            Ok(true) => {
+                *cli.runs_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(now);
+                tracing::info!(conversation = %conv.id, permission = ?now, "the thread's CLI took its new level");
+            }
+            Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(conversation = %conv.id, error = %err, "could not set the thread's new level");
+            }
+        }
     }
 
     /// The session went to Full access: the requests its thread's CLI is waiting on go, as

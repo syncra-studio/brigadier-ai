@@ -31,8 +31,12 @@ cd /src/helpers/computer-use
 cargo build --locked --release -p brigadier-cu
 export BRIGADIER_CU_BIN="$CARGO_TARGET_DIR/release/brigadier-cu"
 
+"$here/x_server_test.sh"
+source "$here/x_server.sh"
+
 export DISPLAY=:99
-Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp >"$LINUX_LIVE_OUT/xvfb.log" 2>&1 &
+# -noreset: the server doesn't reset each time its last client leaves (#705).
+Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp -noreset >"$LINUX_LIVE_OUT/xvfb.log" 2>&1 &
 xvfb=$!
 trap 'kill "$xvfb" 2>/dev/null || true' EXIT
 for _ in $(seq 50); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
@@ -50,7 +54,7 @@ for wm in ${LINUX_LIVE_WMS:-mutter openbox xfwm4}; do
   LINUX_LIVE_WM="$wm" dbus-run-session -- bash -c \
     '$1 >"$LINUX_LIVE_OUT/$2.log" 2>&1 & w=$!; python3 -u "$0/live_test.py"; s=$?; kill $w; wait $w; exit $s' \
     "$here" "$start" "$wm" || failed=1
-  if ! xdpyinfo >/dev/null 2>&1; then
+  if ! x_server_alive "$xvfb"; then
     echo "the X server died during the $wm run" >&2
     exit 1
   fi

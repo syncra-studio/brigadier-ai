@@ -2,7 +2,10 @@
 //! uses (`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex, `OPENCODE_DB` for OpenCode's
 //! database in it). The CLI keeps its own login in it, in its own way (Claude Code keys its
 //! Keychain entry on the folder; Codex writes `auth.json` or a keyring entry keyed on it;
-//! OpenCode a row of its database); Brigadier never reads or writes a credential.
+//! OpenCode a row of its database); Brigadier never uses or changes these logins. One thing
+//! does handle them: Claude Code keeps MCP sign-ins in the item that holds its login, so sharing
+//! those sign-ins between accounts ([`crate::mcp_oauth`]) reads that item and rewrites it whole,
+//! the login as it found it, under Claude's storage lock and only for a checked Claude version.
 //! The user's own login, the one their terminal uses, stays the first account and is never
 //! touched.
 //!
