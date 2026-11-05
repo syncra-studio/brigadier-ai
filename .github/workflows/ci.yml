@@ -78,6 +78,8 @@ jobs:
           test -z "$(git status --porcelain -- apps/desktop/src/ipc/generated)"
       - name: Continuity report and sampler tests (no live calls)
         run: python3 -B -m unittest discover -s tools/continuity-battery -p 'test_*.py' -v
+      - name: Smoke judge, perf report and publishing gate tests
+        run: node --test apps/desktop/scripts/judge-smoke.test.mjs apps/desktop/scripts/perf-report.test.mjs apps/desktop/scripts/publish-gate.test.mjs
       - run: pnpm typecheck
       - name: Lint, the style check (tokens and src/components only), tokens in step with Pen
         run: pnpm lint
@@ -391,30 +393,14 @@ jobs:
         run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"
       - name: Perf regression report (never a gate)
         # §5 of docs/STRIP-DOWN-PLAN.md: benchmarks are a report, not a gate. Only main's own
-        # pushes file or update the tracking issue; a PR run just prints the lines above.
+        # pushes file or update a metric's tracking issue; a PR run just prints the lines above.
+        # Closing is the nightly's: it sees every platform, this only Linux.
         if: always() && github.ref == 'refs/heads/main'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          lines="$(grep '^PERF REGRESSION:' "$RUNNER_TEMP/smoke.log" || true)"
-          if [ -z "$lines" ]; then
-            echo "No perf regressions."
-            exit 0
-          fi
-          metrics="$(printf '%s\n' "$lines" | sed -E 's/^PERF REGRESSION: (.*) [^ ]+ vs limit .*/\1/' | sort -u | paste -sd, -)"
-          title="Nightly perf regression: $metrics"
-          repo="$GITHUB_REPOSITORY"
-          found="$(gh issue list -R "$repo" --state open --search "$title in:title" --json number,title)"
-          open="$(echo "$found" | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -n1)"
-          body="$RUN_URL"$'\n\n'"$lines"
-          if [ -n "$open" ]; then
-            gh issue comment "$open" -R "$repo" --body "$body"
-          else
-            gh issue create -R "$repo" --title "$title" --body "$body"
-          fi
+        run: node apps/desktop/scripts/perf-report.mjs "$RUNNER_TEMP/smoke.log"
       - name: No processes left behind
         if: always()
         run: |

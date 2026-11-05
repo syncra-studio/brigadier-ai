@@ -1,5 +1,6 @@
 import { memo, type ReactNode, useState } from "react";
 
+import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
 import { PlanText, planTitle } from "@/app/conversation/cards/planCard";
@@ -55,10 +56,11 @@ type Shown = { icon: ReactNode; title: ReactNode; subtitle?: ReactNode; body: Re
 
 /** "[Add tests] · why", leaving out what is missing. */
 function byline(by: ReactNode, text: string | null): ReactNode {
-  if (!by) return text ?? "";
-  return text ? (
+  const words = text && <CodeSpans text={text} />;
+  if (!by) return words ?? "";
+  return words ? (
     <>
-      {by} · {text}
+      {by} · {words}
     </>
   ) : (
     by
@@ -87,12 +89,12 @@ function describe(
                 Outside the sandbox
               </Badge>
             )}
-            {request.command && <ToolBox>{request.command}</ToolBox>}
+            {request.command && <ToolBox><CodeSpans exact text={request.command} /></ToolBox>}
             {request.paths.length > 0 && (
               <ToolBox>{request.paths.join("\n")}</ToolBox>
             )}
             {!request.command && request.input && (
-              <ToolBox>{request.input}</ToolBox>
+              <ToolBox><CodeSpans exact text={request.input} /></ToolBox>
             )}
             {request.cwd && (
               <p className="text-muted-foreground font-mono text-xs">in {request.cwd}</p>
@@ -108,7 +110,7 @@ function describe(
         subtitle: byline(by, NEVER_PUSHES_NOTE),
         body: (
           <>
-            <ToolBox>{subject.argv.map(quote).join(" ")}</ToolBox>
+            <ToolBox><CodeSpans exact text={subject.argv.map(quote).join(" ")} /></ToolBox>
             <p className="text-muted-foreground font-mono text-xs">in {subject.cwd}</p>
           </>
         ),
@@ -130,28 +132,28 @@ function describe(
         icon: <Sparkle />,
         title: subject.action,
         subtitle: by,
-        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.details}</p>,
+        body: <p data-slot="approval-card-text" className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere"><CodeSpans text={subject.details} /></p>,
       };
     case "outline":
       return {
         icon: <Sparkle />,
         title: "Start this plan?",
         subtitle: byline(by, subject.title),
-        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.outline}</p>,
+        body: <p data-slot="approval-card-text" className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere"><CodeSpans text={subject.outline} /></p>,
       };
     case "peerMessage":
       return {
         icon: <Sparkle />,
         title: `Send a message to ${subject.title} in ${subject.project}?`,
         subtitle: by,
-        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.text}</p>,
+        body: <p data-slot="approval-card-text" className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere"><CodeSpans text={subject.text} /></p>,
       };
     case "browser":
       return {
         icon: <Globe />,
         title: subject.question,
         subtitle: by,
-        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.details}</p>,
+        body: <p data-slot="approval-card-text" className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere"><CodeSpans text={subject.details} /></p>,
       };
     case "plan":
       return {
@@ -199,7 +201,7 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
     <ActionCard data-card="approval" aria-label="Approval" className={cn(paper, "rounded-thread")}>
       <div data-slot="approval-card-header" className="flex min-w-0 items-start gap-2 px-4 pt-3.5 pb-2.5">
         <span className="text-foreground/65 flex h-5 shrink-0 items-center [&_svg]:size-4.5">{shown.icon}</span>
-        <ActionCardTitle detail={shown.subtitle}>{shown.title}</ActionCardTitle>
+        <ActionCardTitle detail={shown.subtitle}>{typeof shown.title === "string" ? <CodeSpans text={shown.title} /> : shown.title}</ActionCardTitle>
       </div>
       <ApprovalCardBody>{shown.body}</ApprovalCardBody>
       {/* As tall as its words: 10 over them, 14 under. */}

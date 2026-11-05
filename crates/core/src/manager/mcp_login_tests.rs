@@ -31,10 +31,14 @@ fn the_sign_in_page_is_the_link_with_an_oauth_request() {
 fn assert_signed(progress: &McpSignInProgress) {
     assert!(progress.finished && !progress.agents.is_empty());
     assert!(
-        progress.agents.iter().all(|agent| matches!(
-            agent.state,
-            AgentSignInState::SignedIn | AgentSignInState::AlreadySignedIn
-        )),
+        progress
+            .agents
+            .iter()
+            .filter(|agent| agent.agent != ProviderKind::OpenCode)
+            .all(|agent| matches!(
+                agent.state,
+                AgentSignInState::SignedIn | AgentSignInState::AlreadySignedIn
+            )),
         "{progress:?}"
     );
 }
@@ -111,11 +115,14 @@ esac
                     ("PATH".into(), "/bin:/usr/bin".into()),
                     ("STATE".into(), dir.display().to_string()),
                 ],
+                // OpenCode's status is its own step: it's not installed here.
                 binary: Arc::new(move |agent| {
-                    Some(bin.join(match agent {
-                        Agent::Claude => "claude",
-                        _ => "codex",
-                    }))
+                    (agent != Agent::OpenCode).then(|| {
+                        bin.join(match agent {
+                            Agent::Claude => "claude",
+                            _ => "codex",
+                        })
+                    })
                 }),
             },
             dir,
@@ -178,9 +185,10 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
     let id = logins.start(fake.clis.clone(), target.clone(), open);
     // Both pages wait in the browser together: Codex's doesn't wait for Claude's sign-in.
     fake::wait(&logins, &id, |p| {
-        p.agents.len() == 2
+        p.agents.len() == 3
             && p.agents
                 .iter()
+                .filter(|a| a.agent != ProviderKind::OpenCode)
                 .all(|a| a.state == AgentSignInState::InBrowser)
     });
     let pages = opened.lock().unwrap().clone();
@@ -207,6 +215,7 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
         progress
             .agents
             .iter()
+            .filter(|a| a.agent != ProviderKind::OpenCode)
             .map(|a| (a.agent, a.server.as_str(), a.state.clone()))
             .collect::<Vec<_>>(),
         [
@@ -236,6 +245,7 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
         progress
             .agents
             .iter()
+            .filter(|a| a.agent != ProviderKind::OpenCode)
             .all(|a| a.state == AgentSignInState::AlreadySignedIn)
     );
 }
@@ -335,9 +345,10 @@ fn a_cancelled_sign_in_stops_its_clis() {
     };
     let id = logins.start(fake.clis.clone(), target.clone(), open.clone());
     fake::wait(&logins, &id, |p| {
-        p.agents.len() == 2
+        p.agents.len() == 3
             && p.agents
                 .iter()
+                .filter(|a| a.agent != ProviderKind::OpenCode)
                 .all(|a| a.state == AgentSignInState::InBrowser)
     });
     // Asking again while it waits gives the same sign-in, its pages opened again.
@@ -350,6 +361,7 @@ fn a_cancelled_sign_in_stops_its_clis() {
         progress
             .agents
             .iter()
+            .filter(|a| a.agent != ProviderKind::OpenCode)
             .all(|a| a.state == AgentSignInState::Cancelled),
         "{progress:?}"
     );
@@ -371,7 +383,7 @@ fn a_login_that_fails_says_why_in_the_clis_words() {
     std::fs::write(fake.dir.join("codex"), "#!/bin/sh\ncase \"$1 $2\" in\n\"mcp list\") echo '[{\"name\":\"srv\",\"auth_status\":\"not_logged_in\"}]' ;;\n*) echo 'Error: the server refused the client' >&2; exit 1 ;;\nesac\n").unwrap();
     let id = logins.start(fake.clis.clone(), target, Arc::new(|_: &str| {}));
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.agents.len(), 2);
+    assert_eq!(progress.agents.len(), 3);
     assert!(progress.agents.iter().any(|step| step.agent == ProviderKind::Claude && matches!(&step.state, AgentSignInState::Failed { reason } if reason.contains("Add this server"))));
     assert!(progress.agents.iter().any(|step| step.agent == ProviderKind::Codex && matches!(&step.state, AgentSignInState::Failed { reason } if reason == "the server refused the client")));
 }
@@ -387,7 +399,7 @@ fn an_agent_without_its_cli_is_reported_truthfully() {
     let (open, _) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.agents.len(), 2);
+    assert_eq!(progress.agents.len(), 3);
     assert!(
         progress
             .agents
@@ -442,7 +454,7 @@ esac
     let id = logins.start(fake.clis.clone(), target.clone(), Arc::new(|_: &str| {}));
     let progress = fake::wait(&logins, &id, |p| p.finished);
     assert_signed(&progress);
-    assert_eq!(progress.agents.len(), 2, "{progress:?}");
+    assert_eq!(progress.agents.len(), 3, "{progress:?}");
     assert!(fake.dir.join("claude-in").exists() && fake.dir.join("codex-in").exists());
 }
 
@@ -853,7 +865,7 @@ mod live {
         };
         println!("progress: {progress:#?}");
         assert_signed(&progress);
-        assert_eq!(progress.agents.len(), 2);
+        assert_eq!(progress.agents.len(), 3);
         assert!(
             progress
                 .agents
@@ -926,9 +938,9 @@ fn fallback_spreads_only_the_cli_that_finished_before_reporting_success() {
 fn a_failed_account_spread_is_reported_instead_of_claiming_all_accounts_signed_in() {
     let fake = fake::fake("spread-error");
     let logins = Arc::new(McpLogins::default());
-    let _ = logins
-        .spread
-        .set(Arc::new(|_| Err("Account store unavailable".into())));
+    let _ = logins.spread.set(Arc::new(|_| {
+        Err(io::Error::other("Account store unavailable"))
+    }));
     let (open, _) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     let progress = fake::wait(&logins, &id, |progress| progress.finished);
@@ -938,4 +950,57 @@ fn a_failed_account_spread_is_reported_instead_of_claiming_all_accounts_signed_i
             .iter()
             .any(|agent| matches!(agent.state, AgentSignInState::Failed { .. }))
     );
+}
+
+#[test]
+fn a_keychain_refusal_stops_the_account_spread_until_the_next_sign_in() {
+    use brigadier_providers::adapters::kinds;
+    let logins = McpLogins::default();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let refusing = Arc::new(AtomicBool::new(true));
+    let (seen, refuses) = (calls.clone(), refusing.clone());
+    let _ = logins.spread.set(Arc::new(move |kind| {
+        seen.lock().unwrap().push(kind);
+        if refuses.load(Ordering::SeqCst) && kind == ProviderKind::Claude {
+            return Err(io::Error::other(Blocked::KeychainRefused));
+        }
+        Ok(())
+    }));
+    let count = |kind| calls.lock().unwrap().iter().filter(|k| **k == kind).count();
+    logins.spread_pass();
+    logins.spread_pass();
+    // Asked once however many passes come; another CLI keeps going.
+    assert_eq!(count(ProviderKind::Claude), 1);
+    assert_eq!(count(ProviderKind::Codex), 2);
+    assert_eq!(calls.lock().unwrap().len(), 2 * kinds().count() - 1);
+    // Signing in asks again, and says why when the answer is still no.
+    assert!(
+        logins
+            .spread_after_sign_in(ProviderKind::Claude)
+            .unwrap_err()
+            .contains("Keychain")
+    );
+    assert_eq!(count(ProviderKind::Claude), 2);
+    logins.spread_pass();
+    assert_eq!(count(ProviderKind::Claude), 2);
+    // Allowed this time: the passes come back.
+    refusing.store(false, Ordering::SeqCst);
+    logins.spread_after_sign_in(ProviderKind::Claude).unwrap();
+    logins.spread_pass();
+    assert_eq!(count(ProviderKind::Claude), 4);
+}
+
+#[tokio::test]
+async fn the_account_spread_starts_at_boot_without_a_sign_in() {
+    use crate::manager::flow::{Flow, Options, Reply};
+    // No extra account is set up here, so a pass ends before any credential store.
+    let flow = Flow::start(
+        "account-spread-at-boot",
+        Options::default(),
+        Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await;
+    assert!(flow.manager.mcp_logins.spread.get().is_none());
+    flow.manager.start_mcp_account_spread();
+    assert!(flow.manager.mcp_logins.spread.get().is_some());
 }

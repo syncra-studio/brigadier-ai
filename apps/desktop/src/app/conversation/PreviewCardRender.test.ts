@@ -26,6 +26,7 @@ type Seen = {
   turn: [string | null, string | null][];
   said: [string | null, string | null][][];
   later: [string | null, string | null][][];
+  openPage: [string | null, string | null][][];
   turnStopped: [string | null, string | null, string | null, string[]];
   noRecord: boolean;
   worker: [string | null, string | null][];
@@ -104,6 +105,10 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   // A later preview that ended before it gave an address, or an app, leaves the running page's
   // card (#450); the page the answer names is the card's, not the turn's latest server (#451).
   assert.deepEqual(seen.later, [[["Web preview", "localhost:4100"]], [["Web preview", "localhost:4200"]]]);
+  // A preview started with --open wins over its bare server named in the answer, in its own turn
+  // and a later one; without --open the answer's address stands (above).
+  const openPage: [string, string] = ["Web preview", "127.0.0.1:4700/fixtures/a.html?x=1"];
+  assert.deepEqual(seen.openPage, [[openPage], [openPage]]);
   // The turn's page stopped: the card says so and offers Start again, never Open (#407).
   assert.deepEqual(seen.turnStopped, ["Web preview", "Stopped", "localhost:4400", ["Start again"]]);
   // A worker's own fixture, stopped with its task, is no Web preview of the turn whose request

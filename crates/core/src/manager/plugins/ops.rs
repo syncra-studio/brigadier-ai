@@ -524,6 +524,28 @@ impl crate::manager::SessionManager {
         let choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
         let mut view = super::CatalogView::new(&rows, &choices);
+        let projects: Vec<_> = self
+            .plugin_projects()
+            .into_iter()
+            .map(|(_, _, path)| path)
+            .collect();
+        let parts: Vec<_> = Catalog::cli_only(self.registry().roots(), &projects)
+            .into_iter()
+            .map(|part| super::CatalogCliOnly {
+                agent: part.agent,
+                plugin: part.plugin,
+                hooks: part.hooks,
+                commands: part.commands,
+                agents: part.agents,
+                plugins: part.plugins,
+            })
+            .collect();
+        if !parts.is_empty() {
+            let bytes = serde_json::to_vec(&parts).expect("parts are serializable");
+            let parts_hash = brigadier_registry::catalog::fingerprint(&bytes);
+            view.version = format!("{}-{parts_hash}", view.version);
+            view.cli_only = Some(parts);
+        }
         // Commands are display data only; env/header values never enter the page model.
         for row in &mut view.rows {
             let source = rows

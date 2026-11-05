@@ -129,6 +129,7 @@ for line in sys.stdin:
                     tool_timeout_secs: Some(120),
                     trusted: true,
                     always_load: true,
+                    sources: Default::default(),
                 }]
             } else {
                 vec![]

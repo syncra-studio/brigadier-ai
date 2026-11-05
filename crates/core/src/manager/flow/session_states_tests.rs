@@ -719,6 +719,13 @@ async fn a_worker_whose_own_background_commands_still_run_still_works() {
         flow.manager.work_holds(&conv).await,
         "it holds the session's work"
     );
+    assert!(
+        flow.manager
+            .hibernate(flow.conversation.clone())
+            .await
+            .is_err(),
+        "the session stays awake: its worker's CLI closing would end the command"
+    );
 
     finish.notify_one();
     super::eventually_async("its background commands to end", || async {

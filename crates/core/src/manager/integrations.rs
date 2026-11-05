@@ -29,6 +29,7 @@ pub(super) fn registry(vars: impl IntoIterator<Item = (String, String)>) -> Arc<
         claude_dir: PathBuf::new(),
         claude_json: PathBuf::new(),
         codex_home: PathBuf::new(),
+        opencode_dir: PathBuf::new(),
         desktop_config: None,
         cursor_dir: PathBuf::new(),
         agents_skills: PathBuf::new(),
@@ -173,6 +174,7 @@ pub(crate) fn granted_servers(
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
+            sources: Default::default(),
         });
     }
     Ok(granted)

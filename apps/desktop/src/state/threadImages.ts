@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { request } from "@/ipc/client";
-import { cliEntry, readSessionImage } from "@/state/cliThread";
+import { cliEntry, itemIdOf, readSessionImage, useWorkerThreads } from "@/state/cliThread";
 
 /**
  * Images the thread looked at or made, read from the daemon once each, as data URLs its rows'
@@ -14,11 +14,20 @@ const KEPT = 64;
 
 const read = new Map<string, Promise<string>>();
 
-function load(conversationId: string, itemId: string): Promise<string> {
+/** An item of a worker's own transcript the app has read: those tiles ask under the session. */
+function workerEntry(itemId: string) {
+  for (const view of Object.values(useWorkerThreads.getState().views)) {
+    const entry = view.entries.find((each) => itemIdOf(each.event) === itemId);
+    if (entry) return entry;
+  }
+  return undefined;
+}
+
+export function loadThreadImage(conversationId: string, itemId: string): Promise<string> {
   const key = `${conversationId}|${itemId}`;
   const known = read.get(key);
   if (known) return known;
-  const image = cliEntry(conversationId, itemId)?.images?.[0];
+  const image = (cliEntry(conversationId, itemId) ?? workerEntry(itemId))?.images?.[0];
   const promise = image
     ? readSessionImage(conversationId, image)
     : request({ method: "readThreadImage", conversationId, itemId }).then(({ data, mime }) => `data:${mime};base64,${data}`);
@@ -39,7 +48,7 @@ export function useThreadImage(conversationId: string | null, itemId: string): {
   useEffect(() => {
     if (!conversationId) return;
     let current = true;
-    load(conversationId, itemId).then(
+    loadThreadImage(conversationId, itemId).then(
       (url) => current && setState({ url, error: null, for: key }),
       (cause: unknown) => current && setState({ url: null, error: cause instanceof Error ? cause.message : String(cause), for: key }),
     );
@@ -61,7 +70,7 @@ export function useThreadImages(conversationId: string | null, itemIds: readonly
     const wanted = ids ? ids.split(" ") : [];
     Promise.all(
       wanted.map((itemId) =>
-        load(conversationId, itemId).then(
+        loadThreadImage(conversationId, itemId).then(
           (url) => ({ url, error: null }),
           (cause: unknown) => ({ url: null, error: cause instanceof Error ? cause.message : String(cause) }),
         ),

@@ -764,6 +764,8 @@ export function cliBlocks(
     return named.some((id) => (view.workers ?? []).some((row) => (row.id === id || row.id.endsWith(id)) && (row.startedAtMs >= from || sentBack(row.id))));
   };
   const internal = new Set<Block>();
+  // Brigadier's `/compact` turns that hold nothing the thread shows, each a hidden block.
+  const emptyCompacts = new Set<Block>();
   const waited = waitOutputs(view);
   // The turns, by place, that hold anything the thread shows. Brigadier's own `/compact` can: Claude
   // tells a background job's end in the next turn it runs, and a worker's wake-up is a hidden input
@@ -898,6 +900,15 @@ export function cliBlocks(
     // Brigadier's word that a command ended after its turn: its one plain line (D21).
     const wake = asked && says ? entry.wake : undefined;
     const woke = !!wake;
+    // A `/compact` that holds work joins the block before it: the empty `/compact`s between go,
+    // with their times, so the block before is the last one shown.
+    if (compacting && worked.has(turn) && !asked.text.startsWith(CHECKPOINT_MARK)) {
+      while (block && emptyCompacts.has(block)) {
+        blocks.pop();
+        times.pop();
+        block = blocks.at(-1) ?? null;
+      }
+    }
     const before = block;
     if (asked && (own || compacting || news || unshown || says)) {
       // Brigadier's word of what workers did that the block before started, or that a command
@@ -926,7 +937,10 @@ export function cliBlocks(
         times.push([[position, entry.atMs ?? 0]]);
         // Brigadier's compaction is done under the hood: its turn is no block (no header, no
         // time, nothing cut off); its divider goes after the block before.
-        if (compacting) internal.add(block);
+        if (compacting) {
+          internal.add(block);
+          if (!worked.has(turn)) emptyCompacts.add(block);
+        }
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
       if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, id: `${asked.itemId}:${nth}`, text, ...(joins && { inWork: true }) }));

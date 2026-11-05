@@ -10,7 +10,9 @@
 //!    admitting writes, commit everything queued, acknowledge the client that asked, close
 //!    connections, remove the token, exit 0.
 //!
-//! A critical task or the store writer dying is logged and exits with code 70 instead.
+//! A critical task or the store writer dying is logged and exits with code 70 instead. A quit
+//! that outlasts [`SHUTDOWN_DEADLINE`] or gets a second signal also exits with code 70, so a
+//! stuck daemon can't keep the lock with its socket gone; the next launch sweeps what it left.
 //!
 //! The same binary has more jobs, chosen before any of the above runs:
 //!
@@ -65,6 +67,11 @@ use crate::supervisor::Supervisor;
 const EXIT_FATAL: u8 = 70;
 /// How long connections get to receive their goodbye after the store drained.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
+/// Longest a quit may take before the process exits regardless. Its bounded steps add up to about
+/// 30 s at worst, and `brigadierd quit` waits 40 s before it reports a daemon as stuck.
+const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(40);
+/// How long the log's background thread gets to write the forced exit's reason.
+const LOG_FLUSH: Duration = Duration::from_millis(100);
 const READERS: usize = 4;
 const RUNTIME_WORKERS: usize = 2;
 /// What all of the daemon's SQLite connections may hold together, most of it page cache. Each
@@ -358,6 +365,7 @@ async fn run(
     daemon
         .sessions
         .set_browser(std::sync::Arc::new(crate::connect::open_in_browser));
+    daemon.sessions.start_mcp_account_spread();
     supervisor.spawn_critical(
         "ipc accept loop",
         server::accept_loop(daemon.clone(), listener, token),
@@ -375,10 +383,19 @@ async fn run(
     tracing::info!("brigadierd ready");
 
     let reason = tokio::select! {
-        signal = termination_signal() => signal,
-        Some(reason) = quit_rx.recv() => reason,
+        signal = termination_signal() => {
+            limit_shutdown(SHUTDOWN_DEADLINE, 1);
+            signal
+        }
+        Some(reason) = quit_rx.recv() => {
+            // Two signals: at logout one reaches the daemon along with the app's quit, and that
+            // one mustn't cut short the quit it is already doing.
+            limit_shutdown(SHUTDOWN_DEADLINE, 2);
+            reason
+        }
         state = store.writer_stopped() => {
             tracing::error!(state = ?state, "store writer stopped; exiting");
+            limit_shutdown(SHUTDOWN_DEADLINE, 2);
             stopping.cancel();
             store.stop_maintenance();
             awake.shutdown().await;
@@ -389,6 +406,7 @@ async fn run(
         }
         Some(reason) = fatal.recv() => {
             tracing::error!(reason = %reason, "critical task failed; exiting");
+            limit_shutdown(SHUTDOWN_DEADLINE, 2);
             stopping.cancel();
             store.stop_maintenance();
             awake.shutdown().await;
@@ -430,6 +448,42 @@ async fn run(
             tracing::error!(error = %err, "store did not shut down cleanly");
             Ok(ExitCode::from(EXIT_FATAL))
         }
+    }
+}
+
+/// From now on, exits the process once `deadline` passes or `signals` more signals arrive. On its
+/// own thread and runtime, because what it guards against may have stopped the main runtime too.
+fn limit_shutdown(deadline: Duration, signals: usize) {
+    let limit = move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        let reason = match runtime {
+            Ok(runtime) => runtime.block_on(async {
+                tokio::select! {
+                    () = tokio::time::sleep(deadline) => "the deadline passed",
+                    () = async {
+                        for _ in 0..signals {
+                            termination_signal().await;
+                        }
+                    } => "another signal arrived",
+                }
+            }),
+            Err(err) => {
+                tracing::warn!(error = %err, "signals can't end a stuck shutdown");
+                std::thread::sleep(deadline);
+                "the deadline passed"
+            }
+        };
+        tracing::error!(reason, "shutdown did not finish; exiting now");
+        std::thread::sleep(LOG_FLUSH);
+        std::process::exit(EXIT_FATAL.into());
+    };
+    if let Err(err) = std::thread::Builder::new()
+        .name("brigadierd-shutdown-limit".into())
+        .spawn(limit)
+    {
+        tracing::warn!(error = %err, "nothing limits this shutdown");
     }
 }
 
@@ -478,6 +532,119 @@ async fn termination_signal() -> &'static str {
             Some(_) = async { match c.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => "Ctrl-C",
             Some(_) = async { match close.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => "console closed",
             Some(_) = async { match shutdown.as_mut() { Some(s) => s.recv().await, None => std::future::pending().await } } => "system shutdown",
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::{BufRead as _, BufReader};
+    use std::process::{Child, Command, Stdio};
+    use std::time::Instant;
+
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    use super::*;
+
+    /// Set in the copy of this test binary that plays a daemon stuck quitting:
+    /// `<deadline in ms>,<signals>`.
+    const STUCK: &str = "BRIGADIER_TEST_STUCK_SHUTDOWN";
+    const LONG_MS: u64 = 600_000;
+
+    /// Never returns. The handler stays installed on a runtime that never runs again, as in a
+    /// daemon whose first signal was consumed and whose runtime then stopped.
+    fn stuck(limit: &str) -> ! {
+        let (deadline, signals) = limit.split_once(',').unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _handler = runtime
+            .block_on(async {
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            })
+            .unwrap();
+        limit_shutdown(
+            Duration::from_millis(deadline.parse().unwrap()),
+            signals.parse().unwrap(),
+        );
+        // Time for the limit to start listening.
+        std::thread::sleep(Duration::from_millis(300));
+        // On a line of its own, whatever the test harness printed before it.
+        println!("\nstuck");
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    }
+
+    fn start_stuck(deadline_ms: u64, signals: usize) -> Child {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "tests::a_stuck_shutdown_ends_at_its_deadline_or_on_a_second_signal",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(STUCK, format!("{deadline_ms},{signals}"))
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let out = BufReader::new(child.stdout.take().unwrap());
+        assert!(out.lines().any(|line| line.unwrap() == "stuck"));
+        child
+    }
+
+    /// Its exit code, once it has exited; `None` when it still runs after `wait`.
+    fn exit_within(child: &mut Child, wait: Duration) -> Option<Option<i32>> {
+        let until = Instant::now() + wait;
+        while Instant::now() < until {
+            if let Some(status) = child.try_wait().unwrap() {
+                return Some(status.code());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        None
+    }
+
+    fn term(child: &Child) {
+        let pid = Pid::from_raw(i32::try_from(child.id()).unwrap());
+        kill(pid, Signal::SIGTERM).unwrap();
+    }
+
+    #[test]
+    fn a_stuck_shutdown_ends_at_its_deadline_or_on_a_second_signal() {
+        if let Ok(limit) = std::env::var(STUCK) {
+            stuck(&limit);
+        }
+        let fatal = Some(Some(i32::from(EXIT_FATAL)));
+        let wait = Duration::from_secs(10);
+        let mut outcomes = Vec::new();
+
+        let mut past_deadline = start_stuck(500, 1);
+        outcomes.push(("deadline", exit_within(&mut past_deadline, wait)));
+
+        // A quit a signal started: the next signal ends it.
+        let mut signalled = start_stuck(LONG_MS, 1);
+        term(&signalled);
+        outcomes.push(("second signal", exit_within(&mut signalled, wait)));
+
+        // A quit a client asked for: one signal leaves it running, the next ends it.
+        let mut asked = start_stuck(LONG_MS, 2);
+        term(&asked);
+        let after_one = exit_within(&mut asked, Duration::from_millis(500));
+        term(&asked);
+        outcomes.push(("two signals", exit_within(&mut asked, wait)));
+
+        for mut child in [past_deadline, signalled, asked] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert_eq!(
+            after_one, None,
+            "one signal mustn't cut a client's quit short"
+        );
+        for (case, outcome) in outcomes {
+            assert_eq!(outcome, fatal, "{case}");
         }
     }
 }

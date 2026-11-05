@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/t
 import type { ModelGroup } from "@/components/shared/model-selector";
 import type { ModelInfo, ProviderKind } from "@/ipc/generated";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
+import { shippedModelNames } from "@/lib/shippedModels";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { setModelFavorite } from "@/state/providers";
@@ -438,6 +439,7 @@ function ModelPickerPanel({
 
   const notSetUp = (entry: ModelGroup) => {
     const missing = entry.unavailable === "not installed";
+    const names = new Intl.ListFormat("en-GB").format(shippedModelNames(entry.provider));
     return (
       <div data-slot="model-picker-not-set-up" className="flex flex-col items-center gap-2.5 px-5 py-7 text-center">
         <ProviderGlyph provider={entry.provider} tile="md" idle />
@@ -445,7 +447,8 @@ function ModelPickerPanel({
           {entry.label} {missing ? "isn't installed" : "isn't signed in"}
         </p>
         <p className="text-muted-foreground max-w-2xs text-xs">
-          {missing ? "Install it and its models show here." : "Sign in and its models show here."}
+          {missing ? "Install it and its models show here" : "Sign in and its models show here"}
+          {names ? `: ${names}.` : "."}
         </p>
         <Button
           variant="soft"

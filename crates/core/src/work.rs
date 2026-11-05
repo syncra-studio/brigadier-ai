@@ -653,10 +653,15 @@ pub struct Preview {
     #[serde(default)]
     pub log: Option<String>,
     /// A local HTTP URL printed by this preview; never for an app preview, whose window is
-    /// what the user looks at.
+    /// what the user looks at. With `open_path`, the server's origin plus that path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,
+    /// The page it was started to show (`--open`), a path on its own server; Start again keeps
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub open_path: Option<String>,
     #[serde(default)]
     pub kind: PreviewKind,
     /// What it shows when that isn't a URL: a simulator's device ("iPhone 16"), a PDF's file,

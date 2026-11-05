@@ -40,7 +40,8 @@ use brigadier_providers::Artifact;
 use tokio_util::sync::CancellationToken;
 
 use super::{OUTPUT_MAX_BYTES, SessionManager, blocking};
-use crate::model::{ConversationId, DomainEvent, Lifecycle, TaskId};
+use crate::app_call::{AppAnswer, AppOp, OpenTarget};
+use crate::model::{ConversationId, DomainEvent, Lifecycle, LinkTarget, Settings, Setup, TaskId};
 use crate::tools::StartPreview;
 use crate::work::{OutputSource, Preview, PreviewKind, PreviewState};
 use crate::{Error, Result, now_ms};
@@ -97,6 +98,9 @@ pub(crate) struct LivePreview {
     task: Option<TaskId>,
     /// The user asked for it (`purpose: "user"`): a merge leaves it running (#335).
     for_user: bool,
+    /// An agent started it for the user, as a web page, so its first run opens a Browser tab on
+    /// it. Never one the user's Start again started, though that runs for the user too.
+    opens_tab: bool,
     pid: u32,
     kind: PreviewKind,
     workspace: PathBuf,
@@ -338,6 +342,7 @@ impl SessionManager {
             kind: Some(preview.kind),
             target: preview.target.clone(),
             purpose: Some(crate::tools::PreviewPurpose::User),
+            open: preview.open_path.clone(),
         };
         self.start_preview_as(&id, args, starter, stops, Some(preview_id.clone()))
             .await?;
@@ -399,12 +404,17 @@ impl SessionManager {
         let kind = args
             .kind
             .unwrap_or_else(|| super::preview_ready::infer_kind(&command));
+        let open_path = args.open;
+        if let Some(open) = &open_path {
+            check_open_path(open, kind)?;
+        }
         let target = args
             .target
             .map(|target| target.trim().to_owned())
             .filter(|target| !target.is_empty())
             .or_else(|| super::preview_ready::infer_target(kind, &command));
         let for_user = args.purpose == Some(crate::tools::PreviewPurpose::User);
+        let opens_tab = for_user && again.is_none() && kind == PreviewKind::Web;
         let mut env = args.env.unwrap_or_default();
         // As given, for a start again: what Brigadier adds is added again then.
         let given_env = env.clone();
@@ -535,6 +545,7 @@ impl SessionManager {
             ended_at_ms: None,
             log: None,
             url: None,
+            open_path,
             kind,
             task_id: task.clone(),
             building: false,
@@ -548,6 +559,7 @@ impl SessionManager {
             id: preview_id.clone(),
             task: task.clone(),
             for_user,
+            opens_tab,
             pid,
             kind,
             workspace,
@@ -877,15 +889,42 @@ impl SessionManager {
         preview.state = PreviewState::Running;
         preview.building = false;
         if live.kind == PreviewKind::Web {
-            preview.url = preview.url.or(url);
+            preview.url = page_url(preview.url.or(url), preview.open_path.as_deref());
         }
         preview.pages = pages;
+        let tab = preview.url.clone().filter(|_| live.opens_tab);
         if let Err(err) = self.record_preview(preview).await {
             tracing::warn!(conversation = %live.conversation, preview = %live.id, error = %err, "could not record a preview as running");
             return false;
         }
         live.ready.cancel();
+        if let Some(url) = tab {
+            let this = self.arc();
+            let (id, task) = (live.conversation.clone(), live.task.clone());
+            self.spawn(async move { this.open_preview_tab(&id, task.as_ref(), url).await });
+        }
         true
+    }
+
+    /// Opens a Browser tab on a preview that just started running for the user, behind the tab
+    /// they are on, where a click on its address would open one. Whatever comes of it stays
+    /// here: the preview runs either way, and its agent hears nothing of it.
+    async fn open_preview_tab(&self, id: &ConversationId, task: Option<&TaskId>, url: String) {
+        let session = self
+            .core
+            .conversation(id)
+            .is_ok_and(|found| matches!(found.setup, Some(Setup::Session { .. })));
+        if !opens_in_tab(session, &self.core.settings(), EMBEDS_PAGES) {
+            return;
+        }
+        let label = self.browser_label(id, task).await;
+        let op = AppOp::Open {
+            target: OpenTarget::Url { url },
+            show: false,
+        };
+        if let AppAnswer::Failed { message } = self.app.call(id, task, &label, op, TAB_WAIT).await {
+            tracing::info!(conversation = %id, %message, "a preview's tab did not open");
+        }
     }
 
     /// A worker's preview ended on its own (`told`): its worker hears it while it works, as it
@@ -1011,7 +1050,7 @@ impl SessionManager {
                 ))
                 .await;
             }
-            preview.url = known_url(preview.url, url);
+            preview.url = known_page(preview.url, url, preview.open_path.as_deref());
             preview.pages = pages;
             preview.state = state;
             preview.building = false;
@@ -1249,7 +1288,10 @@ impl SessionManager {
         let known = self.core.board(&id).await?;
         let url = match (&live, known.previews.get(&preview_id)) {
             (Some(live), Some(preview))
-                if preview.url.as_deref().is_none_or(guessed)
+                if preview
+                    .url
+                    .as_deref()
+                    .is_none_or(|url| page_guessed(url, preview.open_path.as_deref()))
                     && preview.kind == PreviewKind::Web =>
             {
                 let path = live.log.clone();
@@ -1267,7 +1309,7 @@ impl SessionManager {
             board.previews.get(&preview_id).cloned().ok_or_else(|| {
                 Error::Invalid(format!("there is no {preview_id} in this session"))
             })?;
-        let found = known_url(preview.url.clone(), url);
+        let found = known_page(preview.url.clone(), url, preview.open_path.as_deref());
         if preview.url != found {
             preview.url = found;
             self.record_preview(preview.clone()).await?;
@@ -1873,6 +1915,7 @@ impl SessionManager {
                 id: preview.id.clone(),
                 task: preview.task_id.clone(),
                 for_user: false,
+                opens_tab: false,
                 pid: preview.pid.unwrap_or_default(),
                 kind: preview.kind,
                 workspace: PathBuf::from(&preview.workspace),
@@ -2072,6 +2115,83 @@ fn known_url(known: Option<String>, logged: Option<String>) -> Option<String> {
         (known, logged) => known.or(logged),
     }
 }
+
+/// A web address's root on its own server: `http://localhost:3000/` from any page of it.
+fn server_root(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let host = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    format!("{scheme}://{host}/")
+}
+
+/// A preview's address: with `--open`, its server's origin plus that path, whatever path the
+/// server printed.
+fn page_url(url: Option<String>, open: Option<&str>) -> Option<String> {
+    match open {
+        Some(open) => url.map(|url| format!("{}{open}", server_root(&url).trim_end_matches('/'))),
+        None => url,
+    }
+}
+
+/// [`guessed`], for an address that carries `open`: its server is what was guessed or printed.
+fn page_guessed(url: &str, open: Option<&str>) -> bool {
+    match open {
+        Some(_) => guessed(&server_root(url)),
+        None => guessed(url),
+    }
+}
+
+/// [`known_url`], for an address that carries `open`: a printed server replaces a guessed one
+/// and the path stays.
+fn known_page(known: Option<String>, logged: Option<String>, open: Option<&str>) -> Option<String> {
+    let known = match open {
+        Some(_) => known.map(|url| server_root(&url)),
+        None => known,
+    };
+    page_url(known_url(known, logged), open)
+}
+
+/// Whether `--open`'s `open` may be used on a preview of `kind`: only a path on a web preview's
+/// own server, so it can never leave that server.
+fn check_open_path(open: &str, kind: PreviewKind) -> Result<()> {
+    if kind != PreviewKind::Web {
+        return Err(Error::Invalid(format!(
+            "--open is only for a web preview: this one is {}, which has no page to open. Leave \
+             --open out, or pass --kind web if it does serve a page.",
+            format!("{kind:?}").to_lowercase()
+        )));
+    }
+    let problem = if !open.starts_with('/') {
+        "it must start with one \"/\""
+    } else if open.starts_with("//") {
+        "it starts with \"//\", which names another server; it must start with one \"/\""
+    } else if open.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        "it has whitespace or a control character; percent-encode them (%20)"
+    } else {
+        return Ok(());
+    };
+    Err(Error::Invalid(format!(
+        "--open {open:?} isn't a page on the preview's own server: {problem}, like \
+         /docs/page.html?x=1."
+    )))
+}
+
+/// Whether a preview's address, always a local one, opens in a Browser tab: what the app's
+/// `linkDestination` (apps/desktop/src/state/linkRouting.ts) says for a local link, as this runs
+/// with no window to ask.
+fn opens_in_tab(session: bool, settings: &Settings, embeds_pages: bool) -> bool {
+    session
+        && embeds_pages
+        && settings.browser_enabled
+        && settings.local_links_in == LinkTarget::Brigadier
+}
+
+/// Whether this system shows pages inside the app: the app's `embedded`.
+const EMBEDS_PAGES: bool = !cfg!(target_os = "linux");
+
+/// How long the window may take to open a preview's tab.
+const TAB_WAIT: Duration = Duration::from_secs(10);
 
 /// Whether nothing listens on local `port` now.
 async fn port_free(port: u16) -> bool {
@@ -2586,6 +2706,7 @@ while True: time.sleep(0.03)
             id: "preview-1".into(),
             task: None,
             for_user: false,
+            opens_tab: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2713,6 +2834,7 @@ while True: time.sleep(0.03)
             id: "preview-1".into(),
             task: None,
             for_user: false,
+            opens_tab: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2787,6 +2909,7 @@ while True: time.sleep(0.03)
             id: "preview-1".into(),
             task: None,
             for_user: false,
+            opens_tab: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2857,6 +2980,7 @@ while True: time.sleep(0.03)
             id: "preview-1".into(),
             task: None,
             for_user: false,
+            opens_tab: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2884,6 +3008,116 @@ while True: time.sleep(0.03)
         child.kill().unwrap();
         child.wait().unwrap();
         flow.stop().await;
+    }
+
+    #[test]
+    fn an_open_path_stays_on_the_previews_own_server() {
+        for fine in ["/", "/page.html", "/a/b?x=1&y=2#top", "/#/todos", "/%20a"] {
+            assert!(
+                super::check_open_path(fine, PreviewKind::Web).is_ok(),
+                "{fine}"
+            );
+        }
+        for refused in [
+            "",
+            "page.html",
+            "?x=1",
+            "http://localhost:3000/",
+            "//elsewhere/page",
+            "///page",
+            "/a b",
+            " /a",
+            "/a\tb",
+            "/a\nb",
+            "/a\u{7f}b",
+            "/a\u{a0}b",
+        ] {
+            let err = super::check_open_path(refused, PreviewKind::Web).unwrap_err();
+            assert!(err.to_string().contains("own server"), "{refused:?}: {err}");
+        }
+        for kind in [
+            PreviewKind::App,
+            PreviewKind::Simulator,
+            PreviewKind::Pdf,
+            PreviewKind::Test,
+        ] {
+            let err = super::check_open_path("/page", kind).unwrap_err();
+            assert!(err.to_string().contains("only for a web preview"), "{err}");
+        }
+    }
+
+    #[test]
+    fn an_open_page_stays_over_a_guessed_and_a_printed_address() {
+        let open = Some("/fixtures/a.html?x=1");
+        let page = |origin: &str| Some(format!("{origin}/fixtures/a.html?x=1"));
+        // Whatever path the server printed is replaced, and again it stays the same.
+        for printed in [
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3000/",
+            "http://127.0.0.1:3000/other?y#z",
+        ] {
+            let url = super::page_url(Some(printed.into()), open);
+            assert_eq!(url, page("http://127.0.0.1:3000"), "{printed}");
+            assert_eq!(super::page_url(url.clone(), open), url);
+        }
+        assert_eq!(
+            super::page_url(Some("http://[::1]:3000/x".into()), open),
+            page("http://[::1]:3000")
+        );
+        assert_eq!(super::page_url(None, open), None);
+        // Guessed from its port, the page's address is still a guess...
+        let guess = super::page_url(Some(super::port_url(3000)), open);
+        assert_eq!(guess, page("http://localhost:3000"));
+        assert!(super::page_guessed(guess.as_deref().unwrap(), open));
+        // ...so the server it prints on that port takes over, under the same page.
+        let printed = Some("http://127.0.0.1:3000/".to_owned());
+        let found = super::known_page(guess.clone(), printed.clone(), open);
+        assert_eq!(found, page("http://127.0.0.1:3000"));
+        assert!(!super::page_guessed(found.as_deref().unwrap(), open));
+        // Another port's doesn't, nor anything once a server was printed.
+        let other = Some("http://127.0.0.1:4000/".to_owned());
+        assert_eq!(super::known_page(guess.clone(), other, open), guess);
+        let later = Some("http://localhost:3000/".to_owned());
+        assert_eq!(super::known_page(found.clone(), later, open), found);
+        assert_eq!(super::known_page(None, printed.clone(), open), found);
+        // Without --open it is what it was.
+        assert_eq!(super::page_url(printed.clone(), None), printed);
+        assert_eq!(
+            super::known_page(
+                Some(super::port_url(3000)),
+                Some("http://localhost:3000/app/".into()),
+                None
+            ),
+            Some("http://localhost:3000/app/".into())
+        );
+    }
+
+    #[test]
+    fn a_previews_tab_follows_the_settings_as_a_local_link_does() {
+        use crate::model::{LinkTarget, Settings};
+        let on = Settings::default();
+        assert!(on.browser_enabled && on.local_links_in == LinkTarget::Brigadier);
+        assert!(super::opens_in_tab(true, &on, true));
+        // Not in a session, not on an embedding system.
+        assert!(!super::opens_in_tab(false, &on, true));
+        assert!(!super::opens_in_tab(true, &on, false));
+        // The built-in browser off, or local links sent to the default browser.
+        let off = Settings {
+            browser_enabled: false,
+            ..on.clone()
+        };
+        assert!(!super::opens_in_tab(true, &off, true));
+        let system = Settings {
+            local_links_in: LinkTarget::System,
+            ..on.clone()
+        };
+        assert!(!super::opens_in_tab(true, &system, true));
+        // Other web links' choice has no say over a local address.
+        let web = Settings {
+            web_links_in: LinkTarget::Brigadier,
+            ..on
+        };
+        assert!(super::opens_in_tab(true, &web, true));
     }
 
     #[test]

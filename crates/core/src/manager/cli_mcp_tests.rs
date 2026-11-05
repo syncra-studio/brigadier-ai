@@ -89,6 +89,7 @@ fn stdio(script: &Path) -> McpServer {
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
+        sources: Default::default(),
     }
 }
 
@@ -310,6 +311,7 @@ async fn an_http_server_keeps_its_session_across_calls_and_is_ended_on_close() {
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
+        sources: Default::default(),
     };
     let mut conn = Conn::open(server, platform(), Path::new("/"), &[], None)
         .await
@@ -449,6 +451,7 @@ async fn a_stdio_server_gets_its_ping_answered_between_calls() {
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
+        sources: Default::default(),
     };
     let env: Vec<_> = std::env::vars().collect();
     let mut conn = Conn::open(server, platform(), &std::env::temp_dir(), &env, None)
@@ -533,6 +536,7 @@ async fn closing_never_waits_for_a_server_that_stopped_reading() {
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
+        sources: Default::default(),
     };
     let env: Vec<_> = std::env::vars().collect();
     let conn = Conn::open(server, platform(), &std::env::temp_dir(), &env, None)
@@ -656,6 +660,7 @@ async fn an_http_server_gets_its_own_request_answered_during_a_call() {
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
+        sources: Default::default(),
     };
     let mut conn = Conn::open(server, platform(), Path::new("/"), &[], None)
         .await
@@ -705,6 +710,7 @@ async fn a_gateway_server_is_reached_through_its_own_lease_released_on_close() {
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
+        sources: Default::default(),
     };
     let leased = lease(&gateway, &server).expect("a gateway server is leased");
     let (url, secret) = match (&leased.1.transport, leased.1.env.first()) {

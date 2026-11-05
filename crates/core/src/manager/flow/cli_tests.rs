@@ -1548,6 +1548,122 @@ async fn the_user_messages_a_worker_directly() {
     flow.stop().await;
 }
 
+/// #740: the user's Stop of the last worker a `brigadier wait` waits on ends that wait, which
+/// has no timeout and hears no event of a stopped worker.
+#[tokio::test]
+async fn the_users_stop_ends_a_wait_with_no_timeout() {
+    let waited: Arc<Mutex<Option<Value>>> = Arc::default();
+    let script: Script = {
+        let waited = waited.clone();
+        Arc::new(move |turn| {
+            let waited = waited.clone();
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    turn.stopped().await;
+                    return Reply::text("");
+                }
+                if turn.input.contains("Start one.") {
+                    let started = brigadier(&turn, CliRequest::Start(Box::new(start("Work."))));
+                    let id = id_of(&started.await);
+                    let got = brigadier(&turn, wait(&[&id], None)).await;
+                    *waited.lock().unwrap() = Some(got);
+                }
+                Reply::text("Heard.")
+            })
+        })
+    };
+    let flow = Flow::start("cli-wait-user-stop", Options::default(), script).await;
+    flow.say("Start one.").await;
+    let board = flow
+        .until("the worker runs", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == crate::work::TaskState::Running)
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    flow.manager.stop_task_by_user(task.id).await.unwrap();
+    super::eventually("the wait ended", || waited.lock().unwrap().is_some()).await;
+    let got = waited.lock().unwrap().clone().unwrap();
+    assert_eq!(got["timedOut"], false, "{got:#}");
+    assert_eq!(got["events"], json!([]), "{got:#}");
+    flow.stop().await;
+}
+
+/// #752: Stop while `git worktree add` runs: the start ends there. Its CLI never starts, the
+/// worker stays stopped, and what the add made goes.
+#[tokio::test]
+async fn a_stop_during_worktree_creation_stays_stopped() {
+    let workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Set by the thread's turn, once its own worktree is there: only the worker's add waits.
+    let hook: Arc<Mutex<Option<(std::path::PathBuf, String)>>> = Arc::default();
+    let script: Script = {
+        let (workers, hook) = (workers.clone(), hook.clone());
+        Arc::new(move |turn| {
+            let (workers, hook) = (workers.clone(), hook.clone());
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    workers.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Reply::text("Worked.");
+                }
+                if turn.input.contains("Start one.") {
+                    let (path, text) = hook.lock().unwrap().clone().unwrap();
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(&path, text).unwrap();
+                    let mut mode = std::fs::metadata(&path).unwrap().permissions();
+                    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+                    std::fs::set_permissions(&path, mode).unwrap();
+                    brigadier(&turn, CliRequest::Start(Box::new(start("Work.")))).await;
+                }
+                Reply::text("Started.")
+            })
+        })
+    };
+    let flow = Flow::start("cli-stop-worktree", Options::default(), script).await;
+    let (reached, release) = (
+        flow.repo.join(".git/add-reached"),
+        flow.repo.join(".git/add-go"),
+    );
+    *hook.lock().unwrap() = Some((
+        flow.repo.join(".git/hooks/post-checkout"),
+        format!(
+            // Out of the worktree: a stop ends what runs in it, and this stands for the add.
+            "#!/bin/sh\ncd /\ntouch '{}'\nwhile [ ! -e '{}' ]; do sleep 0.05; done\n",
+            reached.display(),
+            release.display()
+        ),
+    ));
+    flow.say("Start one.").await;
+    super::eventually("git worktree add runs", || reached.exists()).await;
+    let task = Flow::task(&flow.board().await, 1).clone();
+    let worktree = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .worker(&task)
+        .join("work");
+    // The stop's own removal of the worktree waits for the add, as git's lock makes it.
+    let add_ends = async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        std::fs::write(&release, "").unwrap();
+    };
+    let (stopped, ()) = tokio::join!(
+        flow.manager.stop_workers(flow.conversation.clone()),
+        add_ends
+    );
+    assert_eq!(stopped.unwrap(), vec![task.id.clone()]);
+    super::eventually("what the add made is gone", || !worktree.exists()).await;
+    // Past anything a start carrying on would still do.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let task = Flow::task(&flow.board().await, 1).clone();
+    assert_eq!(task.state, crate::work::TaskState::Stopped);
+    assert!(task.workspace.is_none());
+    assert_eq!(workers.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let branches = super::git(&flow.repo, &["branch", "--list"]);
+    assert!(!branches.contains("task-1"), "{branches}");
+    flow.stop().await;
+}
+
 /// A plain worker's CLI dying is a `gone` event and a usage limit a `usage-limit` one, for its
 /// session's `brigadier wait`; neither is handed to another model.
 #[tokio::test]
@@ -1698,7 +1814,9 @@ async fn a_plain_workers_turn_end_step_keeps_the_turns_outcome() {
     for (status, cutoff, state, step) in cases {
         let task = flow
             .manager
-            .set_task_state(&flow.conversation, &id, TaskState::Running)
+            .update_task(&flow.conversation, &id, |task| {
+                task.state = TaskState::Running;
+            })
             .await
             .unwrap();
         let live = flow.manager.task_live(&task);
@@ -2680,6 +2798,62 @@ async fn computer_use_workers_take_the_computer_use_row() {
         (json!("codex"), Value::Null, json!("high")),
         "shipped",
     );
+    flow.stop().await;
+}
+
+/// #745: with no row's CLI signed in, a `--work` start runs on the session's own agent, not on
+/// a row whose CLI can't run.
+#[tokio::test]
+async fn a_start_with_every_rows_cli_signed_out_runs_on_the_sessions_agent() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if turn.worker().is_some() {
+                return Reply::text("Done.");
+            }
+            if turn.input.contains("Start it.") {
+                let request = StartRequest {
+                    work: Some("Only codex".into()),
+                    local: true,
+                    ..start("Look at it.")
+                };
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock().unwrap().insert("started".into(), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-rows-signed-out", Options::default(), script).await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n\
+         | Only codex | codex | default | high | test |\n",
+    )
+    .unwrap();
+    flow.behavior
+        .signed_out
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Codex);
+    flow.manager
+        .runtime
+        .refresh_providers(Some(ProviderKind::Codex));
+    flow.until("Codex is signed out", |_| {
+        !flow.manager.runtime.provider_signed_in(ProviderKind::Codex)
+    })
+    .await;
+    flow.say("Start it.").await;
+    flow.until("the worker reported", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Reported)
+    })
+    .await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(seen["started"]["worker"]["agent"], "claude", "{seen:#?}");
     flow.stop().await;
 }
 

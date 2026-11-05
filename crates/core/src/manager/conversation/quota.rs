@@ -108,13 +108,16 @@ impl SessionManager {
         choices
             .into_iter()
             .flat_map(|choice| {
+                let model = self
+                    .runs_as(choice.provider, choice.model.as_deref(), None)
+                    .0;
                 self.runtime
                     .account_candidates(choice.provider)
                     .into_iter()
                     .filter(|candidate| candidate.logged_in)
                     .filter_map(move |candidate| {
                         candidate.quota.as_ref().and_then(|quota| {
-                            crate::accounts::ready_again_at(quota, choice.model.as_deref())
+                            crate::accounts::ready_again_at(quota, model.as_deref())
                         })
                     })
             })

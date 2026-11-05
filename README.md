@@ -53,7 +53,7 @@ better: each reviews the other's work. To build from source (or for Windows and 
    repository (**+** next to **Projects**). It can also clone one, or start git in a folder.
 3. Press **New session** on the project and say what you want in plain words.
 4. The session works on its own branch, in its own worktree: it plans and changes the code,
-   running your checks and getting the other vendor's review itself. Then it merges the work, and
+   running checks and getting a review when needed. It asks before merging into the base branch;
    a **Revert** button sits under the merge message.
 
 Step by step: [docs/user/first-task.md](docs/user/first-task.md).
@@ -68,12 +68,11 @@ to start it in the background. A session can also offer to start something outsi
 its own session. The tab bar holds the open session's chat and its own terminals, browser pages
 and files. More: [docs/user/sessions-and-tabs.md](docs/user/sessions-and-tabs.md).
 
-## Auto-merge and Revert
+## Merge and Revert
 
-Finished work merges on its own: through a pull request when the project is on GitHub and `gh` is
-signed in, otherwise into the base branch on your Mac. Checks and review inform the merge without
-holding it; the merge message says what was verified. Each merge message has a **Revert** button.
-Turn it off in Settings › Git. More: [docs/user/auto-merge-and-revert.md](docs/user/auto-merge-and-revert.md).
+The thread asks before merging work into the base branch or pushing it. It can use a pull request
+or merge locally as you direct. Each merge message has a **Revert** button.
+More: [docs/user/auto-merge-and-revert.md](docs/user/auto-merge-and-revert.md).
 
 ## Accounts
 
@@ -175,10 +174,8 @@ A worker runs its own checks and reports when it's done. Its commits then **land
   integrated tree, never mid-run. The thread fixes what it agrees with, then reports what's left. A
   small change with its tests passing lands without one.
 
-When the thread's own work is ready, it merges it the same way: through a pull request when the
-project is on GitHub and `gh` is signed in, otherwise on your Mac. The merge message has a Revert
-button that asks the thread to undo it the way it went in. With Settings › Git › "Merge on its own
-when the work is ready" off, the thread tells you the work is ready and merges when you ask.
+When the thread's own work is ready, it asks before pushing or merging into the base branch.
+The merge message has a Revert button that asks the thread to undo it the way it went in.
 
 Archiving a session removes its worktrees, scratch folders, CLI session files and processes,
 including detached children. Unfinished work is kept as a WIP commit on its branch. Anything that

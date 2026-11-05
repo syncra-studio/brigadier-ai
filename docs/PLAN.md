@@ -514,7 +514,7 @@ Not built: the UI for the sign-in states and the sign-in in Brigadier (it waits 
 
 | Risk | Mitigation |
 |---|---|
-| Anthropic's terms for third-party use of subscriptions change | Run only the user's own unmodified `claude` binary, and never handle tokens. Watch the policy, and support API-key auth as an alternative. |
+| Anthropic's terms for third-party use of subscriptions change | Run only the user's own unmodified `claude` binary, and never use or change its login tokens. Sharing MCP sign-ins between extra accounts does read the Keychain item that holds them and rewrite it whole, login unchanged, only on a Claude version that still uses its storage lock (`crates/providers/src/mcp_oauth.rs`). Watch the policy, and support API-key auth as an alternative. |
 | `codex app-server` is marked experimental; its API may change | Generate bindings from the installed version's schema, detect the version, and isolate everything in the adapter crate. |
 | Codex orchestrator cannot fully disable its built-in tools | Use a read-only sandbox, and have Brigadier decline every approval. Verify in Phase 2, and prefer a Claude orchestrator if needed. |
 | Rebirth loses unrecorded nuance | Handoff note, verbatim recent messages, full transcript search. The Inspector compares before/after. |

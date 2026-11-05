@@ -38,6 +38,40 @@ pub fn parse_owner_pid(raw: &str) -> Result<i32, String> {
     }
 }
 
+/// For the start of `serve`: a daemon whose owner is already gone exits 0 here,
+/// before it spends a second or more starting the driver.
+pub fn exit_if_already_gone(owner_pid: Option<i32>) {
+    if let Some(pid) = owner_pid.filter(|pid| !owner_alive(*pid)) {
+        eprintln!("Brigadier Computer Use daemon: owner process {pid} is not running; exiting.");
+        std::process::exit(0);
+    }
+}
+
+#[cfg(unix)]
+fn owner_alive(pid: i32) -> bool {
+    process_exists(pid)
+}
+
+#[cfg(windows)]
+fn owner_alive(pid: i32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: the handle is checked, only polled with a zero timeout and closed here.
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else {
+            return false;
+        };
+        let alive = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+        let _ = CloseHandle(process);
+        alive
+    }
+}
+
 /// Start watching `pid`. Never blocks; the wait runs on a dedicated thread.
 #[cfg(unix)]
 pub fn watch(pid: i32) -> OwnerWatch {

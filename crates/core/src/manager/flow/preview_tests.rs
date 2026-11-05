@@ -91,6 +91,32 @@ fn thread(replies: Replies) -> Script {
                     "start_preview",
                     json!({ "command": command, "name": "report", "kind": "pdf", "target": "out.pdf" }),
                 )
+            } else if let Some((open, command)) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-page "))
+                .and_then(|rest| rest.split_once(" :: "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "site", "open": open }),
+                )
+            } else if let Some((open, command)) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-page-for-user "))
+                .and_then(|rest| rest.split_once(" :: "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "site", "open": open, "purpose": "user" }),
+                )
+            } else if let Some(command) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-test-for-user "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "tests", "kind": "test", "purpose": "user" }),
+                )
             } else if input.contains("Please stop it.") {
                 ("stop_preview", json!({}))
             } else if input.contains("Show me the log.") {
@@ -548,6 +574,7 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
             kind: None,
             target: None,
             purpose: None,
+            open: None,
         };
         manager.start_preview(&id, args).await
     });
@@ -1155,6 +1182,348 @@ async fn a_web_preview_runs_once_its_url_answers() {
         "{log}"
     );
     server.abort();
+    flow.stop().await;
+}
+
+/// `--open` names the page: a server that prints only its root still opens on that page, and a
+/// path that would leave the server, or a preview that has no page, is refused.
+#[tokio::test]
+async fn a_preview_with_open_keeps_its_page_when_the_server_prints_its_root() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let replies: Replies = Arc::default();
+    let flow = Flow::start("preview-open", Options::default(), thread(replies.clone())).await;
+    // Port 14237 is the one from the report, unless something else holds it on this machine.
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:14237").await {
+        Ok(listener) => listener,
+        Err(_) => tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(),
+    };
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        }
+    });
+
+    for refused in ["//elsewhere/page", "/with space", "page.html"] {
+        flow.say(&format!("start-page {refused} :: sleep 600"))
+            .await;
+        flow.settled().await;
+        let answer = replies.lock().unwrap().last().unwrap().1.clone();
+        println!("refused {refused:?}: {answer}");
+        assert!(
+            answer.contains("isn't a page on the preview's own server"),
+            "{answer}"
+        );
+    }
+    flow.say("start-page /x :: cargo test").await;
+    flow.settled().await;
+    let answer = replies.lock().unwrap().last().unwrap().1.clone();
+    println!("refused a test run: {answer}");
+    assert!(
+        answer.contains("--open is only for a web preview"),
+        "{answer}"
+    );
+    assert!(flow.board().await.previews.is_empty());
+
+    let open = "/fixtures/onboarding-welcome.html?preview=1";
+    flow.say(&format!(
+        "start-page {open} :: echo 'Local: http://127.0.0.1:{port}/'; sleep 600"
+    ))
+    .await;
+    let board = flow
+        .until("the preview to be ready", |board| {
+            board
+                .previews
+                .get("preview-1")
+                .is_some_and(|preview| preview.state == PreviewState::Running)
+        })
+        .await;
+    let url = board.previews["preview-1"].url.clone();
+    println!("record url: {}", url.as_deref().unwrap_or("(none)"));
+    let wanted = format!("http://127.0.0.1:{port}{open}");
+    assert_eq!(url.as_deref(), Some(wanted.as_str()));
+    server.abort();
+    flow.stop().await;
+}
+
+/// A local server that answers everything, on a port of its own.
+async fn answering_server() -> (u16, tokio::task::JoinHandle<()>) {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        }
+    });
+    (port, server)
+}
+
+/// The tabs the window was asked for: by whom, on what, and whether in front.
+type Tabs = Arc<Mutex<Vec<(Option<crate::TaskId>, String, bool)>>>;
+
+/// The app's window: it opens every Browser tab it is asked for and keeps what it was asked.
+fn window(flow: &Flow) -> Tabs {
+    use crate::app_call::{AppAnswer, AppOp, OpenTarget};
+    let tabs: Tabs = Arc::default();
+    let mut calls = flow.manager.subscribe_app();
+    let manager = flow.manager.clone();
+    let log = tabs.clone();
+    tokio::spawn(async move {
+        while let Ok(call) = calls.recv().await {
+            if let AppOp::Open {
+                target: OpenTarget::Url { url },
+                show,
+            } = &call.op
+            {
+                log.lock()
+                    .unwrap()
+                    .push((call.task_id.clone(), url.clone(), *show));
+                manager.app_answer(
+                    &call.id,
+                    AppAnswer::Opened {
+                        tab: Some("browser:new".into()),
+                        front: false,
+                        kept: false,
+                    },
+                );
+            }
+        }
+    });
+    tabs
+}
+
+/// Waits for the tabs asked for to be `wanted` (none on a system that doesn't embed pages).
+async fn tabs_are(tabs: &Tabs, wanted: Vec<(Option<crate::TaskId>, String, bool)>) {
+    let wanted = if cfg!(target_os = "linux") {
+        Vec::new()
+    } else {
+        wanted
+    };
+    let count = wanted.len();
+    super::eventually("the tabs to be asked for", || {
+        tabs.lock().unwrap().len() >= count
+    })
+    .await;
+    // What should not open has had its time to.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(*tabs.lock().unwrap(), wanted);
+}
+
+/// Waits for `id` to run and answers its address.
+async fn runs(flow: &Flow, id: &str) -> Option<String> {
+    let board = flow
+        .until("the preview to run", |board| {
+            board
+                .previews
+                .get(id)
+                .is_some_and(|preview| preview.state == PreviewState::Running)
+        })
+        .await;
+    board.previews[id].url.clone()
+}
+
+/// An agent's web preview for the user opens a tab behind on its first run, the thread's or a
+/// worker's; one to prove a change, or one that is no web page, opens none.
+#[tokio::test]
+async fn a_tab_opens_only_on_a_user_web_previews_first_run() {
+    let replies: Replies = Arc::default();
+    let thread = thread(replies.clone());
+    let flow = Flow::start(
+        "preview-tab",
+        Options::default(),
+        script(move |turn| {
+            let thread = thread.clone();
+            async move {
+                if turn.worker().is_some() {
+                    let asked = turn
+                        .input
+                        .lines()
+                        .find_map(|line| line.strip_prefix("worker-preview "))
+                        .and_then(|rest| rest.split_once(" :: "))
+                        .map(|(open, command)| (open.to_owned(), command.to_owned()));
+                    if let Some((open, command)) = asked {
+                        let args = json!({ "command": command, "name": "demo", "open": open, "purpose": "user" });
+                        let reply = turn.call("start_preview", args).await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text("Done.");
+                }
+                let handed = turn
+                    .input
+                    .lines()
+                    .find_map(|line| line.strip_prefix("hand-over "))
+                    .map(str::to_owned);
+                if let Some(rest) = handed {
+                    turn.start_worker("Demo", &format!("worker-preview {rest}")).await;
+                    return Reply::text("Started it.");
+                }
+                thread(turn).await
+            }
+        }),
+    )
+    .await;
+    let tabs = window(&flow);
+    let (proof, _proof_server) = answering_server().await;
+    let (user, _user_server) = answering_server().await;
+    let (worker, _worker_server) = answering_server().await;
+
+    // Started to prove a change: no tab.
+    flow.say(&format!(
+        "start echo 'Local: http://127.0.0.1:{proof}/'; sleep 600"
+    ))
+    .await;
+    assert!(runs(&flow, "preview-1").await.is_some());
+    // For the user, but a test run: no tab.
+    flow.say("start-test-for-user sleep 600").await;
+    runs(&flow, "preview-2").await;
+    tabs_are(&tabs, Vec::new()).await;
+
+    // The thread's web preview for the user: behind, on the address it printed.
+    flow.say(&format!(
+        "start-for-user echo 'Local: http://127.0.0.1:{user}/'; sleep 600"
+    ))
+    .await;
+    let url = runs(&flow, "preview-3").await.unwrap();
+    assert_eq!(url, format!("http://127.0.0.1:{user}/"));
+    tabs_are(&tabs, vec![(None, url.clone(), false)]).await;
+
+    // A worker's: the same, on its page.
+    flow.say(&format!(
+        "hand-over /demo.html?x=1 :: echo 'Local: http://127.0.0.1:{worker}/'; sleep 600"
+    ))
+    .await;
+    let page = runs(&flow, "preview-4").await.unwrap();
+    assert_eq!(page, format!("http://127.0.0.1:{worker}/demo.html?x=1"));
+    let task = flow.board().await.previews["preview-4"].task_id.clone();
+    assert!(task.is_some());
+    tabs_are(&tabs, vec![(None, url, false), (task, page, false)]).await;
+    flow.stop().await;
+}
+
+/// Start again keeps the page, on the port the new run printed, and opens no tab: it runs for the
+/// user too, but the user started it.
+#[tokio::test]
+async fn start_again_keeps_the_open_page_and_opens_no_tab() {
+    let flow = Flow::start(
+        "preview-tab-again",
+        Options::default(),
+        thread(Arc::default()),
+    )
+    .await;
+    let tabs = window(&flow);
+    let tmp = scratch("tab-again");
+    let (first, _first_server) = answering_server().await;
+    let (second, _second_server) = answering_server().await;
+    let (port, end) = (tmp.join("port"), tmp.join("end"));
+    std::fs::write(&port, first.to_string()).unwrap();
+    let open = "/fixtures/a.html?x=1";
+    flow.say(&format!(
+        "start-page-for-user {open} :: echo \"Local: http://127.0.0.1:$(cat {})/\"; until [ -e {} ]; do sleep 0.1; done",
+        port.display(),
+        end.display()
+    ))
+    .await;
+    let url = runs(&flow, "preview-1").await.unwrap();
+    assert_eq!(url, format!("http://127.0.0.1:{first}{open}"));
+    tabs_are(&tabs, vec![(None, url.clone(), false)]).await;
+
+    // It ends on its own, with its page, and starts again on another port.
+    std::fs::write(&end, "").unwrap();
+    let ended = flow
+        .until("it to end", |board| {
+            !board.previews["preview-1"].state.is_live()
+        })
+        .await;
+    assert_eq!(
+        ended.previews["preview-1"].url.as_deref(),
+        Some(url.as_str())
+    );
+    std::fs::remove_file(&end).unwrap();
+    std::fs::write(&port, second.to_string()).unwrap();
+    flow.manager
+        .restart_preview(flow.conversation.clone(), "preview-1".into())
+        .await
+        .unwrap();
+    let again = runs(&flow, "preview-1").await.unwrap();
+    assert_eq!(again, format!("http://127.0.0.1:{second}{open}"));
+    let board = flow.board().await;
+    assert_eq!(board.previews["preview-1"].open_path.as_deref(), Some(open));
+    tabs_are(&tabs, vec![(None, url, false)]).await;
+    std::fs::write(&end, "").unwrap();
+    flow.stop().await;
+}
+
+/// Settings that send local links elsewhere ask nothing of the window, and with no window at all
+/// the preview still runs and its agent hears nothing of a tab.
+#[tokio::test]
+async fn a_previews_tab_asks_nothing_when_settings_say_no_and_no_window_is_no_error() {
+    let replies: Replies = Arc::default();
+    let flow = Flow::start(
+        "preview-tab-gate",
+        Options::default(),
+        thread(replies.clone()),
+    )
+    .await;
+
+    // No window to take it.
+    let (none, _none_server) = answering_server().await;
+    flow.say(&format!(
+        "start-for-user echo 'Local: http://127.0.0.1:{none}/'; sleep 600"
+    ))
+    .await;
+    runs(&flow, "preview-1").await;
+    flow.settled().await;
+    let answer = replies.lock().unwrap().last().unwrap().1.clone();
+    assert!(answer.starts_with("preview-1 \"site\""), "{answer}");
+    assert!(!answer.contains("window"), "{answer}");
+    assert_eq!(
+        state_of(&flow.board().await, "preview-1"),
+        PreviewState::Running
+    );
+
+    let tabs = window(&flow);
+    // The built-in browser off.
+    let on = flow.core.settings();
+    let mut settings = on.clone();
+    settings.browser_enabled = false;
+    flow.core.update_settings(settings).await.unwrap();
+    let (off, _off_server) = answering_server().await;
+    flow.say(&format!(
+        "start-for-user echo 'Local: http://127.0.0.1:{off}/'; sleep 600"
+    ))
+    .await;
+    runs(&flow, "preview-2").await;
+    tabs_are(&tabs, Vec::new()).await;
+
+    // Local links sent to the default browser.
+    let mut settings = on.clone();
+    settings.local_links_in = crate::model::LinkTarget::System;
+    flow.core.update_settings(settings).await.unwrap();
+    let (system, _system_server) = answering_server().await;
+    flow.say(&format!(
+        "start-for-user echo 'Local: http://127.0.0.1:{system}/'; sleep 600"
+    ))
+    .await;
+    runs(&flow, "preview-3").await;
+    tabs_are(&tabs, Vec::new()).await;
+
+    // Local links back in Brigadier's browser: the tab opens.
+    flow.core.update_settings(on).await.unwrap();
+    let (back, _back_server) = answering_server().await;
+    flow.say(&format!(
+        "start-for-user echo 'Local: http://127.0.0.1:{back}/'; sleep 600"
+    ))
+    .await;
+    let url = runs(&flow, "preview-4").await.unwrap();
+    tabs_are(&tabs, vec![(None, url, false)]).await;
     flow.stop().await;
 }
 

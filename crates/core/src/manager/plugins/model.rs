@@ -8,6 +8,23 @@ pub struct CatalogView {
     pub rows: Vec<CatalogRow>,
     /// Hash of catalog + choices for later menu cache invalidation.
     pub version: String,
+    /// What runs only on its own CLI, shown read-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cli_only: Option<Vec<CatalogCliOnly>>,
+}
+
+/// A plugin's hooks, commands and agents, or a CLI's own: never shared, installed or edited.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogCliOnly {
+    pub agent: Option<brigadier_providers::ProviderKind>,
+    /// The plugin's id; none: the CLI's own folders.
+    pub plugin: Option<String>,
+    pub hooks: Vec<String>,
+    pub commands: Vec<String>,
+    pub agents: Vec<String>,
+    pub plugins: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
@@ -90,6 +107,7 @@ impl CatalogView {
         Self {
             rows,
             version: brigadier_registry::catalog::fingerprint(&bytes),
+            cli_only: None,
         }
     }
 }

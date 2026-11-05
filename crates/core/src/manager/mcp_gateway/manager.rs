@@ -84,6 +84,13 @@ impl SessionManager {
         &self.mcp_gateway
     }
 
+    /// Shares MCP sign-ins with the extra accounts from boot on: one made in the user's own CLI
+    /// or in an earlier run needs no sign-in here first. A CLI with no extra account is skipped
+    /// before any credential store, so an account added later is picked up without a restart.
+    pub fn start_mcp_account_spread(&self) {
+        self.mcp_logins.enable_account_spread(self.runtime.clone());
+    }
+
     /// Cache only sign-in routing from the catalog already read for the page or a launch.
     pub(crate) fn cache_plugin_sign_in_targets(&self, rows: &[brigadier_registry::catalog::Row]) {
         remember_targets(&self.mcp_gateway, rows, &self.data_dir);

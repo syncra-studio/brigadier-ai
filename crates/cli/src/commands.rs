@@ -173,6 +173,22 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/context.schema.json"),
     },
     Command {
+        name: "skill",
+        summary: "The skills of your session's setup, or one skill's whole text.",
+        details: "Alone it lists the skills and whether your CLI loaded each at launch; with a \
+                  name it prints that skill whole. The same as `brigadier context skills`. A \
+                  worker's CLI loads none: it pulls the one it needs here.",
+        args: &[Arg::Positional {
+            name: "name",
+            help: "The skill to print whole; none lists them.",
+            required: false,
+            rest: false,
+            choices: &[],
+        }],
+        available: true,
+        schema: include_str!("../schemas/context.schema.json"),
+    },
+    Command {
         name: "context",
         summary: "Everything about your job, on pull: brief, decisions, open items, ledger, \
                   transcript, skills, MCP servers, project, routing.",
@@ -374,8 +390,8 @@ pub const COMMANDS: &[Command] = &[
             Arg::Flag {
                 long: "skill",
                 value: Some("NAME"),
-                help: "Gone: a worker has no skills (D13); it reads one with `brigadier context \
-                       skills <name>`.",
+                help: "Gone: a worker has no skills (D13); it reads one with `brigadier skill \
+                       <name>`.",
                 choices: &[],
                 repeat: true,
             },
@@ -555,8 +571,16 @@ pub const COMMANDS: &[Command] = &[
                 "purpose",
                 "WHY",
                 &["proof", "user"],
-                "start: `user` when the user asked to see it (a merge leaves it running); \
-                 `proof` by default.",
+                "start: `user` when the user asked to see it (a merge leaves it running, and a \
+                 web page opens its own tab behind the user's, where Settings › Browser sends \
+                 local links to Brigadier); `proof` by default.",
+            ),
+            flag(
+                "open",
+                "PATH",
+                "start: the page to open on a web preview, a path on its own server starting \
+                 with one `/` (`/docs/page.html?x=1`); its address is the server's origin plus \
+                 this, whatever the server prints.",
             ),
             flag("tail", "N", "log: the last N lines (40 by default)."),
             flag(

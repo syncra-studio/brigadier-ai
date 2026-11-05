@@ -447,19 +447,22 @@ impl SessionManager {
         false
     }
 
+    /// Its turn or a background command of its own counts: a reported worker's CLI closing
+    /// would end that command with it.
     pub(super) async fn has_running_workers(&self, id: &ConversationId) -> bool {
         self.core.tasks(id).await.is_ok_and(|tasks| {
-            tasks.iter().any(|task| {
-                matches!(
-                    task.state,
-                    TaskState::Queued
-                        | TaskState::Starting
-                        | TaskState::Running
-                        | TaskState::Blocked
-                        | TaskState::Landing
-                        | TaskState::TakenOver
-                )
-            })
+            self.workers_working(&tasks)
+                || tasks.iter().any(|task| {
+                    matches!(
+                        task.state,
+                        TaskState::Queued
+                            | TaskState::Starting
+                            | TaskState::Running
+                            | TaskState::Blocked
+                            | TaskState::Landing
+                            | TaskState::TakenOver
+                    )
+                })
         })
     }
 

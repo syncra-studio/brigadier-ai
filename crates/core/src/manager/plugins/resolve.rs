@@ -3,9 +3,11 @@ use brigadier_providers::ProviderKind;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use brigadier_providers::{McpGateway, McpServer, McpTransport, SwitchedOff};
+use brigadier_providers::{
+    McpGateway, McpServer, McpSources, McpTransport, McpValuePart, SwitchedOff,
+};
 use brigadier_registry::catalog::{Content, Definition, Kind, Row};
-use brigadier_registry::{Catalog, Roots, Transport};
+use brigadier_registry::{Catalog, Roots, Transport, WrittenPart};
 
 use super::choices::Choices;
 
@@ -157,7 +159,66 @@ fn server(server: &brigadier_registry::Server, name: &str) -> McpServer {
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
+        sources: Default::default(),
     }
+}
+
+/// Fills in what `agent` reads of `item` for itself. `Err`: why `item` can't reach it: a header
+/// whose variable is unset, for any agent (never an empty credential or a literal `${VAR}`), or
+/// a headers helper outside Claude. The message names variables and keys, never a value.
+fn read_sources(
+    item: &brigadier_registry::Server,
+    server: &mut McpServer,
+    agent: ProviderKind,
+    vars: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let name = &server.name;
+    let http = matches!(item.transport, Transport::Http { .. });
+    let mut references = Vec::new();
+    'references: for (key, parts) in &item.written.references {
+        let mut own = Vec::with_capacity(parts.len());
+        for part in parts {
+            own.push(match part {
+                WrittenPart::Text(text) => McpValuePart::Text(text.expose().to_owned()),
+                WrittenPart::Var { name, .. }
+                    if vars.get(name).is_some_and(|value| !value.is_empty()) =>
+                {
+                    McpValuePart::Var(name.clone())
+                }
+                WrittenPart::Var {
+                    default: Some(default),
+                    ..
+                } => McpValuePart::Text(default.expose().to_owned()),
+                WrittenPart::Var { name: var, .. } if http => {
+                    return Err(format!(
+                        "MCP server {name:?} was left out because the variable {var} it reads for \
+                         {key} isn't set. Set it in your shell and restart Brigadier to use it."
+                    ));
+                }
+                // An optional setting of a stdio server: `env` keeps its value as it is.
+                WrittenPart::Var { .. } => continue 'references,
+            });
+        }
+        // Only defaults in use: a plain value, which `env` already has.
+        if own.iter().any(|part| matches!(part, McpValuePart::Var(_))) {
+            references.push((key.clone(), own));
+        }
+    }
+    let sources = McpSources {
+        references,
+        headers_helper: item.written.headers_helper.clone(),
+    };
+    if agent != ProviderKind::Claude && sources.headers_helper.is_some() {
+        return Err(format!(
+            "MCP server {name:?} was left out of this session because its headers come from a \
+             headersHelper, which only Claude Code can run."
+        ));
+    }
+    // Any other CLI keeps the launch's values in `env`.
+    if matches!(agent, ProviderKind::Claude | ProviderKind::Codex) {
+        server.sources = sources;
+    }
+    Ok(())
 }
 
 pub fn resolve(ctx: Context<'_>) -> Resolved {
@@ -165,7 +226,7 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
     let cli = brigadier_registry::adapter::adapter(ctx.agent);
     let cwd_root = checkout(ctx.cwd);
     let catalog = Catalog::read(ctx.account_home, ctx.trusted.then_some(cwd_root));
-    let native_rows = Catalog::rows(std::slice::from_ref(&catalog));
+    let native_rows = catalog.rows_loaded_by(ctx.account_home, ctx.agent);
     let native: Vec<(&Row, &Definition)> = native_rows
         .iter()
         .flat_map(|row| {
@@ -261,10 +322,21 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
             }
         }
     }
+    let mut left_out = Vec::new();
     for ((kind, name), (row, definition)) in &selected {
         match &definition.content {
             Content::Server(item) => {
                 let mut server = server(item, name);
+                if let Err(message) =
+                    read_sources(item, &mut server, ctx.agent, &ctx.account_home.vars)
+                {
+                    resolved.warnings.push(ResolveWarning {
+                        server: name.to_string(),
+                        message,
+                    });
+                    left_out.push((*kind, *name));
+                    continue;
+                }
                 if item.signs_in
                     && let Transport::Http { url, .. } = &item.transport
                     && let Some(gateway) = ctx
@@ -275,6 +347,7 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
                         url: gateway.url.clone(),
                     };
                     server.env = vec![gateway.secret_header.clone()];
+                    server.sources = McpSources::default();
                     server.gateway = Some(gateway);
                 }
                 resolved.servers.push(server);
@@ -313,6 +386,10 @@ pub fn resolve(ctx: Context<'_>) -> Resolved {
                 });
             }
         }
+    }
+    // Off in the CLI's own config too, where it would still load (Codex's).
+    for key in left_out {
+        selected.remove(&key);
     }
     for (row, definition) in native {
         let keep = selected
@@ -738,6 +815,119 @@ mod tests {
         assert!(!format!("{:?}", resolved.servers[0].gateway).contains("local-secret"));
     }
 
+    /// #809: each CLI reads a server's header source itself, or goes without it and says why.
+    #[test]
+    fn header_sources_reach_each_cli_and_a_source_it_cant_read_is_left_out() {
+        let mut fixture = Fixture::new();
+        fixture
+            .roots
+            .vars
+            .insert("FIXTURE_TOKEN".into(), "frozen-value".into());
+        write(
+            &fixture.roots.claude_json,
+            r#"{"mcpServers":{
+                "helper":{"url":"https://helper.test/mcp","headersHelper":"print-headers"},
+                "bearer":{"url":"https://bearer.test/mcp","headers":{"Authorization":"Bearer ${FIXTURE_TOKEN}"}},
+                "mixed":{"url":"https://mixed.test/mcp","headers":{"X-Key":"a-${FIXTURE_TOKEN}"}},
+                "fallback":{"url":"https://fallback.test/mcp","headers":{"Authorization":"Bearer x","X-Key":"${FIXTURE_MISSING:-used}"}},
+                "unset":{"url":"https://unset.test/mcp","headers":{"Authorization":"Bearer ${FIXTURE_MISSING}"}},
+                "optional":{"command":"optional-server","env":{"OPTIONAL":"${FIXTURE_MISSING}"}},
+                "renamed":{"command":"renamed-server","env":{"API_KEY":"${FIXTURE_TOKEN}"}}
+            }}"#,
+        );
+        write(
+            &fixture.roots.codex_home.join("config.toml"),
+            "[mcp_servers.own]\nurl='https://own.test/mcp'\nbearer_token_env_var='FIXTURE_MISSING'\n",
+        );
+        let rows = fixture.rows();
+        let helper = rows.iter().find(|row| row.name == "helper").unwrap();
+        let Content::Server(helper) = &helper.definitions[0].content else {
+            unreachable!()
+        };
+        assert!(!helper.signs_in, "a headers helper is not an OAuth sign-in");
+        let names = |resolved: &Resolved| -> Vec<String> {
+            resolved.servers.iter().map(|s| s.name.clone()).collect()
+        };
+        let left_out = |resolved: &Resolved| -> Vec<String> {
+            resolved.warnings.iter().map(|w| w.server.clone()).collect()
+        };
+        let by_name = |resolved: &'_ Resolved, name: &str| {
+            resolved
+                .servers
+                .iter()
+                .find(|server| server.name == name)
+                .unwrap()
+                .clone()
+        };
+
+        let claude = fixture.resolve(ProviderKind::Claude, &rows, &Choices::default());
+        assert_eq!(
+            names(&claude),
+            [
+                "bearer", "fallback", "helper", "mixed", "optional", "renamed"
+            ]
+        );
+        assert_eq!(left_out(&claude), ["own", "unset"]);
+        assert_eq!(
+            by_name(&claude, "helper").sources.headers_helper.as_deref(),
+            Some("print-headers")
+        );
+        assert_eq!(
+            by_name(&claude, "bearer").sources.references,
+            [(
+                "Authorization".to_owned(),
+                vec![
+                    McpValuePart::Text("Bearer ".into()),
+                    McpValuePart::Var("FIXTURE_TOKEN".into())
+                ]
+            )]
+        );
+        // The default is what's used, so it is a plain value, not a reference.
+        assert!(by_name(&claude, "fallback").sources.references.is_empty());
+        // An unset variable in a stdio server's env keeps today's value: only a header skips.
+        let optional = by_name(&claude, "optional");
+        assert_eq!(optional.sources, Default::default());
+        assert_eq!(optional.env, [("OPTIONAL".to_owned(), String::new())]);
+
+        let codex = fixture.resolve(ProviderKind::Codex, &rows, &Choices::default());
+        // A set variable Codex can't name keeps its value (`env`); the provider keeps it off
+        // the command line.
+        assert_eq!(
+            names(&codex),
+            ["bearer", "fallback", "mixed", "optional", "renamed"]
+        );
+        assert_eq!(left_out(&codex), ["helper", "own", "unset"]);
+        assert_eq!(
+            by_name(&codex, "renamed").env,
+            [("API_KEY".to_owned(), "frozen-value".to_owned())]
+        );
+        // Its own server goes too, not only Brigadier's copy of it.
+        assert!(codex.off.servers.contains(&"own".to_owned()));
+
+        // OpenCode keeps the launch's value (only a set variable), and no reference.
+        let opencode = fixture.resolve(ProviderKind::OpenCode, &rows, &Choices::default());
+        assert_eq!(
+            names(&opencode),
+            ["bearer", "fallback", "mixed", "optional", "renamed"]
+        );
+        let bearer = by_name(&opencode, "bearer");
+        assert_eq!(bearer.sources, Default::default());
+        assert_eq!(
+            bearer.env,
+            [("Authorization".to_owned(), "Bearer frozen-value".to_owned())]
+        );
+
+        for warning in claude.warnings.iter().chain(&codex.warnings) {
+            assert!(!warning.message.contains("frozen-value"), "{warning:?}");
+        }
+        let unset = claude
+            .warnings
+            .iter()
+            .find(|w| w.server == "unset")
+            .unwrap();
+        assert!(unset.message.contains("FIXTURE_MISSING"), "{unset:?}");
+    }
+
     #[test]
     fn untrusted_context_excludes_project_definitions_even_when_globalized() {
         let fixture = Fixture::new();
@@ -833,5 +1023,88 @@ mod tests {
                 native_http
             );
         }
+    }
+
+    /// #707: OpenCode's items reach the other CLIs; what no CLI could take reaches none, and a
+    /// broken file of its own leaves their launches as they were.
+    #[test]
+    fn an_opencode_server_reaches_every_cli_and_a_bad_one_none() {
+        let fixture = Fixture::new();
+        let config = fixture.roots.opencode_dir.join("opencode.jsonc");
+        write(
+            &config,
+            r#"{ // mine
+                "mcp": {
+                    "good": {"type": "local", "command": ["good-server", "--x"]},
+                    "bad.name": {"type": "local", "command": ["x"]},
+                    "no-command": {"type": "local", "command": []},
+                },
+            }"#,
+        );
+        let rows = fixture.rows();
+        let names = |agent| {
+            fixture
+                .resolve(agent, &rows, &Choices::default())
+                .servers
+                .into_iter()
+                .map(|server| server.name)
+                .collect::<Vec<_>>()
+        };
+        for agent in [
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::OpenCode,
+        ] {
+            assert_eq!(names(agent), ["good"], "{agent:?}");
+        }
+        write(&config, "{ not json");
+        let rows = fixture.rows();
+        for agent in [
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::OpenCode,
+        ] {
+            let resolved = fixture.resolve(agent, &rows, &Choices::default());
+            assert!(resolved.servers.is_empty(), "{agent:?}");
+        }
+    }
+
+    /// #707: a skill in a folder OpenCode loads by itself isn't given to it a second time; a CLI
+    /// that doesn't load that folder still gets it.
+    #[test]
+    fn a_skill_opencode_loads_by_itself_is_not_given_again() {
+        let fixture = Fixture::new();
+        skill(&fixture.roots.home.join(".claude/skills/example"), "One.");
+        let rows = fixture.rows();
+        let resolved = fixture.resolve(ProviderKind::OpenCode, &rows, &Choices::default());
+        assert_eq!(resolved.skills.len(), 1);
+        assert!(resolved.skills[0].native);
+        let resolved = fixture.resolve(ProviderKind::Codex, &rows, &Choices::default());
+        assert!(!resolved.skills[0].native);
+    }
+
+    /// #707: OpenCode's own server, switched off in Brigadier, is on its off list.
+    #[test]
+    fn an_opencode_server_switched_off_is_suppressed_there() {
+        let fixture = Fixture::new();
+        write(
+            &fixture.roots.opencode_dir.join("opencode.json"),
+            r#"{"mcp": {"own": {"type": "local", "command": ["own-server"]}}}"#,
+        );
+        let rows = fixture.rows();
+        let choices = Choices(
+            rows.iter()
+                .map(|row| {
+                    let off = Choice {
+                        on: false,
+                        ..Choice::default_for(row)
+                    };
+                    (row.id.clone(), off)
+                })
+                .collect(),
+        );
+        let resolved = fixture.resolve(ProviderKind::OpenCode, &rows, &choices);
+        assert!(resolved.servers.is_empty());
+        assert_eq!(resolved.off.servers, ["own"]);
     }
 }

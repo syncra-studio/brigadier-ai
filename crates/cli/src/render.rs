@@ -584,6 +584,9 @@ pub fn wait(output: &WaitOutput) -> String {
             out.push_str(message.trim_end());
             out.push('\n');
         }
+        if let Some(at) = event.resets_at_ms {
+            out.push_str(&format!("Resets {}.\n", local_time(at)));
+        }
         // What Brigadier saw, after what the worker said (harness P1).
         if let Some(git) = &event.git {
             out.push_str(&git_text(git));
@@ -982,7 +985,7 @@ fn ordinal(n: u32) -> String {
 }
 
 /// An epoch-ms instant as a local date and time ("2026-10-23 09:40"), or `unknown`.
-fn local_time(at_ms: i64) -> String {
+pub fn local_time(at_ms: i64) -> String {
     jiff::Timestamp::from_millisecond(at_ms).map_or_else(
         |_| "unknown".into(),
         |at| {
@@ -1153,6 +1156,34 @@ mod tests {
     use super::*;
     use crate::models::{Account, ModelsOutput, Usage};
     use crate::protocol::ProviderKind;
+
+    /// #710: `brigadier wait` says when a usage limit resets.
+    #[test]
+    fn wait_says_when_a_usage_limit_resets() {
+        let at = 1_792_783_200_000;
+        let text = wait(&WaitOutput {
+            events: vec![crate::protocol::WaitEvent {
+                id: "e5f6a7b8".into(),
+                event_id: String::new(),
+                event: crate::protocol::EventKind::UsageLimit,
+                message: Some("its five_hour usage limit".into()),
+                asks: None,
+                resets_at_ms: Some(at),
+                at_ms: 1,
+                git: None,
+                commands: None,
+            }],
+            timed_out: false,
+            message: false,
+        });
+        assert!(
+            text.contains(&format!(
+                "its five_hour usage limit\nResets {}.\n",
+                local_time(at)
+            )),
+            "{text}"
+        );
+    }
 
     #[test]
     fn why_names_the_turn_its_message_reply_and_ledger() {

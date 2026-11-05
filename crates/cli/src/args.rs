@@ -274,6 +274,14 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             item: None,
             session: false,
         },
+        "skill" => CliRequest::Context {
+            part: Some(ContextPart::Skills),
+            name: args.one("name").map(str::to_owned),
+            grep: None,
+            last: None,
+            item: None,
+            session: false,
+        },
         "show" => CliRequest::Show { id: id() },
         "read" => {
             let last = number("last")?;
@@ -343,7 +351,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             if let Some(skill) = args.all("skill").first() {
                 return Err(error(format!(
                     "--skill is gone: a worker has no skills; it reads one with `brigadier \
-                     context skills {skill}`"
+                     skill {skill}`"
                 )));
             }
             let with: Vec<Capability> = args
@@ -664,6 +672,7 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                     put("workdir", flag("workdir"));
                     put("target", flag("target"));
                     put("purpose", flag("purpose"));
+                    put("open", flag("open"));
                     let mut env = Map::new();
                     for pair in args.all("env") {
                         let Some((name, value)) = pair.split_once('=') else {
@@ -1351,7 +1360,7 @@ mod tests {
         assert!(fails(&["start", "--local", "--worktree", "go"]).contains("don't go together"));
         assert!(fails(&["start", "--local", "--base", "main", "go"]).contains("--base is for"));
         // Every worker is naked (D13): a skill is read, not given.
-        assert!(fails(&["start", "--skill", "a", "go"]).contains("`brigadier context skills a`"));
+        assert!(fails(&["start", "--skill", "a", "go"]).contains("`brigadier skill a`"));
         let CliRequest::Start(computer) = run(&["start", "--with", "computer-use", "go"]).0 else {
             panic!()
         };
@@ -1412,6 +1421,25 @@ mod tests {
             } => (tool, action, args),
             other => panic!("not a tool: {other:?}"),
         }
+    }
+
+    #[test]
+    fn preview_start_carries_the_page_to_open() {
+        assert_eq!(
+            tool(&[
+                "preview",
+                "start",
+                "--open",
+                "/a.html?x=1#top",
+                "pnpm",
+                "dev"
+            ]),
+            (
+                Tool::Preview,
+                "start".into(),
+                json!({"command": "pnpm dev", "open": "/a.html?x=1#top"})
+            )
+        );
     }
 
     #[test]
@@ -1875,5 +1903,14 @@ mod tests {
             };
             assert!(request(command, &args).unwrap().is_some());
         }
+    }
+
+    /// #707: `brigadier skill` lists the skills or prints one, as `context skills` does.
+    #[test]
+    fn skill_lists_or_prints_one_as_context_skills_does() {
+        let (list, _) = run(&["skill"]);
+        assert_eq!(list, run(&["context", "skills"]).0);
+        let (one, _) = run(&["skill", "tools:review"]);
+        assert_eq!(one, run(&["context", "skills", "tools:review"]).0);
     }
 }

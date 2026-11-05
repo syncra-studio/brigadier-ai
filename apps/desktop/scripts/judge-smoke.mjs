@@ -5,10 +5,10 @@
 // The launches come in pairs: a first launch on a new data folder, then a second launch on the
 // same folder. Each report measures the startup budget that fits it (first launch or cold
 // start) and marks the other n/a. Each of the two is judged by the median of the launches that
-// measured it against the unchanged limit (budget × tolerance): on shared runners most of it is
-// the platform creating the window and webview before the page loads, and that swings by
-// seconds between otherwise identical launches. Every other check is judged on the first
-// launch exactly as the app judged it. All launches
+// measured it against the unchanged limit (budget × tolerance; cold start has its own, below): on
+// shared runners most of it is the platform creating the window and webview before the page
+// loads, and that swings by seconds between otherwise identical launches. Every other check is
+// judged on the first launch exactly as the app judged it. All launches
 // are printed with their startup milestones, and written to the combined report.
 // Runner preparation may delay a launch, but every judged launch is kept.
 // There is no retry or best-of selection: a failed launch remains part of the judgment.
@@ -43,6 +43,9 @@ const regression = (metric, measured, limit) =>
   console.log(`PERF REGRESSION: ${metric} ${Math.round(measured)} vs limit ${Math.round(limit)}`);
 
 const STARTUP = { firstColdStart: "First launch", coldStart: "Cold start" };
+// The runners' cold-start medians run 2517-3018 ms with one 3199 and no code cause (#679), so the
+// 3000 ms the app reports (1 s × tolerance) would call their noise a regression.
+const CI_LIMIT_MS = { coldStart: 3500 };
 const checkOf = (launch, id) => launch.checks?.find((check) => check.id === id);
 const startup = {};
 for (const [id, name] of Object.entries(STARTUP)) {
@@ -50,7 +53,7 @@ for (const [id, name] of Object.entries(STARTUP)) {
     .map((launch, index) => ({ index, check: checkOf(launch, id) }))
     .filter(({ check }) => check && check.status !== "notApplicable");
   const measured = judged.map(({ check }) => check.measured ?? null);
-  const limit = judged[0]?.check.limit ?? null;
+  const limit = CI_LIMIT_MS[id] ?? judged[0]?.check.limit ?? null;
   const sorted = measured.filter((value) => typeof value === "number").toSorted((a, b) => a - b);
   const median =
     sorted.length > 0 && sorted.length === judged.length

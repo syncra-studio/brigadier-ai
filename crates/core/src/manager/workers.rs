@@ -422,21 +422,6 @@ impl SessionManager {
         Ok(Some(task))
     }
 
-    pub(crate) async fn set_task_state(
-        &self,
-        conversation_id: &ConversationId,
-        id: &TaskId,
-        state: TaskState,
-    ) -> Result<Task> {
-        self.update_task(conversation_id, id, |task| {
-            task.state = state;
-            if state != TaskState::Blocked {
-                task.blocked_reason = None;
-            }
-        })
-        .await
-    }
-
     /// Marks a task blocked (with why) or running again.
     pub(crate) async fn set_task_blocked(&self, id: &TaskId, reason: Option<String>) {
         let Some(live) = self.existing_task_live(id) else {
@@ -596,30 +581,62 @@ impl SessionManager {
         let conversation_id = task.conversation_id.clone();
         // Held while its worktree is made and recorded; the launch below enters again.
         let fence = self.enter(&conversation_id)?;
-        self.set_task_state(&conversation_id, &task.id, TaskState::Starting)
-            .await?;
-        let owner = format!("task:{}", task.id);
-        let workspace = self.prepare_workspace(&owner, &task).await?;
-        let task = self
-            .update_task(&conversation_id, &task.id, |t| {
-                t.workspace = Some(TaskWorkspace {
-                    worktree: workspace
-                        .worktree
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().into_owned()),
-                    branch: workspace.branch.clone(),
-                    base: workspace.base.as_ref().map(|oid| oid.0.clone()),
-                    on_snapshot: workspace.on_snapshot,
-                    target: workspace.target.clone(),
-                    scratch: workspace.scratch.to_string_lossy().into_owned(),
-                    warmed: workspace.warmed.clone(),
-                    merge: workspace.merge.clone(),
-                });
+        // A stop that came first stands (#752): nothing here writes over it.
+        let not_stopped = |t: &Task| !t.state.is_final() && !self.is_stopping(&t.id);
+        let starting = self
+            .update_task_if(&conversation_id, &task.id, not_stopped, |t| {
+                t.state = TaskState::Starting;
+                t.blocked_reason = None;
             })
             .await?;
+        if starting.is_none() {
+            return Err(stopped_as_it_started(&task));
+        }
+        let owner = format!("task:{}", task.id);
+        let workspace = self.prepare_workspace(&owner, &task).await?;
+        let made = TaskWorkspace {
+            worktree: workspace
+                .worktree
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            branch: workspace.branch.clone(),
+            base: workspace.base.as_ref().map(|oid| oid.0.clone()),
+            on_snapshot: workspace.on_snapshot,
+            target: workspace.target.clone(),
+            scratch: workspace.scratch.to_string_lossy().into_owned(),
+            warmed: workspace.warmed.clone(),
+            merge: workspace.merge.clone(),
+        };
+        let recorded = self
+            .update_task_if(&conversation_id, &task.id, not_stopped, |t| {
+                t.workspace = Some(made.clone());
+            })
+            .await?;
+        let Some(task) = recorded else {
+            self.discard_stopped_start(live, &task, made).await;
+            return Err(stopped_as_it_started(&task));
+        };
         drop(fence);
         self.record_plain_workspace(&task).await;
         self.launch_first(live, &task, &workspace.scratch).await
+    }
+
+    /// A stop ended the worker while its workspace was being made, so the stop's own cleanup
+    /// missed what came after it: that goes now.
+    async fn discard_stopped_start(&self, live: &TaskLive, task: &Task, made: TaskWorkspace) {
+        // After the stop's cleanup, not beside it.
+        let _settled = live.settle.lock().await;
+        let leftovers = self
+            .runtime
+            .ledger()
+            .dispose(&format!("task:{}", task.id))
+            .await;
+        if !leftovers.is_clean() {
+            tracing::warn!(task = %task.id, ?leftovers, "some of a stopped start's leftovers will be retried at the next launch");
+        }
+        let mut task = task.clone();
+        task.workspace = Some(made);
+        self.drop_task_branch(&task).await;
     }
 
     /// Starts the worker's CLI on its first message, its prompt as `brigadier start` gave it
@@ -1047,13 +1064,41 @@ impl SessionManager {
             })
             .await;
         }
-        cli.session
-            .send(first)
-            .await
-            .map_err(|err| Error::Provider(err.to_string()))?;
+        if let Err(err) = cli.session.send(first).await {
+            self.first_send_refused(live, task, &cli).await;
+            return Err(Error::Provider(err.to_string()));
+        }
         live.state.lock().await.quota_send_accepted = true;
         self.confirm_worker_quota_transition(live, &cli).await;
         Ok(())
+    }
+
+    /// The CLI just launched refused its first input, so no turn runs (#748): the worker reads
+    /// as it did before the launch, with no CLI, and whoever launched it decides what's next. A
+    /// stop or a pause under way keeps what it did.
+    async fn first_send_refused(&self, live: &TaskLive, task: &Task, cli: &Arc<Cli>) {
+        {
+            let state = live.state.lock().await;
+            if state.stopping || !state.cli.as_ref().is_some_and(|c| Arc::ptr_eq(c, cli)) {
+                return;
+            }
+        }
+        live.close_cli().await;
+        live.allow_revival().await;
+        let restored = self
+            .update_task_if(
+                &task.conversation_id,
+                &task.id,
+                |t| t.state == TaskState::Running,
+                |t| {
+                    t.state = task.state;
+                    t.blocked_reason.clone_from(&task.blocked_reason);
+                },
+            )
+            .await;
+        if let Err(err) = restored {
+            tracing::warn!(task = %task.id, error = %err, "could not record a refused first message");
+        }
     }
 
     /// Whether `task` is being stopped, or ended since it was read as `task`.
@@ -1222,7 +1267,7 @@ impl SessionManager {
     /// `repo` (best effort; see `warm`): from `parent` first, else from another worktree of the
     /// project or its checkout. Registered at once, so removing the worktree stops it and
     /// waits for it first; it also stops once `cut_off` says so. It runs when awaited, and
-    /// resolves to the folders copied in.
+    /// resolves to the folders copied in and the ones left out ([`warm::Warmed::left_out`]).
     fn warm_job(
         &self,
         repo: &Path,
@@ -1230,7 +1275,7 @@ impl SessionManager {
         parent: Option<PathBuf>,
         label: String,
         cut_off: impl Fn() -> bool + Send + Sync + 'static,
-    ) -> impl std::future::Future<Output = Vec<String>> + Send + 'static {
+    ) -> impl std::future::Future<Output = (Vec<String>, Vec<String>)> + Send + 'static {
         let warming = warm::Warming::begin(worktree);
         let (git, repo, path) = (self.git.clone(), repo.to_owned(), worktree.to_owned());
         let platform = self.runtime.platform().clone();
@@ -1259,12 +1304,12 @@ impl SessionManager {
                     ms = started.elapsed().as_millis() as u64,
                     "warmed a worktree"
                 );
-                Ok(warmed.folders())
+                Ok((warmed.folders(), warmed.left_out(&path)))
             })
             .await
             .unwrap_or_else(|err| {
                 tracing::warn!(%err, "couldn't warm a worktree");
-                Vec::new()
+                Default::default()
             })
         }
     }
@@ -1508,14 +1553,14 @@ impl SessionManager {
             held.cut_off()
         });
         self.spawn(async move {
-            let warmed = warming.await;
-            if !warmed.is_empty()
+            let (warmed, left_out) = warming.await;
+            if !(warmed.is_empty() && left_out.is_empty())
                 && !guard.cut_off()
                 && let Ok(conv) = manager.conv(&id)
             {
                 conv.note(format!(
                     "[workspace] {}",
-                    super::prompts::copied_in_line(&warmed)
+                    super::prompts::copied_in_line(&warmed, &left_out)
                 ))
                 .await;
             }
@@ -2308,17 +2353,24 @@ impl SessionManager {
     ) -> Result<bool> {
         let conversation_id = self.conversation_of_task(&task_id).await?;
         let live = self.existing_task_live(&task_id);
-        if let Some(live) = &live {
-            let mut state = live.state.lock().await;
-            state.quota_cancelled = true;
-            state.quota_timer += 1;
-        }
+        // Before its settle lock: a start under it sees the stop coming.
+        let was_cancelled = match &live {
+            Some(live) => live.cancel_quota().await,
+            None => false,
+        };
         let settled = match &live {
             Some(live) => Some(live.settle.lock().await),
             None => None,
         };
         let task = self.task_by_id(&conversation_id, &task_id).await?;
         if !eligible(task.state) {
+            // No stop happened: a worker going on keeps its quota recovery (#765).
+            if let Some(live) = &live
+                && !task.state.is_final()
+            {
+                self.restore_quota_recovery(live, &task, was_cancelled)
+                    .await;
+            }
             return Ok(false);
         }
         if let Some(live) = &live {
@@ -2327,6 +2379,9 @@ impl SessionManager {
         // Until it is recorded stopped, a landing that fails as its worktree goes hands
         // nothing back to the orchestrator.
         let _stopping = Stopping::mark(self, &task_id);
+        // Marked now, so a start either recorded its workspace before this or sees the stop and
+        // removes it itself (#752).
+        let task = self.task_by_id(&conversation_id, &task_id).await?;
         if let Some(live) = &live {
             live.close_cli().await;
         }
@@ -2334,6 +2389,8 @@ impl SessionManager {
         let state = if done { TaskState::Done } else { kept_as };
         self.dispose_task_as(&task, kept_as, state).await;
         drop(settled);
+        // A `brigadier wait` already waiting on it ends: it sends nothing more (#740).
+        self.worker_events.added.notify_waiters();
         Ok(true)
     }
 
@@ -2714,11 +2771,16 @@ impl SessionManager {
         was_cancelled: bool,
         why: impl Into<String>,
     ) -> Error {
+        self.restore_quota_recovery(live, task, was_cancelled).await;
+        Error::Invalid(why.into())
+    }
+
+    /// Its quota recovery goes on as it was before a pause, switch or stop that moved nothing.
+    async fn restore_quota_recovery(&self, live: &TaskLive, task: &Task, was_cancelled: bool) {
         live.state.lock().await.quota_cancelled = was_cancelled;
         if !was_cancelled {
             self.arm_worker_quota_retry(task).await;
         }
-        Error::Invalid(why.into())
     }
 
     pub(crate) async fn conversation_of_task(&self, task_id: &TaskId) -> Result<ConversationId> {

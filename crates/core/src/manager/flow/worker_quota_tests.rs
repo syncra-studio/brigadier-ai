@@ -404,3 +404,194 @@ async fn a_failed_worker_send_has_no_completed_transition() {
     );
     flow.stop().await;
 }
+
+/// The worker's usage limit is over, as a fresh usage read says.
+fn quota_reset(flow: &Flow, task: &Task) {
+    let account = task.quota_wait.as_ref().unwrap().account.as_ref().unwrap();
+    let now = crate::now_ms();
+    let monitor = flow.manager.runtime.monitor();
+    let mut quota = monitor.current_for(account, now).unwrap();
+    quota.limit.as_mut().unwrap().resets_at_ms = Some(now - 1);
+    for window in &mut quota.windows {
+        window.resets_at_ms = Some(now - 1);
+    }
+    quota.observed_at_ms = now;
+    monitor.note(account, &quota, now);
+}
+
+/// The user's message, as the composer sends it.
+async fn composer_says(flow: &Flow, task: &Task, text: &str) -> crate::Result<bool> {
+    flow.manager
+        .send_to_worker(
+            flow.conversation.clone(),
+            task.id.clone(),
+            text.into(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+}
+
+/// #749: the user's message takes over from the wait, as `brigadier send`'s does: nothing
+/// relaunches the worker later with "Quota is available again".
+#[tokio::test]
+async fn a_composer_message_ends_the_quota_wait() {
+    let (flow, seen) = flow("worker-quota-composer", true, 60_000, 1, false, None).await;
+    flow.until("worker quota wait", |board| {
+        Flow::task(board, 1).quota_wait.is_some()
+    })
+    .await;
+    let task = worker(&flow).await;
+    composer_says(&flow, &task, "Do this instead.")
+        .await
+        .unwrap();
+    flow.until("its turn reported", |board| {
+        Flow::task(board, 1).state == TaskState::Reported
+    })
+    .await;
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert!(worker(&flow).await.quota_wait.is_none());
+    quota_reset(&flow, &task);
+    flow.manager.retry_waiting_workers().await;
+    assert_eq!(seen.lock().unwrap().len(), 2, "a turn nobody asked for");
+    flow.stop().await;
+}
+
+/// #749: a message its CLI refused took nothing over: the worker still goes on at the reset.
+#[tokio::test]
+async fn a_refused_composer_message_leaves_the_quota_wait() {
+    let (flow, seen) = flow("worker-quota-refused", true, 60_000, 1, false, None).await;
+    flow.until("worker quota wait", |board| {
+        Flow::task(board, 1).quota_wait.is_some()
+    })
+    .await;
+    let task = worker(&flow).await;
+    flow.behavior
+        .refuse_sends
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Claude);
+    composer_says(&flow, &task, "Do this instead.")
+        .await
+        .unwrap_err();
+    flow.behavior.refuse_sends.lock().unwrap().clear();
+    assert!(worker(&flow).await.quota_wait.is_some());
+    quota_reset(&flow, &task);
+    flow.manager.retry_waiting_workers().await;
+    flow.until("it went on at the reset", |board| {
+        let task = Flow::task(board, 1);
+        task.quota_wait.is_none() && task.state == TaskState::Reported
+    })
+    .await;
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    flow.stop().await;
+}
+
+/// #750: a session that slept while its worker waited wakes when the worker can go on.
+#[tokio::test]
+async fn a_worker_waiting_for_quota_goes_on_after_its_session_slept() {
+    let (flow, seen) = flow("worker-quota-asleep", true, 60_000, 1, false, None).await;
+    flow.until("worker quota wait", |board| {
+        Flow::task(board, 1).quota_wait.is_some()
+    })
+    .await;
+    flow.settled().await;
+    let task = worker(&flow).await;
+    flow.manager
+        .hibernate(flow.conversation.clone())
+        .await
+        .unwrap();
+    // Still out: it stays asleep, and looks again.
+    flow.manager.retry_waiting_workers().await;
+    assert_eq!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .lifecycle,
+        crate::model::Lifecycle::Hibernated
+    );
+    quota_reset(&flow, &task);
+    flow.manager.retry_waiting_workers().await;
+    flow.until("it went on at the reset", |board| {
+        let task = Flow::task(board, 1);
+        task.quota_wait.is_none() && task.state == TaskState::Reported
+    })
+    .await;
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert_eq!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .lifecycle,
+        crate::model::Lifecycle::Active
+    );
+    assert_ne!(flow.board().await.run, crate::work::RunState::Hibernated);
+    flow.stop().await;
+}
+
+/// #765: a Stop all that found the worker already reported leaves its quota recovery alone: its
+/// next turn's limit still pauses it, and it can still start.
+#[tokio::test]
+async fn a_stop_that_did_not_apply_leaves_the_workers_limit_handling() {
+    let limited = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let next = limited.clone();
+    let flow = Flow::start(
+        "worker-quota-stop-lost",
+        Options::default(),
+        Arc::new(move |turn| {
+            let next = next.clone();
+            Box::pin(async move {
+                if turn.worker().is_none() {
+                    if turn.input.contains("Start quota worker.") {
+                        let mut request = start("Report once.");
+                        request.agent = Some(Agent::Claude);
+                        brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                    }
+                    return Reply::text("Heard.");
+                }
+                if next.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    return Reply {
+                        limit: Some(LimitHit {
+                            window: Some("five_hour".into()),
+                            resets_at_ms: Some(crate::now_ms() + 60_000),
+                            kind: LimitKind::UsageWindow,
+                            model: None,
+                        }),
+                        ..Reply::default()
+                    };
+                }
+                Reply::text("Reported.")
+            })
+        }),
+    )
+    .await;
+    flow.say("Start quota worker.").await;
+    flow.until("the worker reported", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == TaskState::Reported)
+    })
+    .await;
+    let task = worker(&flow).await;
+    let stopped = flow
+        .manager
+        .stop_worker_if(
+            &flow.conversation,
+            &task,
+            "stopped".into(),
+            crate::manager::workers::user_stoppable,
+        )
+        .await
+        .unwrap();
+    assert!(!stopped);
+    limited.store(true, std::sync::atomic::Ordering::SeqCst);
+    composer_says(&flow, &task, "One more.").await.unwrap();
+    flow.until("its limit pauses it", |board| {
+        Flow::task(board, 1).quota_wait.is_some()
+    })
+    .await;
+    flow.stop().await;
+}

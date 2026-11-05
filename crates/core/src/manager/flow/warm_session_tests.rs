@@ -127,3 +127,50 @@ async fn the_threads_worktree_gets_the_checkouts_dependencies_and_the_thread_is_
     assert!(flow.repo.join("node_modules/left-pad/index.js").is_file());
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn the_thread_hears_of_a_cache_left_out_when_nothing_was_copied() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let script: Script = {
+        let seen = seen.clone();
+        Arc::new(move |turn| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push(turn.input.clone());
+                Reply::text("Done.")
+            })
+        })
+    };
+    let options = Options {
+        files: vec![
+            (".gitignore", "node_modules/\n"),
+            ("package.json", "{\"name\": \"flow\"}\n"),
+            ("package-lock.json", "{\"lockfileVersion\": 3}\n"),
+            ("node_modules/left-pad/index.js", "module.exports = 1;\n"),
+        ],
+        ..Options::default()
+    };
+    let flow = Flow::start("warm-session-left-out", options, script).await;
+    if !copies_here(&flow.repo) {
+        flow.stop().await;
+        return;
+    }
+    // The checkout's lockfile no longer matches the commit the worktree gets, so its
+    // `node_modules` can't be used.
+    std::fs::write(flow.repo.join("package-lock.json"), "{}\n").unwrap();
+    let told = || {
+        seen.lock().unwrap().iter().any(|input| {
+            input.contains("[workspace] `node_modules` wasn't copied in from another checkout of this project, so it may need installing or building.")
+        })
+    };
+    for _ in 0..50 {
+        flow.say("Go on").await;
+        flow.settled().await;
+        if told() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(told(), "{:#?}", seen.lock().unwrap());
+    flow.stop().await;
+}

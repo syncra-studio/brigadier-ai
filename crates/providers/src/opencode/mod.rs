@@ -545,6 +545,15 @@ fn config_content(spec: &SessionSpec) -> Value {
         }
         servers.insert(server.name.clone(), entry);
     }
+    // What the user switched off of its own: an entry here replaces its own whole, and one with
+    // only `disabled` is ignored (2.2.5). A sealed session has none of its own to switch.
+    if !sealed(spec) {
+        for name in &spec.switched_off.servers {
+            servers.entry(name.clone()).or_insert_with(
+                || json!({ "type": "remote", "url": "http://127.0.0.1:9", "disabled": true }),
+            );
+        }
+    }
     let mut config = json!({ "mcp": { "servers": servers } });
     let skills: Vec<String> = spec
         .skill_plugins
@@ -1586,6 +1595,33 @@ impl ProviderSession for OpenCodeSession {
         })
     }
 
+    /// A background subagent is a session of its own, so its execution is interrupted; a
+    /// command goes through its shell, which also removes the output OpenCode kept of it.
+    fn stop_task(&self, task_id: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            if task_id.starts_with("ses_") {
+                let path = format!("/api/session/{task_id}/interrupt");
+                return self
+                    .server
+                    .call(Method::POST, &path, Some(&json!({})))
+                    .await
+                    .map(drop);
+            }
+            let folder = self.cwd.display().to_string();
+            let path = with_query(
+                &format!("/api/shell/{task_id}"),
+                &[("location[directory]", &folder)],
+            );
+            // Noted first: OpenCode may say the end before it answers.
+            lock(&self.parser).stopping.insert(task_id.clone());
+            let stopped = self.server.call(Method::DELETE, &path, None).await;
+            if stopped.is_err() {
+                lock(&self.parser).stopping.remove(&task_id);
+            }
+            stopped.map(drop)
+        })
+    }
+
     fn can_compact(&self) -> bool {
         true
     }
@@ -1808,6 +1844,7 @@ mod tests {
             tool_timeout_secs: Some(600),
             trusted: true,
             always_load: true,
+            sources: Default::default(),
         }];
         assert!(sealed(&worker));
         let env = session_env(&worker, Some(Path::new("/data/opencode-1")));
@@ -1839,6 +1876,22 @@ mod tests {
         let config: Value =
             serde_json::from_str(var(&env, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
         assert_eq!(config["compaction"], json!({"auto": false}));
+        // #707: a server of its own the user switched off stays off, whole entry or nothing.
+        thread.switched_off.servers = vec!["own".to_owned()];
+        let env = session_env(&thread, None);
+        let config: Value =
+            serde_json::from_str(var(&env, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
+        assert_eq!(
+            config["mcp"]["servers"]["own"],
+            json!({"type": "remote", "url": "http://127.0.0.1:9", "disabled": true})
+        );
+        // A sealed session has none of its own: no entries it would only list as off.
+        let mut sealed_off = worker.clone();
+        sealed_off.switched_off.servers = vec!["own".to_owned()];
+        let env = session_env(&sealed_off, Some(Path::new("/data/opencode-1")));
+        let config: Value =
+            serde_json::from_str(var(&env, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
+        assert!(config["mcp"]["servers"].get("own").is_none());
         // A one-shot reader never loads the user's setup.
         let mut reader = spec();
         reader.tools = ToolSet::Review;
@@ -1914,6 +1967,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self.answer(200, {"location": {}, "data": [{"name": "init", "description": "guided AGENTS.md setup"}, {"name": "review"}]})
         elif self.command == "DELETE":
             self.answer(204)
+        elif self.path.endswith("/interrupt"):
+            self.answer(200, {"interrupted": True})
         else:
             self.answer(404, {"message": "not here"})
     do_GET = do_POST = do_DELETE = do_PATCH = handle_any
@@ -2058,6 +2113,20 @@ sys.stdin.read()
         );
         assert!(!said().contains("DELETE"), "a running turn keeps it");
         assert_eq!(*lock(&session.steered), ["msg_1"]);
+
+        // Stop on a background row: a command goes by its shell, a subagent by its session.
+        std::fs::write(&log, "").unwrap();
+        session.stop_task("sh_1".into()).await.unwrap();
+        session.stop_task("ses_child".into()).await.unwrap();
+        let requests = said();
+        let folder = root.display().to_string();
+        let query = with_query("/api/shell/sh_1", &[("location[directory]", &folder)]);
+        assert!(requests.contains(&format!("DELETE {query}")), "{requests}");
+        assert!(lock(&session.parser).stopping.contains("sh_1"));
+        assert!(
+            requests.contains("POST /api/session/ses_child/interrupt"),
+            "{requests}"
+        );
 
         let commands = session.commands().await;
         assert_eq!(
