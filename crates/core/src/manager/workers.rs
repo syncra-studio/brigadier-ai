@@ -118,8 +118,16 @@ struct TaskLiveState {
     cutoff: Option<AttemptEnd>,
     /// Its hand-off to a fresh CLI session, under way (D14).
     seam: Option<seam::SeamLive>,
-    /// What its session sent while it hands off: its successor's first input carries it.
+    /// What its session sent while it hands off: its successor's first input carries it, or,
+    /// when a usage limit called the hand-off off, its next input. Kept in the same order in
+    /// `record/seam-held.json`, written only with this state's lock held.
     seam_held: Vec<String>,
+    /// Which hold on its hand-off is the current one, and whether one is running.
+    seam_hold_timer: u64,
+    seam_hold_armed: bool,
+    /// How many turns its CLI was seen starting: a refused send leaves a turn that started
+    /// meanwhile running.
+    turns_started: u64,
     /// Its turn is a compaction of its own (development builds' `debugCompact`): its session
     /// already heard its last turn end and hears nothing of this one.
     compacting: bool,
@@ -133,6 +141,15 @@ struct TaskLiveState {
     /// The model this run started on (the one its session or routing chose): it goes back there
     /// when nothing else can take it.
     run_origin: Option<ModelChoice>,
+}
+
+impl TaskLiveState {
+    /// Its hand-off is over or called off, and so is the hold on it.
+    fn seam_over(&mut self) {
+        self.seam = None;
+        self.seam_hold_armed = false;
+        self.seam_hold_timer += 1;
+    }
 }
 
 /// A task's live worker.
@@ -213,7 +230,14 @@ impl TaskLive {
         }
         if matches!(event, ProviderEvent::TurnStarted { .. }) {
             state.busy = true;
+            state.turns_started += 1;
         }
+    }
+
+    /// Tests: holds its state lock, to order what waits for it.
+    #[cfg(test)]
+    pub(crate) async fn state_guard(&self) -> impl Sized + '_ {
+        self.state.lock().await
     }
 
     /// The worker's CLI session, while one runs.
@@ -1074,10 +1098,16 @@ impl SessionManager {
             })
             .await;
         }
-        if let Err(err) = cli.session.send(first).await {
+        // What a usage limit left waiting goes first; a successor's first input has it already.
+        let held = match successor_of {
+            Some(_) => Vec::new(),
+            None => self.held_for_input(live, task).await,
+        };
+        if let Err(err) = cli.session.send(seam::with_held(first, &held)).await {
             self.first_send_refused(live, task, &cli).await;
             return Err(Error::Provider(err.to_string()));
         }
+        self.held_went(live, task, held.len()).await;
         live.state.lock().await.quota_send_accepted = true;
         self.confirm_worker_quota_transition(live, &cli).await;
         Ok(())
@@ -2296,23 +2326,41 @@ impl SessionManager {
         let mut state = live.state.lock().await;
         // Handing off (D14): its successor's first input carries it.
         if state.seam.as_ref().is_some_and(|seam| seam.holds()) {
-            state.seam_held.push(held_text(&input));
+            self.hold_for_successor(&mut state, task, held_text(&input))
+                .await?;
+            drop(state);
+            self.arm_worker_seam_hold(task).await;
             return Ok(());
         }
         let Some(cli) = state.cli.clone() else {
             drop(state);
             return self.revive_worker(&live, task, input).await;
         };
-        if state.busy {
+        // What a usage limit left waiting goes first.
+        let held = state.seam_held.clone();
+        let input = seam::with_held(input, &held);
+        // The lock stays free during the call, as its event pump needs it (#768). Busy from
+        // before it: a turn could end before the lock was taken again.
+        let steering = std::mem::replace(&mut state.busy, true);
+        let turns = state.turns_started;
+        drop(state);
+        let sent = if steering {
             cli.session.steer(input).await
         } else {
-            // Busy only once a turn really started: a refused send leaves it idle.
-            let sent = cli.session.send(input).await;
-            state.busy = sent.is_ok();
-            sent
+            cli.session.send(input).await
+        };
+        if let Err(err) = sent {
+            // A refused send leaves it idle, unless a turn started all the same.
+            let mut state = live.state.lock().await;
+            if !steering
+                && state.turns_started == turns
+                && state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, &cli))
+            {
+                state.busy = false;
+            }
+            return Err(Error::Provider(err.to_string()));
         }
-        .map_err(|err| Error::Provider(err.to_string()))?;
-        drop(state);
+        self.held_went(&live, task, held.len()).await;
         let running = self
             .update_task(conversation_id, &task.id, |task| {
                 if !task.state.is_final() {
@@ -2785,6 +2833,8 @@ impl SessionManager {
         why: impl Into<String>,
     ) -> Error {
         self.restore_quota_recovery(live, task, was_cancelled).await;
+        // Its hand-off may be why: somebody waits on it now.
+        self.arm_worker_seam_hold(task).await;
         Error::Invalid(why.into())
     }
 

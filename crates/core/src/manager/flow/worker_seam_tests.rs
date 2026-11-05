@@ -25,6 +25,8 @@ struct Seen {
     accounts: Mutex<Vec<(String, Option<String>)>>,
     /// The session starts its worker with a routing row, an effort and a granted server.
     routed: std::sync::atomic::AtomicBool,
+    /// Its next note turn hits a usage limit.
+    limit_note: std::sync::atomic::AtomicBool,
 }
 
 impl Seen {
@@ -148,6 +150,12 @@ fn script(seen: Arc<Seen>) -> Script {
                 return Reply::text("Fixed.");
             }
             if turn.input.starts_with(NUDGE_MARK) {
+                if seen
+                    .limit_note
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Reply::limited();
+                }
                 std::fs::write(
                     note_of(&turn.input),
                     "Doing now: growing.\nNext: grow more.",
@@ -510,9 +518,6 @@ async fn gated_flow(
 async fn a_restart_in_the_note_turn_closes_the_generation_and_the_next_message_starts_one() {
     let seen = Arc::new(Seen::default());
     let (mut flow, task, _, _) = gated_flow("worker-seam-restart-note", seen.clone()).await;
-    // A message waits for the successor while the note turn runs.
-    send(&flow, &task, "Meanwhile.").await;
-    assert!(seen.given("Meanwhile.").is_empty());
     flow.crash().await;
     until(&flow, "the generation closed", || {
         matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
@@ -576,13 +581,7 @@ async fn a_crash_before_the_successor_launched_sends_its_message_once() {
     };
     assert_eq!(messages, vec!["After.".to_owned()]);
     flow.crash().await;
-    flow.settled().await;
-    assert!(matches!(
-        seam_file(&flow, &task).phase,
-        Phase::Closed { .. }
-    ));
-    // The next message starts another successor, carrying both, once.
-    send(&flow, &task, "Next.").await;
+    // Another successor starts at once, carrying it, once.
     until(&flow, "the successor", || {
         seam_file(&flow, &task).generation == 2
     })
@@ -591,7 +590,6 @@ async fn a_crash_before_the_successor_launched_sends_its_message_once() {
     let after = seen.given("After.");
     assert_eq!(after.len(), 1, "{after:?}");
     assert!(after[0].1.starts_with(HANDOFF_MARK));
-    assert!(after[0].1.contains("Next."));
     assert_ne!(after[0].0, successor);
     assert_eq!(seam_file(&flow, &task).seams[0].successor, after[0].0);
     flow.stop().await;
@@ -886,5 +884,331 @@ async fn three_compactions_asked_for_on_an_idle_worker_hand_it_off_unheard() {
         seam_file(&flow, &task).generation == 2
     })
     .await;
+    flow.stop().await;
+}
+
+/// The hold a worker's hand-off keeps messages for, here and after a restart.
+fn hold_for(flow: &mut Flow, hold: std::time::Duration) {
+    let config = crate::manager::seam::SeamConfig {
+        hold,
+        ..flow.manager.seam_config()
+    };
+    flow.seam = Some(config);
+    flow.manager.set_seam(config);
+}
+
+/// What `record/seam-held.json` keeps.
+fn side_file(flow: &Flow, task: &Task) -> Vec<String> {
+    std::fs::read(record(flow, task).join("seam-held.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// A message acknowledged while the note turn ran survives a restart: its successor starts at
+/// once and takes it, and it never goes again.
+#[tokio::test]
+async fn a_message_held_through_a_restart_starts_the_successor_with_it_once() {
+    let seen = Arc::new(Seen::default());
+    let (mut flow, task, _, _) = gated_flow("worker-seam-restart-held", seen.clone()).await;
+    send(&flow, &task, "Meanwhile.").await;
+    assert!(seen.given("Meanwhile.").is_empty());
+    flow.crash().await;
+    until(&flow, "the successor took it", || {
+        !seen.given("Meanwhile.").is_empty()
+    })
+    .await;
+    flow.idle().await;
+    assert_eq!(seam_file(&flow, &task).generation, 2);
+    assert!(side_file(&flow, &task).is_empty());
+    send(&flow, &task, "Next.").await;
+    until(&flow, "the next", || !seen.given("Next.").is_empty()).await;
+    flow.idle().await;
+    let held = seen.given("Meanwhile.");
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert!(held[0].1.starts_with(HANDOFF_MARK), "{}", held[0].1);
+    flow.stop().await;
+}
+
+/// A crash while the successor starts leaves the message in both the side file and
+/// `Starting.messages`: it goes to the next successor once.
+#[tokio::test]
+async fn a_message_in_both_the_side_file_and_starting_goes_once() {
+    let seen = Arc::new(Seen::default());
+    let (mut flow, task, _, release) = gated_flow("worker-seam-both", seen.clone()).await;
+    send(&flow, &task, "Meanwhile.").await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_start.lock().unwrap() =
+        Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
+    release.notify_one();
+    reached.notified().await;
+    let Phase::Starting { messages, .. } = seam_file(&flow, &task).phase else {
+        panic!("not starting")
+    };
+    assert_eq!(side_file(&flow, &task), messages);
+    assert!(messages[0].contains("Meanwhile."), "{messages:?}");
+    flow.crash().await;
+    until(&flow, "the next successor took it", || {
+        !seen.given("Meanwhile.").is_empty()
+    })
+    .await;
+    flow.idle().await;
+    let held = seen.given("Meanwhile.");
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].1.matches("Meanwhile.").count(), 1, "{}", held[0].1);
+    assert!(side_file(&flow, &task).is_empty());
+    flow.stop().await;
+}
+
+/// A crash after a message was saved and before its successor began: the side file alone brings
+/// it back, and the successor starts with it.
+#[tokio::test]
+async fn a_crash_between_saving_a_message_and_starting_delivers_it_once() {
+    let seen = Arc::new(Seen::default());
+    let (mut flow, task, _, release) = gated_flow("worker-seam-saved", seen.clone()).await;
+    release.notify_one();
+    until(&flow, "the generation closed", || {
+        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+    })
+    .await;
+    flow.idle().await;
+    std::fs::write(
+        record(&flow, &task).join("seam-held.json"),
+        serde_json::to_vec(&["Saved.\n\n[Worker message saved-1]"]).unwrap(),
+    )
+    .unwrap();
+    flow.crash().await;
+    until(&flow, "the successor took it", || {
+        !seen.given("Saved.").is_empty()
+    })
+    .await;
+    flow.idle().await;
+    assert_eq!(seen.given("Saved.").len(), 1);
+    assert!(side_file(&flow, &task).is_empty());
+    flow.stop().await;
+}
+
+/// A crash after a queued message was saved and before it left the queue: it leaves the queue
+/// on the way back up, and doesn't go twice.
+#[tokio::test]
+async fn a_row_saved_for_the_successor_leaves_the_queue_on_recovery() {
+    let seen = Arc::new(Seen::default());
+    let (mut flow, task, _, _) = gated_flow("worker-seam-row", seen.clone()).await;
+    flow.manager
+        .send_to_worker(
+            flow.conversation.clone(),
+            task.id.clone(),
+            "Use blue.".into(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    let id = flow.board().await.queue.items[0].id.clone();
+    std::fs::write(
+        record(&flow, &task).join("seam-held.json"),
+        serde_json::to_vec(&[crate::manager::workers::marked_once("Use blue.", &id)]).unwrap(),
+    )
+    .unwrap();
+    flow.crash().await;
+    until(&flow, "the successor took it", || {
+        !seen.given("Use blue.").is_empty()
+    })
+    .await;
+    flow.until("the queue to empty", |board| board.queue.items.is_empty())
+        .await;
+    flow.idle().await;
+    assert_eq!(seen.given("Use blue.").len(), 1);
+    flow.stop().await;
+}
+
+/// A usage limit in the note turn calls the hand-off off: what waited goes with the worker's
+/// next input, before it.
+#[tokio::test]
+async fn a_usage_limit_in_the_note_turn_sends_what_waited_with_the_next_input() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task, _, release) = gated_flow("worker-seam-limit", seen.clone()).await;
+    seen.limit_note
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    send(&flow, &task, "Meanwhile.").await;
+    release.notify_one();
+    flow.until("its quota wait", |board| {
+        Flow::task(board, 1).quota_wait.is_some()
+    })
+    .await;
+    assert!(matches!(seam_file(&flow, &task).phase, Phase::Live));
+    send(&flow, &task, "Next.").await;
+    until(&flow, "the next", || !seen.given("Next.").is_empty()).await;
+    flow.idle().await;
+    let next = seen.given("Next.");
+    assert_eq!(next.len(), 1, "{next:?}");
+    let (held, after) = (
+        next[0].1.find("Meanwhile.").expect("what waited went too"),
+        next[0].1.find("Next.").unwrap(),
+    );
+    assert!(held < after, "{}", next[0].1);
+    assert_eq!(seen.given("Meanwhile.").len(), 1);
+    assert!(side_file(&flow, &task).is_empty());
+    flow.stop().await;
+}
+
+/// …and after a restart in the quota wait too, from the side file.
+#[tokio::test]
+async fn a_restart_after_a_usage_limit_in_the_note_turn_keeps_what_waited() {
+    let seen = Arc::new(Seen::default());
+    let (mut flow, task, _, release) = gated_flow("worker-seam-limit-crash", seen.clone()).await;
+    seen.limit_note
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    send(&flow, &task, "Meanwhile.").await;
+    release.notify_one();
+    flow.until("its quota wait", |board| {
+        Flow::task(board, 1).quota_wait.is_some()
+    })
+    .await;
+    flow.crash().await;
+    flow.settled().await;
+    send(&flow, &task, "Next.").await;
+    until(&flow, "the next", || !seen.given("Next.").is_empty()).await;
+    flow.idle().await;
+    assert_eq!(seen.given("Meanwhile.").len(), 1);
+    assert!(side_file(&flow, &task).is_empty());
+    flow.stop().await;
+}
+
+/// A note turn that never ends: a held message waits a minute at most, and its successor starts
+/// with it.
+#[tokio::test]
+async fn a_hung_note_turn_ends_when_the_hold_runs_out() {
+    let seen = Arc::new(Seen::default());
+    let (mut flow, task, _, _) = gated_flow("worker-seam-hung", seen.clone()).await;
+    hold_for(&mut flow, std::time::Duration::from_millis(200));
+    send(&flow, &task, "Meanwhile.").await;
+    until(&flow, "the successor took it", || {
+        !seen.given("Meanwhile.").is_empty()
+    })
+    .await;
+    flow.idle().await;
+    assert_eq!(seam_file(&flow, &task).generation, 2);
+    let held = seen.given("Meanwhile.");
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert!(held[0].1.starts_with(HANDOFF_MARK), "{}", held[0].1);
+    flow.stop().await;
+}
+
+/// A pause a hung note turn refuses starts the hold, and goes through once it ran out.
+#[tokio::test]
+async fn a_pause_refused_by_a_hung_note_turn_goes_through_after_the_hold() {
+    let seen = Arc::new(Seen::default());
+    let (mut flow, task, _, _) = gated_flow("worker-seam-hung-pause", seen.clone()).await;
+    hold_for(&mut flow, std::time::Duration::from_millis(200));
+    let refused = flow.manager.pause_task(task.id.clone()).await;
+    assert!(refused.unwrap_err().to_string().contains("try again"));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match flow.manager.pause_task(task.id.clone()).await {
+            Ok(paused) => {
+                assert!(paused);
+                break;
+            }
+            Err(err) => assert!(
+                tokio::time::Instant::now() < deadline,
+                "still refused: {err}"
+            ),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    flow.stop().await;
+}
+
+/// A message that reaches the state lock between the check that nothing waits and the hand-off's
+/// end isn't stranded: its successor starts with it. Tokio's lock is first come, first served,
+/// so the order is the worst one every time.
+#[tokio::test]
+async fn a_message_at_the_moment_the_generation_closes_starts_the_successor() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task, _, release) = gated_flow("worker-seam-close-race", seen.clone()).await;
+    let live = flow.manager.task_live(&task);
+    let rerouting = live.reroute.lock().await;
+    release.notify_one();
+    until(&flow, "the generation closed", || {
+        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+    })
+    .await;
+    super::eventually_async("its CLI closed", || async { live.cli().await.is_none() }).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let messaged = worker(&flow).await;
+    let state = live.state_guard().await;
+    let (manager, conversation) = (flow.manager.clone(), flow.conversation.clone());
+    let sent = tokio::spawn(async move {
+        manager
+            .send_worker_text(&conversation, &messaged, "Late.".into())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    drop(rerouting);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    drop(state);
+    sent.await.unwrap().unwrap();
+    until(&flow, "the successor took it", || {
+        !seen.given("Late.").is_empty()
+    })
+    .await;
+    flow.idle().await;
+    assert_eq!(seen.given("Late.").len(), 1);
+    flow.stop().await;
+}
+
+/// A send on its way leaves the worker's state lock free: its event pump goes on meanwhile, so a
+/// full event channel can't stall the reply the send waits for (#768's timeout, a duplicate).
+#[tokio::test]
+async fn a_send_on_its_way_leaves_the_state_lock_free() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-lock-send", seen.clone()).await;
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    *flow.behavior.hold_send_entry.lock().unwrap() = Some((reached.clone(), release.clone()));
+    let (manager, conversation, messaged) = (
+        flow.manager.clone(),
+        flow.conversation.clone(),
+        task.clone(),
+    );
+    let sent = tokio::spawn(async move {
+        manager
+            .send_worker_text(&conversation, &messaged, "Later.".into())
+            .await
+    });
+    reached.notified().await;
+    let live = flow.manager.task_live(&task);
+    let busy = tokio::time::timeout(std::time::Duration::from_secs(2), live.busy()).await;
+    release.notify_one();
+    assert_eq!(busy.ok(), Some(true), "the send holds the state lock");
+    sent.await.unwrap().unwrap();
+    until(&flow, "the turn", || !seen.given("Later.").is_empty()).await;
+    flow.idle().await;
+    flow.stop().await;
+}
+
+/// A refused send leaves the worker idle, as it always did.
+#[tokio::test]
+async fn a_refused_send_leaves_the_worker_idle() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("worker-lock-refused", seen.clone()).await;
+    flow.behavior
+        .refuse_sends
+        .lock()
+        .unwrap()
+        .push(task.route.choice.provider);
+    let latest = worker(&flow).await;
+    let refused = flow
+        .manager
+        .send_worker_text(&flow.conversation, &latest, "Later.".into())
+        .await;
+    assert!(refused.is_err());
+    assert!(!flow.manager.task_live(&task).busy().await);
+    flow.behavior.refuse_sends.lock().unwrap().clear();
     flow.stop().await;
 }
