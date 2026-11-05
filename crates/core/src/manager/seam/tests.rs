@@ -1075,3 +1075,33 @@ fn the_map_says_how_many_commits_havent_landed() {
         "{text}"
     );
 }
+
+/// A same-CLI hand-off has no Map, and says what hasn't landed all the same (#616), whatever
+/// the note quotes.
+#[test]
+fn a_same_cli_handoff_says_what_has_not_landed() {
+    let size = TailBudget {
+        reason: Reason::Size,
+        hot_tokens: Some(150_000),
+        target_window: Some(1_000_000),
+    };
+    let line = "2 commits on session aren't on main";
+    let text = boot_tail(
+        &[],
+        Some("doing now: the parser\n\n## Map\n- mine"),
+        None,
+        size,
+    );
+    let text = with_unlanded(text, Some(line));
+    assert!(text.contains("\n## Map\n- mine\n"), "{text}");
+    assert!(!text.contains("- 2 commits"), "{text}");
+    assert!(
+        text.ends_with(&format!("\n{line}.\n\n{HANDOFF_END}")),
+        "{text}"
+    );
+    let text = boot_tail(&[], None, Some("the CLI exited"), size);
+    assert!(with_unlanded(text, Some(line)).ends_with(&format!("\n{line}.\n\n{HANDOFF_END}")));
+    // Nothing unlanded: nothing added.
+    let text = boot_tail(&[], Some("doing now: the parser"), None, size);
+    assert_eq!(with_unlanded(text.clone(), None), text);
+}
