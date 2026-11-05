@@ -624,7 +624,7 @@ mod tests {
             "talk with the user, ask and plan; quick look-ups; small edits (a few lines in a file or two); git, merges, pushes and CI; checking workers' evidence (`git log`, their output, CI).",
             "Your subagents may do look-ups, cross-file reads and small edits (the routing's models, effort at most high); after such an edit, one quick check (a test file, a type check).",
             "App builds and live runs go to workers or CI. Run related tests once per fix; CI runs the full suite; a full local run only when the user asks or CI cannot cover it.",
-            "To start or show an app, run `brigadier preview start --purpose user <command>` yourself (shows in the user's Background); a worker only when code must change first.",
+            "To start or show an app, run `brigadier preview start --purpose user [--open /page] <command>` yourself (shows in the user's Background; a web one opens its own tab behind theirs, on that page); a worker only when code must change first.",
             "start the worker with `--mockup`; then the real build.",
             "anything bigger, anything that needs a build or tests (the checks on your integrated tree too), and research beyond a quick look-up: a worker on the routing's search row, or the user's own research row.",
             "on disjoint parts: N is the \"Workers at once\" line of `brigadier models`.",
@@ -658,7 +658,7 @@ mod tests {
             "| `brigadier fusion offer \"<question>\"` | In a top-level Chat only, offer a second opinion from every installed CLI; nothing starts until the user clicks Ask. |",
             "| `brigadier session propose --title \"2-4 words\" \"<self-contained brief>\"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise. |",
             "| `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |",
-            "| `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |",
+            "| `brigadier preview start --purpose user [--open /page] [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. `--open`: the page to show, not the server's root. A web one opens its own tab; don't open it again. |",
             "A worker is naked: its CLI loads none of your setup but the project's instruction file, MCP servers only by `--mcp` (for heavy use), `--with computer-use` to see an app; it pulls decisions, skills and the rest with `brigadier context`, and calls any MCP server of the setup with `brigadier mcp`. In a Chat it works in `--repo <path>` (a worktree, or the checkout with `--local`), else in its own folder without git.",
             // Pick the model.
             "The user's routing decides each worker's agent, model and effort. The rows are in `brigadier state` (routing), read once: no `brigadier models` before each start. Pass `--work \"<Work>\"` of the row that fits; that row (the user's, else the shipped) picks all three. `brigadier start` skips a row whose account is out of quota by itself; never name a model or effort the rows don't.",
@@ -667,7 +667,7 @@ mod tests {
             "Change:** what to build or fix, and decisions made (quote the user's words when they matter).",
             "Do not touch:** files, areas or behaviour that must stay.",
             "Files:** the exact files or names it owns. Two workers never share a file; two that need one run in order or get exact names up front.",
-            "Acceptance:** first a demo the user sees (a preview with `--purpose user`, screenshots or real output), relayed to the user at once; related tests once per fix only after their go, then the exact commands that must pass; CI runs the full suite, and a full local run only when the user asks or CI cannot cover it; \"commit, merge into my branch (below), then say done with the commit ids and each command's last lines\".",
+            "Acceptance:** first a demo the user sees (a preview with `--purpose user`, plus `--open /page` when the page isn't the server's root, whose tab opens itself; screenshots or real output), relayed to the user at once; related tests once per fix only after their go, then the exact commands that must pass; CI runs the full suite, and a full local run only when the user asks or CI cannot cover it; \"commit, merge into my branch (below), then say done with the commit ids and each command's last lines\".",
             "Add \"Ask me (your parent) if something blocks you; don't guess on scope.\"",
             // O57 item 2: the orchestrator names its worker's job.
             "Start it with `--title \"<its job in 2-4 words>\"`",

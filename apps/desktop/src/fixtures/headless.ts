@@ -537,10 +537,10 @@ export async function renderFixtureLive(
           return call("Input.dispatchMouseEvent", { type: "mouseReleased", x: asked.x, y: asked.y, button: "left", buttons: 0, clickCount: 1 });
         case "pointerDown":
           pointerButtons = 1;
-          return call("Input.dispatchMouseEvent", { type: "mousePressed", x: asked.x, y: asked.y, button: "left", buttons: 1, clickCount: 1 });
+          return call("Input.dispatchMouseEvent", { type: "mousePressed", x: asked.x, y: asked.y, button: "left", buttons: 1, clickCount: asked.count ?? 1 });
         case "pointerUp":
           pointerButtons = 0;
-          return call("Input.dispatchMouseEvent", { type: "mouseReleased", x: asked.x, y: asked.y, button: "left", buttons: 0, clickCount: 1 });
+          return call("Input.dispatchMouseEvent", { type: "mouseReleased", x: asked.x, y: asked.y, button: "left", buttons: 0, clickCount: asked.count ?? 1 });
         case "pointer":
           return call("Input.dispatchMouseEvent", { type: "mouseMoved", x: asked.x, y: asked.y, button: pointerButtons ? "left" : "none", buttons: pointerButtons });
       }

@@ -9,6 +9,8 @@ import {
   useState,
 } from "react";
 
+import { CodeSpans } from "@/app/conversation/cards/codeSpans";
+import { plainCode, selectedWithin } from "@/app/conversation/cards/questionRound";
 import { CardTextEditor, type CardTextHandle } from "@/app/conversation/CardTextEditor";
 import { CardDictate } from "@/app/conversation/CardDictate";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
@@ -18,8 +20,11 @@ import type { AnswerInput } from "@/ipc/generated";
 import { pageShown } from "@/lib/pageHidden";
 import { cancelDictation, dictationOwner, registerInserter } from "@/state/dictation";
 
-/** How long a picked answer shows its dot before it goes. */
-const COMMIT_MS = 180;
+/** How long a picked answer shows its dot before it goes: time for a double-click's second click to call it off. */
+const COMMIT_MS = 300;
+
+/** How far a press moves before it is a drag, not a click. */
+const DRAG_PX = 4;
 
 /** A button's click as the user gave it: by the pointer, or by Enter or Space on it. */
 function clickInput(event: MouseEvent): AnswerInput {
@@ -36,7 +41,8 @@ function clickInput(event: MouseEvent): AnswerInput {
  * click in the thread and Enter answers nothing. Every answer may change code or be hard to undo
  * (a merge), so nothing is lit until the user moves to an answer, even when the
  * card took focus on its own: ↑/↓ or 1–9 light one (the pointer passing over lights nothing),
- * and the recommended answer is only marked. A click on an answer picks it.
+ * and the recommended answer is only marked. A click on an answer picks it; a drag over its words
+ * or a double-click selects them and answers nothing.
  *
  * `multiple` (a CLI's own multi-select question, harness D7): a click or Enter marks an answer
  * or unmarks it, its dot staying, and the button sends the marked ones together.
@@ -146,6 +152,9 @@ export function ChoiceCard({
   const card = useRef<HTMLElement>(null);
   const field = useRef<CardTextHandle>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // The answer lit before a pick, for a pick taken back.
+  const litBefore = useRef(highlight);
+  const pressedAt = useRef({ x: 0, y: 0 });
   // The card takes focus (the field, when there is nothing to pick), unless the user is
   // typing somewhere.
   const pickable = choices.length > 0;
@@ -169,12 +178,29 @@ export function ChoiceCard({
       multiple.onMarked(next);
       return;
     }
+    litBefore.current = highlight;
     setChosen(index);
     setHighlight(index);
     timer.current = setTimeout(() => {
       setChosen(null);
       onChoose(index, input);
     }, COMMIT_MS);
+  };
+  // A click on an answer. A double-click's second one takes back the pick its first one made, and
+  // a triple-click's third does nothing; marking, the second click unmarks by itself.
+  const clicked = (index: number, event: MouseEvent<HTMLElement>) => {
+    if (event.detail >= 3) return;
+    if (event.detail === 2 && !multiple) {
+      if (chosen === null) return;
+      clearTimeout(timer.current);
+      setChosen(null);
+      setHighlight(litBefore.current);
+      return;
+    }
+    // A drag never picks, even one that selected nothing.
+    const dragged = Math.hypot(event.clientX - pressedAt.current.x, event.clientY - pressedAt.current.y) > DRAG_PX;
+    if (event.detail === 1 && (dragged || selectedWithin(event.currentTarget))) return;
+    commit(index, clickInput(event));
   };
   const text = typed.trim();
   const send = (input: AnswerInput) => {
@@ -282,13 +308,17 @@ export function ChoiceCard({
                     role={multiple ? "checkbox" : "radio"}
                     aria-checked={multiple ? marked.includes(index) : index === highlight}
                     number={index + 1}
-                    label={choice.label}
+                    name={plainCode(choice.label)}
+                    label={<CodeSpans text={choice.label} />}
                     description={choice.description ?? undefined}
                     recommended={choice.recommended}
                     highlighted={index === highlight}
                     chosen={index === chosen || (!!multiple && marked.includes(index))}
                     disabled={busy || preparing}
-                    onClick={(event) => commit(index, clickInput(event))}
+                    onMouseDown={(event) => {
+                      pressedAt.current = { x: event.clientX, y: event.clientY };
+                    }}
+                    onClick={(event) => clicked(index, event)}
                     {...row(index + 2)}
                   />
                 );

@@ -39,9 +39,14 @@ pid: number | null, state: PreviewState, startedAtMs: number, endedAtMs: number 
 log: string | null, 
 /**
  * A local HTTP URL printed by this preview; never for an app preview, whose window is
- * what the user looks at.
+ * what the user looks at. With `open_path`, the server's origin plus that path.
  */
-url?: string, kind: PreviewKind, 
+url?: string, 
+/**
+ * The page it was started to show (`--open`), a path on its own server; Start again keeps
+ * it.
+ */
+openPath?: string, kind: PreviewKind, 
 /**
  * What it shows when that isn't a URL: a simulator's device ("iPhone 16"), a PDF's file,
  * a test run's command.

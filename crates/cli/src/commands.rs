@@ -555,8 +555,16 @@ pub const COMMANDS: &[Command] = &[
                 "purpose",
                 "WHY",
                 &["proof", "user"],
-                "start: `user` when the user asked to see it (a merge leaves it running); \
-                 `proof` by default.",
+                "start: `user` when the user asked to see it (a merge leaves it running, and a \
+                 web page opens its own tab behind the user's, where Settings › Browser sends \
+                 local links to Brigadier); `proof` by default.",
+            ),
+            flag(
+                "open",
+                "PATH",
+                "start: the page to open on a web preview, a path on its own server starting \
+                 with one `/` (`/docs/page.html?x=1`); its address is the server's origin plus \
+                 this, whatever the server prints.",
             ),
             flag("tail", "N", "log: the last N lines (40 by default)."),
             flag(

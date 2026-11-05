@@ -14,4 +14,4 @@ All through `brigadier` (`--help`, `--json` on all):
 | `brigadier fusion offer "<question>"` | In a top-level Chat only, offer a second opinion from every installed CLI; nothing starts until the user clicks Ask. |
 | `brigadier session propose --title "2-4 words" "<self-contained brief>"` | In a project session, work apart from it, offered as a new session on a card: a call, never a promise. |
 | `brigadier ask --question Q [--option O]… [--question …]` | One card: no question tool, or a worker's question (in the background). |
-| `brigadier preview start --purpose user [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. |
+| `brigadier preview start --purpose user [--open /page] [--name N] [--workdir D] [--env K=V] <command>`, `log [--wait S]`, `stop` | Run an app the user sees; `log` says if up. `--open`: the page to show, not the server's root. A web one opens its own tab; don't open it again. |
