@@ -37,6 +37,7 @@ export function DetailsPage({ view, item, actions, adapter }: { view: PluginsVie
       sectionsClassName="gap-9 pt-4"
     >
       {item.differentPerAgent && <p data-slot="different-per-agent" className="text-foreground/65 text-xs">Different per agent</p>}
+      {item.cliOnly?.map((line) => <p key={line} data-slot="cli-only" className="text-foreground/65 text-xs">{line}</p>)}
       <SignInStatus key={item.key} item={item} adapter={adapter} disabled={actions.busy} />
       <SettingsSection
         title="Projects"

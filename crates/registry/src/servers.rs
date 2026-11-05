@@ -29,6 +29,8 @@ enum Variables {
     /// Cursor: `${env:VAR}`, `${userHome}`, `${workspaceFolder}`, `${workspaceFolderBasename}`,
     /// `${pathSeparator}` and `${/}`.
     Cursor,
+    /// OpenCode: `{env:VAR}`.
+    OpenCode,
 }
 
 /// What a config file's servers share.
@@ -494,6 +496,249 @@ fn json_servers(
     servers
 }
 
+/// The MCP servers of OpenCode's config `files`, the later winning per name, in either shape it
+/// takes (`mcp.<name>`, `mcp.servers.<name>`). A file that can't be read or an entry no other
+/// CLI could take is a [`Problem`]: it never gets a row, so it can't reach their launches.
+pub(crate) fn opencode(
+    files: &[PathBuf],
+    source: Source,
+    project: Option<&Path>,
+    roots: &Roots,
+    problems: &mut Vec<Problem>,
+) -> Vec<Server> {
+    let mut found: std::collections::BTreeMap<String, Server> = Default::default();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let config: Value = match serde_json::from_str(&without_jsonc(&text)) {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(path = %file.display(), %error, "unreadable MCP config");
+                problems.push(file_problem(file, source, project, Some(error.line())));
+                continue;
+            }
+        };
+        let origin = Origin {
+            source,
+            project,
+            base: project,
+            variables: Variables::OpenCode,
+            file,
+            plugin_root: None,
+            written: None,
+        };
+        let Some(mcp) = config.get("mcp").and_then(Value::as_object) else {
+            continue;
+        };
+        let nested = mcp
+            .get("servers")
+            .filter(|servers| servers.get("type").is_none())
+            .and_then(Value::as_object);
+        let flat = mcp
+            .iter()
+            .filter(|(name, _)| nested.is_none() || name.as_str() != "servers");
+        for (name, entry) in flat.chain(nested.into_iter().flatten()) {
+            problems.retain(|known| !(known.source == source && known.name == *name));
+            found.remove(name);
+            match opencode_server(name, entry, &origin, roots) {
+                Ok(server) => {
+                    found.insert(name.clone(), server);
+                }
+                Err((read, error)) => {
+                    problems.push(entry_problem(name, source, project, file, read, error));
+                }
+            }
+        }
+    }
+    found.into_values().collect()
+}
+
+/// One entry of OpenCode's: `{type: "local", command: […], environment, cwd}`,
+/// `{type: "remote", url, headers, oauth}`, either with `enabled` or `disabled`.
+fn opencode_server(
+    name: &str,
+    entry: &Value,
+    origin: &Origin<'_>,
+    roots: &Roots,
+) -> Result<Server, (Option<String>, String)> {
+    let Some(config) = entry.as_object() else {
+        return Err((None, "It isn't a server's settings".into()));
+    };
+    // Codex refuses a config with any other server name, so its whole launch would fail.
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err((
+            None,
+            "Its name can't be shared: only letters, digits, “-” and “_”".into(),
+        ));
+    }
+    let values = |key: &str| string_map(config.get(key)).collect::<Vec<_>>();
+    let command: Vec<&str> = config
+        .get("command")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let raw = |key: &str| config.get(key).and_then(Value::as_str).map(str::to_owned);
+    let (url, cwd) = (raw("url"), raw("cwd"));
+    let reads_file = |text: &str| text.contains("{file:");
+    if command.iter().copied().any(reads_file)
+        || url.as_deref().is_some_and(reads_file)
+        || cwd.as_deref().is_some_and(reads_file)
+        || ["environment", "headers"]
+            .iter()
+            .any(|key| values(key).iter().any(|(_, value)| reads_file(value)))
+    {
+        return Err((
+            None,
+            "It reads a value from a file, which only OpenCode can".into(),
+        ));
+    }
+    let expand = |text: &str| expand(text, origin, roots);
+    let kind = config.get("type").and_then(Value::as_str);
+    let (transport, values_key) = match kind {
+        Some("remote") => {
+            let Some(written) = url.as_deref() else {
+                return Err((None, "It has no command or url".into()));
+            };
+            let url = expand(written);
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                let scheme = written.split_once("://").map_or("", |(scheme, _)| scheme);
+                return Err((
+                    Some(written.to_owned()),
+                    format!("Unsupported address “{scheme}://”: only http and https"),
+                ));
+            }
+            let headers = values("headers")
+                .into_iter()
+                .map(|(header, value)| (header, Secret::new(expand(&value))))
+                .collect();
+            (Transport::Http { url, headers }, "headers")
+        }
+        Some("local") => {
+            let Some((program, args)) = command
+                .split_first()
+                .filter(|(program, _)| !program.trim().is_empty())
+            else {
+                return Err((None, "It has no command or url".into()));
+            };
+            let base = origin.base;
+            (
+                Transport::Stdio {
+                    command: command_path(&expand(program), base),
+                    args: args.iter().map(|arg| expand(arg)).collect(),
+                    env: values("environment")
+                        .into_iter()
+                        .map(|(key, value)| (key, Secret::new(expand(&value))))
+                        .collect(),
+                    cwd: cwd.as_deref().map(|cwd| absolute(&expand(cwd), base)),
+                    base: base.map(Path::to_owned),
+                },
+                "environment",
+            )
+        }
+        Some(other) => return Err((None, format!("Unknown type “{other}”"))),
+        None => return Err((None, "It has no type".into())),
+    };
+    let references: Vec<_> = values(values_key)
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let parts = parts(&value, origin, roots);
+            parts
+                .iter()
+                .any(|part| matches!(part, WrittenPart::Var { .. }))
+                .then_some((key, parts))
+        })
+        .collect();
+    let names_var = |text: &str| text.contains("{env:");
+    let templated = !references.is_empty()
+        || command.iter().copied().any(names_var)
+        || url.as_deref().is_some_and(names_var)
+        || cwd.as_deref().is_some_and(names_var);
+    let mut server = server(name, origin.source, origin.project, origin.file, transport);
+    server.disabled = config.get("disabled").and_then(Value::as_bool) == Some(true)
+        || config.get("enabled").and_then(Value::as_bool) == Some(false);
+    let oauth = config.get("oauth");
+    server.signs_in &= oauth != Some(&Value::Bool(false));
+    server.oauth = oauth.and_then(Value::as_object).and_then(|oauth| {
+        let field = |key: &str| oauth.get(key).and_then(Value::as_str).map(&expand);
+        let client_id = field("clientId");
+        let client_secret = field("clientSecret").map(Secret::new);
+        (client_id.is_some() || client_secret.is_some()).then_some(OAuthClient {
+            client_id,
+            client_secret,
+        })
+    });
+    server.written = AsWritten {
+        command: command.first().map(|program| (*program).to_owned()),
+        args: command
+            .iter()
+            .skip(1)
+            .map(|arg| (*arg).to_owned())
+            .collect(),
+        url,
+        cwd,
+        references,
+        headers_helper: None,
+    };
+    server.templated = templated;
+    Ok(server)
+}
+
+/// JSONC as JSON: comments and trailing commas out, strings untouched. A comment's text becomes
+/// spaces, so an error's line stays the file's.
+fn without_jsonc(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                out.push(c);
+                while let Some(c) = chars.next() {
+                    out.push(c);
+                    match c {
+                        '\\' => out.extend(chars.next()),
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                while chars.peek().is_some_and(|c| *c != '\n') {
+                    chars.next();
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut last = ' ';
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        out.push(c);
+                    }
+                    if last == '*' && c == '/' {
+                        break;
+                    }
+                    last = c;
+                }
+            }
+            '}' | ']' => {
+                let kept = out.trim_end().len();
+                if out[..kept].ends_with(',') {
+                    out.replace_range(kept - 1..kept, " ");
+                }
+                out.push(c);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// The user's own Codex servers set `enabled = false`, read as they'd be once on.
 pub(crate) fn toml_servers_off(config: &toml::Table, roots: &Roots) -> Vec<Server> {
     let off: toml::Table = config
@@ -884,6 +1129,24 @@ fn parts(text: &str, origin: &Origin<'_>, roots: &Roots) -> Vec<WrittenPart> {
         push(&mut parts, text);
         return parts;
     }
+    if matches!(variables, Variables::OpenCode) {
+        let mut rest = text;
+        while let Some(start) = rest.find("{env:") {
+            push(&mut parts, &rest[..start]);
+            let after = &rest[start + "{env:".len()..];
+            let Some(end) = after.find('}') else {
+                push(&mut parts, &rest[start..]);
+                return parts;
+            };
+            parts.push(WrittenPart::Var {
+                name: after[..end].to_owned(),
+                default: None,
+            });
+            rest = &after[end + 1..];
+        }
+        push(&mut parts, rest);
+        return parts;
+    }
     let mut rest = text;
     while let Some(start) = rest.find("${") {
         push(&mut parts, &rest[..start]);
@@ -918,7 +1181,7 @@ fn parts(text: &str, origin: &Origin<'_>, roots: &Roots) -> Vec<WrittenPart> {
                     continue;
                 }
             },
-            Variables::None => unreachable!(),
+            Variables::None | Variables::OpenCode => unreachable!(),
         };
         match origin.plugin_root {
             Some(root) if name == "CLAUDE_PLUGIN_ROOT" => {

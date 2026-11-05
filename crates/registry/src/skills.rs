@@ -85,6 +85,10 @@ pub enum SkillRoot {
     ClaudeProject(PathBuf),
     /// A project's `.agents/skills` (Codex, in a checkout of the project).
     AgentsProject(PathBuf),
+    /// OpenCode's own `skills` folder.
+    OpenCodeUser,
+    /// A project's `.opencode/skills` (OpenCode).
+    OpenCodeProject(PathBuf),
     /// A plugin its agent loads, which shows the skill as `<plugin>:<name>`.
     Plugin(Plugin),
 }
@@ -101,6 +105,16 @@ impl SkillRoot {
             (Self::AgentsProject(project), ProviderKind::Codex) => {
                 Some(project.as_path()) == session.project && session.in_checkout
             }
+            // Beside its own, it loads the Claude and `.agents` folders of the home and project.
+            (Self::OpenCodeUser | Self::ClaudeUser | Self::AgentsUser, ProviderKind::OpenCode) => {
+                true
+            }
+            (
+                Self::OpenCodeProject(project)
+                | Self::ClaudeProject(project)
+                | Self::AgentsProject(project),
+                ProviderKind::OpenCode,
+            ) => Some(project.as_path()) == session.project,
             (Self::Plugin(plugin), agent) => {
                 plugin.agent == agent && plugin.counts_in(session.project)
             }
@@ -116,6 +130,8 @@ impl SkillRoot {
             Self::ClaudeSynced(account) => format!("claude:synced:{account}"),
             Self::ClaudeProject(project) => format!("claude:project:{}", project.display()),
             Self::AgentsProject(project) => format!("agents:project:{}", project.display()),
+            Self::OpenCodeUser => "opencode:user".into(),
+            Self::OpenCodeProject(project) => format!("opencode:project:{}", project.display()),
             Self::Plugin(plugin) => plugin.prefix(),
         }
     }
@@ -158,6 +174,20 @@ pub(crate) fn add_project(skills: &mut Vec<Skill>, project: &Path) {
         skills,
         &project.join(".agents").join("skills"),
         SkillRoot::AgentsProject(project.to_owned()),
+    );
+}
+
+/// OpenCode's own skills of the user: read after the other CLIs', so an id stays what it was.
+pub(crate) fn add_opencode_user(skills: &mut Vec<Skill>, folder: &Path) {
+    scan(skills, &folder.join("skills"), SkillRoot::OpenCodeUser);
+}
+
+/// OpenCode's own skills of a project.
+pub(crate) fn add_opencode_project(skills: &mut Vec<Skill>, project: &Path) {
+    scan(
+        skills,
+        &project.join(".opencode").join("skills"),
+        SkillRoot::OpenCodeProject(project.to_owned()),
     );
 }
 

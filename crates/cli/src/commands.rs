@@ -173,6 +173,22 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/context.schema.json"),
     },
     Command {
+        name: "skill",
+        summary: "The skills of your session's setup, or one skill's whole text.",
+        details: "Alone it lists the skills and whether your CLI loaded each at launch; with a \
+                  name it prints that skill whole. The same as `brigadier context skills`. A \
+                  worker's CLI loads none: it pulls the one it needs here.",
+        args: &[Arg::Positional {
+            name: "name",
+            help: "The skill to print whole; none lists them.",
+            required: false,
+            rest: false,
+            choices: &[],
+        }],
+        available: true,
+        schema: include_str!("../schemas/context.schema.json"),
+    },
+    Command {
         name: "context",
         summary: "Everything about your job, on pull: brief, decisions, open items, ledger, \
                   transcript, skills, MCP servers, project, routing.",
@@ -374,8 +390,8 @@ pub const COMMANDS: &[Command] = &[
             Arg::Flag {
                 long: "skill",
                 value: Some("NAME"),
-                help: "Gone: a worker has no skills (D13); it reads one with `brigadier context \
-                       skills <name>`.",
+                help: "Gone: a worker has no skills (D13); it reads one with `brigadier skill \
+                       <name>`.",
                 choices: &[],
                 repeat: true,
             },

@@ -347,3 +347,20 @@ test("collisions within one project or plugin keep distinct readable names", () 
     assert.ok(view.items.every((item) => !item.name.includes("/")));
   }
 });
+
+test("a plugin's CLI-only parts show on its items, a CLI's own on the page", () => {
+  const row = server("bundled");
+  row.definitions = [{ ...row.definitions[0]!, agent: "claude", plugin: "bundle@market" }];
+  const page = catalogPage({
+    ...catalog(row, server("plain")),
+    cliOnly: [
+      { agent: "claude", plugin: "bundle@market", hooks: ["PreToolUse"], commands: ["deploy"], agents: [], plugins: [] },
+      { agent: "codex", plugin: "bundle@market", hooks: ["Stop"], commands: [], agents: [], plugins: [] },
+      { agent: "opencode", plugin: null, hooks: [], commands: [], agents: [], plugins: ["status"] },
+    ],
+  }, []);
+  assert.deepEqual(page.items.find((item) => item.key === row.id)?.cliOnly, ["Claude Code only. Hooks: PreToolUse. Commands: deploy."]);
+  assert.equal(page.items.find((item) => item.key !== row.id)?.cliOnly, undefined);
+  assert.deepEqual(page.cliOnly, ["OpenCode only. Plugins: status."]);
+});
+

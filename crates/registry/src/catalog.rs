@@ -148,6 +148,7 @@ impl Server {
             Source::CodexUser | Source::CodexProject | Source::CodexPlugin => {
                 Some(ProviderKind::Codex)
             }
+            Source::OpenCodeUser | Source::OpenCodeProject => Some(ProviderKind::OpenCode),
             _ => None,
         };
         let native = match &self.plugin {
@@ -358,6 +359,15 @@ impl Catalog {
                             None,
                             skill.name.clone(),
                         ),
+                        SkillRoot::OpenCodeUser => {
+                            (ProviderKind::OpenCode, None, None, skill.name.clone())
+                        }
+                        SkillRoot::OpenCodeProject(project) => (
+                            ProviderKind::OpenCode,
+                            Some(project.clone()),
+                            None,
+                            skill.name.clone(),
+                        ),
                         SkillRoot::Plugin(plugin) => (
                             plugin.agent,
                             plugin.project.clone(),
@@ -437,6 +447,74 @@ impl Catalog {
             });
         }
         rows.sort_by(|a, b| a.id.cmp(&b.id));
+        rows
+    }
+}
+
+impl Catalog {
+    /// What runs only on its own CLI, for the page: each plugin's, on or off, and each CLI's own
+    /// folders, the user's and `projects`' together.
+    pub fn cli_only(roots: &crate::Roots, projects: &[PathBuf]) -> Vec<crate::plugins::CliOnly> {
+        let user = Self::read(roots, None);
+        let mut plugins: Vec<crate::Plugin> =
+            user.plugins.into_iter().chain(user.off.plugins).collect();
+        for project in projects {
+            plugins.extend(Self::plugins(roots, Some(project)));
+        }
+        let mut parts: Vec<crate::plugins::CliOnly> = plugins
+            .iter()
+            .filter(|plugin| !plugin.provider_supplied())
+            .map(crate::Plugin::cli_only)
+            .collect();
+        parts.sort_by(|a, b| (a.agent, &a.plugin).cmp(&(b.agent, &b.plugin)));
+        parts.dedup_by(|a, b| a.agent == b.agent && a.plugin == b.plugin);
+        for cli in crate::adapter::adapters() {
+            let mut own = cli.cli_only(roots, None);
+            for project in projects {
+                let here = cli.cli_only(roots, Some(project));
+                own.commands.extend(here.commands);
+                own.agents.extend(here.agents);
+                own.plugins.extend(here.plugins);
+            }
+            for names in [&mut own.commands, &mut own.agents, &mut own.plugins] {
+                names.sort();
+                names.dedup();
+            }
+            parts.push(own);
+        }
+        parts.retain(|part| !part.is_empty());
+        parts
+    }
+
+    /// [`Self::rows`] of `catalog` as `agent` loads it: another CLI's skill it also loads by
+    /// itself counts as its own too, so it isn't given a second time. The page's rows stay
+    /// [`Self::rows`], which say whose folder a skill is in.
+    pub fn rows_loaded_by(&self, roots: &crate::Roots, agent: ProviderKind) -> Vec<Row> {
+        let mut rows = Self::rows(std::slice::from_ref(self));
+        let Some(cli) = crate::adapter::adapter(agent) else {
+            return rows;
+        };
+        for row in &mut rows {
+            let also: Vec<Definition> = row
+                .definitions
+                .iter()
+                .filter(|definition| {
+                    let origin = &definition.provenance;
+                    origin.agent != Some(agent)
+                        && origin.plugin.is_none()
+                        && matches!(&definition.content, Content::Skill { path, .. }
+                        if path.parent().is_some_and(|folder| {
+                            cli.also_loads_skills_at(roots, origin.project.as_deref(), folder)
+                        }))
+                })
+                .cloned()
+                .map(|mut definition| {
+                    definition.provenance.agent = Some(agent);
+                    definition
+                })
+                .collect();
+            row.definitions.extend(also);
+        }
         rows
     }
 }
