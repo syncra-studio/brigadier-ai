@@ -27,7 +27,7 @@ pub mod storage;
 pub mod thread_image_files;
 pub mod thread_view;
 pub mod tools;
-mod traces;
+pub mod traces;
 pub mod tracked_work;
 pub mod work;
 
