@@ -148,6 +148,7 @@ impl Server {
             Source::CodexUser | Source::CodexProject | Source::CodexPlugin => {
                 Some(ProviderKind::Codex)
             }
+            Source::OpenCodeUser | Source::OpenCodeProject => Some(ProviderKind::OpenCode),
             _ => None,
         };
         let native = match &self.plugin {
@@ -358,6 +359,15 @@ impl Catalog {
                             None,
                             skill.name.clone(),
                         ),
+                        SkillRoot::OpenCodeUser => {
+                            (ProviderKind::OpenCode, None, None, skill.name.clone())
+                        }
+                        SkillRoot::OpenCodeProject(project) => (
+                            ProviderKind::OpenCode,
+                            Some(project.clone()),
+                            None,
+                            skill.name.clone(),
+                        ),
                         SkillRoot::Plugin(plugin) => (
                             plugin.agent,
                             plugin.project.clone(),
@@ -437,6 +447,40 @@ impl Catalog {
             });
         }
         rows.sort_by(|a, b| a.id.cmp(&b.id));
+        rows
+    }
+}
+
+impl Catalog {
+    /// [`Self::rows`] of `catalog` as `agent` loads it: another CLI's skill it also loads by
+    /// itself counts as its own too, so it isn't given a second time. The page's rows stay
+    /// [`Self::rows`], which say whose folder a skill is in.
+    pub fn rows_loaded_by(&self, roots: &crate::Roots, agent: ProviderKind) -> Vec<Row> {
+        let mut rows = Self::rows(std::slice::from_ref(self));
+        let Some(cli) = crate::adapter::adapter(agent) else {
+            return rows;
+        };
+        for row in &mut rows {
+            let also: Vec<Definition> = row
+                .definitions
+                .iter()
+                .filter(|definition| {
+                    let origin = &definition.provenance;
+                    origin.agent != Some(agent)
+                        && origin.plugin.is_none()
+                        && matches!(&definition.content, Content::Skill { path, .. }
+                        if path.parent().is_some_and(|folder| {
+                            cli.also_loads_skills_at(roots, origin.project.as_deref(), folder)
+                        }))
+                })
+                .cloned()
+                .map(|mut definition| {
+                    definition.provenance.agent = Some(agent);
+                    definition
+                })
+                .collect();
+            row.definitions.extend(also);
+        }
         rows
     }
 }

@@ -31,10 +31,14 @@ fn the_sign_in_page_is_the_link_with_an_oauth_request() {
 fn assert_signed(progress: &McpSignInProgress) {
     assert!(progress.finished && !progress.agents.is_empty());
     assert!(
-        progress.agents.iter().all(|agent| matches!(
-            agent.state,
-            AgentSignInState::SignedIn | AgentSignInState::AlreadySignedIn
-        )),
+        progress
+            .agents
+            .iter()
+            .filter(|agent| agent.agent != ProviderKind::OpenCode)
+            .all(|agent| matches!(
+                agent.state,
+                AgentSignInState::SignedIn | AgentSignInState::AlreadySignedIn
+            )),
         "{progress:?}"
     );
 }
@@ -111,11 +115,14 @@ esac
                     ("PATH".into(), "/bin:/usr/bin".into()),
                     ("STATE".into(), dir.display().to_string()),
                 ],
+                // OpenCode's status is its own step: it's not installed here.
                 binary: Arc::new(move |agent| {
-                    Some(bin.join(match agent {
-                        Agent::Claude => "claude",
-                        _ => "codex",
-                    }))
+                    (agent != Agent::OpenCode).then(|| {
+                        bin.join(match agent {
+                            Agent::Claude => "claude",
+                            _ => "codex",
+                        })
+                    })
                 }),
             },
             dir,
@@ -178,9 +185,10 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
     let id = logins.start(fake.clis.clone(), target.clone(), open);
     // Both pages wait in the browser together: Codex's doesn't wait for Claude's sign-in.
     fake::wait(&logins, &id, |p| {
-        p.agents.len() == 2
+        p.agents.len() == 3
             && p.agents
                 .iter()
+                .filter(|a| a.agent != ProviderKind::OpenCode)
                 .all(|a| a.state == AgentSignInState::InBrowser)
     });
     let pages = opened.lock().unwrap().clone();
@@ -207,6 +215,7 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
         progress
             .agents
             .iter()
+            .filter(|a| a.agent != ProviderKind::OpenCode)
             .map(|a| (a.agent, a.server.as_str(), a.state.clone()))
             .collect::<Vec<_>>(),
         [
@@ -236,6 +245,7 @@ fn one_sign_in_runs_every_agents_own_login_at_once() {
         progress
             .agents
             .iter()
+            .filter(|a| a.agent != ProviderKind::OpenCode)
             .all(|a| a.state == AgentSignInState::AlreadySignedIn)
     );
 }
@@ -335,9 +345,10 @@ fn a_cancelled_sign_in_stops_its_clis() {
     };
     let id = logins.start(fake.clis.clone(), target.clone(), open.clone());
     fake::wait(&logins, &id, |p| {
-        p.agents.len() == 2
+        p.agents.len() == 3
             && p.agents
                 .iter()
+                .filter(|a| a.agent != ProviderKind::OpenCode)
                 .all(|a| a.state == AgentSignInState::InBrowser)
     });
     // Asking again while it waits gives the same sign-in, its pages opened again.
@@ -350,6 +361,7 @@ fn a_cancelled_sign_in_stops_its_clis() {
         progress
             .agents
             .iter()
+            .filter(|a| a.agent != ProviderKind::OpenCode)
             .all(|a| a.state == AgentSignInState::Cancelled),
         "{progress:?}"
     );
@@ -371,7 +383,7 @@ fn a_login_that_fails_says_why_in_the_clis_words() {
     std::fs::write(fake.dir.join("codex"), "#!/bin/sh\ncase \"$1 $2\" in\n\"mcp list\") echo '[{\"name\":\"srv\",\"auth_status\":\"not_logged_in\"}]' ;;\n*) echo 'Error: the server refused the client' >&2; exit 1 ;;\nesac\n").unwrap();
     let id = logins.start(fake.clis.clone(), target, Arc::new(|_: &str| {}));
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.agents.len(), 2);
+    assert_eq!(progress.agents.len(), 3);
     assert!(progress.agents.iter().any(|step| step.agent == ProviderKind::Claude && matches!(&step.state, AgentSignInState::Failed { reason } if reason.contains("Add this server"))));
     assert!(progress.agents.iter().any(|step| step.agent == ProviderKind::Codex && matches!(&step.state, AgentSignInState::Failed { reason } if reason == "the server refused the client")));
 }
@@ -387,7 +399,7 @@ fn an_agent_without_its_cli_is_reported_truthfully() {
     let (open, _) = browser(fake.dir.clone(), true);
     let id = logins.start(fake.clis.clone(), plugin_target(), open);
     let progress = fake::wait(&logins, &id, |p| p.finished);
-    assert_eq!(progress.agents.len(), 2);
+    assert_eq!(progress.agents.len(), 3);
     assert!(
         progress
             .agents
@@ -442,7 +454,7 @@ esac
     let id = logins.start(fake.clis.clone(), target.clone(), Arc::new(|_: &str| {}));
     let progress = fake::wait(&logins, &id, |p| p.finished);
     assert_signed(&progress);
-    assert_eq!(progress.agents.len(), 2, "{progress:?}");
+    assert_eq!(progress.agents.len(), 3, "{progress:?}");
     assert!(fake.dir.join("claude-in").exists() && fake.dir.join("codex-in").exists());
 }
 
@@ -853,7 +865,7 @@ mod live {
         };
         println!("progress: {progress:#?}");
         assert_signed(&progress);
-        assert_eq!(progress.agents.len(), 2);
+        assert_eq!(progress.agents.len(), 3);
         assert!(
             progress
                 .agents

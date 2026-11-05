@@ -3,12 +3,20 @@ use crate::{ProviderKind, Roots, Source};
 #[test]
 fn every_agent_has_one_adapter_and_owns_its_sources() {
     let agents: Vec<ProviderKind> = adapters().iter().map(|adapter| adapter.agent()).collect();
-    assert_eq!(agents, [ProviderKind::Claude, ProviderKind::Codex]);
+    assert_eq!(
+        agents,
+        [
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::OpenCode
+        ]
+    );
     for agent in agents {
         assert_eq!(adapter(agent).unwrap().agent(), agent);
     }
     assert_eq!(owner(Source::ClaudeLocal), Some(ProviderKind::Claude));
     assert_eq!(owner(Source::CodexPlugin), Some(ProviderKind::Codex));
+    assert_eq!(owner(Source::OpenCodeProject), Some(ProviderKind::OpenCode));
     assert_eq!(owner(Source::Desktop), None);
     assert_eq!(owner(Source::CursorProject), None);
     assert!(adapter(ProviderKind::new("later")).is_none());
@@ -121,5 +129,51 @@ fn terminal_escapes_and_links_are_left_out() {
             "  \u{1b}]8;;http://a/b?c=1\u{7}http://a/b?c=1\u{1b}]8;;\u{7}\r\nnext \u{1b}[1mbold\u{1b}[22m"
         ),
         "  http://a/b?c=1\nnext bold"
+    );
+}
+
+/// #707: `opencode mcp list` names no server (2.2.5), so sign-in lists from its config report.
+#[test]
+fn opencode_signs_in_on_its_config_report() {
+    let opencode = adapter(ProviderKind::OpenCode).unwrap();
+    assert_eq!(
+        opencode.list_servers(None).args,
+        ["debug", "config", "--standalone"]
+    );
+    let login = opencode.login("linear", None);
+    assert_eq!(login.args, ["mcp", "auth", "--standalone", "linear"]);
+    assert!(login.needs_terminal);
+    assert_eq!(
+        opencode.logout("linear", None).args,
+        ["mcp", "logout", "--standalone", "linear"]
+    );
+    let report = r#"[
+      {"type": "document", "path": "/h/opencode.json", "info": {"mcp": {"servers": {
+        "oauth": {"type": "remote", "url": "https://a.test"},
+        "keyed": {"type": "remote", "url": "https://b.test", "headers": {"authorization": "x"}},
+        "plain": {"type": "remote", "url": "https://c.test", "oauth": false},
+        "local": {"type": "local", "command": ["x"]},
+        "off": {"type": "remote", "url": "https://d.test", "disabled": true}
+      }}}},
+      {"type": "directory", "path": "/h"}
+    ]"#;
+    let listed = opencode.parse_servers(report);
+    let needing: Vec<(&str, bool)> = listed
+        .iter()
+        .map(|server| (server.name.as_str(), server.needs_sign_in))
+        .collect();
+    assert_eq!(
+        needing,
+        [
+            ("keyed", false),
+            ("local", false),
+            ("oauth", true),
+            ("plain", false)
+        ]
+    );
+    assert!(
+        opencode
+            .parse_servers("No MCP servers configured")
+            .is_empty()
     );
 }

@@ -2,6 +2,7 @@
 mod claude;
 pub mod codex;
 mod migration;
+mod opencode;
 mod process;
 
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ pub use process::{output_within, wait_within};
 pub const CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 pub use claude::Claude;
 pub use codex::Codex;
+pub use opencode::OpenCode;
 
 /// Where an item is on, or off.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +166,20 @@ pub trait AgentAdapter: Send + Sync {
     /// renamed (`<name>-brigadier`).
     fn renames_colliding_servers(&self) -> bool;
     fn trusts(&self, catalog: &Catalog, project: &Path) -> bool;
+    /// Adds what it keeps of the user's to `catalog`. Claude Code's and Codex's are read together
+    /// in [`Catalog`]'s own pass, which keeps their ids and order; a CLI needs only this.
+    fn read_user(&self, roots: &Roots, catalog: &mut Catalog) {
+        let _ = (roots, catalog);
+    }
+    /// Adds what it keeps of `project`'s to `catalog`.
+    fn read_project(&self, roots: &Roots, project: &Path, catalog: &mut Catalog) {
+        let _ = (roots, project, catalog);
+    }
+    /// It also loads the skills of `folder`, another CLI's skill folder, by itself.
+    fn also_loads_skills_at(&self, roots: &Roots, project: Option<&Path>, folder: &Path) -> bool {
+        let _ = (roots, project, folder);
+        false
+    }
     /// Used only to restore originals during the one-time migration.
     fn add_server(
         &self,
@@ -193,10 +209,11 @@ pub trait AgentAdapter: Send + Sync {
 
 static CLAUDE: Claude = Claude;
 static CODEX: Codex = Codex;
+static OPENCODE: OpenCode = OpenCode;
 
 /// Every agent Brigadier drives, in the order the page shows them.
-pub fn adapters() -> [&'static dyn AgentAdapter; 2] {
-    [&CLAUDE, &CODEX]
+pub fn adapters() -> [&'static dyn AgentAdapter; 3] {
+    [&CLAUDE, &CODEX, &OPENCODE]
 }
 
 /// The adapter of `agent`; none for a CLI whose settings Brigadier doesn't read.
