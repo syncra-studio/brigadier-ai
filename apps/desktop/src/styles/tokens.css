@@ -951,7 +951,7 @@
    (src-tauri/src/intro.rs dims the desktop from 0.95 s). The welcome sound's moments match
    (scripts/render-welcome-sound.mjs): the music drops at 4.8 s, as the mark is read; its
    motion stops at 6.75 s as the mark nears the title, and its chord rings on under the title
-   from 7.2 s; a soft note marks the button at 9 s. */
+   from 7.2 s; a soft note sounds at 9 s. */
 :root {
   /* The window's corner radius, which the orb opens into and the intro fills
      (IntroCanvas.tsx): macOS rounds the window's corners, Windows doesn't (see above). */
@@ -966,9 +966,9 @@
   --intro-mark-glide-scale: 0.36;
   --intro-mark-rise: calc((var(--welcome-title-gap) + var(--spacing-control-lg)) / 2);
   /* The title's two lines start together there and part into place, the first seen about 7.2 s;
-     Continue slides out from under them, read on the note at 9 s, usable as it ends (about 9.35 s). */
+     Continue slides out from under them as they near their place, usable as it ends (about 8.3 s). */
   --intro-part-at: 7.14s;
   --intro-part-for: 1.3s;
-  --intro-continue-at: 8.6s;
-  --intro-continue-for: 0.75s;
+  --intro-continue-at: 7.7s;
+  --intro-continue-for: 0.6s;
 }

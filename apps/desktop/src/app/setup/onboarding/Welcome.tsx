@@ -49,8 +49,8 @@ function setPageStaged(staged: boolean): void {
  * up at the centre, glowing, read just as the music drops, held while the desktop's dim lifts,
  * then glides up to the title's centre, shrinking, and fades out there; the music's motion stops
  * and its chord rings on, breathing. The title's two lines start together at that point and part,
- * one up and one down, into place; Continue slides out from under them, larger than the steps' own,
- * with a soft note, and only then can it be used (Enter too, wherever the focus is). The sound settles and fades
+ * one up and one down, into place; Continue slides out from under them as they near it, larger than
+ * the steps' own, and only then can it be used (Enter too, wherever the focus is). The sound settles and fades
  * out a few seconds later, into the name if need be. Elsewhere it plays the same inside the
  * window, without the dim. Escape shows the end at once, as reduced motion does. Continuing fades
  * the title and the waves out, and the name step comes in on the same dark, with the mark above

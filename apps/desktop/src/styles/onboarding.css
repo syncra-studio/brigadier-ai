@@ -255,9 +255,6 @@ html[data-intro="staged"] #root {
     opacity: 0;
     transform: translateY(-110%);
   }
-  35% {
-    opacity: 0.25;
-  }
   to {
     opacity: 1;
     transform: translateY(0);
