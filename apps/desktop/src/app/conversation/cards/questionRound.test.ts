@@ -9,6 +9,8 @@ import {
   answerWords,
   codeParts,
   multiPicks,
+  optionCode,
+  plainCode,
   questionAnswers,
   questionRound,
   questionRowWords,
@@ -26,6 +28,43 @@ test("a card line shows its backticked names as code, without the backticks", ()
   ]);
   assert.deepEqual(codeParts("Which format?"), [{ text: "Which format?", code: false }]);
   assert.deepEqual(codeParts("An unclosed ` stays"), [{ text: "An unclosed ` stays", code: false }]);
+});
+
+test("a card line's web addresses are links, bare or labelled, and nothing else is", () => {
+  const link = (text: string, href = text) => ({ text, code: false, href });
+  const plain = (text: string) => ({ text, code: false });
+  assert.deepEqual(codeParts("See https://a.example/x, or [the docs](http://b.example/y_(z)?q=1#f)."), [
+    plain("See "),
+    link("https://a.example/x"),
+    plain(", or "),
+    link("the docs", "http://b.example/y_(z)?q=1#f"),
+    plain("."),
+  ]);
+  // What ends the sentence isn't the address; a closer it opened is.
+  assert.deepEqual(codeParts("(see https://a.example/x)."), [plain("(see "), link("https://a.example/x"), plain(").")]);
+  assert.deepEqual(codeParts("https://a.example/w_(x)!"), [link("https://a.example/w_(x)"), plain("!")]);
+  // Backticked code stays code, with no link inside.
+  assert.deepEqual(codeParts("Run `curl https://a.example` now"), [
+    plain("Run "),
+    { text: "curl https://a.example", code: true },
+    plain(" now"),
+  ]);
+  // Only http(s) becomes a link.
+  for (const text of ["[a](javascript:alert(1))", "[a](file:///etc/passwd)", "mailto:a@b.example ftp://a.example", "http://"]) {
+    assert.deepEqual(codeParts(text), [plain(text)]);
+  }
+  assert.equal(plainCode("Read [the docs](https://a.example) and `x`"), "Read the docs and x");
+  assert.equal(optionCode("See https://a.example", "Run `x`"), "x");
+});
+
+test("exact text keeps every character and still links its addresses", () => {
+  const command = "curl -s 'https://a.example/x?y=1' [ok](https://b.example) `date https://c.example`";
+  const parts = codeParts(command, true);
+  assert.equal(parts.map((part) => part.text).join(""), command);
+  assert.deepEqual(parts.filter((part) => part.href).map((part) => [part.text, part.href]), [
+    ["https://a.example/x?y=1", "https://a.example/x?y=1"],
+    ["[ok](https://b.example)", "https://b.example"],
+  ]);
 });
 
 test("a conflicted merge card preserves its warning and resolution choice", () => {
