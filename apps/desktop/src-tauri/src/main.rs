@@ -759,6 +759,10 @@ fn main() {
                 responder.respond(response);
             });
         });
+    // AppKit's launch activation comes before any window: without this a background launch still
+    // takes the front and the keyboard (#684).
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(!background);
     let builder = if check_updates {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     } else {
@@ -1017,5 +1021,14 @@ mod tests {
         let folders = folder_args(args, &root);
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(folders, vec![repo]);
+    }
+
+    /// The builder keeps no readable record of this, so the call itself is what's pinned: without
+    /// it AppKit's launch activation takes the front from the user's app (#684). Split so this
+    /// test's own text doesn't match.
+    #[test]
+    fn a_background_launch_doesnt_activate_over_other_apps() {
+        let call = concat!(".activate_ignoring_other_apps", "(!background)");
+        assert!(include_str!("main.rs").contains(call));
     }
 }
