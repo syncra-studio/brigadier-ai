@@ -4,7 +4,7 @@ import { ROW } from "@/app/conversation/railMenu";
 import { resetsAt, windowName } from "@/app/conversation/StatusCard";
 import { ChevronDown, ChevronRight, SpeedometerLatencySpeed } from "@/components/icons";
 import type { QuotaWindow } from "@/ipc/generated";
-import { usageTone } from "@/lib/quota";
+import { isPlanLimit, planLimitWords, usageTone } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 import { loadProviders } from "@/state/actions";
 import { useApp } from "@/state/store";
@@ -40,7 +40,9 @@ export function UsageRemaining({ provider }: { provider: string }) {
           {windows.length === 0 && (
             <p className="text-muted-foreground">{view ? "Not reported yet" : "Loading…"}</p>
           )}
-          {windows.map((window) => (
+          {windows.map((window) => isPlanLimit(window) ? (
+            <p key={window.id} className="text-muted-foreground">{planLimitWords(window, Date.now())}</p>
+          ) : (
             <p key={window.id} className="flex items-center gap-2">
               <span className="flex-1">{usageName(window)}</span>
               <span className={cn("tabular-nums", usageTone(window.usedPercent, { normal: { text: "" } }).text)}>

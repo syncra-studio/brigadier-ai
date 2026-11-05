@@ -11,11 +11,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import { ChevronDown, ChevronRight, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
-import { UsageBar } from "@/components/shared";
+import { PlanLimit, UsageBar } from "@/components/shared";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { formatCountdown, formatTime } from "@/lib/format";
-import { ordered, usageTone, used, windowTitle } from "@/lib/quota";
+import { isPlanLimit, ordered, tightest, usageTone, used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 import {
   accountLabel,
@@ -336,11 +336,11 @@ function AccountRow({
   // Called "This computer's login" already (no name, no email), the line doesn't say it again.
   if (ownLogin && title !== OWN_LOGIN) line.push(OWN_LOGIN);
 
-  const tightest = windows.reduce<QuotaWindow | null>((top, window) => (top && used(top) >= used(window) ? top : window), null);
-  const usage = !status || !status.path || !signedIn ? null : view.quotaAtMs === null || !tightest ? (
+  const fullest = tightest(windows);
+  const usage = !status || !status.path || !signedIn ? null : view.quotaAtMs === null || !fullest ? (
     <span className={ROW_LINE}>Usage not read yet</span>
   ) : (
-    !shown && <TightestUsage window={tightest} />
+    !shown && <TightestUsage window={fullest} now={now} />
   );
 
   const menu = (
@@ -489,7 +489,8 @@ function AccountRow({
 }
 
 /** A closed row's figure: its fullest limit's name, a short bar and the share used. */
-function TightestUsage({ window }: { window: QuotaWindow }) {
+function TightestUsage({ window, now }: { window: QuotaWindow; now: number }) {
+  if (isPlanLimit(window)) return <PlanLimit window={window} now={now} />;
   const percent = used(window);
   const tone = usageTone(percent);
   return (
@@ -509,6 +510,7 @@ function TightestUsage({ window }: { window: QuotaWindow }) {
 
 /** An open row's limit: its name, a bar, the share used and when it resets. */
 function LimitLine({ window, now }: { window: QuotaWindow; now: number }) {
+  if (isPlanLimit(window)) return <PlanLimit window={window} now={now} />;
   const percent = used(window);
   const tone = usageTone(percent);
   return (

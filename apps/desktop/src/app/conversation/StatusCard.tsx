@@ -2,7 +2,7 @@ import { createContext, type FC, useEffect, useState } from "react";
 
 import type { ContextUsage, ConversationStatus, QuotaWindow } from "@/ipc/generated";
 
-import { usageTone } from "@/lib/quota";
+import { isPlanLimit, planLimitWords, usageTone } from "@/lib/quota";
 
 import { getConversationStatus } from "@/state/actions";
 
@@ -123,6 +123,13 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
               </StatusCardRow>
             )}
             {status?.quota?.windows.map((window) => {
+              if (isPlanLimit(window)) {
+                return (
+                  <StatusCardRow key={window.id} label="Plan limit:">
+                    <span className="text-muted-foreground truncate">{planLimitWords(window, Date.now())}</span>
+                  </StatusCardRow>
+                );
+              }
               const left = Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
               return (
                 <StatusCardRow key={window.id} label={`${windowName(window)} limit:`}>

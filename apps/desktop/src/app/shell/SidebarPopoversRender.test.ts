@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
+import type { QuotaWindow } from "@/ipc/generated";
+import { isPlanLimit, planLimitWords, tightest } from "@/lib/quota";
+
+// The engine's `limit.<scope>` window is a plan's limit, not a reading: a real window at 100% is not one.
+test("a plan's limit is told from a real window at its limit", () => {
+  const window = (id: string, usedPercent: number, resetsAtMs: number | null): QuotaWindow =>
+    ({ id, label: "Usage limit", usedPercent, resetsAtMs, windowMinutes: null, bucket: null, model: null });
+  const plan = window("limit.opencode-go", 100, 72 * 3_600_000);
+  const week = window("seven_day", 12, null);
+  assert.equal(isPlanLimit(plan), true);
+  assert.equal(isPlanLimit(window("seven_day", 100, null)), false);
+  assert.equal(planLimitWords(plan, 0), "Go plan · back in 3d");
+  assert.equal(planLimitWords(window("limit.opencode-go", 100, null), 0), "Go plan limit");
+  assert.equal(tightest([plan, week]), week);
+});
 
 // The sidebar's foot in Chromium (a window wide enough for the expanded sidebar) over a faked daemon: Help is the row's last icon, flush right,
 // and feedback has left the row; the usage list puts the most used first, each with its account in
@@ -34,6 +49,14 @@ test("sidebar: usage list, a provider's page, and the help menu", { timeout: 600
     ["Codex", "5-hour · resets in 3h", "82% used"],
   ]);
   assert.deepEqual(seen.limitDot, { tip: "Usage · limit reached", red: true });
+  // OpenCode's plan limit: grey words last, no bar, no red, nothing on the icon.
+  assert.deepEqual(seen.planRows, [
+    ["Claude Code", "Weekly · resets in 1d 8h", "61% used"],
+    ["OpenCode", "Go plan · back in 3d"],
+  ]);
+  assert.deepEqual(seen.planQuiet, { tip: "Usage · Claude Code 61% used", dot: false, red: false, rowParts: 3 });
+  assert.deepEqual(seen.planNoReset, [["OpenCode", "Go plan limit"]]);
+  assert.equal(seen.planAlone, "Usage");
   assert.deepEqual(seen.providers, { selection: { type: "settings", page: "providers" }, closed: true });
   // A provider that needs signing in comes first, as the Providers page says it.
   assert.deepEqual(seen.signInRows, [

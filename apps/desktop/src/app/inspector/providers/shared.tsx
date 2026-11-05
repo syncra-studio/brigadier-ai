@@ -2,7 +2,7 @@ import { type ReactNode, useState } from "react";
 
 import type { QuotaSnapshot, RawState } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
-import { usageTone } from "@/lib/quota";
+import { isPlanLimit, planLimitWords, usageTone } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 
 export const STATE_VARIANTS: Record<RawState, "secondary" | "success" | "warning" | "destructive" | "outline"> = {
@@ -26,6 +26,9 @@ export function QuotaWindows({ quota }: { quota: QuotaSnapshot }) {
         </p>
       )}
       {quota.windows.map((window) => {
+        if (isPlanLimit(window)) {
+          return <p key={window.id} className="text-muted-foreground">{planLimitWords(window, Date.now())}</p>;
+        }
         const used = Math.min(100, Math.max(0, window.usedPercent));
         const usage = usageTone(used, { normal: { text: "text-muted-foreground", fill: "bg-primary" } });
         const resetsAt = window.resetsAtMs;
