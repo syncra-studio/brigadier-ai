@@ -173,6 +173,8 @@ impl SessionManager {
                 // Other sessions' messages its CLI never took (S30).
                 self.recover_session_messages(&conversation.id).await;
             }
+            // What became of the jobs the restart caught; an archived session's go unheard.
+            self.recover_background_jobs(&conversation.id).await;
             // Merge cards are retired: open ones close, and no card answer merges.
             if conversation.lifecycle != Lifecycle::Archived {
                 self.retire_merge_cards(&conversation.id).await;
