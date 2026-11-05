@@ -136,8 +136,10 @@ fn serve_exits_zero_at_once_when_the_owner_is_already_dead() {
     owner.wait().expect("reap owner");
 
     let mut daemon = KillOnDrop(spawn_serve(root.path(), &socket, owner_pid));
-    let status = wait_with_deadline(&mut daemon.0, Duration::from_secs(2))
-        .expect("daemon must exit at once when the owner is already dead");
+    // The daemon's own work takes milliseconds, but macOS takes about a second
+    // (more under load) to first exec the fresh copy of a debug binary.
+    let status = wait_with_deadline(&mut daemon.0, Duration::from_secs(10))
+        .expect("daemon must exit when the owner is already dead");
     assert!(status.success(), "daemon must exit 0, got {status}");
     assert!(!socket.exists(), "daemon must not leave a socket behind");
 }
