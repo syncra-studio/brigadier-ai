@@ -147,12 +147,15 @@ export function BrowserTab({
   const fullUrl = useApp((s) => s.settings.browserFullUrl);
   const made = page !== undefined;
   const browserOn = useBrowserOn();
+  const onboarded = useApp((s) => s.settings.onboarded);
   useEffect(() => {
+    // During first-launch setup the app is see-through, so a page beneath it would show.
+    if (!onboarded) return;
     if (!browserOn || !embedded || !active || !initialUrl || made || !area.current) return;
     void openPage(conversationId, initialUrl, pageBounds(area.current), agent).catch(
       failed,
     );
-  }, [conversationId, initialUrl, agent, made, active, embedded, browserOn]);
+  }, [conversationId, initialUrl, agent, made, active, embedded, browserOn, onboarded]);
 
   // Keep the page over this tab's area, and hide it when the tab goes or is covered.
   useEffect(() => {
