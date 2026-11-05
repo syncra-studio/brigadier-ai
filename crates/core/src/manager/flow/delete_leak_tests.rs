@@ -355,6 +355,31 @@ fn needles(flow: &Flow, id: &ConversationId, tasks: &[Task], extra: &[String]) -
     needles.into_iter().filter(|n| !n.is_empty()).collect()
 }
 
+/// For a hit in a database file, the bytes around each place `needle` shows, escaped: which row
+/// or leftover it is. Nothing for any other place.
+fn around_in_database(place: &str, text: &[u8], needle: &str) -> String {
+    const AROUND: usize = 120;
+    let name = Path::new(place)
+        .file_name()
+        .map(|name| name.to_string_lossy());
+    if !place.starts_with("in ")
+        || !name.is_some_and(|name| name.contains(".db") || name.contains(".sqlite"))
+    {
+        return String::new();
+    }
+    let mut hits = String::new();
+    for (at, _) in text
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle.as_bytes())
+    {
+        let from = at.saturating_sub(AROUND);
+        let to = (at + needle.len() + AROUND).min(text.len());
+        hits.push_str(&format!("\n  at {at}: {}", text[from..to].escape_ascii()));
+    }
+    hits
+}
+
 /// Where a needle shows: file names and contents under `roots` (the fake CLIs' own stores
 /// aside: they stand in for the CLIs' files, which the test homes hold), the repository's
 /// refs, worktrees and config, and `/tmp`.
@@ -369,7 +394,10 @@ fn leak_scan(flow: &Flow, repo: &Path, roots: &[&Path], needles: &[String]) -> V
     let mut check = |place: &str, text: &[u8]| {
         for needle in needles {
             if memchr_find(text, needle.as_bytes()) {
-                found.push(format!("{place}: {needle}"));
+                found.push(format!(
+                    "{place}: {needle}{}",
+                    around_in_database(place, text, needle)
+                ));
             }
         }
     };
@@ -886,6 +914,41 @@ async fn the_orphan_sweep_takes_a_deleted_sessions_leftovers_only() {
     .await;
     needles.push(unmerged);
     let leaks = leak_scan(&flow, &flow.repo, &[flow.scratch()], &needles);
+    assert!(leaks.is_empty(), "{leaks:#?}");
+    flow.stop().await;
+}
+
+/// A worker's cleanup still under way as a delete reaches its records: they wait for it, then go
+/// with the delete, not at the next launch.
+#[tokio::test]
+async fn a_deleted_sessions_records_wait_for_a_cleanup_still_under_way() {
+    let flow = Flow::start("delete-records-wait", options(), script()).await;
+    let id = flow.conversation.clone();
+    flow.say("Hello").await;
+    flow.settled().await;
+    let ledger = flow.manager.runtime.ledger().clone();
+    let holder = format!("held:{id}");
+    let held = Artifact::ScratchDir {
+        path: flow.scratch().join("held").display().to_string(),
+    };
+    ledger.record(&holder, held.clone()).await.unwrap();
+    flow.manager.delete(id.clone()).await.unwrap();
+    let release = async {
+        super::eventually("the session to be gone", || {
+            flow.core.conversation(&id).is_err()
+        })
+        .await;
+        // Past the first look at its records, however long this machine takes to get there.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        ledger.unrecord(&holder, held).await.unwrap();
+    };
+    tokio::join!(release, flow.manager.cleanup_finished(&id));
+    let leaks = leak_scan(
+        &flow,
+        &flow.repo,
+        &[flow.scratch()],
+        std::slice::from_ref(&id.0),
+    );
     assert!(leaks.is_empty(), "{leaks:#?}");
     flow.stop().await;
 }
