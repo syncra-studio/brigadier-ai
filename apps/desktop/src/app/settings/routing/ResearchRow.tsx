@@ -17,7 +17,8 @@ export const RESEARCH_ROW = {
 export function researchLine(refresh: RankingsRefresh | null, now: number, groups: readonly ModelGroup[] = []): string {
   if (!refresh?.startedAtMs) return "Hasn't run yet";
   const at = since(refresh.finishedAtMs ?? refresh.startedAtMs, now);
-  const by = refresh.model ? ` on ${refresh.provider ? rowModelName(groups, refresh.provider, refresh.model) : refresh.model}` : "";
+  const unrated = refresh.researcherUnrated ? " (unrated)" : "";
+  const by = refresh.model ? ` on ${refresh.provider ? rowModelName(groups, refresh.provider, refresh.model) : refresh.model}${unrated}` : "";
   switch (refresh.state) {
     case "checkingRegistry":
     case "researching":

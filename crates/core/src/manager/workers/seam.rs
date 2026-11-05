@@ -15,15 +15,24 @@
 //! `record/seam.json` is the hand-off's truth across restarts, as a session's is
 //! ([`crate::manager::seam`]): each phase is written before what it leads to, so a restart at
 //! any point goes on from it without starting two successors or sending anything twice.
+//!
+//! What its session sends meanwhile is acknowledged, so it is kept first: in
+//! `record/seam-held.json`, each with a once-only mark ([`super::once`]). A restart restores it
+//! and its successor starts at once with it. A usage limit that calls the hand-off off sends it
+//! with the worker's next input. A note turn that never ends has [`SeamConfig::hold`] once
+//! somebody waits on it, a message or a refused pause or switch.
+//!
+//! [`SeamConfig::hold`]: crate::manager::seam::SeamConfig::hold
 
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use brigadier_providers::{ErrorKind, Origin, ProviderError, TurnInput, TurnStatus};
+use brigadier_providers::{ErrorKind, InputPart, Origin, ProviderError, TurnInput, TurnStatus};
 
-use super::TaskLive;
+use super::once::{mark_in, marked_once, once_mark, without_mark};
+use super::{TaskLive, TaskLiveState, explicitly_paused};
 use crate::manager::conversation::Cli;
 use crate::manager::conversation::long::{LongFile, read_long, thrashing, write_long};
 use crate::manager::long_sessions::HANDOFF_AFTER;
@@ -31,14 +40,18 @@ use crate::manager::seam::{
     Boot, CARRY_ON, LONG_NOTE, NOTE_FIXES, Phase, Reason, SeamEnd, SeamFile, TailBudget, bootstrap,
     check_note, complete, handoff_line, note_path, nudge, read_seam, start_path, write_seam,
 };
+use crate::manager::session_dir::write_atomic;
 use crate::manager::{SessionManager, blocking};
-use crate::work::{AttemptEnd, Task};
+use crate::work::{AttemptEnd, Task, TaskState};
 use crate::{Error, Result, now_ms};
 
 /// Why a worker ended its generation without a note, when it simply didn't write one.
 const NO_NOTE: &str = "it ended its turn without writing one";
 /// …and when Brigadier restarted in its note turn.
 const RESTARTED: &str = "Brigadier restarted before it wrote one";
+/// What a worker's hand-off holds for its successor, beside its `seam.json`: only its state
+/// lock's holder writes it, so it never overwrites a phase.
+const HELD_FILE: &str = "seam-held.json";
 
 /// A worker's hand-off under way, in memory. `carry_on`: its work was cut off, so its
 /// successor starts at once and goes on by itself; else it starts with the next message.
@@ -175,7 +188,8 @@ impl SessionManager {
         let record = self.worker_record(task);
         let cutoff = live.take_cutoff().await;
         if let Some(limit @ AttemptEnd::Limit { .. }) = cutoff {
-            live.state.lock().await.seam = None;
+            // What it holds stays kept, for the worker's next input.
+            live.state.lock().await.seam_over();
             let at = record.clone();
             let _ = blocking(move || {
                 let mut file = read_seam(&at);
@@ -235,7 +249,11 @@ impl SessionManager {
         .await;
         if let Err(err) = closed {
             tracing::warn!(task = %task.id, error = %err, "could not close the worker's generation");
-            live.state.lock().await.seam = None;
+            {
+                let mut state = live.state.lock().await;
+                state.seam_over();
+                state.stopping = false;
+            }
             if carry_on {
                 self.plain_turn_ended(live, task, status).await;
             }
@@ -243,12 +261,16 @@ impl SessionManager {
         }
         live.close_cli().await;
         let _reroute = live.reroute.lock().await;
-        let waiting = !live.state.lock().await.seam_held.is_empty();
-        if !carry_on && !waiting {
-            // Its successor starts with the next message.
-            live.state.lock().await.seam = None;
-            live.allow_revival().await;
-            return;
+        {
+            // Under one lock: a message either waits, and is seen here, or finds the hand-off over.
+            let mut state = live.state.lock().await;
+            if !carry_on && state.seam_held.is_empty() {
+                // Its successor starts with the next message.
+                state.seam_over();
+                state.stopping = false;
+                state.busy = false;
+                return;
+            }
         }
         if let Err(err) = self.worker_successor(live, task, Vec::new()).await {
             self.plain_failed(task, format!("Its fresh session could not start: {err}."))
@@ -288,11 +310,18 @@ impl SessionManager {
             }
         };
         let text = format!("{}{LONG_NOTE}", nudge(&note));
-        let mut state = live.state.lock().await;
-        state.seam = Some(SeamLive::Nudged { carry_on, fixes: 0 });
-        state.busy = true;
+        {
+            let mut state = live.state.lock().await;
+            state.seam = Some(SeamLive::Nudged { carry_on, fixes: 0 });
+            state.busy = true;
+        }
         if let Err(err) = cli.session.send(TurnInput::text(text)).await {
             tracing::warn!(task = %live.id, error = %err, "could not ask the worker for its note");
+            let mut state = live.state.lock().await;
+            // The hold ran out meanwhile, and ends its generation itself.
+            if state.stopping {
+                return true;
+            }
             state.busy = false;
             return false;
         }
@@ -320,14 +349,20 @@ impl SessionManager {
         let Ok(Some(fix)) = fix else {
             return false;
         };
-        let mut state = live.state.lock().await;
-        state.seam = Some(SeamLive::Nudged {
-            carry_on,
-            fixes: fixes + 1,
-        });
-        state.busy = true;
+        {
+            let mut state = live.state.lock().await;
+            state.seam = Some(SeamLive::Nudged {
+                carry_on,
+                fixes: fixes + 1,
+            });
+            state.busy = true;
+        }
         if let Err(err) = cli.session.send(TurnInput::text(fix)).await {
             tracing::warn!(task = %live.id, error = %err, "could not ask the worker to fix its note");
+            let mut state = live.state.lock().await;
+            if state.stopping {
+                return true;
+            }
             state.seam = Some(SeamLive::Nudged { carry_on, fixes });
             state.busy = false;
             return false;
@@ -352,11 +387,13 @@ impl SessionManager {
         let Phase::Closed { end } = file.phase.clone() else {
             return Err(Error::Invalid("no hand-off is under way".into()));
         };
-        let mut held = {
+        self.held_for_input(live, task).await;
+        let waited = {
             let mut state = live.state.lock().await;
-            state.seam = None;
+            state.seam_over();
             std::mem::take(&mut state.seam_held)
         };
+        let mut held = waited.clone();
         held.extend(messages);
         let provider = task.route.choice.provider;
         let reserved = uuid::Uuid::new_v4().to_string();
@@ -413,7 +450,7 @@ impl SessionManager {
         let (n, first) = match first {
             Ok(first) => first,
             Err(err) => {
-                live.state.lock().await.seam_held = held;
+                live.state.lock().await.seam_held = waited;
                 return Err(err);
             }
         };
@@ -441,23 +478,91 @@ impl SessionManager {
             write_seam(&at, &file)
         })
         .await;
-        if !done {
-            live.state.lock().await.seam_held = held;
+        // What came with this call goes back to its caller, told it didn't go. Else its side file
+        // empties only now: a crash before leaves it beside what `seam.json` recorded.
+        let mut state = live.state.lock().await;
+        if done {
+            save_held(&record, &state.seam_held).await;
+        } else {
+            state.seam_held = waited;
         }
+        drop(state);
         launched
     }
 
-    /// After a restart, before the worker's cut-off turn is told: where its hand-off stood
-    /// goes on from its `seam.json`. A note turn the restart cut off ends its generation, with
-    /// the note it wrote or without; a successor that was starting is asked whether it took
-    /// its hand-off, and only if it didn't do the messages it carried go again, with the next
-    /// successor. A closed generation's successor starts with the next message it is sent.
-    pub(crate) async fn recover_worker_seam(&self, task: &Task) {
-        let record = self.worker_record(task);
-        let at = record.clone();
-        let Ok(mut file) = blocking(move || Ok(read_seam(&at))).await else {
+    /// After a restart, before the worker's cut-off turn is told: where its hand-off stood goes
+    /// on from its `seam.json`, as in [`Self::settle_worker_seam`]. A message that waits for a
+    /// successor was acknowledged, so in an `active` session the successor starts now, with it
+    /// (or with a resume on its way, or the next message, when the worker can't go on by itself).
+    /// Whether it starts: its cut-off turn then has nothing more to tell.
+    pub(crate) async fn recover_worker_seam(&self, task: &Task, active: bool) -> bool {
+        self.settle_worker_seam(task).await;
+        let resuming = task
+            .plain
+            .as_ref()
+            .is_some_and(|plain| plain.resume_input.is_some());
+        let waiting = !self.task_live(task).state.lock().await.seam_held.is_empty();
+        if !active
+            || !waiting
+            || resuming
+            || explicitly_paused(task)
+            || !self.worker_seam_closed(task).await
+        {
+            return false;
+        }
+        let (manager, task) = (self.arc(), task.clone());
+        self.spawn(async move { manager.start_restored_successor(&task).await });
+        true
+    }
+
+    /// Starts the successor that takes what a restart restored, unless the worker moved on.
+    async fn start_restored_successor(&self, task: &Task) {
+        let live = self.task_live(task);
+        let _managed = live.manage.lock().await;
+        let _settled = live.settle.lock().await;
+        let _reroute = live.reroute.lock().await;
+        let task = match self.task_by_id(&task.conversation_id, &task.id).await {
+            Ok(task) if !task.state.is_final() && !explicitly_paused(&task) => task,
+            _ => return,
+        };
+        if live.state.lock().await.seam_held.is_empty() || !self.worker_seam_closed(&task).await {
+            return;
+        }
+        let Err(err) = self.worker_successor(&live, &task, Vec::new()).await else {
             return;
         };
+        // Kept for its next message. A cut-off turn nothing goes on from is told as any other is.
+        tracing::warn!(task = %task.id, error = %err, "could not start a worker's successor after a restart");
+        if matches!(task.state, TaskState::Running | TaskState::Blocked) {
+            let _ = self
+                .update_task(&task.conversation_id, &task.id, |t| {
+                    t.state = TaskState::Reported;
+                    t.blocked_reason = None;
+                    t.mockup_drawing = false;
+                })
+                .await;
+            self.plain_cut_off(&task).await;
+        }
+    }
+
+    /// Where its hand-off stood goes on from its `seam.json`. A note turn that was cut off ends
+    /// its generation, with the note it wrote or without; a successor that was starting is asked
+    /// whether it took its hand-off, and only if it didn't do the messages it carried go again,
+    /// with the next successor. What the side file keeps comes back, without what its last
+    /// successor carried: the side file empties after that is recorded.
+    async fn settle_worker_seam(&self, task: &Task) {
+        let record = self.worker_record(task);
+        let at = record.clone();
+        let Ok((mut file, saved)) = blocking(move || Ok((read_seam(&at), read_held(&at)))).await
+        else {
+            return;
+        };
+        let last = file
+            .seams
+            .last()
+            .map(|seam| seam.messages.clone())
+            .unwrap_or_default();
+        let mut carried = Vec::new();
         match file.phase.clone() {
             Phase::Live | Phase::Closed { .. } => {}
             Phase::Nudged {
@@ -471,7 +576,6 @@ impl SessionManager {
                         (!written).then(|| RESTARTED.to_owned()),
                     ),
                 };
-                self.write_worker_seam(&record, file).await;
             }
             Phase::Starting {
                 end,
@@ -489,8 +593,10 @@ impl SessionManager {
                         successor.clone(),
                         provider,
                         end,
-                        messages,
+                        messages.clone(),
                     );
+                    let unheard = self.unheard(task, saved, &messages).await;
+                    self.keep_held(task, &record, unheard).await;
                     self.write_worker_seam(&record, file).await;
                     let _ = self
                         .update_task(&task.conversation_id, &task.id, |t| {
@@ -500,10 +606,191 @@ impl SessionManager {
                     return;
                 }
                 file.phase = Phase::Closed { end };
-                self.write_worker_seam(&record, file).await;
-                self.task_live(task).state.lock().await.seam_held = messages;
+                carried = messages;
             }
         }
+        let held = without_each(saved, &last);
+        // In the order they came, each once. Kept before its phase moves on, so nothing rests on
+        // a phase that no longer names it.
+        let unheard = self.unheard(task, held, &carried).await;
+        let held = carried.into_iter().chain(unheard).collect::<Vec<_>>();
+        self.take_rows_held(task, &held).await;
+        self.keep_held(task, &record, held).await;
+        self.write_worker_seam(&record, file).await;
+    }
+
+    /// `saved`, without what `gone` carried and what its CLI already took (its mark says, so a
+    /// crash between a send and the side file's emptying sends nothing twice).
+    async fn unheard(&self, task: &Task, saved: Vec<String>, gone: &[String]) -> Vec<String> {
+        let mut unheard = Vec::new();
+        for text in without_each(saved, gone) {
+            let took = match mark_in(&text) {
+                Some(mark) => self.worker_took(task, mark).await,
+                None => false,
+            };
+            if !took {
+                unheard.push(text);
+            }
+        }
+        unheard
+    }
+
+    /// A row may have been kept here and not yet left the queue when a crash came: it goes with
+    /// the rest of what is kept, not from the queue as well.
+    async fn take_rows_held(&self, task: &Task, held: &[String]) {
+        if held.is_empty() {
+            return;
+        }
+        let Ok(board) = self.core.board(&task.conversation_id).await else {
+            return;
+        };
+        for row in board
+            .queue
+            .items
+            .iter()
+            .filter(|row| row.worker.as_ref() == Some(&task.id))
+            .filter(|row| {
+                let mark = once_mark(&row.id);
+                held.iter().any(|text| text.contains(&mark))
+            })
+        {
+            if let Err(err) = self.core.take_queued(&task.conversation_id, &row.id).await {
+                tracing::warn!(task = %task.id, error = %err, "could not take a message kept for its worker out of the queue");
+            }
+        }
+    }
+
+    /// `held` is what the worker's hand-off keeps now, on disk and in memory.
+    async fn keep_held(&self, task: &Task, record: &Path, held: Vec<String>) {
+        let live = self.task_live(task);
+        let mut state = live.state.lock().await;
+        save_held(record, &held).await;
+        state.seam_held = held;
+    }
+
+    /// Keeps `text`, which a hand-off holds, for its successor: on disk before its sender hears
+    /// it went, with a once-only mark. A message that can't be kept isn't taken. The caller holds
+    /// the state lock, so the hand-off can't end meanwhile.
+    pub(super) async fn hold_for_successor(
+        &self,
+        state: &mut TaskLiveState,
+        task: &Task,
+        text: String,
+    ) -> Result<()> {
+        // A queued message has its row's mark already.
+        let text = if without_mark(&text) == text {
+            marked_once(&text, &uuid::Uuid::new_v4().to_string())
+        } else {
+            text
+        };
+        let mut held = state.seam_held.clone();
+        held.push(text);
+        let (record, saving) = (self.worker_record(task), held.clone());
+        blocking(move || write_held(&record, &saving)).await?;
+        state.seam_held = held;
+        Ok(())
+    }
+
+    /// What waits for the worker's next input, from memory or, after a restart that didn't look
+    /// (a quota wait goes on by itself), from its side file.
+    pub(super) async fn held_for_input(&self, live: &TaskLive, task: &Task) -> Vec<String> {
+        let held = live.state.lock().await.seam_held.clone();
+        if !held.is_empty() {
+            return held;
+        }
+        let record = self.worker_record(task);
+        let at = record.clone();
+        let Ok((saved, file)) = blocking(move || Ok((read_held(&at), read_seam(&at)))).await else {
+            return Vec::new();
+        };
+        if saved.is_empty() {
+            return Vec::new();
+        }
+        let last = file
+            .seams
+            .last()
+            .map(|seam| seam.messages.clone())
+            .unwrap_or_default();
+        let held = self.unheard(task, saved, &last).await;
+        self.take_rows_held(task, &held).await;
+        self.keep_held(task, &record, held.clone()).await;
+        held
+    }
+
+    /// The first `count` of what waited went to its CLI.
+    pub(super) async fn held_went(&self, live: &TaskLive, task: &Task, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let record = self.worker_record(task);
+        let mut state = live.state.lock().await;
+        let count = count.min(state.seam_held.len());
+        state.seam_held.drain(..count);
+        save_held(&record, &state.seam_held).await;
+    }
+
+    /// Somebody waits on a hand-off that holds messages: when [`hold`] runs out, its turn ends
+    /// whatever its CLI is doing, so it never waits on a note turn that hung.
+    ///
+    /// [`hold`]: crate::manager::seam::SeamConfig::hold
+    pub(super) async fn arm_worker_seam_hold(&self, task: &Task) {
+        let live = self.task_live(task);
+        let timer = {
+            let mut state = live.state.lock().await;
+            if state.seam_hold_armed || !state.seam.as_ref().is_some_and(SeamLive::holds) {
+                return;
+            }
+            state.seam_hold_armed = true;
+            state.seam_hold_timer += 1;
+            state.seam_hold_timer
+        };
+        let hold = self.seam_config().hold;
+        let (manager, id, conversation) =
+            (self.arc(), task.id.clone(), task.conversation_id.clone());
+        self.spawn(async move {
+            let seam = loop {
+                tokio::time::sleep(hold).await;
+                let mut state = live.state.lock().await;
+                if state.seam_hold_timer != timer
+                    || state.stopping
+                    || !state.seam.as_ref().is_some_and(SeamLive::holds)
+                {
+                    return;
+                }
+                // Between its turns, or ending one anyway: it isn't hung.
+                if !state.busy || state.cutoff.is_some() {
+                    continue;
+                }
+                // Stopping: a turn end that comes now finds the generation taken care of.
+                state.stopping = true;
+                state.busy = false;
+                break state.seam.clone().unwrap();
+            };
+            manager.hold_ran_out(live, conversation, id, seam).await;
+        });
+    }
+
+    /// The hold on a hand-off ran out: its generation ends as a failed note turn's does.
+    // Not `async`: this is reached from the hand-off's own turn end, through a message, so its
+    // future's type is named here rather than inferred.
+    fn hold_ran_out(
+        self: Arc<Self>,
+        live: Arc<TaskLive>,
+        conversation: crate::model::ConversationId,
+        id: crate::work::TaskId,
+        seam: SeamLive,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            let Ok(task) = self.task_by_id(&conversation, &id).await else {
+                return;
+            };
+            if task.state.is_final() {
+                return;
+            }
+            tracing::warn!(task = %id, "a worker's hand-off ran past its hold; its generation ends");
+            self.worker_seam_turn_end(&live, &task, seam, TurnStatus::Failed, false)
+                .await;
+        })
     }
 
     async fn write_worker_seam(&self, record: &Path, file: SeamFile) {
@@ -516,15 +803,16 @@ impl SessionManager {
     /// Its CLI ended unasked during a hand-off that holds messages: they would wait for nobody.
     /// Its generation closes as after a restart, and the next message starts its successor.
     pub(crate) async fn close_held_seam(&self, live: &TaskLive, task: &Task) {
-        let held = live
-            .state
-            .lock()
-            .await
-            .seam
-            .take_if(|seam| seam.holds())
-            .is_some();
+        let held = {
+            let mut state = live.state.lock().await;
+            let held = state.seam.as_ref().is_some_and(SeamLive::holds);
+            if held {
+                state.seam_over();
+            }
+            held
+        };
         if held {
-            self.recover_worker_seam(task).await;
+            self.settle_worker_seam(task).await;
         }
     }
 
@@ -584,6 +872,63 @@ fn closed_end(
         shown: Vec::new(),
         moved_to: None,
     }
+}
+
+/// What the worker's hand-off kept in its side file.
+fn read_held(record: &Path) -> Vec<String> {
+    std::fs::read(record.join(HELD_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Its side file holds `held`; there is none when nothing waits.
+fn write_held(record: &Path, held: &[String]) -> Result<()> {
+    let path = record.join(HELD_FILE);
+    if held.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(Error::Invalid(err.to_string())),
+        };
+    }
+    std::fs::create_dir_all(record).map_err(|err| Error::Invalid(err.to_string()))?;
+    let text = serde_json::to_string_pretty(held).map_err(|err| Error::Invalid(err.to_string()))?;
+    write_atomic(&path, text.as_bytes())
+}
+
+/// [`write_held`], where a failure can only be logged: what memory holds still goes.
+async fn save_held(record: &Path, held: &[String]) {
+    let (at, held) = (record.to_owned(), held.to_owned());
+    if let Err(err) = blocking(move || write_held(&at, &held)).await {
+        tracing::warn!(error = %err, "could not record what a worker's hand-off holds");
+    }
+}
+
+/// `saved` without one copy of each of `gone`: the same message may have been sent twice.
+fn without_each(mut saved: Vec<String>, gone: &[String]) -> Vec<String> {
+    for text in gone {
+        if let Some(at) = saved.iter().position(|kept| kept == text) {
+            saved.remove(at);
+        }
+    }
+    saved
+}
+
+/// `input` after what waited for it, in the order they came; a slash command or a skill must stay
+/// first to run, so what waited follows those.
+pub(super) fn with_held(mut input: TurnInput, held: &[String]) -> TurnInput {
+    if held.is_empty() {
+        return input;
+    }
+    let held = held.join("\n\n");
+    match input.parts.first_mut() {
+        Some(InputPart::Text(text)) if !text.trim_start().starts_with('/') => {
+            *text = format!("{held}\n\n{text}");
+        }
+        _ => input.parts.push(InputPart::Text(held)),
+    }
+    input
 }
 
 /// Points the reserved successor at the id its CLI took, before its first input goes.
