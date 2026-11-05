@@ -115,7 +115,7 @@ async function until(what: string, check: () => boolean, ms = 5000) {
     await sleep(16);
   }
 }
-// A picked answer is sent COMMIT_MS (180 ms) after the pick: by 400 ms, any answer a key gave
+// A picked answer is sent COMMIT_MS (300 ms) after the pick: by 400 ms, any answer a key gave
 // would have been sent, so "nothing was sent" is checked after this settle.
 const settle = () => sleep(400);
 const region = (name: string) => document.querySelector<HTMLElement>(`[data-fixture="${name}"]`)!;

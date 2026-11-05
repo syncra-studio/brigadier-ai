@@ -1,6 +1,7 @@
 import {
   type ComponentProps,
   type CSSProperties,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 
@@ -12,7 +13,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * The card itself; its content decides the keys (digits, arrows) through `onKeyDown`.
- * `container` names the container query its narrow layout keys off.
+ * `container` names the container query its narrow layout keys off. Every word on it can be
+ * selected and copied (#663); its buttons can't.
  */
 export function ActionCard({
   className,
@@ -25,6 +27,7 @@ export function ActionCard({
     // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
     <section
       data-slot="action-card"
+      data-selectable
       // A click on the card's blank space keeps the user's current focus.
       onMouseDown={(event) => {
         event.stopPropagation();
@@ -32,7 +35,7 @@ export function ActionCard({
       }}
       className={cn(
         container === "approval" ? "@container/approval-card" : "@container/request-card",
-        "text-foreground flex w-full flex-col outline-none",
+        "text-foreground flex w-full flex-col outline-none [&_button]:select-none",
         className,
       )}
       {...props}
@@ -71,8 +74,7 @@ export function ActionCardQuestion({
 }) {
   return (
     <div className="flex items-start justify-between gap-2 ps-4 pe-3 pt-4 pb-2">
-      {/* Its words can be selected and copied: a command it names, say (#663). */}
-      <div role="alert" aria-atomic="true" data-selectable className="flex min-w-0 flex-1 flex-col gap-1">
+      <div role="alert" aria-atomic="true" className="flex min-w-0 flex-1 flex-col gap-1">
         {kind && (
           <p data-slot="action-card-kind" className="text-foreground/65 text-code leading-5">
             {kind}
@@ -171,7 +173,7 @@ function Marker({ chosen, children }: { chosen?: boolean | undefined; children?:
       aria-hidden
       data-slot="action-marker"
       className={cn(
-        "border-foreground/20 text-foreground/70 flex size-5 shrink-0 items-center justify-center self-start rounded-sm border text-xs leading-none font-medium",
+        "border-foreground/20 text-foreground/70 flex size-5 shrink-0 items-center justify-center self-start rounded-sm border text-xs leading-none font-medium select-none",
         chosen && "border-foreground text-foreground",
       )}
     >
@@ -182,33 +184,54 @@ function Marker({ chosen, children }: { chosen?: boolean | undefined; children?:
 
 /**
  * A numbered answer: its square (a dot while it commits; empty with no `number`), label,
- * "Recommended", a description, → while highlighted or hovered.
+ * "Recommended", a description, → while highlighted or hovered. Not a button, which would block
+ * selecting its words and can't hold a link: `onClick` picks it, by the pointer or (with
+ * `event.detail` 0, as a button's would be) by Enter or Space on the row itself.
  */
 export function ActionOption({
   number,
+  name,
   label,
   description,
   recommended,
   highlighted,
   chosen,
+  disabled,
   className,
+  onKeyDown,
   ...props
-}: Omit<ComponentProps<"button">, "children"> & {
+}: Omit<ComponentProps<"div">, "children"> & {
   /** `null`: the card's only answer, its square left empty. */
   number: number | null;
-  label: string;
+  /** What it reads as: to a screen reader, and when its label is hovered. */
+  name: string;
+  label: ReactNode;
   description?: ReactNode;
   recommended?: boolean | undefined;
   highlighted: boolean;
   /** Picked and about to go. */
   chosen?: boolean | undefined;
+  disabled?: boolean | undefined;
 }) {
+  const onKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    onKeyDown?.(event);
+    // A link inside takes its own keys.
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    if (!disabled && !event.repeat) event.currentTarget.click();
+  };
   return (
-    <button
-      type="button"
+    // Its role comes with the props: a radio or a checkbox.
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div
+      // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      tabIndex={0}
       data-slot="action-option"
       data-highlighted={highlighted || undefined}
-      aria-label={label}
+      aria-label={name}
+      aria-disabled={disabled || undefined}
+      onKeyDown={onKeys}
       className={cn(
         "group text-code flex min-h-8 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-start",
         highlighted ? "bg-foreground/5" : "hover:bg-foreground/5",
@@ -219,7 +242,7 @@ export function ActionOption({
       <Marker chosen={chosen}>{number}</Marker>
       <span className="flex min-w-0 flex-1 flex-col gap-y-0.5">
         <span className="inline-flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 font-medium wrap-anywhere" title={label}>
+          <span className="min-w-0 font-medium wrap-anywhere" title={name}>
             {label}
           </span>
           {recommended && (
@@ -237,7 +260,7 @@ export function ActionOption({
           highlighted && "opacity-100",
         )}
       />
-    </button>
+    </div>
   );
 }
 

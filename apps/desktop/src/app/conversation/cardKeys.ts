@@ -16,7 +16,7 @@ export function inField(target: EventTarget | null): boolean {
 
 /**
  * Esc puts the card aside, and Enter answers it, from anywhere in its view: not from a text
- * field (the composer sends), not Enter on a focused button or link (that clicks it), and not
+ * field (the composer sends), not Enter on a focused button, answer row or link (that clicks it), and not
  * while a menu or dialog is open (they take their keys first). A side chat's keys are its own.
  * Without `enter` Enter is left alone, and with `within` it answers only from inside that
  * element (the focused card).
@@ -37,7 +37,7 @@ export function useCardKeys(
     if (inField(target)) return;
     if (event.key === "Enter") {
       if (!keys.enter) return;
-      if (target?.closest("button, a[href], [role=button], summary")) return;
+      if (target?.closest("button, a[href], [role=button], [role=radio], [role=checkbox], summary")) return;
       if (within && !(target && within.current?.contains(target))) return;
     }
     if (document.querySelector(OVERLAYS)) return;

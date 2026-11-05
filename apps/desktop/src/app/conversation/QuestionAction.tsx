@@ -152,7 +152,7 @@ export function QuestionAction({
           ? uncommitted.title
           : <CodeSpans text={item.text} />
       }
-      kind={question.title}
+      kind={question.title && <CodeSpans text={question.title} />}
       detail={
         uncommitted ? (
           "Brigadier asks once, before a worker starts from them. They are never committed either way."
