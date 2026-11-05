@@ -1335,6 +1335,8 @@ mod tests {
                 source: None,
                 preview_log: None,
                 detached: false,
+                owed: false,
+                followed: false,
             });
             journal.save(&history).unwrap();
         };
