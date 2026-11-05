@@ -357,6 +357,24 @@ async fn a_worker_goes_on_with_the_works_next_row_in_its_cli_session() {
     bench.flow.stop().await;
 }
 
+/// #744: a row naming a family word runs as the model it names, so a failure moves to the next
+/// row rather than onto its own model under the short word.
+#[tokio::test]
+async fn a_worker_on_a_family_word_row_moves_to_the_next_row() {
+    let bench = bench(
+        "capacity-worker-family-word",
+        &[("Two", "codex", "astra"), ("Two", "codex", "gpt-b")],
+        true,
+        &["gpt-6-astra"],
+        Some(work("Two")),
+    )
+    .await;
+    bench.flow.say("Start one.").await;
+    bench.reported(2).await;
+    assert_eq!(bench.worker_models(), strings(&["gpt-6-astra", "gpt-b"]));
+    bench.flow.stop().await;
+}
+
 /// The loop guard: past the Work's rows to Fallback, on another agent, whose first row fails too;
 /// no model comes round again.
 #[tokio::test]

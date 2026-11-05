@@ -6543,6 +6543,40 @@ impl SessionManager {
                 self.kick(conv);
                 return;
             }
+            // The account it stays on is still out: another of its provider may have room by
+            // now, as a fresh limit would find (#742).
+            if from.account.is_some() {
+                let model = self.runs_as(from.provider, from.model.as_deref(), None).0;
+                let native_id = self.last_native_id(&conv.id, from.provider).await;
+                if let Some(next) = self.runtime.switch_target(
+                    &self.runtime.account_for(&from),
+                    model.as_deref(),
+                    native_id.as_deref(),
+                ) {
+                    let mut target = from.clone();
+                    target.account = Some(next.choice_id());
+                    self.prepare_provider_transition(
+                        conv,
+                        from.clone(),
+                        target,
+                        crate::work::ProviderTransitionCause::AutomaticFallback,
+                        waited_request,
+                    )
+                    .await;
+                    conv.restarting(WriteCause::Reroute).await;
+                    conv.close_cli().await;
+                    if let Err(err) = self.run_on_account(&conv.id, &from, &next).await {
+                        crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it moved to"; conversation = %conv.id, error = %err);
+                    }
+                    conv.state.lock().await.limit_tries += 1;
+                    if let Err(err) = self.stop_waiting(conv).await {
+                        tracing::error!(conversation = %conv.id, error = %err, "could not commit quota recovery");
+                        return;
+                    }
+                    self.kick(conv);
+                    return;
+                }
+            }
             // "Switch to another agent automatically" turned on while it waits (S38).
             if let Some(to) = self.fallback_agent(conv, &from) {
                 self.prepare_provider_transition(

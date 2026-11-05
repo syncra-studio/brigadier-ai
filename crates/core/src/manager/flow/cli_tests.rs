@@ -2683,6 +2683,62 @@ async fn computer_use_workers_take_the_computer_use_row() {
     flow.stop().await;
 }
 
+/// #745: with no row's CLI signed in, a `--work` start runs on the session's own agent, not on
+/// a row whose CLI can't run.
+#[tokio::test]
+async fn a_start_with_every_rows_cli_signed_out_runs_on_the_sessions_agent() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if turn.worker().is_some() {
+                return Reply::text("Done.");
+            }
+            if turn.input.contains("Start it.") {
+                let request = StartRequest {
+                    work: Some("Only codex".into()),
+                    local: true,
+                    ..start("Look at it.")
+                };
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock().unwrap().insert("started".into(), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-rows-signed-out", Options::default(), script).await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n\
+         | Only codex | codex | default | high | test |\n",
+    )
+    .unwrap();
+    flow.behavior
+        .signed_out
+        .lock()
+        .unwrap()
+        .push(ProviderKind::Codex);
+    flow.manager
+        .runtime
+        .refresh_providers(Some(ProviderKind::Codex));
+    flow.until("Codex is signed out", |_| {
+        !flow.manager.runtime.provider_signed_in(ProviderKind::Codex)
+    })
+    .await;
+    flow.say("Start it.").await;
+    flow.until("the worker reported", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Reported)
+    })
+    .await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(seen["started"]["worker"]["agent"], "claude", "{seen:#?}");
+    flow.stop().await;
+}
+
 /// Goal 12 (D8, D77): a worker the routing doesn't pick now for its work still starts, and
 /// its start says what the routing names, to the session and in the thread; one it picks says
 /// nothing. A family word reads as the model it names; a review's work counts when only

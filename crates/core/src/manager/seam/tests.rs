@@ -1006,3 +1006,70 @@ fn the_nudge_says_its_words_are_brigadiers_and_no_rule_of_the_users() {
          a rule or decision of the user's."
     ));
 }
+
+/// #616: a hand-off's Map says, from git, what hasn't landed: nothing once the work is there,
+/// a squash included, and on the base branch itself what isn't on its upstream.
+#[test]
+fn the_map_says_how_many_commits_havent_landed() {
+    let dir = std::env::temp_dir().join(format!("seam-unlanded-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let commit = |file: &str| {
+        std::fs::write(dir.join(file), file).unwrap();
+        run(&["add", file]);
+        run(&["commit", "--quiet", "-m", file]);
+    };
+    run(&["init", "--quiet", "--initial-branch=main"]);
+    commit("base");
+    run(&["checkout", "--quiet", "-b", "session"]);
+    commit("one");
+    commit("two");
+    let git = brigadier_git::Git::new("git".into(), std::env::vars_os().collect());
+    let repo = git.open(&dir).unwrap();
+
+    assert_eq!(
+        unlanded_line(&repo, "session", Some("main")).as_deref(),
+        Some("2 commits on session aren't on main")
+    );
+    // Local work on the base branch: against its upstream, when it has one.
+    assert_eq!(unlanded_line(&repo, "main", None), None);
+    let base = run(&["rev-parse", "main"]);
+    run(&["update-ref", "refs/remotes/origin/session", &base]);
+    assert_eq!(
+        unlanded_line(&repo, "session", None).as_deref(),
+        Some("2 commits on session aren't on origin/session")
+    );
+    // Merged by a squash: the work is there, so nothing is said.
+    run(&["checkout", "--quiet", "main"]);
+    run(&["merge", "--quiet", "--squash", "session"]);
+    run(&["commit", "--quiet", "-m", "squashed"]);
+    assert_eq!(unlanded_line(&repo, "session", Some("main")), None);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Under the Map, of a hand-off that has one.
+    let text = boot_tail(
+        &[],
+        None,
+        Some("usage limit"),
+        TailBudget {
+            reason: Reason::Quota,
+            hot_tokens: None,
+            target_window: None,
+        },
+    );
+    let text = with_unlanded(text, Some("2 commits on session aren't on main"));
+    assert!(
+        text.contains("\n## Map\n- 2 commits on session aren't on main\n- Session folder:"),
+        "{text}"
+    );
+}

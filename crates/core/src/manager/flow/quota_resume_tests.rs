@@ -417,6 +417,225 @@ async fn limited_flow(
     (flow, turns)
 }
 
+/// A snapshot of `provider`'s own login where a weekly window scoped to `model` is used up.
+fn scoped_window_out(
+    flow: &Flow,
+    provider: ProviderKind,
+    model: &str,
+    resets_at_ms: i64,
+) -> crate::accounts::AccountRef {
+    let own = crate::accounts::AccountRef::new(provider, None);
+    let now = crate::now_ms();
+    flow.manager.runtime.monitor().note(
+        &own,
+        &brigadier_providers::QuotaSnapshot {
+            provider,
+            windows: vec![brigadier_providers::QuotaWindow {
+                id: "model_week".into(),
+                label: "model_week".into(),
+                used_percent: 100.0,
+                resets_at_ms: Some(resets_at_ms),
+                window_minutes: Some(7 * 24 * 60),
+                bucket: None,
+                model: Some(model.into()),
+            }],
+            limit: None,
+            observed_at_ms: now,
+            source: brigadier_providers::QuotaSource::Read,
+        },
+        now,
+    );
+    own
+}
+
+/// #741: a session on the CLI's default model, whose own window is used up, keeps waiting when
+/// it looks again instead of sending and hitting the limit again.
+#[tokio::test]
+async fn a_default_model_out_by_its_own_window_keeps_waiting() {
+    let (flow, turns) = waiting_flow("quota-default-model-out").await;
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    let mut setup = conversation.setup.unwrap();
+    let Setup::Session { orchestrator, .. } = &mut setup else {
+        panic!("a session");
+    };
+    orchestrator.model = None;
+    let choice = orchestrator.clone();
+    flow.core
+        .set_setup(flow.conversation.clone(), setup)
+        .await
+        .unwrap();
+    flow.until("the five-hour limit to reset", |_| {
+        crate::now_ms() > waiting_reset(&flow)
+    })
+    .await;
+    let weekly = crate::now_ms() + 3_600_000;
+    let own = scoped_window_out(&flow, ProviderKind::Claude, "claude-opus-5-5", weekly);
+    assert!(!flow.manager.choice_available(&choice).await);
+    assert!(!flow.manager.account_frees_choice(&choice, &own).await);
+    flow.manager.retry_waiting_conversations().await;
+    // A turn that went again would have run by now.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(turns.load(Ordering::SeqCst), 1, "no turn went again");
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_some()
+    );
+    flow.stop().await;
+}
+
+/// #746: a `default` Fallback row whose model is out by its own window takes no session, and
+/// the session wakes at that window's reset.
+#[tokio::test]
+async fn a_default_fallback_row_out_by_its_own_window_takes_no_session() {
+    let codex_turns = Arc::new(AtomicUsize::new(0));
+    let counted = codex_turns.clone();
+    let flow = Flow::start(
+        "quota-default-fallback-out",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        Arc::new(move |turn| {
+            let counted = counted.clone();
+            Box::pin(async move {
+                match turn.provider {
+                    ProviderKind::Claude => Reply::limited(),
+                    _ => {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        Reply::text("Done on Codex.")
+                    }
+                }
+            })
+        }),
+    )
+    .await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n\
+         | Fallback | codex | default | high | test |\n",
+    )
+    .unwrap();
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+    let codex_back = crate::now_ms() + 1_800_000;
+    scoped_window_out(&flow, ProviderKind::Codex, "gpt-6-astra", codex_back);
+
+    flow.say(ASKED).await;
+    let wait = flow
+        .until("the thread to wait for its limit", |_| {
+            flow.core
+                .conversation(&flow.conversation)
+                .is_ok_and(|conversation| conversation.quota_wait.is_some())
+        })
+        .await;
+    drop(wait);
+    assert_eq!(codex_turns.load(Ordering::SeqCst), 0, "Codex took no turn");
+    assert_eq!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .unwrap()
+            .resets_at_ms,
+        Some(codex_back),
+        "it wakes when that window resets"
+    );
+    let from = crate::model::ModelChoice {
+        provider: ProviderKind::Claude,
+        model: Some("claude-opus-5-5".into()),
+        effort: None,
+        fast: None,
+        account: None,
+    };
+    assert_eq!(flow.manager.next_session_model(&from, &[]), None);
+    flow.stop().await;
+}
+
+/// #742: a session moved from account A to B, then limited on B too, goes back to A once A has
+/// room, rather than waiting for B's reset.
+#[tokio::test]
+async fn a_waiting_session_goes_on_at_a_sibling_account_that_freed_up() {
+    let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let logged = seen.clone();
+    let flow = Flow::start(
+        "quota-sibling-account",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        Arc::new(move |turn| {
+            let logged = logged.clone();
+            Box::pin(async move {
+                let count = {
+                    let mut seen = logged.lock().unwrap();
+                    seen.push(turn.account.clone());
+                    seen.len()
+                };
+                // The first account back soon; the second out for an hour.
+                let resets_in = match count {
+                    1 => 1_500,
+                    2 => 3_600_000,
+                    _ => return Reply::text("Moved the tax rules."),
+                };
+                Reply {
+                    limit: Some(brigadier_providers::LimitHit {
+                        kind: brigadier_providers::LimitKind::UsageWindow,
+                        window: Some("five_hour".into()),
+                        resets_at_ms: Some(crate::now_ms() + resets_in),
+                        model: None,
+                    }),
+                    ..Reply::default()
+                }
+            })
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.disabled_providers.push(ProviderKind::Codex);
+    flow.core.update_settings(settings).await.unwrap();
+
+    flow.say(ASKED).await;
+    flow.until("the thread to wait for its limit", |_| {
+        flow.core
+            .conversation(&flow.conversation)
+            .is_ok_and(|conversation| conversation.quota_wait.is_some())
+    })
+    .await;
+    assert_eq!(seen.lock().unwrap().len(), 2, "both accounts hit a limit");
+    flow.until("the first account's limit to reset", |_| {
+        crate::now_ms() > waiting_reset(&flow)
+    })
+    .await;
+    flow.manager.retry_waiting_conversations().await;
+    flow.until("the request done", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_ne!(seen[0], seen[1], "{seen:?}");
+    assert_eq!(
+        seen[2], seen[0],
+        "it went on at the freed account: {seen:?}"
+    );
+    flow.stop().await;
+}
+
 /// What the user asks in a [`limited_flow`].
 const ASKED: &str = "Move the tax rules into their own module.";
 
