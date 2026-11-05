@@ -11,8 +11,8 @@
 //!   the row is no longer Deciding from that moment.
 //!
 //! The user's own Steer always joins (D25). Side chats and tab chats keep the plain queue. A block
-//! only paused workers hold, or any block after the user's Stop until the next turn starts, judges
-//! nothing: what the user sends goes right in.
+//! only paused workers hold, or any block after the user's Stop until the next turn starts or they
+//! resume a worker, judges nothing: what the user sends goes right in.
 
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;

@@ -2718,6 +2718,10 @@ impl SessionManager {
             .await?;
             return Err(err);
         }
+        // It really runs again: no Stop stands for what the user sends next.
+        if let Ok(conv) = self.conv(&conversation_id) {
+            conv.worker_resumed().await;
+        }
         self.worker_resume_taken(&task, &input).await?;
         self.orchestrator_step(&conversation_id, OrchestratorStepKind::Resumed { task_id })
             .await;

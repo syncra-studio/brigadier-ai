@@ -311,8 +311,9 @@ struct ConvState {
     end_commands: bool,
     /// The user stopped the running turn: nothing more is steered into it.
     interrupted: bool,
-    /// The user's Stop, until the next turn starts: what they send goes right in, never judged,
-    /// whatever still holds. Don't resume sets `interrupted` too, but is no Stop.
+    /// The user's Stop, until the next turn starts or they resume a worker: what they send goes
+    /// right in, never judged, whatever still holds. Don't resume sets `interrupted` too, but is
+    /// no Stop.
     user_stopped: bool,
     /// A turn is marked running and its send isn't accepted yet: nothing can join it, and on
     /// its CLI a steer would go first (#607).
@@ -1144,6 +1145,11 @@ impl ConvLive {
         {
             crate::logging::private_trace!(self.private_logs, warn, "could not stop the turn"; conversation = %self.id, error = %err);
         }
+    }
+
+    /// The user resumed a worker after a Stop: what they send next is judged as usual.
+    pub(super) async fn worker_resumed(&self) {
+        self.state.lock().await.user_stopped = false;
     }
 
     /// Holds new turns while startup recovers what the stop left (`true`); released, whether

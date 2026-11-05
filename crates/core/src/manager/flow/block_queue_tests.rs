@@ -699,6 +699,28 @@ async fn a_chats_follow_up_goes_right_in_after_a_stop_before_its_worker_stops() 
     flow.stop().await;
 }
 
+/// A worker the user resumes after their Stop really runs: no Stop stands, so a follow-up is
+/// judged as usual, with no turn having started since.
+#[tokio::test]
+async fn a_follow_up_is_judged_again_once_a_worker_is_resumed_after_a_stop() {
+    let (flow, _answers, release) = block("block-stop-resumed").await;
+    let id = flow.conversation.clone();
+    let task = flow.manager.core.tasks(&id).await.unwrap().remove(0);
+    assert!(flow.manager.pause_task(task.id.clone()).await.unwrap());
+    flow.manager.interrupt(id.clone()).await.unwrap();
+    flow.manager.resume_task(task.id).await.unwrap();
+    let conv = flow.manager.conv(&id).unwrap();
+    assert!(
+        flow.manager.queue_holds(&conv).await,
+        "its worker runs again"
+    );
+    assert!(conv.idle().await, "no turn started since the Stop");
+    judged(&flow, &id, FIRST).await;
+    waits(&flow, FIRST).await;
+    release.notify_one();
+    flow.stop().await;
+}
+
 /// Don't resume also marks the thread interrupted, but it is no Stop: a worker that really runs
 /// still has its follow-up judged.
 #[tokio::test]
