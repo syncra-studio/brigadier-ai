@@ -375,8 +375,9 @@ struct ConvState {
     /// Those of them a `brigadier wait` already ended for: the next wait blocks (goal 3).
     held_told: Vec<String>,
     /// The running turn started with a message the user sent while the session's work still
-    /// held (its workers or its CLI's background commands): it goes on with that work, in its
-    /// block ([`crate::thread_view::ThreadTurn::joins`]).
+    /// held (its workers or its CLI's background commands), or is a successor's first while it
+    /// held: it goes on with that work, in its block
+    /// ([`crate::thread_view::ThreadTurn::joins`]).
     turn_joins: bool,
     /// The open block's `brigadier` look-ups, and whether its drift note went (D167).
     look_ups: u32,
@@ -444,6 +445,13 @@ struct ConvState {
 }
 
 impl ConvState {
+    /// Whether the running turn's run state shows, for the tab and the composer. A hand-off's
+    /// own turn doesn't (D193), unless it joins work that still holds: that work is under way.
+    /// Only what shows: a message sent meanwhile still waits, by `seam.quiet` itself.
+    fn shows_turn(&self) -> bool {
+        !self.seam.quiet || self.turn_joins
+    }
+
     /// The drift note (D167) for the turn starting now: when the block took more look-ups than
     /// one `brigadier state` call would, once a block. A new block counts afresh.
     fn drift_note(&mut self, opens_block: bool) -> Option<String> {
@@ -2760,6 +2768,14 @@ impl SessionManager {
         // a message of the user's starting this turn goes on with that work.
         let holds = self.work_holds(&conv).await;
         let queue_held = holds && self.queue_holds(&conv).await;
+        // A successor's first turn goes on with the work its generation left holding, whatever
+        // starts it: the word to carry on, a worker's news (D163). No message of the user's need.
+        let successor_joins = session
+            && holds
+            && matches!(
+                self.read_seam_of(&conv.id).await.phase,
+                super::seam::Phase::Closed { .. }
+            );
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         let mut carry = false;
@@ -2885,7 +2901,7 @@ impl SessionManager {
                 state.outcomes.remove(request);
                 state.stopped_open.remove(request);
             }
-            state.turn_joins = holds && !users.is_empty();
+            state.turn_joins = holds && !users.is_empty() || successor_joins;
             // A user's message with no work held opens a new block.
             drift = state.drift_note(!holds && !users.is_empty());
             state.in_turn = users.clone();
@@ -2902,7 +2918,7 @@ impl SessionManager {
             break (users, envelopes, request, notes);
         };
         self.settle_requests(&conv.id).await;
-        if !conv.state.lock().await.seam.quiet {
+        if conv.state.lock().await.shows_turn() {
             self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
                 .await;
         }
@@ -5458,7 +5474,7 @@ impl SessionManager {
                     self.session_message_taken(&conv.id, label);
                 }
                 if let Some(request) = started
-                    && !conv.state.lock().await.seam.quiet
+                    && conv.state.lock().await.shows_turn()
                 {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
                         .await;
@@ -6969,7 +6985,7 @@ impl SessionManager {
         let Ok(conv) = self.conv(id) else { return };
         let request = {
             let state = conv.state.lock().await;
-            if state.seam.quiet {
+            if !state.shows_turn() {
                 return;
             }
             state.request.clone()

@@ -291,6 +291,8 @@ export type Block = {
   taskNotices: BlockTaskNotice[];
   /** The requests it shows: its own (the key), then the steered ones. */
   requestIds: string[];
+  /** A later block of its CLI's turns is shown after it: nothing holds it open any more. */
+  followed?: boolean;
   state: BlockState;
   error: string | null;
   /** Where that error's turn failed, when a later turn of the block went on after it. */

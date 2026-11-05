@@ -85,3 +85,28 @@ test("a context refresh while a block is held leaves its live line under the div
   assert.deepEqual(quiet.closed.waits, [[]]);
   assert.ok(quiet.closed.refresh.gap !== null && quiet.closed.refresh.gap >= 0, JSON.stringify(quiet.closed));
 });
+
+type SeenSeam = Seen & { liveLines: number[]; composer: string | null; order: string[][] };
+
+test("a hand-off while a block is held leaves one block with one live line, its divider and rows in order, and the composer's clock the same as its header's", async (t) => {
+  const seam = JSON.parse(await renderFixturePage(t, "held-block.html?seam=held", "held-block-result", 20000)) as Record<"running" | "over" | "recordedClosed" | "joinedRunning" | "joinedClosed" | "nothingHeld", SeenSeam>;
+  const order = ["A worker is on the first.", "divider", "Picking up where the last session stoppe", "Messaged First bug", "The worker has what it needs."];
+  for (const step of [seam.running, seam.over]) {
+    assert.equal(step.blocks, 1, JSON.stringify(step));
+    assert.deepEqual(step.liveLines, [1], JSON.stringify(step));
+    assert.deepEqual(step.order, [order], JSON.stringify(step));
+    assert.match(step.headers[0] ?? "", /^Working for /);
+    assert.equal(step.composer, step.headers[0], JSON.stringify(step));
+  }
+  assert.deepEqual(seam.over.waits, [["Waiting for 2 workers"]]);
+  // Recorded without the join, it splits once its block closes; with it, it stays one.
+  assert.equal(seam.recordedClosed.blocks, 2, JSON.stringify(seam.recordedClosed));
+  assert.equal(seam.joinedRunning.blocks, 1, JSON.stringify(seam.joinedRunning));
+  assert.equal(seam.joinedClosed.blocks, 1, JSON.stringify(seam.joinedClosed));
+  assert.match(seam.joinedClosed.headers[0] ?? "", /^Worked for /);
+  // Nothing held, the block open only through the hand-off's own turns: the later block alone is live.
+  assert.equal(seam.nothingHeld.blocks, 2, JSON.stringify(seam.nothingHeld));
+  assert.deepEqual(seam.nothingHeld.liveLines, [0, 1], JSON.stringify(seam.nothingHeld));
+  assert.match(seam.nothingHeld.headers[0] ?? "", /^Worked for /);
+  assert.match(seam.nothingHeld.headers[1] ?? "", /^Working for /);
+});

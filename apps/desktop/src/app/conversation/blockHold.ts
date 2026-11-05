@@ -8,7 +8,7 @@ import type { WorkSpan } from "@/ipc/generated";
 import { useCliThread, useTurnCommands, useTurnSubagents, useTurnWorkers } from "@/state/cliThread";
 import { backgroundOf } from "@/state/nativeWorkers";
 
-type HeldBlock = { state: BlockState; startedAtMs: number; endedAtMs: number | null; worked: readonly WorkSpan[] };
+type HeldBlock = { state: BlockState; startedAtMs: number; endedAtMs: number | null; worked: readonly WorkSpan[]; followed?: boolean };
 
 const NO_STARTS: readonly number[] = [];
 
@@ -44,8 +44,9 @@ export function useBlockHold(conversationId: string | null, meta: HeldBlock | nu
     const view = conversationId && meta ? s.views[conversationId] : undefined;
     return view ? JSON.stringify(heldWait(view, starts, meta!.startedAtMs, meta!.endedAtMs)) : "null";
   });
-  // Open or over is the core's word alone (D163): what holds it above only names the wait.
-  const held = useCliThread((s) => coreHolds(conversationId ? s.views[conversationId]?.block : null, over?.endedAtMs ?? null)) && !!over;
+  // Open or over is the core's word alone (D163): what holds it above only names the wait. A block
+  // the thread went on past never reads held: one live block at most.
+  const held = useCliThread((s) => coreHolds(conversationId ? s.views[conversationId]?.block : null, over?.endedAtMs ?? null)) && !!over && !meta?.followed;
   return { workers, commands, subagents, held, heldUntil, named: useMemo(() => JSON.parse(named) as StatusHead | null, [named]) };
 }
 

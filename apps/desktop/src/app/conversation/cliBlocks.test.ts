@@ -1983,3 +1983,79 @@ test("a /compact the user typed keeps its own block with its work", () => {
   );
   assert.deepEqual(blocks.map((block) => [block.user?.kind === "message" ? block.user.text : null, block.texts.length]), [["Grow", 1], ["/compact", 1]]);
 });
+
+// A hand-off while the block is held, as the core's view has it (seen live, 11b55574): the block,
+// its refresh's hidden `/compact`, the hidden note turn, then a successor that carries on by itself.
+const handOff = (last: Partial<ThreadTurn> = {}, working = true): ThreadView => {
+  const brigadier = { said: { by: "brigadier" as const } };
+  return {
+    entries: [
+      user("u1", "Fix it", 1000),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "A worker is on it." }, 1100),
+      at({ type: "compactionEnded", automatic: false, tokensBefore: 9, tokensAfter: 1, error: null }, 2000),
+      user("c1", "/compact keep these", 1900, brigadier),
+      user("n1", "[Brigadier] A fresh session will continue this work.", 3000, brigadier),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "Handed off." }, 3100),
+      user("s1", "Carry on from the hand-off note.", 4000, brigadier),
+      at({ type: "message", itemId: "a3", role: "assistant", text: "Picking up." }, 4100),
+      at({ type: "message", itemId: "a4", role: "assistant", text: "Told the worker." }, 4300),
+    ],
+    turns: [{ ...turn("u1", 1000, 1200, "done"), requests: ["r1"] }, turn("c1", 1900, 2100, "done"), turn("n1", 3000, 3200, "done"), { ...turn("s1", 4000, null, null), ...last }],
+    seams: [{ n: 1, open: false, at: "s1", carried: true, nudge: "n1", note: null, start: null, death: null, movedTo: null }],
+    workers: [{ id: "w1", number: 1, title: "Worker", agent: "claude", model: null, startedAtMs: 1050, working, lastEnd: null, gone: false, lastEventAtMs: null, limit: null, freshContext: false, waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false }],
+    block: { startedAtMs: 1000 },
+  } as ThreadView;
+};
+const ended = { endedAtMs: 4400, end: "done" as const };
+
+test("a successor's first turn while its block is held goes on in that block, past the hand-off's hidden blocks", () => {
+  // Recorded without a join: while the core's block is open and a worker from before works.
+  for (const last of [{}, ended]) {
+    const blocks = cliBlocks(handOff(last), "conv", undefined, true);
+    assert.deepEqual(blocks.map((block) => block.key), ["u1"], JSON.stringify(last));
+    assert.deepEqual(blocks[0]!.texts.map((text) => text.text), ["A worker is on it.", "Picking up.", "Told the worker."]);
+    assert.equal(blocks[0]!.compactions.length, 1);
+    assert.equal(blocks[0]!.seams.length, 1);
+    assert.equal(blocks[0]!.followed, undefined);
+  }
+  // Its join on record, the block stays one once it closes.
+  const closed = { ...handOff({ ...ended, joins: true }, false), block: { startedAtMs: 1000, endedAtMs: 5000 } };
+  assert.deepEqual(cliBlocks(closed, "conv", undefined, true).map((block) => block.key), ["u1"]);
+  // A message of the user's as the successor's first takes the same way, its bubble in the block.
+  const asked = handOff({ requests: ["r2"] });
+  asked.entries[6] = user("s1", "And this", 4000);
+  asked.seams = [{ ...asked.seams![0]!, carried: false }];
+  const [only, ...more] = cliBlocks(asked, "conv", undefined, true);
+  assert.deepEqual(more, []);
+  assert.deepEqual(only!.steers.map((steer) => steer.text), ["And this"]);
+});
+
+test("the board's row of a joined successor lands by its time among the block's items, the hidden blocks' times gone", () => {
+  const board: BoardDigest = { ...NO_BOARD, orchestratorSteps: [{ requestId: "r1", atMs: 4200, position: 0, kind: { type: "messaged", taskId: "w1", text: "Go on." } }] };
+  const [only, ...more] = cliBlocks(handOff(), "conv", board, true);
+  assert.deepEqual(more, []);
+  const row = only!.orchestratorSteps.find((step) => step.kind.type === "messaged")!;
+  const textAt = (words: string) => only!.texts.find((text) => text.text === words)!.position;
+  assert.ok(textAt("Picking up.") < row.position && row.position < textAt("Told the worker."), JSON.stringify(row));
+});
+
+test("with nothing held a successor stays its own block, and the block before never reads held once one follows it", () => {
+  // Its worker done, the core's block open only through the hand-off's own turns.
+  const unheld = cliBlocks(handOff({}, false), "conv", undefined, true);
+  assert.deepEqual(unheld.map((block) => [block.key, !!block.followed]), [["u1", true], ["s1", false]]);
+  // No block at all: the same.
+  assert.deepEqual(cliBlocks({ ...handOff(), workers: [], block: null }, "conv", undefined, true).map((block) => block.key), ["u1", "s1"]);
+  // A worker the successor started itself is no hold of the block before.
+  const own = handOff({}, true);
+  own.workers = [{ ...own.workers![0]!, startedAtMs: 4050 }];
+  assert.deepEqual(cliBlocks(own, "conv", undefined, true).map((block) => block.key), ["u1", "s1"]);
+});
+
+test("a message still on its way doesn't close the block before: it may yet join it", () => {
+  const view: ThreadView = { entries: [user("u1", "Fix it", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "A worker is on it." }, 1100)], turns: [{ ...turn("u1", 1000, 1200, "done"), requests: ["r1"] }], block: { startedAtMs: 1000 } };
+  const message = { id: "m2", conversationId: "conv", role: "user", text: "Also this", attachments: [], mentions: [], createdAtMs: 2000, requestId: "m2" } as unknown as Message;
+  const tree = cliThreadTree(view, "conv", [message], {}, [], NO_BOARD, { state: "running", error: null }, true);
+  const blocks = tree.nodes.flatMap((node) => (node.kind === "block" ? [node.block] : []));
+  assert.equal(blocks.length, 2, JSON.stringify(tree.nodes.map((node) => node.kind)));
+  assert.equal(blocks[0]!.followed, undefined);
+});

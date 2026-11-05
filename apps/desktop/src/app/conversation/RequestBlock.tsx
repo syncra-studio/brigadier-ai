@@ -87,6 +87,8 @@ export type BlockMeta = {
   nudges: number[];
   /** Quiet lines of what its workers did, and of background jobs' ends its CLI took up, by position. */
   taskNotices: BlockTaskNotice[];
+  /** The thread went on past it in a later block: nothing holds it open (`Block.followed`). */
+  followed?: boolean;
   state: BlockState;
   /** What failed in it, kept once a later turn of it goes on (`settle`). */
   error: string | null;

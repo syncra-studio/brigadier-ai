@@ -766,6 +766,8 @@ export function cliBlocks(
   const internal = new Set<Block>();
   // Brigadier's `/compact` turns that hold nothing the thread shows, each a hidden block.
   const emptyCompacts = new Set<Block>();
+  // Brigadier's note turns, each a hidden block: what they do is under the hood, so they hold nothing.
+  const noteTurns = new Set<Block>();
   const waited = waitOutputs(view);
   // The turns, by place, that hold anything the thread shows. Brigadier's own `/compact` can: Claude
   // tells a background job's end in the next turn it runs, and a worker's wake-up is a hidden input
@@ -781,6 +783,13 @@ export function cliBlocks(
   const nudges = new Set(seams.flatMap((seam) => (seam.nudge ? [seam.nudge] : [])));
   // A successor that started by itself: its first message is Brigadier's word to carry on.
   const carried = new Set(seams.flatMap((seam) => (seam.carried && seam.at ? [seam.at] : [])));
+  // Each successor's first message, carried on by itself or not.
+  const successors = new Set(seams.flatMap((seam) => (seam.at ? [seam.at] : [])));
+  // A thread recorded before the engine noted a successor's join says it only by what still
+  // works: a worker from before the successor. The core's block alone is no word of it, as the
+  // hand-off's own turns keep it open with nothing held.
+  const workedOn = (startedAtMs: number | null | undefined) =>
+    (view.workers ?? []).some((row) => (row.working || !!row.paused || row.waiting.length > 0) && row.startedAtMs <= (startedAtMs ?? Number.POSITIVE_INFINITY));
   // A queued message shows once (run2-D44): in the rail while the CLI has it there, else
   // where the CLI first read it in the turn that took it (a message that waited for its own
   // turn, or was steered in after it waited, was read before; until the CLI reads it again it is
@@ -854,6 +863,7 @@ export function cliBlocks(
           blocks.push(block);
           turnOf.set(block, view.turns[turn]);
           internal.add(block);
+          noteTurns.add(block);
           times.push([[position, entry.atMs ?? 0]]);
         } else maintenance = "steered";
         return;
@@ -909,6 +919,20 @@ export function cliBlocks(
         block = blocks.at(-1) ?? null;
       }
     }
+    // A successor's first turn while the block it continues still holds goes on in that block (D163),
+    // past the hidden blocks of the hand-off, which go with their times: `place` reads them by index.
+    let heldOn = false;
+    if (asked && startsTurn(entry) && successors.has(asked.itemId)) {
+      const shown = blocks.findLast((each) => !emptyCompacts.has(each) && !noteTurns.has(each));
+      if (shown && !internal.has(shown) && (view.turns[turn]?.joins || (holds(shown) && workedOn(view.turns[turn]?.startedAtMs ?? entry.atMs)))) {
+        while (block !== shown) {
+          blocks.pop();
+          times.pop();
+          block = blocks.at(-1) ?? null;
+        }
+        heldOn = true;
+      }
+    }
     const before = block;
     if (asked && (own || compacting || news || unshown || says)) {
       // Brigadier's word of what workers did that the block before started, or that a command
@@ -918,7 +942,8 @@ export function cliBlocks(
         startsTurn(entry) &&
         !!before &&
         !internal.has(before) &&
-        ((!!news && startedIn(before, asked.text)) ||
+        (heldOn ||
+          (!!news && startedIn(before, asked.text)) ||
           (woke && carries.some((request) => before.requestIds.includes(request))) ||
           // Brigadier's `/compact` that holds work (a background command's end Claude told in it,
           // what a worker's wake-up said): one more turn of the block before, as Codex's word of
@@ -969,7 +994,7 @@ export function cliBlocks(
       const shown = fromSession(userMessage(conversationId, entry, id, said?.by === "both" ? said.user : event.text, position + 1), theirs);
       // Sent while the block before still held: its bubble goes in that block, where it came,
       // and the turn's work goes on there.
-      if (goesOn(block, entry.requests ?? [], true)) {
+      if (block && (heldOn || goesOn(block, entry.requests ?? [], true))) {
         join(block, position, entry.atMs);
         // One the block already shows (a switch's carry-on sends it again) shows once.
         const ids = [block.user?.kind === "message" ? block.user.message.id : null, ...block.steers.map((steer) => steer.message.id)];
@@ -1113,7 +1138,11 @@ export function cliBlocks(
     if (!before) continue;
     before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death, movedTo: seam.movedTo });
   }
-  return blocks.filter((each) => !internal.has(each));
+  const shownBlocks = blocks.filter((each) => !internal.has(each));
+  // One live block at most: the CLI's turns went on past each but the last. A message still on its
+  // way is no such turn (`cliThreadTree` adds its block later): it may yet join the last.
+  for (const each of shownBlocks.slice(0, -1)) each.followed = true;
+  return shownBlocks;
 }
 
 /** A thread not read yet: no turns. */
