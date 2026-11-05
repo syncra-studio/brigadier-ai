@@ -22,6 +22,8 @@
 //! when the field still doesn't show the text and the browser has a
 //! debugging port, the page's focused field gets the text through it.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -71,7 +73,31 @@ pub trait PageFields: Send + Sync {
     async fn insert_over_debug_port(&self, _args: &Value, _text: &str) -> Option<Typed> {
         None
     }
+
+    /// The app and window a `click` acts on, and whether it presses a text
+    /// field inside a web page. `None` when they can't be told.
+    fn click_target(&self, _args: &Value) -> Option<ClickTarget> {
+        None
+    }
+
+    /// Whether this window's focus is on an editable field outside its web
+    /// page: the browser's own address or search field. An unknown focus
+    /// is `false`.
+    fn focus_on_browser_chrome(&self, _pid: i32, _window_id: u32) -> bool {
+        false
+    }
 }
+
+/// What a `click` acts on. See [`PageFields::click_target`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClickTarget {
+    pub pid: i32,
+    pub window_id: u32,
+    pub presses_page_field: bool,
+}
+
+/// The page field each app's last click pressed: its window and its token.
+type ClickedFields = Arc<Mutex<HashMap<i32, (u32, String)>>>;
 
 /// One page element found by [`PageFields::find`].
 pub trait PageField: Send {
@@ -197,11 +223,83 @@ pub fn typed_result(typed: &Typed, text: &str, args: &Value) -> ToolResult {
 pub struct TypeIntoPages {
     inner: Box<dyn Tool>,
     fields: Box<dyn PageFields>,
+    clicked: ClickedFields,
 }
 
 impl TypeIntoPages {
     pub fn new(inner: Box<dyn Tool>, fields: Box<dyn PageFields>) -> Self {
-        Self { inner, fields }
+        Self {
+            inner,
+            fields,
+            clicked: ClickedFields::default(),
+        }
+    }
+}
+
+/// The driver's `click`, noting when it pressed a text field inside a web
+/// page. In a background Safari window the press focuses the page's field but
+/// not the app's, so text typed without a target would go to the address bar.
+struct NoteClickedFields {
+    inner: Box<dyn Tool>,
+    fields: Box<dyn PageFields>,
+    clicked: ClickedFields,
+}
+
+#[async_trait]
+impl Tool for NoteClickedFields {
+    fn def(&self) -> &ToolDef {
+        self.inner.def()
+    }
+
+    fn has_independent_input_lane(&self, args: &Value) -> bool {
+        self.inner.has_independent_input_lane(args)
+    }
+
+    async fn protected_resource_ownership(
+        &self,
+        adapter_id: &str,
+        args: &Value,
+    ) -> ProtectedResourceOwnership {
+        self.inner
+            .protected_resource_ownership(adapter_id, args)
+            .await
+    }
+
+    async fn protected_resource_scope(
+        &self,
+        adapter_id: &str,
+        args: &Value,
+    ) -> Result<Option<Value>, String> {
+        self.inner.protected_resource_scope(adapter_id, args).await
+    }
+
+    async fn validate_protected_resource_scope(
+        &self,
+        adapter_id: &str,
+        args: &Value,
+        approved_scope: &Value,
+    ) -> Result<(), String> {
+        self.inner
+            .validate_protected_resource_scope(adapter_id, args, approved_scope)
+            .await
+    }
+
+    async fn invoke(&self, args: Value) -> ToolResult {
+        let target = self.fields.click_target(&args);
+        let token = args.get("element_token").and_then(Value::as_str);
+        let token = token.map(str::to_owned);
+        let result = self.inner.invoke(args).await;
+        if let (Some(target), false) = (target, result.is_error == Some(true)) {
+            let mut clicked = self
+                .clicked
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match token.filter(|_| target.presses_page_field) {
+                Some(token) => clicked.insert(target.pid, (target.window_id, token)),
+                None => clicked.remove(&target.pid),
+            };
+        }
+        result
     }
 }
 
@@ -212,9 +310,21 @@ pub fn install(registry: &mut ToolRegistry) {
 }
 
 /// [`install`] with the given page fields.
-pub fn install_with(registry: &mut ToolRegistry, fields: impl FnOnce() -> Box<dyn PageFields>) {
-    registry.wrap("type_text", move |inner| {
-        Box::new(TypeIntoPages::new(inner, fields())) as Box<dyn Tool>
+pub fn install_with(registry: &mut ToolRegistry, fields: impl Fn() -> Box<dyn PageFields>) {
+    let clicked = ClickedFields::default();
+    registry.wrap("click", |inner| {
+        Box::new(NoteClickedFields {
+            inner,
+            fields: fields(),
+            clicked: clicked.clone(),
+        }) as Box<dyn Tool>
+    });
+    registry.wrap("type_text", |inner| {
+        Box::new(TypeIntoPages {
+            inner,
+            fields: fields(),
+            clicked,
+        }) as Box<dyn Tool>
     });
 }
 
@@ -261,6 +371,9 @@ impl Tool for TypeIntoPages {
         let Some(text) = args.get("text").and_then(Value::as_str).map(str::to_owned) else {
             return self.inner.invoke(args).await;
         };
+        if let Some(refusal) = self.refusal_for_focus_on_browser_chrome(&args) {
+            return refusal;
+        }
         // The driver's keys don't reach a page on another Space: go straight
         // to the key window.
         if self.fields.on_other_space(&args) {
@@ -278,6 +391,48 @@ impl Tool for TypeIntoPages {
 }
 
 impl TypeIntoPages {
+    /// The answer to text without a target while the page field the last
+    /// click pressed didn't get the app's focus, which stayed on the browser's
+    /// own field. A focus that has moved on ends the watch.
+    fn refusal_for_focus_on_browser_chrome(&self, args: &Value) -> Option<ToolResult> {
+        if ["element_token", "element_index", "x", "y"]
+            .iter()
+            .any(|key| args.get(key).is_some())
+        {
+            return None;
+        }
+        let pid = i32::try_from(args.get("pid")?.as_i64()?).ok()?;
+        let mut clicked = self
+            .clicked
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (window_id, token) = clicked.get(&pid)?.clone();
+        if args
+            .get("window_id")
+            .and_then(Value::as_u64)
+            .is_some_and(|asked| asked != u64::from(window_id))
+        {
+            return None;
+        }
+        if !self.fields.focus_on_browser_chrome(pid, window_id) {
+            clicked.remove(&pid);
+            return None;
+        }
+        Some(
+            ToolResult::error(format!(
+                "Nothing was typed: the page field you clicked didn't get the app's focus, which \
+                 is still on the browser's own address or search field. Pass element_token \
+                 \"{token}\" to type into that field, or use the page tool. To type into the \
+                 browser's own field, click it first."
+            ))
+            .with_structured(json!({
+                "code": "focus_on_browser_chrome",
+                "delivered": false,
+                "clicked_element_token": token,
+            })),
+        )
+    }
+
     /// Types into the page's field as key events, then through the
     /// browser's debugging port if the keys don't show. `None` when the
     /// field can't be used.
@@ -330,6 +485,52 @@ impl PageFields for System {
             crate::hotkey::chromium_family(pid)
                 && platform_macos::windows::window_on_current_space_by_id(window_id) == Some(false)
         })
+    }
+
+    fn click_target(&self, args: &Value) -> Option<ClickTarget> {
+        use cua_driver_core::element_token::ResolvedElement;
+        use platform_macos::ax::bindings::{copy_string_attr, AXUIElementRef};
+        use platform_macos::ax::snapshot::AxSnapshot;
+
+        let (pid, window_id) = target(args)?;
+        let press = args
+            .get("action")
+            .and_then(Value::as_str)
+            .is_none_or(|action| action == "press");
+        let presses_page_field = press
+            && args.get("element_token").is_some()
+            && cua_driver_core::snapshot_store::current_runtime_store::<AxSnapshot>()
+                .and_then(|store| store.resolve(pid, args).ok())
+                .is_some_and(|resolved| {
+                    let ResolvedElement::Element { element, .. } = resolved else {
+                        return false;
+                    };
+                    let pointer = element.as_ptr() as AXUIElementRef;
+                    let role = unsafe { copy_string_attr(pointer, "AXRole") };
+                    is_field_role(role.as_deref()) && unsafe { inside_web_area(pointer) }
+                });
+        Some(ClickTarget {
+            pid,
+            window_id,
+            presses_page_field,
+        })
+    }
+
+    fn focus_on_browser_chrome(&self, pid: i32, window_id: u32) -> bool {
+        use core_foundation::base::{CFRelease, CFTypeRef};
+        use platform_macos::ax::bindings::copy_string_attr;
+
+        unsafe {
+            let Some(focused) =
+                platform_macos::ax::exact_target::focused_element_in_window(pid, window_id)
+            else {
+                return false;
+            };
+            let chrome = is_field_role(copy_string_attr(focused, "AXRole").as_deref())
+                && !inside_web_area(focused);
+            CFRelease(focused as CFTypeRef);
+            chrome
+        }
     }
 
     async fn insert_over_debug_port(&self, args: &Value, text: &str) -> Option<Typed> {
@@ -426,6 +627,48 @@ pub fn field_probe(dom_id: &str, names: &[String], text: &str) -> String {
          const v = (e.value !== undefined ? e.value : e.textContent) || ''; \
          return v.includes({text}) ? 'there:' + v : 'missing'; }})()"
     )
+}
+
+/// A role that takes typed text in a page or in a browser's own bar.
+#[cfg(target_os = "macos")]
+fn is_field_role(role: Option<&str>) -> bool {
+    matches!(
+        role,
+        Some("AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField")
+    )
+}
+
+/// Whether `element` sits inside a page's `AXWebArea`. Unknown is `false`.
+///
+/// # Safety
+///
+/// `element` must be valid; it stays owned by the caller.
+#[cfg(target_os = "macos")]
+unsafe fn inside_web_area(element: platform_macos::ax::bindings::AXUIElementRef) -> bool {
+    use core_foundation::base::{CFRelease, CFTypeRef};
+    use platform_macos::ax::bindings::{copy_element_attr, copy_string_attr};
+
+    /// Deeper than any page field; only bounds a malformed tree.
+    const MAX_DEPTH: usize = 64;
+
+    let mut current = copy_element_attr(element, "AXParent");
+    for _ in 0..MAX_DEPTH {
+        let Some(parent) = current else {
+            return false;
+        };
+        let found = copy_string_attr(parent, "AXRole").as_deref() == Some("AXWebArea");
+        current = (!found)
+            .then(|| copy_element_attr(parent, "AXParent"))
+            .flatten();
+        CFRelease(parent as CFTypeRef);
+        if found {
+            return true;
+        }
+    }
+    if let Some(parent) = current {
+        CFRelease(parent as CFTypeRef);
+    }
+    false
 }
 
 /// The target's app and window, from the arguments or the element token.

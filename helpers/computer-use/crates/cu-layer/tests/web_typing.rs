@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use cu_layer::web_typing::{PageField, PageFields, Typed};
+use cu_layer::web_typing::{ClickTarget, PageField, PageFields, Typed};
 use cua_driver_core::protocol::{Content, ToolResult};
 use cua_driver_core::tool::{Tool, ToolDef, ToolRegistry};
 use serde_json::{json, Value};
@@ -30,6 +30,10 @@ struct Page {
     /// How often the driver's tool ran.
     driver_calls: usize,
     keys: Vec<String>,
+    /// What `click` presses is a text field inside the page.
+    click_presses_page_field: bool,
+    /// The window's focus is on the browser's address or search field.
+    focus_on_chrome: bool,
 }
 
 type Shared = Arc<Mutex<Page>>;
@@ -91,6 +95,30 @@ impl PageFields for FakeFields {
     async fn insert_over_debug_port(&self, _args: &Value, _text: &str) -> Option<Typed> {
         self.0.lock().unwrap().debug_port.clone()
     }
+
+    fn click_target(&self, args: &Value) -> Option<ClickTarget> {
+        Some(ClickTarget {
+            pid: args.get("pid")?.as_i64()? as i32,
+            window_id: args.get("window_id")?.as_u64()? as u32,
+            presses_page_field: self.0.lock().unwrap().click_presses_page_field,
+        })
+    }
+
+    fn focus_on_browser_chrome(&self, _pid: i32, _window_id: u32) -> bool {
+        self.0.lock().unwrap().focus_on_chrome
+    }
+}
+
+struct FakeClick(ToolDef);
+
+#[async_trait]
+impl Tool for FakeClick {
+    fn def(&self) -> &ToolDef {
+        &self.0
+    }
+    async fn invoke(&self, _args: Value) -> ToolResult {
+        ToolResult::text("clicked")
+    }
 }
 
 impl PageField for FakeField {
@@ -107,6 +135,15 @@ impl PageField for FakeField {
 fn build(page: Page) -> (ToolRegistry, Shared) {
     let shared = Arc::new(Mutex::new(page));
     let mut registry = ToolRegistry::new();
+    registry.register(Box::new(FakeClick(ToolDef {
+        name: "click".into(),
+        description: "fake".into(),
+        input_schema: json!({"type": "object", "additionalProperties": true}),
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        open_world: false,
+    })));
     registry.register(Box::new(FakeTypeText {
         def: ToolDef {
             name: "type_text".into(),
@@ -120,7 +157,7 @@ fn build(page: Page) -> (ToolRegistry, Shared) {
         page: shared.clone(),
     }));
     let fields = shared.clone();
-    cu_layer::web_typing::install_with(&mut registry, move || Box::new(FakeFields(fields)));
+    cu_layer::web_typing::install_with(&mut registry, move || Box::new(FakeFields(fields.clone())));
     (registry, shared)
 }
 
@@ -424,4 +461,56 @@ fn focus_on_something_that_isnt_a_field_gets_nothing() {
 fn keys_that_landed_in_an_editable_element_are_read_from_its_text() {
     let page = "focus(add(el('DIV', {id: 'doc', ce: true, text: 'zz here'})));";
     assert_eq!(probe(page, "doc", &[], "zz"), "there:zz here");
+}
+
+/// A click on a page field in a background Safari window can leave the app's
+/// focus on the address bar, where text without a target would go.
+#[tokio::test]
+async fn text_without_a_target_is_refused_while_a_clicked_page_field_lost_focus_to_the_browser() {
+    let pid = 7301;
+    let (registry, page) = build(Page {
+        click_presses_page_field: true,
+        focus_on_chrome: true,
+        ..Page::default()
+    });
+    let token = "s00000001:5";
+    let click = json!({"pid": pid, "window_id": 2, "element_token": token});
+    let untargeted = json!({"pid": pid, "window_id": 2, "text": "hello"});
+    registry.invoke("click", click).await;
+
+    let refused = registry.invoke("type_text", untargeted.clone()).await;
+    assert_eq!(refused.is_error, Some(true), "{}", text_of(&refused));
+    assert_eq!(
+        code_of(&refused).as_deref(),
+        Some("focus_on_browser_chrome")
+    );
+    assert!(text_of(&refused).contains(token), "{}", text_of(&refused));
+    assert_eq!(page.lock().unwrap().driver_calls, 0, "nothing may be typed");
+
+    // Naming the field still works, and so does a focus that reached the page.
+    let targeted = json!({"pid": pid, "window_id": 2, "element_token": token, "text": "hello"});
+    registry.invoke("type_text", targeted).await;
+    assert_eq!(page.lock().unwrap().driver_calls, 1);
+    page.lock().unwrap().focus_on_chrome = false;
+    registry.invoke("type_text", untargeted).await;
+    assert_eq!(page.lock().unwrap().driver_calls, 2);
+}
+
+#[tokio::test]
+async fn the_browsers_own_field_takes_text_when_no_page_field_was_clicked() {
+    let pid = 7302;
+    let (registry, page) = build(Page {
+        focus_on_chrome: true,
+        ..Page::default()
+    });
+    let click = json!({"pid": pid, "window_id": 2, "element_token": "s00000001:6"});
+    registry.invoke("click", click).await;
+    let typed = registry
+        .invoke(
+            "type_text",
+            json!({"pid": pid, "window_id": 2, "text": "example.com"}),
+        )
+        .await;
+    assert_ne!(typed.is_error, Some(true), "{}", text_of(&typed));
+    assert_eq!(page.lock().unwrap().driver_calls, 1);
 }
