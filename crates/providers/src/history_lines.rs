@@ -89,7 +89,9 @@ fn remove_lines_with(
         new.sync_all()?;
         at(Stage::Renaming);
         std::fs::rename(&temp, &path)?;
-        // What was appended to the old file after the last read, through to the rename.
+        // What was appended to the old file after the last read, through to the rename. Accepted
+        // gap: a CLI that opened the old file before the rename and writes after this read-back
+        // loses that line, as no lock is shared with it.
         loop {
             let more = read_from(&mut old, copied)?;
             if more.is_empty() {
