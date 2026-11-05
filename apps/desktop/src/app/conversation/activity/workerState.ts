@@ -14,6 +14,7 @@ export type WorkerStateKind =
   | "quiet"
   | "working"
   | "paused"
+  | "cliEnded"
   | "failed"
   | "stopped"
   | "merged"
@@ -37,7 +38,7 @@ function unmerged(row: WorkerRow): boolean {
 
 /**
  * A worker's state at `now`, the first that holds of: Needs you, Limit until HH:MM, Paused (its
- * session paused it, D7), Fresh context, Quiet Nm, Working, Failed, Ended, Merged, Done · not
+ * session paused it, D7), CLI ended (kept, on hand, its next message continues it), Fresh context, Quiet Nm, Working, Failed, Ended, Merged, Done · not
  * merged, Done.
  */
 export function workerStateOf(row: WorkerRow, now: number): WorkerState {
@@ -46,6 +47,7 @@ export function workerStateOf(row: WorkerRow, now: number): WorkerState {
     return { kind: "limit", word: row.limit.resetsAtMs !== null ? `Limit until ${formatTime(row.limit.resetsAtMs)}` : "Limit" };
   }
   if (row.paused) return { kind: "paused", word: "Paused" };
+  if (row.cliEnded) return { kind: "cliEnded", word: "Its CLI ended · next message continues it" };
   if (row.freshContext && row.working) return { kind: "freshContext", word: "Fresh context" };
   if (atWork(row)) {
     const quiet = row.lastEventAtMs === null ? 0 : now - row.lastEventAtMs;
@@ -81,10 +83,10 @@ export function rowOnHand(row: WorkerRow, now: number): boolean {
   return kind === "paused" || !FINISHED.has(kind);
 }
 
-/** Whether it waits rather than works: for the user, or for a limit to reset. */
+/** Whether it waits rather than works: for the user, a limit to reset, or the message that continues it. */
 export function rowWaiting(row: WorkerRow, now: number): boolean {
   const { kind } = workerStateOf(row, now);
-  return kind === "needsYou" || kind === "limit";
+  return kind === "needsYou" || kind === "limit" || kind === "cliEnded";
 }
 
 /**

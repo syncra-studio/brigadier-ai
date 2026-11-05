@@ -34,6 +34,9 @@ const HIBERNATE_CHECK: Duration = Duration::from_secs(60);
 /// before the launch sweep removes it. Another data folder's task that sat that long loses
 /// only its test data: its worker's next start makes the folder again.
 const UNCLAIMED_TEST_DATA_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// How often and how long a delete looks again at records waiting for another cleanup: 5 s.
+const RECORDS_WAIT_STEP: Duration = Duration::from_millis(100);
+const RECORDS_WAIT_TRIES: u32 = 50;
 
 impl SessionManager {
     /// Lets the cleanup ledger remove the worktrees it records.
@@ -1688,7 +1691,20 @@ impl SessionManager {
         // Last, its traces in Brigadier's own records and logs: a failure stays recorded and
         // the launch sweep finishes it.
         let traces = crate::ledger::traces_owner(&id.0);
-        let leftovers = ledger.dispose(&traces).await;
+        let mut leftovers = ledger.dispose(&traces).await;
+        // A cleanup that names it can still be under way (a worker's that just ended): its
+        // records wait for that for a moment, rather than for the next launch.
+        for _ in 0..RECORDS_WAIT_TRIES {
+            let waiting = leftovers
+                .failures
+                .iter()
+                .any(|failure| failure.starts_with("its records wait for "));
+            if !waiting {
+                break;
+            }
+            tokio::time::sleep(RECORDS_WAIT_STEP).await;
+            leftovers = ledger.dispose(&traces).await;
+        }
         if !leftovers.is_clean() {
             tracing::warn!(
                 ?leftovers,

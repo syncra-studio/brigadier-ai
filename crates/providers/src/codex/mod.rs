@@ -1445,7 +1445,7 @@ impl Provider for Codex {
                 compacts: version_at_least(&thread.cli_version, COMPACT_SINCE),
                 rpc,
                 shared,
-                access: spec.access,
+                access: Mutex::new(spec.access),
                 tools: spec.tools,
                 writable_roots: writable_roots(&spec),
                 effort: spec.effort.clone(),
@@ -2959,7 +2959,8 @@ pub struct CodexSession {
     compacts: bool,
     rpc: Arc<Rpc>,
     shared: Arc<Shared>,
-    access: Access,
+    /// Its level: every turn sets its sandbox and approvals ([`sandbox_policy`]).
+    access: Mutex<Access>,
     /// Its tools: a side chat's read-only sandbox keeps network on ([`sandbox_policy`]).
     tools: ToolSet,
     /// What its workspace sandbox writes besides its working directory.
@@ -3042,6 +3043,7 @@ impl CodexSession {
                 reasoning_effort: effort.clone().or_else(|| self.thread_effort.clone()),
             },
         });
+        let access = *lock(&self.access);
         let started: p::TurnStartResponse = self
             .rpc
             .call(
@@ -3051,12 +3053,8 @@ impl CodexSession {
                     input: Self::input(input)?,
                     effort,
                     summary: Some(p::ReasoningSummary::Auto),
-                    sandbox_policy: Some(sandbox_policy(
-                        self.access,
-                        self.tools,
-                        &self.writable_roots,
-                    )),
-                    approval_policy: Some(approval_policy(self.access)),
+                    sandbox_policy: Some(sandbox_policy(access, self.tools, &self.writable_roots)),
+                    approval_policy: Some(approval_policy(access)),
                     approvals_reviewer: Some(REVIEWER),
                     collaboration_mode,
                     ..Default::default()
@@ -3306,6 +3304,11 @@ impl ProviderSession for CodexSession {
             }
             Ok(())
         })
+    }
+
+    fn set_access(&self, access: Access) -> BoxFuture<'_, Result<bool>> {
+        *lock(&self.access) = access;
+        Box::pin(async { Ok(true) })
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
@@ -5362,7 +5365,7 @@ for line in sys.stdin:
             compacts: false,
             rpc: rpc.clone(),
             shared: shared.clone(),
-            access: Access::Ask,
+            access: Mutex::new(Access::Ask),
             tools: ToolSet::Thread,
             writable_roots: Vec::new(),
             effort: None,
@@ -5479,7 +5482,7 @@ for line in sys.stdin:
             compacts: false,
             rpc: rpc.clone(),
             shared: shared.clone(),
-            access: Access::Ask,
+            access: Mutex::new(Access::Ask),
             tools: ToolSet::Thread,
             writable_roots: Vec::new(),
             effort: Some("high".into()),
@@ -5514,6 +5517,23 @@ for line in sys.stdin:
         session.set_plan_mode(true).await.unwrap();
         session.send(TurnInput::text("Plan again.")).await.unwrap();
         assert_eq!(modes()[3], mode("plan", "low"));
+        // #603: a level set while it runs holds from its next turn, with no restart.
+        assert!(session.set_access(Access::Full).await.unwrap());
+        session.send(TurnInput::text("At Full.")).await.unwrap();
+        let log_lines = std::fs::read_to_string(&log).unwrap();
+        let last: Value = log_lines
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .rfind(|line| line["method"] == "turn/start")
+            .unwrap();
+        assert_eq!(
+            last["params"]["approvalPolicy"],
+            serde_json::to_value(approval_policy(Access::Full)).unwrap()
+        );
+        assert_eq!(
+            last["params"]["sandboxPolicy"],
+            serde_json::to_value(sandbox_policy(Access::Full, ToolSet::Thread, &[])).unwrap()
+        );
 
         rpc.notify("ask").await.unwrap();
         let mut seen = Vec::new();
@@ -5718,7 +5738,7 @@ for line in sys.stdin:
             compacts: false,
             rpc,
             shared,
-            access: Access::Ask,
+            access: Mutex::new(Access::Ask),
             tools: ToolSet::Thread,
             writable_roots: Vec::new(),
             effort: None,

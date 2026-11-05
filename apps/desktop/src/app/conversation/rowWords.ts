@@ -1,4 +1,4 @@
-import { taskWaitWords } from "@/app/conversation/taskActivity";
+import { cliEnded, taskWaitWords } from "@/app/conversation/taskActivity";
 import type { Decision, GateOwner, GateRole, MachineStepKind, MachineStepReason, Task } from "@/ipc/generated";
 
 /**
@@ -71,6 +71,7 @@ export function taskState(task: Task): RowState {
     case "paused":
       return { word: task.quotaWait ? "Waiting for quota" : "Paused", tone: "quiet" };
     case "reported":
+      if (cliEnded(task)) return { word: "CLI ended", tone: "warning" };
       return { word: writes(task) ? "Finished" : "Reported", tone: "live" };
     case "takenOver":
       return { word: "In your terminal", tone: "warning" };

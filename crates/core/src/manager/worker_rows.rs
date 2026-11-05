@@ -498,6 +498,10 @@ pub(crate) fn row(
         last_end,
         gone,
         paused,
+        cli_ended: task
+            .error
+            .clone()
+            .filter(|error| !gone && !cli.open && super::plain_workers::cli_ended(error)),
         last_event_at_ms: cli.last_event_ms,
         limit: cli.limit.filter(|_| !gone),
         fresh_context: cli.fresh_context && cli.open,
@@ -946,7 +950,11 @@ impl SessionManager {
                     *text = held;
                     true
                 }
-                None => true,
+                None => {
+                    // A queued message's once-only mark isn't the user's words (#766).
+                    *text = super::workers::without_mark(text);
+                    true
+                }
             },
             _ => true,
         });

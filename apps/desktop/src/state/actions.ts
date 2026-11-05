@@ -35,7 +35,7 @@ import type {
 } from "@/ipc/generated";
 import { saveSummaryShown } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
-import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
+import { HOME, levelUp, samePlace, useHistory } from "@/state/history";
 import { useAgentPageAsk } from "@/state/agentSignIn";
 import { providerForSetting } from "@/state/providerDestination";
 import { tabsIdOf } from "@/state/draftTabs";
@@ -109,7 +109,7 @@ function reopenLastSelection(): void {
   reopened = true;
   const { selection, conversations } = useApp.getState();
   const id = selection.type === "draft" && selection.kind === "chat" ? reopenable(savedSelection(), conversations) : null;
-  if (id) select({ type: "conversation", id }, "replace");
+  if (id) select({ type: "conversation", id });
   useApp.subscribe((state, previous) => {
     if (state.selection !== previous.selection) rememberSelection(state.selection);
   });
@@ -247,14 +247,18 @@ export async function loadFullText(
 }
 
 /** Where leaving Settings goes back to: what was shown when it opened. */
-let beforeSettings: Selection = { type: "draft", kind: "chat" };
+let beforeSettings: Selection = HOME;
 
 /**
- * Shows `selection`. By default it is a new entry of the history Back and Forward go through
- * (see state/history.ts); `mode` can put it in place of the current entry, or leave the
- * history alone. Resolves once it shows, or once it would have but for a later `select`.
+ * Shows `selection`, which clears what Forward could redo (see state/history.ts) unless it is the
+ * place already showing. Resolves once it shows, or once it would have but for a later `select`.
  */
-export function select(selection: Selection, mode: HistoryMode = "push"): Promise<void> {
+export function select(selection: Selection): Promise<void> {
+  return reach(selection);
+}
+
+/** Shows `selection`, once it can; Back and Forward pass what Forward holds on arrival. */
+function reach(selection: Selection, forward?: Selection[]): Promise<void> {
   const asked = ++selecting;
   if (selection.type === "conversation" && !conversationHeld(selection.id)) {
     // Nothing of it is held yet: it shows once its view, its CLI's thread and the code of its
@@ -264,10 +268,10 @@ export function select(selection: Selection, mode: HistoryMode = "push"): Promis
     // the messages Brigadier keeps.
     const code = import("@/app/conversation/threadCode").then((thread) => thread.preloadThreadCode()).catch(() => {});
     return Promise.all([readRecords(selection.id), readThread(selection.id), code]).then(() => {
-      if (asked === selecting) show(selection, mode);
+      if (asked === selecting) show(selection, forward);
     });
   }
-  show(selection, mode);
+  show(selection, forward);
   return Promise.resolve();
 }
 
@@ -340,7 +344,7 @@ function idle(): Promise<void> {
   });
 }
 
-function show(selection: Selection, mode: HistoryMode): void {
+function show(selection: Selection, forward?: Selection[]): void {
   const { selection: shown } = useApp.getState();
   if (selection !== shown) {
     cancelSettingReveal();
@@ -348,7 +352,8 @@ function show(selection: Selection, mode: HistoryMode): void {
   }
   // What leaving Settings goes back to, however it was reached (Back and Forward too).
   if (selection.type === "settings" && shown.type !== "settings") beforeSettings = shown;
-  recordPlace(selection, mode);
+  if (forward) useHistory.setState({ forward });
+  else if (!samePlace(selection, shown)) useHistory.setState({ forward: [] });
   useApp.setState({ selection });
   const { board } = useBoard.getState();
   if (selection.type !== "conversation") {
@@ -408,13 +413,20 @@ export function openSettings(page: SettingsPageLink = "general", row?: string): 
   if (row) revealSetting(row);
 }
 
+/** `selection`, or Home when it can't show: nothing, a deleted conversation, a removed project's draft. */
+function placeOrHome(selection: Selection): Selection {
+  const { conversations, projects } = useApp.getState();
+  const gone =
+    selection.type === "none" ||
+    (selection.type === "conversation" && !conversations[selection.id]) ||
+    (selection.type === "draft" && selection.kind === "session" && !projects[selection.projectId]);
+  return gone ? HOME : selection;
+}
+
 /** Leaves Settings for what was shown before it (a new chat if that conversation is gone). */
 export function closeSettings(): void {
   if (useApp.getState().selection.type !== "settings") return;
-  const back = beforeSettings;
-  const gone = back.type === "conversation" && !useApp.getState().conversations[back.id];
-  const lost = back.type === "draft" && back.kind === "session" && !useApp.getState().projects[back.projectId];
-  select(gone || lost ? { type: "draft", kind: "chat" } : back);
+  select(placeOrHome(beforeSettings));
 }
 
 /** ⌘, : opens Settings, or leaves it when it is open. */
@@ -424,29 +436,22 @@ export function toggleSettings(): void {
 }
 
 /**
- * Back (-1) and Forward (1) through the history. A conversation deleted since, or a draft whose
- * project was removed, can't show again: arriving there shows Home in its place.
+ * Back (-1) goes up a level (see `levelUp`); Forward (1) redoes what Back left. A place that can't
+ * show any more shows Home instead.
  */
 export function stepHistory(delta: -1 | 1): void {
-  const target = stepPlace(delta);
-  if (!target) return;
+  const { selection: shown } = useApp.getState();
+  const { forward } = useHistory.getState();
+  const place = delta === -1 ? levelUp(shown, beforeSettings) : forward.at(-1);
+  if (!place) return;
   // A native browser page can own the keyboard when the View menu asks to leave it.
   if (typeof document !== "undefined" && !document.hasFocus()) void browserFocus(null).catch(() => {});
-  const { conversations, projects } = useApp.getState();
-  const gone =
-    (target.type === "conversation" && !conversations[target.id]) ||
-    (target.type === "draft" && target.kind === "session" && !projects[target.projectId]);
-  if (gone) {
-    const home: Selection = { type: "draft", kind: "chat" };
-    replacePlace(home);
-    select(home, "none");
-    return;
-  }
+  const target = placeOrHome(place);
   if (target.type === "conversation") {
-    const conversation = conversations[target.id];
+    const conversation = useApp.getState().conversations[target.id];
     if (conversation?.projectId) setProjectExpanded(conversation.projectId, true);
   }
-  select(target, "none");
+  void reach(target, delta === -1 ? [...forward, shown] : forward.slice(0, -1));
 }
 
 /** Where `openConversation` lands: a message between sessions, by its id (its row or its block). */
@@ -716,8 +721,7 @@ export async function send(
     // Only follow the new conversation if the user is still looking at the draft.
     if (useApp.getState().selection === selection) {
       useApp.setState({ draft: emptyDraft(null) });
-      // The draft is gone: Back goes to where it was opened from.
-      select({ type: "conversation", id: conversationId }, "replace");
+      select({ type: "conversation", id: conversationId });
     }
   } else {
     return;
@@ -863,6 +867,11 @@ export async function updateSetup(id: string, setup: Setup): Promise<void> {
 export async function continueOn(id: string, provider: ProviderKind, model: ModelChoice | null): Promise<ContinueWhen> {
   const { when } = await request({ method: "continueOn", id, provider, model });
   return when;
+}
+
+/** The switch asked for goes without waiting for the session's background jobs, which may end. */
+export async function moveNow(id: string): Promise<void> {
+  await request({ method: "moveNow", id });
 }
 
 /**
@@ -1397,7 +1406,7 @@ export async function archiveAll(ids: string[]): Promise<void> {
   for (const conversation of before) storeConversation({ ...conversation, lifecycle: "archived" });
   const { selection } = useApp.getState();
   if (selection.type === "conversation" && before.some((c) => c.id === selection.id)) {
-    select({ type: "draft", kind: "chat" }, "replace");
+    select(HOME);
   }
   let archived = before;
   const confirm = (list: Conversation[]) => {
@@ -1544,7 +1553,7 @@ function unrestore(before: Conversation | undefined): void {
 function dropConversations(ids: string[]): void {
   const { selection } = useApp.getState();
   if (selection.type === "conversation" && ids.includes(selection.id)) {
-    select({ type: "draft", kind: "chat" }, "replace");
+    select(HOME);
   }
   useApp.setState((state) => {
     const conversations = { ...state.conversations };
@@ -1642,7 +1651,7 @@ export async function removeProject(
     (selection.type === "conversation" && gone.includes(selection.id)) ||
     (selection.type === "draft" && selection.kind === "session" && selection.projectId === id)
   ) {
-    select({ type: "draft", kind: "chat" }, "replace");
+    select(HOME);
   }
   useApp.setState((state) => {
     const { [id]: _removed, ...projects } = state.projects;

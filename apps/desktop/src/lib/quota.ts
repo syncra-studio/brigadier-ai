@@ -1,8 +1,40 @@
 import type { QuotaSample, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
+import { formatCountdown } from "@/lib/format";
 
 /** Share of a window used, as a whole percent from 0 to 100. */
 export function used(window: QuotaWindow): number {
   return Math.round(Math.min(100, Math.max(0, window.usedPercent)));
+}
+
+/**
+ * Whether a window is a plan's limit rather than a usage reading: the engine writes one, id
+ * `limit.<scope>` and always 100% used, when a session meets a limit that holds only some of a
+ * provider's models (OpenCode Go's, see `LIMIT_WINDOW` in routing/monitor.rs). The provider's
+ * other models still work, so it shows quietly: no share, no bar, no red.
+ */
+export function isPlanLimit(window: QuotaWindow): boolean {
+  return window.id.startsWith("limit.");
+}
+
+/** A plan limit in words: "Go plan · back in 3d", or "Go plan limit" with no reset ahead. */
+export function planLimitWords(window: QuotaWindow, now: number): string {
+  const scope = window.id.slice("limit.".length).replace(/^opencode-/, "");
+  const plan = `${scope.charAt(0).toUpperCase()}${scope.slice(1)} plan`;
+  return window.resetsAtMs !== null && window.resetsAtMs > now
+    ? `${plan} · back in ${formatCountdown(window.resetsAtMs, now)}`
+    : `${plan} limit`;
+}
+
+function fullness(window: QuotaWindow): number {
+  return isPlanLimit(window) ? -1 : used(window);
+}
+
+/** The window nearest its limit; a plan limit only when there is no reading to show. */
+export function tightest(windows: readonly QuotaWindow[]): QuotaWindow | null {
+  return windows.reduce<QuotaWindow | null>(
+    (top, window) => (top && fullness(top) >= fullness(window) ? top : window),
+    null,
+  );
 }
 
 /** Shortest window first (the session, then the week). */

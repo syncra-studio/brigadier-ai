@@ -231,6 +231,15 @@ async fn chat_config(kind: ProviderKind) {
                             .map(|pair| &pair[1])
                     };
                     assert_eq!(flag("--permission-mode"), Some(&json!(claude_mode)));
+                    // The daemon's socket and binary stay off its command line (#811).
+                    let settings = flag("--settings").unwrap().as_str().unwrap();
+                    assert!(settings.ends_with(".json"), "{settings}");
+                    assert!(
+                        !args
+                            .iter()
+                            .any(|arg| arg.as_str().unwrap().contains("autoMemoryEnabled")),
+                        "{args:?}"
+                    );
                     assert_eq!(flag("--permission-prompt-tool"), Some(&json!("stdio")));
                     assert!(
                         flag("--tools").is_none(),

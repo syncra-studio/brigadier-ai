@@ -371,6 +371,7 @@ impl SessionManager {
                             commands: std::mem::take(&mut live.commands),
                             subagents: std::mem::take(&mut live.subagents),
                             jobs_said: std::mem::take(&mut live.jobs_said),
+                            move_to: live.move_to,
                             reading_output: live.reading_output,
                             context_window: live.context_window,
                             // Still owed until it says whose it is: its first item, or a user message.
@@ -404,6 +405,7 @@ impl SessionManager {
                             commands: std::mem::take(&mut live.commands),
                             subagents: std::mem::take(&mut live.subagents),
                             jobs_said: std::mem::take(&mut live.jobs_said),
+                            move_to: live.move_to,
                             reading_output: live.reading_output,
                             quiet,
                             ..LiveTurn::default()
@@ -809,6 +811,25 @@ impl SessionManager {
         });
     }
 
+    /// The move asked for, as `seam.json` says it now: the app hears it with what it waits for.
+    pub(super) fn move_due(
+        &self,
+        id: &ConversationId,
+        to: Option<brigadier_providers::ProviderKind>,
+    ) {
+        let jobs = {
+            let mut threads = self.cli_threads.lock().unwrap();
+            let Some(live) = threads.get_mut(id) else {
+                return;
+            };
+            live.move_to = to;
+            said_jobs(live, now_ms()).map(|jobs| (jobs, self.next_news_seq()))
+        };
+        if let Some((jobs, seq)) = jobs {
+            self.say_jobs(id.clone(), jobs, seq);
+        }
+    }
+
     /// A worker's word came for conversation `id` while no turn of its CLI is open: the turn
     /// that carries it there is owed (`CliJobs::waking`), as a background command's end's is,
     /// so the block it ends holds until that turn starts (D24, D94).
@@ -864,7 +885,7 @@ impl SessionManager {
         let Ok(conv) = self.conv(id) else {
             return false;
         };
-        let live = conv.work_under_way().await || self.work_holds(&conv).await;
+        let live = conv.users_work_under_way().await || self.work_holds(&conv).await;
         let said = {
             let mut blocks = self.work_blocks.lock().unwrap();
             let now = now_ms();

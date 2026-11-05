@@ -101,6 +101,8 @@ const WORKER_DENIED_TOOLS: &str = "AskUserQuestion";
 /// Claude Code's own plan mode, a permission mode (checked on 2.1.310: `set_permission_mode`
 /// takes it between turns, and `ExitPlanMode` proposes the plan as a permission request).
 const PLAN_MODE: &str = "plan";
+/// Full access, as Claude's permission mode.
+const BYPASS_MODE: &str = "bypassPermissions";
 /// Claude's `ExitPlanMode` declined with these words once its plan is on the user's card
 /// (harness D7): the turn ends there; the user builds it or replies.
 const PLAN_CAPTURED: &str = "Brigadier showed the user your plan on a card. Stop here and end your turn: they will reply to change it, or tell you to build it.";
@@ -1082,13 +1084,27 @@ fn permission_mode(spec: &SessionSpec) -> &'static str {
     if matches!(spec.tools, ToolSet::SideChat | ToolSet::TabChat) {
         return "dontAsk";
     }
-    match spec.access {
+    access_mode(spec.access)
+}
+
+/// Claude's permission mode at `access`.
+fn access_mode(access: Access) -> &'static str {
+    match access {
         Access::Ask => "default",
         Access::AcceptEdits => "acceptEdits",
-        Access::Full => "bypassPermissions",
+        Access::Full => BYPASS_MODE,
         // A read-only session never asks: what its allow rules don't cover is denied.
         Access::ReadOnly => "dontAsk",
     }
+}
+
+/// The mode a running session goes to for `access`. `None`: it can't. Claude takes
+/// `bypassPermissions` only in a process started in it (`bypass_not_launched`, checked on
+/// 2.1.318, which takes every other change); such a session stays where it is until it starts
+/// again, and Brigadier allows what it asks meanwhile.
+fn mode_for_running(access: Access, started_bypassing: bool) -> Option<&'static str> {
+    let mode = access_mode(access);
+    (mode != BYPASS_MODE || started_bypassing).then_some(mode)
 }
 
 /// Brigadier's settings layer for a session, passed with `--settings` (above project settings).
@@ -1244,6 +1260,41 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         settings["env"] = Value::Object(env);
     }
     settings
+}
+
+/// Moves `--settings` out of Claude's command line into a private file under `run_dir`, which
+/// `--settings` also takes: the layer names the daemon's socket and binary, and a broad `pkill -f`
+/// matching those would end every session (#811). The file's name is new for each start: an
+/// old process still exiting removes only its own. One that can't be written leaves the layer
+/// where it was: a session that starts matters more.
+fn settings_in_file(args: &mut [String], run_dir: &Path, native_id: &str) -> Option<PathBuf> {
+    let at = args.iter().position(|arg| arg == "--settings")? + 1;
+    let layer = args.get(at)?;
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let file = run_dir
+        .join("claude-settings")
+        .join(format!("{native_id}-{}.json", &tag[..8]));
+    let written = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            use std::io::Write as _;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            options.open(&file)?.write_all(layer.as_bytes())
+        });
+    match written {
+        Ok(()) => {
+            args[at] = file.display().to_string();
+            Some(file)
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "could not write the session's settings file");
+            None
+        }
+    }
 }
 
 /// Whether the settings sources this session loads disable hooks. Read only this switch:
@@ -1628,13 +1679,15 @@ impl Provider for Claude {
                 )));
             }
             let user_config = self.config_dir();
-            let args = Self::session_args(
+            let mut args = Self::session_args(
                 &spec,
                 &cwd,
                 &native_id,
                 self.main_config.is_some(),
                 user_config.as_deref(),
             )?;
+            let settings_file =
+                settings_in_file(&mut args, &self.platform.paths().run_dir, &native_id);
             let cli_version = self.version().await;
 
             // The project's own setup, where Claude looks for it: before its staging folders
@@ -1694,6 +1747,7 @@ impl Provider for Claude {
                     let before = files::plan_files(&config);
                     (config, before)
                 }),
+                settings_file,
             };
 
             let recorder = match &spec.record_to {
@@ -1810,7 +1864,8 @@ impl Provider for Claude {
                 shared,
                 parser: parser_tx,
                 memory,
-                level_mode: permission_mode(&spec),
+                level_mode: Mutex::new(permission_mode(&spec)),
+                started_bypassing: permission_mode(&spec) == BYPASS_MODE,
             };
 
             let mut initialize = Map::new();
@@ -2180,7 +2235,9 @@ pub struct ClaudeSession {
     memory: Arc<MemoryRecord>,
     /// The session's own permission mode ([`permission_mode`]): what it runs in out of plan
     /// mode.
-    level_mode: &'static str,
+    level_mode: Mutex<&'static str>,
+    /// It started in `bypassPermissions`, so it can go back to it ([`mode_for_running`]).
+    started_bypassing: bool,
 }
 
 impl ClaudeSession {
@@ -2411,7 +2468,11 @@ impl ProviderSession for ClaudeSession {
 
     fn set_plan_mode(&self, on: bool) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
-            let wanted = if on { PLAN_MODE } else { self.level_mode };
+            let wanted = if on {
+                PLAN_MODE
+            } else {
+                *lock(&self.level_mode)
+            };
             // Out of plan mode is the session's own level, whatever Claude left plan mode for.
             let now = lock(&self.shared.mode).clone();
             if now == wanted || (!on && now != PLAN_MODE) {
@@ -2423,6 +2484,25 @@ impl ProviderSession for ClaudeSession {
             self.request(request, CONTROL_TIMEOUT).await?;
             *lock(&self.shared.mode) = wanted.to_owned();
             Ok(())
+        })
+    }
+
+    fn set_access(&self, access: Access) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async move {
+            let Some(wanted) = mode_for_running(access, self.started_bypassing) else {
+                return Ok(false);
+            };
+            // In plan mode it goes there as it leaves ([`Self::set_plan_mode`]).
+            let now = lock(&self.shared.mode).clone();
+            if now != PLAN_MODE && now != wanted {
+                let mut request = Map::new();
+                request.insert("subtype".into(), "set_permission_mode".into());
+                request.insert("mode".into(), wanted.into());
+                self.request(request, CONTROL_TIMEOUT).await?;
+                *lock(&self.shared.mode) = wanted.to_owned();
+            }
+            *lock(&self.level_mode) = wanted;
+            Ok(true)
         })
     }
 
@@ -2464,6 +2544,8 @@ struct SessionFiles {
     /// Claude's config directory and the plan files in it at the start: a plan file it writes
     /// later is the session's own, removed with it ([`files::owned_plan_file`]).
     plans: Option<(PathBuf, HashSet<std::ffi::OsString>)>,
+    /// Its settings layer ([`settings_in_file`]), removed when it has exited.
+    settings_file: Option<PathBuf>,
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps
@@ -2579,6 +2661,9 @@ async fn read_loop(
     let exit = process.exited().await;
     session_files.memory.record(true).await;
     drop(session_files.in_folder);
+    if let Some(file) = session_files.settings_file {
+        let _ = std::fs::remove_file(file);
+    }
     lock(&shared.pending).clear();
     shared.turn_active.store(false, Ordering::Release);
     shared
@@ -4964,7 +5049,9 @@ for line in sys.stdin:
                 serde_json::from_str(&std::fs::read_to_string(&capture).unwrap()).unwrap();
             let args = captured["args"].as_array().unwrap();
             let at = args.iter().position(|arg| arg == "--settings").unwrap();
-            let layer: Value = serde_json::from_str(args[at + 1].as_str().unwrap()).unwrap();
+            // In its private file, while it runs (#811).
+            let layer = std::fs::read_to_string(args[at + 1].as_str().unwrap()).unwrap();
+            let layer: Value = serde_json::from_str(&layer).unwrap();
             assert!(layer.get("disableAllHooks").is_none(), "{layer}");
             if off {
                 assert!(layer.get("hooks").is_none(), "{layer}");
@@ -5296,6 +5383,27 @@ for line in sys.stdin:
                 json!({"strict":strict,"denied":denied,"env":env}).to_string(),
             )
             .unwrap();
+        }
+    }
+
+    /// #603: Claude refuses `bypassPermissions` in a process not started in it, and takes every
+    /// other change.
+    #[test]
+    fn a_running_session_goes_to_full_access_only_if_it_started_there() {
+        assert_eq!(mode_for_running(Access::Full, false), None);
+        assert_eq!(
+            mode_for_running(Access::Full, true),
+            Some("bypassPermissions")
+        );
+        for started_bypassing in [false, true] {
+            assert_eq!(
+                mode_for_running(Access::Ask, started_bypassing),
+                Some("default")
+            );
+            assert_eq!(
+                mode_for_running(Access::AcceptEdits, started_bypassing),
+                Some("acceptEdits")
+            );
         }
     }
 }

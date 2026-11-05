@@ -402,6 +402,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
             phase: Phase::Live,
             seams: vec![seam(1, None), seam(2, Some(TOO_LONG_TEST))],
             moving: None,
+            began: Vec::new(),
         },
     )
     .unwrap();
@@ -468,6 +469,7 @@ fn a_successor_given_only_shown_messages_draws_no_bubble_again() {
             phase: Phase::Live,
             seams: vec![seam(1, &["m1"], &["m1"]), seam(2, &["m2", "m3"], &["m2"])],
             moving: None,
+            began: Vec::new(),
         },
     )
     .unwrap();

@@ -233,7 +233,7 @@ impl SessionManager {
             .cloned()
             .ok_or_else(|| Error::NotFound(format!("card {card_id}")))?;
         if approval.state != CardState::Pending {
-            return Err(Error::Invalid("this card was already answered".into()));
+            return Err(Error::Invalid(settled_words(&approval.state).into()));
         }
         // Only a CLI's own session grant: Brigadier's gates ask every time.
         if decision == ApprovalDecision::AllowSimilar
@@ -258,7 +258,10 @@ impl SessionManager {
             },
         };
         approval.resolved_at_ms = Some(now_ms());
-        self.store_approval(&approval).await?;
+        // A CLI's request is settled once its answer reached that CLI (#767).
+        if !matches!(approval.subject, ApprovalSubject::Cli { .. }) {
+            self.store_approval(&approval).await?;
+        }
 
         match &approval.subject {
             // A worker's request, or the thread's own (no task). A Deny always tells the model
@@ -270,16 +273,21 @@ impl SessionManager {
                     },
                     other => other.clone(),
                 };
-                match &approval.task_id {
+                let delivered = match &approval.task_id {
                     Some(task_id) => {
                         self.answer_worker_approval(task_id, request, decision, by)
-                            .await?;
+                            .await
                     }
                     None => {
                         self.answer_thread_approval(&conversation_id, request, decision)
-                            .await?;
+                            .await
                     }
+                };
+                if let Err(err) = delivered {
+                    self.expire_undelivered(&conversation_id, &card_id).await;
+                    return Err(err);
                 }
+                self.store_approval(&approval).await?;
             }
             ApprovalSubject::Action { action, .. } => {
                 let text = match &decision {
@@ -690,6 +698,43 @@ impl SessionManager {
         }
     }
 
+    /// Card `card_id`'s answer could not reach its CLI, which no longer waits for one: left
+    /// pending, it would catch the next `--allow`. One answered meanwhile stays as it is.
+    async fn expire_undelivered(&self, conversation_id: &ConversationId, card_id: &CardId) {
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        if let Some(approval) = board.approvals.get(card_id)
+            && approval.state == CardState::Pending
+        {
+            self.settle_approval(approval, session_ended()).await;
+        }
+    }
+
+    /// Expires the pending requests of worker `task_id`'s CLI, which has ended: nothing can
+    /// take their answer, and its next CLI asks again what it still needs (#767). Brigadier
+    /// quitting leaves them to the next start's [`Self::expire_stale_cards`].
+    pub(crate) async fn expire_cli_cards(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: &TaskId,
+    ) {
+        if !self.admitting.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        for approval in board.approvals.values() {
+            if approval.task_id.as_ref() == Some(task_id)
+                && approval.state == CardState::Pending
+                && matches!(approval.subject, ApprovalSubject::Cli { .. })
+            {
+                self.settle_approval(approval, session_ended()).await;
+            }
+        }
+    }
+
     /// Expires cards nobody can wait for any more (after a restart).
     pub(crate) async fn expire_stale_cards(&self, conversation_id: &ConversationId) {
         let Ok(board) = self.core.board(conversation_id).await else {
@@ -759,6 +804,25 @@ impl SessionManager {
             },
         )
         .await;
+    }
+}
+
+/// The state of a card whose asker's CLI session has ended.
+fn session_ended() -> CardState {
+    CardState::Expired {
+        reason: "The session that asked has ended.".into(),
+    }
+}
+
+/// What answering a card that isn't waiting any more replies, saying who settled it (#650).
+fn settled_words(state: &CardState) -> &'static str {
+    match state {
+        CardState::Allowed {
+            by: Decider::Policy,
+            ..
+        } => "this card is already settled: it went ahead because the session went to Full access",
+        CardState::Expired { .. } => "this card has expired: the session that asked has ended",
+        _ => "this card was already answered",
     }
 }
 

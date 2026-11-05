@@ -129,6 +129,10 @@ pub struct CliJobs {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub subagents: bool,
+    /// A move to this CLI, asked for, waits for what holds here (#794).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub move_to: Option<ProviderKind>,
 }
 
 impl CliJobs {
@@ -234,6 +238,10 @@ pub struct WorkerRow {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub paused: bool,
+    /// Its CLI ended on its own and its next message continues it: the words saying so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cli_ended: Option<String>,
     /// When its CLI last said anything.
     pub last_event_at_ms: Option<i64>,
     /// The usage limit its model hit, while it holds.
@@ -523,6 +531,8 @@ pub(crate) struct LiveTurn {
     pub context_window: Option<i64>,
     /// A hand-off's own turn (core-goals D193): no turn of the user's work, never shown open.
     pub quiet: bool,
+    /// The other CLI the session was asked to continue on; it outlasts the turn.
+    pub move_to: Option<ProviderKind>,
 }
 
 /// How many commands of calls not (yet) a background task's are kept.
@@ -632,7 +642,7 @@ impl LiveTurn {
 
     /// What of its CLI's background work holds its turn now (`CliJobs`).
     pub(crate) fn jobs(&self, now: i64) -> CliJobs {
-        let holding = self
+        let holding: Vec<String> = self
             .background
             .iter()
             .filter(|task| {
@@ -647,16 +657,18 @@ impl LiveTurn {
             })
             .map(|task| task.id.clone())
             .collect();
+        let subagents = self.subagent_running()
+            || !self.open
+                && self.background.iter().any(|task| {
+                    task.kind == BackgroundTaskKind::Agent
+                        && task.status == BackgroundTaskStatus::Running
+                });
         CliJobs {
+            move_to: self.move_to.filter(|_| !holding.is_empty() || subagents),
             holding,
             waking: (!self.open || self.awaiting_user)
                 && self.waking_until.is_some_and(|until| now < until),
-            subagents: self.subagent_running()
-                || !self.open
-                    && self.background.iter().any(|task| {
-                        task.kind == BackgroundTaskKind::Agent
-                            && task.status == BackgroundTaskStatus::Running
-                    }),
+            subagents,
         }
     }
 }

@@ -15,6 +15,15 @@ const row = (patch: Partial<WorkerRow> = {}): WorkerRow => {
   };
 };
 
+test("a kept worker whose CLI ended waits on the strip: not working, and nothing to pause", () => {
+  const ended = row({ working: false, lastEnd: "interrupted", cliEnded: "Its CLI ended; the next message continues it (signal 15)." });
+  const view = workersStrip([ended], NOW);
+  assert.deepEqual(view?.rows, [ended.id]);
+  assert.equal(view?.working, 0);
+  assert.equal(view?.waiting, 1);
+  assert.deepEqual(view?.pausable, []);
+});
+
 test("the strip lists only the workers at work, waiting or paused, oldest first; finished ones are the context card's", () => {
   const working = row();
   const asks = row({ waiting: [{ kind: "question", what: "rm -rf build", card: null }] });
