@@ -24,19 +24,28 @@ pub(crate) fn marked_once(text: &str, id: &str) -> String {
     format!("{text}\n\n{}", once_mark(id))
 }
 
-/// A message's text as it was written, without its mark: on a line of its own after the words,
-/// with what Brigadier added for the message's files, if any, after it.
+/// Where the first mark in `text` is (after its blank line) and how long it is, closing bracket
+/// included.
+fn mark_at(text: &str) -> Option<(usize, usize)> {
+    let at = text.find(&format!("\n\n{MARK}"))? + 2;
+    let len = text[at..].find(']')?;
+    (!text[at..at + len].contains('\n')).then_some((at, len + 1))
+}
+
+/// The mark `text` carries, if any.
+pub(crate) fn mark_in(text: &str) -> Option<&str> {
+    mark_at(text).map(|(at, len)| &text[at..at + len])
+}
+
+/// A message's text as it was written, without its marks (a turn may carry several messages):
+/// each on a line of its own after the words, with what Brigadier added for the message's files,
+/// if any, after it.
 pub(crate) fn without_mark(text: &str) -> String {
-    let start = format!("\n\n{MARK}");
-    let Some(at) = text.find(&start) else {
-        return text.to_owned();
-    };
-    match text[at + 2..].find(']') {
-        Some(len) if !text[at + 2..at + 2 + len].contains('\n') => {
-            format!("{}{}", &text[..at], &text[at + 2 + len + 1..])
-        }
-        _ => text.to_owned(),
+    let mut text = text.to_owned();
+    while let Some((at, len)) = mark_at(&text) {
+        text.replace_range(at - 2..at + len, "");
     }
+    text
 }
 
 impl SessionManager {
@@ -76,5 +85,11 @@ mod tests {
             "Use blue.\n\nThe files: a.png"
         );
         assert_eq!(marked_once("/compact", "row-1"), "/compact");
+        assert_eq!(mark_in(&marked), Some("[Worker message row-1]"));
+        assert_eq!(mark_in("/compact"), None);
+        assert_eq!(
+            without_mark("One\n\n[Worker message a]\n\nTwo\n\n[Worker message b]"),
+            "One\n\nTwo"
+        );
     }
 }

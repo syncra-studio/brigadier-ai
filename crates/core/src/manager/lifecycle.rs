@@ -202,7 +202,10 @@ impl SessionManager {
                     && conversation.lifecycle != Lifecycle::Archived
                     && task.native_session.is_some()
                 {
-                    crate::heap(|| self.recover_worker_seam(&task)).await;
+                    let active = conversation.lifecycle == Lifecycle::Active;
+                    if crate::heap(|| self.recover_worker_seam(&task, active)).await {
+                        continue;
+                    }
                 }
                 if conversation.lifecycle == Lifecycle::Active {
                     match self.recover_worker_resume(&task).await {
