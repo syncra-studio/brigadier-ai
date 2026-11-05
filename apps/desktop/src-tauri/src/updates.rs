@@ -27,8 +27,8 @@ const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 /// A download that gets no new bytes for this long has stalled. It limits the wait between
 /// bytes, not the whole download, which may be slow.
 const DOWNLOAD_STALL: Duration = Duration::from_secs(60);
-/// How long the feed gets to answer the read just before a download.
-const RECHECK_LIMIT: Duration = Duration::from_secs(30);
+/// How long the feed gets to answer a read.
+const FEED_LIMIT: Duration = Duration::from_secs(30);
 
 /// Sent to the window with the update as it now shows ([`Shown`]).
 pub const EVENT: &str = "app-update";
@@ -93,7 +93,7 @@ pub fn start(app: AppHandle) {
 }
 
 async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
-    let Some(update) = app.updater()?.check().await? else {
+    let Some(update) = within(FEED_LIMIT, app.updater()?.check()).await? else {
         return Ok(());
     };
     let version = update.version.clone();
@@ -104,7 +104,7 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
             // The feed read again: a nightly published since the offer deletes the offered
             // build's archive, so its address would no longer answer.
             let update = match app.updater() {
-                Ok(updater) => newest_or(RECHECK_LIMIT, updater.check(), offered).await,
+                Ok(updater) => newest_or(FEED_LIMIT, updater.check(), offered).await,
                 Err(_) => offered,
             };
             tracing::info!(version = %update.version, "downloading a nightly update");
@@ -128,6 +128,16 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
         emit(app, &shown);
     }
     Ok(())
+}
+
+/// A read of the feed, which is an error when it takes past `limit`.
+async fn within<T>(
+    limit: Duration,
+    read: impl Future<Output = tauri_plugin_updater::Result<T>>,
+) -> tauri_plugin_updater::Result<T> {
+    tokio::time::timeout(limit, read)
+        .await
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut))?
 }
 
 /// What a read of the feed found, or `offered` when it finds nothing, fails or takes past `limit`.
@@ -666,6 +676,18 @@ mod tests {
             tokio::time::timeout(LIMIT * 20, newest_or(LIMIT, silent, V1)).await
         });
         assert_eq!(picked, Ok(V1));
+    }
+
+    /// A feed that never answers a check is an error, so Check now and the later checks don't
+    /// wait on it for good (#772).
+    #[test]
+    fn a_check_of_a_feed_that_never_answers_fails() {
+        const LIMIT: Duration = Duration::from_millis(100);
+        let silent = std::future::pending::<tauri_plugin_updater::Result<()>>();
+        let checked = tauri::async_runtime::block_on(async {
+            tokio::time::timeout(LIMIT * 20, within(LIMIT, silent)).await
+        });
+        assert!(matches!(checked, Ok(Err(_))), "{checked:?}");
     }
 
     /// A daemon that keeps going leaves the update uninstalled.
