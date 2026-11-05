@@ -864,6 +864,11 @@ export async function continueOn(id: string, provider: ProviderKind, model: Mode
   return when;
 }
 
+/** The switch asked for goes without waiting for the session's background jobs, which may end. */
+export async function moveNow(id: string): Promise<void> {
+  await request({ method: "moveNow", id });
+}
+
 /**
  * Stores a file in the daemon's blob store, for attaching to a message. `pasted`: the file is
  * text the user pasted, which goes to the model as part of their message. `name`: the name to

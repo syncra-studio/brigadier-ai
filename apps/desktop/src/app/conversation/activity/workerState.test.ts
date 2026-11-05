@@ -19,6 +19,12 @@ test("a worker that waits on the user needs you, before anything else", () => {
   assert.equal(word({ working: false, lastEnd: "done", waiting: [{ kind: "signIn", what: "linear", card: null }] }), "Needs you");
 });
 
+test("a kept worker whose CLI ended says so, stays on hand and is no failure", () => {
+  const ended = row({ working: false, lastEnd: "interrupted", cliEnded: "Its CLI ended; the next message continues it (signal 15)." });
+  assert.equal(workerStateOf(ended, NOW).word, "Its CLI ended · next message continues it");
+  assert.equal(rowOnHand(ended, NOW), true);
+});
+
 test("a usage limit reads Limit until its reset, or Limit without a time", () => {
   const at = NOW + 3_600_000;
   assert.equal(word({ limit: { kind: "usageWindow", resetsAtMs: at, window: "five_hour" } }), `Limit until ${formatTime(at)}`);

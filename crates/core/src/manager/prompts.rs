@@ -552,14 +552,15 @@ mod tests {
     /// with no help read first (D156, D170): 6,638. A mockup the user asked to see goes to a
     /// `--mockup` worker, never drawn as text in a card: 6,763. A demo the user sees before any
     /// tests or suites (the user, 11-03): 6,904. Where to look when asked what it has, `brigadier skill`
-    /// and `brigadier mcp list` (#707, Codex's naked worker answered "none" without looking): 7,099.
+    /// and `brigadier mcp list` (#707, Codex's naked worker answered "none" without looking): 7,099. Then the warning against a
+    /// broad `pkill -f`, the likely cause of six workers ending at once (#811): 7,130.
     #[test]
     fn the_standing_instructions_stay_short() {
         let full = standing_text(&session_instructions(
             &Settings::default(),
             ProviderKind::Codex,
         ));
-        assert!(full.len() <= 7_100, "{}", full.len());
+        assert!(full.len() <= 7_130, "{}", full.len());
         assert!(STANDING_INSTRUCTIONS.lines().count() <= 23);
         // What every turn needs, and nothing that matters only at a seam.
         for words in [

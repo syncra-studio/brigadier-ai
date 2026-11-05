@@ -236,6 +236,16 @@ pub(crate) struct Cli {
     pub meter: TokenMeter,
     /// A session thread's: the workspace, level and access it was started for.
     pub launch: Option<super::thread::ThreadLaunch>,
+    /// The level a session thread runs at now: the one it was started for, until it took
+    /// another with no restart ([`SessionManager::apply_level`]).
+    pub runs_at: std::sync::Mutex<Option<crate::model::PermissionLevel>>,
+}
+
+impl Cli {
+    /// The level it runs at now (see [`Self::runs_at`]).
+    pub(super) fn level(&self) -> Option<crate::model::PermissionLevel> {
+        *self.runs_at.lock().unwrap_or_else(|p| p.into_inner())
+    }
 }
 
 /// A turn a restart cut off, going on by itself (D9 a) until its CLI begins it.
@@ -301,6 +311,9 @@ struct ConvState {
     end_commands: bool,
     /// The user stopped the running turn: nothing more is steered into it.
     interrupted: bool,
+    /// A turn is marked running and its send isn't accepted yet: nothing can join it, and on
+    /// its CLI a steer would go first (#607).
+    turn_starting: bool,
     /// The CLI is being closed on purpose (hibernate, archive, an account switch).
     closing: bool,
     /// Envelopes for coming turns, each with the request it belongs to.
@@ -370,6 +383,8 @@ struct ConvState {
     /// Brigadier's own notes for the running turn held the same way: steered in once no
     /// command runs, else carried by the next turn.
     held_notes: Vec<String>,
+    /// How many of them a `brigadier wait` already ended for.
+    held_notes_told: usize,
     /// The steered requests marked as waiting behind them, unmarked when the last ends.
     held_requests: Vec<String>,
     /// Those of them a `brigadier wait` already ended for: the next wait blocks (goal 3).
@@ -529,17 +544,20 @@ impl ConvState {
 
     /// Native process ownership: app-only CLIs must not be retired while their apps run.
     fn has_cli_jobs(&self) -> bool {
-        self.background.as_ref().is_some_and(Background::waits)
-            || !self.lingering.is_empty()
-            || self.lingering_request.is_some()
+        !self.seam.cut_jobs
+            && (self.background.as_ref().is_some_and(Background::waits)
+                || !self.lingering.is_empty()
+                || self.lingering_request.is_some())
     }
 
-    /// [`Self::has_cli_jobs`] but for ended jobs whose turn is still owed: their end was told
-    /// already, or comes in a turn of its own, so nothing of them is cut by what comes next.
+    /// [`Self::has_cli_jobs`] but for ended jobs whose turn is still owed (their end was told
+    /// already, or comes in a turn of its own, so nothing of them is cut by what comes next),
+    /// and with the running turn's commands (#605).
     fn runs_cli_jobs(&self) -> bool {
         self.background
             .as_ref()
             .is_some_and(|jobs| !jobs.running.is_empty())
+            || !self.commands.is_empty()
             || !self.lingering.is_empty()
             || self.lingering_request.is_some()
     }
@@ -1043,10 +1061,21 @@ impl ConvLive {
     /// start kept for the next try isn't: its request is over, and nothing sends it by itself.
     pub(super) async fn work_under_way(&self) -> bool {
         let state = self.state.lock().await;
+        Self::under_way(&state, state.busy)
+    }
+
+    /// [`Self::work_under_way`] as the user's work reads: a hand-off's own turn is none of it
+    /// (core-goals D193, #794).
+    pub(super) async fn users_work_under_way(&self) -> bool {
+        let state = self.state.lock().await;
+        Self::under_way(&state, state.busy && !state.seam.quiet)
+    }
+
+    fn under_way(state: &ConvState, running: bool) -> bool {
         let over = |request: Option<&String>| {
             request.is_some_and(|request| state.outcomes.contains_key(request))
         };
-        state.busy
+        running
             || state.unowned_turn
             || state.hand_over.is_some()
             || state
@@ -1824,10 +1853,9 @@ impl SessionManager {
             conv.frame(&message.id, frame.clone());
         }
         let mut state = conv.state.lock().await;
-        let cli = state
-            .cli
-            .clone()
-            .filter(|_| state.busy && !state.compacting && !state.seam.held);
+        let cli = state.cli.clone().filter(|_| {
+            state.busy && !state.turn_starting && !state.compacting && !state.seam.held
+        });
         let steered = match cli {
             Some(cli) => {
                 // What waits for the next user message (a card's decision) goes with it.
@@ -1914,8 +1942,10 @@ impl SessionManager {
         };
         let mut state = conv.state.lock().await;
         let held: Vec<String> = state.held_requests.to_vec();
-        let new = held.iter().any(|id| !state.held_told.contains(id));
+        let new = held.iter().any(|id| !state.held_told.contains(id))
+            || state.held_notes.len() > state.held_notes_told;
         state.held_told = held;
+        state.held_notes_told = state.held_notes.len();
         new
     }
 
@@ -1950,6 +1980,7 @@ impl SessionManager {
             if !state.holding.is_empty() {
                 return;
             }
+            state.held_notes_told = 0;
             std::mem::take(&mut state.held_notes)
         };
         for note in notes {
@@ -1965,6 +1996,7 @@ impl SessionManager {
             // What waited for a command goes with the next turn: the messages from the inbox,
             // the notes as notes.
             let notes = std::mem::take(&mut state.held_notes);
+            state.held_notes_told = 0;
             state.notes.extend(notes);
             state.take_held()
         };
@@ -2048,6 +2080,9 @@ impl SessionManager {
         // Behind a running command it waits for that command's end ([`ConvState::held_notes`]).
         if state.busy && !state.interrupted && !state.holding.is_empty() {
             state.held_notes.push(text);
+            drop(state);
+            // A `brigadier wait` holding it ends, so it is read now.
+            self.worker_events.added.notify_waiters();
             return;
         }
         let cli = state
@@ -2509,6 +2544,7 @@ impl SessionManager {
             }
             // A turn of its own, for no request.
             state.busy = true;
+            state.turn_starting = false;
             state.interrupted = false;
             state.compacting = true;
             state.request = None;
@@ -2872,6 +2908,7 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
+            state.turn_starting = true;
             state.interrupted = false;
             state.landed = false;
             state.watchdog.begin(now_ms());
@@ -3095,6 +3132,7 @@ impl SessionManager {
                 prepend_said(&mut input, &mut user, &transcript);
             }
         }
+        self.apply_level(&conv, &cli).await;
         // Plan mode is the CLI's own (harness D7): set before the turn, never told in words.
         if conv.kind == ConversationKind::Session
             && let Err(err) = cli.session.set_plan_mode(self.plan_mode(&conv.id)).await
@@ -3128,7 +3166,11 @@ impl SessionManager {
             state.seam.fix_sending();
         }
         if let Err(err) = cli.session.send(input).await {
-            conv.state.lock().await.awaiting_start = false;
+            {
+                let mut state = conv.state.lock().await;
+                state.awaiting_start = false;
+                state.turn_starting = false;
+            }
             if let Some(successor) = successor {
                 self.seam_not_started(&conv, successor).await;
             }
@@ -3140,6 +3182,7 @@ impl SessionManager {
         }
         {
             let mut state = conv.state.lock().await;
+            state.turn_starting = false;
             state.transition_send_accepted = true;
             state.seam.fix_sent();
         }
@@ -3170,6 +3213,7 @@ impl SessionManager {
         let failed = {
             let mut state = conv.state.lock().await;
             state.busy = false;
+            state.turn_starting = false;
             state.compacting = false;
             if asked_note {
                 state.seam.fix_not_sent();
@@ -3206,7 +3250,7 @@ impl SessionManager {
             failed
         };
         if asked_note {
-            self.arm_seam_hold(conv).await;
+            self.hold_until_heard(conv).await;
         }
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
@@ -3682,6 +3726,7 @@ impl SessionManager {
             session,
             grants: grant_values,
             ended: CancellationToken::new(),
+            runs_at: std::sync::Mutex::new(launch.as_ref().map(|launch| launch.permission)),
             launch,
         });
         conv.state.lock().await.cli = Some(cli.clone());
@@ -4956,19 +5001,30 @@ impl SessionManager {
             }
             (words, request)
         };
-        let words = brigadier_providers::policy::unwrapped_command(&words);
-        let text = self.hide_secrets(&conv.id, tail.into_bytes()).await;
         let envelope = Envelope {
             kind: InjectionKind::BackgroundRun,
             label: "background command finished".into(),
             task_id: None,
-            text: format!(
-                "{}{words}` finished after your turn · {status}]\n{}",
-                crate::thread_view::WAKE_MARK,
-                String::from_utf8_lossy(&text)
-            ),
+            text: self.command_end_text(&conv.id, &words, status, tail).await,
         };
         self.deliver_for(&conv.id, envelope, request).await;
+    }
+
+    /// What the thread is told of a Codex command that ended unread.
+    async fn command_end_text(
+        &self,
+        id: &ConversationId,
+        words: &str,
+        status: &str,
+        tail: String,
+    ) -> String {
+        let words = brigadier_providers::policy::unwrapped_command(words);
+        let text = self.hide_secrets(id, tail.into_bytes()).await;
+        format!(
+            "{}{words}` finished after your turn · {status}]\n{}",
+            crate::thread_view::WAKE_MARK,
+            String::from_utf8_lossy(&text)
+        )
     }
 
     /// Keeps a command's streamed output, and puts on the event feed only what of the
@@ -5433,6 +5489,7 @@ impl SessionManager {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
                         state.busy = true;
+                        state.turn_starting = false;
                         state.interrupted = false;
                         state.limit_hit = None;
                         state.model_failed = false;
@@ -5675,6 +5732,8 @@ impl SessionManager {
         if status == TurnStatus::Interrupted && conv.state.lock().await.interrupted {
             self.end_stopped_calls(conv).await;
         }
+        // The seam's hold stopped this note turn, not the user: what it runs goes on (#605).
+        let mut forced = false;
         if conv.kind == ConversationKind::Session {
             // What the thread committed in this turn is recorded as its own, before a next turn
             // can take its commits for the user's; nothing starts from it.
@@ -5696,6 +5755,14 @@ impl SessionManager {
             // What its Codex auto-reviews used, which its own totals leave out.
             self.meter_child_threads(cli, TokenOwner::Conversation(&conv.id))
                 .await;
+            {
+                // Commands of a turn cut short that don't go on (below) hold nothing at its end.
+                let mut state = conv.state.lock().await;
+                forced = state.seam.forced();
+                if status != TurnStatus::Completed && !forced {
+                    state.commands.clear();
+                }
+            }
             // Before the next turn may start: a turn admitted in between would still run on
             // this CLI, past the seam.
             self.seam_turn_end(conv, cli).await;
@@ -5717,23 +5784,28 @@ impl SessionManager {
             end_commands,
             unshown,
             unread,
+            unread_cut,
         ) = {
             let mut state = conv.state.lock().await;
             // A Codex command still running when its turn ended goes on as its CLI's job; one
             // that ended unread is told as one that ends after it.
             let words = std::mem::take(&mut state.command_words);
             let mut unread = Vec::new();
-            if status == TurnStatus::Completed
-                && (conv.kind == ConversationKind::Session || cli.launch.is_some())
-            {
-                for (item, words) in words {
-                    if state.commands.contains(&item) {
-                        state.lingering.insert(item, words);
+            let mut unread_cut = Vec::new();
+            if conv.kind == ConversationKind::Session || cli.launch.is_some() {
+                if status == TurnStatus::Completed || forced {
+                    for (item, words) in words {
+                        if state.commands.contains(&item) {
+                            state.lingering.insert(item, words);
+                        }
                     }
-                }
-                for (item, (words, how, tail)) in std::mem::take(&mut state.unread_ends) {
-                    state.lingering.insert(item.clone(), words);
-                    unread.push((item, how, tail));
+                    for (item, (words, how, tail)) in std::mem::take(&mut state.unread_ends) {
+                        state.lingering.insert(item.clone(), words);
+                        unread.push((item, how, tail));
+                    }
+                } else {
+                    // A stopped or failed turn starts nothing more: the next message says it.
+                    unread_cut.extend(std::mem::take(&mut state.unread_ends).into_values());
                 }
             }
             state.unread_ends.clear();
@@ -5863,10 +5935,15 @@ impl SessionManager {
                 end_commands,
                 unshown,
                 unread,
+                unread_cut,
             )
         };
         for (item, how, tail) in unread {
             self.lingering_ended(conv, &item, &how, tail).await;
+        }
+        for (words, how, tail) in unread_cut {
+            let text = self.command_end_text(&conv.id, &words, &how, tail).await;
+            conv.state.lock().await.notes.push(text);
         }
         // Stopped as it ended: its request and its turn read so now, whichever way it hands over.
         if (limit_hit.is_some() || model_failed) && conv.state.lock().await.interrupted {
@@ -6113,6 +6190,7 @@ impl SessionManager {
         let on = conversation.as_ref().and_then(setup_choice);
         let tried = {
             let mut state = conv.state.lock().await;
+            state.turn_starting = false;
             match &on {
                 Some(on) if self.seam_on(conv) && !state.failed_models.is_empty() => {
                     let failed = self.tried_model(on);
@@ -7834,7 +7912,7 @@ mod tests {
             .unwrap();
         reached.notified().await;
         // The previous turn's end armed the hold while the nudge was on its way (OpenCode, live).
-        flow.manager.arm_seam_hold(&conv).await;
+        flow.manager.hold_until_heard(&conv).await;
         flow.manager
             .on_conversation_event(
                 &conv,

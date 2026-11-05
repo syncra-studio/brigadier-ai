@@ -478,6 +478,32 @@ async fn the_next_worker_row_goes_when_a_turn_ends_while_the_first_is_still_leav
     flow.stop().await;
 }
 
+/// #766: the daemon dies after the worker's CLI took a row and before the row left the queue.
+/// After the restart the row leaves the queue unsent: the CLI's own record shows it took it.
+#[tokio::test]
+async fn a_row_its_cli_took_before_a_crash_is_not_sent_again() {
+    let (mut flow, _answers, release, task) = working("worker-row-crash").await;
+    assert!(to_worker(&flow, &task, "Use blue.", false).await);
+    let (reached, _resume) = pause_delivery(&flow).await;
+    release.notify_one();
+    reached.notified().await;
+    assert_eq!(flow.board().await.queue.items.len(), 1);
+    flow.crash().await;
+    flow.until("the queue to empty", |board| board.queue.items.is_empty())
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let native = flow
+        .manager
+        .task_by_id(&flow.conversation, &task.id)
+        .await
+        .unwrap()
+        .native_session
+        .unwrap();
+    let inputs = std::fs::read_to_string(flow.dir.join("data/transcripts").join(native)).unwrap();
+    assert_eq!(inputs.matches("Use blue.").count(), 1, "{inputs}");
+    flow.stop().await;
+}
+
 /// An edit while the worker's row is on its way to it is refused: never accepted and then
 /// lost when the delivery of the words read before takes the row.
 #[tokio::test]

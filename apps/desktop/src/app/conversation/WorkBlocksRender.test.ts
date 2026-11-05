@@ -154,25 +154,27 @@ test("a turn the user stops as its answer starts keeps its work in view; a backg
 });
 
 test("a live group's label: a quick step's name stands a second, a long one's changes at once, the newest running step is named, a summary shows at once", { timeout: 120000 }, async (t) => {
-  type Labels = { t: number; label: string | null }[];
+  type Labels = { t: number; slowest: number; label: string | null }[];
+  // Within a couple of frames, however long this machine's frames are just now.
+  const late = (label: Labels[number]) => 100 + 2 * label.slowest;
   const seen = await drive<{ quick: Labels; long: Labels; together: string | null; newerEnds: Labels; pending: boolean; summary: Labels }>(t, "drive=pace");
   // The read shows, then the build once the read's name has stood 1000ms (within a frame or two).
   const read = seen.quick.findIndex((each) => /a\.ts/.test(each.label ?? ""));
   const build = seen.quick.findIndex((each) => /npm run build/.test(each.label ?? ""));
   assert.ok(read >= 0 && build === read + 1, JSON.stringify(seen.quick));
   const stood = seen.quick[build]!.t - seen.quick[read]!.t;
-  assert.ok(stood >= 1000 - 20 && stood <= 1000 + 100, `the read's name stood ${stood}ms: ${JSON.stringify(seen.quick)}`);
+  assert.ok(stood >= 1000 - 20 && stood <= 1000 + late(seen.quick[build]!), `the read's name stood ${stood}ms: ${JSON.stringify(seen.quick)}`);
   // The build ran over a second: its end shows the next label within a couple of frames.
-  assert.ok(seen.long.length >= 2 && seen.long[1]!.t <= 100, JSON.stringify(seen.long));
+  assert.ok(seen.long.length >= 2 && seen.long[1]!.t <= late(seen.long[1]!), JSON.stringify(seen.long));
   assert.equal(seen.long[1]!.label, "Thinking");
   // Two commands together: the newer named; it ends, and the older (not the last) is named again.
   assert.match(seen.together ?? "", /npm run lint/);
   assert.match(seen.newerEnds.at(-1)?.label ?? "", /sleep 9/);
-  assert.ok(seen.newerEnds.at(-1)!.t <= 100, JSON.stringify(seen.newerEnds));
+  assert.ok(seen.newerEnds.at(-1)!.t <= late(seen.newerEnds.at(-1)!), JSON.stringify(seen.newerEnds));
   // A label waiting its turn; a line comes after the group: its summary shows at once.
   assert.equal(seen.pending, true);
   const summary = seen.summary.at(-1)!;
-  assert.ok(summary.t <= 100, JSON.stringify(seen.summary));
+  assert.ok(summary.t <= late(summary), JSON.stringify(seen.summary));
   assert.match(summary.label ?? "", /^(Read|Ran)/);
   assert.doesNotMatch(summary.label ?? "", /Reading|Running|Thinking/);
 });

@@ -116,13 +116,29 @@ const button = (label: string) => {
   if (!found) throw new Error(`No button: ${label}`);
   return found;
 };
+/** What `find` finds, once it's there: a busy machine's menu or dialog can take longer than a pause. */
+const until = async <T,>(find: () => T | null | undefined): Promise<T | null | undefined> => {
+  const end = performance.now() + 10000;
+  let found = find();
+  while (!found && performance.now() < end) {
+    await pause();
+    found = find();
+  }
+  return found;
+};
+const buttonShown = async (label: string) => {
+  await until(() => [...document.querySelectorAll<HTMLElement>("button, [role=menuitem]")].some((item) => item.getAttribute("aria-label") === label || item.textContent?.trim() === label));
+  return button(label);
+};
+/** The dialog is gone and the page takes the pointer again: a click before that lands nowhere. */
+const dialogGone = () => until(() => !document.querySelector("[role=dialog]") && document.body.style.pointerEvents !== "none");
 async function exerciseRemoval() {
   await pause();
-  await fixtureClick(button("Actions for Project 1")); await pause();
-  const row = button("Remove project…").getBoundingClientRect();
+  await fixtureClick(await buttonShown("Actions for Project 1")); await pause();
+  const row = (await buttonShown("Remove project…")).getBoundingClientRect();
   const press = () => fixtureInput({ type: "click", x: row.x + row.width / 2, y: row.y + row.height / 2 });
-  await press(); await pause();
-  const dialog = document.querySelector('[role=dialog]');
+  await press();
+  const dialog = await until(() => document.querySelector('[role=dialog]'));
   const seen: Record<string, unknown> = {
     title: dialog?.querySelector('h2')?.textContent,
     choices: dialog?.textContent,
@@ -131,12 +147,12 @@ async function exerciseRemoval() {
   };
   // Repeated clicks where the menu item was, and Escape: no removal can precede confirmation.
   for (let i = 0; i < 7; i++) { await press(); await pause(); }
-  await fixtureInput({ type: "key", key: "Escape" }); await pause();
+  await fixtureInput({ type: "key", key: "Escape" }); await dialogGone();
   seen.cancelled = { removals: calls.filter((req) => req.method === "removeProject"), remaining: Object.keys(useApp.getState().projects).length };
-  await fixtureClick(button("Actions for Project 1")); await pause();
-  await fixtureClick(button("Remove project…")); await pause();
-  await fixtureClick(document.querySelector('[role=checkbox]')!); await pause();
-  await fixtureClick(button("Remove")); await pause();
+  await fixtureClick(await buttonShown("Actions for Project 1")); await pause();
+  await fixtureClick(await buttonShown("Remove project…")); await pause();
+  await fixtureClick((await until(() => document.querySelector('[role=checkbox]')))!); await pause();
+  await fixtureClick(await buttonShown("Remove")); await pause();
   for (let i = 0; i < 7; i++) { await press(); await fixtureInput({ type: "key", key: "Escape" }); await pause(); }
   seen.removals = calls.filter((req) => req.method === "removeProject");
   seen.remaining = Object.keys(useApp.getState().projects);

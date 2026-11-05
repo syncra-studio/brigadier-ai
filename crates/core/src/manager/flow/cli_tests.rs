@@ -1708,14 +1708,20 @@ async fn wait_hears_a_worker_gone_and_its_usage_limit() {
     let answers = answers.lock().unwrap().clone();
     let crashed = answers["crashed"].as_array().unwrap();
     assert!(
-        crashed.iter().any(|event| event["event"] == "gone"),
+        crashed.iter().any(|event| event["event"] == "interrupted"
+            && event["message"]
+                .as_str()
+                .is_some_and(|words| words.contains("the next message continues it"))),
         "{crashed:#?}"
     );
     let limited = &answers["limited"][0];
     assert_eq!(limited["event"], "usage-limit", "{limited:#}");
     assert!(limited["resetsAtMs"].as_i64().is_some());
     let board = flow.board().await;
-    assert_eq!(Flow::task(&board, 1).state, crate::work::TaskState::Failed);
+    assert_eq!(
+        Flow::task(&board, 1).state,
+        crate::work::TaskState::Reported
+    );
     assert_eq!(Flow::task(&board, 2).state, crate::work::TaskState::Paused);
     // Nobody took either over.
     assert_eq!(board.tasks.len(), 2);
@@ -4071,4 +4077,71 @@ async fn a_better_rated_model_is_suggested_and_the_users_order_is_left_unchanged
     assert!(page.suggestions.is_empty());
     assert_eq!(page.rows, vec![mine]);
     assert_eq!(std::fs::read(&path).unwrap(), written);
+}
+
+/// #740: the user's Stop of one worker, with another still live: the note to the thread waits
+/// behind the running `brigadier wait`, which ends for it, as it does for a held message.
+#[tokio::test]
+async fn the_users_stop_of_one_worker_ends_a_wait_with_others_live() {
+    let waited: Arc<Mutex<Option<Value>>> = Arc::default();
+    let told: Arc<Mutex<Option<String>>> = Arc::default();
+    let script: Script = {
+        let (waited, told) = (waited.clone(), told.clone());
+        Arc::new(move |turn| {
+            let (waited, told) = (waited.clone(), told.clone());
+            Box::pin(async move {
+                if turn.worker().is_some() {
+                    turn.stopped().await;
+                    return Reply::text("");
+                }
+                if turn.input.contains("Start two.") {
+                    let a = brigadier(&turn, CliRequest::Start(Box::new(start("Work a."))));
+                    let a = id_of(&a.await);
+                    let b = brigadier(&turn, CliRequest::Start(Box::new(start("Work b."))));
+                    let b = id_of(&b.await);
+                    let command = |status| brigadier_providers::ProviderEvent::Command {
+                        item_id: "wait-1".into(),
+                        command: "brigadier wait".into(),
+                        cwd: None,
+                        status,
+                        exit_code: None,
+                        output: None,
+                        duration_ms: None,
+                        kept: None,
+                    };
+                    turn.emit(command(brigadier_providers::ItemStatus::InProgress))
+                        .await;
+                    let got = brigadier(&turn, wait(&[&a, &b], None)).await;
+                    *waited.lock().unwrap() = Some(got);
+                    turn.emit(command(brigadier_providers::ItemStatus::Completed))
+                        .await;
+                    *told.lock().unwrap() = turn.steered().await;
+                }
+                Reply::text("Heard.")
+            })
+        })
+    };
+    let flow = Flow::start("cli-wait-stop-one", Options::default(), script).await;
+    flow.say("Start two.").await;
+    let board = flow
+        .until("both workers run", |board| {
+            board
+                .tasks
+                .values()
+                .filter(|task| task.state == crate::work::TaskState::Running)
+                .count()
+                == 2
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    // The wait is under way, behind its command.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    flow.manager.stop_task_by_user(task.id).await.unwrap();
+    super::eventually("the wait ended", || waited.lock().unwrap().is_some()).await;
+    let got = waited.lock().unwrap().clone().unwrap();
+    assert_eq!(got["message"], true, "{got:#}");
+    super::eventually("the note read", || told.lock().unwrap().is_some()).await;
+    let told = told.lock().unwrap().clone().unwrap();
+    assert!(told.contains("ended"), "{told}");
+    flow.stop().await;
 }

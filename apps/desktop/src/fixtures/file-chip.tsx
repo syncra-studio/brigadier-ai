@@ -200,9 +200,14 @@ function readerShows() {
 const item = (words: string) => [...document.querySelectorAll<HTMLElement>("[role=menu] [role=menuitem]")].find((el) => el.textContent === words);
 
 async function closeReader() {
+  // A chip's tooltip still closing takes an Escape for itself; one that stays fails here.
+  await until("the chip's tooltip to go", () => !document.querySelector("[data-slot=tooltip-content]"));
   for (let press = 1; press < 4; press += 1) {
     await fixtureInput({ type: "key", key: "Escape" });
     await sleep(400);
+    // A busy machine's reader takes longer to go: a press is only needed if this one did nothing.
+    const end = performance.now() + 5000;
+    while (reader() && performance.now() < end) await sleep(16);
     if (!reader()) return press;
   }
   throw new Error(`reader stuck ${[...document.querySelectorAll("[data-slot=tooltip-content]")].map((el) => `${el.textContent}:${el.getAttribute("data-state")}`).join("|")}`);

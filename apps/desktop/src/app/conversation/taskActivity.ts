@@ -10,6 +10,11 @@ function hasTaskActivity(task: Task): boolean {
   return !TERMINAL.has(task.state);
 }
 
+/** Its CLI ended on its own and the worker is kept: what `plain_gone` writes, and the next message continues it (#811). */
+export function cliEnded(task: Task): boolean {
+  return task.state === "reported" && !!task.error?.startsWith("Its CLI ended");
+}
+
 /** Its session paused it (D7): nothing of it runs until it is resumed; a quota wait still goes on. */
 export function userPaused(task: Task): boolean {
   return task.state === "paused" && !task.quotaWait && !task.blockedReason?.trim();
@@ -76,7 +81,7 @@ function semantic(source: ActivitySource): string {
     case "landing":
       return "Landing";
     case "reported":
-      return "Finished, handing back";
+      return cliEnded(task) ? task.error! : "Finished, handing back";
     default:
       return "Waiting";
   }
