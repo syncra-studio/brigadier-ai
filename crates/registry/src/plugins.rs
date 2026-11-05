@@ -44,7 +44,108 @@ pub struct Plugin {
     pub project: Option<PathBuf>,
 }
 
+/// What runs only on its own CLI, a plugin's or its CLI's own: Brigadier shows it, read-only, and
+/// never shares, installs or edits it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CliOnly {
+    pub agent: Option<ProviderKind>,
+    /// The plugin's id; `None`: the CLI's own folders.
+    pub plugin: Option<String>,
+    /// The events its hooks run on.
+    pub hooks: Vec<String>,
+    pub commands: Vec<String>,
+    pub agents: Vec<String>,
+    /// Plugins of the CLI's own kind (OpenCode's), which nothing else can run.
+    pub plugins: Vec<String>,
+}
+
+impl CliOnly {
+    pub fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
+            && self.commands.is_empty()
+            && self.agents.is_empty()
+            && self.plugins.is_empty()
+    }
+}
+
+/// The names of the `.md` files in `folder`, or of `every` entry; hidden ones left out.
+pub(crate) fn names_in(folder: &Path, every: bool) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file = path.file_name()?.to_str()?;
+            if file.starts_with('.') || !(every || path.extension().is_some_and(|e| e == "md")) {
+                return None;
+            }
+            Some(path.file_stem()?.to_str()?.to_owned())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 impl Plugin {
+    /// The rest of the bundle, beside its skills and servers: hooks, commands, agent definitions.
+    pub fn cli_only(&self) -> CliOnly {
+        let manifest = self.manifest();
+        let named = |key: &str| {
+            let mut names = names_in(&self.root.join(key), false);
+            for path in manifest_paths(&self.root, manifest.get(key), self.agent) {
+                if path.is_dir() {
+                    names.extend(names_in(&path, false));
+                } else if path.is_file() {
+                    names.extend(
+                        path.file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .map(str::to_owned),
+                    );
+                }
+            }
+            names.sort();
+            names.dedup();
+            names
+        };
+        let mut hooks: Vec<String> = Vec::new();
+        let mut add_hooks = |value: &Value| {
+            let events = value.get("hooks").unwrap_or(value);
+            hooks.extend(
+                events
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, _)| k.clone()),
+            );
+        };
+        if let Some(value) = read_json(&self.root.join("hooks/hooks.json")) {
+            add_hooks(&value);
+        }
+        match manifest.get("hooks") {
+            Some(inline @ Value::Object(_)) => add_hooks(inline),
+            paths => {
+                for path in manifest_paths(&self.root, paths, self.agent) {
+                    if let Some(value) = read_json(&path) {
+                        add_hooks(&value);
+                    }
+                }
+            }
+        }
+        hooks.sort();
+        hooks.dedup();
+        CliOnly {
+            agent: Some(self.agent),
+            plugin: Some(self.id.clone()),
+            hooks,
+            commands: named("commands"),
+            agents: named("agents"),
+            plugins: Vec::new(),
+        }
+    }
+
     /// Supplied by Codex itself, rather than installed from a user-chosen marketplace.
     /// Brigadier leaves these out of its catalog and lets Codex load them itself.
     pub fn provider_supplied(&self) -> bool {

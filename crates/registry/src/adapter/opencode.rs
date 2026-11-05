@@ -107,6 +107,20 @@ impl AgentAdapter for OpenCode {
         skills::add_opencode_project(&mut catalog.skills, project);
     }
 
+    fn cli_only(&self, roots: &Roots, project: Option<&Path>) -> crate::plugins::CliOnly {
+        let folder = match project {
+            Some(project) => project.join(".opencode"),
+            None => roots.opencode_dir.clone(),
+        };
+        crate::plugins::CliOnly {
+            agent: Some(ProviderKind::OpenCode),
+            commands: crate::plugins::names_in(&folder.join("commands"), false),
+            agents: crate::plugins::names_in(&folder.join("agents"), false),
+            plugins: crate::plugins::names_in(&folder.join("plugins"), true),
+            ..Default::default()
+        }
+    }
+
     fn also_loads_skills_at(&self, roots: &Roots, project: Option<&Path>, folder: &Path) -> bool {
         // Whatever `CLAUDE_CONFIG_DIR` says: it looks in the home's.
         let of = |base: &Path| {

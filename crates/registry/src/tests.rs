@@ -2109,3 +2109,43 @@ fn an_opencode_entry_no_cli_could_take_is_a_problem_and_no_row() {
     assert!(catalog.servers.is_empty());
     assert_eq!(catalog.problems[0].name, "opencode.json");
 }
+
+/// #707: the rest of a plugin's bundle, and what a CLI has of its own, are listed to show.
+#[test]
+fn a_plugins_hooks_commands_and_agents_are_listed_read_only() {
+    let home = fixture("cli-only");
+    let plugin = home.join("bundle");
+    write(
+        &plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name": "bundle", "hooks": {"Stop": []}}"#,
+    );
+    write(
+        &plugin.join("hooks/hooks.json"),
+        r#"{"hooks": {"PreToolUse": []}}"#,
+    );
+    write(&plugin.join("commands/deploy.md"), "# Deploy");
+    write(&plugin.join("commands/.hidden.md"), "# No");
+    write(&plugin.join("agents/reviewer.md"), "# Reviewer");
+    let parts = Plugin {
+        agent: ProviderKind::Claude,
+        id: "bundle@market".into(),
+        name: "bundle".into(),
+        root: plugin,
+        project: None,
+    }
+    .cli_only();
+    assert_eq!(parts.hooks, ["PreToolUse", "Stop"]);
+    assert_eq!(parts.commands, ["deploy"]);
+    assert_eq!(parts.agents, ["reviewer"]);
+
+    let project = home.join("project");
+    write(&home.join(".config/opencode/plugins/status.js"), "x");
+    write(&home.join(".config/opencode/commands/polish.md"), "x");
+    write(&project.join(".opencode/commands/ship.md"), "x");
+    let own = Catalog::cli_only(&roots(&home, &[]), std::slice::from_ref(&project));
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert_eq!(own[0].agent, Some(ProviderKind::OpenCode));
+    assert_eq!(own[0].plugin, None);
+    assert_eq!(own[0].plugins, ["status"]);
+    assert_eq!(own[0].commands, ["polish", "ship"]);
+}

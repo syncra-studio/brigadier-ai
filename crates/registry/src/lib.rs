@@ -43,7 +43,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-pub use plugins::Plugin;
+pub use plugins::{CliOnly, Plugin};
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.

@@ -175,6 +175,11 @@ pub trait AgentAdapter: Send + Sync {
     fn read_project(&self, roots: &Roots, project: &Path, catalog: &mut Catalog) {
         let _ = (roots, project, catalog);
     }
+    /// What it keeps of its own that only it can run, of the user's or `project`'s.
+    fn cli_only(&self, roots: &Roots, project: Option<&Path>) -> crate::plugins::CliOnly {
+        let _ = (roots, project);
+        crate::plugins::CliOnly::default()
+    }
     /// It also loads the skills of `folder`, another CLI's skill folder, by itself.
     fn also_loads_skills_at(&self, roots: &Roots, project: Option<&Path>, folder: &Path) -> bool {
         let _ = (roots, project, folder);

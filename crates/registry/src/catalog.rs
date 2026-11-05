@@ -452,6 +452,40 @@ impl Catalog {
 }
 
 impl Catalog {
+    /// What runs only on its own CLI, for the page: each plugin's, on or off, and each CLI's own
+    /// folders, the user's and `projects`' together.
+    pub fn cli_only(roots: &crate::Roots, projects: &[PathBuf]) -> Vec<crate::plugins::CliOnly> {
+        let user = Self::read(roots, None);
+        let mut plugins: Vec<crate::Plugin> =
+            user.plugins.into_iter().chain(user.off.plugins).collect();
+        for project in projects {
+            plugins.extend(Self::plugins(roots, Some(project)));
+        }
+        let mut parts: Vec<crate::plugins::CliOnly> = plugins
+            .iter()
+            .filter(|plugin| !plugin.provider_supplied())
+            .map(crate::Plugin::cli_only)
+            .collect();
+        parts.sort_by(|a, b| (a.agent, &a.plugin).cmp(&(b.agent, &b.plugin)));
+        parts.dedup_by(|a, b| a.agent == b.agent && a.plugin == b.plugin);
+        for cli in crate::adapter::adapters() {
+            let mut own = cli.cli_only(roots, None);
+            for project in projects {
+                let here = cli.cli_only(roots, Some(project));
+                own.commands.extend(here.commands);
+                own.agents.extend(here.agents);
+                own.plugins.extend(here.plugins);
+            }
+            for names in [&mut own.commands, &mut own.agents, &mut own.plugins] {
+                names.sort();
+                names.dedup();
+            }
+            parts.push(own);
+        }
+        parts.retain(|part| !part.is_empty());
+        parts
+    }
+
     /// [`Self::rows`] of `catalog` as `agent` loads it: another CLI's skill it also loads by
     /// itself counts as its own too, so it isn't given a second time. The page's rows stay
     /// [`Self::rows`], which say whose folder a skill is in.
