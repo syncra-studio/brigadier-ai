@@ -1,9 +1,9 @@
-import { userPaused } from "@/app/conversation/taskActivity";
+import { cliEnded, userPaused } from "@/app/conversation/taskActivity";
 import type { Task } from "@/ipc/generated";
 
 /** The worker's conversation is done when it has returned its answer, even before landing. */
 export function workerDone(task: Task): boolean {
-  return ["reported", "landed", "done", "rejected", "stopped", "failed"].includes(task.state);
+  return ["reported", "landed", "done", "rejected", "stopped", "failed"].includes(task.state) && !cliEnded(task);
 }
 
 /**
@@ -55,6 +55,7 @@ export function workerState(task: Task): string {
 
 /** Waiting stays still and tells the user what would let the worker continue. */
 export function workerPreview(task: Task): string | null {
+  if (cliEnded(task)) return task.error;
   if (workerDone(task)) return task.state === "failed" || task.state === "stopped" || task.state === "rejected"
     ? workerState(task) : null;
   if (task.resuming) return "Interrupted — resuming";

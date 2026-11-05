@@ -1262,6 +1262,41 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     settings
 }
 
+/// Moves `--settings` out of Claude's command line into a private file under `run_dir`, which
+/// `--settings` also takes: the layer names the daemon's socket and binary, and a broad `pkill -f`
+/// matching those would end every session (#811). The file's name is new for each start: an
+/// old process still exiting removes only its own. One that can't be written leaves the layer
+/// where it was: a session that starts matters more.
+fn settings_in_file(args: &mut [String], run_dir: &Path, native_id: &str) -> Option<PathBuf> {
+    let at = args.iter().position(|arg| arg == "--settings")? + 1;
+    let layer = args.get(at)?;
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let file = run_dir
+        .join("claude-settings")
+        .join(format!("{native_id}-{}.json", &tag[..8]));
+    let written = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            use std::io::Write as _;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            options.open(&file)?.write_all(layer.as_bytes())
+        });
+    match written {
+        Ok(()) => {
+            args[at] = file.display().to_string();
+            Some(file)
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "could not write the session's settings file");
+            None
+        }
+    }
+}
+
 /// Whether the settings sources this session loads disable hooks. Read only this switch:
 /// Claude still loads the files itself, and Brigadier never sets `disableAllHooks`. Local
 /// overrides project, which overrides user (code.claude.com/docs/en/settings). For a worker
@@ -1644,13 +1679,15 @@ impl Provider for Claude {
                 )));
             }
             let user_config = self.config_dir();
-            let args = Self::session_args(
+            let mut args = Self::session_args(
                 &spec,
                 &cwd,
                 &native_id,
                 self.main_config.is_some(),
                 user_config.as_deref(),
             )?;
+            let settings_file =
+                settings_in_file(&mut args, &self.platform.paths().run_dir, &native_id);
             let cli_version = self.version().await;
 
             // The project's own setup, where Claude looks for it: before its staging folders
@@ -1710,6 +1747,7 @@ impl Provider for Claude {
                     let before = files::plan_files(&config);
                     (config, before)
                 }),
+                settings_file,
             };
 
             let recorder = match &spec.record_to {
@@ -2506,6 +2544,8 @@ struct SessionFiles {
     /// Claude's config directory and the plan files in it at the start: a plan file it writes
     /// later is the session's own, removed with it ([`files::owned_plan_file`]).
     plans: Option<(PathBuf, HashSet<std::ffi::OsString>)>,
+    /// Its settings layer ([`settings_in_file`]), removed when it has exited.
+    settings_file: Option<PathBuf>,
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps
@@ -2621,6 +2661,9 @@ async fn read_loop(
     let exit = process.exited().await;
     session_files.memory.record(true).await;
     drop(session_files.in_folder);
+    if let Some(file) = session_files.settings_file {
+        let _ = std::fs::remove_file(file);
+    }
     lock(&shared.pending).clear();
     shared.turn_active.store(false, Ordering::Release);
     shared
@@ -5006,7 +5049,9 @@ for line in sys.stdin:
                 serde_json::from_str(&std::fs::read_to_string(&capture).unwrap()).unwrap();
             let args = captured["args"].as_array().unwrap();
             let at = args.iter().position(|arg| arg == "--settings").unwrap();
-            let layer: Value = serde_json::from_str(args[at + 1].as_str().unwrap()).unwrap();
+            // In its private file, while it runs (#811).
+            let layer = std::fs::read_to_string(args[at + 1].as_str().unwrap()).unwrap();
+            let layer: Value = serde_json::from_str(&layer).unwrap();
             assert!(layer.get("disableAllHooks").is_none(), "{layer}");
             if off {
                 assert!(layer.get("hooks").is_none(), "{layer}");

@@ -77,6 +77,14 @@ fn user_messaged_note(task: &Task, text: &str) -> String {
 }
 
 /// A new event of worker `task`'s (its own id given when it is kept).
+/// How a kept worker's row and error start when its CLI ended (`apps/desktop` reads these words).
+const CLI_ENDED: &str = "Its CLI ended";
+
+/// Whether a task's error says its CLI ended, for a worker kept to go on.
+pub(super) fn cli_ended(error: &str) -> bool {
+    error.starts_with(CLI_ENDED)
+}
+
 pub(super) fn event(task: &TaskId, kind: EventKind) -> WaitEvent {
     WaitEvent {
         id: short(&task.0),
@@ -1213,11 +1221,51 @@ impl SessionManager {
         self.worker_event(&task.conversation_id, &task.id, None, event);
     }
 
-    /// A plain worker's CLI ended on its own: the worker is gone, and its session hears why.
-    /// Its unfinished work is kept on its branch, as a stop keeps it.
+    /// A plain worker's CLI ended on its own (#811). The worker and its worktree stay, and its
+    /// next message resumes its CLI session; nothing starts by itself. Its session and its row
+    /// say so. One with no CLI session to resume (its first start failed) is gone, as a failed
+    /// start is, its unfinished work kept on its branch.
     pub(super) async fn plain_gone(&self, task: &Task, exit: &str) {
-        self.plain_failed(task, format!("Its CLI ended: {exit}."))
+        if task.state == TaskState::Starting || self.last_worker_native_id(task).await.is_none() {
+            self.plain_failed(task, format!("{CLI_ENDED}: {exit}."))
+                .await;
+            return;
+        }
+        let words = format!("{CLI_ENDED}; the next message continues it ({exit}).");
+        let live = self.task_live(task);
+        // Until its word is in: a `brigadier wait` seeing it idle would end empty.
+        live.reporting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let kept = self
+            .update_task_if(
+                &task.conversation_id,
+                &task.id,
+                |task| !task.state.is_final() && !super::workers::explicitly_paused(task),
+                |task| {
+                    // A quota wait goes on at its reset, as it was.
+                    if task.quota_wait.is_none() {
+                        task.state = TaskState::Reported;
+                        task.blocked_reason = None;
+                    }
+                    task.mockup_drawing = false;
+                    task.error = Some(words.clone());
+                },
+            )
             .await;
+        if !matches!(kept, Ok(Some(_))) {
+            live.reporting
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+        self.close_held_seam(&live, task).await;
+        let _ = live.take_cutoff().await;
+        let mut event = event(&task.id, EventKind::Interrupted);
+        event.message = Some(words);
+        self.with_facts(task, &mut event).await;
+        self.worker_event(&task.conversation_id, &task.id, None, event);
+        live.reporting
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.settle_requests(&task.conversation_id).await;
     }
 
     /// A plain worker failed (`reason`): it is gone, and its session hears why. Its unfinished
@@ -1432,16 +1480,7 @@ impl SessionManager {
         let Some((conv, item)) = self.claim_worker_row(conversation_id, &head.id).await else {
             return;
         };
-        let delivered = match self
-            .deliver_direct(
-                conversation_id,
-                &task,
-                &item.text,
-                &item.attachments,
-                &item.mentions,
-            )
-            .await
-        {
+        let delivered = match self.deliver_row(conversation_id, &task, &item).await {
             Ok(()) => {
                 #[cfg(test)]
                 {
@@ -1484,16 +1523,7 @@ impl SessionManager {
         let Some((conv, item)) = self.claim_worker_row(conversation_id, &item.id).await else {
             return Ok(());
         };
-        let sent = match self
-            .deliver_direct(
-                conversation_id,
-                &task,
-                &item.text,
-                &item.attachments,
-                &item.mentions,
-            )
-            .await
-        {
+        let sent = match self.deliver_row(conversation_id, &task, &item).await {
             Ok(()) => self
                 .core
                 .take_queued(conversation_id, &item.id)
@@ -1526,6 +1556,8 @@ impl SessionManager {
             }
         }
         for worker in workers {
+            self.take_rows_it_took(conversation_id, &worker, &board.queue.items)
+                .await;
             self.drain_worker_queue(conversation_id, &worker).await;
         }
     }
@@ -1539,6 +1571,62 @@ impl SessionManager {
         text: &str,
         attachments: &[AttachmentRef],
         mentions: &[Mention],
+    ) -> Result<()> {
+        self.deliver_direct_marked(conversation_id, task, text, attachments, mentions, None)
+            .await
+    }
+
+    /// Queued row `item` to its worker, marked so a restart can tell its CLI took it (#766).
+    async fn deliver_row(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        item: &crate::work::QueuedMessage,
+    ) -> Result<()> {
+        self.deliver_direct_marked(
+            conversation_id,
+            task,
+            &item.text,
+            &item.attachments,
+            &item.mentions,
+            Some(&item.id),
+        )
+        .await
+    }
+
+    /// A restart may have come after the worker's CLI took a row and before the row left the
+    /// queue: such a row leaves it now, not sent again (#766).
+    async fn take_rows_it_took(
+        &self,
+        conversation_id: &ConversationId,
+        worker: &TaskId,
+        rows: &[crate::work::QueuedMessage],
+    ) {
+        let Ok(task) = self.task_by_id(conversation_id, worker).await else {
+            return;
+        };
+        for row in rows
+            .iter()
+            .filter(|row| row.worker.as_ref() == Some(worker))
+        {
+            if self
+                .worker_took(&task, &super::workers::once_mark(&row.id))
+                .await
+                && let Err(err) = self.core.take_queued(conversation_id, &row.id).await
+            {
+                tracing::warn!(task = %worker, error = %err, "could not take a message its worker took out of the queue");
+            }
+        }
+    }
+
+    async fn deliver_direct_marked(
+        &self,
+        conversation_id: &ConversationId,
+        task: &Task,
+        text: &str,
+        attachments: &[AttachmentRef],
+        mentions: &[Mention],
+        once: Option<&str>,
     ) -> Result<()> {
         let live = self.task_live(task);
         if task.state == TaskState::Starting {
@@ -1566,8 +1654,12 @@ impl SessionManager {
                 )));
             }
         };
+        let marked = once.map_or_else(
+            || text.to_owned(),
+            |id| super::workers::marked_once(text, id),
+        );
         let input = self
-            .direct_input(conversation_id, scratch, text, attachments, mentions)
+            .direct_input(conversation_id, scratch, &marked, attachments, mentions)
             .await?;
         let wait = self.message_takes_quota_wait(&live, &task).await?;
         if let Err(err) = self.deliver_to_worker(conversation_id, &task, input).await {
@@ -1915,6 +2007,33 @@ impl SessionManager {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
+        // Its CLI ended and it was kept (#811): a note is its next message, which resumes its CLI
+        // session; with none, nothing starts and the reply says it is ready.
+        if !task.state.is_final()
+            && task.quota_wait.is_none()
+            && !super::workers::explicitly_paused(&task)
+            && task.error.as_deref().is_some_and(cli_ended)
+        {
+            let note = note.filter(|note| !note.trim().is_empty());
+            let done = note.is_some();
+            if let Some(note) = note {
+                self.send_plain(&task, note).await?;
+                self.orchestrator_step(
+                    &task.conversation_id,
+                    crate::work::OrchestratorStepKind::Resumed {
+                        task_id: task.id.clone(),
+                    },
+                )
+                .await;
+            }
+            return Ok(CliReply::ok(&ManageOutput {
+                id: short(&task.id.0),
+                done,
+                to: None,
+                off_routing: None,
+                worker: self.worker_now(&task).await,
+            }));
+        }
         // Held as a message to the paused worker is, and goes with the resume: no row of its own.
         if let Some(note) = note
             && super::workers::explicitly_paused(&task)

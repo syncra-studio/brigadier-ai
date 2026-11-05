@@ -682,6 +682,7 @@ fn net_word(kind: EventKind) -> &'static str {
         EventKind::UsageLimit => "hit a usage limit",
         EventKind::FreshContext => "compacted its context",
         EventKind::Quiet => "is quiet",
+        EventKind::Settled => "was settled",
         // A session's events only; never a worker's.
         EventKind::Answered => "answered",
         EventKind::Removed => "had a message removed",

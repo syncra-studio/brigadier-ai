@@ -32,6 +32,10 @@ gone: boolean,
  */
 paused?: boolean, 
 /**
+ * Its CLI ended on its own and its next message continues it: the words saying so.
+ */
+cliEnded?: string, 
+/**
  * When its CLI last said anything.
  */
 lastEventAtMs: number | null, 

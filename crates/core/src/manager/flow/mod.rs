@@ -2683,6 +2683,8 @@ mod interrupted_turn_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(unix)]
 mod block_queue_tests;
+#[cfg(unix)]
+mod dead_cli_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod litter_tests;
