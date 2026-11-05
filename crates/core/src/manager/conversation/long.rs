@@ -157,7 +157,7 @@ impl SessionManager {
         }
         let cli = state.cli.clone().filter(|cli| cli.session.can_compact())?;
         state.busy = true;
-        state.interrupted = false;
+        state.stop_over();
         state.compacting = true;
         state.request = None;
         state.turn_error = None;

@@ -301,6 +301,9 @@ struct ConvState {
     end_commands: bool,
     /// The user stopped the running turn: nothing more is steered into it.
     interrupted: bool,
+    /// The user's Stop, until the next turn starts: what they send goes right in, never judged,
+    /// whatever still holds. Don't resume sets `interrupted` too, but is no Stop.
+    user_stopped: bool,
     /// The CLI is being closed on purpose (hibernate, archive, an account switch).
     closing: bool,
     /// Envelopes for coming turns, each with the request it belongs to.
@@ -520,6 +523,12 @@ impl ConvState {
             .as_ref()
             .is_some_and(|jobs| !jobs.owed.is_empty())
             || self.runs_cli_work()
+    }
+
+    /// A new turn starts: no stop stands any more.
+    fn stop_over(&mut self) {
+        self.interrupted = false;
+        self.user_stopped = false;
     }
 
     /// Its CLI's work that still runs: a job, or a command past its turn.
@@ -1423,11 +1432,11 @@ impl SessionManager {
         }
         let mut state = conv.state.lock().await;
         state.last_activity_ms = now_ms();
-        // A turn the user's Stop is ending has no work left to judge against: as with none. A
-        // side chat keeps the plain queue.
-        let stopping =
-            state.interrupted && !steer && !paused && queue_judging::judges_queue(&conversation);
-        if state.busy && !state.compacting && !stopping {
+        // After the user's Stop nothing is judged, whatever still holds. A side chat keeps the
+        // plain queue.
+        let stopped =
+            state.user_stopped && !steer && !paused && queue_judging::judges_queue(&conversation);
+        if state.busy && !state.compacting && !stopped {
             if steer {
                 // In the running turn's block from the first frame: marked in the write that stores it.
                 let message = self
@@ -1498,13 +1507,14 @@ impl SessionManager {
         }
         // No turn runs, but the Chat's work still holds (its workers, its CLI's background
         // commands): as a session's, the message waits in the queue, judged in the background.
-        // Paused workers alone don't make it wait: it goes right in. A Steer always does.
+        // Paused workers alone don't make it wait, nor does anything after the user's Stop: it
+        // goes right in. A Steer always does.
         let mut holds = false;
         let mut into = None;
         if !paused && queue_judging::judges_queue(&conversation) {
             drop(state);
             holds = self.work_holds(&conv).await;
-            if !steer && holds && self.queue_holds(&conv).await {
+            if !steer && !stopped && holds && self.queue_holds(&conv).await {
                 return self
                     .queue_to_judge(&conv, text, attachments, mentions, queue_index)
                     .await;
@@ -1681,7 +1691,7 @@ impl SessionManager {
         let id = &conv.id;
         // A reply instead of "Build it" closes the plan's card (harness D7).
         self.plan_replied(id).await;
-        let (busy, held, compacting, quiet, stopping) = {
+        let (busy, held, compacting, quiet, stopped) = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
             (
@@ -1689,7 +1699,7 @@ impl SessionManager {
                 state.seam.held,
                 state.compacting,
                 state.busy && state.seam.quiet,
-                state.busy && state.interrupted,
+                state.user_stopped,
             )
         };
         // No steer while compacting: it waits in the queue and goes once compaction is done.
@@ -1735,8 +1745,8 @@ impl SessionManager {
             .await;
             return Ok(SendOutcome::Sent(message));
         }
-        // A turn the user's Stop is ending has no work left to judge against: as with none.
-        if busy && !stopping && !paused {
+        // After the user's Stop nothing is judged, whatever still holds or is still ending.
+        if busy && !stopped && !paused {
             // It waits in the queue, judged in the background (D157).
             return self
                 .queue_to_judge(conv, text, attachments, mentions, queue_index)
@@ -1744,9 +1754,10 @@ impl SessionManager {
         }
         // No turn runs, but the session's work still holds (its workers, its CLI's background
         // commands): the message waits in the queue all the same, judged in the background.
-        // Paused workers alone don't make it wait: it goes right in. A Steer always does.
+        // Paused workers alone don't make it wait, nor does anything after the user's Stop: it
+        // goes right in. A Steer always does.
         let holds = !paused && self.work_holds(conv).await;
-        if !steer && holds && self.queue_holds(conv).await {
+        if !steer && !stopped && holds && self.queue_holds(conv).await {
             return self
                 .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
@@ -1762,7 +1773,7 @@ impl SessionManager {
             return Ok(SendOutcome::Queued(item));
         }
         // Into the work that holds with no turn running: it takes it (D25), in its open block
-        // from the first frame. Behind a turn being stopped, the next turn carries it.
+        // from the first frame. Behind a turn still ending, the next turn carries it.
         let into = if holds {
             self.request_for(id).await
         } else {
@@ -2152,6 +2163,7 @@ impl SessionManager {
         {
             let mut state = conv.state.lock().await;
             state.interrupted = true;
+            state.user_stopped = true;
             state.wait_timer += 1;
         }
         self.cancel_quota_recovery(&id).await?;
@@ -2526,7 +2538,7 @@ impl SessionManager {
             }
             // A turn of its own, for no request.
             state.busy = true;
-            state.interrupted = false;
+            state.stop_over();
             state.compacting = true;
             state.request = None;
             state.turn_error = None;
@@ -2897,7 +2909,7 @@ impl SessionManager {
                 None => envelopes[0].1.clone(),
             };
             state.busy = true;
-            state.interrupted = false;
+            state.stop_over();
             state.landed = false;
             state.watchdog.begin(now_ms());
             state.limit_hit = None;
@@ -5458,7 +5470,7 @@ impl SessionManager {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
                         state.busy = true;
-                        state.interrupted = false;
+                        state.stop_over();
                         state.limit_hit = None;
                         state.model_failed = false;
                         state.turn_error = None;

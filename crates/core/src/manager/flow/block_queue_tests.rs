@@ -5,10 +5,12 @@
 //! in (its workers paused or stopped, its turn stopped) judges nothing: a follow-up goes right in,
 //! with no row in the rail.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use brigadier_cli::protocol::CliRequest;
+use brigadier_providers::{ItemStatus, ProviderEvent};
 use serde_json::json;
+use tokio::sync::mpsc;
 
 use super::chat_thread_tests::new_chat;
 use super::cli_tests::{Answers, brigadier, start};
@@ -606,21 +608,318 @@ async fn a_stop_ends_deciding_on_a_row_already_in_the_rail() {
     flow.stop().await;
 }
 
-/// A worker that really runs: its follow-up is still judged, with or without a Stop of the turn,
-/// which leaves workers to their own stop (D157).
+/// A worker that really runs, with no Stop: its follow-up is still judged (D157).
 #[tokio::test]
 async fn a_follow_up_is_still_judged_while_a_worker_really_runs() {
     let (flow, _answers, release) = block("block-running-judged").await;
     let id = flow.conversation.clone();
-    flow.manager.interrupt(id.clone()).await.unwrap();
-    let conv = flow.manager.conv(&id).unwrap();
-    assert!(flow.manager.queue_holds(&conv).await, "its worker runs");
-    let row = match follow_up(&flow, &id, FIRST).await {
+    judged(&flow, &id, FIRST).await;
+    waits(&flow, FIRST).await;
+    release.notify_one();
+    flow.stop().await;
+}
+
+/// `text` is judged: a row of the rail, Deciding from the first frame.
+async fn judged(flow: &Flow, id: &ConversationId, text: &str) {
+    let row = match follow_up(flow, id, text).await {
         SendOutcome::Queued(item) => item,
         sent => panic!("it is judged: {sent:?}"),
     };
     assert!(row.deciding, "Deciding from the first frame: {row:?}");
+}
+
+/// The gap before Stop's worker stops arrive: the worker still runs, yet the block is stopped, so
+/// a follow-up goes right in and joins it. The turn it starts ends the Stop: the next one, the
+/// worker still running, is judged again.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_follow_up_goes_right_in_after_a_stop_before_its_worker_stops() {
+    let (flow, answers, release) = block("block-stop-gap").await;
+    let id = flow.conversation.clone();
+    let open = flow.board().await.latest_request().unwrap().id.clone();
+    flow.manager.interrupt(id.clone()).await.unwrap();
+    let conv = flow.manager.conv(&id).unwrap();
+    assert!(
+        flow.manager.queue_holds(&conv).await,
+        "its worker still runs"
+    );
+    let sent = follow_up(&flow, &id, FIRST).await;
+    let message = went_right_in(&flow, &id, sent).await;
+    flow.idle().await;
+    let marks = super::tab_chat_tests::steer_marks(&flow, &message.id).await;
+    assert!(
+        !marks.is_empty()
+            && marks
+                .iter()
+                .all(|into| into.as_deref() == Some(open.as_str())),
+        "it joins the block that holds: {marks:?}"
+    );
+    assert_eq!(inputs(&answers).last().unwrap(), FIRST);
+    judged(&flow, &id, "And the docs.").await;
+    waits(&flow, "And the docs.").await;
+    release.notify_one();
+    flow.stop().await;
+}
+
+/// The same gap in a Chat.
+#[tokio::test]
+async fn a_chats_follow_up_goes_right_in_after_a_stop_before_its_worker_stops() {
+    let (script, answers, release) = worker_script();
+    let behavior = Arc::new(FakeBehavior::default());
+    *behavior.judge.lock().unwrap() = Some("WAITS");
+    let flow = Flow::start(
+        "block-chat-stop-gap",
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, "Fix it from the Chat.").await;
+    let conv = flow.manager.conv(&chat).unwrap();
+    super::eventually("the worker to run", || {
+        answers.lock().unwrap().contains_key("worker running")
+    })
+    .await;
+    super::eventually_async("the thread to rest", || conv.idle()).await;
+    flow.manager.interrupt(chat.clone()).await.unwrap();
+    assert!(
+        flow.manager.queue_holds(&conv).await,
+        "its worker still runs"
+    );
+    let sent = follow_up(&flow, &chat, FIRST).await;
+    went_right_in(&flow, &chat, sent).await;
+    super::eventually("its turn", || {
+        inputs(&answers).iter().any(|input| input == FIRST)
+    })
+    .await;
+    release.notify_one();
+    flow.stop().await;
+}
+
+/// Don't resume also marks the thread interrupted, but it is no Stop: a worker that really runs
+/// still has its follow-up judged.
+#[tokio::test]
+async fn dont_resume_is_no_stop_a_running_workers_follow_up_is_still_judged() {
+    let (flow, _answers, release) = block("block-dont-resume").await;
+    let id = flow.conversation.clone();
+    flow.manager.dont_resume(&id).await.unwrap();
+    judged(&flow, &id, FIRST).await;
     waits(&flow, FIRST).await;
     release.notify_one();
+    flow.stop().await;
+}
+
+/// A session whose "Start it." turn emits `events` and rests, keeping the CLI's events; the
+/// judge answers WAITS.
+async fn cli_work(
+    name: &str,
+    events: Vec<ProviderEvent>,
+) -> (Flow, Answers, mpsc::Sender<ProviderEvent>) {
+    let answers = Answers::default();
+    let sender: Arc<Mutex<Option<mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let script: Script = {
+        let (answers, sender) = (answers.clone(), sender.clone());
+        Arc::new(move |turn| {
+            let (answers, sender, events) = (answers.clone(), sender.clone(), events.clone());
+            Box::pin(async move {
+                answers
+                    .lock()
+                    .unwrap()
+                    .entry("inputs".into())
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(turn.input));
+                if turn.input.contains("Start it.") {
+                    for event in events {
+                        let _ = turn.events.send(event).await;
+                    }
+                    *sender.lock().unwrap() = Some(turn.events.clone());
+                }
+                Reply::text("Noted.")
+            })
+        })
+    };
+    let behavior = Arc::new(FakeBehavior::default());
+    *behavior.judge.lock().unwrap() = Some("WAITS");
+    let flow = Flow::start(
+        name,
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    flow.say("Start it.").await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually_async("the turn to end", || conv.idle()).await;
+    assert!(flow.manager.queue_holds(&conv).await, "its work holds");
+    let sender = sender.lock().unwrap().clone().expect("the CLI's events");
+    (flow, answers, sender)
+}
+
+fn job(running: &[&str]) -> ProviderEvent {
+    ProviderEvent::BackgroundJobs {
+        running: running.iter().map(|job| (*job).to_owned()).collect(),
+    }
+}
+
+fn subagent() -> ProviderEvent {
+    ProviderEvent::ToolCall {
+        item_id: "spawn".into(),
+        name: "agents/spawnAgent".into(),
+        input: Some(r#"{"message":"sleep 40"}"#.into()),
+        status: ItemStatus::InProgress,
+        output: None,
+        kept: None,
+    }
+}
+
+/// After the user's Stop `flow`'s follow-up goes right in, on a turn of its own message.
+async fn right_in_after_stop(flow: &Flow, answers: &Answers) {
+    let id = flow.conversation.clone();
+    let sent = follow_up(flow, &id, FIRST).await;
+    went_right_in(flow, &id, sent).await;
+    super::eventually("its turn", || {
+        inputs(answers).iter().any(|input| input == FIRST)
+    })
+    .await;
+}
+
+/// With no Stop, a background command or a subagent still running has it judged (D157).
+#[tokio::test]
+async fn a_follow_up_is_still_judged_while_cli_work_really_runs() {
+    for (name, event) in [
+        ("block-job-judged", job(&["a"])),
+        ("block-subagent-judged", subagent()),
+    ] {
+        let (flow, _answers, _sender) = cli_work(name, vec![event]).await;
+        let id = flow.conversation.clone();
+        judged(&flow, &id, FIRST).await;
+        waits(&flow, FIRST).await;
+        flow.stop().await;
+    }
+}
+
+/// After the user's Stop, a background command still running judges nothing.
+#[tokio::test]
+async fn a_follow_up_goes_right_in_after_a_stop_while_a_background_command_runs() {
+    let (flow, answers, sender) = cli_work("block-stop-job", vec![job(&["a"])]).await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    right_in_after_stop(&flow, &answers).await;
+    drop(sender);
+    flow.stop().await;
+}
+
+/// After the user's Stop, a subagent still running judges nothing.
+#[tokio::test]
+async fn a_follow_up_goes_right_in_after_a_stop_while_a_subagent_runs() {
+    let (flow, answers, sender) = cli_work("block-stop-subagent", vec![subagent()]).await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    right_in_after_stop(&flow, &answers).await;
+    drop(sender);
+    flow.stop().await;
+}
+
+/// After the user's Stop, a finished command whose turn hasn't started judges nothing, though it
+/// still holds the block.
+#[tokio::test]
+async fn a_follow_up_goes_right_in_after_a_stop_while_a_finished_commands_turn_is_owed() {
+    use brigadier_providers::claude::parse::{Output, Parser};
+
+    let (script, answers, _release) = worker_script();
+    let behavior = Arc::new(FakeBehavior {
+        session_file: true,
+        ..FakeBehavior::default()
+    });
+    *behavior.judge.lock().unwrap() = Some("WAITS");
+    let flow = Flow::start(
+        "block-stop-owed",
+        Options {
+            behavior,
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let id = flow.conversation.clone();
+    flow.say("Look.").await;
+    flow.settled().await;
+    let conv = flow.manager.conv(&id).unwrap();
+    super::eventually_async("the turn to end", || conv.idle()).await;
+    flow.manager.interrupt(id.clone()).await.unwrap();
+    // The thread's own record: the command ran, and ended with the turn it owes not yet begun.
+    let mut parser = Parser::live();
+    for line in include_str!("fixtures/claude-background-watch.jsonl").lines() {
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        if value.get("phase").and_then(serde_json::Value::as_str) == Some("owed") {
+            break;
+        }
+        if value.get("phase").is_some() || value.get("fixture").is_some() {
+            continue;
+        }
+        for output in parser.feed(line) {
+            if let Output::Event(event) = output {
+                flow.manager.follow_cli_thread(&conv, Some(&event)).await;
+            }
+        }
+    }
+    assert!(
+        flow.manager.thread_view(&id).unwrap().jobs.waking,
+        "its end owes a turn"
+    );
+    assert!(flow.manager.work_holds(&conv).await, "it holds the block");
+    let sent = follow_up(&flow, &id, FIRST).await;
+    went_right_in(&flow, &id, sent).await;
+    super::eventually("its turn", || {
+        inputs(&answers).iter().any(|input| input == FIRST)
+    })
+    .await;
+    flow.stop().await;
+}
+
+/// The CLI's own turn for a job's end, after a Stop: the Stop stands, so a follow-up is no row
+/// and no judge; it goes once that turn ends.
+#[tokio::test]
+async fn a_follow_up_goes_right_in_behind_the_clis_own_turn_after_a_stop() {
+    let (flow, answers, sender) = cli_work("block-stop-own-turn", vec![job(&["a"])]).await;
+    let id = flow.conversation.clone();
+    flow.manager.interrupt(id.clone()).await.unwrap();
+    sender.send(job(&[])).await.unwrap();
+    sender
+        .send(ProviderEvent::TurnStarted { turn_id: None })
+        .await
+        .unwrap();
+    let conv = flow.manager.conv(&id).unwrap();
+    super::eventually_async("the CLI's own turn", || async { !conv.idle().await }).await;
+    let sent = follow_up(&flow, &id, FIRST).await;
+    went_right_in(&flow, &id, sent).await;
+    assert!(
+        !inputs(&answers).iter().any(|input| input == FIRST),
+        "it waits for that turn's end"
+    );
+    sender
+        .send(ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: brigadier_providers::TurnStatus::Completed,
+            duration_ms: Some(1),
+            usage: None,
+        })
+        .await
+        .unwrap();
+    super::eventually("its turn", || {
+        inputs(&answers).iter().any(|input| input == FIRST)
+    })
+    .await;
     flow.stop().await;
 }
