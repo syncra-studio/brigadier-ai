@@ -101,6 +101,8 @@ const WORKER_DENIED_TOOLS: &str = "AskUserQuestion";
 /// Claude Code's own plan mode, a permission mode (checked on 2.1.310: `set_permission_mode`
 /// takes it between turns, and `ExitPlanMode` proposes the plan as a permission request).
 const PLAN_MODE: &str = "plan";
+/// Full access, as Claude's permission mode.
+const BYPASS_MODE: &str = "bypassPermissions";
 /// Claude's `ExitPlanMode` declined with these words once its plan is on the user's card
 /// (harness D7): the turn ends there; the user builds it or replies.
 const PLAN_CAPTURED: &str = "Brigadier showed the user your plan on a card. Stop here and end your turn: they will reply to change it, or tell you to build it.";
@@ -1047,13 +1049,27 @@ fn permission_mode(spec: &SessionSpec) -> &'static str {
     if matches!(spec.tools, ToolSet::SideChat | ToolSet::TabChat) {
         return "dontAsk";
     }
-    match spec.access {
+    access_mode(spec.access)
+}
+
+/// Claude's permission mode at `access`.
+fn access_mode(access: Access) -> &'static str {
+    match access {
         Access::Ask => "default",
         Access::AcceptEdits => "acceptEdits",
-        Access::Full => "bypassPermissions",
+        Access::Full => BYPASS_MODE,
         // A read-only session never asks: what its allow rules don't cover is denied.
         Access::ReadOnly => "dontAsk",
     }
+}
+
+/// The mode a running session goes to for `access`. `None`: it can't. Claude takes
+/// `bypassPermissions` only in a process started in it (`bypass_not_launched`, checked on
+/// 2.1.318, which takes every other change); such a session stays where it is until it starts
+/// again, and Brigadier allows what it asks meanwhile.
+fn mode_for_running(access: Access, started_bypassing: bool) -> Option<&'static str> {
+    let mode = access_mode(access);
+    (mode != BYPASS_MODE || started_bypassing).then_some(mode)
 }
 
 /// Brigadier's settings layer for a session, passed with `--settings` (above project settings).
@@ -1775,7 +1791,8 @@ impl Provider for Claude {
                 shared,
                 parser: parser_tx,
                 memory,
-                level_mode: permission_mode(&spec),
+                level_mode: Mutex::new(permission_mode(&spec)),
+                started_bypassing: permission_mode(&spec) == BYPASS_MODE,
             };
 
             let mut initialize = Map::new();
@@ -2145,7 +2162,9 @@ pub struct ClaudeSession {
     memory: Arc<MemoryRecord>,
     /// The session's own permission mode ([`permission_mode`]): what it runs in out of plan
     /// mode.
-    level_mode: &'static str,
+    level_mode: Mutex<&'static str>,
+    /// It started in `bypassPermissions`, so it can go back to it ([`mode_for_running`]).
+    started_bypassing: bool,
 }
 
 impl ClaudeSession {
@@ -2376,7 +2395,11 @@ impl ProviderSession for ClaudeSession {
 
     fn set_plan_mode(&self, on: bool) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
-            let wanted = if on { PLAN_MODE } else { self.level_mode };
+            let wanted = if on {
+                PLAN_MODE
+            } else {
+                *lock(&self.level_mode)
+            };
             // Out of plan mode is the session's own level, whatever Claude left plan mode for.
             let now = lock(&self.shared.mode).clone();
             if now == wanted || (!on && now != PLAN_MODE) {
@@ -2388,6 +2411,25 @@ impl ProviderSession for ClaudeSession {
             self.request(request, CONTROL_TIMEOUT).await?;
             *lock(&self.shared.mode) = wanted.to_owned();
             Ok(())
+        })
+    }
+
+    fn set_access(&self, access: Access) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async move {
+            let Some(wanted) = mode_for_running(access, self.started_bypassing) else {
+                return Ok(false);
+            };
+            // In plan mode it goes there as it leaves ([`Self::set_plan_mode`]).
+            let now = lock(&self.shared.mode).clone();
+            if now != PLAN_MODE && now != wanted {
+                let mut request = Map::new();
+                request.insert("subtype".into(), "set_permission_mode".into());
+                request.insert("mode".into(), wanted.into());
+                self.request(request, CONTROL_TIMEOUT).await?;
+                *lock(&self.shared.mode) = wanted.to_owned();
+            }
+            *lock(&self.level_mode) = wanted;
+            Ok(true)
         })
     }
 
@@ -5083,6 +5125,27 @@ for line in sys.stdin:
                 json!({"strict":strict,"denied":denied,"env":env}).to_string(),
             )
             .unwrap();
+        }
+    }
+
+    /// #603: Claude refuses `bypassPermissions` in a process not started in it, and takes every
+    /// other change.
+    #[test]
+    fn a_running_session_goes_to_full_access_only_if_it_started_there() {
+        assert_eq!(mode_for_running(Access::Full, false), None);
+        assert_eq!(
+            mode_for_running(Access::Full, true),
+            Some("bypassPermissions")
+        );
+        for started_bypassing in [false, true] {
+            assert_eq!(
+                mode_for_running(Access::Ask, started_bypassing),
+                Some("default")
+            );
+            assert_eq!(
+                mode_for_running(Access::AcceptEdits, started_bypassing),
+                Some("acceptEdits")
+            );
         }
     }
 }

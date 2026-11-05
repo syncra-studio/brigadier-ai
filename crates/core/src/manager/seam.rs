@@ -116,6 +116,10 @@ pub(crate) struct SeamFile {
     /// turn runs, and its successor starts there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moving: Option<crate::model::ModelChoice>,
+    /// The messages a recovery found the last successor took, though its turn was never seen
+    /// starting: they never go again, however many restarts come before it is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub began: Vec<String>,
 }
 
 impl Default for SeamFile {
@@ -125,6 +129,7 @@ impl Default for SeamFile {
             phase: Phase::Live,
             seams: Vec::new(),
             moving: None,
+            began: Vec::new(),
         }
     }
 }
