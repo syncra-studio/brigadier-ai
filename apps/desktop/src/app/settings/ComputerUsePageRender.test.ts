@@ -26,7 +26,7 @@ test("computer use settings: model, enable, menu bar, permissions and setup, in 
   assert.deepEqual(seen.model, { shown: "Opus · High", disabled: false });
   assert.deepEqual(seen.modelCodexOnly, { shown: "Codex's default · High", disabled: false });
   assert.deepEqual(seen.modelExtraAccount, { shown: "Opus · High", disabled: false });
-  assert.deepEqual(seen.modelForbidden, { saves: 0, error: "Refused by your rule “Never use Opus for Computer use”" });
+  assert.deepEqual(seen.modelForbidden, { saves: 0, error: "", greyed: "Never use Opus for Computer use" });
   // An effort above a cap is no refusal: the pick is saved and runs at the cap (D-L38).
   assert.deepEqual(seen.modelAboveCeiling, { saves: 1, error: "" });
   assert.deepEqual(seen.modelMine, { shown: "Gpt-6-luna · Low", disabled: false });

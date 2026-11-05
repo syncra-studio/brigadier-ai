@@ -168,12 +168,17 @@ try {
     await until("model picker", () => !!document.querySelector("[data-slot=model-picker-model]"));
     const sonnet = [...document.querySelectorAll("[data-slot=model-picker-model]")].find((el) => el.textContent?.includes("Sonnet"))!;
     await fixtureClick(sonnet); await until("same provider dispatch", () => asked.some((req) => req.method === "updateSetup"));
+    // A pick keeps the picker open; its trigger closes it.
+    await fixtureClick(document.querySelector("[data-slot=model-selector-trigger]")!);
+    await until("picker closed", () => !document.querySelector("[data-slot=model-picker-popover]"));
     // The cross-provider path reports queuing truthfully; it does not claim to have switched.
     await fixtureClick(document.querySelector("[data-slot=model-selector-trigger]")!);
     await until("picker reopened", () => !!document.querySelector("[data-slot=model-picker-agent]"));
     const codex = [...document.querySelectorAll("[data-slot=model-picker-agent]")].find((el) => el.textContent?.includes("Codex"))!;
     await fixtureClick(codex); await until("GPT row", () => [...document.querySelectorAll("[data-slot=model-picker-model]")].some((el) => el.textContent?.includes("GPT")));
     await fixtureClick([...document.querySelectorAll("[data-slot=model-picker-model]")].find((el) => el.textContent?.includes("GPT"))!);
+    // The move is asked for as the picker closes.
+    await fixtureClick(document.querySelector("[data-slot=model-selector-trigger]")!);
     await until("cross provider dispatch", () => asked.some((req) => req.method === "continueOn")); await sleep();
     seen.pickerCalls = asked.filter((req) => req.method === "updateSetup" || req.method === "continueOn" || req.method === "sendMessage");
     seen.feedback = useToasts.getState().toasts.map((toast) => toast.text);

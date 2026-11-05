@@ -1,52 +1,39 @@
 import { useState } from "react";
 
 import { ActionError } from "@/app/inspector/providers/ActionError";
-import { Picker } from "@/app/inspector/providers/Picker";
 import { RecordToggle } from "@/app/inspector/providers/RecordToggle";
 import { Section, useAction } from "@/app/inspector/providers/shared";
 import { Button, Input, ToggleGroup, ToggleGroupItem } from "@/components/controls";
+import { ModelSelector } from "@/components/shared";
 import { pickFolder } from "@/ipc/client";
-import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
+import type { ModelChoice } from "@/ipc/generated";
 import { startRawSession } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
+import { useModelGroups } from "@/lib/setup";
 import { cliFacts, PROVIDERS } from "@/lib/providerKinds";
-
-/** Model choices for a provider: the CLI's default, then its live list. */
-function modelOptions(overview: ProviderOverview | undefined) {
-  return [
-    { value: "", label: "CLI default" },
-    ...(overview?.models?.models ?? []).map((model) => ({
-      value: model.id,
-      label: model.id,
-      hint: model.displayName,
-    })),
-  ];
-}
 
 export function StartSessionForm() {
   const overviews = useApp((s) => s.providers.view?.providers ?? []);
-  const [provider, setProvider] = useState<ProviderKind>(PROVIDERS[0]!);
+  const groups = useModelGroups();
+  // No model: the CLI's own default.
+  const [choice, setChoice] = useState<ModelChoice>({ provider: PROVIDERS[0]!, model: null, effort: null });
   const [cwd, setCwd] = useState("");
-  const [model, setModel] = useState("");
-  const [effort, setEffort] = useState("");
   const [access, setAccess] = useState<"acceptEdits" | "readOnly">("acceptEdits");
   const [approvals, setApprovals] = useState<"delegated" | "declineAll">("delegated");
   const [record, setRecord] = useState(false);
   const start = useAction();
 
-  const overview = overviews.find((entry) => entry.provider === provider);
-  const chosen = overview?.models?.models.find((entry) => entry.id === model);
-  const efforts = chosen?.efforts ?? [];
+  const overview = overviews.find((entry) => entry.provider === choice.provider);
   const canStart = cwd.trim().startsWith("/") && overview?.status?.loggedIn === true;
 
   const submit = () =>
     void start.run(() =>
       startRawSession({
-        provider,
+        provider: choice.provider,
         cwd: cwd.trim(),
-        model: model || null,
-        effort: effort || null,
+        model: choice.model,
+        effort: choice.effort,
         access: access === "acceptEdits" ? { type: "acceptEdits" } : { type: "readOnly" },
         approvals,
         record,
@@ -63,44 +50,12 @@ export function StartSessionForm() {
         }}
       >
         <div className="flex items-center gap-2">
-          <ToggleGroup
-            type="single"
-            size="sm"
-            variant="outline"
-            value={provider}
-            onValueChange={(value) => {
-              if (value) {
-                setProvider(value);
-                setModel("");
-                setEffort("");
-              }
-            }}
-            aria-label="Provider"
-          >
-            {PROVIDERS.map((id) => (
-              <ToggleGroupItem key={id} value={id} className="text-xs">
-                {cliFacts(id).label}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <Picker
-            label="Model"
-            value={model}
-            options={modelOptions(overview)}
-            onChange={(value) => {
-              setModel(value);
-              setEffort("");
-            }}
-          />
-          <Picker
-            label="Reasoning effort"
-            value={effort}
-            options={[
-              { value: "", label: "Default effort" },
-              ...efforts.map((level) => ({ value: level, label: level })),
-            ]}
-            onChange={setEffort}
-            disabled={efforts.length === 0}
+          <ModelSelector
+            groups={groups}
+            value={choice}
+            onChange={setChoice}
+            agentDefault={(provider) => cliFacts(provider).vendor}
+            noFast
           />
         </div>
         <div className="flex items-center gap-2">
