@@ -1352,6 +1352,9 @@ impl Provider for Codex {
             if let Some(home) = self.own_home(user_setup_naked(Some(&spec))) {
                 return self.in_home(&home).start(spec, ledger).await;
             }
+            if self.main_home.is_some() {
+                alias_what_an_account_removes(&mut spec);
+            }
             if stop_hook_of(Some(&spec)).is_some() && !self.trust_stop_hook(&spec).await {
                 spec.stop_hook = None;
             }
@@ -1625,10 +1628,17 @@ impl Provider for Codex {
         })
     }
 
-    fn terminal(&self, spec: SessionSpec, cwd: PathBuf) -> BoxFuture<'_, Result<TerminalCommand>> {
+    fn terminal(
+        &self,
+        mut spec: SessionSpec,
+        cwd: PathBuf,
+    ) -> BoxFuture<'_, Result<TerminalCommand>> {
         Box::pin(async move {
             if let Some(home) = self.own_home(user_setup_naked(Some(&spec))) {
                 return self.in_home(&home).terminal(spec, cwd).await;
+            }
+            if self.main_home.is_some() {
+                alias_what_an_account_removes(&mut spec);
             }
             let Origin::Resume { native_id } = &spec.origin else {
                 return Err(Error::Invalid(
@@ -2274,6 +2284,20 @@ fn by_name<'a>(http: bool, key: &str, parts: &'a [McpValuePart]) -> Option<ByNam
             Some(ByName::Bearer(var))
         }
         _ => None,
+    }
+}
+
+/// An extra account's CLI runs without the login variables [`HOME`] lists, so Codex can't read
+/// one by name. Without its variable part the value stays a reference Codex can't name, which
+/// goes by its alias holding the launch's value ([`McpServer::env`]).
+fn alias_what_an_account_removes(spec: &mut SessionSpec) {
+    for server in &mut spec.mcp_servers {
+        for (_, parts) in &mut server.sources.references {
+            let removed = |part: &McpValuePart| matches!(part, McpValuePart::Var(var) if HOME.auth_vars.contains(&var.as_str()));
+            if parts.iter().any(removed) {
+                parts.retain(|part| !removed(part));
+            }
+        }
     }
 }
 

@@ -35,7 +35,7 @@ if '--version' in sys.argv:
 def capture(value):
     with open(os.environ['CAPTURE'], 'a') as f:
         f.write(json.dumps(value) + '\n')
-capture({'argv': sys.argv[1:], 'env': {k: v for k, v in os.environ.items() if k.startswith('BRIGADIER_MCP_') or k == 'ANTHROPIC_API_KEY'}})
+capture({'argv': sys.argv[1:], 'env': {k: v for k, v in os.environ.items() if k.startswith('BRIGADIER_MCP_') or k in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY')}})
 for line in sys.stdin:
     m = json.loads(line)
     capture(m)
@@ -466,4 +466,69 @@ async fn a_claude_settings_file_goes_with_a_failed_start_and_with_its_cli() {
     let failed = provider.start(naked(), Arc::new(Refused)).await;
     assert!(failed.is_err());
     assert!(files().is_empty(), "the start failed: {:?}", files());
+}
+
+/// Codex's extra account runs without its login variables too. A header it would read by name
+/// from one goes by alias instead, and never as a literal header in its config.
+#[tokio::test]
+async fn an_extra_codex_accounts_header_on_a_login_variable_goes_by_alias() {
+    let fake = Fake::new();
+    let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+        data_dir: Some(fake.0.join("data")),
+    })
+    .unwrap();
+    platform
+        .private_fs()
+        .create_private_dir(&platform.paths().data_dir)
+        .unwrap();
+    let env = Arc::new(CliEnv::from_vars([
+        ("HOME".into(), fake.0.as_os_str().to_owned()),
+        ("PATH".into(), std::env::var_os("PATH").unwrap()),
+        ("PROVIDER".into(), "codex".into()),
+        (
+            "CAPTURE".into(),
+            fake.0.join("capture.jsonl").into_os_string(),
+        ),
+        (
+            "CATALOG".into(),
+            fake.0.join("catalog.json").into_os_string(),
+        ),
+        ("OPENAI_API_KEY".into(), MADE_UP_LOGIN.into()),
+    ]));
+    env.choose(ProviderKind::Codex, Some(fake.0.join("fake-cli")));
+    std::fs::create_dir_all(fake.0.join("extra")).unwrap();
+    let provider = codex::Codex::for_account(platform, &env, &fake.0.join("extra"));
+    let mut server = header_server();
+    server.env.truncate(1);
+    server.sources.references = vec![(
+        "Authorization".into(),
+        vec![
+            McpValuePart::Text("Bearer ".into()),
+            McpValuePart::Var("OPENAI_API_KEY".into()),
+        ],
+    )];
+    let mut spec = fake.chat(Access::Full, false);
+    spec.mcp_servers = vec![server];
+    let started = provider.start(spec, Arc::new(Kept)).await.unwrap();
+    let capture = std::fs::read_to_string(fake.0.join("capture.jsonl")).unwrap();
+    let rows: Vec<Value> = capture
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let thread = rows
+        .iter()
+        .find(|row| row["method"] == "thread/start")
+        .unwrap();
+    let web = &thread["params"]["config"]["mcp_servers"]["web"];
+    assert!(web.get("bearer_token_env_var").is_none(), "{web}");
+    assert_eq!(web["http_headers"], json!({}));
+    let alias = web["env_http_headers"]["Authorization"].as_str().unwrap();
+    assert_eq!(
+        rows[0]["env"][alias],
+        json!(format!("Bearer {MADE_UP_LOGIN}"))
+    );
+    assert!(rows[0]["env"].get("OPENAI_API_KEY").is_none());
+    assert!(!rows[0]["argv"].to_string().contains(MADE_UP_LOGIN));
+    assert!(!thread.to_string().contains(MADE_UP_LOGIN));
+    started.session.close().await;
 }
