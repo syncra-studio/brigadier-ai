@@ -371,8 +371,9 @@ const QUIET: RowActivity = { running: false, awaiting: null, workers: 0 };
 export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
   const failed = failedOf(activity);
-  // Its turn failed while its work runs: its block is still open, so it reads Working until that closes.
-  const held = failed && workHolds(activity);
+  // Its turn failed while its work runs: its block is still open, so it reads Working until that
+  // closes. A paused worker keeps the block open too (`work_holds`), though no message waits for it.
+  const held = failed && (workHolds(activity) || Object.values(activity.tasks).includes("paused"));
   // Asleep, nothing of it runs (D10).
   const running = activity.run !== "hibernated" && (works(activity) || !!activity.workersWorking || !!activity.commandsWorking || held);
   const awaiting =

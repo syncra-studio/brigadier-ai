@@ -184,6 +184,13 @@ test("a turn that failed while its work runs reads Working until the block close
   assert.deepEqual(rowMark(rowActivity({ ...held([["t", "starting"]]), approvals: new Set(["a"]) })), { look: "dot", waiting: true, hover: "Needs you · approval" });
 });
 
+test("a failed turn with only a paused worker reads Working while its block is open; a message still doesn't wait for it", () => {
+  const paused = fromSnapshot({ conversationId: "failed-paused", run: "failed", tasks: [["t", "paused"]], approvals: [], questions: [] });
+  assert.deepEqual(rowMark(rowActivity(paused)), { look: "working", hover: "Working" });
+  assert.equal(tabState(rowActivity(paused), false), "working");
+  assert.equal(workHolds(paused), false, "it may wait for that very message");
+});
+
 test("turn-end timestamps survive snapshots and worker-only news, independent of finished requests", () => {
   const snapshot = fromSnapshot({ conversationId: "done", run: "idle", tasks: [], approvals: [], questions: [], turnEndedAtMs: 123 });
   useActivity.setState({ byConversation: { done: snapshot } });
