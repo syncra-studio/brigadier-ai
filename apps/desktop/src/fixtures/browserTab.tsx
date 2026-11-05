@@ -31,6 +31,9 @@ const full = params.has("full");
 const ID = "c-browser";
 const OTHER = "c-browser-2";
 const PAGE = "https://www.example.com/docs/intro?q=1#top";
+/** A stored tab that opens its address itself, once the first-launch setup is over. */
+const STORED = "c-browser-stored";
+const STORED_URL = "http://127.0.0.1:18504/";
 /** Which of two Browser tabs is in front. */
 const useFront = create<{ id: string }>(() => ({ id: ID }));
 
@@ -196,7 +199,7 @@ function Main() {
   const selection = useApp((s) => s.selection);
   const front = useFront((s) => s.id);
   if (selection.type === "settings") return selection.page === "browserImport" ? <BrowserImportPage /> : <BrowserPage />;
-  return <BrowserTab key={front} conversationId={front} active />;
+  return <BrowserTab key={front} conversationId={front} initialUrl={front === STORED ? STORED_URL : undefined} active />;
 }
 
 function Fixture() {
@@ -459,6 +462,15 @@ function Fixture() {
       press("KeyF");
       await wait(100);
       seen.newTabFind = findBar() !== null;
+
+      // A stored tab stays closed through the first-launch setup, then opens its address.
+      const before = asked.length;
+      useFront.setState({ id: STORED });
+      await wait(100);
+      seen.storedDuringSetup = asked.slice(before);
+      useApp.setState((state) => ({ settings: { ...state.settings, onboarded: true } }));
+      await until(() => asked.length > before);
+      seen.storedAfterSetup = asked.slice(before);
 
       if (!stopped) setResult(JSON.stringify(seen));
     })();
