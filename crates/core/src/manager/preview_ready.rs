@@ -1,9 +1,9 @@
 //! When a starting preview is ready to look at ([`super::preview`]): a web preview once the
 //! local URL it printed, or a TCP port a process of its process group listens on, answers an
-//! HTTP request; any preview once a process of its group owns an on-screen window. Members are
-//! found by process group, so one a launcher left behind (reparented) still counts. Every probe
-//! is cheap and bounded, and one that can't run (no `lsof`, no window server) reads as "not
-//! ready", never as an error.
+//! HTTP request; any preview once a process of its group, or one below it in another group, owns
+//! an on-screen window. Group members count even when reparented, so one a launcher left behind
+//! still does. Every probe is cheap and bounded, and one that can't run (no `lsof`, no window
+//! server) reads as "not ready", never as an error.
 
 use std::time::Duration;
 
@@ -197,6 +197,25 @@ pub(super) fn window_owners() -> Vec<u32> {
 #[cfg(not(target_os = "macos"))]
 pub(super) fn window_owners() -> Vec<u32> {
     Vec::new()
+}
+
+/// Whether one of `owners` belongs to the preview `root` leads: in its process group, or below
+/// it in the process tree whatever its group (pnpm runs a script in a group of its own, #831).
+/// Any other process's window, another session's included, is neither.
+pub(super) fn owns_a_window(
+    processes: &dyn brigadier_sandbox::Processes,
+    root: u32,
+    owners: &[u32],
+) -> bool {
+    if owners.is_empty() {
+        return false;
+    }
+    owners
+        .iter()
+        .any(|owner| processes.group_of(*owner) == Some(root))
+        || processes
+            .descendants(root)
+            .is_ok_and(|below| owners.iter().any(|owner| below.contains(owner)))
 }
 
 /// The TCP ports the processes of process group `group` listen on, per `lsof`; none when it
@@ -450,6 +469,58 @@ mod tests {
             assert_eq!(found, kind, "{command}");
             assert_eq!(infer_target(found, command).as_deref(), target, "{command}");
         }
+    }
+
+    /// `pnpm tauri:dev` puts the script, and so the app, in a process group of its own, below
+    /// the preview's shell (#831). A window counts from there, and a stranger's never does.
+    #[cfg(unix)]
+    #[test]
+    fn a_window_counts_from_a_moved_descendant_and_never_from_a_stranger() {
+        use std::io::BufRead as _;
+        use std::os::unix::process::CommandExt as _;
+        use std::process::{Command, Stdio};
+
+        let platform =
+            brigadier_sandbox::native(brigadier_sandbox::PlatformOptions::default()).unwrap();
+        let processes = platform.processes();
+        let mut root = Command::new("/bin/sh")
+            .args([
+                "-c",
+                r#"perl -e '$|=1; setpgrp(0,0); print "$$\n"; sleep 60' & wait"#,
+            ])
+            .stdout(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(root.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let moved: u32 = line.trim().parse().unwrap();
+        // Another session's preview: its own group, and not below this one.
+        let mut stranger = Command::new("sleep")
+            .arg("60")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+
+        let group = processes.group_of(moved);
+        let from_moved = owns_a_window(processes, root.id(), &[moved]);
+        let from_stranger = owns_a_window(processes, root.id(), &[stranger.id()]);
+        // The process that started the preview, as the app that holds the session is.
+        let from_above = owns_a_window(processes, root.id(), &[std::process::id()]);
+        let from_none = owns_a_window(processes, root.id(), &[]);
+
+        processes.kill_tree(root.id()).unwrap();
+        root.wait().unwrap();
+        stranger.kill().unwrap();
+        stranger.wait().unwrap();
+
+        assert_eq!(group, Some(moved), "it left the preview's group");
+        assert!(from_moved, "a moved descendant's window counts");
+        assert!(!from_stranger, "a stranger's window never counts");
+        assert!(!from_above, "the starter's window never counts");
+        assert!(!from_none);
     }
 
     #[test]

@@ -824,9 +824,7 @@ impl SessionManager {
         let (group, path) = (live.pid, live.log.clone());
         let (window, url) = blocking(move || {
             let processes = platform.processes();
-            let window = ready::window_owners()
-                .into_iter()
-                .any(|owner| processes.group_of(owner) == Some(group));
+            let window = ready::owns_a_window(processes, group, &ready::window_owners());
             Ok((window, if web { log_url(&path) } else { None }))
         })
         .await
