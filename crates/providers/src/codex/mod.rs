@@ -56,7 +56,7 @@ use brigadier_sandbox::Platform;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc, oneshot};
 
 use crate::cli::{CliEnv, parse_version, version_at_least};
 use crate::events::Events;
@@ -664,6 +664,22 @@ impl Codex {
         spec
     }
 
+    /// This home's turn to start an app-server, held from before the spawn until `initialize`
+    /// answers ([`Rpc::initialize`]). Codex's first start in a home sets up its sqlite state, and
+    /// another app-server starting meanwhile exits with "failed to initialize sqlite state
+    /// runtime" (#681, live on 0.166.0: 2 starts at once on a new home failed 14 rounds of 15,
+    /// one at a time none). Only this daemon's starts wait: another program's aren't seen.
+    async fn start_slot(&self) -> Option<OwnedMutexGuard<()>> {
+        static SLOTS: Mutex<Option<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> = Mutex::new(None);
+        let home = self.codex_home()?;
+        let slot = lock(&SLOTS)
+            .get_or_insert_default()
+            .entry(home)
+            .or_default()
+            .clone();
+        Some(slot.lock_owned().await)
+    }
+
     /// Spawns an app-server for `cwd` with the user's personal setup switched off, and
     /// initializes it.
     async fn app_server(
@@ -676,6 +692,7 @@ impl Codex {
     ) -> Result<(Arc<Rpc>, process::Lines)> {
         let spec = self.server_spec(&self.binary()?, cwd, session);
         let redactor = session.and_then(|session| session.redactor.clone());
+        let slot = self.start_slot().await;
         let process::Spawned { process, stdout } = process::spawn(
             self.platform.clone(),
             &spec,
@@ -689,7 +706,7 @@ impl Codex {
                 ..process::Options::default()
             },
         )?;
-        Ok((Arc::new(Rpc::new(process)), stdout))
+        Ok((Arc::new(Rpc::new(process, slot)), stdout))
     }
 
     /// Runs `work` against a throwaway app-server, then shuts it down.
@@ -724,9 +741,10 @@ impl Codex {
             args.drain(at..at + 2);
         }
         spec.args = args.into_iter().map(Into::into).collect();
+        let slot = self.start_slot().await;
         let process::Spawned { process, stdout } =
             process::spawn(self.platform.clone(), &spec, process::Options::default())?;
-        Self::control_on(Arc::new(Rpc::new(process)), stdout, work).await
+        Self::control_on(Arc::new(Rpc::new(process, slot)), stdout, work).await
     }
 
     /// Initializes the app-server `rpc` reads from `stdout`, runs `work`, then shuts it down.
@@ -2803,19 +2821,22 @@ struct Rpc {
     process: Arc<CliProcess>,
     next_id: AtomicI64,
     pending: Mutex<HashMap<i64, oneshot::Sender<std::result::Result<Value, String>>>>,
+    /// Its home's turn to start ([`Codex::start_slot`]), until `initialize` answers.
+    start_slot: Mutex<Option<OwnedMutexGuard<()>>>,
 }
 
 impl Rpc {
-    fn new(process: Arc<CliProcess>) -> Self {
+    fn new(process: Arc<CliProcess>, start_slot: Option<OwnedMutexGuard<()>>) -> Self {
         Self {
             process,
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
+            start_slot: Mutex::new(start_slot),
         }
     }
 
     async fn initialize(&self) -> Result<()> {
-        let _: Value = self
+        let answered: Result<Value> = self
             .call(
                 "initialize",
                 &p::InitializeParams {
@@ -2832,7 +2853,10 @@ impl Rpc {
                     }),
                 },
             )
-            .await?;
+            .await;
+        // It got past setting up its home, or it never will: the next start may go.
+        lock(&self.start_slot).take();
+        answered?;
         self.notify("initialized").await
     }
 
@@ -5310,7 +5334,7 @@ for line in sys.stdin:
         spec.cwd = Some(scratch.clone());
         let process::Spawned { process, stdout } =
             process::spawn(platform, &spec, process::Options::default()).unwrap();
-        let rpc = Arc::new(Rpc::new(process));
+        let rpc = Arc::new(Rpc::new(process, None));
         let (events_tx, mut events) = mpsc::channel(EVENTS);
         tokio::spawn(async move { while events.recv().await.is_some() {} });
         let shared = Arc::new(Shared {
@@ -5428,7 +5452,7 @@ for line in sys.stdin:
         spec.cwd = Some(scratch.clone());
         let process::Spawned { process, stdout } =
             process::spawn(platform, &spec, process::Options::default()).unwrap();
-        let rpc = Arc::new(Rpc::new(process));
+        let rpc = Arc::new(Rpc::new(process, None));
         let (events_tx, mut events) = mpsc::channel(EVENTS);
         let shared = Arc::new(Shared {
             approvals: Mutex::new(HashMap::new()),
@@ -5580,6 +5604,53 @@ for line in sys.stdin:
         }
     }
 
+    /// #681: Codex's first start in a home sets up its sqlite state, and a second app-server
+    /// starting meanwhile exits ("failed to initialize sqlite state runtime"; live on 0.166.0).
+    /// The stand-in exits the same way, so both starts only succeed one after the other.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_starts_on_one_home_wait_for_each_other() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::now_v7()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let binary = bin.join("codex");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\n\
+             mkdir \"$CODEX_HOME/setting-up\" || exit 1\n\
+             sleep 0.3\n\
+             read -r _\n\
+             rmdir \"$CODEX_HOME/setting-up\"\n\
+             printf '%s\\n' '{\"id\":1,\"result\":{}}'\n\
+             cat >/dev/null\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        std::fs::create_dir_all(&platform.paths().data_dir).unwrap();
+        let codex = Codex::new(
+            platform,
+            Arc::new(CliEnv::from_vars([
+                ("HOME".into(), dir.as_os_str().to_owned()),
+                ("CODEX_HOME".into(), dir.as_os_str().to_owned()),
+                (
+                    "PATH".into(),
+                    format!("{}:/usr/bin:/bin", bin.display()).into(),
+                ),
+            ])),
+        );
+        let (first, second) = tokio::join!(
+            codex.control(async |_: &Rpc| Ok(())),
+            codex.control(async |_: &Rpc| Ok(())),
+        );
+        assert!(first.is_ok() && second.is_ok(), "{first:?} {second:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A Codex app-server stand-in that prints `lines`, then runs a minute without reading its
     /// input: a batch file on Windows, a shell script elsewhere.
     fn deaf_app_server(dir: &Path, lines: &[&[u8]]) -> brigadier_sandbox::SpawnSpec {
@@ -5620,7 +5691,7 @@ for line in sys.stdin:
         })
         .unwrap();
         let process::Spawned { process, stdout } = process::spawn(platform, spec, options).unwrap();
-        let rpc = Arc::new(Rpc::new(process));
+        let rpc = Arc::new(Rpc::new(process, None));
         let (events_tx, events) = mpsc::channel(EVENTS);
         let shared = Arc::new(Shared {
             approvals: Mutex::new(HashMap::new()),
