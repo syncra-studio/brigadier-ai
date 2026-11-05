@@ -966,7 +966,13 @@ fn main() {
             api.prevent_exit();
             shell::quit(app, 0);
         }
-        RunEvent::Exit => shell::quit_on_exit(app),
+        RunEvent::Exit => {
+            // Every quit ends here, and a quit Apple event never returns to the code below it.
+            // Past this the thread-locals go in an order of their own, and a tab's page can't
+            // be dropped once the layer it leaves is gone.
+            browser::close_all();
+            shell::quit_on_exit(app);
+        }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             shell::user_came_to_it();
