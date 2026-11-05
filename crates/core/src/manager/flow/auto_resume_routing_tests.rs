@@ -11,6 +11,7 @@ use brigadier_providers::{ProviderKind, SessionSpec};
 
 use super::cli_tests::{brigadier, start};
 use super::{Flow, Options, Reply, Script};
+use crate::model::{ConversationKind, ModelChoice, PermissionLevel, SetupRequest};
 use crate::work::Task;
 
 /// A turn as the scripted CLI took it: whose (a worker's task id, or "thread"), on which
@@ -41,6 +42,10 @@ fn script(log: Log) -> Script {
             });
             if went_on(&turn.input) {
                 return Reply::text("Checked git log; carried on.");
+            }
+            if who == "thread" && turn.input.contains("Hold.") {
+                turn.stopped().await;
+                return Reply::text("Stopped.");
             }
             if who != "thread" {
                 if turn.input.contains("Hang") {
@@ -234,6 +239,78 @@ async fn what_goes_on_by_itself_keeps_its_routing_pick() {
     assert_eq!(*b_kind, ProviderKind::Codex);
     assert_eq!(b_spec.model.as_deref(), Some("gpt-test"));
     assert_eq!(b_spec.effort.as_deref(), Some("low"));
+    flow.stop().await;
+}
+
+/// A Chat, a thread with no project (Q76), goes on by itself with its own pick too: the same
+/// agent, model and effort, resuming its CLI session on the account it started on, though
+/// routing now picks another for new work.
+#[tokio::test]
+async fn a_chat_that_goes_on_by_itself_keeps_its_routing_pick() {
+    let log: Log = Arc::default();
+    let mut flow = flow("auto-resume-chat", &log).await;
+    let chat = flow
+        .manager
+        .create_conversation(
+            ConversationKind::Chat,
+            None,
+            Some("Chat".into()),
+            Some(SetupRequest::Chat {
+                model: ModelChoice {
+                    provider: ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: Some("medium".into()),
+                    fast: None,
+                    account: None,
+                },
+                permission: PermissionLevel::default(),
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    flow.say_to(&chat, "Hold.").await;
+    super::eventually("the Chat's turn", || {
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|took| took.input.contains("Hold."))
+    })
+    .await;
+    let before = starts_of(&flow, &chat.0);
+    assert_eq!(before.len(), 1, "{before:#?}");
+    assert_eq!(before[0].1.model.as_deref(), Some("claude-opus-5-5"));
+    assert_eq!(before[0].1.effort.as_deref(), Some("medium"));
+
+    flow.crash().await;
+    flip_accounts(&flow);
+    super::eventually("the Chat went on", || {
+        took(&log, "thread").iter().any(|took| went_on(&took.input))
+    })
+    .await;
+    flow.settled_in(&chat).await;
+
+    let starts = starts_of(&flow, &chat.0);
+    assert_eq!(starts.len(), 2, "{starts:#?}");
+    let (kind, again) = &starts[1];
+    assert!(
+        matches!(
+            again.origin,
+            brigadier_providers::model::Origin::Resume { .. }
+        ),
+        "{:?}",
+        again.origin
+    );
+    assert_eq!(pick(*kind, again), pick(before[0].0, &before[0].1));
+    let turns = took(&log, "thread");
+    assert_eq!(turns[0].account.as_deref(), Some("acct-b"));
+    assert!(
+        turns
+            .iter()
+            .all(|took| took.account.as_deref() == Some("acct-b")),
+        "{turns:#?}"
+    );
+    assert_eq!(routed_now(&flow, ProviderKind::Claude), None);
     flow.stop().await;
 }
 
