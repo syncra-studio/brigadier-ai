@@ -412,6 +412,11 @@ pub fn chromium_family(pid: i32) -> bool {
     system::chromium_family(pid)
 }
 
+/// Whether the `.app` bundle at this path embeds a Chromium-family framework.
+pub fn bundle_embeds_chromium(bundle: &std::path::Path) -> bool {
+    system::bundle_embeds_chromium(bundle)
+}
+
 #[cfg(target_os = "macos")]
 mod system {
     use core_foundation::base::{CFRange, CFRelease, CFTypeRef, TCFType};
@@ -601,9 +606,11 @@ mod system {
         }) else {
             return false;
         };
-        let Ok(frameworks) =
-            std::fs::read_dir(std::path::Path::new(&bundle).join("Contents/Frameworks"))
-        else {
+        bundle_embeds_chromium(std::path::Path::new(&bundle))
+    }
+
+    pub fn bundle_embeds_chromium(bundle: &std::path::Path) -> bool {
+        let Ok(frameworks) = std::fs::read_dir(bundle.join("Contents/Frameworks")) else {
             return false;
         };
         frameworks.flatten().any(|entry| {

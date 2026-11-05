@@ -8,7 +8,9 @@
 //! an app by path or among macOS's service apps, so these are Brigadier's.
 
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_void, CString};
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -169,6 +171,58 @@ pub fn locate_by_name(name: &str) -> Option<AppLocator> {
     bundle_installed(name).then(|| AppLocator::BundleId(name.to_owned()))
 }
 
+/// The `.app` bundle a launch would open.
+pub fn bundle_path(bundle_id: Option<&str>, name: Option<&str>) -> Option<PathBuf> {
+    let bundle_id = match (bundle_id, name) {
+        (Some(bundle_id), _) => bundle_id.to_owned(),
+        (None, Some(name)) => match locate_by_name(name)? {
+            AppLocator::Path(path) => return Some(path.into()),
+            AppLocator::BundleId(bundle_id) => bundle_id,
+        },
+        (None, None) => return None,
+    };
+    unsafe {
+        NSWorkspace::sharedWorkspace()
+            .URLForApplicationWithBundleIdentifier(&NSString::from_str(&bundle_id))
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+    }
+}
+
+// ── Quarantine ──────────────────────────────────────────────────────────────
+
+/// Set in a file's quarantine flags once the user has approved opening it.
+const QUARANTINE_USER_APPROVED: u32 = 0x0040;
+
+/// Whether a `com.apple.quarantine` value (`flags;time;agent;id`, the flags in
+/// hex) is still waiting for the user's approval. A value that can't be read
+/// counts as approved: this only keeps a launch from showing an alert.
+pub fn quarantine_awaits_approval(value: &str) -> bool {
+    let flags = value.split(';').next().unwrap_or_default();
+    u32::from_str_radix(flags, 16).is_ok_and(|flags| flags & QUARANTINE_USER_APPROVED == 0)
+}
+
+/// Whether macOS would ask the user before opening this bundle for the first
+/// time. The attribute is only read, never changed.
+pub fn awaits_first_open_approval(bundle: &Path) -> bool {
+    let Ok(path) = CString::new(bundle.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut value = [0u8; 256];
+    let length = unsafe {
+        libc::getxattr(
+            path.as_ptr(),
+            c"com.apple.quarantine".as_ptr(),
+            value.as_mut_ptr().cast(),
+            value.len(),
+            0,
+            0,
+        )
+    };
+    usize::try_from(length)
+        .is_ok_and(|length| quarantine_awaits_approval(&String::from_utf8_lossy(&value[..length])))
+}
+
 // ── Launching ───────────────────────────────────────────────────────────────
 
 /// What to launch and how.
@@ -211,6 +265,7 @@ pub fn launch(request: &Launch<'_>) -> anyhow::Result<i32> {
         }
         (None, None) => anyhow::bail!("Provide either bundle_id or name"),
     };
+    let hides = starts_fresh(bundle_id.as_deref(), request.creates_new_instance);
     let config = if request.plain() {
         OpenConfig {
             apple_event_bundle_id: bundle_id,
@@ -221,10 +276,14 @@ pub fn launch(request: &Launch<'_>) -> anyhow::Result<i32> {
         // open-application event on top makes it fail for apps installed in
         // a system cryptex (Safari).
         OpenConfig {
-            arguments: request.arguments.to_vec(),
+            arguments: launch_arguments(
+                request.arguments,
+                hides && !request.urls.is_empty(),
+                reads_bare_arguments_as_targets(bundle_id.as_deref(), request.name),
+            ),
             environment: request.environment.clone(),
             creates_new_instance: request.creates_new_instance,
-            hides: starts_fresh(bundle_id.as_deref(), request.creates_new_instance),
+            hides,
             apple_event_bundle_id: if request.urls.is_empty() {
                 bundle_id
             } else {
@@ -239,6 +298,39 @@ pub fn launch(request: &Launch<'_>) -> anyhow::Result<i32> {
         show_without_activating(&running);
     }
     Ok(unsafe { running.processIdentifier() })
+}
+
+/// The arguments a launch hands the app. A new process given documents skips
+/// the windows macOS would restore, so the caller's document is the one it
+/// shows, unless that app would take the bare `YES` for a file or link to open.
+pub fn launch_arguments(
+    arguments: &[String],
+    new_process_with_urls: bool,
+    reads_bare_arguments: bool,
+) -> Vec<String> {
+    let mut arguments = arguments.to_vec();
+    if new_process_with_urls
+        && !reads_bare_arguments
+        && !arguments
+            .iter()
+            .any(|argument| argument == IGNORE_SAVED_STATE)
+    {
+        arguments.extend([IGNORE_SAVED_STATE.to_owned(), "YES".to_owned()]);
+    }
+    arguments
+}
+
+/// The user default that keeps AppKit from restoring an app's saved windows.
+const IGNORE_SAVED_STATE: &str = "-ApplePersistenceIgnoreState";
+
+/// Whether the app treats each argument without a dash as a file or link to
+/// open: Chromium browsers and Electron apps do.
+fn reads_bare_arguments_as_targets(bundle_id: Option<&str>, name: Option<&str>) -> bool {
+    bundle_id.is_some_and(|bundle_id| {
+        crate::browser::open_link::browser_kind(bundle_id)
+            == Some(crate::browser::open_link::BrowserKind::Chromium)
+    }) || bundle_path(bundle_id, name)
+        .is_some_and(|bundle| crate::hotkey::bundle_embeds_chromium(&bundle))
 }
 
 /// Whether a launch starts a new process: the app isn't running yet, or a

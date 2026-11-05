@@ -335,6 +335,98 @@ fn preflight_file_urls_returns_structured_file_not_found() {
     assert!(preflight_file_urls(&["https://example.com".into()]).is_none());
 }
 
+fn titled(window_id: u32, title: &str) -> WindowInfo {
+    let mut window = window(window_id);
+    window.title = title.to_owned();
+    window
+}
+
+#[test]
+fn a_new_process_given_documents_ignores_its_saved_windows() {
+    let flag = || vec!["-ApplePersistenceIgnoreState".to_owned(), "YES".to_owned()];
+    let given = vec!["--flag".to_owned()];
+    let mut expected = given.clone();
+    expected.extend(flag());
+    assert_eq!(apps::launch_arguments(&given, true, false), expected);
+    // Nothing to protect, or an app that would open a file or page called YES.
+    assert_eq!(apps::launch_arguments(&given, false, false), given);
+    assert_eq!(apps::launch_arguments(&given, true, true), given);
+    // The caller already chose.
+    assert_eq!(apps::launch_arguments(&flag(), true, false), flag());
+}
+
+#[test]
+fn the_requested_files_window_is_listed_first_and_a_missing_one_is_named() {
+    use cu_layer::browser::open_link::{local_file_names, titled_windows_first};
+
+    let names = local_file_names(&[
+        "/tmp/w16-smoke.txt".to_owned(),
+        "https://example.com/page".to_owned(),
+    ]);
+    assert_eq!(names, ["w16-smoke.txt"]);
+
+    let mut windows = vec![
+        titled(1, "New Text Document.txt"),
+        titled(2, "w16-smoke.txt"),
+    ];
+    assert!(titled_windows_first(&mut windows, &names).is_empty());
+    assert_eq!(ids(&windows), [2, 1]);
+
+    let mut only_other = vec![titled(1, "New Text Document.txt")];
+    assert_eq!(titled_windows_first(&mut only_other, &names), names);
+}
+
+#[test]
+fn only_a_quarantine_the_user_has_not_approved_waits_for_approval() {
+    for waiting in [
+        "0081;6a;Safari;",
+        "0083;6a;Safari;AA",
+        "0181;6a;Homebrew Cask;",
+    ] {
+        assert!(apps::quarantine_awaits_approval(waiting), "{waiting}");
+    }
+    for approved in [
+        "00c1;6a;Safari;",
+        "00c3;6a;Safari;AA",
+        "01c1;6a;;",
+        "",
+        "garbage",
+    ] {
+        assert!(!apps::quarantine_awaits_approval(approved), "{approved}");
+    }
+}
+
+#[tokio::test]
+async fn an_app_awaiting_its_first_open_approval_is_refused_before_it_launches() {
+    let root =
+        std::env::temp_dir().join(format!("brigadier-quarantine-test-{}", std::process::id()));
+    let bundle = root.join("Downloaded.app");
+    std::fs::create_dir_all(&bundle).unwrap();
+    let quarantine = "0081;6a000000;Safari;";
+    let set = std::process::Command::new("xattr")
+        .args(["-w", "com.apple.quarantine", quarantine])
+        .arg(&bundle)
+        .status()
+        .unwrap();
+    assert!(set.success());
+
+    let result = LaunchAppTool
+        .invoke(json!({"name": bundle.to_str().unwrap()}))
+        .await;
+
+    assert_eq!(result.is_error, Some(true));
+    let structured = result.structured_content.as_ref().unwrap();
+    assert_eq!(structured["error"], "APP_NOT_YET_APPROVED");
+    // Never stripped: the user's approval is macOS's to record.
+    let kept = std::process::Command::new("xattr")
+        .args(["-p", "com.apple.quarantine"])
+        .arg(&bundle)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(String::from_utf8_lossy(&kept.stdout).trim(), quarantine);
+}
+
 #[test]
 fn an_app_is_found_by_the_full_path_to_its_bundle_wherever_it_lives() {
     let root = std::env::temp_dir().join(format!("brigadier-launch-test-{}", std::process::id()));

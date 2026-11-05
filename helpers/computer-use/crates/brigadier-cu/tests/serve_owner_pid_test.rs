@@ -53,6 +53,10 @@ fn unbranded_binary(root: &Path) -> std::path::PathBuf {
 }
 
 fn spawn_serve(root: &Path, socket: &Path, owner_pid: u32) -> Child {
+    spawn_serve_with_env(root, socket, owner_pid, &[])
+}
+
+fn spawn_serve_with_env(root: &Path, socket: &Path, owner_pid: u32, env: &[(&str, &str)]) -> Child {
     let _guard = spawn_lock();
     Command::new(unbranded_binary(root))
         .arg("serve")
@@ -69,6 +73,7 @@ fn spawn_serve(root: &Path, socket: &Path, owner_pid: u32) -> Child {
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_PID")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_SECONDS")
         .env_remove("BRIGADIER_CU_SOCKET_AUTHORIZED_ROOT_START_MICROSECONDS")
+        .envs(env.iter().copied())
         .spawn()
         .expect("spawn brigadier-cu serve")
 }
@@ -131,10 +136,35 @@ fn serve_exits_zero_at_once_when_the_owner_is_already_dead() {
     owner.wait().expect("reap owner");
 
     let mut daemon = KillOnDrop(spawn_serve(root.path(), &socket, owner_pid));
-    let status = wait_with_deadline(&mut daemon.0, Duration::from_secs(2))
-        .expect("daemon must exit at once when the owner is already dead");
+    // The daemon's own work takes milliseconds, but macOS takes about a second
+    // (more under load) to first exec the fresh copy of a debug binary.
+    let status = wait_with_deadline(&mut daemon.0, Duration::from_secs(10))
+        .expect("daemon must exit when the owner is already dead");
     assert!(status.success(), "daemon must exit 0, got {status}");
     assert!(!socket.exists(), "daemon must not leave a socket behind");
+}
+
+/// Building the driver's tools takes most of a start, so a daemon with no
+/// owner must not get that far. Settings the driver refuses (exit 78) show
+/// which came first, whatever the machine's load.
+#[test]
+fn serve_notices_a_dead_owner_before_starting_the_driver() {
+    let root = private_root();
+    let socket = root.path().join("orphan-unbuilt.sock");
+    let mut owner = spawn_owner();
+    let owner_pid = owner.id();
+    owner.kill().expect("kill owner");
+    owner.wait().expect("reap owner");
+
+    let mut daemon = KillOnDrop(spawn_serve_with_env(
+        root.path(),
+        &socket,
+        owner_pid,
+        &[("CUA_DRIVER_MANAGED_POLICY_FILE", "/no/such/policy-file")],
+    ));
+    let status = wait_with_deadline(&mut daemon.0, Duration::from_secs(30))
+        .expect("daemon must exit when the owner is already dead");
+    assert_eq!(status.code(), Some(0), "the owner check must come first");
 }
 
 #[test]

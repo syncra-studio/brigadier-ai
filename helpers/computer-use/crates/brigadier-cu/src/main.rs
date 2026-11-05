@@ -269,6 +269,7 @@ fn main() {
             claude_code_compat,
             owner_pid,
         } => {
+            owner_watch::exit_if_already_gone(owner_pid);
             responsibility::reexec_disclaimed_if_needed();
             let gate_opts = permissions::GateOpts::from_env_and_flag(no_permissions_gate);
 
@@ -510,6 +511,7 @@ fn main() {
             claude_code_compat,
             owner_pid,
         } => {
+            owner_watch::exit_if_already_gone(owner_pid);
             // Windows and Linux have no permission prompts to gate on.
             let _ = no_permissions_gate;
             let reg = build_registry(cli::cursor_config(), claude_code_compat);
