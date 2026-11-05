@@ -152,6 +152,8 @@ struct Launched {
     pid: i32,
     app: Option<apps::RunningApp>,
     windows: Vec<WindowInfo>,
+    /// Files a new process was given that no window is titled with.
+    files_not_shown: Vec<String>,
 }
 
 #[async_trait]
@@ -207,6 +209,27 @@ impl Tool for LaunchAppTool {
                 name.as_deref(),
             )
         };
+
+        // macOS asks the user before an app's first open, in an alert over
+        // their work that a background launch would wait on. An app already
+        // running has been through it.
+        if !running_before.iter().any(is_named) {
+            if let Some(bundle) = apps::bundle_path(bundle_id.as_deref(), name.as_deref())
+                .filter(|bundle| apps::awaits_first_open_approval(bundle))
+            {
+                return structured_launch_error(
+                    "APP_NOT_YET_APPROVED",
+                    format!(
+                        "{} was not launched: it was downloaded and hasn't been opened on this \
+                         Mac yet, so macOS would show its \"downloaded from the Internet\" alert \
+                         over the user's work. Ask the user to open it once themselves and \
+                         confirm the alert, then launch it again.",
+                        bundle.display()
+                    ),
+                    json!({ "path": bundle.display().to_string() }),
+                );
+            }
+        }
 
         // A running app keeps the arguments it started with, so a file or
         // link given among them would be dropped without a word: open it as
@@ -303,7 +326,12 @@ impl Tool for LaunchAppTool {
                 }
                 crate::offspace::remember_front_windows(pid);
                 let app = apps::running_app(pid);
-                return Ok(Launched { pid, app, windows });
+                return Ok(Launched {
+                    pid,
+                    app,
+                    windows,
+                    files_not_shown: Vec::new(),
+                });
             }
             let named = |app: &apps::RunningApp| {
                 names_app(
@@ -348,6 +376,7 @@ impl Tool for LaunchAppTool {
                     }
                 }
             };
+            let mut files_not_shown = Vec::new();
             let windows = if opens_in_running_app {
                 // Wait a little for the documents' windows and list them
                 // first, so the caller needn't list the windows again.
@@ -358,13 +387,23 @@ impl Tool for LaunchAppTool {
                 }
                 windows
             } else {
+                // The window to read next must be the requested file's, not
+                // one the app restored or had open already.
+                let names = open_link::local_file_names(&urls);
+                open_link::wait_for_titled_windows(pid, &names);
                 let mut windows = resolve_windows_for_pid(pid);
                 put_window_first(&mut windows, apps::main_window_id(pid));
+                files_not_shown = open_link::titled_windows_first(&mut windows, &names);
                 windows
             };
             crate::offspace::remember_front_windows(pid);
             let app = apps::running_app(pid);
-            Ok::<_, anyhow::Error>(Launched { pid, app, windows })
+            Ok::<_, anyhow::Error>(Launched {
+                pid,
+                app,
+                windows,
+                files_not_shown,
+            })
         })
         .await;
 
@@ -420,6 +459,7 @@ impl Tool for LaunchAppTool {
                 pid,
                 app,
                 mut windows,
+                files_not_shown,
             })) => {
                 drop_noise_windows(&mut windows);
                 let app_name = app.as_ref().map(|a| a.name.as_str()).unwrap_or("?");
@@ -465,6 +505,15 @@ impl Tool for LaunchAppTool {
                     }
                     None => format!("Launched {app_name} (pid {pid}) in background.{port_summary}"),
                 };
+
+                if !files_not_shown.is_empty() {
+                    summary.push_str(&format!(
+                        "\nNo window is titled with {} yet: it may still be opening, or the \
+                         app may have shown something else. Check a window's title before \
+                         acting on it.",
+                        files_not_shown.join(", ")
+                    ));
+                }
 
                 if !windows.is_empty() {
                     summary.push_str("\n\nWindows:");
@@ -515,6 +564,9 @@ impl Tool for LaunchAppTool {
                     if !unopened_links.is_empty() {
                         structured["opened_in_background"]["not_opened"] = json!(unopened_links);
                     }
+                }
+                if !files_not_shown.is_empty() {
+                    structured["files_not_shown"] = json!(files_not_shown);
                 }
                 if !moved_targets.is_empty() {
                     summary.push_str(&format!(

@@ -175,6 +175,42 @@ pub fn wait_for_new_windows(
     (windows, new + shown)
 }
 
+/// The names of the local files among `urls`, as their windows would be
+/// titled. A link's page brings its own title, so links have none.
+pub fn local_file_names(urls: &[String]) -> Vec<String> {
+    urls.iter()
+        .filter(|url| crate::launch::local_file_target(url).is_some())
+        .filter_map(|url| shown_name(url))
+        .collect()
+}
+
+/// Wait a little for a new process to show a window for each of `names`.
+pub fn wait_for_titled_windows(pid: i32, names: &[String]) {
+    let deadline = Instant::now() + NEW_WINDOW_WAIT;
+    while !every_name_shown(&crate::window_list::windows(Some(pid)), names)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(NEW_WINDOW_POLL);
+    }
+}
+
+/// Lists the windows titled with one of `names` first, keeping the order
+/// otherwise, and returns the names no window is titled with.
+pub fn titled_windows_first(windows: &mut [WindowInfo], names: &[String]) -> Vec<String> {
+    let titled =
+        |title: &str, names: &[String]| names.iter().any(|name| title_shows_name(title, name));
+    windows.sort_by_key(|window| !titled(&window.title, names));
+    names
+        .iter()
+        .filter(|name| {
+            !windows
+                .iter()
+                .any(|window| title_shows_name(&window.title, name))
+        })
+        .cloned()
+        .collect()
+}
+
 /// The name a window showing `url` is titled with: its last path component.
 /// shortcut: only %20 is decoded; other escaped names just wait out the cap.
 fn shown_name(url: &str) -> Option<String> {
@@ -189,12 +225,16 @@ fn shown_name(url: &str) -> Option<String> {
 /// Whether `window` is titled with one of `names` (apps may hide a file's
 /// extension).
 fn shows_a_name(window: &crate::window_list::Window, names: &[String]) -> bool {
-    names.iter().any(|name| {
-        window.title == *name
-            || std::path::Path::new(name)
-                .file_stem()
-                .is_some_and(|stem| window.title == stem.to_string_lossy())
-    })
+    names
+        .iter()
+        .any(|name| title_shows_name(&window.title, name))
+}
+
+fn title_shows_name(title: &str, name: &str) -> bool {
+    title == name
+        || std::path::Path::new(name)
+            .file_stem()
+            .is_some_and(|stem| title == stem.to_string_lossy())
 }
 
 /// Whether every name is shown by one of `windows` that has its real size
