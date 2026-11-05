@@ -161,7 +161,7 @@ jobs:
             sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
             sleep 5
           done
-          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          sudo timeout 300 apt-get "${apt_opts[@]}" install -y "${packages[@]}"
           # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
           sudo rm -rf "$archives/partial" "$archives/lock"
           sudo chown -R "$(id -u):$(id -g)" "$archives"
@@ -254,7 +254,7 @@ jobs:
             sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
             sleep 5
           done
-          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          sudo timeout 300 apt-get "${apt_opts[@]}" install -y "${packages[@]}"
           # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
           sudo rm -rf "$archives/partial" "$archives/lock"
           sudo chown -R "$(id -u):$(id -g)" "$archives"
@@ -356,7 +356,7 @@ jobs:
             sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
             sleep 5
           done
-          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          sudo timeout 300 apt-get "${apt_opts[@]}" install -y "${packages[@]}"
           # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
           sudo rm -rf "$archives/partial" "$archives/lock"
           sudo chown -R "$(id -u):$(id -g)" "$archives"

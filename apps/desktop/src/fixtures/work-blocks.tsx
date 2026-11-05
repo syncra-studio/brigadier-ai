@@ -670,15 +670,23 @@ async function driveStopAnswer(): Promise<object> {
 async function drivePace(): Promise<object> {
   await settle(600);
   const label = () => text(one("button", all("[data-slot=work-group]", turn() ?? document).at(-1) ?? document.createElement("div")));
-  /** The group's label as it changes over `ms`, each with when it first showed (by the frames' clock). */
+  /**
+   * The group's label as it changes over `ms`, each with when it first showed (by the frames'
+   * clock) and the slowest frame until then: a busy machine's frames say how late "at once" reads.
+   */
   const watch = async (ms: number, act?: () => void, onLabel?: (label: string | null) => void) => {
-    const labels: { t: number; label: string | null }[] = [];
+    const labels: { t: number; slowest: number; label: string | null }[] = [];
     act?.();
     const start = Number(document.timeline.currentTime);
-    for (let now = start; now - start < ms; now = Number(document.timeline.currentTime)) {
+    let slowest = 0;
+    let before = start;
+    // A few frames at least, whatever `ms`: a busy machine's one frame can outlast it.
+    for (let now = start, frames = 0; now - start < ms || frames < 4; now = Number(document.timeline.currentTime), frames += 1) {
+      slowest = Math.max(slowest, now - before);
+      before = now;
       const shown = label();
       if (labels.at(-1)?.label !== shown) {
-        labels.push({ t: Math.round(now - start), label: shown });
+        labels.push({ t: Math.round(now - start), slowest: Math.round(slowest), label: shown });
         onLabel?.(shown);
       }
       await frame();

@@ -83,12 +83,24 @@ function Fixture() {
       return () => { disposed = true; };
     }
     const seen: Record<string, unknown> = {};
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const at = (ms: number, action: () => void) => timers.push(setTimeout(() => {
-      // Animations are finished first: these geometry checks inspect the settled strip.
-      for (const animation of document.getAnimations()) animation.finish();
-      action();
-    }, ms));
+    // One step after another, each its time after the last: on a busy machine timers set from
+    // the start fire late and together, with no time between a step and what reads its result.
+    let disposed = false;
+    let last = 0;
+    let steps = Promise.resolve();
+    const at = (ms: number, action: () => void) => {
+      const after = ms - last;
+      last = ms;
+      steps = steps.then(async () => {
+        await wait(after);
+        // A closed tab stays for its slide, on a timer of its own: the steps read the tabs left.
+        while (!disposed && document.querySelector("[data-closing]")) await wait(16);
+        if (disposed) return;
+        // Animations are finished first: these geometry checks inspect the settled strip.
+        for (const animation of document.getAnimations()) animation.finish();
+        action();
+      });
+    };
     const newTab = () => bar().querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!;
     const context = () => document.querySelector<HTMLButtonElement>('button[aria-label="Context"]')!;
     at(500, () => {
@@ -182,7 +194,7 @@ function Fixture() {
       seen.back = { plain: bar().hasAttribute("data-plain"), labels: labels() };
       setResult(JSON.stringify(seen));
     });
-    return () => timers.forEach(clearTimeout);
+    return () => { disposed = true; };
   }, []);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
