@@ -1586,6 +1586,30 @@ impl ProviderSession for OpenCodeSession {
         })
     }
 
+    /// A background subagent is a session of its own, so its execution is interrupted; a
+    /// command goes through its shell, which also removes the output OpenCode kept of it.
+    fn stop_task(&self, task_id: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            if task_id.starts_with("ses_") {
+                let path = format!("/api/session/{task_id}/interrupt");
+                return self
+                    .server
+                    .call(Method::POST, &path, Some(&json!({})))
+                    .await
+                    .map(drop);
+            }
+            let folder = self.cwd.display().to_string();
+            let path = with_query(
+                &format!("/api/shell/{task_id}"),
+                &[("location[directory]", &folder)],
+            );
+            self.server
+                .call(Method::DELETE, &path, None)
+                .await
+                .map(drop)
+        })
+    }
+
     fn can_compact(&self) -> bool {
         true
     }
@@ -1914,6 +1938,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self.answer(200, {"location": {}, "data": [{"name": "init", "description": "guided AGENTS.md setup"}, {"name": "review"}]})
         elif self.command == "DELETE":
             self.answer(204)
+        elif self.path.endswith("/interrupt"):
+            self.answer(200, {"interrupted": True})
         else:
             self.answer(404, {"message": "not here"})
     do_GET = do_POST = do_DELETE = do_PATCH = handle_any
@@ -2058,6 +2084,19 @@ sys.stdin.read()
         );
         assert!(!said().contains("DELETE"), "a running turn keeps it");
         assert_eq!(*lock(&session.steered), ["msg_1"]);
+
+        // Stop on a background row: a command goes by its shell, a subagent by its session.
+        std::fs::write(&log, "").unwrap();
+        session.stop_task("sh_1".into()).await.unwrap();
+        session.stop_task("ses_child".into()).await.unwrap();
+        let requests = said();
+        let folder = root.display().to_string();
+        let query = with_query("/api/shell/sh_1", &[("location[directory]", &folder)]);
+        assert!(requests.contains(&format!("DELETE {query}")), "{requests}");
+        assert!(
+            requests.contains("POST /api/session/ses_child/interrupt"),
+            "{requests}"
+        );
 
         let commands = session.commands().await;
         assert_eq!(
