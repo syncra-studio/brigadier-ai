@@ -92,8 +92,10 @@ pub(crate) struct WorkerSession {
     pub grant: String,
 }
 
+mod once;
 mod quota;
 mod seam;
+pub(crate) use once::{marked_once, once_mark, without_mark};
 
 #[derive(Default)]
 struct TaskLiveState {
@@ -1048,6 +1050,13 @@ impl SessionManager {
             }
             t.state = TaskState::Running;
             t.blocked_reason = None;
+            // It runs again: its row no longer says its CLI ended (#811).
+            if t.error
+                .as_deref()
+                .is_some_and(super::plain_workers::cli_ended)
+            {
+                t.error = None;
+            }
         })
         .await?;
         if stopped || live.state.lock().await.quota_cancelled {
@@ -1726,6 +1735,10 @@ impl SessionManager {
             state.compacting = false;
             (state.stopping, state.cli.is_some())
         };
+        // Before whoever closed it goes on: nothing is left to take their answer (#767).
+        if !replaced {
+            self.expire_cli_cards(&live.conversation_id, &live.id).await;
+        }
         cli.ended.cancel();
         // A fresh session that already took the task over tells its own MCP servers.
         if !replaced {
@@ -2041,6 +2054,14 @@ impl SessionManager {
                 },
             )
             .await;
+            // Its session may have heard it ask: it hears who settled it, not silence (#650).
+            let mut told =
+                super::plain_workers::event(task_id, brigadier_cli::protocol::EventKind::Settled);
+            told.message = Some(format!(
+                "its permission prompt for {} went ahead because the session went to Full access; nobody answered it",
+                request.tool
+            ));
+            self.worker_event(id, task_id, None, told);
         }
     }
 
@@ -2715,18 +2736,9 @@ impl SessionManager {
         let live = self.task_live(task);
         let _managed = live.manage.lock().await;
         let _settled = live.settle.lock().await;
-        if let Some(native_id) = self.last_worker_native_id(task).await {
-            // The preferred account may have changed while the daemon was down.
-            for candidate in self.runtime.account_candidates(task.route.choice.provider) {
-                if let Ok(provider) = self.runtime.provider_for(&candidate.account)
-                    && provider
-                        .took_input(&native_id, input.lines().next().unwrap())
-                        .await
-                {
-                    self.worker_resume_taken(task, input).await?;
-                    return Ok(false);
-                }
-            }
+        if self.worker_took(task, input.lines().next().unwrap()).await {
+            self.worker_resume_taken(task, input).await?;
+            return Ok(false);
         }
         let (manager, task, input) = (self.arc(), task.clone(), input.clone());
         self.spawn(async move {

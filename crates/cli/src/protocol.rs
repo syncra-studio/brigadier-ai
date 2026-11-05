@@ -1036,6 +1036,8 @@ pub enum EventKind {
     FreshContext,
     /// Its CLI said nothing for 20 minutes while it worked.
     Quiet,
+    /// Its permission prompt went ahead without an answer: its session went to Full access.
+    Settled,
     /// A session waited on sent you a message: its answer, given here and not again as a
     /// message (goal 4).
     Answered,
@@ -1055,6 +1057,7 @@ impl EventKind {
             Self::UsageLimit => "usage-limit",
             Self::FreshContext => "fresh-context",
             Self::Quiet => "quiet",
+            Self::Settled => "settled",
             Self::Answered => "answered",
             Self::Removed => "removed",
         }

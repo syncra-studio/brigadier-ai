@@ -35,6 +35,17 @@ test("waits override stale work and never claim Working or shimmer", () => {
   assert.equal(taskState(quota).word, "Waiting for Codex quota");
 });
 
+test("a kept worker whose CLI ended says so and how it goes on, not Finished", () => {
+  const error = "Its CLI ended; the next message continues it (exit code 143).";
+  const worker = task({ state: "reported", error });
+  assert.equal(taskState(worker).word, "CLI ended");
+  assert.equal(taskActivityLines({ task: worker }, 41000, false).first, error);
+  // A failed turn's error still reads as it did.
+  const failed = task({ state: "reported", error: "The API said no." });
+  assert.notEqual(taskState(failed).word, "CLI ended");
+  assert.equal(taskActivityLines({ task: failed }, 41000, false).first, "Finished, handing back");
+});
+
 test("a new attempt uses its own start time", () => {
   const worker = task({ attempts: [{ route: base.route, startedAtMs: 11000, endedAtMs: null, end: null }] });
   assert.equal(line(worker, "Editing 2 files").first, "Editing 2 files · 30s");

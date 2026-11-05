@@ -43,6 +43,7 @@
               "usage-limit",
               "fresh-context",
               "quiet",
+              "settled",
               "answered",
               "removed"
             ]

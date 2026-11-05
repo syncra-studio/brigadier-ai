@@ -861,7 +861,7 @@ async fn every_fault_of_a_worker_reaches_an_idle_parent_once() {
     let expected: Vec<(String, String)> = [
         ("Ask-first", "asks"),
         ("Fail-now", "failed"),
-        ("Crash-now", "ended"),
+        ("Crash-now", "stopped"),
         ("Limit-now", "hit a usage limit"),
         ("Compact-now", "compacted its context"),
         ("Compact-now", "finished"),

@@ -513,6 +513,21 @@ impl SessionManager {
         }
     }
 
+    /// Its CLI ended unasked during a hand-off that holds messages: they would wait for nobody.
+    /// Its generation closes as after a restart, and the next message starts its successor.
+    pub(crate) async fn close_held_seam(&self, live: &TaskLive, task: &Task) {
+        let held = live
+            .state
+            .lock()
+            .await
+            .seam
+            .take_if(|seam| seam.holds())
+            .is_some();
+        if held {
+            self.recover_worker_seam(task).await;
+        }
+    }
+
     /// Whether the worker's generation closed with no successor yet: its next message starts
     /// one.
     pub(super) async fn worker_seam_closed(&self, task: &Task) -> bool {

@@ -946,7 +946,11 @@ impl SessionManager {
                     *text = held;
                     true
                 }
-                None => true,
+                None => {
+                    // A queued message's once-only mark isn't the user's words (#766).
+                    *text = super::workers::without_mark(text).to_owned();
+                    true
+                }
             },
             _ => true,
         });
