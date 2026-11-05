@@ -7,10 +7,14 @@
 //! item or `.credentials.json`. Codex 0.164.0 uses a globally shared direct Keychain entry
 //! (already shared), or a home-local fallback file / `secrets/mcp_oauth.age`. The latter is
 //! decrypted and re-encrypted with each home's existing key; the other namespaces stay put.
+//!
+//! Claude's item holds its login beside `mcpOAuth`, and it can only be rewritten whole, so a
+//! Claude that refreshed its login without taking the storage lock could lose that refresh. The
+//! rewrite therefore waits for [`InstalledCli`] to pass [`claude_checked`].
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, mpsc};
 use std::time::{Duration, SystemTime};
@@ -31,18 +35,119 @@ struct Decrypted {
 }
 static DECRYPTED: LazyLock<Mutex<BTreeMap<PathBuf, Decrypted>>> = LazyLock::new(Mutex::default);
 
+/// The oldest Claude Code whose use of its storage lock was checked.
+const CLAUDE_LOCK_SINCE: &str = "2.1.311";
+/// The storage lock's name, as Claude Code's binary spells it.
+const CLAUDE_LOCK_NAME: &[u8] = b".storage-write";
+
+/// The CLI whose credential stores are synced, as last checked: `None` when that isn't known.
+#[derive(Clone, Copy)]
+pub struct InstalledCli<'a> {
+    pub version: &'a str,
+    pub binary: &'a Path,
+}
+
+/// Why a sync didn't run, in words a sign-in can show.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Blocked {
+    /// macOS asked the user and they said no; asking again every pass would only nag.
+    KeychainRefused,
+    /// This Claude isn't known to take the storage lock its stores are rewritten under.
+    UncheckedCli,
+}
+
+impl std::fmt::Display for Blocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::KeychainRefused => {
+                "macOS refused Keychain access, so this MCP sign-in didn't reach this CLI's accounts"
+            }
+            Self::UncheckedCli => {
+                "This Claude Code version isn't checked for sharing, so this MCP sign-in stays on its own account"
+            }
+        })
+    }
+}
+
+impl std::error::Error for Blocked {}
+
+/// What stopped a sync, when it was one of [`Blocked`].
+pub fn blocked(error: &io::Error) -> Option<&Blocked> {
+    error.get_ref()?.downcast_ref()
+}
+
 /// Sync current sign-ins, including refreshes made by running CLIs. `homes` must contain only
 /// managed account homes, never the main home. Busy stores are retried on the next pass.
 /// Production credential access is deliberately excluded from test builds.
-pub fn sync_accounts(kind: ProviderKind, env: &CliEnv, homes: &[PathBuf]) -> io::Result<()> {
+pub fn sync_accounts(
+    kind: ProviderKind,
+    env: &CliEnv,
+    homes: &[PathBuf],
+    cli: Option<InstalledCli<'_>>,
+) -> io::Result<()> {
     #[cfg(not(test))]
     {
-        sync_with(kind, env, homes, &SystemKeyring)
+        sync_with(kind, env, homes, cli, &SystemKeyring)
     }
     #[cfg(test)]
     {
-        let _ = (kind, env, homes);
+        let _ = (kind, env, homes, cli);
         Ok(())
+    }
+}
+
+/// Whether Claude's credential item may be rewritten: a version from the one that was checked
+/// on, whose binary still names the storage lock. That shows the lock code is there, not that
+/// every path honours it. A binary that can't be read, or a wrapper script, doesn't pass.
+fn claude_checked(cli: Option<InstalledCli<'_>>) -> bool {
+    type Scanned = (PathBuf, u64, Option<SystemTime>, bool);
+    // One scan per binary: it reads the whole file, and passes come every few seconds.
+    static SCANNED: Mutex<Option<Scanned>> = Mutex::new(None);
+    let Some(cli) = cli.filter(|cli| crate::cli::version_at_least(cli.version, CLAUDE_LOCK_SINCE))
+    else {
+        return false;
+    };
+    let Ok(binary) = fs::canonicalize(cli.binary) else {
+        return false;
+    };
+    let Ok(metadata) = fs::metadata(&binary) else {
+        return false;
+    };
+    let (len, modified) = (metadata.len(), metadata.modified().ok());
+    let mut scanned = SCANNED.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((path, seen_len, seen_modified, named)) = &*scanned
+        && *path == binary
+        && *seen_len == len
+        && *seen_modified == modified
+    {
+        return *named;
+    }
+    let named = names_lock(&binary).unwrap_or(false);
+    *scanned = Some((binary, len, modified, named));
+    named
+}
+
+/// Whether the file at `path` contains [`CLAUDE_LOCK_NAME`], read in pieces (it may be a
+/// binary of hundreds of megabytes).
+fn names_lock(path: &Path) -> io::Result<bool> {
+    let mut file = File::open(path)?;
+    let mut buffer = vec![0; 1 << 20];
+    let mut kept = 0;
+    loop {
+        let read = file.read(&mut buffer[kept..])?;
+        if read == 0 {
+            return Ok(false);
+        }
+        let filled = kept + read;
+        if buffer[..filled]
+            .windows(CLAUDE_LOCK_NAME.len())
+            .any(|window| window == CLAUDE_LOCK_NAME)
+        {
+            return Ok(true);
+        }
+        // The name may straddle two pieces.
+        kept = filled.min(CLAUDE_LOCK_NAME.len() - 1);
+        buffer.copy_within(filled - kept..filled, 0);
     }
 }
 
@@ -75,22 +180,29 @@ trait Keyring {
 #[cfg(not(test))]
 struct SystemKeyring;
 
+/// A Keychain error in plain words; never holds credential data. The user saying no to macOS's
+/// prompt (`errSecUserCanceled`, `errSecAuthFailed`) is told apart: see [`Blocked`].
+#[cfg(all(not(test), target_os = "macos"))]
+fn keychain_error(action: &str, code: i32) -> io::Error {
+    if matches!(code, -128 | -25293) {
+        io::Error::other(Blocked::KeychainRefused)
+    } else {
+        io::Error::other(format!("MCP Keychain {action} failed ({code})"))
+    }
+}
+
 #[cfg(all(not(test), target_os = "macos"))]
 impl Keyring for SystemKeyring {
     fn get(&self, service: &str, account: &str) -> io::Result<Option<Vec<u8>>> {
         match security_framework::passwords::get_generic_password(service, account) {
             Ok(data) => Ok(Some(data)),
             Err(error) if error.code() == -25300 => Ok(None),
-            Err(error) => Err(io::Error::other(format!(
-                "MCP Keychain read failed ({})",
-                error.code()
-            ))),
+            Err(error) => Err(keychain_error("read", error.code())),
         }
     }
     fn set(&self, service: &str, account: &str, data: &[u8]) -> io::Result<()> {
-        security_framework::passwords::set_generic_password(service, account, data).map_err(
-            |error| io::Error::other(format!("MCP Keychain write failed ({})", error.code())),
-        )
+        security_framework::passwords::set_generic_password(service, account, data)
+            .map_err(|error| keychain_error("write", error.code()))
     }
     fn insert(&self, service: &str, account: &str, data: &[u8]) -> io::Result<Vec<u8>> {
         let keychain = security_framework::os::macos::keychain::SecKeychain::default()
@@ -100,10 +212,7 @@ impl Keyring for SystemKeyring {
             Err(error) if error.code() == -25299 => self
                 .get(service, account)?
                 .ok_or_else(|| io::Error::other("MCP encryption key disappeared")),
-            Err(error) => Err(io::Error::other(format!(
-                "MCP encryption key creation failed ({})",
-                error.code()
-            ))),
+            Err(error) => Err(keychain_error("key creation", error.code())),
         }
     }
 }
@@ -488,6 +597,7 @@ fn sync_with(
     kind: ProviderKind,
     env: &CliEnv,
     homes: &[PathBuf],
+    cli: Option<InstalledCli<'_>>,
     keyring: &impl Keyring,
 ) -> io::Result<()> {
     let Some(main) = accounts::main_home(kind, env) else {
@@ -506,6 +616,9 @@ fn sync_with(
         .collect();
     if homes.is_empty() {
         return Ok(());
+    }
+    if kind == ProviderKind::Claude && !claude_checked(cli) {
+        return Err(io::Error::other(Blocked::UncheckedCli));
     }
     let source = stores(kind, env, &main);
     let mut destinations = Vec::new();
@@ -539,6 +652,8 @@ fn sync_with(
                     }
                 }
             }
+            // The next item would prompt again, and the answer is known.
+            Err(err) if blocked(&err).is_some() => return Err(err),
             Err(err) => {
                 error = Some(err);
             }
@@ -562,8 +677,10 @@ fn sync_with(
             }
             Ok(())
         })();
-        if let Err(err) = result {
-            error = Some(err);
+        match result {
+            Err(err) if blocked(&err).is_some() => return Err(err),
+            Err(err) => error = Some(err),
+            Ok(()) => {}
         }
     }
     error.map_or(Ok(()), Err)

@@ -2,8 +2,8 @@
 //! with its own client; its MCP grants spread only to that CLI's managed account homes.
 //! Gateway requests never run these commands or open a browser.
 
-use std::collections::HashMap;
-use std::io::Read;
+use std::collections::{HashMap, HashSet};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -11,6 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use brigadier_providers::ProviderKind;
+use brigadier_providers::mcp_oauth::{Blocked, InstalledCli, blocked};
 use brigadier_registry::adapter::{AgentAdapter, CliCall, Listed, adapters, plain_text};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -121,6 +122,9 @@ type ListKey = (ProviderKind, Option<PathBuf>);
 pub(crate) struct McpLogins {
     spread: std::sync::OnceLock<Spread>,
     account_sync: Arc<Mutex<()>>,
+    /// The CLIs whose Keychain items macOS refused: left alone until the next sign-in, so a
+    /// refusal doesn't bring its prompt back every pass.
+    keychain_refused: Mutex<HashSet<ProviderKind>>,
     fallback_flows: Mutex<HashMap<String, String>>,
     runs: Mutex<HashMap<String, Run>>,
     /// Told whenever a sign-in moves on.
@@ -136,7 +140,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-type Spread = Arc<dyn Fn(ProviderKind) -> Result<(), String> + Send + Sync>;
+type Spread = Arc<dyn Fn(ProviderKind) -> io::Result<()> + Send + Sync>;
 
 impl McpLogins {
     pub(crate) fn cancel_fallback(&self, row: &str) -> Result<(), String> {
@@ -168,14 +172,20 @@ impl McpLogins {
             let Some(runtime) = runtime.upgrade() else {
                 return Ok(());
             };
-            brigadier_providers::mcp_oauth::sync_accounts(
-                kind,
-                runtime.cli_env(),
-                &runtime.account_homes(kind),
-            )
-            .map_err(|_| "Could not spread this CLI's MCP sign-in to its accounts".into())
+            let homes = runtime.account_homes(kind);
+            if homes.is_empty() {
+                return Ok(());
+            }
+            let status = runtime.overview(kind).and_then(|overview| overview.status);
+            let cli = status.as_ref().and_then(|status| {
+                Some(InstalledCli {
+                    version: status.version.as_deref()?,
+                    binary: Path::new(status.path.as_deref()?),
+                })
+            });
+            brigadier_providers::mcp_oauth::sync_accounts(kind, runtime.cli_env(), &homes, cli)
         });
-        if self.spread.set(spread.clone()).is_err() {
+        if self.spread.set(spread).is_err() {
             return;
         }
         let me = Arc::downgrade(self);
@@ -183,14 +193,42 @@ impl McpLogins {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_secs(5));
-                if me.upgrade().is_none() {
+                let Some(me) = me.upgrade() else {
                     break;
-                }
-                for kind in brigadier_providers::adapters::kinds() {
-                    let _ = spread(kind);
-                }
+                };
+                me.spread_pass();
             }
         });
+    }
+
+    /// One pass of the background spread, over every CLI macOS didn't refuse.
+    fn spread_pass(&self) {
+        for kind in brigadier_providers::adapters::kinds() {
+            if !lock(&self.keychain_refused).contains(&kind) {
+                let _ = self.spread(kind);
+            }
+        }
+    }
+
+    /// Spreads after a sign-in the user just asked for: a refusal from before may be asked again.
+    fn spread_after_sign_in(&self, kind: ProviderKind) -> Result<(), String> {
+        lock(&self.keychain_refused).remove(&kind);
+        self.spread(kind)
+    }
+
+    fn spread(&self, kind: ProviderKind) -> Result<(), String> {
+        let Some(spread) = self.spread.get() else {
+            return Ok(());
+        };
+        spread(kind).map_err(|error| match blocked(&error) {
+            Some(why) => {
+                if *why == Blocked::KeychainRefused {
+                    lock(&self.keychain_refused).insert(kind);
+                }
+                why.to_string()
+            }
+            None => "Could not spread this CLI's MCP sign-in to its accounts".into(),
+        })
     }
 
     /// Starts signing every agent that needs it in to `target`, all at once, in the background
@@ -346,10 +384,7 @@ impl McpLogins {
             agents.insert(at, step);
         });
         if !waiting {
-            if already_signed_in
-                && let Some(spread) = self.spread.get()
-                && let Err(reason) = spread(agent)
-            {
+            if already_signed_in && let Err(reason) = self.spread_after_sign_in(agent) {
                 self.set_state(id, agent, AgentSignInState::Failed { reason });
             }
             return;
@@ -378,9 +413,7 @@ impl McpLogins {
             .and_then(|(binary, env)| login(&binary, &call, &env, &opened, cancel))
         {
             Ok(()) => {
-                if let Some(spread) = self.spread.get()
-                    && let Err(reason) = spread(agent)
-                {
+                if let Err(reason) = self.spread_after_sign_in(agent) {
                     AgentSignInState::Failed { reason }
                 } else {
                     self.signed(adapter.agent(), &server);
