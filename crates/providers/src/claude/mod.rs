@@ -5049,7 +5049,9 @@ for line in sys.stdin:
                 serde_json::from_str(&std::fs::read_to_string(&capture).unwrap()).unwrap();
             let args = captured["args"].as_array().unwrap();
             let at = args.iter().position(|arg| arg == "--settings").unwrap();
-            let layer: Value = serde_json::from_str(args[at + 1].as_str().unwrap()).unwrap();
+            // In its private file, while it runs (#811).
+            let layer = std::fs::read_to_string(args[at + 1].as_str().unwrap()).unwrap();
+            let layer: Value = serde_json::from_str(&layer).unwrap();
             assert!(layer.get("disableAllHooks").is_none(), "{layer}");
             if off {
                 assert!(layer.get("hooks").is_none(), "{layer}");
