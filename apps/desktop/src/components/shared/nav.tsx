@@ -31,6 +31,7 @@ export function NavSection({
   actions,
   steadyActions = false,
   steadyChevron = false,
+  scrollList = false,
   children,
 }: {
   title?: string | undefined;
@@ -41,13 +42,15 @@ export function NavSection({
   steadyActions?: boolean;
   /** Its chevron shows without a hover. */
   steadyChevron?: boolean;
+  /** In a parent of bounded height, its list scrolls under a title that stays. */
+  scrollList?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
   return (
-    <section aria-labelledby={title ? id : undefined} className="group/section flex flex-col">
+    <section aria-labelledby={title ? id : undefined} className={cn("group/section flex flex-col", scrollList && "min-h-0")}>
       {title && (
-        <div className="flex min-h-6 items-center gap-1 ps-2 pe-1.5 pb-1">
+        <div className="flex min-h-6 shrink-0 items-center gap-1 ps-2 pe-1.5 pb-1">
           {onOpenChange ? (
             <button
               id={id}
@@ -78,22 +81,23 @@ export function NavSection({
           )}
         </div>
       )}
-      <NavFold open={open}>{children}</NavFold>
+      <NavFold open={open} scroll={scrollList}>{children}</NavFold>
     </section>
   );
 }
 
 /** Content that folds away to nothing and opens again: height and opacity ease over 300ms. */
-export function NavFold({ open, children }: { open: boolean; children: ReactNode }) {
+export function NavFold({ open, scroll = false, children }: { open: boolean; scroll?: boolean; children: ReactNode }) {
   return (
     <div
       inert={!open}
       className={cn(
         "ease-enter grid transition-[grid-template-rows,opacity] duration-300 motion-reduce:transition-none",
         open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        scroll && "min-h-0",
       )}
     >
-      <div className="min-h-0 overflow-hidden">{children}</div>
+      <div className={cn("min-h-0", scroll ? "scroll-edge-fade overflow-y-auto" : "overflow-hidden")}>{children}</div>
     </div>
   );
 }

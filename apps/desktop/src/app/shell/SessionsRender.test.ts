@@ -20,16 +20,18 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
 
   test(`${place}: hovering with a mark gives the title all the room before the two actions`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
-    assert.equal(seen.idle.rowHeight, 30);
+    // Pinned rows take two lines, with the actions on the first; the rest one.
+    assert.equal(seen.idle.rowHeight, pinned ? 46 : 30);
     assert.equal(seen.idle.fontSize, 14);
     assert.equal(seen.idle.actionWidth, 20);
     assert.equal(seen.idle.iconWidth, 16);
     assert.equal(seen.idle.statusVisible, true);
-    assert.equal(seen.hovered.statusVisible, false);
-    assert.equal(seen.hovered.statusDisplay, "none", "the replaced state no longer takes title space");
+    assert.equal(seen.hovered.statusVisible, true, "the mark stays while the actions take the time's place");
     assert.equal(seen.hovered.overflowing, true, "a long title still truncates");
-    const gap = seen.hovered.actionsLeft - seen.hovered.titleRight;
-    assert.ok(gap >= 0 && gap <= 3, `only the existing clearance before the icons is reserved (${gap}px)`);
+    if (!pinned) {
+      const gap = seen.hovered.actionsLeft - seen.hovered.titleRight;
+      assert.ok(gap >= 0 && gap <= 31, `only the mark and the clearance before the icons are reserved (${gap}px)`);
+    }
     assert.equal(seen.after.titleWidth, seen.idle.titleWidth, "the mark regains its usual space after leaving");
   });
 
@@ -48,7 +50,7 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
 
   test(`${place}: the row's ⋯ opens its tab's menu`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
-    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
+    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A"]);
     assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id", "Copy as Markdown"]);
   });
 }
@@ -60,7 +62,7 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
   };
   assert.equal(seen.error, undefined);
   assert.equal(seen.open, "none", "no session is open");
-  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A", "Permanently delete"]);
+  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A"]);
   assert.equal(seen.markdown, "# Fix the login\n\n## User\n\nFix the login.\n\n## Assistant\n\nThe token expired; it refreshes now.\n\n## User\n\nAnd the logout?\n\n## Assistant\n\nLogout clears it too.\n");
   assert.deepEqual(seen.forks, [{ conversationId: "w2-a", messageId: "a2", place: "newWorktree" }]);
   // Read once, for Copy; Fork finds it held.
@@ -95,9 +97,9 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     seen.rows.map(({ title, status, tip }) => [title, status, tip]),
     [
       // Those that need the user float to the top, newest first like the rest.
-      ["Deploy the site", "amber", "Needs you · approval"],
+      ["Deploy the site", "waiting", "Needs you · approval"],
       ["Broken build", "amber", "Failed"],
-      ["Ship the release", "amber", "Needs you · sign-in"],
+      ["Ship the release", "waiting", "Needs you · sign-in"],
       ["Footer", "working", "Working"],
       ["Header", "working", "Working"],
       ["Fix the login", null, null],
@@ -114,13 +116,13 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   );
   for (const row of seen.rows) {
     assert.equal(row.words, null, `${row.title}: no state word on a row`);
-    assert.equal(row.mark, row.status === "working" ? "spinner" : row.status === "dot" ? "unread" : row.status === "amber" ? "amber" : null, `${row.title}: its mark`);
+    assert.equal(row.mark, row.status === "working" ? "spinner" : row.status === "dot" ? "unread" : row.status === "amber" ? "amber" : row.status === "waiting" ? "waiting" : null, `${row.title}: its mark`);
     assert.equal(row.error, false);
     assert.equal(row.plain, true, `${row.title}: no chip`);
   }
-  // The title tells sessions apart: a mark takes only its 20-unit slot.
+  // The title tells sessions apart: a mark takes only its 20-unit slot, its time what's left.
   assert.equal(seen.widths.length, 7, "the seven rows with a mark");
-  for (const row of seen.widths) assert.ok(row.titleShare >= 80, `${row.title}: the title keeps the row (${row.titleShare}%)`);
+  for (const row of seen.widths) assert.ok(row.titleShare >= 70, `${row.title}: the title keeps the row (${row.titleShare}%)`);
   assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 }, "the project header contains only its folder icon and name");
   assert.deepEqual(seen.opened, { type: "conversation", id: "w1-a" }, "the row opens its own session");
   assert.deepEqual(seen.activeAfter, ["Header"]);
@@ -181,7 +183,7 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
     assert.equal(seen.find((row) => row.title === "Draft the notes")?.tip, "Draft the notes");
     for (const row of seen) {
       const busy = row.state === "working";
-      assert.equal(row.beforeMark, busy ? "spinner" : row.state === "dot" ? "unread" : row.state === "amber" ? "amber" : null, `${row.title}: closed row mark`);
+      assert.equal(row.beforeMark, busy ? "spinner" : row.state === "dot" ? "unread" : row.state === "amber" ? "amber" : row.state === "waiting" ? "waiting" : null, `${row.title}: closed row mark`);
       // In front of the user, a row shows no dot: its spinner if it works.
       assert.notEqual(row.openState, "dot", `${row.title}: no dot while open`);
       assert.equal(row.rowMark, row.openState === "working" ? "spinner" : null, `${row.title}: an open row has no dot`);
@@ -210,20 +212,20 @@ test("an idle session whose turn ended shows only its unread dot, no Done word",
 });
 
 
-test("waiting questions show Needs you and the amber mark, also when an approval waits, but not while open; answers and skips clear it", { timeout: 60000 }, async (t) => {
+test("waiting questions show Needs you and the blue mark, also when an approval waits, but not while open; answers and skips clear it", { timeout: 60000 }, async (t) => {
   type Row = { status: string; tip: string; mark: string | null; active: boolean };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?questions=1", "sessions-result", 20000)) as { before: Row[]; opened: Row; after: Row[] };
   for (const row of seen.before) {
-    assert.equal(row.status, "amber");
+    assert.equal(row.status, "waiting");
     assert.ok(["Needs you · question", "Needs you · approval"].includes(row.tip));
-    assert.equal(row.mark, "amber");
+    assert.equal(row.mark, "waiting");
   }
   // The question is in front of the user: its row says what its turn does instead.
   assert.deepEqual({ status: seen.opened.status, tip: seen.opened.tip, mark: seen.opened.mark }, { status: "working", tip: "Working", mark: "spinner" });
   assert.equal(seen.opened.active, true);
   assert.deepEqual(seen.after.map(({ status, tip, mark }) => ({ status, tip, mark })), [
     { status: "working", tip: "Working", mark: "spinner" },
-    { status: "amber", tip: "Needs you · approval", mark: "amber" },
+    { status: "waiting", tip: "Needs you · approval", mark: "waiting" },
   ]);
 });
 
@@ -232,8 +234,8 @@ test("unopened sessions with working workers keep Working until idle, including 
   type Row = { title: string; status: string; mark: string | null };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?workerActivity=1", "sessions-result", 20000)) as { before: Row[]; someWorking: Row; idle: Row; reconnected: Row; threadReads: string[] };
   assert.deepEqual(seen.before.map(({ title, status, mark }) => [title, status, mark]), [
-    ["Approval with workers", "amber", "amber"],
-    ["Question with workers", "amber", "amber"],
+    ["Approval with workers", "waiting", "waiting"],
+    ["Question with workers", "waiting", "waiting"],
     ["Workers still running", "working", "spinner"],
   ]);
   for (const row of [seen.someWorking, seen.reconnected]) {

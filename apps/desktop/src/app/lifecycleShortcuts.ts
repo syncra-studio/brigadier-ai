@@ -31,8 +31,9 @@ function undoesText(target: EventTarget | null): boolean {
 }
 
 /**
- * ⇧⌘A archives the picked sidebar rows, else the open conversation. ⌘⌫ asks to delete the
- * picked rows. ⌘Z right after an archive (while its toast shows) undoes it. Esc lets go of the
+ * ⇧⌘A archives the picked sidebar rows, else the open conversation. ⌘⌫ archives the picked
+ * sidebar rows too, leaving those already archived alone, and asks to delete those picked on
+ * Settings › Archived. ⌘Z right after an archive (while its toast shows) undoes it. Esc lets go of the
  * picked rows. (Ctrl for ⌘ on Windows and Linux.) ⌘⌫ and Esc leave text fields alone, and so
  * does ⌘Z where it has text to undo. None of them act while a dialog or menu is open.
  */
@@ -86,7 +87,14 @@ export function useLifecycleShortcuts(): void {
       if (event.key === "Backspace" || event.key === "Delete") {
         if (picked.ids.length === 0 || useDeleteAsk.getState().ids) return;
         event.preventDefault();
-        askDelete(picked.ids);
+        if (picked.list === "archived") {
+          askDelete(picked.ids);
+          return;
+        }
+        const live = picked.ids.filter((id) => state.conversations[id]?.lifecycle !== "archived");
+        if (live.length === 0) return;
+        clearPicked();
+        void archiveAll(live);
         return;
       }
       if (event.code === "KeyZ" && undoLastArchive()) event.preventDefault();

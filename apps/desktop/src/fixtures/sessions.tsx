@@ -181,19 +181,20 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
     return {
       title: button.querySelector('[data-slot="row-title"]')?.textContent?.trim(),
       status: status?.dataset.status ?? null,
-      tip: status?.title || null,
+      tip: status?.querySelector("[aria-label]")?.getAttribute("aria-label") ?? null,
       active: button.dataset.active === "true",
-      mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-unread"]') ? "unread" : status?.querySelector('[data-slot="status-amber"]') ? "amber" : null,
+      mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-unread"]') ? "unread" : status?.querySelector('[data-slot="status-amber"]') ? "amber" : status?.querySelector('[data-slot="status-waiting"]') ? "waiting" : null,
       error: !!button.querySelector('[data-slot="status-error"]'),
       plain: status ? plainStatus(status) : true,
       words: wordsOf(button),
     };
   });
 
-/** Any text on a row beyond its title: rows carry no state words (D3). */
+/** Any text on a row beyond its title and time: rows carry no state words (D3). */
 const wordsOf = (button: HTMLElement) => {
   const title = button.querySelector('[data-slot="row-title"]')?.textContent ?? "";
-  return button.textContent?.replace(title, "").trim() || null;
+  const time = button.querySelector('[data-slot="row-time"]')?.textContent ?? "";
+  return button.textContent?.replace(title, "").replace(time, "").trim() || null;
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -505,7 +506,7 @@ function Fixture() {
           envelope("conversation:question", { type: "questionUpdated", question: answered("q", "question", "Use blue") }),
           envelope("conversation:question-approval", { type: "questionUpdated", question: answered("qa", "question-approval", "Skipped") }),
         ]);
-        await until(() => questionRow("question")?.status === "working" && questionRow("question-approval")?.status === "amber");
+        await until(() => questionRow("question")?.status === "working" && questionRow("question-approval")?.status === "waiting");
         setResult(JSON.stringify({ before, opened, after: [questionRow("question"), questionRow("question-approval")] }));
       })();
       return;
@@ -518,7 +519,7 @@ function Fixture() {
           useApp.setState({ selection: { type: "none" } });
           const row = [...document.querySelectorAll<HTMLElement>('[data-slot="row-status"]')].find((status) => status.closest("button")?.querySelector('[data-slot="row-title"]')?.textContent === conversation.title)!;
           await until(() => row.closest("button")?.dataset.active !== "true");
-          const beforeMark = row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : row.querySelector('[data-slot="status-amber"]') ? "amber" : null;
+          const beforeMark = row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : row.querySelector('[data-slot="status-amber"]') ? "amber" : row.querySelector('[data-slot="status-waiting"]') ? "waiting" : null;
           const unread = row.querySelector<HTMLElement>('[data-slot="status-unread"]');
           const spinner = row.querySelector<HTMLElement>('[data-slot="status-spinner"]');
           const error = row.closest("button")?.querySelector<HTMLElement>('[data-slot="status-error"]');
@@ -537,7 +538,7 @@ function Fixture() {
           const open = [...document.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].find((title) => title.textContent === conversation.title)!.closest("button")!;
           const openStatus = open.querySelector<HTMLElement>('[data-slot="row-status"]');
           states.push({ ...info, title: conversation.title, openState: openStatus?.dataset.status ?? null,
-            words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: openStatus?.title ?? null,
+            words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: openStatus?.querySelector("[aria-label]")?.getAttribute("aria-label") ?? null,
             rowMark: open.querySelector('[data-slot="status-spinner"]') ? "spinner" : open.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             mark: slot.querySelector('[data-slot="status-spinner"]') ? "spinner" : slot.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             dot: tab.querySelector('[data-slot="status-dot"]') !== null,

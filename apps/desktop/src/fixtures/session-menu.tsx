@@ -1,6 +1,5 @@
 /**
- * The session tab's ⋯ "Session actions" (issue 213): Copy › has the path and the id the CLI uses; "Permanently delete" asks with the Archived page's confirm and sends
- * `delete`; ⌥⌘P still pins. Driven with the browser's real clicks and keys; IPC is mocked and
+ * The session tab's ⋯ "Session actions" (issue 213): Copy › has the path and the id the CLI uses; nothing deletes; ⌥⌘P still pins. Driven with the browser's real clicks and keys; IPC is mocked and
  * records the calls, no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -138,14 +137,6 @@ try {
   seen.step = "pressing ⌥⌘P";
   await fixtureInput({ type: "key", key: "p", modifiers: ["Alt", "Meta"] });
   await until("the pin", () => calls.length > 0);
-  seen.step = "deleting";
-  await menu(real);
-  await fixtureClick(items().find((item) => item.textContent?.trim() === "Permanently delete")!);
-  await until("the delete dialog", () => document.querySelector("[role=dialog]") !== null);
-  seen.deleteDialog = document.querySelector("[role=dialog] h2")?.textContent;
-  const remove = [...document.querySelectorAll("[role=dialog] button")].find((button) => button.textContent?.trim() === "Delete session")!;
-  await fixtureClick(remove);
-  await until("the delete", () => calls.length > 1);
 } catch (error) {
   seen.error = String(error);
 }

@@ -133,7 +133,8 @@
  *   Type        text-{2xs,xs,sm,base,lg,xl,2xl} (UI roles, each with its line height), text-hero,
  *               text-page-title (a Settings page's title), text-label (a Settings row's label),
  *               text-nav-title (the sidebar panel's title),
- *               text-code (code blocks), text-code-inline (inline code, em-relative)
+ *               text-code (code blocks), text-code-inline (inline code, em-relative),
+ *               text-badge (a project's initials in its badge)
  *   Tracking    tracking-hero, tracking-section, tracking-eyebrow (small uppercase labels)
  *   Fonts       font-sans, font-display, font-mono (system stacks, no downloads)
  *   Shadows     shadow-hairline (the composer card's inner edge), shadow-menu, shadow-tooltip,
@@ -266,6 +267,9 @@
   --text-notice--line-height: round(calc(var(--text-sm--line-height) * 0.9), 1px);
   --text-notice-button: calc(var(--text-xs) * 0.9);
   --text-code-inline: 0.85em;
+  /* A project's initials in its 16px badge. */
+  --text-badge: 0.5625rem;
+  --text-badge--line-height: 1rem;
   /* Its top edge: where the 549px list view sits centred, kept for every view and while the list
      loads, so a height change moves only the bottom edge. */
   --spacing-add-project-top: max(1rem, calc(50% - 17.15625rem));
