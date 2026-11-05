@@ -49,7 +49,7 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.equal(row("c4").awaiting, null, "a worker's server");
   applyActivityEvents([servers(null, [{ name: "linear", status: "needs-auth" }])]);
   assert.equal(row("c4").awaiting, "signIn");
-  assert.deepEqual(rowMark(row("c4")), { look: "dot", amber: true, hover: "Needs you · sign-in" });
+  assert.deepEqual(rowMark(row("c4")), { look: "dot", waiting: true, hover: "Needs you · sign-in" });
   applyActivityEvents([servers(null, [{ name: "linear", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
 });
@@ -155,8 +155,8 @@ test("the reconnect snapshot restores live worker activity without a thread view
   useActivity.setState({ byConversation: { snapshot } });
   assert.equal(row("snapshot").running, true);
   assert.equal(tabState(row("snapshot"), false, false, true), "working");
-  assert.deepEqual(rowMark(rowActivity({ ...snapshot, questions: new Set(["q"]) })), { look: "dot", amber: true, hover: "Needs you · question" });
-  assert.deepEqual(rowMark(rowActivity({ ...snapshot, approvals: new Set(["a"]) })), { look: "dot", amber: true, hover: "Needs you · approval" });
+  assert.deepEqual(rowMark(rowActivity({ ...snapshot, questions: new Set(["q"]) })), { look: "dot", waiting: true, hover: "Needs you · question" });
+  assert.deepEqual(rowMark(rowActivity({ ...snapshot, approvals: new Set(["a"]) })), { look: "dot", waiting: true, hover: "Needs you · approval" });
   // A sign-in doesn't hold the turn: while it works, it spins.
   assert.deepEqual(rowMark(rowActivity({ ...snapshot, signIns: new Set(["mcp"]) })), { look: "working", hover: "Working" });
   assert.equal(rowActivity({ ...snapshot, workersWorking: false }).running, false);
@@ -181,7 +181,7 @@ test("a turn that failed while its work runs reads Working until the block close
   const held = (tasks: [string, "starting"][]) => fromSnapshot({ conversationId: id, run: "failed", tasks, approvals: [], questions: [] });
   assert.deepEqual(rowMark(rowActivity(held([["t", "starting"]]))), working, "a worker not yet at its CLI holds it too, and a failed run");
   assert.deepEqual(rowMark(rowActivity(held([]))), failed, "nothing runs: red at once");
-  assert.deepEqual(rowMark(rowActivity({ ...held([["t", "starting"]]), approvals: new Set(["a"]) })), { look: "dot", amber: true, hover: "Needs you · approval" });
+  assert.deepEqual(rowMark(rowActivity({ ...held([["t", "starting"]]), approvals: new Set(["a"]) })), { look: "dot", waiting: true, hover: "Needs you · approval" });
 });
 
 test("turn-end timestamps survive snapshots and worker-only news, independent of finished requests", () => {

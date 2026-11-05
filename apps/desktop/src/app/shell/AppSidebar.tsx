@@ -155,7 +155,7 @@ function useFoldedSections<T extends string>(key: string, initial: T[] = []) {
 }
 
 /**
- * The sidebar panel on Home: its header (title, the Inbox | Projects switch and search), New chat,
+ * The sidebar panel on Home: its header (title, search and the Inbox | Projects tabs), New chat,
  * then the Inbox (D7) or, in Projects mode, Pinned (when there are any), Projects with their
  * sessions, and Chats. Each section folds away from its title.
  */
@@ -248,6 +248,7 @@ export function AppSidebar() {
                     conversation={conversation}
                     active={conversation.id === activeId}
                     actions={actions}
+                    twoLine
                   />
                 ))}
               </NavList>

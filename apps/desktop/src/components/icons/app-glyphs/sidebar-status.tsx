@@ -9,6 +9,15 @@ export const SidebarError: FC<SVGProps<SVGSVGElement>> = (props) => (
   </svg>
 );
 
+/** A sidebar row's waiting mark: a question mark in the error mark's ring (16-unit grid). */
+export const SidebarQuestion: FC<SVGProps<SVGSVGElement>> = (props) => (
+  <svg viewBox="0 0 16 16" fill="currentColor" {...props}>
+    <path fillRule="evenodd" clipRule="evenodd" d="M8 1.48633C11.5972 1.48633 14.5137 4.40279 14.5137 8C14.5137 11.5972 11.5972 14.5137 8 14.5137C4.40279 14.5137 1.48633 11.5972 1.48633 8C1.48633 4.40279 4.40279 1.48633 8 1.48633ZM8 2.51367C4.9698 2.51367 2.51367 4.9698 2.51367 8C2.51367 11.0302 4.9698 13.4863 8 13.4863C11.0302 13.4863 13.4863 11.0302 13.4863 8C13.4863 4.9698 11.0302 2.51367 8 2.51367Z" />
+    <path fill="none" stroke="currentColor" strokeWidth="1.03" strokeLinecap="round" strokeLinejoin="round" d="M6.3 6.25C6.42 5.42 7.12 4.87 8 4.87C8.95 4.87 9.7 5.5 9.7 6.36C9.7 7.05 9.27 7.42 8.72 7.77C8.27 8.06 8 8.36 8 8.92" />
+    <circle cx="8" cy="10.72" r="0.68" />
+  </svg>
+);
+
 /** A sidebar row's working mark: a faint ring with a half arc (24-unit grid); callers spin it. */
 export const SidebarWorking: FC<SVGProps<SVGSVGElement>> = (props) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>

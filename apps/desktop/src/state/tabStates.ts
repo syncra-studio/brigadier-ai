@@ -107,8 +107,11 @@ function needsYou({ awaiting, running }: RowActivity, viewing: boolean): boolean
 
 /** A row's mark: a spinner, the red error mark, the blue dot, or nothing; never a word (D3). */
 export type RowLook = "working" | "error" | "dot" | null;
-/** `amber`: it needs the user or failed, the sidebar's one mark for both. */
-export type RowMark = { look: RowLook; hover: string | null; amber?: boolean };
+/**
+ * On a sidebar row, `waiting` (a question, approval or sign-in) draws the blue ring and `amber` (a
+ * failed run) the amber one, whatever `look` says; a chat tab goes by `look` alone.
+ */
+export type RowMark = { look: RowLook; hover: string | null; waiting?: boolean; amber?: boolean };
 
 const NO_MARK: RowMark = { look: null, hover: null };
 
@@ -132,7 +135,7 @@ export function rowMark(
 ): RowMark {
   switch (tabState(activity, quotaWait !== null, stopped, false, viewing)) {
     case "needsYou":
-      return { look: "dot", amber: true, hover: `Needs you · ${activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "sign-in"}` };
+      return { look: "dot", waiting: true, hover: `Needs you · ${activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "sign-in"}` };
     case "failed":
       return { look: "error", amber: true, hover: "Failed" };
     case "working":

@@ -15,11 +15,10 @@ import {
   Folder,
   Moon,
   Pencil,
-  Trash,
   Unarchive,
 } from "@/components/icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
-import { RowAction } from "@/components/shared";
+import { RowAction, workingDirectory } from "@/components/shared";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {
@@ -31,16 +30,8 @@ import {
   setPinned,
 } from "@/state/actions";
 import { useRowMark } from "@/state/tabStates";
-import { askDelete } from "@/state/picking";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
-
-/** Where a session works: its worktree once created, else the repository. Chats work nowhere. */
-function workingDirectory(conversation: Conversation): string | null {
-  const setup = conversation.setup;
-  if (setup?.type !== "session") return null;
-  return (setup.environment.type === "newWorktree" && setup.environment.path) || setup.repo;
-}
 
 /** The thread on its shown branch as Markdown, for "Copy as Markdown". */
 function useThreadMarkdown(title: string): () => string {
@@ -69,7 +60,7 @@ async function copy(text: string, done: string) {
 /**
  * The ⋯ "Session actions" ("Chat actions" in a Chat) of the header, the tab and the sidebar's
  * rows: Rename ⌥⌘R; Copy › (a session's path, its id, Markdown); Fork ›; Open in › (a session's
- * path); Archive ⇧⌘A and Permanently delete. ⌥⌘P pins it. Share, side chats, scheduled tasks and new windows need what Brigadier doesn't have,
+ * path); Archive ⇧⌘A. ⌥⌘P pins it. Deleting is left to Settings › Archived. Share, side chats, scheduled tasks and new windows need what Brigadier doesn't have,
  * so they are not offered.
  */
 export const ChatActions: FC<{
@@ -231,7 +222,8 @@ export const ChatActions: FC<{
             </div>
           </>
         )}
-        <DropdownMenuSeparator />
+        {/* An archived tab has nothing below: its Unarchive is on the page it shows. */}
+        {(row || !archived) && <DropdownMenuSeparator />}
         {row && archived && (
           <DropdownMenuItem onSelect={() => void restore(id).catch(fail)}>
             <Unarchive />
@@ -245,11 +237,6 @@ export const ChatActions: FC<{
             <DropdownMenuShortcut>{key("⇧⌘A")}</DropdownMenuShortcut>
           </DropdownMenuItem>
         )}
-        {/* The Archived page's confirm, for a conversation still at work too: deleting stops it. */}
-        <DropdownMenuItem variant="destructive" onSelect={() => askDelete([id])}>
-          <Trash />
-          Permanently delete
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

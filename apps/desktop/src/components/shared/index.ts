@@ -13,6 +13,7 @@ export * from "./model-selector";
 export * from "./nav";
 export * from "./progress-line";
 export * from "./row-action";
+export * from "./row-card";
 export * from "./section";
 export * from "./session-status";
 export * from "./settings-card";
