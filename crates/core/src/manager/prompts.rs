@@ -373,17 +373,40 @@ pub(crate) const NO_AI_COAUTHORS: &str =
     "Don't add Co-authored-by trailers that name an AI to commit messages.";
 
 /// What a worker or the thread is told about the dependency installs and build caches copied
-/// into its worktree from the project's checkout or another of its worktrees (`warm`).
-pub(crate) fn copied_in_line(warmed: &[String]) -> String {
-    format!(
-        "Dependencies are already installed: {} {} copied in from another checkout of this project. Don't reinstall them.",
-        warmed
+/// into its worktree from the project's checkout or another of its worktrees (`warm`), and the
+/// ones that weren't (`left_out`). At least one of the two has folders.
+pub(crate) fn copied_in_line(warmed: &[String], left_out: &[String]) -> String {
+    let names = |folders: &[String]| {
+        folders
             .iter()
             .map(|folder| format!("`{folder}`"))
             .collect::<Vec<_>>()
-            .join(", "),
-        if warmed.len() == 1 { "was" } else { "were" }
-    )
+            .join(", ")
+    };
+    let (was, them) = if warmed.len() == 1 {
+        ("was", "it")
+    } else {
+        ("were", "them")
+    };
+    let (wasnt, they) = if left_out.len() == 1 {
+        ("wasn't", "it")
+    } else {
+        ("weren't", "they")
+    };
+    let (copied, missing) = (names(warmed), names(left_out));
+    if left_out.is_empty() {
+        format!(
+            "Dependencies are already installed: {copied} {was} copied in from another checkout of this project. Don't reinstall them."
+        )
+    } else if warmed.is_empty() {
+        format!(
+            "{missing} {wasnt} copied in from another checkout of this project, so {they} may need installing or building."
+        )
+    } else {
+        format!(
+            "Some dependencies are installed: {copied} {was} copied in from another checkout of this project, so don't reinstall {them}. {missing} {wasnt} copied, so {they} may need installing or building."
+        )
+    }
 }
 
 /// The repository's tracked script that sets up a new worktree.
@@ -446,6 +469,35 @@ pub(crate) fn chat(side: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regression_warm_note_names_the_caches_left_out() {
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            copied_in_line(&names(&["node_modules"]), &[]),
+            "Dependencies are already installed: `node_modules` was copied in from another checkout of this project. Don't reinstall them."
+        );
+        assert_eq!(
+            copied_in_line(
+                &names(&["node_modules"]),
+                &names(&["apps/desktop/node_modules"])
+            ),
+            "Some dependencies are installed: `node_modules` was copied in from another checkout of this project, so don't reinstall it. `apps/desktop/node_modules` wasn't copied, so it may need installing or building."
+        );
+        assert_eq!(
+            copied_in_line(&names(&["a", "b"]), &names(&["c", "d"])),
+            "Some dependencies are installed: `a`, `b` were copied in from another checkout of this project, so don't reinstall them. `c`, `d` weren't copied, so they may need installing or building."
+        );
+        assert_eq!(
+            copied_in_line(&[], &names(&["node_modules"])),
+            "`node_modules` wasn't copied in from another checkout of this project, so it may need installing or building."
+        );
+    }
 
     #[test]
     fn regression_opencode_asks_before_merging_base() {
