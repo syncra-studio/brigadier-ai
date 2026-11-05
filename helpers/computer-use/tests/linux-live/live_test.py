@@ -239,13 +239,6 @@ def main():
                        if "Hello world" in (el.get("value") or el.get("label") or "") and el.get("screenshot_frame")), None)
     if text_frame is None:
         return finish("no screenshot frame for mousepad's text")
-    if WM == "mutter":
-        # shortcut: GTK3 under mutter reports its screen extents with the window's origin added
-        # twice (#704); undo it here until that is fixed.
-        geometry = x("xwininfo", "-id", str(wid))
-        text_frame = dict(text_frame,
-                          x=text_frame["x"] - int(re.search(r"Absolute upper-left X:\s+(-?\d+)", geometry).group(1)),
-                          y=text_frame["y"] - int(re.search(r"Absolute upper-left Y:\s+(-?\d+)", geometry).group(1)))
     landed = lambda e, t, sc, i: expect(not e, f"refused (effect {sc.get('effect')})")
     # Real input: openbox and xfwm4 activate the window it lands in (core click-to-focus), and
     # the helper puts the user's window back; the reply must say so.

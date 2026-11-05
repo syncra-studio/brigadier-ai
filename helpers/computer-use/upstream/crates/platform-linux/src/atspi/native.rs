@@ -6019,6 +6019,15 @@ pub(crate) fn x11_window_origin(xid: u64) -> Option<(i32, i32)> {
     Some((trans.dst_x as i32, trans.dst_y as i32))
 }
 
+fn x11_window_size(xid: u64) -> Option<(i32, i32)> {
+    use x11rb::protocol::xproto::*;
+    use x11rb::rust_connection::RustConnection;
+
+    let (conn, _) = RustConnection::connect(None).ok()?;
+    let geom = conn.get_geometry(xid as u32).ok()?.reply().ok()?;
+    Some((i32::from(geom.width), i32::from(geom.height)))
+}
+
 fn x11_top_level_geometry(xid: u64) -> Option<(i32, i32, i32, i32)> {
     use x11rb::protocol::xproto::*;
     use x11rb::rust_connection::RustConnection;
@@ -6328,17 +6337,32 @@ fn screen_extent_rebase(
     x11_origin: (i32, i32),
     accessible_frame_extents: (i32, i32, i32, i32),
     top_level: Option<(i32, i32, i32, i32)>,
+    client_size: Option<(i32, i32)>,
 ) -> Option<(i32, i32)> {
     if !crate::snapshot_queries::plausible_raw_extents(accessible_frame_extents) {
         return None;
     }
-    let (frame_x, frame_y, _, _) = accessible_frame_extents;
+    let (frame_x, frame_y, frame_w, frame_h) = accessible_frame_extents;
     // Chromium's broken "Screen" provider is rooted at the renderer-local
     // origin. A legitimate screen provider may differ from the X11 client
     // origin by title-bar/CSD extents; rebasing that small decoration delta
     // would move otherwise-correct GTK coordinates off their controls.
     if top_level == Some(accessible_frame_extents) {
         return None;
+    }
+    // GTK3 under mutter: a window at the screen's corner has a frame near (0,0)
+    // that differs from mutter's frame window by its invisible borders. Holding
+    // the client window where it really is shows it is a true screen rectangle;
+    // Chromium's local frame is the client's size, so it holds it only at (0,0),
+    // where the rebase changes nothing.
+    if let Some((client_w, client_h)) = client_size {
+        if frame_x <= x11_origin.0
+            && frame_y <= x11_origin.1
+            && frame_x + frame_w >= x11_origin.0 + client_w
+            && frame_y + frame_h >= x11_origin.1 + client_h
+        {
+            return None;
+        }
     }
     if frame_x.abs() <= 2 && frame_y.abs() <= 2 {
         Some((x11_origin.0 - frame_x, x11_origin.1 - frame_y))
@@ -6490,8 +6514,10 @@ async fn element_bounds_for_visited(
                 },
                 _ => None,
             };
-            accessible_frame
-                .and_then(|frame_extents| screen_extent_rebase(origin, frame_extents, top_level))
+            let client_size = bounded_blocking(move || x11_window_size(xid)).await.flatten();
+            accessible_frame.and_then(|frame_extents| {
+                screen_extent_rebase(origin, frame_extents, top_level, client_size)
+            })
         } else {
             None
         }
@@ -7226,15 +7252,15 @@ mod coord_tests {
     fn screen_extents_are_rebased_from_accessible_frame_to_x11_origin() {
         let frame = Some((600, 50, 800, 600));
         assert_eq!(
-            screen_extent_rebase((604, 80), (0, 0, 792, 566), frame),
+            screen_extent_rebase((604, 80), (0, 0, 792, 566), frame, None),
             Some((604, 80))
         );
         assert_eq!(
-            screen_extent_rebase((604, 100), (604, 80, 792, 566), frame),
+            screen_extent_rebase((604, 100), (604, 80, 792, 566), frame, None),
             None
         );
         assert_eq!(
-            screen_extent_rebase((604, 80), (604, 80, 792, 566), frame),
+            screen_extent_rebase((604, 80), (604, 80, 792, 566), frame, None),
             None
         );
     }
@@ -7242,24 +7268,34 @@ mod coord_tests {
     #[test]
     fn sentinel_frame_extents_are_not_a_renderer_origin() {
         assert_eq!(
-            screen_extent_rebase((155, 149), (-1, -1, -1, -1), None),
+            screen_extent_rebase((155, 149), (-1, -1, -1, -1), None, None),
             None
         );
-        assert_eq!(screen_extent_rebase((155, 149), (0, 0, 0, 0), None), None);
+        assert_eq!(screen_extent_rebase((155, 149), (0, 0, 0, 0), None, None), None);
     }
 
     #[test]
     fn a_renderer_local_frame_at_the_corner_keeps_its_rebase() {
         assert_eq!(
-            screen_extent_rebase((5, 29), (0, 0, 640, 480), Some((0, 0, 650, 514))),
+            screen_extent_rebase(
+                (5, 29),
+                (0, 0, 640, 480),
+                Some((0, 0, 650, 514)),
+                Some((640, 480))
+            ),
             Some((5, 29))
         );
         assert_eq!(
-            screen_extent_rebase((5, 56), (0, 0, 640, 480), Some((0, 27, 650, 514))),
+            screen_extent_rebase(
+                (5, 56),
+                (0, 0, 640, 480),
+                Some((0, 27, 650, 514)),
+                Some((640, 480))
+            ),
             Some((5, 56))
         );
         assert_eq!(
-            screen_extent_rebase((5, 29), (0, 0, 640, 480), None),
+            screen_extent_rebase((5, 29), (0, 0, 640, 480), None, None),
             Some((5, 29))
         );
     }
@@ -7267,7 +7303,23 @@ mod coord_tests {
     #[test]
     fn a_gtk_frame_matching_its_window_manager_frame_at_the_corner_is_not_rebased() {
         assert_eq!(
-            screen_extent_rebase((5, 29), (0, 0, 650, 514), Some((0, 0, 650, 514))),
+            screen_extent_rebase((5, 29), (0, 0, 650, 514), Some((0, 0, 650, 514)), None),
+            None
+        );
+    }
+
+    #[test]
+    fn a_gtk_frame_at_the_corner_that_holds_its_client_window_is_not_rebased() {
+        // mousepad under mutter at the screen's corner: the frame accessible
+        // includes the 37 px title bar, and mutter's frame window is larger
+        // than it by its invisible borders.
+        assert_eq!(
+            screen_extent_rebase(
+                (0, 37),
+                (0, 0, 640, 517),
+                Some((-14, -12, 668, 566)),
+                Some((640, 480))
+            ),
             None
         );
     }
