@@ -142,6 +142,11 @@ agentPaths: Array<AgentPath>,
  */
 hiddenModels: Array<ModelRef>, 
 /**
+ * Models the user starred in the model picker: its Favorites tab, and first in their agent's
+ * list.
+ */
+favoriteModels: Array<ModelRef>, 
+/**
  * Every model Brigadier has seen in its agent's list: startup doesn't wait for an agent
  * whose every known model is made unavailable.
  */

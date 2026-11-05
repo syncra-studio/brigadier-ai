@@ -234,7 +234,6 @@ export const ConversationComposer = memo(function ConversationComposer({ autoFoc
                 <ModelSelector
                   groups={resolved.groups}
                   value={resolved.model}
-                  defaultChoice={resolved.defaultModel}
                   label="Model"
                   onChange={(model) => updateDraft(resolved.project?.id ?? null, { model })}
                   open={modelOpen}

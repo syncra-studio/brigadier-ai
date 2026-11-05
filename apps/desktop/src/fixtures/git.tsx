@@ -5,7 +5,8 @@ import { createRoot } from "react-dom/client";
 
 import { GitPage } from "@/app/settings/GitPage";
 import { TooltipProvider } from "@/components/overlays";
-import type { ModelInfo, ProviderKind, ProviderOverview, Request, Settings } from "@/ipc/generated";
+import type { ModelInfo, ModelRules, ProviderKind, ProviderOverview, Request, Settings } from "@/ipc/generated";
+import { useModelRules } from "@/state/modelRules";
 import { useApp } from "@/state/store";
 
 /*
@@ -164,19 +165,37 @@ function Fixture() {
         seen.gone = text(row("Write with")?.querySelector(".text-xs"));
         return openMenu("Write with");
       },
-      // Automatic is first among the picker's agents; it shows its one choice.
+      // Automatic is a band over the columns, with its own switch; the rail has only the agents.
       () => {
         seen.writerAgents = all('[data-slot="model-picker-agent"]').map(text);
-        pickMenu("Automatic");
+        // What the rules keep out everywhere shows greyed with their words, as in the composer.
+        useModelRules.setState({ view: { rules: [{ type: "forbid", names: ["opus"], work: null }] } as unknown as ModelRules, error: null });
       },
       () => {
-        seen.writerMenu = all('[data-picker-part="models"] [role="option"]').map(text);
+        seen.writerForbidden = all('[data-slot="model-picker-model"]').find((item) => text(item).startsWith("Opus"))?.dataset.refused;
+        useModelRules.setState({ view: null });
+      },
+      () => {
+        seen.writerBand = text(document.querySelector('[data-slot="model-picker-band"]'));
         document.querySelector<HTMLElement>('[data-slot="model-picker-automatic"]')?.click();
       },
       () => {
-        seen.automatic = { trigger: text(button("Write with")), saved: settings().gitWriter };
-        return openMenu("Commit messages");
+        seen.automatic = {
+          trigger: text(button("Write with")),
+          saved: settings().gitWriter,
+          open: document.querySelector('[data-slot="model-picker"]') !== null,
+          on: document.querySelector('[data-slot="model-picker-automatic"]')?.getAttribute("data-state"),
+        };
+        // Picking a model turns it off.
+        all('[data-slot="model-picker-model"]').find((item) => text(item).startsWith("Opus"))?.click();
       },
+      () => {
+        seen.pickedOff = { saved: settings().gitWriter?.model, on: document.querySelector('[data-slot="model-picker-automatic"]')?.getAttribute("data-state") };
+        // On again, and closed by its trigger.
+        document.querySelector<HTMLElement>('[data-slot="model-picker-automatic"]')?.click();
+      },
+      () => button("Write with")?.click(),
+      () => openMenu("Commit messages"),
       () => {
         seen.styles = menuItems();
         pickMenu("Custom instructions");

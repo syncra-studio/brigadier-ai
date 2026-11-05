@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { OrderPlace } from "@/app/settings/routing/OrderPlace";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
 import { TargetPicker } from "@/app/settings/routing/pickers";
@@ -42,13 +44,18 @@ export function OrderList({
     },
   });
   const taken = order.map((row) => rowTarget(groups, row.agent, row.model));
-  const picked = (target: OverrideTarget): GuidanceRow => ({
+  const picked = (target: OverrideTarget, effort: string | null): GuidanceRow => ({
     work,
     agent: target.provider,
     model: targetModel(target),
-    effort: null,
+    effort,
     reason: YOUR_CHOICE,
   });
+  // A place stays the same row as its model changes, so the picker open on it stays open.
+  const [placeOf, setPlaceOf] = useState<Readonly<Record<string, string>>>({});
+  // What Add model has added while it is open: another pick there changes it, not adds one more.
+  const [added, setAdded] = useState<string | null>(null);
+  const addedRow = order.find((row) => placeKey(row) === added) ?? null;
   return (
     <div className={cn(HAIRLINE_TOP, "flex flex-col pt-1 pb-2")}>
       <ol ref={listRef} aria-label={`The order ${work} tries`} className="flex flex-col">
@@ -58,7 +65,7 @@ export function OrderList({
             onSave(order.flatMap((other) => (placeKey(other) === key ? (next ? [next] : []) : [other])));
           return (
             <OrderPlace
-              key={key}
+              key={placeOf[key] ?? key}
               row={row}
               position={index + 1}
               count={order.length}
@@ -68,13 +75,30 @@ export function OrderList({
               dragging={dragging === key}
               grip={grip(key, index)}
               onEffort={(effort) => replace({ ...row, effort })}
-              onModel={(target) => replace(picked(target))}
+              onModel={(target, effort) => {
+                const next = picked(target, effort);
+                setPlaceOf((places) => ({ ...places, [placeKey(next)]: places[key] ?? key }));
+                replace(next);
+              }}
               onRemove={() => replace(null)}
             />
           );
         })}
       </ol>
-      <TargetPicker label="Add model" onPick={(target) => onSave([...order, picked(target)])} taken={taken}>
+      <TargetPicker
+        label="Add model"
+        taken={taken}
+        chosen={addedRow}
+        onEffort={(effort) => addedRow && onSave(order.map((row) => (row === addedRow ? { ...row, effort } : row)))}
+        work={work}
+        rules={rules}
+        onPick={(target, effort) => {
+          const next = picked(target, effort);
+          setAdded(placeKey(next));
+          onSave(addedRow ? order.map((row) => (row === addedRow ? next : row)) : [...order, next]);
+        }}
+        onClosed={() => setAdded(null)}
+      >
         <Button variant="link-blue" size="inline" className="text-xs h-9 w-fit gap-2 ps-6.5 font-medium">
           <Plus aria-hidden className="size-3.5" />
           Add model
