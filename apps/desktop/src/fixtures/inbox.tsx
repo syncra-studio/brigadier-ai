@@ -241,13 +241,14 @@ async function cardOf(id: string): Promise<Record<string, unknown>> {
   return seen;
 }
 
+const shown = (element: Element | null) => element !== null && getComputedStyle(element).display !== "none" && getComputedStyle(element).visibility !== "hidden";
+
 /** A row under the real pointer: the card, and what its first line and second line keep. */
 async function hoverRow(id: string): Promise<Record<string, unknown>> {
   const row = q<HTMLElement>(`[data-row-id="${id}"]`)!;
   const box = row.getBoundingClientRect();
   await fixtureInput({ type: "pointer", x: box.x + box.width / 2, y: box.y + box.height / 2 });
   await until(() => q('[data-slot="row-card"]') !== null);
-  const shown = (element: Element | null) => element !== null && getComputedStyle(element).display !== "none" && getComputedStyle(element).visibility !== "hidden";
   const seen = {
     card: q('[data-slot="row-card"]') !== null,
     time: shown(q('[data-slot="row-time"]', row)),

@@ -58,6 +58,8 @@ function MergedChip({ conversation }: { conversation: Conversation }) {
   return <Badge data-slot="row-merged" className="bg-pr-purple/15 text-pr-purple me-0.5">Merged</Badge>;
 }
 
+const isArchived = (id: string) => useApp.getState().conversations[id]?.lifecycle === "archived";
+
 /**
  * A chat or session. `twoLine` (Inbox, Pinned): a badge, its project and the time since the user's
  * last message over its title, chip and mark. Otherwise one line: its title, chip, mark and time, or
@@ -103,7 +105,6 @@ export const ConversationRow = memo(function ConversationRow({
   const picked = usePicked((s) => s.list === "sidebar" && s.ids.includes(conversation.id));
   // What a right-click acts on: every picked row when this is one of several.
   const [targets, setTargets] = useState<string[]>([]);
-  const isArchived = (id: string) => useApp.getState().conversations[id]?.lifecycle === "archived";
   const liveTargets = targets.filter((id) => !isArchived(id));
   const archivedTargets = targets.filter(isArchived);
   const forkIcon = forked && <BranchAlt aria-label="Fork" className="text-muted-foreground size-icon-sm" />;
