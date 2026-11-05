@@ -3,10 +3,10 @@
 
    The intro, from the moment it starts (`data-started` on `.welcome`): the orb, the window it
    opens into and the waves on the shell's dark are drawn on `.welcome-canvas` (IntroCanvas.tsx);
-   the mark comes up, glowing, and fades away (`.welcome-intro-mark`); the title comes in a letter
-   at a time (StaggerText.tsx); the button under it comes in last, and its animation ending is
-   what makes it usable. Escape (`data-settled`) and reduced motion show the end of all that at
-   once. */
+   the mark comes up, glowing, then glides up to the title's centre, shrinking, and fades out there
+   (`.welcome-intro-mark`); the title's two lines start together at that point and part into place;
+   the button slides out from under them last, and its animation ending is what makes it usable.
+   Escape (`data-settled`) and reduced motion show the end of all that at once. */
 
 .welcome {
   position: absolute;
@@ -70,7 +70,8 @@
 }
 
 /* The intro's mark at the window's centre, a crisp white with a soft glow: it comes up quickly,
-   to be read just as the music drops, is held, then fades away (only while the intro plays). */
+   to be read just as the music drops, is held, then glides to the title's centre, shrinking, and
+   fades out there (only while the intro plays). */
 .welcome-intro-mark {
   position: absolute;
   top: 50%;
@@ -91,7 +92,7 @@
 }
 
 .welcome[data-started]:not([data-settled]) .welcome-intro-mark {
-  animation: intro-mark var(--intro-mark-for) linear var(--intro-mark-at) both;
+  animation: intro-mark var(--intro-mark-glide-for) linear var(--intro-mark-at) both;
 }
 
 /* The welcome's heading and its button, centred. */
@@ -132,16 +133,6 @@
   font-weight: 600;
 }
 
-.stagger-word {
-  display: inline-block;
-  white-space: nowrap;
-}
-
-.stagger-char {
-  display: inline-block;
-  transform-origin: 0 100%;
-}
-
 /* The name's Continue, centred 56 above the window's bottom. */
 .welcome-name .welcome-continue {
   display: flex;
@@ -163,8 +154,25 @@
 
 /* ── Playing ───────────────────────────────────────────────────────────────────────────── */
 
-.welcome[data-step="intro"][data-started]:not([data-settled]) .welcome-continue {
-  animation: intro-continue-in var(--intro-continue-in) var(--intro-ease) var(--intro-continue) both;
+/* Nothing is left on the title or the button once they end (no fill forwards). The title sits
+   above the button, which comes out from under it. */
+.welcome[data-step="intro"][data-started]:not([data-settled]) {
+  .welcome-title {
+    position: relative;
+    z-index: 1;
+  }
+
+  .welcome-title-line {
+    animation: intro-part-up var(--intro-part-for) var(--intro-ease) var(--intro-part-at) backwards;
+  }
+
+  .welcome-title-line:nth-child(2) {
+    animation-name: intro-part-down;
+  }
+
+  .welcome-continue {
+    animation: intro-continue-in var(--intro-continue-for) var(--intro-ease) var(--intro-continue-at) backwards;
+  }
 }
 
 /* ── The name, after the intro ─────────────────────────────────────────────────────────── */
@@ -187,39 +195,72 @@ html[data-intro="staged"] #root {
   visibility: hidden;
 }
 
-/* Its share of --intro-mark-for: in over the first 6.8 % (0.14 s, read clearly from about
-   0.1 s), held to 68 %, then a plain fade out over the last 0.65 s. */
+/* Its share of --intro-mark-glide-for (2.65 s from 4.7 s): in over the first 0.14 s, read clearly
+   from about 0.1 s; held to 6.09 s; it glides up to the title's centre, shrinking, by 7 s, and
+   fades out from 6.82 s to 7.35 s, leaving nothing. */
 @keyframes intro-mark {
   0% {
     opacity: 0;
     scale: 0.97;
     animation-timing-function: cubic-bezier(0.4, 0, 0.3, 1);
   }
-  6.8% {
+  5.28% {
     opacity: 1;
     scale: 1;
   }
-  68% {
+  52.45% {
     opacity: 1;
     scale: 1;
-    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+    translate: -50% -50%;
+    animation-timing-function: cubic-bezier(0.55, 0, 0.15, 1);
+  }
+  80% {
+    opacity: 1;
+  }
+  86.8% {
+    scale: var(--intro-mark-glide-scale);
+    translate: -50% calc(-50% - var(--intro-mark-rise));
   }
   100% {
     opacity: 0;
-    scale: 1;
+    scale: var(--intro-mark-glide-scale);
+    translate: -50% calc(-50% - var(--intro-mark-rise));
+  }
+}
+
+@keyframes intro-part-up {
+  from {
+    opacity: 0;
+    transform: translateY(50%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes intro-part-down {
+  from {
+    opacity: 0;
+    transform: translateY(-50%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
 @keyframes intro-continue-in {
   from {
     opacity: 0;
-    filter: blur(calc(var(--spacing) * 2));
-    scale: 0.94;
+    transform: translateY(-110%);
+  }
+  35% {
+    opacity: 0.25;
   }
   to {
     opacity: 1;
-    filter: blur(0);
-    scale: 1;
+    transform: translateY(0);
   }
 }
 
