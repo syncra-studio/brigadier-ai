@@ -355,6 +355,31 @@ fn needles(flow: &Flow, id: &ConversationId, tasks: &[Task], extra: &[String]) -
     needles.into_iter().filter(|n| !n.is_empty()).collect()
 }
 
+/// For a hit in a database file, the bytes around each place `needle` shows, escaped: which row
+/// or leftover it is. Nothing for any other place.
+fn around_in_database(place: &str, text: &[u8], needle: &str) -> String {
+    const AROUND: usize = 120;
+    let name = Path::new(place)
+        .file_name()
+        .map(|name| name.to_string_lossy());
+    if !place.starts_with("in ")
+        || !name.is_some_and(|name| name.contains(".db") || name.contains(".sqlite"))
+    {
+        return String::new();
+    }
+    let mut hits = String::new();
+    for (at, _) in text
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle.as_bytes())
+    {
+        let from = at.saturating_sub(AROUND);
+        let to = (at + needle.len() + AROUND).min(text.len());
+        hits.push_str(&format!("\n  at {at}: {}", text[from..to].escape_ascii()));
+    }
+    hits
+}
+
 /// Where a needle shows: file names and contents under `roots` (the fake CLIs' own stores
 /// aside: they stand in for the CLIs' files, which the test homes hold), the repository's
 /// refs, worktrees and config, and `/tmp`.
@@ -369,7 +394,10 @@ fn leak_scan(flow: &Flow, repo: &Path, roots: &[&Path], needles: &[String]) -> V
     let mut check = |place: &str, text: &[u8]| {
         for needle in needles {
             if memchr_find(text, needle.as_bytes()) {
-                found.push(format!("{place}: {needle}"));
+                found.push(format!(
+                    "{place}: {needle}{}",
+                    around_in_database(place, text, needle)
+                ));
             }
         }
     };
