@@ -176,8 +176,7 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
           onClose={close}
           onRemoved={() => {
             if (liveDialog.current === open && useApp.getState().selection === selection) {
-              // The removed detail cannot be revisited; keep any existing Forward entries.
-              select({ type: "settings", page: "plugins" }, "replace");
+              select({ type: "settings", page: "plugins" });
             }
             if (liveDialog.current === open) close();
             refresh();

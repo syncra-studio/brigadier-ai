@@ -2,89 +2,42 @@ import { create } from "zustand";
 
 import { useApp, type Selection } from "@/state/store";
 
-/** How many places Back can go through. */
-const MAX_ENTRIES = 100;
+/** Home: what Back ends on, and what shows in place of a place that is gone. */
+export const HOME: Selection = { type: "draft", kind: "chat" };
 
 /**
- * How a selection enters the history: a new entry (dropping what Forward would have gone to),
- * in place of the current one, or not at all (Back and Forward themselves).
+ * What Forward can redo: the places Back left, latest last. Any other navigation clears it. It
+ * lives in memory and starts afresh on each launch.
  */
-export type HistoryMode = "push" | "replace" | "none";
+export const useHistory = create<{ forward: Selection[] }>(() => ({ forward: [] }));
 
 /**
- * Where the window has been, for Back and Forward: the places shown, oldest first, and which
- * one shows. It lives in memory and starts afresh on each launch.
+ * Where Back goes from `selection`, by where it sits and never by how it was reached: a Settings
+ * detail to its page, a page to General, General to what Settings was opened from
+ * (`beforeSettings`), a conversation or a project's draft to Home. Home has nowhere to go.
  */
-export const useHistory = create<{ entries: Selection[]; index: number }>(() => ({
-  entries: [],
-  index: -1,
-}));
-
-/** A place as history tells places apart, including pages inside Settings pages. */
-function placeKey(selection: Selection): string | null {
+export function levelUp(selection: Selection, beforeSettings: Selection): Selection | null {
   switch (selection.type) {
-    case "conversation":
-      return `conversation:${selection.id}`;
-    case "draft":
-      return selection.kind === "chat" ? "draft:chat" : `draft:session:${selection.projectId}`;
-    case "settings":
-      return JSON.stringify(["settings", selection.page, selection.detail ?? null]);
     case "none":
       return null;
+    case "conversation":
+      return HOME;
+    case "draft":
+      return selection.kind === "chat" ? null : HOME;
+    case "settings":
+      if (selection.detail) return { type: "settings", page: selection.page };
+      return selection.page === "general" ? beforeSettings : { type: "settings", page: "general" };
   }
 }
 
-/**
- * Notes that `selection` is about to show. A push onto the place already showing (the same
- * page or conversation again) updates that entry instead; a push onto a place further back
- * drops the entries after it.
- */
-export function recordPlace(selection: Selection, mode: HistoryMode): void {
-  if (mode === "none" || selection.type === "none") return;
-  let { entries, index } = useHistory.getState();
-  if (entries.length === 0) {
-    // The place shown at launch is the first entry.
-    const { selection: shown } = useApp.getState();
-    entries = shown.type === "none" ? [] : [shown];
-    index = entries.length - 1;
-  }
-  const current = entries[index];
-  if (current && (mode === "replace" || placeKey(current) === placeKey(selection))) {
-    const next = entries.slice();
-    next[index] = selection;
-    useHistory.setState({ entries: next, index });
-    return;
-  }
-  // A place already behind the current one is returned to, not stacked again: Back then
-  // unwinds the way the place was first reached instead of replaying every detour.
-  const key = placeKey(selection);
-  const earlier = entries.slice(0, index).findIndex((entry) => placeKey(entry) === key);
-  const kept = earlier === -1 ? entries.slice(0, index + 1) : entries.slice(0, earlier);
-  const next = [...kept, selection].slice(-MAX_ENTRIES);
-  useHistory.setState({ entries: next, index: next.length - 1 });
-}
-
-/** Moves `delta` entries along, returning the entry arrived at (null at either end). */
-export function stepPlace(delta: -1 | 1): Selection | null {
-  const { entries, index } = useHistory.getState();
-  const target = entries[index + delta];
-  if (!target) return null;
-  useHistory.setState({ index: index + delta });
-  return target;
-}
-
-/** Puts `selection` in place of the entry showing (a place found gone on arrival). */
-export function replacePlace(selection: Selection): void {
-  const { entries, index } = useHistory.getState();
-  if (!entries[index]) return;
-  const next = entries.slice();
-  next[index] = selection;
-  useHistory.setState({ entries: next });
+/** Whether two selections show the same place, including pages inside Settings pages. */
+export function samePlace(a: Selection, b: Selection): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Whether Back and Forward have somewhere to go. */
 export function useCanStep(): { back: boolean; forward: boolean } {
-  const back = useHistory((s) => s.index > 0);
-  const forward = useHistory((s) => s.index < s.entries.length - 1);
+  const back = useApp((s) => levelUp(s.selection, HOME) !== null);
+  const forward = useHistory((s) => s.forward.length > 0);
   return { back, forward };
 }

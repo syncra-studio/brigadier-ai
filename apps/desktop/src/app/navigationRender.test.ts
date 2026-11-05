@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-type Snapshot = { selection: unknown; title: string; index: number };
+type Snapshot = { selection: unknown; title: string };
 type Seen = {
   error?: string;
+  // `back` and `forward`: whether that button is dimmed.
+  levelUp: (Snapshot & { back: boolean; forward: boolean })[];
   detail: Snapshot; back: Snapshot; forward: Snapshot; keyForward: Snapshot;
   focusAfterBack: Snapshot & { heading: boolean };
   search: Snapshot & { focused: boolean }; searchBack: Snapshot & { focused: boolean };
@@ -18,11 +20,22 @@ type Seen = {
 
 // Real titlebar arrows and input focus, plus the menu bridge macOS uses while a native page
 // owns the keyboard. BrowserTabRender separately exercises native browser history.
-test("global arrows and keyboard restore nested Settings, preserve focus, and never replay transient requests", { timeout: 90000 }, async (t) => {
+test("global arrows and keyboard go up a level through nested Settings, preserve focus, and never replay transient requests", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "navigation.html", "navigation-result", 60000)) as Seen;
   assert.equal(seen.error, undefined, JSON.stringify(seen));
   const list = { type: "settings", page: "providers" };
   const detail = (provider: string) => ({ ...list, detail: { provider } });
+  const home = { type: "draft", kind: "chat" };
+  const general = { type: "settings", page: "general" };
+  // Home, Settings, Routing, Providers; Back x2; Forward x2. Both buttons dim with nowhere to go.
+  assert.deepEqual(seen.levelUp.map(({ selection, back, forward }) => ({ selection, back, forward })), [
+    { selection: home, back: true, forward: true },
+    { selection: list, back: false, forward: true },
+    { selection: general, back: false, forward: false },
+    { selection: home, back: true, forward: false },
+    { selection: general, back: false, forward: false },
+    { selection: list, back: false, forward: true },
+  ]);
   assert.deepEqual(seen.detail.selection, detail("claude"));
   assert.deepEqual(seen.back.selection, list);
   assert.deepEqual(seen.forward.selection, detail("claude"));

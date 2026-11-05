@@ -541,16 +541,9 @@ async function driveRemoval(setKey: (key: number) => void) {
   const seen: Record<string, unknown> = {};
   for (const scenario of ["cancel", "close-general", "close-back", "navigate-back", "active"] as const) {
     await reset(setKey);
-    useHistory.setState({ entries: [], index: -1 });
+    useHistory.setState({ forward: [] });
     await OPENERS.D1!();
     await pause();
-    if (scenario === "active") {
-      // Successful active removal must replace detail without dropping this Forward entry.
-      openSettings("general");
-      await pause();
-      stepHistory(-1);
-      await pause();
-    }
     click("Remove Linear");
     await pause();
     click("Remove", document.querySelector("[data-dialog]")!);
@@ -563,13 +556,16 @@ async function driveRemoval(setKey: (key: number) => void) {
     if (scenario === "cancel") click("Cancel");
     if (scenario.startsWith("close-")) click("Close", document.querySelector("[data-dialog]")!);
     await pause();
-    if (["close-general", "close-back", "navigate-back"].includes(scenario)) {
+    if (scenario === "close-general") {
       openSettings("general");
       await pause();
-      if (scenario.endsWith("back")) {
-        stepHistory(-1);
-        await pause();
-      }
+    }
+    if (scenario.endsWith("back")) {
+      // Leaving and returning to the same detail ends the visit the removal was asked from.
+      stepHistory(-1);
+      await pause();
+      stepHistory(1);
+      await pause();
     }
     const before = removalSnapshot();
     const beforeReads = reads;
