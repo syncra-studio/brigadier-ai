@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ContinueButton } from "@/app/setup/onboarding/ContinueButton";
 import { IntroCanvas, WINDOW_SHAPED } from "@/app/setup/onboarding/IntroCanvas";
 import { NameForm } from "@/app/setup/onboarding/NameForm";
-import { StaggerText } from "@/app/setup/onboarding/StaggerText";
 import { playWelcomeSound, preloadWelcomeSound } from "@/app/setup/onboarding/welcomeSound";
 import { BrigadierGlyph } from "@/components/icons";
 import { DialogTitle } from "@/components/overlays";
@@ -48,9 +47,10 @@ function setPageStaged(staged: boolean): void {
  * It opens out, blurred, into the window, and its light settles onto the shell's dark, with
  * faint waves of light moving over it; the window's chrome comes back. Brigadier's mark comes
  * up at the centre, glowing, read just as the music drops, held while the desktop's dim lifts,
- * then fades away; the music's motion stops with it and its chord rings on, breathing. The
- * title comes in a letter at a time; Continue under it appears last, larger than the steps' own,
- * with a soft note, and only then can it be used (Enter too, wherever the focus is). The sound settles and fades
+ * then glides up to the title's centre, shrinking, and fades out there; the music's motion stops
+ * and its chord rings on, breathing. The title's two lines start together at that point and part,
+ * one up and one down, into place; Continue slides out from under them as they near it, larger than
+ * the steps' own, and only then can it be used (Enter too, wherever the focus is). The sound settles and fades
  * out a few seconds later, into the name if need be. Elsewhere it plays the same inside the
  * window, without the dim. Escape shows the end at once, as reduced motion does. Continuing fades
  * the title and the waves out, and the name step comes in on the same dark, with the mark above
@@ -224,7 +224,6 @@ export function Welcome({
     [],
   );
 
-  const playing = start !== null && !settled;
   return (
     <div
       className="welcome"
@@ -255,22 +254,16 @@ export function Welcome({
         <div className="welcome-copy">
           <DialogTitle asChild>
             <h1 className="welcome-title" aria-label={TITLE.join(" ")}>
-              {TITLE.map((line, index) => (
+              {TITLE.map((line) => (
                 <span key={line} className="welcome-title-line">
-                  <StaggerText
-                    text={line}
-                    play={playing}
-                    // The second line follows on from the first's last letter.
-                    delayMs={tokenMs("--intro-heading") + lettersBefore(index) * tokenMs("--intro-letter-stagger")}
-                    staggerMs={tokenMs("--intro-letter-stagger")}
-                  />
+                  <span aria-hidden>{line}</span>
                 </span>
               ))}
             </h1>
           </DialogTitle>
           <div
             className="welcome-continue"
-            // Out of reach until it has faded in, without the disabled look.
+            // Out of reach until it has come in, without the disabled look.
             inert={!ready}
             onAnimationEnd={(event) => {
               if (event.target === event.currentTarget && event.animationName === "intro-continue-in") {
@@ -286,9 +279,4 @@ export function Welcome({
       )}
     </div>
   );
-}
-
-/** How many letters (spaces aside) the title's lines before `line` hold. */
-function lettersBefore(line: number): number {
-  return TITLE.slice(0, line).reduce((sum, text) => sum + text.replaceAll(" ", "").length, 0);
 }
