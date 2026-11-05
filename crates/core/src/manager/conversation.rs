@@ -1806,10 +1806,12 @@ impl SessionManager {
             return true;
         }
         // A paused worker keeps its work open too, until it resumes or stops (D159).
-        self.core.tasks(&conv.id).await.is_ok_and(|tasks| {
-            self.workers_working(&tasks)
-                || (paused_hold && tasks.iter().any(|task| task.state == TaskState::Paused))
-        })
+        paused_hold
+            && self
+                .core
+                .tasks(&conv.id)
+                .await
+                .is_ok_and(|tasks| tasks.iter().any(|task| task.state == TaskState::Paused))
     }
 
     pub(super) async fn join_working(
