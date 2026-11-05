@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [build-dependencies]
 cc = "=1.4.7"
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 blake3.workspace = true
@@ -25,7 +25,7 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sysinfo.workspace = true
-tauri = { version = "2.11.6", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2.7.3"
 tauri-plugin-notification = "2.4.0"
 tauri-plugin-opener = "2.5.5"
@@ -36,7 +36,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 ts-rs.workspace = true
 # The Browser tab's page: the wry release Tauri itself runs on (a second copy would clash).
-wry = { version = "0.55.1", default-features = false }
+wry = { version = "0.57.1", default-features = false }
 
 # The Browser tab's own WebKit UI delegate (src/browser_ui.rs) and the first launch's window
 # staging (src/intro.rs): the releases wry is built on.
@@ -49,12 +49,12 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKContentRuleList", "WKContentRuleListStore", "WKFindConfiguration", "WKFindResult", "WKFrameInfo", "WKNavigation", "WKNavigationAction", "WKOpenPanelParameters", "WKSecurityOrigin", "WKSnapshotConfiguration", "WKUIDelegate", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKHTTPCookieStore", "WKWebsiteDataRecord", "WKWebsiteDataStore", "WKWindowFeatures"] }
 # Clears the startup blur, which Tauri's `set_effects(None)` leaves on macOS (the release Tauri
 # applies it with).
-window-vibrancy = "0.6.0"
+window-vibrancy = "0.8.1"
 
 # WebView2's CapturePreview uses the same COM bindings as wry.
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "0.38.2"
-windows = { version = "0.61.3", features = ["Win32_System_Com_StructuredStorage", "Win32_UI_WindowsAndMessaging"] }
+webview2-com = "0.39.0"
+windows = { version = "0.62.2", features = ["Win32_System_Com_StructuredStorage", "Win32_UI_WindowsAndMessaging"] }
 
 [lints]
 workspace = true
