@@ -890,6 +890,41 @@ async fn the_orphan_sweep_takes_a_deleted_sessions_leftovers_only() {
     flow.stop().await;
 }
 
+/// A worker's cleanup still under way as a delete reaches its records: they wait for it, then go
+/// with the delete, not at the next launch.
+#[tokio::test]
+async fn a_deleted_sessions_records_wait_for_a_cleanup_still_under_way() {
+    let flow = Flow::start("delete-records-wait", options(), script()).await;
+    let id = flow.conversation.clone();
+    flow.say("Hello").await;
+    flow.settled().await;
+    let ledger = flow.manager.runtime.ledger().clone();
+    let holder = format!("held:{id}");
+    let held = Artifact::ScratchDir {
+        path: flow.scratch().join("held").display().to_string(),
+    };
+    ledger.record(&holder, held.clone()).await.unwrap();
+    flow.manager.delete(id.clone()).await.unwrap();
+    let release = async {
+        super::eventually("the session to be gone", || {
+            flow.core.conversation(&id).is_err()
+        })
+        .await;
+        // Past the first look at its records, however long this machine takes to get there.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        ledger.unrecord(&holder, held).await.unwrap();
+    };
+    tokio::join!(release, flow.manager.cleanup_finished(&id));
+    let leaks = leak_scan(
+        &flow,
+        &flow.repo,
+        &[flow.scratch()],
+        std::slice::from_ref(&id.0),
+    );
+    assert!(leaks.is_empty(), "{leaks:#?}");
+    flow.stop().await;
+}
+
 /// Archive keeps the session's record and its CLIs' transcripts and removes its tmp/, dev/,
 /// logs/ and its CLI's temp folder (S8, S20).
 #[tokio::test]
