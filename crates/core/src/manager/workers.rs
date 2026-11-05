@@ -2361,6 +2361,13 @@ impl SessionManager {
             return Err(Error::Provider(err.to_string()));
         }
         self.held_went(&live, task, held.len()).await;
+        // A turn that ended during the send isn't running: its pump took busy back and its end
+        // stays. Under the lock, so that end can only be recorded after this write. Nothing
+        // under a task write waits for this lock.
+        let state = live.state.lock().await;
+        if !state.busy {
+            return Ok(());
+        }
         let running = self
             .update_task(conversation_id, &task.id, |task| {
                 if !task.state.is_final() {
@@ -2369,6 +2376,7 @@ impl SessionManager {
                 }
             })
             .await;
+        drop(state);
         if let Err(err) = running {
             tracing::warn!(task = %task.id, error = %err, "could not record a messaged worker running");
         }

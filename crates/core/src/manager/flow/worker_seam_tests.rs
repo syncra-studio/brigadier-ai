@@ -1244,3 +1244,31 @@ async fn a_message_whose_successor_could_not_start_is_not_kept_as_well() {
     );
     flow.stop().await;
 }
+
+/// #842 lets its turn run during the send: one that ended before the send returned stays
+/// reported, or its idle worker reads running and never hibernates.
+#[tokio::test]
+async fn a_turn_that_ended_during_its_send_stays_reported() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task) = flow("fast-send", seen.clone()).await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_send_return.lock().unwrap() = Some((reached.clone(), release.clone()));
+    let manager = flow.manager.clone();
+    let (id, sending) = (flow.conversation.clone(), task.clone());
+    let sent = tokio::spawn(async move {
+        manager
+            .send_worker_text(&id, &sending, "Fast.".into())
+            .await
+    });
+    reached.notified().await;
+    until(&flow, "the fast turn reported", || {
+        seen.heard("finished") == 2
+    })
+    .await;
+    assert_eq!(worker(&flow).await.state, crate::work::TaskState::Reported);
+    release.notify_one();
+    sent.await.unwrap().unwrap();
+    assert_eq!(worker(&flow).await.state, crate::work::TaskState::Reported);
+    flow.stop().await;
+}
