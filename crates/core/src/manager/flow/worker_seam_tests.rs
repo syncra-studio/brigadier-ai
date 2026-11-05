@@ -1212,3 +1212,35 @@ async fn a_refused_send_leaves_the_worker_idle() {
     flow.behavior.refuse_sends.lock().unwrap().clear();
     flow.stop().await;
 }
+
+/// A successor that couldn't start tells its message's sender so: that message isn't kept as
+/// well, or the sender's next try would send it twice.
+#[tokio::test]
+async fn a_message_whose_successor_could_not_start_is_not_kept_as_well() {
+    let seen = Arc::new(Seen::default());
+    let (flow, task, _, release) = gated_flow("worker-seam-refused", seen.clone()).await;
+    release.notify_one();
+    until(&flow, "the generation closed", || {
+        matches!(seam_file(&flow, &task).phase, Phase::Closed { .. })
+    })
+    .await;
+    flow.idle().await;
+    let provider = task.route.choice.provider;
+    flow.behavior.refuse_sends.lock().unwrap().push(provider);
+    let latest = worker(&flow).await;
+    let refused = flow
+        .manager
+        .send_worker_text(&flow.conversation, &latest, "Refused.".into())
+        .await;
+    assert!(refused.is_err());
+    flow.behavior.refuse_sends.lock().unwrap().clear();
+    send(&flow, &task, "Next.").await;
+    until(&flow, "the next", || !seen.given("Next.").is_empty()).await;
+    flow.idle().await;
+    assert!(
+        seen.given("Refused.").is_empty(),
+        "{:?}",
+        seen.given("Refused.")
+    );
+    flow.stop().await;
+}
