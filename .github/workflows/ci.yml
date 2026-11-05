@@ -71,6 +71,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Rust formatting
         run: cargo fmt --all --check
+      - name: Computer-use helper formatting
+        working-directory: helpers/computer-use
+        run: cargo fmt --all --check
       - name: Generated TypeScript bindings are current
         run: |
           cargo run --locked -q -p brigadier-ipc --bin gen-ts
