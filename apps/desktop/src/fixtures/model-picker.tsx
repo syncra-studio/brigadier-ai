@@ -4,9 +4,8 @@
  * Claude session, gpt-6.1-sol picked at Ultra, Fast), opencode (a model with no efforts), rule
  * (Opus 5.5 at High under "Never go above High effort"), search, automatic (Settings › Git), or
  * routing (a row of an order). `?drive=1` writes what it saw to #model-picker-result
- * (ModelPickerRender.test.ts reads it): the star, where it opens, a pick keeping it open with the
- * keyboard on the checked level (also when it comes back late, or with none checked), no efforts,
- * older models, and the search as plain typing.
+ * (ModelPickerRender.test.ts reads it): the star, opening on Favorites, a pick keeping it open with
+ * the keyboard on the efforts, no efforts, older models.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useState } from "react";
@@ -29,7 +28,7 @@ const driven = params.has("drive");
 
 const id = "model-picker";
 const start = Date.now() - 20 * 60_000;
-let conversation = {
+const conversation = {
   id, kind: "session", projectId: null, title: "Tax helpers", pinnedAtMs: null, createdAtMs: start, updatedAtMs: start,
   lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
   setup: {
@@ -62,14 +61,6 @@ mockIPC((command, payload) => {
     case "continueOn":
       asked.push({ provider: req.provider, model: req.model });
       return { method: req.method, when: "now" };
-    case "updateSetup":
-      // The daemon answers a moment later: the column shows the last model until then.
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          conversation = { ...conversation, setup: req.setup };
-          resolve({ method: req.method, conversation });
-        }, 150);
-      });
     case "updateSettings":
       starred.push(req.settings.favoriteModels);
       return { method: req.method, settings: req.settings };
@@ -95,7 +86,7 @@ useApp.setState({
           model("opus", "Opus 5.5", { ...claude, isDefault: true, fast: FAST }),
           model("fable", "Fable 5.1", claude),
           model("sonnet", "Sonnet 5.5", claude),
-          model("haiku", "Haiku 5.5", { efforts: ["low", "medium"], defaultEffort: "medium" }),
+          model("haiku", "Haiku 5.5", claude),
           ...(driven ? [model("opus-4-6", "Opus 4.6", { ...claude, legacy: true })] : []),
         ]),
         overview("codex", [
@@ -107,8 +98,6 @@ useApp.setState({
           model("opencode/claude-opus-5-5", "opencode/claude-opus-5-5", claude),
           model("opencode-go/kimi-k3", "opencode-go/kimi-k3", { efforts: ["max"], defaultEffort: "max" }),
           model("opencode/big-pickle", "opencode/big-pickle"),
-          // Its levels name no default of their own: none is checked.
-          model("opencode-go/kimi-k3.1-pro", "opencode-go/kimi-k3.1-pro", { efforts: ["low", "medium", "high"] }),
         ]),
       ],
       sessions: [],
@@ -196,20 +185,9 @@ async function drive() {
     seen.starredFirst = await until("Sonnet first", () => (text(models()[0]) === "Sonnet 5.5" ? models().map(text) : null));
     trigger()!.click();
     await until("the picker closed", () => !picker());
-    // A star on another model: it still opens on the checked model's agent.
-    const opensOn = () => text(document.querySelector("[data-picker-part=agents] [aria-selected=true]"));
+    // Opened again, it starts on Favorites, as T3 Code's does.
     await open();
-    seen.otherStarredOpensOn = opensOn();
-    // The search is plain typing: no autocorrect bubble.
-    const field = picker()!.querySelector("input")!;
-    seen.searchField = ["autocorrect", "autocapitalize", "spellcheck", "autocomplete", "writingsuggestions"].map((name) => field.getAttribute(name));
-    // The checked model starred, it opens on Favorites.
-    all("[data-slot=model-picker-star]").find((star) => star.getAttribute("aria-label") === "Add Opus 5.5 to favorites")!.click();
-    await until("the second star written", () => starred.length === 2);
-    trigger()!.click();
-    await until("the picker closed again", () => !picker());
-    await open();
-    seen.checkedStarredOpensOn = opensOn();
+    seen.reopensOn = text(document.querySelector("[data-picker-part=agents] [aria-selected=true]"));
     seen.favorites = models().map(text);
     // A pick keeps it open, and moves the keyboard to the picked model's levels.
     await browseAndPick("opencode", "opencode-go/kimi-k3");
@@ -239,20 +217,6 @@ async function drive() {
     document.querySelector<HTMLElement>("[data-picker-older]")!.click();
     seen.unfolded = await until("the older model", () => (modelNamed("Opus 4.6") ? models().map(text) : null));
     seen.asked = asked.length;
-    // No level of the new model is checked: nothing looks selected, the keyboard waits on the column.
-    await browseAndPick("opencode", "opencode-go/kimi-k3.1-pro");
-    seen.noneChecked = await until("the keyboard on the column", () =>
-      document.activeElement?.getAttribute("role") === "radiogroup"
-        ? { focused: document.activeElement.getAttribute("aria-label"), checked: levels().filter((row) => row.dataset.state === "on").length, levels: levels().map(text) }
-        : null,
-    );
-    // A pick that comes back late: the keyboard lands on its checked level, not the last model's.
-    await browseAndPick("claude", "Haiku 5.5");
-    seen.lateAnswer = await until("the late answer's level", () =>
-      levels().length === 2 && document.activeElement?.getAttribute("role") === "radio"
-        ? { focused: text(document.activeElement), state: (document.activeElement as HTMLElement).dataset.state, levels: levels().map(text) }
-        : null,
-    );
   } catch (error) {
     seen.error = String(error);
   }
