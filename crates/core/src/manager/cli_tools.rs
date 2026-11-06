@@ -130,6 +130,7 @@ fn tool_call(
         (Tool::Browser, "close") => ToolCall::Browser(B::Close(args(given)?)),
         (Tool::Browser, "show") => ToolCall::Browser(B::Show(args(given)?)),
         (Tool::Browser, "events") => ToolCall::Browser(B::Events(args(given)?)),
+        (Tool::Browser, "eval") => ToolCall::Browser(B::Eval(args(given)?)),
         (Tool::App, "visuals") => ToolCall::App(A::Visuals),
         (Tool::App, "state") => ToolCall::App(A::State),
         (Tool::App, "read-terminal") => ToolCall::App(A::ReadTerminal(args(given)?)),

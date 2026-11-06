@@ -188,6 +188,7 @@ impl BrowserHub {
                 submit,
                 ..
             } => format!("type\u{1f}{target}\u{1f}{submit}\u{1f}{text}"),
+            BrowserOp::Eval { script, .. } => format!("eval\u{1f}{script}"),
             _ => return None,
         };
         Some(
@@ -318,7 +319,40 @@ fn browser_op(call: BrowserToolCall, request: Option<String>) -> Result<BrowserO
             kinds: events.kinds,
             since: events.since.unwrap_or(0),
         },
+        BrowserToolCall::Eval(eval) => BrowserOp::Eval {
+            tab: eval.tab,
+            script: shown_script(eval.script)?,
+            guard: BrowserGuard::default(),
+        },
     })
+}
+
+/// The most of a script a card shows whole.
+const SCRIPT_MOST: usize = 16 * 1024;
+
+/// `script` when the card can show the user exactly what runs: not empty, not too long to read,
+/// and with nothing that changes how the text reads (bidi controls and other invisible ones).
+fn shown_script(script: String) -> Result<String, String> {
+    if script.trim().is_empty() {
+        return Err("browser_eval needs a script.".to_owned());
+    }
+    if script.len() > SCRIPT_MOST {
+        return Err(format!(
+            "That script is {} bytes; the user reads it on a card, so {SCRIPT_MOST} is the most. Send a shorter one.",
+            script.len()
+        ));
+    }
+    let hidden = |c: char| {
+        (c.is_control() && !matches!(c, '\n' | '\t' | '\r'))
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}')
+    };
+    if script.chars().any(hidden) {
+        return Err(
+            "That script has invisible characters, so the user's card couldn't show what really runs. Write them as \\u escapes."
+                .to_owned(),
+        );
+    }
+    Ok(script)
 }
 
 /// What came of asking the user first.
@@ -340,7 +374,9 @@ fn said(message: &str) -> String {
 
 fn guard_of(op: &mut BrowserOp) -> Option<&mut BrowserGuard> {
     match op {
-        BrowserOp::Click { guard, .. } | BrowserOp::Type { guard, .. } => Some(guard),
+        BrowserOp::Click { guard, .. }
+        | BrowserOp::Type { guard, .. }
+        | BrowserOp::Eval { guard, .. } => Some(guard),
         _ => None,
     }
 }
@@ -384,6 +420,7 @@ pub(crate) fn question(sensitive: BrowserSensitive, url: &str) -> String {
         BrowserSensitive::Credentials => format!("Use your password on {site}?"),
         BrowserSensitive::Card => format!("Enter a payment card on {site}?"),
         BrowserSensitive::OneTimeCode => format!("Enter a one-time code on {site}?"),
+        BrowserSensitive::Script => format!("Run this script on {site}?"),
     }
 }
 
@@ -425,6 +462,12 @@ pub(crate) fn details(
     what: &str,
     url: &str,
 ) -> String {
+    // The card shows the script as it is, after this first paragraph (ApprovalCardView, ActionCards).
+    if let BrowserOp::Eval { script, .. } = op {
+        return format!(
+            "On {url}. It can do anything this page can, including read what its fields hold and send it elsewhere. Passwords are scrubbed from its answer only as written.\n\n{script}"
+        );
+    }
     let what = what.trim();
     let doing = match op {
         BrowserOp::Click { .. } => format!("Clicks {what}."),
@@ -894,6 +937,9 @@ impl SessionManager {
                 next,
                 dropped,
             } => ToolReply::ok(events_text(&tab, &lines, next, dropped)),
+            BrowserResult::Evaluated { tab, url, text } => {
+                ToolReply::ok(format!("{tab} — {url}\n\n{text}"))
+            }
             BrowserResult::Failed { message } => ToolReply::error(message),
         }
     }

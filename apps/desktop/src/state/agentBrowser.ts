@@ -279,6 +279,17 @@ async function act(tab: string, op: Exclude<BrowserOp, { op: "open" | "show" }>,
       await settled(tab);
       return withPopups(await page(tab, hands), conversationId, tab, before);
     }
+    case "eval": {
+      // Every run asks: a yes goes with one call, on the page it was given on, and is used here.
+      const shown = useBrowsers.getState().pages[tab];
+      if (approvedHere(tab, op.guard) === null || approvedHere(tab, op.guard) !== shown?.url) {
+        return { result: "needsApproval", tab, url: shown?.url ?? "", generation: shown?.generation ?? 0, sensitive: "script", what: "" };
+      }
+      const answer = await hands.script(tab, { kind: "eval", script: op.script });
+      const error = errorOf(answer);
+      if (error) return failed(error);
+      return { result: "evaluated", tab, url: urlOf(answer) ?? shown.url, text: String((answer as { text?: unknown }).text ?? "") };
+    }
     case "screenshot": {
       const png = await hands.capture(tab);
       return { result: "shot", tab, url: useBrowsers.getState().pages[tab]?.url ?? "", png: base64(new Uint8Array(png)) };
@@ -309,7 +320,7 @@ function approvedHere(tab: string, guard: BrowserGuard): string | null {
   return guard.approved && guard.approved.generation === generation ? guard.approved.url : null;
 }
 
-const SENSITIVE: readonly BrowserSensitive[] = ["pay", "send", "signIn", "credentials", "card", "oneTimeCode"];
+const SENSITIVE: readonly BrowserSensitive[] = ["pay", "send", "signIn", "credentials", "card", "oneTimeCode", "script"];
 
 function askOf(answer: unknown): { sensitive: BrowserSensitive; what: string } | null {
   if (typeof answer !== "object" || !answer || !("ask" in answer)) return null;

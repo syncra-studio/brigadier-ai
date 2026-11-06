@@ -9,6 +9,8 @@ import agentScript from "../../src-tauri/src/browser_agent.js?raw";
 /** The script's own world: the page can't reach its variables, or stand in for what it calls. */
 const AGENT_WORLD = 1010;
 const scriptBody = agentScript.trim().replace(/;$/, "");
+/** The agent's script, for what runs it elsewhere: the eval verb's answer and the picker's description. */
+export const agentScriptBody = scriptBody;
 const call = (op: object) => `(${scriptBody})(${JSON.stringify(op)})`;
 
 /** Runs the agent's script on the tab's page, in its own world. The op is data, and the script is the bundle's own. */

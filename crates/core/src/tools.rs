@@ -461,6 +461,17 @@ pub struct BrowserTabRef {
     pub tab: String,
 }
 
+/// `browser_eval`: runs JavaScript in a page of a tab you work in. The user sees the script on a
+/// card and says yes or no, every time.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserEval {
+    pub tab: String,
+    /// An expression, or statements that `return` the answer; `await` works in both. It runs as
+    /// the page's own script, and the answer comes back as text.
+    pub script: String,
+}
+
 /// `browser_events`: what happened in a tab (pages, network, console), to see why a page misbehaves
 /// or that an action did what it should.
 #[derive(Debug, Clone, Deserialize)]
@@ -657,6 +668,7 @@ pub enum BrowserToolCall {
     /// `browser_show`: a tab brought to the front, when the user asked to see it.
     Show(BrowserTabRef),
     Events(BrowserEvents),
+    Eval(BrowserEval),
 }
 
 impl BrowserToolCall {
@@ -672,6 +684,7 @@ impl BrowserToolCall {
             Self::Close(_) => "browser_close",
             Self::Show(_) => "browser_show",
             Self::Events(_) => "browser_events",
+            Self::Eval(_) => "browser_eval",
         }
     }
 }

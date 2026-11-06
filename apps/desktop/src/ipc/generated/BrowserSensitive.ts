@@ -4,4 +4,4 @@
  * Why an action asks the user first: the first three the agent declares, the rest the page's
  * fields show.
  */
-export type BrowserSensitive = "pay" | "send" | "signIn" | "credentials" | "card" | "oneTimeCode";
+export type BrowserSensitive = "pay" | "send" | "signIn" | "credentials" | "card" | "oneTimeCode" | "script";

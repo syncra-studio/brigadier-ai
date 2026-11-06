@@ -33,6 +33,7 @@ declare global {
       onGuestKey(listener: () => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
       agent(call: Record<string, unknown>): Promise<unknown>;
+      devtools(op: string, args: Record<string, unknown>): Promise<unknown>;
       onAgentEvent(listener: (details: { from: number; event: "devtools-opened" | "devtools-closed" | "detached" }) => void): void;
     };
   }
@@ -454,6 +455,7 @@ export function closePage(id: string): void {
   if (!page) return;
   answerFind(page, NOT_FOUND);
   dropOverlay(id);
+  document.querySelector(`#brigadier-devtools-layer webview[data-devtools-for="${CSS.escape(id)}"]`)?.remove();
   pages.delete(id);
   counters.closed += 1;
   page.element.remove();

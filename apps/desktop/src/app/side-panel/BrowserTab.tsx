@@ -8,6 +8,8 @@ import { followLayout } from "../conversation/pageWatch";
 import { type BrowserKey, browserKey, stepZoom } from "../conversation/browserKeys";
 import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
 import { ProfileButton } from "./ProfileButton";
+import { BrowserDevButton, BrowserDevFrame, BrowserPickerBar } from "./BrowserDevTools";
+import { BrowserDeviceBar } from "./BrowserDeviceSizes";
 import { BrowserOptions } from "./BrowserOptions";
 import { FindBar } from "./FindBar";
 import { NavigationCapsule } from "./NavigationCapsule";
@@ -503,6 +505,7 @@ export function BrowserTab({
             <CameraPhoto />
           </TooltipIconButton>
         )}
+        <BrowserDevButton id={conversationId} ready={page?.ready === true} />
         <BrowserOptions
           native={native}
           zoom={zoom}
@@ -525,6 +528,8 @@ export function BrowserTab({
           </Button>
         </Banner>
       )}
+      <BrowserPickerBar id={conversationId} />
+      <BrowserDeviceBar id={conversationId} />
       {page?.passkeyRefused && (
         <Banner
           data-slot="browser-passkey"
@@ -544,6 +549,7 @@ export function BrowserTab({
           )}
         </Banner>
       )}
+      <BrowserDevFrame id={conversationId} active={active}>
       <div
         ref={area}
         data-slot="browser-page"
@@ -557,6 +563,7 @@ export function BrowserTab({
           </div>
         ))}
       </div>
+      </BrowserDevFrame>
     </div>
   );
 }

@@ -408,6 +408,69 @@
     return { done: true };
   };
 
+  /** What an agent's script gave, as text: JSON where it can be, never a field's live value unless the script read one. */
+  const evalAnswer = (value) => {
+    const seen = new WeakSet();
+    const outline = (node) => `<${node.localName}${node.id ? `#${node.id}` : ""}>`;
+    const json = JSON.stringify(value, (_key, item) => {
+      if (typeof item === "bigint") return `${item}n`;
+      if (typeof item === "function") return `(function ${item.name})`;
+      if (typeof item === "symbol") return String(item);
+      if (item instanceof Element) return outline(item);
+      if (item instanceof Error) return `${item.name}: ${item.message}`;
+      if (item && typeof item === "object") {
+        if (seen.has(item)) return "(seen above)";
+        seen.add(item);
+        if (item instanceof Map) return Object.fromEntries(item);
+        if (item instanceof Set) return [...item];
+      }
+      return item;
+    }, 2);
+    return { text: typeof value === "string" ? value : json === undefined ? String(value) : json };
+  };
+
+  /** A picked element for the chat: what it is and where, never what a field holds. The shell scrubs this too. */
+  const describe = (element) => {
+    const password = isPassword(element);
+    const field = element.localName === "input" || element.localName === "textarea" || element.localName === "select" || element.isContentEditable;
+    const attrs = {};
+    for (const { name, value } of element.attributes) {
+      if (name === "value" || name === "style" || name.startsWith("on")) continue;
+      if (password && !["type", "id", "name", "autocomplete"].includes(name)) continue;
+      attrs[name] = cut(value, 200);
+    }
+    const piece = (node) => {
+      if (node.id && /^[A-Za-z][\w-]*$/.test(node.id) && node.getRootNode().querySelectorAll(`#${node.id}`).length === 1) return `#${node.id}`;
+      const siblings = node.parentElement ? [...node.parentElement.children].filter((other) => other.localName === node.localName) : [];
+      return siblings.length > 1 ? `${node.localName}:nth-of-type(${siblings.indexOf(node) + 1})` : node.localName;
+    };
+    const parts = [];
+    for (let node = element; node && node.nodeType === 1 && node.localName !== "html"; node = node.parentElement) {
+      parts.unshift(piece(node));
+      if (parts[0].startsWith("#")) break;
+    }
+    const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber$"));
+    let component = null;
+    for (let fiber = fiberKey ? element[fiberKey] : null; fiber && !component; fiber = fiber.return) {
+      if (typeof fiber.type === "function") component = fiber.type.displayName || fiber.type.name || null;
+    }
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const styles = {};
+    for (const name of ["display", "position", "color", "background-color", "font-size", "font-family", "margin", "padding", "border-radius"]) styles[name] = style.getPropertyValue(name);
+    return {
+      url: location.href,
+      selector: parts.join(" > "),
+      tag: element.localName,
+      attrs,
+      text: field ? "" : cut(clean(element.innerText || element.textContent), 400),
+      password,
+      component,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      styles,
+    };
+  };
+
   try {
     switch (op.kind) {
       case "read": return read(op.max || 20000);
@@ -431,6 +494,8 @@
         }
         return answer;
       }
+      case "evalAnswer": return evalAnswer(op.value);
+      case "describe": return describe(op.element);
       case "void":
         window.__brigadierRefs = undefined;
         return { done: true };

@@ -1,6 +1,6 @@
 // What an agent's verbs do to a guest (crates/core's browser tool, src/state/agentBrowser.ts). Agents only ever have
-// verbs: nothing here takes protocol methods or code from outside, so the app's page can ask for a click, never for
-// a CDP call or a script. Pages, network and console come from Electron's own events, with no debugger on the tab;
+// verbs: nothing here takes protocol methods, so the app's page can ask for a click, never for a CDP call. Only the
+// eval verb takes code, which main runs as the page's own script (browserDevtoolsEval.ts). Pages, network and console come from Electron's own events, with no debugger on the tab;
 // webContents.debugger is attached only while an agent acts, for trusted input, and goes as soon as the user takes
 // the tab. It is in-process, so no port and no automation switch.
 import { webContents, type WebContents } from "electron";
@@ -8,6 +8,7 @@ import { webContents, type WebContents } from "electron";
 import { handleFromApp } from "./appPage";
 import { activityOf, forgetActivity, watchActivity, watchNetwork } from "./browserAgentActivity";
 import { forgetSecrets, pictureForAgent, runScript, sweptAndScrubbed } from "./browserAgentSecrets";
+import { evalOnPage } from "./browserDevtoolsEval";
 
 export { watchNetwork };
 
@@ -131,6 +132,8 @@ export function installBrowserAgent(): void {
       case "script":
         // A sweep's answer holds field values, and stays in this process.
         if (call.op.kind === "sweep") throw new Error("Unknown agent call");
+        // The one way code from outside reaches a page: the user read it on a card and said yes (agentBrowser.ts).
+        if (call.op.kind === "eval") return evalOnPage(guest, String(call.op.script));
         return sweptAndScrubbed(guest, () => runScript(guest, call.op));
       case "attach":
         return attach(guest);
