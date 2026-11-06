@@ -14,7 +14,7 @@ import { NewChatRow } from "@/app/shell/NewChatRow";
 import { ProjectRow, underSource } from "@/app/shell/ProjectRow";
 import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
 import { SidebarHeader } from "@/app/shell/SidebarHeader";
-import { shownBy, useShowFilter, ViewControl } from "@/app/shell/SidebarView";
+import { shownBy, useShowFilter, ViewMenu, ViewTrigger } from "@/app/shell/SidebarView";
 import {
   BrigadierGlyph,
   Chats,
@@ -149,8 +149,6 @@ export function AppSidebar() {
   const inboxSections = useFoldedSections(INBOX_SECTIONS_KEY, INBOX_FOLDED);
   // Everyone starts with Group by None (D8); every window reads the same daemon setting.
   const inboxMode = useApp((s) => s.settings.sidebarMode !== "projects");
-  const [viewOpen, setViewOpen] = useState(false);
-  const view = <ViewControl projects={allProjects} open={viewOpen} onOpenChange={setViewOpen} />;
   const [dialog, setDialog] = useState<DialogState>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -204,112 +202,114 @@ export function AppSidebar() {
         <NewChatRow active={isChatDraft} />
       </NavList>
 
-      {inboxMode ? (
-        <InboxSidebar
-          activeId={activeId}
-          actions={actions}
-          isOpen={inboxSections.isOpen}
-          setOpen={inboxSections.setOpen}
-          onShown={onShown}
-          view={view}
-        />
-      ) : (
-        <div className={SIDEBAR_LIST}>
-          {pinned.length > 0 && (
-            <NavSection
-              title="Pinned"
-              open={sections.isOpen("pinned")}
-              onOpenChange={(open) => sections.setOpen("pinned", open)}
-            >
-              <NavList className="gap-1">
-                {pinned.map((conversation) => (
-                  <ConversationRow
-                    key={conversation.id}
-                    conversation={conversation}
-                    active={conversation.id === activeId}
-                    actions={actions}
-                    badged
-                  />
-                ))}
-              </NavList>
-            </NavSection>
-          )}
+      <ViewMenu projects={allProjects}>
+        {inboxMode ? (
+          <InboxSidebar
+            activeId={activeId}
+            actions={actions}
+            isOpen={inboxSections.isOpen}
+            setOpen={inboxSections.setOpen}
+            onShown={onShown}
+            view={<ViewTrigger />}
+          />
+        ) : (
+          <div className={SIDEBAR_LIST}>
+            {pinned.length > 0 && (
+              <NavSection
+                title="Pinned"
+                open={sections.isOpen("pinned")}
+                onOpenChange={(open) => sections.setOpen("pinned", open)}
+              >
+                <NavList className="gap-1">
+                  {pinned.map((conversation) => (
+                    <ConversationRow
+                      key={conversation.id}
+                      conversation={conversation}
+                      active={conversation.id === activeId}
+                      actions={actions}
+                      badged
+                    />
+                  ))}
+                </NavList>
+              </NavSection>
+            )}
 
-          <NavSection
-            title="Projects"
-            open={sections.isOpen("projects")}
-            onOpenChange={(open) => sections.setOpen("projects", open)}
-            steadyEnd={view}
-            actions={
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <RowAction
-                    aria-label="Add project"
-                    className="size-icon-button-sm"
-                    onClick={() => openAddProject()}
-                  >
-                    <Plus />
-                  </RowAction>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Add project</TooltipContent>
-              </Tooltip>
-            }
-          >
-            <NavList>
-              {projects.map((project) => (
-                <ProjectRow
-                  key={project.id}
-                  project={project}
-                  sessions={sessions[project.id] ?? NO_SESSIONS}
-                  activeId={activeId}
-                  drafting={draftProjectId === project.id}
-                  actions={actions}
-                  onSettings={onProjectSettings}
-                  onRemove={setRemoving}
-                />
-              ))}
-              {catalogLoaded && allProjects.length === 0 && (
-                <ProjectsEmptyPrompt />
-              )}
-            </NavList>
-          </NavSection>
-
-          {!show.hideChats && (
             <NavSection
-              title="Chats"
-              open={sections.isOpen("chats")}
-              onOpenChange={(open) => sections.setOpen("chats", open)}
+              title="Projects"
+              open={sections.isOpen("projects")}
+              onOpenChange={(open) => sections.setOpen("projects", open)}
+              steadyEnd={<ViewTrigger />}
               actions={
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <RowAction
-                      aria-label="New chat"
+                      aria-label="Add project"
                       className="size-icon-button-sm"
-                      onClick={() => select({ type: "draft", kind: "chat" })}
+                      onClick={() => openAddProject()}
                     >
                       <Plus />
                     </RowAction>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">New chat</TooltipContent>
+                  <TooltipContent side="bottom">Add project</TooltipContent>
                 </Tooltip>
               }
             >
               <NavList>
-                {chats.map((conversation) => (
-                  <ConversationRow
-                    key={conversation.id}
-                    conversation={conversation}
-                    active={conversation.id === activeId}
+                {projects.map((project) => (
+                  <ProjectRow
+                    key={project.id}
+                    project={project}
+                    sessions={sessions[project.id] ?? NO_SESSIONS}
+                    activeId={activeId}
+                    drafting={draftProjectId === project.id}
                     actions={actions}
-                    forked={underSource(conversation, chats)}
+                    onSettings={onProjectSettings}
+                    onRemove={setRemoving}
                   />
                 ))}
-                {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
+                {catalogLoaded && allProjects.length === 0 && (
+                  <ProjectsEmptyPrompt />
+                )}
               </NavList>
             </NavSection>
-          )}
-        </div>
-      )}
+
+            {!show.hideChats && (
+              <NavSection
+                title="Chats"
+                open={sections.isOpen("chats")}
+                onOpenChange={(open) => sections.setOpen("chats", open)}
+                actions={
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <RowAction
+                        aria-label="New chat"
+                        className="size-icon-button-sm"
+                        onClick={() => select({ type: "draft", kind: "chat" })}
+                      >
+                        <Plus />
+                      </RowAction>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">New chat</TooltipContent>
+                  </Tooltip>
+                }
+              >
+                <NavList>
+                  {chats.map((conversation) => (
+                    <ConversationRow
+                      key={conversation.id}
+                      conversation={conversation}
+                      active={conversation.id === activeId}
+                      actions={actions}
+                      forked={underSource(conversation, chats)}
+                    />
+                  ))}
+                  {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
+                </NavList>
+              </NavSection>
+            )}
+          </div>
+        )}
+      </ViewMenu>
 
       {error && (
         <Banner tone="error" text={error} onDismiss={() => setError(null)} />

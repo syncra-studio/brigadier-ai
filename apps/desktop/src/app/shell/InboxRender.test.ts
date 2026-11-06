@@ -5,6 +5,8 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Row = { badge: string | null; icon: boolean; text: string | null; status: string | null; merged: string | null; height: number };
 type Card = { title: string | null; status: string | null; project: string | null; model: string | null; folder: string | null; beside: boolean };
+type Rect = { x: number; y: number; width: number; height: number };
+type Spots = { view: Rect; header: Rect; firstRow: Rect; menu: Rect };
 type Placed = { projects: string[]; sessions: string[] };
 type Lines = Record<string, [boolean, string]>;
 type Seen = {
@@ -23,7 +25,10 @@ type Seen = {
   failedStatus: string; pill: string | null; outOfView: Record<string, boolean>; firstJump: boolean; secondJump: boolean;
   archived: string[]; actionAfter: string | null;
   menuWords: string[]; addProject: boolean; lineActions: number;
-  allOn: { lines: Lines; label: string | null }; allStays: [boolean, string];
+  allOn: { lines: Lines; label: string | null };
+  allOff: { lines: Lines; label: string | null; written: [string[], boolean]; empty: string | null; view: boolean };
+  allOnAgain: { lines: Lines; label: string | null };
+  viewNone: Spots; viewProject: Spots; viewProjectSettled: Spots; sameMenu: boolean;
   firstBadges: Record<string, string>; slotProblems: string[]; brokenTried: boolean;
   showOrder: string[]; placedBefore: Placed; placedAfterAgent: Placed; placedAfterSend: Placed;
   pickedCount: string;
@@ -105,11 +110,14 @@ test("Group by None: Pinned, Open and a folded Archived; rows stay put through a
   assert.deepEqual(seen.menuWords, ["Group by", "Show"]);
   assert.equal(seen.addProject, true);
   assert.equal(seen.lineActions, 0);
-  const everything: Lines = { All: [true, "11"], "brigadier-ai": [true, "3"], freelogo: [true, "1"], "steady-app": [true, "3"], "steady-app-billing-service": [true, "No sessions"], Chats: [true, "4"] };
+  const everything: Lines = { All: [true, "5"], "brigadier-ai": [true, "3"], freelogo: [true, "1"], "steady-app": [true, "3"], "steady-app-billing-service": [true, "No sessions"], Chats: [true, "4"] };
   assert.deepEqual(seen.allOn, { lines: everything, label: null });
-  assert.deepEqual(seen.allStays, [true, "11"], "clicking All with everything showing changes nothing");
+  // All's number is how many lines are ticked. It unticks everything when everything is ticked, projects and Chats; the list is empty and View stays.
+  const nothing: Lines = { All: [false, "0"], "brigadier-ai": [false, "3"], freelogo: [false, "1"], "steady-app": [false, "3"], "steady-app-billing-service": [false, "No sessions"], Chats: [false, "4"] };
+  assert.deepEqual(seen.allOff, { lines: nothing, label: "0 projects", written: [["brigadier-ai", "freelogo", "steady-app", "steady-app-billing-service"], true], empty: "Nothing here with this view.", view: true });
+  assert.deepEqual(seen.allOnAgain, { lines: everything, label: null });
   // Picking individually unticks All; the label counts projects only.
-  assert.deepEqual(seen.picked.lines, { ...everything, All: [false, "11"], freelogo: [false, "1"], "steady-app": [false, "3"], "steady-app-billing-service": [false, "No sessions"] });
+  assert.deepEqual(seen.picked.lines, { ...everything, All: [false, "2"], freelogo: [false, "1"], "steady-app": [false, "3"], "steady-app-billing-service": [false, "No sessions"] });
   assert.equal(seen.picked.label, "1 project");
   assert.deepEqual(seen.picked.written, ["freelogo", "steady-app", "steady-app-billing-service"]);
   assert.ok(seen.picked.rows.includes("Greeting"), "chats mix in until Chats is unticked");
@@ -126,6 +134,13 @@ test("Group by None: Pinned, Open and a folded Archived; rows stay put through a
   assert.deepEqual(seen.allBack.lines, everything, "All returns to everything");
   assert.equal(seen.allBack.label, null);
   assert.deepEqual(seen.allBack.written, [[], false]);
+
+  // Switching Group by moves nothing: the header and View icon at once, the list's start, and the one open menu.
+  assert.deepEqual(seen.viewProject.view, seen.viewNone.view);
+  assert.deepEqual(seen.viewProject.header, seen.viewNone.header);
+  assert.deepEqual(seen.viewProject.firstRow, seen.viewNone.firstRow);
+  assert.deepEqual(seen.viewProjectSettled, seen.viewNone);
+  assert.equal(seen.sameMenu, true, "the menu is not made anew, so it doesn't replay its slide-in");
 
   // Group by Project is today's Projects, with no pill or bulk action; a project's icon, else its folder.
   assert.equal(seen.mode, "projects");

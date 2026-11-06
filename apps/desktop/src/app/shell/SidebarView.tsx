@@ -1,4 +1,4 @@
-import { useId, useMemo, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { Checkbox, Radio, RadioGroup } from "@/components/controls";
@@ -71,16 +71,46 @@ function ShowRow({ name, checked, onChange, mark, count, none }: {
 }
 
 /**
- * The list's View control, on the header of Open (or of Projects when grouped), so it is there
- * whatever the list holds: Group by None or Project, and Show: All, each project, and Chats. Beside
- * its icon it says how many projects show, while anything is left out.
+ * The View control's button, on the header of Open (or of Projects when grouped), so it is there
+ * whatever the list holds; the size of the + beside it, so both headers are the same. Beside it, how
+ * many projects show, while anything is left out.
  */
-export function ViewControl({ projects, open, onOpenChange: setOpen }: {
-  projects: readonly Project[];
-  /** Held by the sidebar: changing Group by moves the control to another header, open still. */
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
+export function ViewTrigger() {
+  const projects = useApp((s) => Object.keys(s.projects).length);
+  const show = useShowFilter();
+  const shownProjects = projects - show.hiddenProjects.size;
+  return (
+    <>
+      {!show.all && (
+        <span data-slot="view-filtered" className="text-foreground/70 me-1 text-xs whitespace-nowrap">
+          {shownProjects === 1 ? "1 project" : `${shownProjects} projects`}
+        </span>
+      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <RowAction
+              aria-label="View"
+              data-slot="sidebar-view"
+              className={cn("size-icon-button-sm data-[state=open]:bg-foreground/8 data-[state=open]:text-foreground [&_svg]:size-icon-sm", !show.all && "bg-foreground/8 text-foreground")}
+            >
+              <SettingsSlider />
+            </RowAction>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">View</TooltipContent>
+      </Tooltip>
+    </>
+  );
+}
+
+/**
+ * Around the sidebar's lists, whichever grouping shows: the View menu, with Group by None or Project,
+ * and Show: All, each project, and Chats. It stays as it is while Group by moves its button to the
+ * other list's header.
+ */
+export function ViewMenu({ projects, children }: { projects: readonly Project[]; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
   const mode = useApp((s) => (s.settings.sidebarMode === "projects" ? "projects" : "inbox"));
   const conversations = useApp((s) => s.conversations);
   const show = useShowFilter();
@@ -89,99 +119,80 @@ export function ViewControl({ projects, open, onOpenChange: setOpen }: {
   const counts = useMemo(() => {
     const byProject: Record<string, number> = {};
     let chats = 0;
-    let all = 0;
     for (const conversation of Object.values(conversations)) {
       if (conversation.lifecycle === "archived" || conversation.sideOf) continue;
-      all += 1;
       if (isChat(conversation)) chats += 1;
       else byProject[conversation.projectId!] = (byProject[conversation.projectId!] ?? 0) + 1;
     }
-    return { byProject, chats, all };
+    return { byProject, chats };
   }, [conversations]);
+  // All counts the lines ticked below it, projects and Chats.
+  const ticked = projects.filter((project) => !show.hiddenProjects.has(project.id)).length + (show.hideChats ? 0 : 1);
   const tickProject = (id: string, on: boolean) => {
     const others = [...show.hiddenProjects].filter((each) => each !== id);
     saved(setSetting("sidebarHiddenProjects", on ? others : [...others, id]));
   };
-  // Unticking All has nothing to go back to: it stays ticked.
+  // With everything ticked it unticks everything; from anything else it ticks everything.
   const tickAll = () => {
-    if (!show.all) saved(editSettings((settings) => ({ ...settings, sidebarHiddenProjects: [], sidebarHideChats: false })));
+    const hiddenProjects = show.all ? projects.map((project) => project.id) : [];
+    const hideChats = show.all;
+    saved(editSettings((settings) => ({ ...settings, sidebarHiddenProjects: hiddenProjects, sidebarHideChats: hideChats })));
   };
-  const shownProjects = projects.length - show.hiddenProjects.size;
   return (
-    <>
-      {!show.all && (
-        <span data-slot="view-filtered" className="text-foreground/70 me-1 text-xs whitespace-nowrap">
-          {shownProjects === 1 ? "1 project" : `${shownProjects} projects`}
-        </span>
-      )}
-      <Popover open={open} onOpenChange={setOpen}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
-              <RowAction
-                aria-label="View"
-                data-slot="sidebar-view"
-                className={cn("[&_svg]:size-icon-sm", (!show.all || open) && "bg-foreground/8 text-foreground")}
-              >
-                <SettingsSlider />
-              </RowAction>
-            </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">View</TooltipContent>
-        </Tooltip>
-        <PopoverContent data-slot="sidebar-view-menu" side="bottom" align="end" className="w-60">
-          <div id={groupBy} className={HEADING}>Group by</div>
-          <RadioGroup
-            aria-labelledby={groupBy}
-            value={mode}
-            onValueChange={(next) => saved(setSetting("sidebarMode", next as SidebarMode))}
-          >
-            {GROUPINGS.map(({ mode: value, label }) => (
-              <label key={value} className={ROW}>
-                <Radio value={value} />
-                {label}
-              </label>
-            ))}
-          </RadioGroup>
-          <div className={RULE} />
-          <div className={HEADING}>Show</div>
-          <ShowRow name="All" checked={show.all} onChange={tickAll} count={counts.all} />
-          <div className={RULE} />
-          <div data-slot="show-list" className="scroll-edge-fade max-h-60 overflow-y-auto">
-            {projects.map((project) => (
-              <ShowRow
-                key={project.id}
-                name={project.name}
-                checked={!show.hiddenProjects.has(project.id)}
-                onChange={(on) => tickProject(project.id, on)}
-                mark={<ProjectBadge name={project.name} projectId={project.id} />}
-                count={counts.byProject[project.id] ?? 0}
-                none="No sessions"
-              />
-            ))}
+    <Popover open={open} onOpenChange={setOpen}>
+      {children}
+      <PopoverContent data-slot="sidebar-view-menu" side="bottom" align="end" className="w-60">
+        <div id={groupBy} className={HEADING}>Group by</div>
+        <RadioGroup
+          aria-labelledby={groupBy}
+          value={mode}
+          onValueChange={(next) => saved(setSetting("sidebarMode", next as SidebarMode))}
+        >
+          {GROUPINGS.map(({ mode: value, label }) => (
+            <label key={value} className={ROW}>
+              <Radio value={value} />
+              {label}
+            </label>
+          ))}
+        </RadioGroup>
+        <div className={RULE} />
+        <div className={HEADING}>Show</div>
+        <ShowRow name="All" checked={show.all} onChange={tickAll} count={ticked} />
+        <div className={RULE} />
+        <div data-slot="show-list" className="scroll-edge-fade max-h-60 overflow-y-auto">
+          {projects.map((project) => (
             <ShowRow
-              name="Chats"
-              checked={!show.hideChats}
-              onChange={(on) => saved(setSetting("sidebarHideChats", !on))}
-              mark={<ProjectBadge name={null} projectId={null} />}
-              count={counts.chats}
-              none="No chats"
+              key={project.id}
+              name={project.name}
+              checked={!show.hiddenProjects.has(project.id)}
+              onChange={(on) => tickProject(project.id, on)}
+              mark={<ProjectBadge name={project.name} projectId={project.id} />}
+              count={counts.byProject[project.id] ?? 0}
+              none="No sessions"
             />
-          </div>
-          <div className={RULE} />
-          <button
-            type="button"
-            className={cn(ROW, "text-foreground/85 w-full text-start outline-hidden [&_svg]:size-icon-md")}
-            onClick={() => {
-              setOpen(false);
-              openAddProject();
-            }}
-          >
-            <Plus className="text-muted-foreground" />
-            Add project…
-          </button>
-        </PopoverContent>
-      </Popover>
-    </>
+          ))}
+          <ShowRow
+            name="Chats"
+            checked={!show.hideChats}
+            onChange={(on) => saved(setSetting("sidebarHideChats", !on))}
+            mark={<ProjectBadge name={null} projectId={null} />}
+            count={counts.chats}
+            none="No chats"
+          />
+        </div>
+        <div className={RULE} />
+        <button
+          type="button"
+          className={cn(ROW, "text-foreground/85 w-full text-start outline-hidden [&_svg]:size-icon-md")}
+          onClick={() => {
+            setOpen(false);
+            openAddProject();
+          }}
+        >
+          <Plus className="text-muted-foreground" />
+          Add project…
+        </button>
+      </PopoverContent>
+    </Popover>
   );
 }

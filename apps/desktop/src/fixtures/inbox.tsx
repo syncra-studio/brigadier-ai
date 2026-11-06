@@ -144,6 +144,7 @@ const openRows = () => [...document.querySelectorAll<HTMLElement>('section')].fi
 const titles = () => [...(openRows()?.querySelectorAll<HTMLElement>('[data-slot="row-title"]') ?? [])].map((title) => title.textContent);
 const rowTitles = () => [...document.querySelectorAll<HTMLElement>('[data-row-id] [data-slot="row-title"]')].map((title) => title.textContent);
 const projectRows = () => [...document.querySelectorAll<HTMLElement>("section li > div > button[aria-expanded]:not([aria-haspopup])")];
+const box4 = (element: Element | null) => { const { x, y, width, height } = element!.getBoundingClientRect(); return { x, y, width, height }; };
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (check: () => boolean) => { for (let n = 0; n < 200 && !check(); n++) await wait(20); };
 
@@ -256,9 +257,11 @@ async function drive(): Promise<Record<string, unknown>> {
   seen.addProject = [...q('[data-slot="sidebar-view-menu"]')!.querySelectorAll("button")].some((button) => button.textContent === "Add project…");
   seen.lineActions = document.querySelectorAll('[data-slot="show-row"] [aria-label^="Actions for"]').length;
   seen.allOn = { lines: lines(), label: label() };
-  // All stays ticked when clicked with everything showing.
+  // With everything ticked, All unticks everything; again, and it ticks everything.
   await click(box("All"));
-  seen.allStays = lines().All;
+  seen.allOff = { lines: lines(), label: label(), written: [useApp.getState().settings.sidebarHiddenProjects.toSorted(), useApp.getState().settings.sidebarHideChats], empty: q("section li")?.textContent ?? null, view: viewButton() !== null };
+  await click(box("All"));
+  seen.allOnAgain = { lines: lines(), label: label() };
   await click(box("freelogo"));
   await click(box("steady-app"));
   await click(box("steady-app-billing-service"));
@@ -272,9 +275,18 @@ async function drive(): Promise<Record<string, unknown>> {
   await click(box("All"));
   seen.allBack = { lines: lines(), label: label(), written: [useApp.getState().settings.sidebarHiddenProjects, useApp.getState().settings.sidebarHideChats], rows: rowTitles().length };
 
-  // Group by Project: today's Projects, under the same control.
+  // Group by Project: today's Projects, under the same control; switching moves nothing.
+  const placedView = () => ({ view: box4(viewButton()), header: box4(viewButton()!.closest("section > div")), firstRow: box4(q("section li")), menu: box4(q('[data-slot="sidebar-view-menu"]')) });
+  q<HTMLElement>(".scroll-edge-fade")!.scrollTop = 0;
+  await wait(200);
+  seen.viewNone = placedView();
+  const menuBefore = q('[data-slot="sidebar-view-menu"]');
   await click([...document.querySelectorAll<HTMLElement>('[data-slot="radio"]')].at(-1)!);
   await until(() => Boolean(q('button[aria-label="Add project"]')));
+  seen.viewProject = placedView();
+  await wait(200);
+  seen.viewProjectSettled = placedView();
+  seen.sameMenu = menuBefore === q('[data-slot="sidebar-view-menu"]');
   seen.oneLineRow = rowOf("core-tests");
   seen.mode = useApp.getState().settings.sidebarMode;
   seen.saved = requests.some((request) => request.method === "updateSettings");

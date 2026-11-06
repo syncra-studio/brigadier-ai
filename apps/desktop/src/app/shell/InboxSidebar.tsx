@@ -159,22 +159,18 @@ export function InboxSidebar({
                 <TooltipContent side="bottom">Open Settings › Archived</TooltipContent>
               </Tooltip>
             </>
-          ) : id === "open" ? (
-            <>
-              {merged.length > 0 && (
-                <RowAction
-                  data-slot="archive-merged"
-                  className="me-1 w-auto gap-1.5 pe-0.5 text-xs whitespace-nowrap"
-                  onClick={() => void archiveAll(merged)}
-                >
-                  <Archive />
-                  Archive {merged.length} merged
-                </RowAction>
-              )}
-              {view}
-            </>
+          ) : id === "open" && merged.length > 0 ? (
+            <RowAction
+              data-slot="archive-merged"
+              className="me-1 w-auto gap-1.5 pe-0.5 text-xs whitespace-nowrap"
+              onClick={() => void archiveAll(merged)}
+            >
+              <Archive />
+              Archive {merged.length} merged
+            </RowAction>
           ) : undefined
         }
+        steadyEnd={id === "open" ? view : undefined}
       >
         <NavList className="gap-1">
           {inbox[id].map((conversation) => (

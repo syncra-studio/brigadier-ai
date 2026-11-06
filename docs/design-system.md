@@ -212,7 +212,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Sidebar & shell | `Page corners` | `app/shell/PageCorners.tsx` | `PageCorners` | |
 | Sidebar & shell | `Page surface` | `app/shell/PageSurface.tsx` | `PageSurface` | |
 | Sidebar & shell | `Sidebar header` | `app/shell/SidebarHeader.tsx` | `SidebarHeader` | |
-| Sidebar & shell | — | `app/shell/SidebarView.tsx` | `ViewControl` | code only: the list's View popover, Group by and Show (All, each project, Chats), on the header of Open or Projects |
+| Sidebar & shell | — | `app/shell/SidebarView.tsx` | `ViewMenu`, `ViewTrigger` | code only: the list's View popover, Group by and Show (All, each project, Chats), on the header of Open or Projects |
 | Sidebar & shell | — | `components/shared/row-card.tsx` | `ProjectBadge`, `ProjectIcon` | code only: a project's icon from its repository through `<img>`; the badge falls back to initials (a chat's bubble), a project row to its folder |
 | Sidebar & shell | `Sidebar` | `app/shell/NewChatRow.tsx` | `NewChatRow` | shown inside it |
 | Sidebar & shell | `Projects empty prompt` | `app/shell/ProjectsEmptyPrompt.tsx` | `ProjectsEmptyPrompt` | |
