@@ -1,21 +1,30 @@
 // The browser's security foundations and the record of its guests, from stage 1. Browser features come by
 // section (L4); per-frame loops go in stage 3 (L35).
-import { app, ipcMain, webContents } from "electron";
+import { app, webContents } from "electron";
 
+import { installBrowserAgent, watchGuest, watchNetwork } from "./browserAgent";
+import { handleFromApp, isAppPage } from "./appPage";
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
-import { installGuest } from "./guestPopups";
+import { installGuestFavicon } from "./guestFavicon";
+import { installGuest, webOrBlank } from "./guestPopups";
 import { installGuestKeys } from "./guestKeys";
-import { applyPermissionPolicy, installPermissionAnswers } from "./permissions";
-import { installProfileStore } from "./profileStore";
+import { applyAppSessionPolicy, applyPermissionPolicy, installPermissionAnswers } from "./permissions";
+import { installProfileStore, isDeleting } from "./profileStore";
 import { isProfilePartition, profilePartition } from "./profiles";
 import { installDurableStorage, keepStorageOf } from "./durableStorage";
 import { keepSessionCookies } from "./sessionCookies";
+import { guestPasskeyPath } from "./windows";
+
+/** The partitions main has named for a profile: the only sessions a guest may have. */
+const profileSessions = new Set<string>();
 
 export function installBrowserHost(): void {
   installDurableStorage();
   installProfileStore();
   installPermissionAnswers();
+  installBrowserAgent();
+  installGuestFavicon();
   app.on("render-process-gone", (_event, contents, details) => {
     note("render-process-gone", { webContents: contents.id, type: contents.getType(), url: contents.getURL(), ...details });
   });
@@ -25,9 +34,14 @@ export function installBrowserHost(): void {
   }
 
   app.on("session-created", (created) => {
-    if (!isProfilePartition(created.storagePath)) return;
+    if (!isProfilePartition(created.storagePath)) {
+      applyAppSessionPolicy(created, { note, isAppPage });
+      return;
+    }
     applyPermissionPolicy(created, { note });
     keepSessionCookies(created, { note });
+    watchNetwork(created);
+    if (process.platform === "darwin") created.registerPreloadScript({ type: "frame", filePath: guestPasskeyPath });
     if (unfocused) note("session-unfocused-policy", { path: created.storagePath });
   });
 
@@ -51,12 +65,22 @@ export function installBrowserHost(): void {
       // The Local Network prompt comes from WebRTC's local candidates; dev must show no dialog.
       if (unfocused) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
       installGuestKeys(contents);
+      watchGuest(contents);
+      contents.ipc.on("brigadier:guest-passkey-refused", () => {
+        note("guest-passkey-refused", { webContents: contents.id });
+        contents.hostWebContents?.send("brigadier:guest-passkey", { from: contents.id });
+      });
       contents.on("did-start-navigation", (details) => {
         if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
       });
       installGuest(contents);
     }
-    contents.on("will-attach-webview", (_attach, preferences) => {
+    contents.on("will-attach-webview", (attach, preferences, params) => {
+      if (!profileSessions.has(params.partition ?? "") || !webOrBlank(params.src ?? "")) {
+        note("guest-refused", { host: contents.id, partition: params.partition, src: params.src });
+        attach.preventDefault();
+        return;
+      }
       delete preferences.preload;
       preferences.nodeIntegration = false;
       preferences.nodeIntegrationInSubFrames = false;
@@ -67,8 +91,13 @@ export function installBrowserHost(): void {
     });
   });
 
-  ipcMain.handle("brigadier:profile-partition", (_event, profileId: string) => profilePartition(profileId));
-  ipcMain.handle("brigadier:guest-info", (_event, id: number) => {
+  handleFromApp("brigadier:profile-partition", (_event, profileId: string) => {
+    if (isDeleting(profileId)) throw new Error("This profile is being deleted");
+    const partition = profilePartition(profileId);
+    profileSessions.add(partition);
+    return partition;
+  });
+  handleFromApp("brigadier:guest-info", (_event, id: number) => {
     const guest = webContents.fromId(id);
     return guest ? { id, pid: guest.getOSProcessId(), url: guest.getURL() } : null;
   });

@@ -4,7 +4,9 @@
 // pending makes free. A kill -9 can still lose what was written in the last FLUSH_EVERY_MS without a navigation.
 import fs from "node:fs";
 
-import { ipcMain, type Session, type WebContents } from "electron";
+import type { Session, WebContents } from "electron";
+
+import { onFromApp } from "./appPage";
 
 const FLUSH_EVERY_MS = 3000;
 const FLUSH_SOON_MS = 150;
@@ -25,7 +27,7 @@ export function installDurableStorage(): void {
   setInterval(() => {
     for (const session of sessions) session.flushStorageData();
   }, FLUSH_EVERY_MS);
-  ipcMain.on("brigadier:flush-storage", (event) => flushSoon(event.sender.session));
+  onFromApp("brigadier:flush-storage", (event) => flushSoon(event.sender.session));
 }
 
 /** Each page's storage goes on the beat, and at once when a guest leaves its page: sign-ins write and then go. */

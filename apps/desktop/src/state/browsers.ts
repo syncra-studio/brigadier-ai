@@ -23,6 +23,8 @@ export type BrowserPage = {
   favicon?: string | null;
   /** The last navigation or download the tab refused, offered to the system browser. */
   blocked: string | null;
+  /** The page asked for a passkey, which this build can't use (macOS, electron/guestPasskey.ts). */
+  passkeyRefused?: boolean;
   /** What the page's history allows, once the shell has said (the Electron build does). */
   canGoBack?: boolean;
   canGoForward?: boolean;
@@ -108,7 +110,10 @@ export async function openPage(
         const shown = useBrowsers.getState().pages[id];
         if (!event.loading) syncZoom(id);
         update(id, { url: event.url, loading: event.loading,
-          ...(event.url !== shown?.url ? { favicon: null } : {}),
+          // Another site's. A pushState looks like any other load here and nothing sends its icon again;
+          // a new page of this site keeps the old icon until its own arrives, as in a browser.
+          ...(originOf(event.url) !== originOf(shown?.url ?? "") ? { favicon: null } : {}),
+          ...(shown?.passkeyRefused && originOf(event.url) !== originOf(shown.url) ? { passkeyRefused: false } : {}),
           ...(event.loading ? { generation: (shown?.generation ?? 0) + 1 } : {}),
           // The shell drops a question from a site the page left.
           ...(shown?.asking && originOf(event.url) !== shown.asking.origin ? { asking: null } : {}) });
@@ -139,6 +144,7 @@ export async function openPage(
         update(id, { asking: { request, origin, camera, microphone } });
       }
       else if (event.type === "blocked") update(id, { blocked: event.url, loading: false });
+      else if (event.type === "passkeyRefused") update(id, { passkeyRefused: true });
     });
     if (!useBrowsers.getState().pages[id]) { await browserClose(id); return; }
     made.add(id);
@@ -195,6 +201,10 @@ export function syncZoom(id: string): void {
 
 export function dismissBlocked(id: string): void {
   update(id, { blocked: null });
+}
+
+export function dismissPasskeyRefused(id: string): void {
+  update(id, { passkeyRefused: false });
 }
 
 /** The tab closed, or its conversation did: the page and all it stored go. */

@@ -77,6 +77,15 @@ pub enum BrowserOp {
     Show {
         tab: String,
     },
+    /// What happened in the tab after `since` (a `next` an answer gave; 0 for all that is kept):
+    /// its pages, network and console. `kinds` narrows it. Reading, so any tab of the session.
+    Events {
+        tab: String,
+        #[serde(default)]
+        kinds: Vec<BrowserEventKind>,
+        #[serde(default)]
+        since: u64,
+    },
 }
 
 impl BrowserOp {
@@ -91,7 +100,8 @@ impl BrowserOp {
             | Self::Type { tab, .. }
             | Self::Screenshot { tab }
             | Self::Close { tab }
-            | Self::Show { tab } => Some(tab),
+            | Self::Show { tab }
+            | Self::Events { tab, .. } => Some(tab),
         }
     }
 }
@@ -102,6 +112,20 @@ pub enum BrowserGo {
     Back,
     Forward,
     Reload,
+}
+
+/// What a line of a tab's activity is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BrowserEventKind {
+    /// A page loaded or the address changed.
+    Navigation,
+    /// A request and how it ended.
+    Network,
+    /// A message of the page's console.
+    Console,
+    /// A load that failed or a page that crashed.
+    Error,
 }
 
 /// What may make an action ask the user first (Q67: money, credentials and anything sent in
@@ -183,6 +207,15 @@ pub enum BrowserResult {
         sensitive: BrowserSensitive,
         /// The control, as the page names it.
         what: String,
+    },
+    /// What happened in the tab, a line each, oldest first. `next` is the `since` of the next
+    /// ask; `dropped` counts the older lines of this answer no longer kept or left out.
+    Events {
+        tab: String,
+        lines: Vec<String>,
+        next: u64,
+        #[serde(default)]
+        dropped: u64,
     },
     Failed {
         message: String,

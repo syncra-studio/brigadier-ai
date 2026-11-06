@@ -1,7 +1,8 @@
 // Dev only: what the driver asks of the main process, reached from the hidden control page over the
 // debugging pipe. A fixed list, so a check can't quietly do something the app itself can't.
-import { app, ipcMain, screen, session, webContents, type BrowserWindow, type WebContents } from "electron";
+import { app, BrowserWindow, ipcMain, screen, session, webContents, type WebContents } from "electron";
 
+import { fromAppPage } from "./appPage";
 import type { Note } from "./events";
 import { chooseFromLastMenu, lastMenuItems } from "./guestMenu";
 import { openPopups } from "./guestPopups";
@@ -33,6 +34,8 @@ const guest = (id: number): WebContents => {
   if (!found) throw new Error(`No guest ${id}`);
   return found;
 };
+
+let devToolsFront: BrowserWindow | null = null;
 
 export function installDevControl({ createWindow, windows, note }: Control): void {
   /** Cursors each guest asked for, so a check can read what a real pointer would have shown. */
@@ -139,6 +142,16 @@ export function installDevControl({ createWindow, windows, note }: Control): voi
     hostSendInput: ({ name, event }) => { need(name).webContents.sendInputEvent(event); return true; },
     hostInsertText: ({ name, text }) => need(name).webContents.insertText(text),
     guestCursors: ({ id }) => cursors.get(id) ?? [],
+    // DevTools on a guest with no window of its own: its front end goes in a hidden page, so a check shows nothing.
+    guestDevTools: async ({ id, open }) => {
+      const contents = guest(id);
+      if (!open) { contents.closeDevTools(); devToolsFront?.destroy(); devToolsFront = null; return contents.isDevToolsOpened(); }
+      const front = new BrowserWindow({ show: false });
+      devToolsFront = front;
+      contents.setDevToolsWebContents(front.webContents);
+      contents.openDevTools({ mode: "detach", activate: false });
+      return contents.isDevToolsOpened();
+    },
     guestExec: ({ id, js }) => guest(id).executeJavaScript(js, false),
     guestMenuItems: () => lastMenuItems(),
     guestMenuChoose: ({ text }) => chooseFromLastMenu(text),
@@ -164,7 +177,8 @@ export function installDevControl({ createWindow, windows, note }: Control): voi
     quit: () => { setTimeout(() => app.quit(), 50); return true; },
     kill: () => { setTimeout(() => process.kill(process.pid, "SIGKILL"), 50); return true; },
   };
-  ipcMain.handle("brigadier:dev-control", (_event, op: string, args?: Args) => {
+  ipcMain.handle("brigadier:dev-control", (event, op: string, args?: Args) => {
+    if (!fromAppPage(event) && event.sender !== windows.get("control")?.webContents) throw new Error("brigadier:dev-control is for the driver");
     const run = ops[op];
     if (!run) throw new Error(`Unknown op ${op}`);
     note("dev-control", { op, name: args?.name });

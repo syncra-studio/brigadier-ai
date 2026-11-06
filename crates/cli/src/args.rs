@@ -725,6 +725,16 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                     put("submit", Some(json!(args.switch("submit"))));
                     put("asks", asks);
                 }
+                "events" => {
+                    one("nothing", false)?.map_or(Ok(()), |extra| {
+                        Err(error(&format!("unexpected argument {extra}")))
+                    })?;
+                    put("since", number("since"));
+                    if let Some(kinds) = args.flag("kinds") {
+                        let kinds: Vec<&str> = kinds.split(',').map(str::trim).collect();
+                        put("kinds", Some(json!(kinds)));
+                    }
+                }
                 _ => {
                     one("nothing", false)?.map_or(Ok(()), |extra| {
                         Err(error(&format!("unexpected argument {extra}")))

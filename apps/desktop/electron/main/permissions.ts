@@ -1,6 +1,8 @@
 // What a web page may have. The camera and microphone go by the profile's saved choice for the site, then a
 // question in the tab; everything else not listed is refused: no handler at all would mean Electron grants it.
-import { ipcMain, systemPreferences, type Session, type WebContents } from "electron";
+import { systemPreferences, type Session, type WebContents } from "electron";
+
+import { handleFromApp } from "./appPage";
 
 import type { Note } from "./events";
 import { isDeleting, setSiteChoice, siteAsked, siteChoice } from "./profileStore";
@@ -97,7 +99,7 @@ function requestMedia(profileId: string, guest: WebContents, details: Electron.M
 }
 
 export function installPermissionAnswers(): void {
-  ipcMain.handle("brigadier:permission-answer", (_event, request: number, choice: "once" | "visiting" | "never" | "dismiss") => {
+  handleFromApp("brigadier:permission-answer", (_event, request: number, choice: "once" | "visiting" | "never" | "dismiss") => {
     const question = questions.get(request);
     if (!question) return;
     questions.delete(request);
@@ -112,6 +114,17 @@ export function installPermissionAnswers(): void {
     if (choice === "once" || choice === "visiting") grant(asked, answer);
     else answer(false);
   });
+}
+
+/** The app's own session: its page keeps what it asks for (the microphone for dictation), and nothing else in it, a visual's frame say, gets anything. */
+export function applyAppSessionPolicy(session: Session, { note, isAppPage }: { note: Note; isAppPage: (url: string) => boolean }): void {
+  session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const origin = details.requestingUrl || contents.getURL();
+    const allowed = details.isMainFrame && isAppPage(origin);
+    note("permission-request", { permission, allowed, origin, session: "app" });
+    callback(allowed);
+  });
+  session.setPermissionCheckHandler((_contents, _permission, origin) => isAppPage(origin));
 }
 
 export function applyPermissionPolicy(session: Session, { note }: { note: Note }): void {

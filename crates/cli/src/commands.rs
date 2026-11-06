@@ -603,6 +603,7 @@ pub const COMMANDS: &[Command] = &[
         details: "`open <url>` opens a tab and prints its id; `navigate <url>`, `read`, \
                   `click <ref>`, `type <ref> <text…>`, `screenshot`, `close` and `show` act \
                   on the tab `--tab` names. `read` lists the page's controls by ref (`e12`). \
+                  `events` tells what happened in the tab: its pages, network and console. \
                   Set `--asks` when a click or typing pays, sends something in the user's name \
                   or signs in: the user is asked first.",
         args: &[
@@ -616,6 +617,7 @@ pub const COMMANDS: &[Command] = &[
                     "screenshot",
                     "close",
                     "show",
+                    "events",
                 ],
                 "What to do.",
             ),
@@ -636,6 +638,16 @@ pub const COMMANDS: &[Command] = &[
                 "WHAT",
                 &["pay", "send", "sign-in"],
                 "click and type: what it does that asks the user first.",
+            ),
+            flag(
+                "kinds",
+                "KINDS",
+                "events: only these, by commas, of navigation, network, console, error.",
+            ),
+            flag(
+                "since",
+                "N",
+                "events: only what came after this, as the last answer's `--since` said.",
             ),
             flag(
                 "out",

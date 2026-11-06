@@ -18,6 +18,8 @@ fs.mkdirSync(daemonDataDir, { recursive: true });
 fs.mkdirSync(daemonHome, { recursive: true });
 fs.mkdirSync(evidenceDir, { recursive: true });
 const log = (...parts) => console.log(new Date().toISOString(), ...parts);
+/** No debugging pipe: Google refuses a page whose navigator.webdriver is true, which the pipe alone causes. Nothing can drive this run. */
+const noPipe = process.env.BRIGADIER_NO_PIPE === "1";
 
 let app = null;
 let nextId = 1;
@@ -72,6 +74,7 @@ async function launch() {
     ...process.env,
     BRIGADIER_DEV: "1",
     BRIGADIER_UNFOCUSED: process.env.BRIGADIER_FOCUSED === "1" ? "0" : "1",
+    ...(noPipe ? { BRIGADIER_DEV_OPEN_MAIN: "1" } : {}),
     BRIGADIER_DEV_DATA: dataDir,
     BRIGADIER_EVENTS: eventsPath,
     BRIGADIER_RENDERER_URL: `http://127.0.0.1:${vitePort}/`,
@@ -83,9 +86,17 @@ async function launch() {
     BRIGADIER_DEV_DAEMON_HOME: process.env.BRIGADIER_DEV_DAEMON_HOME ?? daemonHome,
   };
   stopWatch = await startWatch({ checkDir });
-  app = spawn(path.join(binDir, "spawn-disclaimed"), [appBinary, "--remote-debugging-pipe"], { env, stdio: ["ignore", out, out, "pipe", "pipe"] });
+  app = spawn(path.join(binDir, "spawn-disclaimed"), noPipe ? [appBinary] : [appBinary, "--remote-debugging-pipe"], { env, stdio: noPipe ? ["ignore", out, out] : ["ignore", out, out, "pipe", "pipe"] });
   stopWatch.setPid(app.pid);
-  log("app pid", app.pid);
+  log("app pid", app.pid, noPipe ? "(no pipe)" : "");
+  if (noPipe) {
+    const started = app;
+    app.on("exit", (code, signal) => {
+      log("app exited", started.pid, code, signal);
+      if (app === started) app = null;
+    });
+    return;
+  }
   write = (text) => app.stdio[3].write(text);
   let buffer = "";
   app.stdio[4].on("data", (chunk) => {
@@ -146,6 +157,12 @@ await launch();
 
 async function shutdown(code = 0) {
   try { if (controlSession) await control("quit"); } catch { /* already gone */ }
+  // Without the pipe, SIGTERM is the orderly quit: Electron takes it as app.quit().
+  if (noPipe && app) {
+    const quitting = app;
+    quitting.kill("SIGTERM");
+    for (let tries = 0; app === quitting && tries < 150; tries++) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   await new Promise((resolve) => setTimeout(resolve, 1500));
   if (app) app.kill("SIGTERM");
   vite.kill("SIGTERM");
@@ -155,9 +172,10 @@ async function shutdown(code = 0) {
 }
 
 async function handle(message) {
+  if (noPipe && !["status", "down"].includes(message.op)) throw new Error(`${message.op} needs the debugging pipe: this instance runs without one`);
   switch (message.op) {
     case "status":
-      return { pid: app?.pid ?? null, controlReady: controlSession !== null, vite: vite.pid, devd: process.pid };
+      return { pid: app?.pid ?? null, controlReady: controlSession !== null, noPipe, vite: vite.pid, devd: process.pid };
     case "targets":
       return (await send("Target.getTargets")).targetInfos.map(({ type, url, title, targetId }) => ({ type, url, title, targetId }));
     case "control":

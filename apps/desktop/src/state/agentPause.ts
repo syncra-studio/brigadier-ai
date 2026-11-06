@@ -9,7 +9,7 @@ import { type BrowserDriver, sessionTabs, sessionWith } from "@/state/sessionTab
  * from the page, so the page loading again can't undo it. The daemon holds the agent's calls
  * on a paused tab.
  */
-export const useAgentPause = create<{ paused: Record<string, string> }>(() => ({ paused: {} }));
+export const useAgentPause = create<{ paused: Record<string, string>; devtools: Record<string, true> }>(() => ({ paused: {}, devtools: {} }));
 
 /** The agent working Browser tab `id`, with its session; null for the user's own tabs. */
 export function driverOf(id: string): { conversationId: string; driver: BrowserDriver } | null {
@@ -20,6 +20,9 @@ export function driverOf(id: string): { conversationId: string; driver: BrowserD
 }
 
 export const isPaused = (id: string): boolean => id in useAgentPause.getState().paused;
+
+/** DevTools is open on the tab: a call gets `devtools_open` at once, and reads of its activity go on. */
+export const devToolsOpen = (id: string): boolean => id in useAgentPause.getState().devtools;
 
 function tell(conversationId: string, tab: string, paused: boolean): void {
   request({ method: "browserPaused", conversationId, tab, paused }).catch((error: unknown) =>
@@ -34,6 +37,30 @@ export function userUsed(id: string): void {
   if (!owner) return;
   useAgentPause.setState(({ paused }) => ({ paused: { ...paused, [id]: owner.conversationId } }));
   tell(owner.conversationId, id, true);
+}
+
+/**
+ * DevTools opened or closed on tab `id`. Opening it on an agent's tab counts as taking it over. Closing it resumes
+ * nothing: the agent waits for Continue again. The daemon holds a paused tab's calls, so it hears of the pause only
+ * while DevTools is shut: while open, the calls come here and are answered.
+ */
+export function devToolsChanged(id: string, open: boolean): void {
+  if (open === devToolsOpen(id)) return;
+  const owner = driverOf(id);
+  if (open) {
+    const was = isPaused(id);
+    useAgentPause.setState(({ paused, devtools }) => ({
+      devtools: { ...devtools, [id]: true },
+      paused: owner ? { ...paused, [id]: owner.conversationId } : paused,
+    }));
+    if (owner && was) tell(owner.conversationId, id, false);
+    return;
+  }
+  useAgentPause.setState(({ devtools }) => {
+    const { [id]: _gone, ...rest } = devtools;
+    return { devtools: rest };
+  });
+  if (owner && isPaused(id)) tell(owner.conversationId, id, true);
 }
 
 /** The Browser tabs whose page shows now. */
@@ -58,9 +85,10 @@ export function pageUsed(id: string): void {
 export function handBack(id: string): void {
   const conversationId = useAgentPause.getState().paused[id];
   if (conversationId === undefined) return;
-  useAgentPause.setState(({ paused }) => {
+  useAgentPause.setState(({ paused, devtools }) => {
     const { [id]: _gone, ...rest } = paused;
-    return { paused: rest };
+    const { [id]: _open, ...shut } = devtools;
+    return { paused: rest, devtools: shut };
   });
   tell(conversationId, id, false);
 }

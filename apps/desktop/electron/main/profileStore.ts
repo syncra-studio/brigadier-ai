@@ -4,8 +4,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app, BrowserWindow, ipcMain, session, webContents } from "electron";
+import { app, BrowserWindow, session, webContents } from "electron";
 
+import { handleFromApp } from "./appPage";
 import { replaceFile } from "./durableStorage";
 import { note } from "./events";
 import { profileFolderName, profilePartition, refusalToRemove, type SavedProfiles, type SiteChoice, type SitePermission } from "./profiles";
@@ -142,7 +143,7 @@ const OPS: Record<string, Op> = {
 
 export function installProfileStore(): void {
   removeDeletedFolders();
-  ipcMain.handle("brigadier:profiles", (_event, op: string, args) => {
+  handleFromApp("brigadier:profiles", (_event, op: string, args) => {
     const run = OPS[op];
     if (!run) throw new Error(`No profile operation ${op}`);
     return run(args);

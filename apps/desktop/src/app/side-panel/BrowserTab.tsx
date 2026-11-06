@@ -25,6 +25,7 @@ import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findInPage, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";
 import {
   dismissBlocked,
+  dismissPasskeyRefused,
   openPage,
   syncZoom,
   useBrowsers,
@@ -132,6 +133,7 @@ export function BrowserTab({
 }) {
   const page = useBrowsers((s) => s.pages[conversationId]);
   const paused = useAgentPause((s) => conversationId in s.paused);
+  const devtoolsOpen = useAgentPause((s) => conversationId in s.devtools);
   const driver = useSessionTabs((s) => driverLabel(s.sessions, conversationId));
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -511,12 +513,21 @@ export function BrowserTab({
       {paused && driver !== null && (
         <Banner
           data-slot="browser-paused"
-          text={<>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
+          text={devtoolsOpen
+            ? <>DevTools is open on this page, so <span className="font-medium">{driver}</span> is waiting. Close it to hand the page back.</>
+            : <>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
         >
-          <Button size="sm" onClick={() => handBack(conversationId)}>
+          <Button size="sm" disabled={devtoolsOpen} onClick={() => handBack(conversationId)}>
             Continue
           </Button>
         </Banner>
+      )}
+      {page?.passkeyRefused && (
+        <Banner
+          data-slot="browser-passkey"
+          text={<>Passkeys don't work in Brigadier yet, so this page's request was refused. Sign in with a password or another option on the page.</>}
+          onDismiss={() => dismissPasskeyRefused(conversationId)}
+        />
       )}
       {page?.blocked && (
         <Banner

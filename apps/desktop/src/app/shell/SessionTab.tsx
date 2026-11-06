@@ -91,7 +91,7 @@ export function SessionTab({
           {tab.kind === "file" || tab.kind === "conflict" ? (
             <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
           ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
-            : tab.kind === "browser" ? <span className="relative flex shrink-0"><BrowserTabIcon tabId={tab.id} /><TabProfileDot conversationId={conversationId} tabId={tab.id} /></span>
+            : tab.kind === "browser" ? <span className="relative flex shrink-0"><BrowserTabIcon tabId={tab.id} saved={tab.favicon} /><TabProfileDot conversationId={conversationId} tabId={tab.id} /></span>
             : tab.kind === "terminal" ? <Dock className="size-icon-sm shrink-0" />
             : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
             : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />

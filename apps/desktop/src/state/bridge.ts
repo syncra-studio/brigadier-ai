@@ -18,6 +18,8 @@ import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, applyBoardNews, forgetKeptBoards, sideBoardIds } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
+import { profileChanged, startHandingBack } from "@/state/agentBrowser";
+import { onProfileChanged } from "@/state/browserProfiles";
 import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
 import { applyEvents, useApp } from "@/state/store";
@@ -236,6 +238,8 @@ export async function startBridge(): Promise<void> {
     console.error("listening for a nightly update failed", error);
   });
   await subscribe(onBridgeEvent);
+  startHandingBack();
   startMenuBar();
   startBrowserOptions();
+  onProfileChanged(({ tabId }) => profileChanged(tabId));
 }

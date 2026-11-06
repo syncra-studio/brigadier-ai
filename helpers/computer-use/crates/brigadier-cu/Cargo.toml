@@ -16,7 +16,8 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-cua-driver-core = { path = "../../upstream/crates/cua-driver-core" }
+# Only YAML policies: Brigadier never uses the driver's Rego or JavaScript engines.
+cua-driver-core = { path = "../../upstream/crates/cua-driver-core", default-features = false, features = ["yaml"] }
 cu-layer = { path = "../cu-layer" }
 async-trait = "0.1"
 base64 = { workspace = true }

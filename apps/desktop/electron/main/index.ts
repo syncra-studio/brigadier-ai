@@ -7,6 +7,7 @@ import { app, BrowserWindow, protocol } from "electron";
 
 import type { ComputerUseStatus } from "@/ipc/generated";
 
+import { refuseUnsafeSwitches } from "./appPage";
 import { installBrowserHost } from "./browserHost";
 import { installCommands, waitForCommands } from "./commands";
 import { folderOpened, installCoreCommands } from "./core";
@@ -28,6 +29,7 @@ import { createWindow, mainWindow, setOnVisibility, showMain, userCameToIt, wind
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+refuseUnsafeSwitches();
 setIdentity();
 app.enableSandbox();
 // The arguments as given: the `argv` a second launch delivers has Chromium's switches first and values moved
@@ -161,7 +163,8 @@ if (dev) {
 void app.whenReady().then(async () => {
   installTray(startDaemon);
   servePage();
-  if (dev && !smoke) {
+  // BRIGADIER_DEV_OPEN_MAIN: a run with no driver (`bc up --no-pipe`) opens its window as the shipped app does.
+  if (dev && !smoke && process.env.BRIGADIER_DEV_OPEN_MAIN !== "1") {
     note("ready", { pid: process.pid, electron: process.versions.electron, chrome: process.versions.chrome, sandboxForced: true });
     // The first window waits for the driver: the checks place each window before it shows.
     const control = new BrowserWindow({
