@@ -53,6 +53,8 @@ module.exports = {
       // The CLI goes in afterPack.cjs, once the executable has moved off its name.
       { from: inStage("Brigadier Computer Use.app"), to: "Helpers/Brigadier Computer Use.app" },
     ],
+    // Signed before the app: a cross-compiled binary comes with no signature at all, and the app's fails on it.
+    binaries: ["Contents/MacOS/brigadierd", "Contents/MacOS/brigadier", "Contents/Resources/shell_native.node"],
     // An ad-hoc signature can't load an addon under the hardened runtime's library validation.
     identity: identity ?? "-",
     hardenedRuntime: Boolean(identity),

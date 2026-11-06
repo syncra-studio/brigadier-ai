@@ -15,4 +15,9 @@ exports.default = async function afterPack(context) {
   const cli = path.join(macos, "brigadier");
   fs.copyFileSync(path.join(process.env.BRIGADIER_STAGE, "sidecars/brigadier"), cli);
   fs.chmodSync(cli, 0o755);
+  // Cross-compiled Rust carries no signature at all, which stops the app's own signing at "code object is not
+  // signed". This is only so the walk gets through; a real identity replaces it (`mac.binaries`).
+  for (const file of [path.join(macos, "brigadierd"), cli, path.join(contents, "Resources/shell_native.node")]) {
+    execFileSync("codesign", ["--force", "--sign", "-", file]);
+  }
 };
