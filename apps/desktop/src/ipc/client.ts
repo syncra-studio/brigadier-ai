@@ -350,6 +350,9 @@ export function browserSnapshot(id: string): Promise<void> {
   return invoke("browser_snapshot", { id });
 }
 
+/** A Browser tab's activity: lines, the `since` of the next ask, and how many older lines are left out. */
+export type BrowserActivity = { lines: string[]; next: number; dropped: number };
+
 /** Runs the browser tool's script on the Browser tab `id`'s page with `op` (macOS): what the page answered. */
 export function browserAgent(id: string, op: Record<string, unknown>): Promise<unknown> {
   return invoke("browser_agent", { id, op });
@@ -363,6 +366,16 @@ export function browserAgentLoad(id: string, url: string): Promise<void> {
 /** A PNG of the Browser tab `id`'s page as it shows (macOS). */
 export function browserAgentCapture(id: string): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("browser_agent_capture", { id });
+}
+
+/** An agent has the Browser tab `id` or doesn't; `resumed`: it has it back from the user, with Continue. */
+export function browserAgentDrive(id: string, on: boolean, resumed = false): Promise<void> {
+  return invoke("browser_agent_drive", { id, on, resumed });
+}
+
+/** What happened in the Browser tab `id` after `since`: its pages, network and console. */
+export function browserAgentEvents(id: string, since: number, kinds: readonly string[]): Promise<BrowserActivity> {
+  return invoke<BrowserActivity>("browser_agent_events", { id, since, kinds });
 }
 
 /** Gives the keyboard to the Browser tab `id`'s page, or with `null` back to the app's own. */

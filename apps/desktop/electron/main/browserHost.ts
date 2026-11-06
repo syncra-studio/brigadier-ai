@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { app, ipcMain, webContents } from "electron";
 
+import { installBrowserAgent, watchGuest, watchNetwork } from "./browserAgent";
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
 import { installGuest } from "./guestPopups";
@@ -19,6 +20,7 @@ const tabsFile = () => path.join(app.getPath("userData"), "browser-tabs.json");
 
 export function installBrowserHost(): void {
   installDurableStorage();
+  installBrowserAgent();
   app.on("render-process-gone", (_event, contents, details) => {
     note("render-process-gone", { webContents: contents.id, type: contents.getType(), url: contents.getURL(), ...details });
   });
@@ -31,6 +33,7 @@ export function installBrowserHost(): void {
     if (!isProfilePartition(created.storagePath)) return;
     applyPermissionPolicy(created, { note });
     keepSessionCookies(created, { note });
+    watchNetwork(created);
     if (unfocused) note("session-unfocused-policy", { path: created.storagePath });
   });
 
@@ -54,6 +57,7 @@ export function installBrowserHost(): void {
       // The Local Network prompt comes from WebRTC's local candidates; dev must show no dialog.
       if (unfocused) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
       installGuestKeys(contents);
+      watchGuest(contents);
       contents.on("did-start-navigation", (details) => {
         if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
       });

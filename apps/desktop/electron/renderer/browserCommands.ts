@@ -1,6 +1,7 @@
 // The browser's commands, by the Tauri build's names, answered in the page: a tab's <webview> lives here.
 import type { BrowserBounds, BrowserEvent } from "@/ipc/generated";
 
+import { agentCapture, agentDrive, agentEvents, agentLoad, agentRun } from "./browserAgentHands";
 import { closePage, find, focusPage, go, navigatePage, openPage, placePage, printPage, setModal, zoom } from "./tabLayer";
 
 type Args = Record<string, unknown>;
@@ -34,9 +35,11 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_site_set: () => null,
   browser_read: () => null,
   browser_snapshot: () => null,
-  browser_agent: () => null,
-  browser_agent_load: () => null,
-  browser_agent_capture: () => null,
+  browser_agent: (args) => agentRun(args.id as string, args.op as Record<string, unknown>),
+  browser_agent_load: (args) => agentLoad(args.id as string, args.url as string),
+  browser_agent_capture: (args) => agentCapture(args.id as string),
+  browser_agent_drive: (args) => agentDrive(args.id as string, args.on as boolean, args.resumed === true),
+  browser_agent_events: (args) => agentEvents(args.id as string, args.since as number, args.kinds as string[]),
   browser_import_sources: () => [],
   browser_import: () => null,
   browser_import_open_access: () => null,

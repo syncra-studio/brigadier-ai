@@ -1,6 +1,6 @@
 // Dev only: what the driver asks of the main process, reached from the hidden control page over the
 // debugging pipe. A fixed list, so a check can't quietly do something the app itself can't.
-import { app, ipcMain, screen, session, webContents, type BrowserWindow, type WebContents } from "electron";
+import { app, BrowserWindow, ipcMain, screen, session, webContents, type WebContents } from "electron";
 
 import type { Note } from "./events";
 import { chooseFromLastMenu, lastMenuItems } from "./guestMenu";
@@ -33,6 +33,8 @@ const guest = (id: number): WebContents => {
   if (!found) throw new Error(`No guest ${id}`);
   return found;
 };
+
+let devToolsFront: BrowserWindow | null = null;
 
 export function installDevControl({ createWindow, windows, note }: Control): void {
   /** Cursors each guest asked for, so a check can read what a real pointer would have shown. */
@@ -139,6 +141,16 @@ export function installDevControl({ createWindow, windows, note }: Control): voi
     hostSendInput: ({ name, event }) => { need(name).webContents.sendInputEvent(event); return true; },
     hostInsertText: ({ name, text }) => need(name).webContents.insertText(text),
     guestCursors: ({ id }) => cursors.get(id) ?? [],
+    // DevTools on a guest with no window of its own: its front end goes in a hidden page, so a check shows nothing.
+    guestDevTools: async ({ id, open }) => {
+      const contents = guest(id);
+      if (!open) { contents.closeDevTools(); devToolsFront?.destroy(); devToolsFront = null; return contents.isDevToolsOpened(); }
+      const front = new BrowserWindow({ show: false });
+      devToolsFront = front;
+      contents.setDevToolsWebContents(front.webContents);
+      contents.openDevTools({ mode: "detach", activate: false });
+      return contents.isDevToolsOpened();
+    },
     guestExec: ({ id, js }) => guest(id).executeJavaScript(js, false),
     guestMenuItems: () => lastMenuItems(),
     guestMenuChoose: ({ text }) => chooseFromLastMenu(text),

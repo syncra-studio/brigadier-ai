@@ -313,6 +313,11 @@ fn browser_op(call: BrowserToolCall, request: Option<String>) -> Result<BrowserO
         BrowserToolCall::Screenshot(tab) => BrowserOp::Screenshot { tab: tab.tab },
         BrowserToolCall::Close(tab) => BrowserOp::Close { tab: tab.tab },
         BrowserToolCall::Show(tab) => BrowserOp::Show { tab: tab.tab },
+        BrowserToolCall::Events(events) => BrowserOp::Events {
+            tab: events.tab,
+            kinds: events.kinds,
+            since: events.since.unwrap_or(0),
+        },
     })
 }
 
@@ -447,6 +452,22 @@ fn page_text(tab: &str, page: &BrowserPageRead) -> String {
     };
     let loading = if page.loading { " (loading)" } else { "" };
     format!("{tab} · {title} — {}{loading}\n\n{}", page.url, page.text)
+}
+
+/// A tab's activity as the agent gets it. A page's lines are data like its text.
+fn events_text(tab: &str, lines: &[String], next: u64, dropped: u64) -> String {
+    let mut text = if lines.is_empty() {
+        format!("Nothing new in {tab}.")
+    } else {
+        lines.join("\n")
+    };
+    if dropped > 0 {
+        text.push_str(&format!(
+            "\n({dropped} earlier lines aren't shown: too many, or no longer kept.)"
+        ));
+    }
+    text.push_str(&format!("\n(Next: --since {next}.)"));
+    text
 }
 
 fn failed(message: &str) -> BrowserResult {
@@ -836,6 +857,12 @@ impl SessionManager {
             BrowserResult::NeedsApproval { .. } => {
                 ToolReply::error("This needs the user's yes first; nothing was done.")
             }
+            BrowserResult::Events {
+                tab,
+                lines,
+                next,
+                dropped,
+            } => ToolReply::ok(events_text(&tab, &lines, next, dropped)),
             BrowserResult::Failed { message } => ToolReply::error(message),
         }
     }

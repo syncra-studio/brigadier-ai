@@ -11,6 +11,10 @@
 import { ZOOM_LEAST, ZOOM_MOST } from "@/app/conversation/browserKeys";
 import { type BrowserBounds, type BrowserEvent, type BrowserFound } from "@/ipc/generated";
 
+import { devToolsChanged, userUsed } from "@/state/agentPause";
+
+import { dropOverlay, installAgentOverlays, placeOverlay } from "./agentOverlay";
+import { watchUserComposition } from "./agentFocusGuard";
 import { readFavicon } from "./pageFavicon";
 
 declare global {
@@ -25,12 +29,14 @@ declare global {
       onGuestEscape(listener: (details: { from: number }) => void): void;
       onGuestKey(listener: () => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
+      agent(call: Record<string, unknown>): Promise<unknown>;
+      onAgentEvent(listener: (details: { from: number; event: "devtools-opened" | "devtools-closed" | "detached" }) => void): void;
     };
   }
 }
 
 /** Electron's <webview> element, as far as the layer uses it. */
-type Webview = HTMLElement & {
+export type Webview = HTMLElement & {
   src: string;
   getWebContentsId(): number;
   loadURL(url: string): Promise<void>;
@@ -146,11 +152,14 @@ export function installTabLayer(): void {
   }).observe(layer, { childList: true });
 
   installKeyboardHandover();
+  installAgentOverlays();
+  watchUserComposition();
 
   // A drag anywhere in the app must not fall into a page it crosses: the divider's or a text
   // selection's pointer stays with the app until it's let go.
   window.addEventListener("pointerdown", (event) => {
-    if (event.target instanceof Element && event.target.closest("webview")) return;
+    // The shield over a driven page goes at this press, so its release lands in the page, unheard here.
+    if (event.target instanceof Element && event.target.closest("webview, .brigadier-agent-frame")) return;
     pageHadKey = false;
     layer?.toggleAttribute("data-locked", true);
   }, { capture: true });
@@ -172,6 +181,14 @@ export function installTabLayer(): void {
       if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "escape" });
     }
   });
+  window.brigadierShell.onAgentEvent(({ from, event }) => {
+    for (const page of pages.values()) {
+      if (!page.ready || page.element.getWebContentsId() !== from) continue;
+      // Nothing resumes by itself: DevTools closing, or a debugger ended from outside, leaves the tab with the user.
+      if (event === "detached") userUsed(page.id);
+      else devToolsChanged(page.id, event === "devtools-opened");
+    }
+  });
 }
 
 function loadTabs(): Promise<void> {
@@ -187,6 +204,7 @@ function need(id: string): Page {
 
 function place(page: Page, bounds: BrowserBounds | null): void {
   const { style } = page.element;
+  placeOverlay(page.id, bounds);
   if (bounds === null) {
     style.visibility = "hidden";
     style.pointerEvents = "none";
@@ -309,6 +327,25 @@ function load(page: Page, url: string): void {
   page.element.loadURL(url).catch(() => {});
 }
 
+/** Loads `url` in the tab's page where it is, showing nothing new. */
+export function loadPage(id: string, url: string): void {
+  load(need(id), url);
+}
+
+/** The tab's guest, for an agent's call; the element's methods work only from its first dom-ready. */
+export function agentPage(id: string): { guest: number; element: Webview } {
+  const page = need(id);
+  if (!page.ready) throw new Error(`The page of tab ${id} isn't ready yet.`);
+  return { guest: page.element.getWebContentsId(), element: page.element };
+}
+
+/** Where the tab's page shows now; null behind its tab. */
+export function pageBounds(id: string): BrowserBounds | null {
+  const { style } = need(id).element;
+  if (style.visibility !== "visible") return null;
+  return { x: parseFloat(style.left), y: parseFloat(style.top), width: parseFloat(style.width), height: parseFloat(style.height) };
+}
+
 export function navigatePage(id: string, url: string, bounds: BrowserBounds): void {
   const page = need(id);
   place(page, page.shown ? bounds : null);
@@ -394,6 +431,7 @@ export function closePage(id: string): void {
   const page = pages.get(id);
   if (!page) return;
   answerFind(page, NOT_FOUND);
+  dropOverlay(id);
   pages.delete(id);
   delete tabs[id];
   void window.brigadierShell.tabsWrite(tabs);

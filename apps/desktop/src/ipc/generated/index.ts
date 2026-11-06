@@ -56,6 +56,7 @@ export type { BrowserBounds } from "./BrowserBounds";
 export type { BrowserClear } from "./BrowserClear";
 export type { BrowserDownload } from "./BrowserDownload";
 export type { BrowserEvent } from "./BrowserEvent";
+export type { BrowserEventKind } from "./BrowserEventKind";
 export type { BrowserFound } from "./BrowserFound";
 export type { BrowserGo } from "./BrowserGo";
 export type { BrowserGuard } from "./BrowserGuard";

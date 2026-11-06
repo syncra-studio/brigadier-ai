@@ -10,6 +10,12 @@
 // password, a card or a one-time code (seen here), returns `ask` and does nothing unless the
 // user said yes to it on this page (`approved`: the address the yes was given at, which the app
 // passes only while the tab is still on the page it was given on).
+//
+// With `trusted: true` (the Electron shell, in an isolated world) a click or typing isn't done here:
+// it answers { point: { x, y } } for the shell to do with real input, or an error if something covers
+// the control. { kind: "place", target, typing } answers where the control is now, without scrolling, and for typing
+// refuses a field that lost the focus. With `isolated: true` it runs in a world of its own: refs are kept there, not
+// in the page's DOM, where the page could see or forge them. { kind: "void" } forgets them.
 (op) => {
   const REF = "data-brigadier-ref";
   const NEXT = "data-brigadier-next-ref";
@@ -87,6 +93,8 @@
     const hint = [element.name, element.id, element.getAttribute("aria-label"), element.placeholder, element.labels?.[0]?.innerText]
       .join(" ").toLowerCase();
     if (element.type === "password" || /\b(current|new)-password\b/.test(auto)) return "credentials";
+    // A text field disguised as a password field.
+    if ((getComputedStyle(element).webkitTextSecurity || "none") !== "none") return "credentials";
     if (/\bcc-(number|csc|exp|exp-month|exp-year)\b/.test(auto) ||
         /card.?number|\bcc.?num|\bcvc\b|\bcvv\b|\bcsc\b|security code|expiry|expiration/.test(hint)) return "card";
     if (/\bone-time-code\b/.test(auto) ||
@@ -123,12 +131,25 @@
     }
   };
 
+  const refs = () => (window.__brigadierRefs ??= { next: 1, byRef: new Map(), of: new WeakMap() });
+
   const find = (ref) => {
+    if (op.isolated) return refs().byRef.get(ref)?.deref() ?? null;
     for (const element of each(document)) if (element.getAttribute(REF) === ref) return element;
     return null;
   };
 
   const refOf = (element) => {
+    if (op.isolated) {
+      const store = refs();
+      let own = store.of.get(element);
+      if (!own) {
+        own = `e${store.next++}`;
+        store.of.set(element, own);
+        store.byRef.set(own, new WeakRef(element));
+      }
+      return own;
+    }
     let ref = element.getAttribute(REF);
     if (ref) return ref;
     const root = document.documentElement;
@@ -244,6 +265,38 @@
     return element.dispatchEvent(new Kind(type, { ...init, pointerType: "mouse", isPrimary: true }));
   };
 
+  /** The element at a point of the page, through open shadow roots. */
+  const deepest = (x, y) => {
+    let hit = document.elementFromPoint(x, y);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  };
+  const within = (outer, inner) => {
+    for (let at = inner; at; at = at.parentNode || at.host) if (at === outer) return true;
+    return false;
+  };
+
+  /** Where real input reaches the control, or what is over it; null when it has no place to click. */
+  const placeOf = (element) => {
+    const rects = element.getClientRects();
+    const rect = rects.length ? rects[0] : null;
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return null;
+    const hit = deepest(x, y);
+    const label = hit?.closest?.("label");
+    if (hit && !within(element, hit) && !within(hit, element) && !label?.contains(element) && label?.control !== element) {
+      const role = roleOf(hit);
+      return { error: `${op.target} is covered by ${role || hit.localName} ${quoted(nameOf(hit) || hit.innerText || "")}: deal with that first.` };
+    }
+    return { point: { x, y } };
+  };
+
   const click = () => {
     const found = target();
     if (found.error) return found;
@@ -253,6 +306,12 @@
     const kind = role === "button" ? filledKind(scopeOf(element)) : null;
     const asked = (op.declared && ask(op.declared, element)) || (kind && ask(kind, element));
     if (asked) return asked;
+    if (op.trusted) {
+      element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      // With no box it only takes the page's own click below.
+      const place = placeOf(element);
+      if (place) return place;
+    }
     element.scrollIntoView({ block: "center", inline: "center" });
     pointer(element, "pointerdown");
     pointer(element, "mousedown");
@@ -299,6 +358,10 @@
       element.value = option.value;
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
+    } else if (op.trusted && op.text) {
+      // Only where it is: the cursor goes there first, then { kind: "insert" }.
+      const rect = element.getBoundingClientRect();
+      return { point: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } };
     } else if (element.isContentEditable) {
       document.getSelection()?.selectAllChildren(element);
       document.execCommand("insertText", false, op.text);
@@ -322,6 +385,34 @@
       case "read": return read(op.max || 20000);
       case "click": return click();
       case "type": return type();
+      case "void":
+        window.__brigadierRefs = undefined;
+        return { done: true };
+      case "insert": {
+        // The page's own editing, which needs no window focus: a debugger's insertText is routed by the window's.
+        const found = target();
+        if (found.error) return found;
+        const { element } = found;
+        if (element.isContentEditable) document.getSelection()?.selectAllChildren(element);
+        else element.select?.();
+        if (!document.execCommand("insertText", false, op.text)) {
+          setValue(element, op.text);
+          element.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: op.text }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        return { done: true };
+      }
+      case "place": {
+        const found = target();
+        if (found.error) return found;
+        if (op.typing) {
+          let focused = document.activeElement;
+          while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+          if (!focused || !within(found.element, focused)) return { error: `The page moved the focus away from ${op.target}, so nothing was typed. Read it again.` };
+          return { done: true };
+        }
+        return placeOf(found.element) ?? { error: `${op.target} has no place to click now.` };
+      }
       default: return { error: `unknown op ${op.kind}` };
     }
   } catch (error) {

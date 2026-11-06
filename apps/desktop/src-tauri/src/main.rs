@@ -950,6 +950,8 @@ fn main() {
             browser_agent::browser_agent,
             browser_agent::browser_agent_load,
             browser_agent::browser_agent_capture,
+            browser_agent::browser_agent_drive,
+            browser_agent::browser_agent_events,
             browser::browser_print,
             browser::browser_snapshot,
             browser::browser_focus,
