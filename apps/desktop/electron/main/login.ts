@@ -12,6 +12,7 @@ import { note } from "./events";
 import { dev, identifier, rendererUrl, unfocused } from "./identity";
 import { autostartDir, desktopEntry, LOGIN_ITEMS_PANE, loginItemTook, macLoginItem, privacyPane, type LoginItem } from "./loginRules";
 import { native } from "./native";
+import { setFinishSetup } from "./tray";
 import { preloadPath, windows } from "./windows";
 
 const SETUP_WINDOW = "computer-setup";
@@ -149,6 +150,7 @@ export function openComputerSetup(focus: boolean): void {
 }
 
 export function installLoginCommands(dataDir: string): void {
+  setFinishSetup(() => openComputerSetup(true));
   /** The placed helper app, which System Settings lists. */
   const helperApp = (): string => {
     if (process.platform !== "darwin") throw internal("computer use needs macOS");
