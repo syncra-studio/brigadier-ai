@@ -1,0 +1,20 @@
+// Where the dev app and its scratch data live. Nothing here points at /Applications or the daemon's folder.
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+export const desktopDir = path.join(repoRoot, "apps/desktop");
+export const electronDir = path.join(desktopDir, "electron");
+export const buildDir = path.join(repoRoot, "target/browser-check");
+export const binDir = path.join(buildDir, "bin");
+export const checkInputApp = path.join(binDir, "Brigadier Check Input.app");
+export const appBundle = path.join(buildDir, "Brigadier Dev.app");
+export const appBinary = path.join(appBundle, "Contents/MacOS/Brigadier Dev");
+/** Scratch data and evidence: never the repo. */
+export const checkDir = process.env.BRIGADIER_CHECK_DIR ?? path.join(process.env.TMPDIR ?? os.tmpdir(), "browser-check");
+export const dataDir = path.join(checkDir, "data");
+export const socketPath = path.join(checkDir, "devd.sock");
+export const eventsPath = path.join(checkDir, "events.jsonl");
+export const evidenceDir = path.join(checkDir, "evidence");
+export const vitePort = 1431;

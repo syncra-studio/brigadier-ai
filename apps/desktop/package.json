@@ -14,7 +14,10 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:debug-app": "tauri build --debug --bundles app --config src-tauri/tauri.dev.conf.json",
-    "stage-sidecar": "node scripts/stage-sidecar.mjs"
+    "stage-sidecar": "node scripts/stage-sidecar.mjs",
+    "electron:build": "node ../../tools/browser-check/build-dev-app.mjs",
+    "electron:up": "node ../../tools/browser-check/bc.mjs up",
+    "electron:down": "node ../../tools/browser-check/bc.mjs down"
   },
   "dependencies": {
     "@assistant-ui/core": "0.3.21",
