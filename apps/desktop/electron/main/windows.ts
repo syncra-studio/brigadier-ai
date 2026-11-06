@@ -104,7 +104,8 @@ export function createWindow({ name = "main", bounds = {}, query = "", real = !d
       webviewTag: true,
       // The page keeps running while unseen, or onboarding would wait for the window to come forward (#134).
       backgroundThrottling: false,
-      ...(real ? {} : {
+      // The preload runs in every subframe too, only to lock it: a visual's child frames (preload.ts).
+      ...(real ? { nodeIntegrationInSubFrames: true } : {
         // One localStorage per named window: the checks run a session in each, as separate users would.
         partition: `persist:shell-${name}`,
         additionalArguments: ["--brigadier-stand-in"],
