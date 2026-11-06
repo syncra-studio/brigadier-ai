@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { Button, Checkbox, ErrorLine } from "@/components/controls";
@@ -23,6 +23,13 @@ function Group({ title, line, children }: { title: string; line: string; childre
   );
 }
 
+/** `from` with `key` in it, or not. */
+function toggled(from: ReadonlySet<string>, key: string, on: boolean) {
+  const next = new Set(from);
+  if (on) next.add(key); else next.delete(key);
+  return next;
+}
+
 /** What Refresh found: what to add of the new, what to do about the gone. */
 export function RefreshDialog({ changes, adapter, onClose, onDone }: {
   changes: PluginChanges;
@@ -34,11 +41,7 @@ export function RefreshDialog({ changes, adapter, onClose, onDone }: {
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
   const action = useAction();
-  const toggled = (from: ReadonlySet<string>, key: string, on: boolean) => {
-    const next = new Set(from);
-    if (on) next.add(key); else next.delete(key);
-    return next;
-  };
+  const id = useId();
   const apply = () => action.run(async () => {
     await adapter.applyChanges?.({
       add: changes.found.filter((item) => ticked.has(item.key)).map((item) => item.key),
@@ -53,8 +56,8 @@ export function RefreshDialog({ changes, adapter, onClose, onDone }: {
       {changes.found.length > 0 && (
         <Group title={`New (${changes.found.length})`} line="Tick what your agents should use. What you leave unticked stays out of Brigadier and isn't asked about again; you can bring it back from Add.">
           {changes.found.map((item) => (
-            <label key={item.key} data-slot="refresh-new" className="bg-foreground/5 rounded-control flex cursor-pointer items-center gap-3 px-3 py-2">
-              <Checkbox aria-label={`Add ${item.name}`} checked={ticked.has(item.key)} onCheckedChange={(on) => setTicked((now) => toggled(now, item.key, on === true))} />
+            <label key={item.key} htmlFor={`${id}-${item.key}`} data-slot="refresh-new" className="bg-foreground/5 rounded-control flex cursor-pointer items-center gap-3 px-3 py-2">
+              <Checkbox id={`${id}-${item.key}`} aria-label={`Add ${item.name}`} checked={ticked.has(item.key)} onCheckedChange={(on) => setTicked((now) => toggled(now, item.key, on === true))} />
               <PluginMark item={item} />
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="truncate text-label font-medium">{item.name}</span>
