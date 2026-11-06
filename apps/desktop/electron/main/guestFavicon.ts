@@ -1,7 +1,9 @@
 // A tab's icon, fetched outside its page as a browser does, in the guest's own session with no credentials: most
 // sites' icons carry no CORS header, so a page can't read its own (Google's, for one). What comes back goes only to
 // the app's page, which decodes it (renderer/pageFavicon.ts); the site's page never sees it.
-import { ipcMain, webContents, type Session } from "electron";
+import { webContents, type Session } from "electron";
+
+import { handleFromApp } from "./appPage";
 
 const MAX_BYTES = 512 * 1024;
 const TIMEOUT_MS = 10_000;
@@ -45,7 +47,7 @@ export async function fetchIcon(session: Session, href: string): Promise<string 
 }
 
 export function installGuestFavicon(): void {
-  ipcMain.handle("brigadier:guest-favicon", async (_event, id: number, href: string) => {
+  handleFromApp("brigadier:guest-favicon", async (_event, id: number, href: string) => {
     const guest = webContents.fromId(id);
     if (!guest || guest.getType() !== "webview") return null;
     return fetchIcon(guest.session, href).catch(() => null);
