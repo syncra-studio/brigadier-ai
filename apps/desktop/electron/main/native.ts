@@ -27,6 +27,7 @@ type Addon = {
   noticePermission(): Promise<string>;
   noticeAsk(): void;
   locationStatus(): "off" | "undetermined" | "denied" | "restricted" | "allowed" | "unknown";
+  locationAsk(): void;
 };
 
 let loaded: Addon | null = null;

@@ -101,7 +101,7 @@ export function OsRefusedNotice({
 }) {
   const devices = refused?.refused ?? [];
   const names = devices.map((device) => REFUSED_NAMES[device]).join(" and ");
-  const system = useApp((s) => (s.info?.platform === "macos" ? "macOS" : "Your system"));
+  const mac = useApp((s) => s.info?.platform === "macos");
   return (
     <Popover open={devices.length > 0} onOpenChange={(open) => { if (!open) closeOsRefused(id); }}>
       <PopoverAnchor virtualRef={anchor as RefObject<HTMLDivElement>} />
@@ -115,14 +115,16 @@ export function OsRefusedNotice({
         onInteractOutside={(event) => event.preventDefault()}
       >
         <div className="flex items-start gap-2">
-          <p className="text-browser min-w-0 flex-1 pt-1 break-words">{system} isn't giving Brigadier {names}, so the site can't have it.</p>
+          <p className="text-browser min-w-0 flex-1 pt-1 break-words">{mac ? `macOS isn't giving Brigadier ${names}` : `Brigadier can't get ${names} on this system yet`}, so the site can't have it.</p>
           <TooltipIconButton tooltip="Close" size="icon-xs" onClick={() => closeOsRefused(id)}>
             <X />
           </TooltipIconButton>
         </div>
-        <Button className="mt-3 w-full" size="sm" variant="secondary" onClick={() => { if (devices[0]) void openOsPermissionSettings(devices[0]); closeOsRefused(id); }}>
-          Open System Settings
-        </Button>
+        {mac && (
+          <Button className="mt-3 w-full" size="sm" variant="secondary" onClick={() => { if (devices[0]) void openOsPermissionSettings(devices[0]); closeOsRefused(id); }}>
+            Open System Settings
+          </Button>
+        )}
       </PopoverContent>
     </Popover>
   );

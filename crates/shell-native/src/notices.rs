@@ -114,3 +114,26 @@ pub fn location_status() -> String {
         "unknown".to_string()
     }
 }
+
+/// Makes the system ask about location now, if it hasn't an answer yet. Called on the main thread.
+/// Electron never does: Chromium only starts position updates, which leaves the question to chance.
+#[napi]
+pub fn location_ask() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::rc::Retained;
+        use objc2_core_location::CLLocationManager;
+        use std::cell::RefCell;
+        thread_local! {
+            // Alive past this call: the system drops a question whose manager is gone.
+            static MANAGER: RefCell<Option<Retained<CLLocationManager>>> = const { RefCell::new(None) };
+        }
+        MANAGER.with(|manager| {
+            let mut manager = manager.borrow_mut();
+            // SAFETY: made and used only on this thread; it has no delegate, and the call starts nothing else.
+            unsafe {
+                manager.get_or_insert_with(|| CLLocationManager::new()).requestWhenInUseAuthorization();
+            }
+        });
+    }
+}
