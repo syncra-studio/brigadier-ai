@@ -25,6 +25,7 @@ import { closeFind, findInPage, NO_FIND, openFind, useBrowserFind } from "@/stat
 import {
   dismissBlocked,
   openPage,
+  syncZoom,
   useBrowsers,
   zoomPage,
 } from "@/state/browsers";
@@ -212,6 +213,8 @@ export function BrowserTab({
   const zoom = page?.zoom ?? 1;
   // What the page does natively (find, print, zoom, a screenshot): macOS, once there is a page.
   const native = mac && page?.ready === true;
+
+  useEffect(() => { if (active && native) syncZoom(conversationId); }, [active, native, conversationId]);
 
   const act = (action: Parameters<typeof browserGo>[1]) => {
     userUsed(conversationId);

@@ -100,6 +100,7 @@ export async function openPage(
     await browserOpen(id, url, bounds, agent, (event) => {
       if (event.type === "load") {
         const shown = useBrowsers.getState().pages[id];
+        if (!event.loading) syncZoom(id);
         update(id, { url: event.url, loading: event.loading,
           ...(event.url !== shown?.url ? { favicon: null } : {}),
           ...(event.loading ? { generation: (shown?.generation ?? 0) + 1 } : {}),
@@ -176,6 +177,11 @@ function downloaded(path: string, ok: boolean): void {
 /** Zooms the tab's page to `zoom` (1 is 100%), keeping what the shell says it came to. */
 export async function zoomPage(id: string, zoom: number): Promise<void> {
   update(id, { zoom: await browserZoom(id, zoom) });
+}
+
+/** Reads the zoom the page is at: on Electron it belongs to the site, so a load or another tab can change it. */
+export function syncZoom(id: string): void {
+  browserZoom(id, null).then((zoom) => update(id, { zoom }), () => {});
 }
 
 export function dismissBlocked(id: string): void {

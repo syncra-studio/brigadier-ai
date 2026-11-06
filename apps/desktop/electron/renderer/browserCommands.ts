@@ -1,7 +1,7 @@
 // The browser's commands, by the Tauri build's names, answered in the page: a tab's <webview> lives here.
 import type { BrowserBounds, BrowserEvent } from "@/ipc/generated";
 
-import { closePage, find, go, navigatePage, openPage, placePage, printPage, setModal, zoom } from "./tabLayer";
+import { closePage, find, focusPage, go, navigatePage, openPage, placePage, printPage, setModal, zoom } from "./tabLayer";
 
 type Args = Record<string, unknown>;
 type Channelish = { onmessage: (message: BrowserEvent) => void };
@@ -20,7 +20,7 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_print: (args) => printPage(args.id as string),
   browser_close: (args) => closePage(args.id as string),
   browser_configure: () => null,
-  browser_focus: () => null,
+  browser_focus: (args) => focusPage(args.id as string | null),
   browser_permission: () => null,
   // Not built yet: browser features come section by section (L4). Saved data reads as none.
   browser_history: () => [],

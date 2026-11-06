@@ -8,7 +8,10 @@
 // a hole in itself where a page shows (src/app/conversation/browserLayer.ts), so its own menus and
 // floating controls draw over the live page in one compositor.
 
+import { ZOOM_LEAST, ZOOM_MOST } from "@/app/conversation/browserKeys";
 import { type BrowserBounds, type BrowserEvent, type BrowserFound } from "@/ipc/generated";
+
+import { readFavicon } from "./pageFavicon";
 
 declare global {
   interface Window {
@@ -19,6 +22,7 @@ declare global {
       profilePartition(profileId: string): Promise<string>;
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;
+      onGuestEscape(listener: (details: { from: number }) => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
     };
   }
@@ -41,6 +45,7 @@ type Webview = HTMLElement & {
   findInPage(text: string, options?: { forward?: boolean; findNext?: boolean }): number;
   stopFindInPage(action: "clearSelection" | "keepSelection" | "activateSelection"): void;
   print(): Promise<void>;
+  executeJavaScript(code: string): Promise<unknown>;
 };
 
 export type TabRecord = { profileId: string };
@@ -106,6 +111,11 @@ export function installTabLayer(): void {
       }
     }
   });
+  window.brigadierShell.onGuestEscape(({ from }) => {
+    for (const page of pages.values()) {
+      if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "escape" });
+    }
+  });
 }
 
 function loadTabs(): Promise<void> {
@@ -136,13 +146,21 @@ function place(page: Page, bounds: BrowserBounds | null): void {
   page.shown = true;
 }
 
+const NOT_FOUND: BrowserFound = { found: false, current: 0, total: 0 };
+
+function answerFind(page: Page, found: BrowserFound): void {
+  page.finding?.(found);
+  page.finding = null;
+}
+
 function listen(page: Page): void {
   const { element } = page;
   const emit = (event: BrowserEvent) => page.emit(event);
   const on = <T>(name: string, listener: (event: T) => void) =>
     element.addEventListener(name, listener as unknown as EventListener);
   const load = () => emit({ type: "load", url: page.url, loading: page.loading });
-  on("did-start-loading", () => { page.loading = true; load(); });
+  // A load drops a find in flight, with no answer from the old document: the bar looks again when it stops.
+  on("did-start-loading", () => { answerFind(page, NOT_FOUND); page.loading = true; load(); });
   on("did-stop-loading", () => { page.loading = false; load(); });
   on<{ url: string }>("did-navigate", ({ url }) => { page.url = url; load(); });
   on<{ url: string; isMainFrame: boolean }>("did-navigate-in-page", ({ url, isMainFrame }) => {
@@ -151,9 +169,16 @@ function listen(page: Page): void {
     load();
   });
   on<{ title: string }>("page-title-updated", ({ title }) => emit({ type: "title", title }));
-  on<{ favicons: string[] }>("page-favicon-updated", ({ favicons }) => {
-    if (favicons[0]) emit({ type: "favicon", url: page.url, dataUrl: favicons[0] });
-  });
+  const favicon = () => {
+    const url = page.url;
+    void readFavicon((code) => element.executeJavaScript(code)).then((dataUrl) => {
+      if (dataUrl) emit({ type: "favicon", url, dataUrl });
+    });
+  };
+  // Each document, whatever Chromium says: it sent nothing for the second page of a site with the same icon.
+  on("dom-ready", favicon);
+  // And a page that changes its icon later.
+  on("page-favicon-updated", favicon);
   // A web page that can't load gets its own page (main/guestFailedLoad.ts); any other scheme can't open here.
   on<{ errorCode: number; validatedURL: string; isMainFrame: boolean }>("did-fail-load", ({ errorCode, validatedURL, isMainFrame }) => {
     // -3 is an aborted load, which a newer navigation or the Stop button causes.
@@ -161,10 +186,7 @@ function listen(page: Page): void {
   });
   on("close", () => emit({ type: "closed" }));
   on<{ result: { activeMatchOrdinal: number; matches: number; finalUpdate: boolean } }>("found-in-page", ({ result }) => {
-    if (result.finalUpdate && page.finding) {
-      page.finding({ found: result.matches > 0, current: result.activeMatchOrdinal, total: result.matches });
-      page.finding = null;
-    }
+    if (result.finalUpdate) answerFind(page, { found: result.matches > 0, current: result.activeMatchOrdinal, total: result.matches });
   });
 }
 
@@ -177,7 +199,8 @@ export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (
   const existing = pages.get(id);
   if (existing) {
     existing.emit = emit;
-    return existing.element.loadURL(url);
+    load(existing, url);
+    return Promise.resolve();
   }
   const open = makePage(id, url, bounds, emit).finally(() => opening.delete(id));
   opening.set(id, open);
@@ -208,10 +231,18 @@ async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (e
   });
 }
 
-export async function navigatePage(id: string, url: string, bounds: BrowserBounds): Promise<void> {
+/**
+ * Starts a load and leaves its outcome to the page's events: did-fail-load tells a real failure from an abort.
+ * loadURL's promise also rejects when Stop or a newer address cuts the load short, which is no error.
+ */
+function load(page: Page, url: string): void {
+  page.element.loadURL(url).catch(() => {});
+}
+
+export function navigatePage(id: string, url: string, bounds: BrowserBounds): void {
   const page = need(id);
   place(page, page.shown ? bounds : null);
-  await page.element.loadURL(url);
+  load(page, url);
 }
 
 export function placePage(id: string, bounds: BrowserBounds | null): void {
@@ -253,17 +284,27 @@ export function go(id: string, action: string): void {
 
 export function zoom(id: string, factor: number | null): number {
   const { element } = need(id);
-  if (factor !== null) element.setZoomFactor(factor);
-  return factor ?? element.getZoomFactor();
+  if (factor !== null) element.setZoomFactor(Math.min(ZOOM_MOST, Math.max(ZOOM_LEAST, factor)));
+  return element.getZoomFactor();
+}
+
+/** The keyboard to the tab's page, or back to the app's own (null). */
+export function focusPage(id: string | null): void {
+  if (id !== null) { pages.get(id)?.element.focus(); return; }
+  if (document.activeElement?.tagName === "WEBVIEW") (document.activeElement as HTMLElement).blur();
+  window.focus();
 }
 
 export function find(id: string, query: string, step: "type" | "next" | "previous"): Promise<BrowserFound> {
   const page = need(id);
   if (!query) {
+    answerFind(page, NOT_FOUND);
     page.element.stopFindInPage("clearSelection");
-    return Promise.resolve({ found: false, current: 0, total: 0 });
+    return Promise.resolve(NOT_FOUND);
   }
   return new Promise((resolve) => {
+    // Chromium answers only the latest of two quick searches; the earlier one mustn't wait for ever.
+    answerFind(page, NOT_FOUND);
     page.finding = resolve;
     page.element.findInPage(query, { forward: step !== "previous", findNext: step === "type" });
   });
@@ -276,6 +317,7 @@ export function printPage(id: string): Promise<void> {
 export function closePage(id: string): void {
   const page = pages.get(id);
   if (!page) return;
+  answerFind(page, NOT_FOUND);
   pages.delete(id);
   delete tabs[id];
   void window.brigadierShell.tabsWrite(tabs);

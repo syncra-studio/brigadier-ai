@@ -8,6 +8,7 @@ import { app, ipcMain, webContents } from "electron";
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
 import { installGuest } from "./guestPopups";
+import { installGuestKeys } from "./guestKeys";
 import { applyPermissionPolicy } from "./permissions";
 import { isProfilePartition, profilePartition } from "./profiles";
 import { installDurableStorage, keepStorageOf, replaceFile } from "./durableStorage";
@@ -52,6 +53,7 @@ export function installBrowserHost(): void {
     if (contents.getType() === "webview") {
       // The Local Network prompt comes from WebRTC's local candidates; dev must show no dialog.
       if (unfocused) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
+      installGuestKeys(contents);
       contents.on("did-start-navigation", (details) => {
         if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
       });
