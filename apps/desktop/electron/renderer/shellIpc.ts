@@ -1,11 +1,9 @@
-// What the app asks of its shell, answered in the page. `browser_*` reach the tab layer; the rest is
-// a stand-in for the daemon, here only so the real front end runs while stage 1 proves the browser.
-// When the app moves to Electron (stage 2) these commands get real implementations.
+// A dev run's stand-in windows: the shell and the daemon answered in the page, so the stage 1 browser
+// checks keep their own sessions per window. The real window goes through `@/ipc/native`.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { BrowserBounds, BrowserEvent } from "@/ipc/generated";
 
+import { browserCommands } from "./browserCommands";
 import { answerDaemon, startDaemonEvents } from "./devDaemon";
-import { closePage, find, go, navigatePage, openPage, placePage, printPage, setModal, zoom } from "./tabLayer";
 
 type Args = Record<string, unknown>;
 type Channelish = { onmessage: (message: unknown) => void };
@@ -19,31 +17,9 @@ export function unhandledCommands(): Record<string, number> {
 }
 
 function answer(command: string, args: Args): unknown {
+  const inPage = browserCommands[command];
+  if (inPage) return inPage(args);
   switch (command) {
-    case "browser_open": {
-      const events = args.events as Channelish;
-      return openPage(args.id as string, args.url as string, args.bounds as BrowserBounds, (event: BrowserEvent) => events.onmessage(event));
-    }
-    case "browser_navigate":
-      return navigatePage(args.id as string, args.url as string, args.bounds as BrowserBounds);
-    case "browser_place":
-      return placePage(args.id as string, args.bounds as BrowserBounds | null);
-    case "browser_layer":
-      return setModal(args.modal as boolean);
-    case "browser_go":
-      return go(args.id as string, args.action as string);
-    case "browser_zoom":
-      return zoom(args.id as string, args.zoom as number | null);
-    case "browser_find":
-      return find(args.id as string, args.query as string, args.step as "type" | "next" | "previous");
-    case "browser_print":
-      return printPage(args.id as string);
-    case "browser_close":
-      return closePage(args.id as string);
-    case "browser_configure":
-    case "browser_focus":
-    case "browser_permission":
-      return null;
     case "plugin:event|listen":
       listeners.set(args.handler as number, args.event as string);
       return args.handler;

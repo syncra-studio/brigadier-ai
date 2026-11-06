@@ -1,20 +1,50 @@
 // Dev only: what the driver asks of the main process, reached from the hidden control page over the
 // debugging pipe. A fixed list, so a check can't quietly do something the app itself can't.
-import { app, ipcMain, screen, webContents } from "electron";
+import { app, ipcMain, screen, session, webContents, type BrowserWindow, type WebContents } from "electron";
 
-export function installDevControl({ createWindow, windows, note }) {
+import type { Note } from "./events";
+
+type Args = Record<string, never> & {
+  name: string;
+  bounds: Electron.Rectangle;
+  query: string;
+  real: boolean;
+  level: Parameters<BrowserWindow["setAlwaysOnTop"]>[1] | "normal";
+  on: boolean;
+  id: number;
+  event: Electron.MouseInputEvent | Electron.KeyboardInputEvent;
+  text: string;
+  js: string;
+  stayHidden: boolean;
+  point: { x: number; y: number };
+  partition: string;
+};
+
+type Control = {
+  createWindow: (options: { name: string; bounds?: Partial<Electron.Rectangle>; query?: string; real?: boolean }) => BrowserWindow;
+  windows: Map<string, BrowserWindow>;
+  note: Note;
+};
+
+const guest = (id: number): WebContents => {
+  const found = webContents.fromId(id);
+  if (!found) throw new Error(`No guest ${id}`);
+  return found;
+};
+
+export function installDevControl({ createWindow, windows, note }: Control): void {
   /** Cursors each guest asked for, so a check can read what a real pointer would have shown. */
-  const cursors = new Map();
+  const cursors = new Map<number, string[]>();
   app.on("web-contents-created", (_event, contents) => {
     if (contents.getType() === "webview") contents.on("cursor-changed", (_change, type) => cursors.set(contents.id, [...(cursors.get(contents.id) ?? []), type].slice(-20)));
   });
-  const parked = new Map();
-  const need = (name) => {
+  const parked = new Map<BrowserWindow, Electron.Rectangle>();
+  const need = (name: string): BrowserWindow => {
     const window = windows.get(name);
     if (!window) throw new Error(`No window "${name}"`);
     return window;
   };
-  const ops = {
+  const ops: Record<string, (args: Args) => unknown> = {
     info: () => ({
       pid: process.pid,
       electron: process.versions.electron,
@@ -24,8 +54,8 @@ export function installDevControl({ createWindow, windows, note }) {
       workArea: screen.getPrimaryDisplay().workArea,
     }),
     // Dev windows start hidden and small; openShell parks them before they ever show.
-    createWindow: ({ name, bounds, query }) => {
-      const window = createWindow({ name, bounds, query });
+    createWindow: ({ name, bounds, query, real }) => {
+      const window = createWindow({ name, bounds, query, real });
       return new Promise((resolve) => window.webContents.once("did-finish-load", () => resolve({ name, id: window.id, wc: window.webContents.id, media: window.getMediaSourceId() })));
     },
     // Off the screen first, shown, then the strip: at no moment is the window over the user's work.
@@ -60,7 +90,8 @@ export function installDevControl({ createWindow, windows, note }) {
     setBounds: ({ name, bounds }) => { need(name).setBounds(bounds); return need(name).getBounds(); },
     setLevel: ({ name, level }) => {
       const window = need(name);
-      window.setAlwaysOnTop(level !== "normal", level === "normal" ? undefined : level);
+      if (level === "normal") window.setAlwaysOnTop(false);
+      else window.setAlwaysOnTop(true, level);
       return true;
     },
     allSpaces: ({ name, on }) => {
@@ -101,12 +132,12 @@ export function installDevControl({ createWindow, windows, note }) {
     })),
     hostCapturing: ({ name }) => need(name).webContents.isBeingCaptured(),
     // For the input half of checks: scripted and labelled so, never a real pointer.
-    guestSendInput: ({ id, event }) => { webContents.fromId(id).sendInputEvent(event); return true; },
-    guestInsertText: ({ id, text }) => webContents.fromId(id).insertText(text),
+    guestSendInput: ({ id, event }) => { guest(id).sendInputEvent(event); return true; },
+    guestInsertText: ({ id, text }) => guest(id).insertText(text),
     hostSendInput: ({ name, event }) => { need(name).webContents.sendInputEvent(event); return true; },
     hostInsertText: ({ name, text }) => need(name).webContents.insertText(text),
     guestCursors: ({ id }) => cursors.get(id) ?? [],
-    guestExec: ({ id, js }) => webContents.fromId(id).executeJavaScript(js, false),
+    guestExec: ({ id, js }) => guest(id).executeJavaScript(js, false),
     // Only the spike's blank-state reproduction uses this: checks read OS pixels, not capturePage.
     capturePageForRepro: async ({ name, stayHidden, point }) => {
       const window = need(name);
@@ -118,21 +149,20 @@ export function installDevControl({ createWindow, windows, note }) {
       return { size, pixel: [bitmap[at + 2], bitmap[at + 1], bitmap[at]] };
     },
     cookies: async ({ partition }) => {
-      const { session } = await import("electron");
       const list = await session.fromPartition(partition).cookies.get({});
       return list.map((c) => ({ name: c.name, domain: c.domain, session: c.session, expires: c.expirationDate ?? null, hostOnly: c.hostOnly, httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite }));
     },
     flushCookies: async ({ partition }) => {
-      const { session } = await import("electron");
       await session.fromPartition(partition).cookies.flushStore();
       return true;
     },
     quit: () => { setTimeout(() => app.quit(), 50); return true; },
     kill: () => { setTimeout(() => process.kill(process.pid, "SIGKILL"), 50); return true; },
   };
-  ipcMain.handle("brigadier:dev-control", (_event, op, args) => {
-    if (!ops[op]) throw new Error(`Unknown op ${op}`);
+  ipcMain.handle("brigadier:dev-control", (_event, op: string, args?: Args) => {
+    const run = ops[op];
+    if (!run) throw new Error(`Unknown op ${op}`);
     note("dev-control", { op, name: args?.name });
-    return ops[op](args ?? {});
+    return run(args ?? ({} as Args));
   });
 }

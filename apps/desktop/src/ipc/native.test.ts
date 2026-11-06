@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { invoke, listen, nativeWindow, newChannel, onDragDrop, type DragDropPayload } from "@/ipc/native";
+import { invoke, listen, nativeWindow, newChannel, onDragDrop, setPageCommands, type DragDropPayload } from "@/ipc/native";
 
 type Place = { window?: unknown };
 const place = globalThis as Place;
@@ -31,27 +31,27 @@ test("without Electron's preload a command reaches Tauri, channel included", asy
 function fakeElectron() {
   const sent: { command: string; args: unknown }[] = [];
   const eventHandlers = new Map<string, (payload: unknown) => void>();
-  let channelHandler: ((id: number, message: unknown) => void) | undefined;
+  let channelHandler: ((id: number, json: string) => void) | undefined;
   const page = new EventTarget();
   const native = {
     invoke: async (command: string, args: unknown) => {
       sent.push({ command, args });
-      return "from electron";
+      if (command === "fails") return { error: { code: "invalid", message: "no" } };
+      if (command === "is_fullscreen") return { value: true };
+      return { json: JSON.stringify("from electron") };
     },
     listen: (event: string, handler: (payload: unknown) => void) => {
       eventHandlers.set(event, handler);
       return () => eventHandlers.delete(event);
     },
-    onChannel: (handler: (id: number, message: unknown) => void) => {
+    onChannel: (handler: (id: number, json: string) => void) => {
       channelHandler = handler;
     },
-    isFullscreen: async () => true,
     onResized: () => () => {},
-    closeWindow: async () => {},
     pathForFile: (file: { path: string }) => file.path,
   };
   place.window = Object.assign(page, { brigadierNative: native });
-  return { sent, eventHandlers, page, deliver: (id: number, message: unknown) => channelHandler?.(id, message) };
+  return { sent, eventHandlers, page, deliver: (id: number, message: unknown) => channelHandler?.(id, JSON.stringify(message)) };
 }
 
 test("under Electron a channel crosses as its id and its messages come back to it", async () => {
@@ -75,6 +75,15 @@ test("under Electron an event carries its payload and can be stopped", async () 
   stop();
   assert.equal(electron.eventHandlers.has("flush-pages"), false);
   assert.equal(await nativeWindow.isFullscreen(), true);
+});
+
+test("under Electron a shell's error rejects as it came, and a page command never reaches main", async () => {
+  const electron = fakeElectron();
+  await assert.rejects(invoke("fails"), (error) => (error as { code: string }).code === "invalid");
+  setPageCommands({ page_only: ({ value }) => value });
+  assert.equal(await invoke("page_only", { value: 3 }), 3);
+  assert.equal(electron.sent.some(({ command }) => command === "page_only"), false);
+  setPageCommands({});
 });
 
 function dragEvent(type: string, paths: string[], x = 3, y = 4) {

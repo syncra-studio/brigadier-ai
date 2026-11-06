@@ -16,6 +16,10 @@ Scratch data and evidence go in `$BRIGADIER_CHECK_DIR` (default `$TMPDIR/browser
 | `repro-blank-state.mjs`, `space-probe.mjs` | The spike's blank state: each window state with and without `capturePage`, and a probe that waits for a real Space change |
 | `go.mjs --plan`, `--preflight`, `--go` | Real pointer, cursor and focus, all in one go. Stops on any human input and restores the pointer. Real input comes from `target/browser-check/bin/Brigadier Check Input.app`, which holds the Accessibility grant; don't rebuild it, since an ad-hoc grant is tied to its hash |
 
+## Real and stand-in windows
+
+`createWindow` with `real: true` is the app: it talks to the daemon through the preload's `brigadierNative` (`src/ipc/native.ts`), with data in `$BRIGADIER_CHECK_DIR/daemon-data` and `HOME` in `daemon-home` unless `BRIGADIER_DEV_DAEMON_HOME` says otherwise. Any other window is a stand-in: the shell and daemon answered in the page (`electron/renderer/shellIpc.ts`), one set of sessions per window, which is what `gate.mjs`, `interactions.mjs` and `space-probe.mjs` run on.
+
 ## What each check can claim
 
 - **Scripted**: `sendInputEvent` into the app or page. Proves the app and page respond, not that a real pointer gets there.
@@ -24,6 +28,8 @@ Scratch data and evidence go in `$BRIGADIER_CHECK_DIR` (default `$TMPDIR/browser
 
 ## Things that bit
 
+- Building the Tauri crate overwrites `target/debug/brigadierd` with its empty sidecar placeholder. A dev run uses `target/browser-check/sidecars`, from `build-native.mjs`.
+- `devd.mjs` reads `paths.mjs` once: restart it (`bc down`, `bc up`) after changing a path or its environment. A main-process edit needs `pnpm electron:main` and `bc restart`.
 - `log` is a builtin in zsh: use `/usr/bin/log`, or your reads return nothing with no error you'd notice.
 - A position given when a `BrowserWindow` is made gets clamped to the screen, and a position past the screen's edge snaps back. `openShell` places, shows at opacity 0 and checks. The watcher alerts on any dev window larger than a strip.
 - `capturePage` doesn't follow what's on screen: it makes a hidden page paint while its guests stay hidden. Checks read OS pixels.

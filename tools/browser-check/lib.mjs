@@ -17,10 +17,10 @@ export function parkedBounds(display, index = 0) {
 }
 
 /** Makes a window of the real front end and waits until its app has started. */
-export async function openShell(name, { index = 0, level = "floating", allSpaces = true, bounds } = {}) {
+export async function openShell(name, { index = 0, level = "floating", allSpaces = true, bounds, real = false } = {}) {
   const info = await control("info");
   const park = bounds ? { ...parkedBounds(info.display, index), ...bounds(info.display) } : parkedBounds(info.display, index);
-  const made = info.windows.includes(name) ? await control("windowInfo", { name }) : await control("createWindow", { name, bounds: { width: park.width, height: park.height }, query: `bcw=${name}` });
+  const made = info.windows.includes(name) ? await control("windowInfo", { name }) : await control("createWindow", { name, bounds: { width: park.width, height: park.height }, query: `bcw=${name}`, real });
   // Electron clamps a position given at creation to the screen, and macOS may clamp it again at first
   // show, so it's placed and checked around the show: a window on the user's screen is a failed run.
   await control("setBounds", { name, bounds: park });

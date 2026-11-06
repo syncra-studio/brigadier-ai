@@ -23,12 +23,11 @@ export type DragDropPayload =
 
 /** Electron's side of the door, from apps/desktop/electron's preload. */
 type ElectronNative = {
-  invoke(command: string, args?: unknown): Promise<unknown>;
+  /** An envelope, since a rejection across Electron's IPC keeps only a message. `json` is left unread by main. */
+  invoke(command: string, args?: unknown): Promise<{ json: string } | { value: unknown } | { error: unknown }>;
   listen(event: string, handler: (payload: unknown) => void): UnlistenFn;
-  onChannel(handler: (id: number, message: unknown) => void): void;
-  isFullscreen(): Promise<boolean>;
+  onChannel(handler: (id: number, json: string) => void): void;
   onResized(handler: () => void): UnlistenFn;
-  closeWindow(): Promise<void>;
   /** The real path of a dropped file; only the preload can read it. */
   pathForFile(file: File): string;
 };
@@ -55,7 +54,7 @@ export function newChannel<T>(onMessage: (message: T) => void): Channel<T> {
   if (!shell) return new TauriChannel<T>(onMessage);
   if (!hearingElectronChannels) {
     hearingElectronChannels = true;
-    shell.onChannel((id, message) => electronChannels.get(id)?.onmessage(message as never));
+    shell.onChannel((id, json) => electronChannels.get(id)?.onmessage(JSON.parse(json) as never));
   }
   const channel: Channel<T> = { onmessage: onMessage };
   const id = nextElectronChannel++;
@@ -78,8 +77,21 @@ function electronArgs(args: Record<string, unknown> | undefined): Record<string,
 /** Runs a command in the shell and returns its answer; the shell's error is the rejection. */
 export function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const shell = electron();
-  if (shell) return shell.invoke(command, electronArgs(args)) as Promise<T>;
-  return tauriInvoke<T>(command, args);
+  if (!shell) return tauriInvoke<T>(command, args);
+  const inPage = pageCommands?.[command];
+  if (inPage) return Promise.resolve(inPage(args ?? {}) as T);
+  return shell.invoke(command, electronArgs(args)).then((answer) => {
+    if ("error" in answer) throw answer.error;
+    return ("json" in answer ? JSON.parse(answer.json) : answer.value) as T;
+  });
+}
+
+type PageCommand = (args: Record<string, unknown>) => unknown;
+let pageCommands: Record<string, PageCommand> | null = null;
+
+/** Commands the page answers itself under Electron: a tab's `<webview>` lives in the page. */
+export function setPageCommands(commands: Record<string, PageCommand>): void {
+  pageCommands = commands;
 }
 
 /** Hears an event the shell sends this window. */
@@ -92,16 +104,14 @@ export function listen<T>(event: string, handler: (event: { payload: T }) => voi
 /** This window's own state and its closing. */
 export const nativeWindow = {
   isFullscreen(): Promise<boolean> {
-    const shell = electron();
-    return shell ? shell.isFullscreen() : getCurrentWindow().isFullscreen();
+    return electron() ? invoke<boolean>("is_fullscreen") : getCurrentWindow().isFullscreen();
   },
   onResized(handler: () => void): Promise<UnlistenFn> {
     const shell = electron();
     return shell ? Promise.resolve(shell.onResized(handler)) : getCurrentWindow().onResized(handler);
   },
   close(): Promise<void> {
-    const shell = electron();
-    return shell ? shell.closeWindow() : getCurrentWindow().close();
+    return electron() ? invoke<void>("close_window") : getCurrentWindow().close();
   },
 };
 

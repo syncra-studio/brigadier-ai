@@ -8,12 +8,14 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { appBinary, binDir, checkDir, dataDir, desktopDir, eventsPath, evidenceDir, socketPath, vitePort } from "./paths.mjs";
+import { addonPath, appBinary, binDir, checkDir, daemonDataDir, daemonHome, dataDir, desktopDir, electronDir, eventsPath, evidenceDir, sidecarDir, socketPath, vitePort } from "./paths.mjs";
 import { startFixtures } from "./fixture-pages.mjs";
 import { startWatch } from "./watch.mjs";
 
 fs.mkdirSync(checkDir, { recursive: true });
 fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(daemonDataDir, { recursive: true });
+fs.mkdirSync(daemonHome, { recursive: true });
 fs.mkdirSync(evidenceDir, { recursive: true });
 const log = (...parts) => console.log(new Date().toISOString(), ...parts);
 
@@ -73,6 +75,12 @@ async function launch() {
     BRIGADIER_DEV_DATA: dataDir,
     BRIGADIER_EVENTS: eventsPath,
     BRIGADIER_RENDERER_URL: `http://127.0.0.1:${vitePort}/`,
+    BRIGADIER_ADDON: addonPath,
+    BRIGADIER_CONTROL_HTML: path.join(electronDir, "control.html"),
+    BRIGADIER_DEV_DAEMON_DATA: daemonDataDir,
+    BRIGADIER_DEV_SIDECARS: sidecarDir,
+    // Off the user's CLI sign-ins unless a check says otherwise.
+    BRIGADIER_DEV_DAEMON_HOME: process.env.BRIGADIER_DEV_DAEMON_HOME ?? daemonHome,
   };
   stopWatch = await startWatch({ checkDir });
   app = spawn(path.join(binDir, "spawn-disclaimed"), [appBinary, "--remote-debugging-pipe"], { env, stdio: ["ignore", out, out, "pipe", "pipe"] });

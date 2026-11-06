@@ -14,6 +14,9 @@ export const appBinary = path.join(appBundle, "Contents/MacOS/Brigadier Dev");
 /** Scratch data and evidence: never the repo. */
 export const checkDir = process.env.BRIGADIER_CHECK_DIR ?? path.join(process.env.TMPDIR ?? os.tmpdir(), "browser-check");
 export const dataDir = path.join(checkDir, "data");
+/** The dev daemon's data and, unless a check gives another, its HOME: scratch, never the user's. */
+export const daemonDataDir = path.join(checkDir, "daemon-data");
+export const daemonHome = path.join(checkDir, "daemon-home");
 export const socketPath = path.join(checkDir, "devd.sock");
 export const eventsPath = path.join(checkDir, "events.jsonl");
 export const evidenceDir = path.join(checkDir, "evidence");
@@ -21,4 +24,4 @@ export const vitePort = 1431;
 /** The Rust addon, as main loads it in a dev run. */
 export const addonPath = path.join(buildDir, "shell_native.node");
 /** Where a dev run finds `brigadierd` and `brigadier`. */
-export const sidecarDir = path.join(repoRoot, "target/debug");
+export const sidecarDir = path.join(buildDir, "sidecars");

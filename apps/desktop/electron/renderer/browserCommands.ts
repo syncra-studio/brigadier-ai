@@ -1,0 +1,43 @@
+// The browser's commands, by the Tauri build's names, answered in the page: a tab's <webview> lives here.
+import type { BrowserBounds, BrowserEvent } from "@/ipc/generated";
+
+import { closePage, find, go, navigatePage, openPage, placePage, printPage, setModal, zoom } from "./tabLayer";
+
+type Args = Record<string, unknown>;
+type Channelish = { onmessage: (message: BrowserEvent) => void };
+
+export const browserCommands: Record<string, (args: Args) => unknown> = {
+  browser_open: (args) => {
+    const events = args.events as Channelish;
+    return openPage(args.id as string, args.url as string, args.bounds as BrowserBounds, (event) => events.onmessage(event));
+  },
+  browser_navigate: (args) => navigatePage(args.id as string, args.url as string, args.bounds as BrowserBounds),
+  browser_place: (args) => placePage(args.id as string, args.bounds as BrowserBounds | null),
+  browser_layer: (args) => setModal(args.modal as boolean),
+  browser_go: (args) => go(args.id as string, args.action as string),
+  browser_zoom: (args) => zoom(args.id as string, args.zoom as number | null),
+  browser_find: (args) => find(args.id as string, args.query as string, args.step as "type" | "next" | "previous"),
+  browser_print: (args) => printPage(args.id as string),
+  browser_close: (args) => closePage(args.id as string),
+  browser_configure: () => null,
+  browser_focus: () => null,
+  browser_permission: () => null,
+  // Not built yet: browser features come section by section (L4). Saved data reads as none.
+  browser_history: () => [],
+  browser_history_remove: () => null,
+  browser_downloads: () => [],
+  browser_download_open: () => null,
+  browser_downloads_remove: () => null,
+  browser_clear: () => null,
+  browser_site_count: () => null,
+  browser_sites: () => [],
+  browser_site_set: () => null,
+  browser_read: () => null,
+  browser_snapshot: () => null,
+  browser_agent: () => null,
+  browser_agent_load: () => null,
+  browser_agent_capture: () => null,
+  browser_import_sources: () => [],
+  browser_import: () => null,
+  browser_import_open_access: () => null,
+};

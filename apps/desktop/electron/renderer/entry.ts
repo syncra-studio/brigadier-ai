@@ -1,9 +1,17 @@
-// The Electron page's script. Everything the app's own code asks of its native shell goes through
-// Tauri's `invoke`, so the shell is swapped underneath and src/ runs unchanged: this file installs
-// the swap, then runs the real entry point.
-import { installShellIpc } from "./shellIpc";
+// The Electron page's script: the shell's side of what src/ asks, then the real entry point.
+import { setPageCommands } from "@/ipc/native";
+
+import { browserCommands } from "./browserCommands";
 import { installTabLayer } from "./tabLayer";
+import "./shell.css";
 
 installTabLayer();
-installShellIpc();
+document.documentElement.dataset.shell = "electron";
+if (window.brigadierNative) {
+  setPageCommands(browserCommands);
+} else {
+  // A dev run's stand-in window; a production build has none.
+  const { installShellIpc } = await import("./shellIpc");
+  installShellIpc();
+}
 void import("@/main");

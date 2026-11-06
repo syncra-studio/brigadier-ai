@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isProfilePartition, profilePartition } from "./profiles.mjs";
+import { isProfilePartition, profilePartition } from "./profiles.ts";
 
 test("a profile id maps to its own persisted partition", () => {
   assert.equal(profilePartition("work"), "persist:browser-profile-work");

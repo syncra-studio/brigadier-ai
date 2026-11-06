@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { appBundle, binDir, buildDir, checkInputApp, electronDir } from "./paths.mjs";
+import { appBundle, binDir, buildDir, checkInputApp, desktopDir } from "./paths.mjs";
 
 const VERSION = "45.2.3";
 const NAME = "Brigadier Dev";
@@ -146,7 +146,7 @@ const resources = path.join(contents, "Resources");
 fs.rmSync(path.join(resources, "default_app.asar"), { force: true });
 fs.mkdirSync(path.join(resources, "app"), { recursive: true });
 fs.writeFileSync(path.join(resources, "app/package.json"), JSON.stringify({ name: "brigadier-dev", productName: NAME, version: "0.0.0-dev", main: "index.mjs", type: "module" }));
-fs.writeFileSync(path.join(resources, "app/index.mjs"), `await import(${JSON.stringify(`file://${path.join(electronDir, "main.mjs")}`)});\n`);
+fs.writeFileSync(path.join(resources, "app/index.mjs"), `await import(${JSON.stringify(`file://${path.join(desktopDir, "dist-electron/main.mjs")}`)});\n`);
 
 run("codesign", ["--force", "--deep", "--sign", "-", appBundle]);
 
