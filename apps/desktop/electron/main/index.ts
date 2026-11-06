@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, protocol } from "electron";
 
+import type { ComputerUseStatus } from "@/ipc/generated";
+
 import { installBrowserHost } from "./browserHost";
 import { installCommands, waitForCommands } from "./commands";
 import { folderOpened, installCoreCommands } from "./core";
@@ -13,6 +15,7 @@ import { daemonDataDir, dev, identifier, setIdentity, unfocused } from "./identi
 import { native } from "./native";
 import { folderArgs } from "./paths";
 import { holdQuits, markDaemonStarted, quit } from "./quit";
+import { computerStatusChanged, installTray } from "./tray";
 import { createWindow, mainWindow, setOnVisibility, showMain, userCameToIt, windows } from "./windows";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -69,11 +72,12 @@ function startDaemon(): Promise<void> {
   return daemonReady;
 }
 
-type ShellAsk = { kind: "notify"; title: string; body: string } | { kind: "openSetup" } | { kind: "computerUse"; status: unknown };
+type ShellAsk = { kind: "notify"; title: string; body: string } | { kind: "openSetup" } | { kind: "computerUse"; status: ComputerUseStatus };
 
 /** What the bridge asks of the shell; each is filled in by its own area. */
 function hearDaemon(ask: ShellAsk): void {
   note("daemon-asks", { kind: ask.kind });
+  if (ask.kind === "computerUse") computerStatusChanged(ask.status);
 }
 
 async function openMain(): Promise<void> {
@@ -120,6 +124,7 @@ if (dev) {
 
 // Not awaited at the top level: Electron won't reach "ready" until this module has finished loading.
 void app.whenReady().then(async () => {
+  installTray(startDaemon);
   if (dev) {
     note("ready", { pid: process.pid, electron: process.versions.electron, chrome: process.versions.chrome, sandboxForced: true });
     // The first window waits for the driver: the checks place each window before it shows.
