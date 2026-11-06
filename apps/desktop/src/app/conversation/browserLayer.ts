@@ -41,14 +41,38 @@ export function modalOpen(layers: Iterable<Element>): boolean {
 
 /**
  * The app's clip: the whole window but the holes, as a path whose window runs one way and each
- * hole the other, so a hole is cut however the holes overlap.
+ * hole the other, so a hole is cut however the holes overlap. A hole's bottom corner on the page
+ * surface's own corner follows its curve, so the app's corner caps stay and the page sits in the
+ * surface instead of poking out square.
  */
-export function clipPath(width: number, height: number, cuts: Iterable<BrowserBounds>): string {
+export function clipPath(
+  width: number,
+  height: number,
+  cuts: Iterable<BrowserBounds>,
+  surface?: { left: number; right: number; bottom: number; radius: number },
+): string {
   let path = `M0 0H${width}V${height}H0Z`;
   for (const { x, y, width: w, height: h } of cuts) {
-    path += `M${x} ${y}V${y + h}H${x + w}V${y}Z`;
+    const bottom = y + h;
+    const right = x + w;
+    const onBottom = surface !== undefined && Math.abs(bottom - surface.bottom) < 1;
+    const r = surface?.radius ?? 0;
+    const roundStart = onBottom && Math.abs(x - surface.left) < 1;
+    const roundEnd = onBottom && Math.abs(right - surface.right) < 1;
+    path += `M${x} ${y}`;
+    path += roundStart ? `V${bottom - r}A${r} ${r} 0 0 0 ${x + r} ${bottom}` : `V${bottom}`;
+    path += roundEnd ? `H${right - r}A${r} ${r} 0 0 0 ${right} ${bottom - r}` : `H${right}`;
+    path += `V${y}Z`;
   }
   return `path(nonzero, "${path}")`;
+}
+
+/** The page surface's edges and corner radius, read from the surface itself. */
+function surfaceEdges() {
+  const element = document.querySelector("[data-slot=page-surface]");
+  if (!element) return undefined;
+  const { left, right, bottom } = element.getBoundingClientRect();
+  return { left, right, bottom, radius: parseFloat(getComputedStyle(element).borderBottomRightRadius) };
 }
 
 const areaOf = (element: Element): BrowserBounds | null => {
@@ -59,7 +83,7 @@ const areaOf = (element: Element): BrowserBounds | null => {
 function sync() {
   const root = document.getElementById("root");
   const shown = holes.size > 0;
-  const clip = shown ? clipPath(window.innerWidth, window.innerHeight, holes.values()) : "";
+  const clip = shown ? clipPath(window.innerWidth, window.innerHeight, holes.values(), surfaceEdges()) : "";
   if (clip !== cut && root) {
     cut = clip;
     root.style.clipPath = clip;
