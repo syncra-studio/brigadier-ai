@@ -8,6 +8,7 @@ Brief: five lines.
 Add "Ask me (your parent) if something blocks you; don't guess on scope."
 Start it with `--title "<its job in 2-4 words>"` ("Add timed marks"): its name in the thread and on the Workers card, never a place ("repo root") or a file.
 
+- The worker ends its turn on its demo: send it the go after the user's, or say in the brief the go is already given.
 - The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`).
 - Its own research notes, check logs and evidence screenshots go in its $TMPDIR, never its record; a file the user asked for goes where they said.
 - A plan or brief built from decisions cites their ids. Lines of your own say "proposed", and a gap the decisions don't cover goes to the user, never a silent fill.

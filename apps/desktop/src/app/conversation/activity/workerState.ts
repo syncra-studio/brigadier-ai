@@ -79,7 +79,7 @@ function jobHoldState(hold: JobHold, now: number): WorkerState {
     case "buildSlot":
       return { kind: "buildSlot", word: `Waiting for a build slot ${minutes}m` };
     case "starved":
-      return { kind: "starved", word: `Build starved ${minutes}m · load ${hold.load ?? 0} on ${hold.cores ?? 0} cores` };
+      return { kind: "starved", word: `Build starved ${minutes}m · load ${hold.load ?? 0} on ${hold.cores ?? 0} cores${hold.faked ? " · faked" : ""}` };
   }
 }
 

@@ -16,4 +16,8 @@ what: string | null,
 /**
  * A starved build: the machine's load, and its cores.
  */
-load: number | null, cores: number | null, };
+load: number | null, cores: number | null, 
+/**
+ * That load is a debug build's faked reading, not the machine's.
+ */
+faked?: boolean, };
