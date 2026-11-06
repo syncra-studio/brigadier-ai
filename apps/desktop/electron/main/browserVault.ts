@@ -96,3 +96,35 @@ export async function importLogins(profileId: string, logins: readonly ImportedL
   if (counts.added + counts.updated > 0) writeVault(profileId, vault);
   return counts;
 }
+
+/**
+ * Section 5's door for importing over a profile: its saved passwords become the imported ones, in one write. A login that
+ * stays keeps its id and dates; the never list stays, since it isn't a sign-in. A row with no http(s) address or no
+ * password, or one repeating a site and username earlier in the import, is counted as skipped. Nothing usable empties the list.
+ */
+export async function replaceLogins(profileId: string, logins: readonly ImportedLogin[]): Promise<ImportedCounts> {
+  const old = readVault(profileId);
+  const next: Vault = { nextId: old.nextId, logins: [], never: old.never };
+  const counts: ImportedCounts = { added: 0, updated: 0, unchanged: 0, skipped: 0 };
+  const now = Date.now();
+  for (const login of logins) {
+    const site = loginSite(login.url);
+    if (!site || !login.password || next.logins.some((one) => one.site === site && one.username === login.username)) {
+      counts.skipped += 1;
+      continue;
+    }
+    const known = old.logins.find((one) => one.site === site && one.username === login.username);
+    if (!known) {
+      next.logins.push({ id: next.nextId++, site, username: login.username, password: login.password, createdMs: now, usedMs: now });
+      counts.added += 1;
+    } else if (known.password === login.password) {
+      next.logins.push(known);
+      counts.unchanged += 1;
+    } else {
+      next.logins.push({ ...known, password: login.password, usedMs: now });
+      counts.updated += 1;
+    }
+  }
+  writeVault(profileId, next);
+  return counts;
+}
