@@ -153,10 +153,10 @@ function listen(page: Page): void {
   on<{ favicons: string[] }>("page-favicon-updated", ({ favicons }) => {
     if (favicons[0]) emit({ type: "favicon", url: page.url, dataUrl: favicons[0] });
   });
-  // Electron has no error page: without this a page that can't load is just white, like a blank tab.
+  // A web page that can't load gets its own page (main/guestFailedLoad.ts); any other scheme can't open here.
   on<{ errorCode: number; validatedURL: string; isMainFrame: boolean }>("did-fail-load", ({ errorCode, validatedURL, isMainFrame }) => {
     // -3 is an aborted load, which a newer navigation or the Stop button causes.
-    if (isMainFrame && errorCode !== -3) emit({ type: "blocked", url: validatedURL });
+    if (isMainFrame && errorCode !== -3 && !/^https?:/.test(validatedURL)) emit({ type: "blocked", url: validatedURL });
   });
   on("close", () => emit({ type: "closed" }));
   on<{ result: { activeMatchOrdinal: number; matches: number; finalUpdate: boolean } }>("found-in-page", ({ result }) => {

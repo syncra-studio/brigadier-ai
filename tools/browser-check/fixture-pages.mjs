@@ -2,6 +2,8 @@
 // stamp set on load show whether it's still the same document, alive, and painting.
 import http from "node:http";
 
+import { guestFixture } from "./fixture-guests.mjs";
+
 export const FIXTURE_PORT = Number(process.env.BRIGADIER_FIXTURE_PORT ?? 1432);
 
 const page = (color, name) => `<!doctype html><meta charset="utf-8"><title>${name}</title>
@@ -59,6 +61,8 @@ export function startFixtures() {
     } else if (parts[0] === "input") {
       response.setHeader("content-type", "text/html");
       response.end(input(parts[1], parts[2]));
+    } else if (parts[0] === "guests") {
+      guestFixture(parts, url, response);
     } else if (parts[0] === "sign-in") {
       // One session cookie and one persistent, as a real sign-in sets them.
       response.setHeader("set-cookie", ["sid=session-value; Path=/; HttpOnly; SameSite=Lax", "keep=persistent-value; Path=/; Max-Age=86400"]);

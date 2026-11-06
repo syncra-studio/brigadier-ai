@@ -7,6 +7,7 @@ import { app, ipcMain, webContents } from "electron";
 
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
+import { installGuest } from "./guestPopups";
 import { applyPermissionPolicy } from "./permissions";
 import { isProfilePartition, profilePartition } from "./profiles";
 import { keepSessionCookies } from "./sessionCookies";
@@ -51,11 +52,7 @@ export function installBrowserHost(): void {
       contents.on("did-start-navigation", (details) => {
         if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
       });
-      contents.setWindowOpenHandler((details) => {
-        // A popup becomes a tab of the opener; a page that needs its opener alive comes with section 2.
-        contents.hostWebContents?.send("brigadier:guest-popup", { from: contents.id, url: details.url });
-        return { action: "deny" };
-      });
+      installGuest(contents);
     }
     contents.on("will-attach-webview", (_attach, preferences) => {
       delete preferences.preload;

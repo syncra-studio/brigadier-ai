@@ -3,6 +3,8 @@
 import { app, ipcMain, screen, session, webContents, type BrowserWindow, type WebContents } from "electron";
 
 import type { Note } from "./events";
+import { chooseFromLastMenu, lastMenuItems } from "./guestMenu";
+import { openPopups } from "./guestPopups";
 
 type Args = Record<string, never> & {
   name: string;
@@ -138,6 +140,9 @@ export function installDevControl({ createWindow, windows, note }: Control): voi
     hostInsertText: ({ name, text }) => need(name).webContents.insertText(text),
     guestCursors: ({ id }) => cursors.get(id) ?? [],
     guestExec: ({ id, js }) => guest(id).executeJavaScript(js, false),
+    guestMenuItems: () => lastMenuItems(),
+    guestMenuChoose: ({ text }) => chooseFromLastMenu(text),
+    guestPopups: () => openPopups(),
     // Only the spike's blank-state reproduction uses this: checks read OS pixels, not capturePage.
     capturePageForRepro: async ({ name, stayHidden, point }) => {
       const window = need(name);
