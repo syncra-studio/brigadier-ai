@@ -3,6 +3,8 @@
 // bodies and no headers are ever read, so no cookie or Authorization value can get here.
 import type { Session, WebContents } from "electron";
 
+import { sweepNow, sweepSoon } from "./browserAgentSecrets";
+
 type Kind = "navigation" | "network" | "console" | "error";
 type Line = { at: number; kind: Kind; text: string };
 type Pending = { guest: number; method: string; url: string; started: number };
@@ -79,6 +81,10 @@ export function watchNetwork(session: Session): void {
 /** A tab's pages and console. */
 export function watchActivity(guest: WebContents): void {
   const id = guest.id;
+  // A password field's value is looked for when the page may just have logged it, or is about to leave it.
+  guest.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) sweepNow(guest);
+  });
   guest.on("did-navigate", (_event, url, status) => add(id, "navigation", `page ${shownUrl(url)} (${status})`));
   guest.on("did-navigate-in-page", (_event, url, isMainFrame) => {
     if (isMainFrame) add(id, "navigation", `address ${shownUrl(url)}`);
@@ -95,6 +101,7 @@ export function watchActivity(guest: WebContents): void {
   });
   guest.on("render-process-gone", (_event, { reason }) => add(id, "error", `the page's process ended: ${reason}`));
   guest.on("console-message", ({ level, message, sourceId, lineNumber }) => {
+    sweepSoon(guest);
     add(id, "console", `console ${level}: ${message} (${shownUrl(sourceId)}:${lineNumber})`);
   });
 }

@@ -19,6 +19,12 @@ export function driverOf(id: string): { conversationId: string; driver: BrowserD
   return tab?.kind === "browser" && tab.driver ? { conversationId, driver: tab.driver } : null;
 }
 
+/**
+ * Whether an agent is driving Browser tab `id`: it has the tab and the user hasn't taken it over. For autofill and save
+ * offers (section 6): a driven tab gets neither.
+ */
+export const isDriven = (id: string): boolean => driverOf(id) !== null && !(id in useAgentPause.getState().paused);
+
 export const isPaused = (id: string): boolean => id in useAgentPause.getState().paused;
 
 /** DevTools is open on the tab: a call gets `devtools_open` at once, and reads of its activity go on. */

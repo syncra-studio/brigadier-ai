@@ -604,6 +604,8 @@ pub const COMMANDS: &[Command] = &[
                   `click <ref>`, `type <ref> <text…>`, `screenshot`, `close` and `show` act \
                   on the tab `--tab` names. `read` lists the page's controls by ref (`e12`). \
                   `events` tells what happened in the tab: its pages, network and console. \
+                  Password fields are hidden from all of these and can't be typed into: the \
+                  user fills them in. \
                   Set `--asks` when a click or typing pays, sends something in the user's name \
                   or signs in: the user is asked first.",
         args: &[

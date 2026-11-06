@@ -6,9 +6,10 @@
 // Ops: { kind: "read", max } -> { url, title, text }
 //      { kind: "click", target, declared, approved } -> { done } | { ask, url } | { error }
 //      { kind: "type", target, text, submit, declared, approved } -> the same
-// An action that pays, sends or signs in (declared by the agent), or that enters or submits a
-// password, a card or a one-time code (seen here), returns `ask` and does nothing unless the
-// user said yes to it on this page (`approved`: the address the yes was given at, which the app
+// A password field, seen by its type, its autocomplete, its computed text security or its names, shows only as a line
+// with no ref and nothing goes into it, yes or no: only the user fills those in. An action that pays, sends or signs in
+// (declared by the agent), or that enters or submits a card or a one-time code or submits a password (seen here),
+// returns `ask` and does nothing unless the user said yes to it on this page (`approved`: the address the yes was given at, which the app
 // passes only while the tab is still on the page it was given on).
 //
 // With `trusted: true` (the Electron shell, in an isolated world) a click or typing isn't done here:
@@ -16,6 +17,7 @@
 // the control. { kind: "place", target, typing } answers where the control is now, without scrolling, and for typing
 // refuses a field that lost the focus. With `isolated: true` it runs in a world of its own: refs are kept there, not
 // in the page's DOM, where the page could see or forge them. { kind: "void" } forgets them.
+// { kind: "sweep" } answers every password field's place and value, for the shell's own use: it never reaches an agent.
 (op) => {
   const REF = "data-brigadier-ref";
   const NEXT = "data-brigadier-next-ref";
@@ -86,21 +88,37 @@
     return "";
   };
 
+  /** Fields that were password fields once, in this world: a "show password" toggle changes nothing. */
+  const wasPassword = () => (window.__brigadierPasswordFields ??= new WeakSet());
+
   /** What kind of private thing a field takes: a password, a card or a one-time code. */
   const fieldKind = (element) => {
-    if (!element || !["input", "textarea"].includes(element.localName)) return null;
+    if (!element?.getAttribute) return null;
+    const editable = element.isContentEditable;
+    const field = ["input", "textarea"].includes(element.localName);
+    if (!field && !editable) return null;
+    if (op.isolated && wasPassword().has(element)) return "credentials";
     const auto = (element.getAttribute("autocomplete") || "").toLowerCase();
     const hint = [element.name, element.id, element.getAttribute("aria-label"), element.placeholder, element.labels?.[0]?.innerText]
       .join(" ").toLowerCase();
-    if (element.type === "password" || /\b(current|new)-password\b/.test(auto)) return "credentials";
+    const password = () => {
+      if (op.isolated) wasPassword().add(element);
+      return "credentials";
+    };
+    if (element.type === "password" || /\b(current|new)-password\b/.test(auto)) return password();
     // A text field disguised as a password field.
-    if ((getComputedStyle(element).webkitTextSecurity || "none") !== "none") return "credentials";
+    if ((getComputedStyle(element).webkitTextSecurity || "none") !== "none") return password();
+    if (!field) return null;
     if (/\bcc-(number|csc|exp|exp-month|exp-year)\b/.test(auto) ||
         /card.?number|\bcc.?num|\bcvc\b|\bcvv\b|\bcsc\b|security code|expiry|expiration/.test(hint)) return "card";
     if (/\bone-time-code\b/.test(auto) ||
         /\botp\b|one.?time|verification code|2fa|two.?factor|auth(entication)? code/.test(hint)) return "oneTimeCode";
+    if (["", "text", "search"].includes(element.getAttribute("type") ?? "") && /pass(word|wd|phrase|code)|pwd/.test(hint)) return password();
     return null;
   };
+
+  const isPassword = (element) => fieldKind(element) === "credentials";
+  const HANDS_OFF = "That is a password field, and only the user fills those in, so nothing was done. Ask them to sign in in this tab, and go on when they say so.";
 
   /** The private kind a filled field of `scope` holds (`also` counts as filled), if any. */
   const filledKind = (scope, also) => {
@@ -176,7 +194,7 @@
       if (role === "textbox" || role === "searchbox" || role === "combobox" || role === "slider" || role === "spinbutton") {
         const value = element.isContentEditable ? element.innerText
           : element.localName === "select" ? element.selectedOptions?.[0]?.text : element.value;
-        // A password, card number or code is never read out, only whether it is filled.
+        // A card number or code is never read out, only whether it is filled.
         if (fieldKind(element)) text += value ? " (filled)" : "";
         else if (value) text += ` value=${quoted(value)}`;
         if (element.localName === "select") {
@@ -194,7 +212,7 @@
       }
       if (element.disabled || element.getAttribute("aria-disabled") === "true") text += " (disabled)";
       const kind = fieldKind(element);
-      if (kind) text += ` (${kind === "credentials" ? "password" : kind === "card" ? "card" : "one-time code"} field)`;
+      if (kind) text += ` (${kind === "card" ? "card" : "one-time code"} field)`;
       return text;
     };
     // A label's own text is its control's name, read with the control.
@@ -214,7 +232,8 @@
         const role = roleOf(child);
         if (role) {
           flush();
-          lines.push(describe(child, role));
+          // Nothing of a password field but that it is there: no ref to use, no name or value.
+          lines.push(isPassword(child) ? "(A password field, hidden: only the user fills it in.)" : describe(child, role));
           continue;
         }
         const block = BLOCK.test(tag);
@@ -238,6 +257,13 @@
       text = `${text.slice(0, most)}\n(The page goes on: ${rest} more characters not shown.)`;
     }
     return { url: location.href, title: document.title, text };
+  };
+
+  /** What has the focus, through open shadow roots. */
+  const deepFocused = () => {
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    return focused;
   };
 
   const target = () => {
@@ -301,6 +327,7 @@
     const found = target();
     if (found.error) return found;
     const { element } = found;
+    if (isPassword(element)) return { error: HANDS_OFF };
     if (element.disabled) return { error: `${op.target} is disabled.` };
     const role = roleOf(element);
     const kind = role === "button" ? filledKind(scopeOf(element)) : null;
@@ -338,13 +365,14 @@
     const found = target();
     if (found.error) return found;
     const { element } = found;
+    if (isPassword(element)) return { error: HANDS_OFF };
     const role = roleOf(element);
     if (!["textbox", "searchbox", "combobox", "spinbutton"].includes(role)) {
       return { error: `${op.target} isn't a field to type in (it is a ${role || element.localName}).` };
     }
     if (element.disabled || element.readOnly) return { error: `${op.target} can't be typed in now.` };
-    // A password, card or code field asks as what it is, whatever the agent declared, so the
-    // card never shows the secret typed into it.
+    // A card or code field asks as what it is, whatever the agent declared, so the card never
+    // shows the secret typed into it.
     const own = fieldKind(element);
     const kind = own || (op.submit ? filledKind(scopeOf(element), element) : null);
     const asked = (own && ask(own, element)) || (op.declared && ask(op.declared, element)) || (kind && ask(kind, element));
@@ -385,6 +413,24 @@
       case "read": return read(op.max || 20000);
       case "click": return click();
       case "type": return type();
+      case "sweep": {
+        const answer = { fields: [], values: [], width: innerWidth, frames: [] };
+        const plain = (rect) => ({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+        for (const element of each(document)) {
+          if (element.localName === "iframe") {
+            let origin = location.origin;
+            try {
+              if (element.getAttribute("src")) origin = new URL(element.src).origin;
+            } catch { /* The page's own, then. */ }
+            answer.frames.push({ origin: origin === "null" ? location.origin : origin, rect: plain(element.getBoundingClientRect()) });
+          }
+          if (!isPassword(element)) continue;
+          const value = element.isContentEditable ? element.innerText : element.value;
+          if (value) answer.values.push(value);
+          for (const rect of element.getClientRects()) answer.fields.push(plain(rect));
+        }
+        return answer;
+      }
       case "void":
         window.__brigadierRefs = undefined;
         return { done: true };
@@ -393,6 +439,9 @@
         const found = target();
         if (found.error) return found;
         const { element } = found;
+        // Looked at again right before: the page may have made it one, or moved the focus to one.
+        const focused = deepFocused();
+        if (isPassword(element) || isPassword(focused)) return { error: HANDS_OFF };
         if (element.isContentEditable) document.getSelection()?.selectAllChildren(element);
         else element.select?.();
         if (!document.execCommand("insertText", false, op.text)) {
@@ -406,8 +455,8 @@
         const found = target();
         if (found.error) return found;
         if (op.typing) {
-          let focused = document.activeElement;
-          while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+          const focused = deepFocused();
+          if (isPassword(found.element) || isPassword(focused)) return { error: HANDS_OFF };
           if (!focused || !within(found.element, focused)) return { error: `The page moved the focus away from ${op.target}, so nothing was typed. Read it again.` };
           return { done: true };
         }

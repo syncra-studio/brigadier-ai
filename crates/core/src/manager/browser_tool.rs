@@ -381,7 +381,7 @@ pub(crate) fn question(sensitive: BrowserSensitive, url: &str) -> String {
         BrowserSensitive::Pay => format!("Pay on {site}?"),
         BrowserSensitive::Send => format!("Send something in your name on {site}?"),
         BrowserSensitive::SignIn => format!("Sign in to {site}?"),
-        BrowserSensitive::Credentials => format!("Enter your password on {site}?"),
+        BrowserSensitive::Credentials => format!("Use your password on {site}?"),
         BrowserSensitive::Card => format!("Enter a payment card on {site}?"),
         BrowserSensitive::OneTimeCode => format!("Enter a one-time code on {site}?"),
     }

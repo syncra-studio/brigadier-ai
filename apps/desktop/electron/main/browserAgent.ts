@@ -5,16 +5,11 @@
 // the tab. It is in-process, so no port and no automation switch.
 import { webContents, type WebContents } from "electron";
 
-import agentScript from "../../src-tauri/src/browser_agent.js?raw";
-
 import { handleFromApp } from "./appPage";
 import { activityOf, forgetActivity, watchActivity, watchNetwork } from "./browserAgentActivity";
+import { forgetSecrets, pictureForAgent, runScript, sweptAndScrubbed } from "./browserAgentSecrets";
 
 export { watchNetwork };
-
-/** The script's own world: the page can't reach its variables, or stand in for what it calls. */
-const AGENT_WORLD = 1010;
-const scriptBody = agentScript.trim().replace(/;$/, "");
 
 type Held = {
   /** Calls run in order: a let-go waits for a click under way, so no button stays pressed. */
@@ -115,6 +110,7 @@ export function watchGuest(guest: WebContents): void {
   guest.once("destroyed", () => {
     held.delete(id);
     forgetActivity(id);
+    forgetSecrets(id);
   });
 }
 
@@ -133,8 +129,9 @@ export function installBrowserAgent(): void {
     const guest = guestFor(event.sender, call.guest);
     switch (call.call) {
       case "script":
-        // The op is data, and the script is the bundle's own.
-        return guest.executeJavaScriptInIsolatedWorld(AGENT_WORLD, [{ code: `(${scriptBody})(${JSON.stringify({ ...call.op, isolated: true })})` }]);
+        // A sweep's answer holds field values, and stays in this process.
+        if (call.op.kind === "sweep") throw new Error("Unknown agent call");
+        return sweptAndScrubbed(guest, () => runScript(guest, call.op));
       case "attach":
         return attach(guest);
       case "release":
@@ -157,9 +154,9 @@ export function installBrowserAgent(): void {
         guest.sendInputEvent({ type: "mouseWheel", x: Math.round(call.x), y: Math.round(call.y), deltaX: -call.deltaX, deltaY: -call.deltaY });
         return null;
       case "events":
-        return activityOf(guest.id, call.since, call.kinds);
+        return sweptAndScrubbed(guest, () => activityOf(guest.id, call.since, call.kinds));
       case "capture":
-        return (await guest.capturePage()).toPNG();
+        return pictureForAgent(guest);
       default:
         throw new Error("Unknown agent call");
     }

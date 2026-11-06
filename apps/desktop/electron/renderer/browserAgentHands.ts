@@ -2,7 +2,7 @@
 // to what it found, and real input goes in under the focus guard. The main process holds the debugger.
 import { glideTo, pressAt, raiseShield, dropOverlay } from "./agentOverlay";
 import { guardFocus, userComposing } from "./agentFocusGuard";
-import { agentPage, focusPage, loadPage, pageBounds } from "./tabLayer";
+import { agentPage, focusPage, loadPage, pageBounds, whilePainting } from "./tabLayer";
 import { isPaused, userUsed } from "@/state/agentPause";
 
 type Answer = Record<string, unknown>;
@@ -83,6 +83,7 @@ export function agentEvents(id: string, since: number, kinds: readonly string[])
 }
 
 export async function agentCapture(id: string): Promise<ArrayBuffer> {
-  const png = await agent({ call: "capture", guest: agentPage(id).guest }) as Uint8Array;
+  const { guest } = agentPage(id);
+  const png = await whilePainting(id, () => agent({ call: "capture", guest })) as Uint8Array;
   return png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer;
 }

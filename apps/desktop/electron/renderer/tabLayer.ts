@@ -70,6 +70,8 @@ type Page = {
   /** Set while a find is on its way; `found-in-page` answers it. */
   finding: ((found: BrowserFound) => void) | null;
   shown: boolean;
+  /** The app has it showing, whatever is lent for a picture. */
+  placed: boolean;
   /** The element's own methods throw until its first dom-ready, so this follows the events. */
   url: string;
   loading: boolean;
@@ -212,6 +214,7 @@ function need(id: string): Page {
 function place(page: Page, bounds: BrowserBounds | null): void {
   const { style } = page.element;
   placeOverlay(page.id, bounds);
+  page.placed = bounds !== null;
   if (bounds === null) {
     style.visibility = "hidden";
     style.pointerEvents = "none";
@@ -313,10 +316,11 @@ async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (e
   element.setAttribute("partition", await window.brigadierShell.profilePartition(profileId));
   element.setAttribute("allowpopups", "");
   element.dataset.tab = id;
-  const page: Page = { id, element, profileId, emit, ready: false, finding: null, shown: false, url, loading: true };
+  const page: Page = { id, element, profileId, emit, ready: false, finding: null, shown: false, placed: false, url, loading: true };
   pages.set(id, page);
   listen(page);
   place(page, bounds);
+  page.placed = false;
   element.style.visibility = "hidden";
   counters.created += 1;
   await new Promise<void>((resolve) => {
@@ -345,6 +349,22 @@ export function agentPage(id: string): { guest: number; element: Webview } {
   const page = need(id);
   if (!page.ready) throw new Error(`The page of tab ${id} isn't ready yet.`);
   return { guest: page.element.getWebContentsId(), element: page.element };
+}
+
+/**
+ * Runs `take` with the tab's page painting. A page behind its tab has no surface for capturePage (UnknownVizError). The
+ * layer lies under the app, which covers it where it cuts no hole, so the page can show for this long with nothing seen.
+ */
+export async function whilePainting<T>(id: string, take: () => Promise<T>): Promise<T> {
+  const page = need(id);
+  if (page.placed) return take();
+  page.element.style.visibility = "visible";
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return await take();
+  } finally {
+    if (!page.placed) page.element.style.visibility = "hidden";
+  }
 }
 
 /** Where the tab's page shows now; null behind its tab. */
