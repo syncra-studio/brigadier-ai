@@ -3,6 +3,7 @@
 import { app, webContents } from "electron";
 
 import { installBrowserAgent, watchGuest, watchNetwork } from "./browserAgent";
+import { installBrowserImport } from "./browserImport";
 import { handleFromApp, isAppPage } from "./appPage";
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
@@ -22,6 +23,7 @@ const profileSessions = new Set<string>();
 export function installBrowserHost(): void {
   installDurableStorage();
   installProfileStore();
+  installBrowserImport();
   installPermissionAnswers();
   installBrowserAgent();
   installGuestFavicon();

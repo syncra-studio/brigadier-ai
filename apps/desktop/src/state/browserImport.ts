@@ -1,25 +1,46 @@
 import { invoke, newChannel } from "@/ipc/native";
 
+import { create } from "zustand";
+
 import type { ImportFailure, ImportOutcome, ImportProgress, ImportRecord, ImportSource } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
+import { openSettings, select } from "@/state/actions";
+import { allProfiles, type BrowserProfile, createProfile, nextHue, placeSession, placeTab } from "@/state/browserProfiles";
+import { newSessionTab, openBrowserTab } from "@/state/sessionTabs";
+import { useApp } from "@/state/store";
+import { toast } from "@/state/toasts";
 
 /*
  * Settings › Import Browser Data: the shell's commands, and the pure words and choices the page
  * shows for each browser (its row, the toasts after an import, why one can't run).
  */
 
+/** A browser as the Electron shell lists it. */
+export type ListedSource = ImportSource & {
+  /** Its profiles with nothing to bring, by name: they get no profile here. */
+  emptyProfiles: string[];
+  /** Whether its cookies may be read: not where "Chromium Safe Storage" locks them. */
+  signIns: boolean;
+  /** Whether its passwords may be read: never on Linux, nor under that key. */
+  passwords: boolean;
+  /** Where each source profile (any browser's) went last, by its id. */
+  imports: Partial<Record<string, { into: string; atMs: number }>>;
+  /** No import has run yet, so the page shows its one notice about agents. */
+  firstImport: boolean;
+};
+
 /** The installed browsers in the page's order, each with where it stands. */
-export function importSources(): Promise<ImportSource[]> {
-  return invoke<ImportSource[]>("browser_import_sources").then((sources) => {
+export function importSources(): Promise<ListedSource[]> {
+  return invoke<ListedSource[]>("browser_import_sources").then((sources) => {
     listed = { sources, atMs: Date.now() };
     return sources;
   });
 }
 
 /** The browsers as last listed, and when: the page shows them at once when it opens again. */
-export type ListedSources = { sources: ImportSource[]; atMs: number };
+export type ListedSources = { sources: ListedSource[]; atMs: number };
 let listed: ListedSources | null = null;
-let prefetching: Promise<ImportSource[]> | null = null;
+let prefetching: Promise<ListedSource[]> | null = null;
 
 export function lastImportSources(): ListedSources | null {
   return listed;
@@ -35,26 +56,118 @@ export function prefetchImportSources(): void {
 }
 
 /** The page's read on opening: the prefetch's, while it is on its way, else a new one. */
-export function openingImportSources(): Promise<ImportSource[]> {
+export function openingImportSources(): Promise<ListedSource[]> {
   return prefetching ?? importSources();
 }
 
+/** Import Browser Data opens with this profile as what the browser's first profile replaces. */
+export const useImportInto = create<{ into: string | null }>(() => ({ into: null }));
+
+export function importInto(profile: string): void {
+  useImportInto.setState({ into: profile });
+  openSettings("browserImport");
+}
+
+/** The record the shell keeps of an import; the fields past `ImportRecord` are the Electron shell's. */
+export type ImportedRecord = ImportRecord & {
+  passwords?: number;
+  passwordsSkipped?: number;
+  bookmarks?: number;
+  appBoundDomains?: string[];
+};
+export type ImportedOutcome =
+  | { type: "done"; record: ImportedRecord; historyError: string | null; passwordsError?: string; bookmarksError?: string; siteStorage?: "copied" | "nextStart" | null }
+  | Extract<ImportOutcome, { type: "failed" }>;
+
 /**
- * Copies the cookies of the profiles `ids` of the browser `key` into Brigadier's browser, and
- * their history when `history` is set; `onProgress` hears how it goes.
+ * Whether Try again can help a password import that failed. Only a Chromium browser's key can
+ * come on asking again: Safari's iCloud Keychain and Firefox's Primary Password stay shut.
  */
-export function importBrowser(
-  key: string,
-  ids: readonly string[],
-  history: boolean,
+export const passwordsRetryable = (family: ImportSource["family"]) => family === "chromium";
+
+/** What a tick in the import brings. */
+export type ImportWhat = { signIns: boolean; history: boolean; bookmarks: boolean; passwords: boolean };
+
+/** One ticked profile of the other browser, and where it goes: "new", or the profile it replaces. */
+export type ImportChoice = { id: string; name: string; into: string };
+
+export type ProfileImportResult = {
+  choice: ImportChoice;
+  /** The Brigadier profile it went into. */
+  profile: BrowserProfile;
+  replaced: boolean;
+  what: ImportWhat;
+  outcome: ImportedOutcome;
+};
+
+/** A new profile's name: the source's own, with the browser's where it wouldn't say which it is. */
+export function importedName(browser: string, name: string, taken: readonly string[]): string {
+  const plain = !/^(default|default-release|person \d+)$/i.test(name) && !taken.includes(name);
+  return plain ? name : `${browser}: ${name}`;
+}
+
+/**
+ * Imports one profile. It is read first, so a browser that can't be read makes no profile; a new
+ * Brigadier profile is made for what was read, and it is written there.
+ */
+export async function importProfile(
+  source: Pick<ImportSource, "key" | "name">,
+  choice: ImportChoice,
+  what: ImportWhat,
   onProgress: (progress: ImportProgress) => void,
-): Promise<ImportOutcome> {
-  return invoke<ImportOutcome>("browser_import", {
-    key,
-    ids,
-    history,
+): Promise<ProfileImportResult> {
+  const replaced = choice.into !== "new";
+  const profiles = allProfiles();
+  const existing = profiles.find((profile) => profile.id === choice.into);
+  onProgress({ type: "reading" });
+  const read = await invoke<{ type: "ready"; token: number } | Extract<ImportOutcome, { type: "failed" }>>("browser_import_read", {
+    key: source.key,
+    name: source.name,
+    id: choice.id,
+    what,
+  });
+  if (read.type === "failed") {
+    const profile = existing ?? { id: "", name: choice.name, hue: nextHue(profiles) };
+    return { choice, profile, replaced, what, outcome: read };
+  }
+  const name = importedName(source.name, choice.name, profiles.map((profile) => profile.name));
+  const target = existing?.id ?? createProfile(name, nextHue(profiles));
+  const outcome = await invoke<ImportedOutcome>("browser_import_write", {
+    token: read.token,
+    target,
+    replace: replaced,
+    what,
     progress: newChannel<ImportProgress>(onProgress),
   });
+  const profile = allProfiles().find((each) => each.id === target) ?? { id: target, name, hue: nextHue(profiles) };
+  return { choice, profile, replaced, what, outcome };
+}
+
+/** The session most lately active, where a site or a profile opens from Settings. */
+function latestSession(): string | null {
+  const open = Object.values(useApp.getState().conversations).filter((conversation) => conversation.lifecycle !== "archived");
+  return open.toSorted((a, b) => b.updatedAtMs - a.updatedAtMs)[0]?.id ?? null;
+}
+
+/** Opens `site` to sign in again, on `profile`, in the latest session. */
+export function signInOn(profile: string, site: string): void {
+  const session = latestSession();
+  if (!session) {
+    toast("Open a session first: sites open in its browser tabs.");
+    return;
+  }
+  const tabId = openBrowserTab(session, `https://${site}/`);
+  placeTab(tabId, profile);
+  void select({ type: "conversation", id: session });
+}
+
+/** Puts that session on `profile`, in a New tab, in front. */
+export function openProfile(profile: string): void {
+  const session = latestSession();
+  if (!session) return;
+  placeSession(session, profile);
+  newSessionTab(session, "newTab");
+  void select({ type: "conversation", id: session });
 }
 
 /** Opens System Settings at Full Disk Access. */
@@ -131,9 +244,7 @@ export function rowView(source: ImportSource): RowView {
   const profiles = source.profiles.length;
   const total = totalCookies(source);
   const profileCount = counted(profiles, "profile", "profiles");
-  if (profiles === 0 || total === 0) {
-    return { status: "No cookies yet", tone: "idle", details: profiles === 0 ? [] : [profileCount], action: "none", label: "Import…" };
-  }
+  if (profiles === 0) return { status: "Nothing to bring", tone: "idle", details: [], action: "none", label: "Import…" };
   const details = source.record
     ? recordDetails(source.record)
     : [profileCount, ...(total === null ? [] : [counted(total, "cookie", "cookies")])];
@@ -146,23 +257,7 @@ export function importedBadge(record: ImportRecord, nowMs: number): string {
   return `Imported ${ago === "now" ? "just now" : ago}`;
 }
 
-/** The toast after an import that ran. */
-export function doneToast(name: string, record: ImportRecord): string {
-  const history = record.history > 0 ? counted(record.history, "page", "pages") + " of history" : null;
-  if (record.imported > 0) {
-    const cookies = counted(record.imported, "cookie", "cookies");
-    return `Imported ${history ? `${cookies} and ${history}` : cookies} from ${name}`;
-  }
-  if (history) return `Imported ${history} from ${name}`;
-  return `No cookies were imported from ${name}`;
-}
-
-/** That toast's tone: plain when nothing came over, as nothing went wrong but nothing was done. */
-export function doneTone(record: ImportRecord): "success" | "neutral" {
-  return record.imported > 0 || record.history > 0 ? "success" : "neutral";
-}
-
-/** Failures that open a dialog to put right (the rest end in an error toast). */
+/** Failures that open a dialog to put right (the rest show in the results). */
 export function opensDialog(reason: ImportFailure): boolean {
   return reason === "running" || reason === "needsFullDiskAccess" || reason === "needsKeychainAccess" || reason === "noKeychainKey";
 }

@@ -1,0 +1,299 @@
+// Settings › Import Browser Data: reads a profile of another browser through the addon
+// (crates/shell-native/src/browser_import.rs) and writes it into one Brigadier profile: cookies and
+// site storage into its session, and history, bookmarks and passwords through their own stores.
+// A source's data, passwords above all, stays in main: the page hears counts.
+import fs from "node:fs";
+import path from "node:path";
+
+import { app, session, shell, webContents, type Session } from "electron";
+
+import { addCommands, channelId, channelSender, type Args } from "./commands";
+import { importBookmarks } from "./browserBookmarks";
+import { importHistory } from "./browserHistory";
+import { cookieDetails, distinctDomains, firstImport, type ReadCookie } from "./browserImportRules";
+import { importLogins } from "./browserVault";
+import { replaceFile } from "./durableStorage";
+import { note } from "./events";
+import { dev } from "./identity";
+import { native } from "./native";
+import { profileFolderName, profileOfStorage, profilePartition } from "./profiles";
+
+const SITE_STORAGE = ["Local Storage", "IndexedDB"];
+/** How long a read waits to be written before its passwords are let go of. */
+const READ_KEPT_MS = 2 * 60 * 1000;
+const COOKIES_AT_ONCE = 50;
+
+type Parts = { signIns: boolean; history: boolean; bookmarks: boolean; passwords: boolean };
+type ReadProfile = {
+  type: "read";
+  profileName: string;
+  cookies: ReadCookie[];
+  leftOutDomains: string[];
+  appBoundDomains: string[];
+  siteStorageFrom: string | null;
+  history: { url: string; title: string; visited_at_ms: number }[];
+  historyError: string | null;
+  bookmarks: { url: string; title: string; root: string; folders: string[]; added_at_ms: number | null }[];
+  bookmarksError: string | null;
+  logins: Parameters<typeof importLogins>[1][number][];
+  loginsLeftOut: number;
+  passwordsError: string | null;
+};
+type Failed = { type: "failed"; reason: string; message: string };
+type Listed = { key: string; name: string; appPath: string; state: string; profiles: unknown[]; emptyProfiles: string[]; signIns: boolean; passwords: boolean };
+
+type Record = {
+  atMs: number;
+  profiles: string[];
+  imported: number;
+  skipped: number;
+  skippedDomains: string[];
+  skippedDomainCount: number;
+  appBoundDomains: string[];
+  history: number;
+  bookmarks: number;
+  passwords: number;
+  passwordsSkipped: number;
+};
+/** What's kept of imports: each browser's last, each source profile's place here, and the notice seen. */
+type Saved = {
+  browsers?: Partial<globalThis.Record<string, { record?: Record; denied?: boolean }>>;
+  sources?: Partial<globalThis.Record<string, { into: string; atMs: number }>>;
+  noticed?: boolean;
+};
+
+const inData = (name: string) => path.join(app.getPath("userData"), name);
+const savedFile = () => inData("browser-imports.json");
+const stagedRoot = () => inData("browser-import-staged");
+const partitionFolder = (profileId: string) => path.join(app.getPath("userData"), "Partitions", profileFolderName(profileId));
+
+/** Where to look for browsers. A dev run looks in a scratch home, never at the user's real browsers. */
+const home = () => (dev && process.env.BRIGADIER_IMPORT_HOME) || app.getPath("home");
+
+function readSaved(): Saved {
+  try {
+    return JSON.parse(fs.readFileSync(savedFile(), "utf8")) as Saved;
+  } catch {
+    return {};
+  }
+}
+
+function changeSaved(change: (saved: Saved) => void): void {
+  const saved = readSaved();
+  change(saved);
+  replaceFile(savedFile(), JSON.stringify(saved));
+}
+
+/** Profiles whose session Chromium has open this run; Electron can't close one, so its files can't change. */
+const openSessions = new Set<string>();
+const icons = new Map<string, string | null>();
+
+async function iconOf(file: string): Promise<string | null> {
+  if (!icons.has(file)) {
+    icons.set(file, await app.getFileIcon(file, { size: "large" }).then((image) => image.toDataURL(), () => null));
+  }
+  return icons.get(file) ?? null;
+}
+
+async function listSources(): Promise<unknown[]> {
+  const listed = JSON.parse(await native().importSources(home())) as Listed[];
+  const saved = readSaved();
+  return Promise.all(
+    listed.map(async ({ appPath, ...source }) => {
+      const known = saved.browsers?.[source.key];
+      return {
+        ...source,
+        state: source.state === "ready" && known?.denied ? "needsKeychainAccess" : source.state,
+        icon: await iconOf(appPath),
+        record: known?.record ?? null,
+        imports: saved.sources ?? {},
+        firstImport: firstImport(saved),
+      };
+    }),
+  );
+}
+
+/** Reads waiting for their profile to be made, each holding what it read, by token. */
+const reads = new Map<number, { key: string; name: string; id: string; read: ReadProfile; timer: ReturnType<typeof setTimeout> }>();
+let nextToken = 1;
+
+async function readProfile({ key, name, id, what }: Args): Promise<Failed | { type: "ready"; token: number }> {
+  const browser = key as string;
+  const read = JSON.parse(await native().importRead(home(), browser, id as string, JSON.stringify(what))) as ReadProfile | Failed;
+  if (read.type === "failed") {
+    if (read.reason === "needsKeychainAccess") {
+      changeSaved((saved) => {
+        saved.browsers = { ...saved.browsers, [browser]: { ...saved.browsers?.[browser], denied: true } };
+      });
+    }
+    return read;
+  }
+  const nothing = read.cookies.length + read.leftOutDomains.length + read.appBoundDomains.length + read.history.length + read.bookmarks.length + read.logins.length + read.loginsLeftOut === 0;
+  if (nothing && !read.siteStorageFrom && !read.historyError && !read.bookmarksError && !read.passwordsError) {
+    return { type: "failed", reason: "readFailed", message: `There's nothing to bring from ${read.profileName}.` };
+  }
+  const token = nextToken++;
+  reads.set(token, { key: browser, name: name as string, id: id as string, read, timer: setTimeout(() => reads.delete(token), READ_KEPT_MS) });
+  return { type: "ready", token };
+}
+
+/** Adds cookies a few at a time, telling `progress`. Returns the domains the store refused. */
+async function addCookies(target: Session, cookies: readonly ReadCookie[], progress: (done: number) => void): Promise<string[]> {
+  const refused: string[] = [];
+  const now = Math.floor(Date.now() / 1000);
+  for (let at = 0; at < cookies.length; at += COOKIES_AT_ONCE) {
+    const batch = cookies.slice(at, at + COOKIES_AT_ONCE);
+    await Promise.all(
+      batch.map((cookie) =>
+        target.cookies.set(cookieDetails(cookie, now)).catch((error: unknown) => {
+          refused.push(cookie.domain);
+          note("import-cookie-refused", { domain: cookie.domain, error: String(error) });
+        }),
+      ),
+    );
+    progress(Math.min(at + COOKIES_AT_ONCE, cookies.length));
+  }
+  await target.cookies.flushStore();
+  return refused;
+}
+
+/** Site storage goes in now if the session isn't open, and otherwise when the app next starts. */
+async function bringSiteStorage(profileId: string, from: string): Promise<"copied" | "nextStart"> {
+  if (!openSessions.has(profileId)) {
+    await native().importSiteStorage(from, partitionFolder(profileId));
+    return "copied";
+  }
+  await native().importSiteStorage(from, path.join(stagedRoot(), profileFolderName(profileId)));
+  return "nextStart";
+}
+
+/** Before any session opens: site storage an import left for this start. */
+function applyStagedStorage(): void {
+  let staged: string[];
+  try {
+    staged = fs.readdirSync(stagedRoot());
+  } catch {
+    return;
+  }
+  for (const folder of staged) {
+    const target = path.join(app.getPath("userData"), "Partitions", folder);
+    for (const name of SITE_STORAGE) {
+      const from = path.join(stagedRoot(), folder, name);
+      if (!fs.existsSync(from)) continue;
+      fs.mkdirSync(target, { recursive: true });
+      fs.rmSync(path.join(target, name), { recursive: true, force: true });
+      fs.renameSync(from, path.join(target, name));
+    }
+    fs.rmSync(path.join(stagedRoot(), folder), { recursive: true, force: true });
+    note("import-site-storage-applied", { folder });
+  }
+}
+
+async function writeProfile({ token, target, replace, progress }: Args, sender: Parameters<typeof channelSender>[0]) {
+  const waiting = reads.get(token as number);
+  if (!waiting) throw new Error("That read has expired. Import again.");
+  clearTimeout(waiting.timer);
+  reads.delete(token as number);
+  const { key, id, read } = waiting;
+  const profileId = target as string;
+  const partition = profilePartition(profileId);
+  const tell = channelSender(sender, channelId(progress));
+  const replacing = replace === true;
+  const signIns = read.cookies.length + read.leftOutDomains.length + read.appBoundDomains.length > 0 || read.siteStorageFrom !== null;
+
+  let refused: string[] = [];
+  let siteStorage: "copied" | "nextStart" | null = null;
+  if (signIns) {
+    // Before the session opens: it holds these folders from then on.
+    if (read.siteStorageFrom) siteStorage = await bringSiteStorage(profileId, read.siteStorageFrom);
+    const target = session.fromPartition(partition);
+    if (replacing) {
+      const storages = ["cookies", "cachestorage", "serviceworkers", ...(siteStorage === "copied" ? [] : ["localstorage", "indexdb"])];
+      await target.clearStorageData({ storages: storages as never });
+      target.flushStorageData();
+    }
+    const total = read.cookies.length;
+    tell(JSON.stringify({ type: "cookies", done: 0, total }));
+    refused = await addCookies(target, read.cookies, (done) => tell(JSON.stringify({ type: "cookies", done, total })));
+    if (replacing) {
+      // Their pages were signed in as someone else: the page said they would reload.
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.session === target && contents.getType() === "webview") contents.reload();
+      }
+    }
+  }
+  tell(JSON.stringify({ type: "history" }));
+  let historyError = read.historyError;
+  let history = 0;
+  if (read.history.length > 0) {
+    try {
+      history = importHistory(profileId, read.history.map((visit) => ({ url: visit.url, title: visit.title, atMs: visit.visited_at_ms })));
+    } catch (error) {
+      historyError = `History couldn't be added (${String(error)}).`;
+    }
+  }
+  let bookmarksError = read.bookmarksError;
+  let bookmarks = 0;
+  if (read.bookmarks.length > 0) {
+    try {
+      bookmarks = importBookmarks(profileId, read.bookmarks);
+    } catch (error) {
+      bookmarksError = `Bookmarks couldn't be added (${String(error)}).`;
+    }
+  }
+  let passwordsError = read.passwordsError;
+  let passwords = 0;
+  if (read.logins.length > 0) {
+    try {
+      passwords = importLogins(profileId, read.logins);
+    } catch {
+      // Not the error's text: nothing about a password's store needs repeating.
+      passwordsError = "Passwords couldn't be saved.";
+    }
+  }
+  const domains = distinctDomains([...read.leftOutDomains, ...read.appBoundDomains, ...refused]);
+  const record: Record = {
+    atMs: Date.now(),
+    profiles: [read.profileName],
+    imported: read.cookies.length - refused.length,
+    skipped: read.leftOutDomains.length + read.appBoundDomains.length + refused.length,
+    skippedDomains: domains.shown,
+    skippedDomainCount: domains.count,
+    appBoundDomains: distinctDomains(read.appBoundDomains).shown,
+    history,
+    bookmarks,
+    passwords,
+    passwordsSkipped: read.loginsLeftOut,
+  };
+  changeSaved((saved) => {
+    saved.noticed = true;
+    saved.sources = { ...saved.sources, [id]: { into: profileId, atMs: record.atMs } };
+    // A try at another part says nothing of what the import brought.
+    if (signIns) saved.browsers = { ...saved.browsers, [key]: { record } };
+  });
+  note("import-written", { key, profileId, imported: record.imported, skipped: record.skipped, history, bookmarks, passwords, siteStorage, replacing });
+  return {
+    type: "done",
+    record,
+    historyError,
+    siteStorage,
+    ...(passwordsError ? { passwordsError } : {}),
+    ...(bookmarksError ? { bookmarksError } : {}),
+  };
+}
+
+export function installBrowserImport(): void {
+  applyStagedStorage();
+  app.on("session-created", (created) => {
+    const profileId = profileOfStorage(created.storagePath);
+    if (profileId) openSessions.add(profileId);
+  });
+  addCommands({
+    browser_import_sources: () => listSources(),
+    browser_import_read: (args) => readProfile(args),
+    browser_import_write: (args, { sender }) => writeProfile(args, sender),
+    browser_import_open_access: () => {
+      if (process.platform === "darwin") void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles");
+    },
+  });
+}

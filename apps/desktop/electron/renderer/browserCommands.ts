@@ -45,7 +45,4 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_agent_capture: (args) => agentCapture(args.id as string),
   browser_agent_drive: (args) => agentDrive(args.id as string, args.on as boolean, args.resumed === true),
   browser_agent_events: (args) => agentEvents(args.id as string, args.since as number, args.kinds as string[]),
-  browser_import_sources: () => [],
-  browser_import: () => null,
-  browser_import_open_access: () => null,
 };
