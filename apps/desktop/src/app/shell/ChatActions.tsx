@@ -13,9 +13,10 @@ import {
   Dock,
   DotsHorizontal,
   Folder,
-  Moon,
   Pencil,
+  Pin,
   Unarchive,
+  Unpin,
 } from "@/components/icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { RowAction, workingDirectory } from "@/components/shared";
@@ -24,12 +25,10 @@ import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {
   archive,
   forkConversation,
-  hibernate,
   renameConversation,
   restore,
   setPinned,
 } from "@/state/actions";
-import { useRowMark } from "@/state/tabStates";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -59,8 +58,8 @@ async function copy(text: string, done: string) {
 
 /**
  * The ⋯ "Session actions" ("Chat actions" in a Chat) of the header, the tab and the sidebar's
- * rows: Rename ⌥⌘R; Copy › (a session's path, its id, Markdown); Fork ›; Open in › (a session's
- * path); Archive ⇧⌘A. ⌥⌘P pins it. Deleting is left to Settings › Archived. Share, side chats, scheduled tasks and new windows need what Brigadier doesn't have,
+ * rows: Pin ⌥⌘P; Rename ⌥⌘R; Copy › (a session's path, its id, Markdown); Fork ›; Open in › (a session's
+ * path); Archive ⇧⌘A. Deleting is left to Settings › Archived. Share, side chats, scheduled tasks and new windows need what Brigadier doesn't have,
  * so they are not offered.
  */
 export const ChatActions: FC<{
@@ -82,10 +81,6 @@ export const ChatActions: FC<{
   const noun = conversation.kind === "chat" ? "chat" : "session";
   const actionsName = conversation.kind === "chat" ? "Chat actions" : "Session actions";
   const mac = useApp((s) => s.info?.platform === "macos");
-
-  const asleep = conversation.lifecycle === "hibernated";
-  // The row's spinner: it can't sleep while it works (the daemon refuses then too).
-  const working = useRowMark(id).look === "working";
 
   const togglePin = () => void setPinned(id, !pinned).catch(fail);
   // No confirmation, even while it runs: archiving stops it, and Undo brings it back stopped.
@@ -142,6 +137,11 @@ export const ChatActions: FC<{
       <DropdownMenuContent align={row ? "start" : "end"}>
         {!archived && (
           <>
+            <DropdownMenuItem onSelect={togglePin}>
+              {pinned ? <Unpin /> : <Pin />}
+              {pinned ? "Unpin" : "Pin"}
+              <DropdownMenuShortcut>{key("⌥⌘P")}</DropdownMenuShortcut>
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={onRename}>
               <Pencil />
               Rename
@@ -208,18 +208,6 @@ export const ChatActions: FC<{
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-          </>
-        )}
-        {row && !archived && !asleep && (
-          <>
-            <DropdownMenuSeparator />
-            {/* A disabled item takes no pointer: its wrapper says why on hover. */}
-            <div title={working ? `It can't sleep while it works` : undefined}>
-              <DropdownMenuItem disabled={working} onSelect={() => void hibernate(id).catch(fail)}>
-                <Moon />
-                Put to sleep
-              </DropdownMenuItem>
-            </div>
           </>
         )}
         {/* An archived tab has nothing below: its Unarchive is on the page it shows. */}

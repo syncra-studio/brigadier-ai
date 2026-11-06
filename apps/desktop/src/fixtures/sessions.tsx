@@ -190,11 +190,10 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
     };
   });
 
-/** Any text on a row beyond its title and time: rows carry no state words (D3). */
+/** Any text on a row beyond its title: rows carry no state words (D3). */
 const wordsOf = (button: HTMLElement) => {
   const title = button.querySelector('[data-slot="row-title"]')?.textContent ?? "";
-  const time = button.querySelector('[data-slot="row-time"]')?.textContent ?? "";
-  return button.textContent?.replace(title, "").replace(time, "").trim() || null;
+  return button.textContent?.replace(title, "").trim() || null;
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -252,9 +251,7 @@ async function hoverRow() {
   const row = button.closest("li")!;
   const text = button.querySelector<HTMLElement>('[data-slot="row-title"]')!;
   const status = button.querySelector<HTMLElement>('[data-slot="row-status"]')!;
-  const pinWord = params.has("pinned") ? "Unpin" : "Pin";
-  const noun = params.has("chats") ? "chat" : "session";
-  const pin = row.querySelector<HTMLButtonElement>(`button[aria-label="${pinWord} ${title}"]`)!;
+  const pins = row.querySelectorAll('button[aria-label^="Pin"], button[aria-label^="Unpin"]').length;
   const dots = row.querySelector<HTMLButtonElement>(`button[aria-label="Actions for ${title}"]`)!;
   const dotsTip = params.has("chats") ? "Chat actions" : "Session actions";
   const background = () => getComputedStyle(button).backgroundColor;
@@ -268,7 +265,7 @@ async function hoverRow() {
     background: background(), titleWidth: text.getBoundingClientRect().width,
     statusVisible: getComputedStyle(status).display !== "none" && getComputedStyle(status).visibility !== "hidden",
     rowHeight: button.getBoundingClientRect().height, fontSize: parseFloat(getComputedStyle(button).fontSize),
-    actionWidth: pin.getBoundingClientRect().width, iconWidth: pin.querySelector("svg")!.getBoundingClientRect().width,
+    actionWidth: dots.getBoundingClientRect().width, iconWidth: dots.querySelector("svg")!.getBoundingClientRect().width,
   };
   const reference = document.getElementById("hover-reference")!;
   await move(reference);
@@ -284,9 +281,9 @@ async function hoverRow() {
     overflowing: text.scrollWidth > text.clientWidth,
   };
   const actions = [];
-  for (const action of [dots, pin]) {
+  for (const action of [dots]) {
     await move(action);
-    await until(() => tooltipText() === (action === pin ? `${pinWord} ${noun}` : dotsTip));
+    await until(() => tooltipText() === dotsTip);
     actions.push({
       background: background(),
       underPointer: action.matches(":hover"),
@@ -308,7 +305,7 @@ async function hoverRow() {
   await fixtureInput({ type: "key", key: "Escape" });
   await fixtureInput({ type: "key", key: "Escape" });
   await until(() => document.querySelector("[role=menu]") === null);
-  return { idle, hovered, actions, menu, copy, navHoverBackground, after };
+  return { idle, hovered, actions, pins, menu, copy, navHoverBackground, after };
 }
 
 /** A session's setup working in `environment`. */

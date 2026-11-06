@@ -141,6 +141,7 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Primitives · Controls | `Switch/On`, `Switch/Off` | `components/controls/switch.tsx` | `Switch` | |
 | Primitives · Controls | `Checkbox/Off`, `Checkbox/On`, `Checkbox/Mixed` | `components/controls/checkbox.tsx` | `Checkbox`, `CheckboxMark` | |
 | Primitives · Controls | `Checkbox Row` | `components/controls/checkbox-row.tsx` | `CheckboxRow` | |
+| Primitives · Controls | — | `components/controls/radio.tsx` | `Radio`, `RadioGroup` | code only: the blue of the checkbox on a round mark |
 | Primitives · Controls | `Kbd`, `Kbd · chip`, `Kbd/Tooltip`, `Kbd/On button` | `components/controls/kbd.tsx` | `Kbd` (`variant` key/chip; the tooltip and button pills follow where it sits) | |
 | Primitives · Controls | `TabsList`, `TabsList/Line`, `TabsList/Vertical`, `Tab/Active`, `Tab/Inactive`, `Tab/Line Active`, `Tab/Line Inactive` | `components/controls/tabs.tsx` | `Tabs`, `TabsList` (`variant` default/line, orientation), `TabsTrigger`, `TabsContent` | |
 | Primitives · Controls | `Toggle/Off`, `Toggle/On` | `components/controls/toggle.tsx` | `Toggle` | |
@@ -211,6 +212,8 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Sidebar & shell | `Page corners` | `app/shell/PageCorners.tsx` | `PageCorners` | |
 | Sidebar & shell | `Page surface` | `app/shell/PageSurface.tsx` | `PageSurface` | |
 | Sidebar & shell | `Sidebar header` | `app/shell/SidebarHeader.tsx` | `SidebarHeader` | |
+| Sidebar & shell | — | `app/shell/SidebarView.tsx` | `ViewControl` | code only: the list's View popover, Group by and Show (All, each project, Chats), on the header of Open or Projects |
+| Sidebar & shell | — | `components/shared/row-card.tsx` | `ProjectBadge`, `ProjectIcon` | code only: a project's icon from its repository through `<img>`; the badge falls back to initials (a chat's bubble), a project row to its folder |
 | Sidebar & shell | `Sidebar` | `app/shell/NewChatRow.tsx` | `NewChatRow` | shown inside it |
 | Sidebar & shell | `Projects empty prompt` | `app/shell/ProjectsEmptyPrompt.tsx` | `ProjectsEmptyPrompt` | |
 | Sidebar & shell | `Project row` | `app/shell/ProjectRow.tsx` | `ProjectRow` | |

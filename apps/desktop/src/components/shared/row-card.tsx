@@ -1,13 +1,14 @@
+import type { ReactNode } from "react";
+
 import { Comment, Folder, ProviderGlyph } from "@/components/icons";
 import { TooltipContent } from "@/components/overlays";
 import { SidebarRowMark } from "@/components/shared/session-status";
-import { useSharedNow } from "@/hooks/use-now";
 import type { Conversation } from "@/ipc/generated";
-import { projectInitials, shortAge, tildePath } from "@/lib/rowLabels";
+import { useProjectIcon } from "@/lib/projectIcon";
+import { projectInitials, tildePath } from "@/lib/rowLabels";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
-import { sortTime } from "@/state/inbox";
 import { useRowMark } from "@/state/tabStates";
 
 /** Where a session works: its worktree once created, else the repository. Chats work nowhere. */
@@ -17,21 +18,29 @@ export function workingDirectory(conversation: Conversation): string | null {
   return (setup.environment.type === "newWorktree" && setup.environment.path) || setup.repo;
 }
 
-/** A row's grey badge: its project's initials, or a bubble for a chat. */
-export function ProjectBadge({ name }: { name: string | null }) {
+/** A project's own icon in a square of its slot's size; drawn through `<img>`, so an SVG's scripts don't run. */
+function ProjectIconImage({ icon, onBroken }: { icon: string; onBroken: () => void }) {
+  return <img data-slot="project-icon" src={icon} alt="" draggable={false} className="size-icon-md shrink-0 rounded-xs object-contain" onError={onBroken} />;
+}
+
+/** A project row's mark: the project's icon when it has one that loads, else `fallback`. */
+export function ProjectIcon({ projectId, fallback }: { projectId: string; fallback: ReactNode }) {
+  const { icon, broken } = useProjectIcon(projectId);
+  return icon === null ? fallback : <ProjectIconImage icon={icon} onBroken={broken} />;
+}
+
+/**
+ * A row's badge: its project's icon when it has one that loads, else its initials in grey; a bubble
+ * in grey for a chat (`name` null).
+ */
+export function ProjectBadge({ name, projectId }: { name: string | null; projectId: string | null }) {
+  const { icon, broken } = useProjectIcon(name === null ? null : projectId);
+  if (icon !== null) {
+    return <span data-slot="row-badge" aria-hidden className="flex shrink-0"><ProjectIconImage icon={icon} onBroken={broken} /></span>;
+  }
   return (
     <span data-slot="row-badge" aria-hidden className="bg-foreground/8 text-foreground/70 text-badge flex size-icon-md shrink-0 items-center justify-center rounded-xs font-semibold">
       {name === null ? <Comment className="size-icon-xs" /> : projectInitials(name)}
-    </span>
-  );
-}
-
-/** How long since the user last wrote to `conversation`, on the one clock all rows share. */
-export function RowTime({ conversation, className }: { conversation: Conversation; className?: string }) {
-  const now = useSharedNow();
-  return (
-    <span data-slot="row-time" className={cn("text-muted-foreground shrink-0 pe-0.5 text-end text-xs tabular-nums", className)}>
-      {shortAge(sortTime(conversation), now)}
     </span>
   );
 }
@@ -56,7 +65,7 @@ function RowCardBody({ conversation, project }: { conversation: Conversation; pr
       )}
       <div className="border-divider my-1.5 border-t" />
       <div data-slot="card-project" className={CARD_LINE}>
-        <ProjectBadge name={project} />
+        <ProjectBadge name={project} projectId={conversation.projectId} />
         <span className="min-w-0 wrap-anywhere">{project ?? "Chat"}</span>
       </div>
       {model && (

@@ -1350,11 +1350,6 @@ export async function readStoredImage(hash: string): Promise<Blob> {
 
 // ----- lifecycle -------------------------------------------------------------------------
 
-export async function hibernate(id: string): Promise<void> {
-  const { conversation } = await request({ method: "hibernate", id });
-  storeConversation(conversation);
-}
-
 /** "session", "chat", or "conversation" for a mix, made plural for `count` other than one. */
 export function conversationNoun(conversations: Conversation[], count = conversations.length) {
   const kinds = new Set(conversations.map((conversation) => conversation.kind));

@@ -13,9 +13,9 @@ test("the session tab's menu: Rename, Copy (path, id), Archive last, no delete a
   };
   assert.equal(seen.error, undefined, `${seen.error} (${seen.step})`);
   const last = ["Archive⇧⌘A"];
-  assert.deepEqual(seen.menus.worktree, ["Rename⌥⌘R", "Copy", "Open in", ...last]);
-  assert.deepEqual(seen.menus.repo, ["Rename⌥⌘R", "Copy", "Open in", ...last]);
-  assert.deepEqual(seen.menus.chat, ["Rename⌥⌘R", "Copy", ...last]);
+  assert.deepEqual(seen.menus.worktree, ["Pin⌥⌘P", "Rename⌥⌘R", "Copy", "Open in", ...last]);
+  assert.deepEqual(seen.menus.repo, ["Pin⌥⌘P", "Rename⌥⌘R", "Copy", "Open in", ...last]);
+  assert.deepEqual(seen.menus.chat, ["Pin⌥⌘P", "Rename⌥⌘R", "Copy", ...last]);
   assert.deepEqual(seen.copies.worktree, ["Copy path", "Copy session id", "Copy as Markdown"]);
   assert.deepEqual(seen.copies.chat, ["Copy chat id", "Copy as Markdown"]);
   // The id the CLI shows (`brigadier list`): the conversation id's last 8 characters.

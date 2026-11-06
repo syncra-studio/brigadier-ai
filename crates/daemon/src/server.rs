@@ -1391,6 +1391,7 @@ fn answered_beside(request: &Request) -> bool {
     matches!(
         request,
         Request::SiteIcon { .. }
+            | Request::ProjectIcon { .. }
             | Request::GetConversation { .. }
             | Request::FindProjects
             | Request::FindRepos
@@ -1693,6 +1694,23 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::SiteIcon { origin } => Response::SiteIcon {
             icon: daemon.site_icons.icon(&origin).await,
         },
+        Request::ProjectIcon { project_id } => {
+            let repo = sessions
+                .core()
+                .project(&project_id)
+                .ok()
+                .and_then(|project| project.repos.first().map(|repo| repo.path.clone()));
+            let icon = match repo {
+                Some(repo) => tokio::task::spawn_blocking(move || {
+                    crate::project_icons::find_icon(repo.as_ref())
+                })
+                .await
+                .ok()
+                .flatten(),
+                None => None,
+            };
+            Response::ProjectIcon { icon }
+        }
         Request::GetBrain { project_id } => Response::GetBrain {
             overview: Box::new(heap(|| sessions.brain_overview(project_id)).await?),
         },

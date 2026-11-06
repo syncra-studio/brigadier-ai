@@ -11,6 +11,7 @@ import type { ModelRef } from "./ModelRef";
 import type { NotifyFinished } from "./NotifyFinished";
 import type { OwnAccountName } from "./OwnAccountName";
 import type { PermissionLevel } from "./PermissionLevel";
+import type { ProjectId } from "./ProjectId";
 import type { ProviderKind } from "./ProviderKind";
 import type { SidebarMode } from "./SidebarMode";
 
@@ -245,6 +246,15 @@ dismissedSuggestions: Array<DismissedSuggestion>,
  * How the sidebar lists conversations, the same in every window.
  */
 sidebarMode: SidebarMode, 
+/**
+ * The projects unticked in the sidebar's View, the same in every window. With none and
+ * `sidebar_hide_chats` off, everything shows.
+ */
+sidebarHiddenProjects: Array<ProjectId>, 
+/**
+ * Chats unticked in the sidebar's View.
+ */
+sidebarHideChats: boolean, 
 /**
  * The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
  * before it existed read as 0, so their conversions run.

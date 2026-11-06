@@ -39,7 +39,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -1110,6 +1110,10 @@ pub enum Request {
     SiteIcon {
         origin: String,
     },
+    /// A project's icon, found among the files of its first repository; `None` when it has none.
+    ProjectIcon {
+        project_id: ProjectId,
+    },
     /// Stops its CLI processes and removes temp files now; the next message continues it.
     Hibernate {
         id: ConversationId,
@@ -1942,6 +1946,10 @@ pub enum Response {
         stored: Option<StoredCopy>,
     },
     SiteIcon {
+        /// The icon as a `data:` URL.
+        icon: Option<String>,
+    },
+    ProjectIcon {
         /// The icon as a `data:` URL.
         icon: Option<String>,
     },

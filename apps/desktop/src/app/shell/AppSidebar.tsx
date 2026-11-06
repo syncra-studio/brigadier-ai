@@ -14,6 +14,7 @@ import { NewChatRow } from "@/app/shell/NewChatRow";
 import { ProjectRow, underSource } from "@/app/shell/ProjectRow";
 import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
 import { SidebarHeader } from "@/app/shell/SidebarHeader";
+import { shownBy, useShowFilter, ViewControl } from "@/app/shell/SidebarView";
 import {
   BrigadierGlyph,
   Chats,
@@ -155,12 +156,16 @@ function useFoldedSections<T extends string>(key: string, initial: T[] = []) {
 }
 
 /**
- * The sidebar panel on Home: its header (title, search and the Inbox | Projects tabs), New chat,
- * then the Inbox (D7) or, in Projects mode, Pinned (when there are any), Projects with their
- * sessions, and Chats. Each section folds away from its title.
+ * The sidebar panel on Home: its header (title and search), New chat, then with Group by None the
+ * one list (D7), or with Group by Project Pinned (when there are any), Projects with their sessions,
+ * and Chats. View's Show list narrows either. Each section folds away from its title.
  */
 export function AppSidebar() {
-  const { pinned, chats, projects, sessions } = useInboxSections();
+  const { pinned: allPinned, chats: allChats, projects: allProjects, sessions } = useInboxSections();
+  const show = useShowFilter();
+  const projects = useMemo(() => allProjects.filter((project) => !show.hiddenProjects.has(project.id)), [allProjects, show]);
+  const pinned = useMemo(() => allPinned.filter((conversation) => shownBy(conversation, show)), [allPinned, show]);
+  const chats = show.hideChats ? NO_SESSIONS : allChats;
   const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const draftProjectId = useApp((s) =>
     s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,
@@ -170,8 +175,10 @@ export function AppSidebar() {
   const shortcuts = useShortcuts();
   const sections = useFoldedSections<SectionId>(SECTIONS_KEY);
   const inboxSections = useFoldedSections(INBOX_SECTIONS_KEY, INBOX_FOLDED);
-  // Everyone starts in Inbox (D8); every window reads the same daemon setting.
+  // Everyone starts with Group by None (D8); every window reads the same daemon setting.
   const inboxMode = useApp((s) => s.settings.sidebarMode !== "projects");
+  const [viewOpen, setViewOpen] = useState(false);
+  const view = <ViewControl projects={allProjects} open={viewOpen} onOpenChange={setViewOpen} />;
   const [dialog, setDialog] = useState<DialogState>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -232,6 +239,7 @@ export function AppSidebar() {
           isOpen={inboxSections.isOpen}
           setOpen={inboxSections.setOpen}
           onShown={onShown}
+          view={view}
         />
       ) : (
         <div className={SIDEBAR_LIST}>
@@ -241,14 +249,14 @@ export function AppSidebar() {
               open={sections.isOpen("pinned")}
               onOpenChange={(open) => sections.setOpen("pinned", open)}
             >
-              <NavList>
+              <NavList className="gap-1">
                 {pinned.map((conversation) => (
                   <ConversationRow
                     key={conversation.id}
                     conversation={conversation}
                     active={conversation.id === activeId}
                     actions={actions}
-                    twoLine
+                    badged
                   />
                 ))}
               </NavList>
@@ -259,19 +267,24 @@ export function AppSidebar() {
             title="Projects"
             open={sections.isOpen("projects")}
             onOpenChange={(open) => sections.setOpen("projects", open)}
+            steadyActions
             actions={
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <RowAction
-                    aria-label="Add project"
-                    className="size-icon-button-sm"
-                    onClick={() => openAddProject()}
-                  >
-                    <Plus />
-                  </RowAction>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Add project</TooltipContent>
-              </Tooltip>
+              <>
+                {/* Shows on the section's hover, as a section's actions do; View keeps the end. */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <RowAction
+                      aria-label="Add project"
+                      className="size-icon-button-sm opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100"
+                      onClick={() => openAddProject()}
+                    >
+                      <Plus />
+                    </RowAction>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Add project</TooltipContent>
+                </Tooltip>
+                {view}
+              </>
             }
           >
             <NavList>
@@ -287,44 +300,46 @@ export function AppSidebar() {
                   onRemove={setRemoving}
                 />
               ))}
-              {catalogLoaded && projects.length === 0 && (
+              {catalogLoaded && allProjects.length === 0 && (
                 <ProjectsEmptyPrompt />
               )}
             </NavList>
           </NavSection>
 
-          <NavSection
-            title="Chats"
-            open={sections.isOpen("chats")}
-            onOpenChange={(open) => sections.setOpen("chats", open)}
-            actions={
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <RowAction
-                    aria-label="New chat"
-                    className="size-icon-button-sm"
-                    onClick={() => select({ type: "draft", kind: "chat" })}
-                  >
-                    <Plus />
-                  </RowAction>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">New chat</TooltipContent>
-              </Tooltip>
-            }
-          >
-            <NavList>
-              {chats.map((conversation) => (
-                <ConversationRow
-                  key={conversation.id}
-                  conversation={conversation}
-                  active={conversation.id === activeId}
-                  actions={actions}
-                  forked={underSource(conversation, chats)}
-                />
-              ))}
-              {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
-            </NavList>
-          </NavSection>
+          {!show.hideChats && (
+            <NavSection
+              title="Chats"
+              open={sections.isOpen("chats")}
+              onOpenChange={(open) => sections.setOpen("chats", open)}
+              actions={
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <RowAction
+                      aria-label="New chat"
+                      className="size-icon-button-sm"
+                      onClick={() => select({ type: "draft", kind: "chat" })}
+                    >
+                      <Plus />
+                    </RowAction>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">New chat</TooltipContent>
+                </Tooltip>
+              }
+            >
+              <NavList>
+                {chats.map((conversation) => (
+                  <ConversationRow
+                    key={conversation.id}
+                    conversation={conversation}
+                    active={conversation.id === activeId}
+                    actions={actions}
+                    forked={underSource(conversation, chats)}
+                  />
+                ))}
+                {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
+              </NavList>
+            </NavSection>
+          )}
         </div>
       )}
 

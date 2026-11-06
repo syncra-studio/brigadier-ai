@@ -4,9 +4,9 @@ import { errorText } from "@/app/shell/dialogs/fields";
 import { NavRow } from "@/components/controls/nav-row";
 import { Badge } from "@/components/controls/badge";
 import { Archive, BranchAlt, Pencil, Pin, Unarchive, Unpin } from "@/components/icons";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
-import { RowAction, RowActionsSlot } from "@/components/shared/row-action";
-import { ProjectBadge, RowCard, RowTime } from "@/components/shared/row-card";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Tooltip, TooltipTrigger } from "@/components/overlays";
+import { RowActionsSlot } from "@/components/shared/row-action";
+import { ProjectBadge, RowCard } from "@/components/shared/row-card";
 import { SidebarRowMark } from "@/components/shared/session-status";
 import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -27,17 +27,9 @@ export type RowActions = {
   Menu: ComponentType<{ conversation: Conversation; onRename: () => void }>;
 };
 
-/** Keeps what fades at a one-line row's end clear of its two actions while they show. */
-const roomForActions =
-  "group-hover/row:pe-14 group-focus-within/row:pe-14 group-has-data-[state=open]/row:pe-14";
-
-/** Keeps an archived row's title clear of its one action while it shows. */
+/** Keeps a row's title and mark clear of its ⋯ while it shows. */
 const roomForAction =
   "group-hover/row:pe-7 group-focus-within/row:pe-7 group-has-data-[state=open]/row:pe-7";
-
-/** The time gives way to the row's actions; the mark and the chip stay. */
-const removeOnRowHover =
-  "group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden";
 
 /** How long a pointer rests on a row before its card shows; on to the next row it shows at once. */
 const CARD_DELAY_MS = 300;
@@ -61,12 +53,11 @@ function MergedChip({ conversation }: { conversation: Conversation }) {
 const isArchived = (id: string) => useApp.getState().conversations[id]?.lifecycle === "archived";
 
 /**
- * A chat or session. `twoLine` (Inbox, Pinned): a badge, its project and the time since the user's
- * last message over its title, chip and mark. Otherwise one line: its title, chip, mark and time, or
- * when archived a badge, its title and time. On hover or focus its ⋯ and Pin take the time's place,
- * and a card beside the sidebar tells the rest. A right-click opens its menu (Pin, Rename…, Archive,
- * or Unarchive), or on one of several picked rows the menu for all of them (Archive (N), Unarchive
- * (N)). ⌘-click (Ctrl-click off macOS) picks it, Shift-click picks a range.
+ * A chat or session on one line: its title, chip and mark; `badged` (the one list, and Pinned), its
+ * project's badge before them and more height. On hover or focus its ⋯ shows, and a card beside the
+ * sidebar tells the rest. A right-click opens its menu (Pin, Rename…, Archive, or Unarchive), or on
+ * one of several picked rows the menu for all of them (Archive (N), Unarchive (N)). ⌘-click
+ * (Ctrl-click off macOS) picks it, Shift-click picks a range.
  */
 export const ConversationRow = memo(function ConversationRow({
   conversation,
@@ -74,7 +65,7 @@ export const ConversationRow = memo(function ConversationRow({
   actions,
   nested = false,
   forked = false,
-  twoLine = false,
+  badged = false,
 }: {
   conversation: Conversation;
   active: boolean;
@@ -82,7 +73,7 @@ export const ConversationRow = memo(function ConversationRow({
   nested?: boolean;
   /** Drawn under its source: a little further in, after the fork icon (D211). */
   forked?: boolean;
-  twoLine?: boolean;
+  badged?: boolean;
 }) {
   const title = conversation.title;
   const pinned = conversation.pinnedAtMs !== null;
@@ -135,40 +126,21 @@ export const ConversationRow = memo(function ConversationRow({
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "data-[selected=true]:bg-link/20 data-[selected=true]:text-foreground pe-1.5",
-                  !twoLine && (archived ? roomForAction : roomForActions),
+                  roomForAction,
                   nested && (forked ? "ps-10" : "ps-8"),
                   !nested && forked && "ps-4",
                   !picked && "group-hover/row:bg-foreground/8",
-                  twoLine && "h-auto flex-col items-stretch gap-0.5 py-1",
+                  badged && "h-9",
                 )}
                 onClick={(event) => {
                   if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
                 }}
               >
-                {twoLine ? (
-                  <>
-                    <span className="flex h-4 min-w-0 items-center gap-1.5">
-                      <ProjectBadge name={project} />
-                      <span data-slot="row-label" className={cn("text-muted-foreground mask-fade-end min-w-0 flex-1 overflow-hidden text-xs whitespace-nowrap", roomForActions)}>{project ?? "Chat"}</span>
-                      <RowTime conversation={conversation} className={removeOnRowHover} />
-                    </span>
-                    <span className="flex h-5 min-w-0 items-center gap-1.5">
-                      {forkIcon}
-                      {titleText}
-                      <MergedChip conversation={conversation} />
-                      {status}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    {forkIcon}
-                    {archived && <ProjectBadge name={project} />}
-                    {titleText}
-                    <MergedChip conversation={conversation} />
-                    {status}
-                    <RowTime conversation={conversation} className={cn("min-w-6.5", removeOnRowHover)} />
-                  </>
-                )}
+                {forkIcon}
+                {badged && <ProjectBadge name={project} projectId={conversation.projectId} />}
+                {titleText}
+                <MergedChip conversation={conversation} />
+                {status}
               </NavRow>
             </TooltipTrigger>
           </ContextMenuTrigger>
@@ -223,21 +195,8 @@ export const ConversationRow = memo(function ConversationRow({
           </ContextMenuContent>
         )}
       </ContextMenu>
-      <RowActionsSlot className={twoLine ? "top-0.5 bottom-auto h-5" : undefined}>
+      <RowActionsSlot>
         <actions.Menu conversation={conversation} onRename={() => actions.onRename(conversation)} />
-        {!archived && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <RowAction
-                aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`}
-                onClick={togglePin}
-              >
-                {pinned ? <Unpin /> : <Pin />}
-              </RowAction>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{pinned ? `Unpin ${noun}` : `Pin ${noun}`}</TooltipContent>
-          </Tooltip>
-        )}
       </RowActionsSlot>
     </li>
   );

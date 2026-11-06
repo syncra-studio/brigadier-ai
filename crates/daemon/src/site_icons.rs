@@ -334,7 +334,7 @@ fn fetch_image(agent: &ureq::Agent, url: &str) -> Option<String> {
 }
 
 /// The image type of `bytes`, by their first bytes (servers often send icons as anything).
-fn image_kind(bytes: &[u8], declared: &str) -> Option<&'static str> {
+pub(crate) fn image_kind(bytes: &[u8], declared: &str) -> Option<&'static str> {
     if bytes.starts_with(&[0, 0, 1, 0]) {
         return Some("image/x-icon");
     }
