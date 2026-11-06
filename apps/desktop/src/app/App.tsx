@@ -27,6 +27,7 @@ import { Toaster } from "@/components/overlays";
 import { preloadThreadCode } from "@/app/conversation/threadCode";
 import { appReady, nowEpochMs } from "@/ipc/client";
 import { waitForAgents } from "@/lib/agentsReady";
+import { whenPageHidden } from "@/lib/pageHidden";
 import { nextPaint, setFrameSampling } from "@/lib/perf";
 import { whenIdle } from "@/lib/preloadable";
 import { warmCode } from "@/lib/warmCode";
@@ -74,7 +75,9 @@ export function App() {
     if (!catalogLoaded || readyReported) return;
     readyReported = true;
     markStartup("catalog");
-    void nextPaint()
+    // No frame comes while nobody can see the page, so a covered window doesn't wait for one: the
+    // stall timer would be all that ended it, and it passes before a late mount (lib/splash.ts).
+    void Promise.race([nextPaint(), whenPageHidden()])
       .then(() => {
         markStartup("paint");
         return waitForAgents();
