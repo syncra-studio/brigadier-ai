@@ -30,3 +30,15 @@ export function trackPageHidden(doc: VisibilityDocument = document): void {
 export function pageShown(doc: Pick<VisibilityDocument, "hidden"> = document): boolean {
   return !doc.hidden;
 }
+
+/**
+ * Resolves once nobody can see the page: at once if that's so now. WebKit runs no animation frames
+ * then, so startup races what waits on a frame against this. For a wait that happens once, as its
+ * listener stays.
+ */
+export function whenPageHidden(doc: Pick<VisibilityDocument, "hidden" | "addEventListener"> = document): Promise<void> {
+  return new Promise((resolve) => {
+    if (doc.hidden) resolve();
+    else doc.addEventListener("visibilitychange", () => doc.hidden && resolve());
+  });
+}

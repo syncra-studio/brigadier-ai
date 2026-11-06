@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
-import { trackPageHidden, type VisibilityDocument } from "@/lib/pageHidden";
+import { trackPageHidden, whenPageHidden, type VisibilityDocument } from "@/lib/pageHidden";
 
 function fakeDocument(hidden: boolean) {
   const listeners: (() => void)[] = [];
@@ -32,6 +32,22 @@ test("the mark follows the page as it is covered and shown again", () => {
   assert.equal(doc.documentElement.dataset.pageHidden, "");
   change(false);
   assert.equal("pageHidden" in doc.documentElement.dataset, false);
+});
+
+test("a wait on the page being hidden ends at once if it is, and only when it goes hidden if not", async () => {
+  await whenPageHidden(fakeDocument(true).doc);
+
+  const { doc, change } = fakeDocument(false);
+  let ended = false;
+  void whenPageHidden(doc).then(() => {
+    ended = true;
+  });
+  change(false);
+  await Promise.resolve();
+  assert.equal(ended, false);
+  change(true);
+  await Promise.resolve();
+  assert.equal(ended, true);
 });
 
 test("a dialog or popover closed while the page is hidden leaves though no frame runs", { timeout: 60000 }, async (t) => {

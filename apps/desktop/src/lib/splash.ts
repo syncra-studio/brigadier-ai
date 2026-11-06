@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from "react";
 
 import { startupFinished } from "@/ipc/client";
+import { whenPageHidden } from "@/lib/pageHidden";
 import { markStartup } from "@/lib/startup";
 
 /** How long startup may take before the splash gives up waiting (also `--splash-late-after`). */
@@ -80,9 +81,12 @@ async function fadeOut(): Promise<void> {
     markStartup("fading");
     // The transitions start at the next style pass; with reduced motion there are none.
     void getComputedStyle(element).opacity;
-    await Promise.all(element.getAnimations().map((animation) => animation.finished)).catch(
-      () => {},
-    );
+    // A transition never ends while nobody can see the page, and the first launch's intro can't
+    // begin until the splash has gone, so a covered window doesn't wait for it.
+    await Promise.race([
+      Promise.all(element.getAnimations().map((animation) => animation.finished)).catch(() => {}),
+      whenPageHidden(),
+    ]);
     element.remove();
   }
   delete root.dataset.splash;

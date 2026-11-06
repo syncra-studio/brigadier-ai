@@ -728,8 +728,10 @@ fn main() {
             window.focus = false;
         }
     }
-    // The first launch's intro shows the window itself, once the page is ready (intro.rs).
-    let hold_for_intro = intro::should_hold(first_launch, smoke);
+    // The first launch's intro shows the window itself, once the page is ready (intro.rs). Not
+    // for a background launch: staging would float the window and dim the desktop over the
+    // user's work, so it opens as usual and the page plays the intro inside it.
+    let hold_for_intro = !background && intro::should_hold(first_launch, smoke);
     if hold_for_intro {
         for window in &mut context.config_mut().app.windows {
             window.visible = false;
