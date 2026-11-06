@@ -14,6 +14,7 @@ import { note } from "./events";
 import { daemonDataDir, dev, identifier, setIdentity, unfocused } from "./identity";
 import { holdForIntro, installIntroCommands } from "./intro";
 import { shouldHold } from "./introRules";
+import { installLoginCommands, openComputerSetup } from "./login";
 import { native } from "./native";
 import { folderArgs } from "./paths";
 import { holdQuits, markDaemonStarted, quit } from "./quit";
@@ -68,6 +69,7 @@ function startDaemon(): Promise<void> {
     firstLaunch = started.firstLaunch;
     installCoreCommands({ started, smoke, budgetTolerance });
     installIntroCommands();
+    installLoginCommands(started.dataDir);
     setOnVisibility((visible) => {
       native().emit(JSON.stringify({ type: "windowVisibility", visible }));
     });
@@ -83,6 +85,7 @@ type ShellAsk = { kind: "notify"; title: string; body: string } | { kind: "openS
 function hearDaemon(ask: ShellAsk): void {
   note("daemon-asks", { kind: ask.kind });
   if (ask.kind === "computerUse") computerStatusChanged(ask.status);
+  if (ask.kind === "openSetup") openComputerSetup(false);
 }
 
 async function openMain(): Promise<void> {
