@@ -374,9 +374,11 @@ fn work_of(
             let marked = proc.marker.as_deref() == Some(marker) && proc.parent != Some(daemon);
             let hidden = || {
                 matches!(proc.parent, None | Some(1))
-                    && proc.hidden_in.as_ref().zip(folder).is_some_and(
-                        |(runs_in, folder)| Path::new(runs_in).starts_with(folder),
-                    )
+                    && proc
+                        .hidden_in
+                        .as_ref()
+                        .zip(folder)
+                        .is_some_and(|(runs_in, folder)| Path::new(runs_in).starts_with(folder))
             };
             (marked || hidden()) && !under.contains(&proc.pid)
         })
@@ -384,7 +386,12 @@ fn work_of(
     // A parent starts before its children, so the top of a tree comes first.
     left.sort_unstable_by_key(|proc| (proc.started_ms, proc.pid));
     for proc in left {
-        if !work.left_behind.iter().flatten().any(|pid| *pid == proc.pid) {
+        if !work
+            .left_behind
+            .iter()
+            .flatten()
+            .any(|pid| *pid == proc.pid)
+        {
             work.left_behind
                 .push(subtree(proc.pid, marker, procs, children));
         }
@@ -711,7 +718,9 @@ impl JobWatch {
                     continue;
                 }
                 let quiet = now.saturating_sub(clock.since_ms);
-                let what = by_pid.get(&top).map_or_else(String::new, |p| command_words(p));
+                let what = by_pid
+                    .get(&top)
+                    .map_or_else(String::new, |p| command_words(p));
                 if quiet >= self.after_ms && !clock.told {
                     clock.told = true;
                     left_told.push((what.clone(), quiet));
@@ -720,11 +729,7 @@ impl JobWatch {
                     stalled.push((clock.since_ms, None, what));
                 }
             }
-            live_left.extend(
-                left_trees
-                    .iter()
-                    .map(|pids| (worker.task.clone(), pids[0])),
-            );
+            live_left.extend(left_trees.iter().map(|pids| (worker.task.clone(), pids[0])));
             for (job, quiet) in told_now {
                 let line = job
                     .output_file
@@ -1115,7 +1120,15 @@ mod tests {
         let at = |minute: i64, cpu: u64| {
             let ticks = HashMap::from([("j".to_owned(), (minute as u64, None))]);
             watch
-                .step(&jobs, &procs(cpu), &ticks, QUIET, minute * MIN, DAEMON, &|_| None)
+                .step(
+                    &jobs,
+                    &procs(cpu),
+                    &ticks,
+                    QUIET,
+                    minute * MIN,
+                    DAEMON,
+                    &|_| None,
+                )
                 .remove(0)
         };
         let mut told = Vec::new();
@@ -1130,7 +1143,11 @@ mod tests {
         }
         assert_eq!(told.len(), 1, "{told:?}");
         assert_eq!(told[0].0, EventKind::Stalled);
-        assert!(told[0].1.starts_with("`cargo build`, left behind"), "{}", told[0].1);
+        assert!(
+            told[0].1.starts_with("`cargo build`, left behind"),
+            "{}",
+            told[0].1
+        );
         // It moves again, then hangs again: told again.
         assert_eq!(at(13, 5_000).hold, None);
         let again: usize = (14..=25).map(|minute| at(minute, 5_000).tell.len()).sum();
@@ -1145,7 +1162,9 @@ mod tests {
         for minute in 0..=30i64 {
             let ticks = HashMap::from([("j".to_owned(), (minute as u64, None))]);
             let verdict = watch
-                .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| None)
+                .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| {
+                    None
+                })
                 .remove(0);
             assert_eq!(verdict.hold, None);
             assert!(verdict.tell.is_empty(), "{:?}", verdict.tell);
@@ -1161,10 +1180,16 @@ mod tests {
             let mut build = proc(9, 0, "cargo", true, 0);
             build.parent = None;
             let rustc = proc(10, 9, "rustc", true, minute as u64 * 30_000);
-            let procs = [with_child(proc(5, 4, "sleep", false, 0)), vec![build, rustc]].concat();
+            let procs = [
+                with_child(proc(5, 4, "sleep", false, 0)),
+                vec![build, rustc],
+            ]
+            .concat();
             let ticks = HashMap::from([("j".to_owned(), (minute as u64, None))]);
             let verdict = watch
-                .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| None)
+                .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| {
+                    None
+                })
                 .remove(0);
             assert_eq!(verdict.hold, None);
             assert!(verdict.tell.is_empty(), "{:?}", verdict.tell);
@@ -1175,9 +1200,17 @@ mod tests {
     fn an_idle_app_left_running_is_not_told() {
         for cmd in [
             vec!["/u/bin/vite", "--port", "1420"],
-            vec!["/u/bin/node", "/r/node_modules/vite/bin/vite.js", "--port", "1420"],
+            vec![
+                "/u/bin/node",
+                "/r/node_modules/vite/bin/vite.js",
+                "--port",
+                "1420",
+            ],
             vec!["/u/bin/node", "/u/bin/pnpm", "dev"],
-            vec!["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--headless"],
+            vec![
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "--headless",
+            ],
         ] {
             let watch = watch();
             let jobs = worker(&[("j", Some("out"))]);
@@ -1188,7 +1221,9 @@ mod tests {
             for minute in 0..=12i64 {
                 let ticks = HashMap::from([("j".to_owned(), (minute as u64, None))]);
                 let verdict = watch
-                    .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| None)
+                    .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| {
+                        None
+                    })
                     .remove(0);
                 assert_eq!(verdict.hold, None, "{cmd:?}");
                 assert!(verdict.tell.is_empty(), "{cmd:?}: {:?}", verdict.tell);
@@ -1211,7 +1246,9 @@ mod tests {
                 .flat_map(|minute| {
                     let ticks = HashMap::from([("j".to_owned(), (minute as u64, None))]);
                     watch
-                        .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| None)
+                        .step(&jobs, &procs, &ticks, QUIET, minute * MIN, DAEMON, &|_| {
+                            None
+                        })
                         .remove(0)
                         .tell
                 })
@@ -1219,7 +1256,11 @@ mod tests {
         };
         let told = told_of("/w/work/sub", 1);
         assert_eq!(told.len(), 1, "{told:?}");
-        assert!(told[0].1.starts_with("`sleep 900`, left behind"), "{}", told[0].1);
+        assert!(
+            told[0].1.starts_with("`sleep 900`, left behind"),
+            "{}",
+            told[0].1
+        );
         assert!(told_of("/w/work2", 1).is_empty());
         assert!(told_of("/w/work", 700).is_empty(), "has a live parent");
     }
@@ -1229,7 +1270,10 @@ mod tests {
     #[test]
     fn a_faked_machine_reading_says_so_on_the_row_and_in_the_event() {
         let machine = parse_faked_machine("60/14").unwrap();
-        assert_eq!((machine.load, machine.cores, machine.faked), (60.0, 14, true));
+        assert_eq!(
+            (machine.load, machine.cores, machine.faked),
+            (60.0, 14, true)
+        );
         assert!(parse_faked_machine("sixty").is_none());
 
         let watch = watch();
@@ -1248,7 +1292,11 @@ mod tests {
             "Build starved 11m · load 60 on 14 cores · faked"
         );
         assert_eq!(tells.len(), 1, "{tells:?}");
-        assert!(tells[0].1.ends_with("load 60 on 14 cores, faked."), "{}", tells[0].1);
+        assert!(
+            tells[0].1.ends_with("load 60 on 14 cores, faked."),
+            "{}",
+            tells[0].1
+        );
     }
 
     #[test]
