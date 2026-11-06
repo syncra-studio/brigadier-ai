@@ -37,4 +37,14 @@ export default defineConfig({
     ...(process.env.BRIGADIER_NO_HMR === "1" ? { hmr: false, watch: null } : { watch: { ignored: ["**/src-tauri/**"] } }),
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
+  // The production page, as src/ builds for Tauri (vite.config.ts): one main chunk, served from inside the app.
+  build: {
+    outDir: "dist-electron/page",
+    target: "chrome140",
+    chunkSizeWarningLimit: 1024,
+    rolldownOptions: {
+      treeshake: { moduleSideEffects: (id) => (/\/src\/components\/(?!icons\/).+\.tsx?$/.test(id) ? false : undefined) },
+      output: { codeSplitting: { groups: [{ name: "index", tags: ["$initial"] }] } },
+    },
+  },
 });

@@ -1,4 +1,6 @@
 packages:
   - apps/*
+allowBuilds:
+  electron-winstaller: false
 overrides:
   "@shikijs/transformers": 4.4.3

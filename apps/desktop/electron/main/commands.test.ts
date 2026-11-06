@@ -18,14 +18,12 @@ function defined(source: string): Set<string> {
 }
 
 test("every Tauri command is answered by Electron or owned by an area, and never both", () => {
-  const answered = new Set([...defined(read("./core.ts")), ...defined(read("../renderer/browserCommands.ts"))]);
+  const answered = defined(read("../renderer/browserCommands.ts"));
   const pending = Object.values(PENDING).flat();
-  for (const area of Object.keys(PENDING)) {
-    let source = "";
-    try {
-      source = read(`./${area.split(/\W/)[0]}.ts`);
-    } catch { /* not started */ }
-    for (const name of defined(source)) answered.add(name);
+  for (const file of fs.readdirSync(new URL(".", import.meta.url))) {
+    if (file.endsWith(".ts") && !file.endsWith(".test.ts") && file !== "pending.ts") {
+      for (const name of defined(read(`./${file}`))) answered.add(name);
+    }
   }
   assert.deepEqual(tauriCommands().filter((name) => !answered.has(name) && !pending.includes(name)), [], "nobody owns these");
   assert.deepEqual(pending.filter((name) => answered.has(name)), [], "answered, so no longer pending");

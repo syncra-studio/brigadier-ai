@@ -13,7 +13,9 @@ export const dev = !BRIGADIER_PRODUCTION && process.env.BRIGADIER_DEV === "1";
 /** A dev run that must never take the focus or the pointer (L8). */
 export const unfocused = dev && process.env.BRIGADIER_UNFOCUSED === "1";
 export const identifier = dev ? "ai.brigadier.dev" : "ai.brigadier.app";
-export const rendererUrl = dev ? (process.env.BRIGADIER_RENDERER_URL ?? "http://127.0.0.1:1431/") : "app://brigadier/index.html";
+/** A dev run can load the production page, to check it under its real origin and policy. */
+export const pageDir = dev ? (process.env.BRIGADIER_PAGE_DIR ?? null) : null;
+export const rendererUrl = dev && !pageDir ? (process.env.BRIGADIER_RENDERER_URL ?? "http://127.0.0.1:1431/") : "app://brigadier/index.html";
 
 export function setIdentity(): void {
   app.setName(dev ? "Brigadier Dev" : "Brigadier");

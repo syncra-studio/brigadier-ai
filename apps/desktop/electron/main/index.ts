@@ -18,9 +18,12 @@ import { holdForIntro, installIntroCommands } from "./intro";
 import { shouldHold } from "./introRules";
 import { installLoginCommands, openComputerSetup } from "./login";
 import { native } from "./native";
+import { servePage } from "./page";
 import { folderArgs } from "./paths";
 import { holdQuits, markDaemonStarted, quit } from "./quit";
 import { computerStatusChanged, installTray } from "./tray";
+import { installSmoke } from "./smoke";
+import { channelOfThisBuild, installUpdates } from "./updates";
 import { createWindow, mainWindow, setOnVisibility, showMain, userCameToIt, windows } from "./windows";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -74,10 +77,12 @@ function startDaemon(): Promise<void> {
     markDaemonStarted();
     note("daemon-bridge-started", { dataDir: started.dataDir, firstLaunch: started.firstLaunch });
     firstLaunch = started.firstLaunch;
-    installCoreCommands({ started, smoke, budgetTolerance });
+    installCoreCommands({ started, smoke, budgetTolerance, updateChannel: channelOfThisBuild() });
     installIntroCommands();
     installLoginCommands(started.dataDir);
     dialogsBridgeUp();
+    installSmoke({ smoke, firstLaunch: started.firstLaunch, budgetTolerance });
+    installUpdates(smoke);
     setOnVisibility((visible) => {
       native().emit(JSON.stringify({ type: "windowVisibility", visible }));
     });
@@ -91,7 +96,7 @@ type ShellAsk = { kind: "notify"; title: string; body: string } | { kind: "openS
 
 /** What the bridge asks of the shell; each is filled in by its own area. */
 function hearDaemon(ask: ShellAsk): void {
-  note("daemon-asks", { kind: ask.kind });
+  note("daemon-asks", { ask: ask.kind });
   if (ask.kind === "notify") notify(ask.title, ask.body);
   if (ask.kind === "computerUse") computerStatusChanged(ask.status);
   if (ask.kind === "openSetup") openComputerSetup(false);
@@ -102,7 +107,16 @@ async function openMain(): Promise<void> {
   const hold = shouldHold(process.platform, firstLaunch, smoke);
   const window = createWindow({ real: true, transparent: hold });
   if (hold) holdForIntro(window);
-  else window.once("ready-to-show", showMain);
+  else window.once("ready-to-show", () => {
+    parkForCheck(window);
+    showMain();
+  });
+}
+
+/** A dev run's launch check keeps its window on its strip, as any other check's. */
+function parkForCheck(window: BrowserWindow): void {
+  const parked = unfocused ? process.env.BRIGADIER_CHECK_BOUNDS : undefined;
+  if (parked) window.setBounds(JSON.parse(parked) as Electron.Rectangle);
 }
 
 app.on("second-instance", (_event, _argv, cwd, given) => {
@@ -146,7 +160,8 @@ if (dev) {
 // Not awaited at the top level: Electron won't reach "ready" until this module has finished loading.
 void app.whenReady().then(async () => {
   installTray(startDaemon);
-  if (dev) {
+  servePage();
+  if (dev && !smoke) {
     note("ready", { pid: process.pid, electron: process.versions.electron, chrome: process.versions.chrome, sandboxForced: true });
     // The first window waits for the driver: the checks place each window before it shows.
     const control = new BrowserWindow({

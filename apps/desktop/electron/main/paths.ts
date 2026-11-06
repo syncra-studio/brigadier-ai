@@ -12,6 +12,16 @@ export function chromiumFolder(platform: NodeJS.Platform, appData: string, ident
   return platform === "darwin" ? path.join(appData, identifier) : null;
 }
 
+/**
+ * Windows: whether an install folder leaves the daemon's data alone. The uninstaller removes its install folder
+ * recursively, and data lives in %LOCALAPPDATA%\\Brigadier\\Data (crates/sandbox/src/paths.rs:172), so the folder
+ * must not be that one or any above it.
+ */
+export function installFolderLeavesData(installFolder: string, dataFolder: string): boolean {
+  const inside = path.win32.relative(path.win32.normalize(installFolder), path.win32.normalize(dataFolder));
+  return inside === "" ? false : inside.startsWith("..") || path.win32.isAbsolute(inside);
+}
+
 /** The folders opened with a launch among its arguments; an option's value is never one (#67, #97). */
 export function folderArgs(args: readonly string[], cwd: string, isFolder: (path: string) => boolean): string[] {
   const folders: string[] = [];

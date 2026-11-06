@@ -9,8 +9,8 @@ installTabLayer();
 document.documentElement.dataset.shell = "electron";
 if (window.brigadierNative) {
   setPageCommands(browserCommands);
-} else {
-  // A dev run's stand-in window; a production build has none.
+} else if (import.meta.env.DEV) {
+  // A dev run's stand-in window; a production build has none, and doesn't carry the stand-in's mocks.
   const { installShellIpc } = await import("./shellIpc");
   installShellIpc();
 }

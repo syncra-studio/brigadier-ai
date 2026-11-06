@@ -10,6 +10,8 @@ const bundle = (entry, name, format) => build({
   root,
   configFile: false,
   logLevel: "warn",
+  // A packaged app carries no node_modules: what main needs goes in its bundle.
+  ssr: { noExternal: true },
   define: { BRIGADIER_PRODUCTION: String(production) },
   build: {
     ssr: true,
@@ -20,7 +22,8 @@ const bundle = (entry, name, format) => build({
     rolldownOptions: {
       input: { [name]: fileURLToPath(new URL(entry, import.meta.url)) },
       external: ["electron", /^node:/],
-      output: { format, entryFileNames: `[name].${format === "cjs" ? "cjs" : "mjs"}`, chunkFileNames: "[name].mjs" },
+      // Bundled CommonJS (electron-updater's) reaches for these by `require`, which an ES module lacks.
+      output: { format, ...(format === "es" ? { banner: 'import { createRequire as __createRequire } from "node:module";\nconst require = __createRequire(import.meta.url);' } : {}), entryFileNames: `[name].${format === "cjs" ? "cjs" : "mjs"}`, chunkFileNames: "[name].mjs" },
     },
   },
 });

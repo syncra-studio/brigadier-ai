@@ -8,9 +8,13 @@ import { native, type Started } from "./native";
 import { isQuitting, pagesFlushed, quit } from "./quit";
 import { clearBackdrop, mainWindow } from "./windows";
 
-export type AppFacts = { started: Started; smoke: boolean; budgetTolerance: number };
+export type AppFacts = { started: Started; smoke: boolean; budgetTolerance: number; updateChannel: string | null };
 
 const openedFolders: string[] = [];
+let coldStart: number | null = null;
+
+/** Process start to the app usable, once the page has said so. */
+export const coldStartMs = (): number | null => coldStart;
 
 /** Folders opened with the app, for the page to take. Before it's connected they wait. */
 export function folderOpened(folders: string[]): void {
@@ -24,7 +28,6 @@ export function bundlePath(executable: string): string | null {
 }
 
 export function installCoreCommands(facts: AppFacts): void {
-  let coldStartMs: number | null = null;
   addCommands({
     ipc_request: async ({ request }: Args) => {
       const outcome = await native().request(JSON.stringify(request));
@@ -41,10 +44,11 @@ export function installCoreCommands(facts: AppFacts): void {
       smoke: facts.smoke,
       firstLaunch: facts.started.firstLaunch,
       budgetTolerance: facts.budgetTolerance,
+      ...(facts.updateChannel ? { updateChannel: facts.updateChannel } : {}),
     }),
     app_ready: ({ readyMs }: Args) => {
-      coldStartMs ??= (readyMs as number) - facts.started.processStartMs;
-      return coldStartMs;
+      coldStart ??= (readyMs as number) - facts.started.processStartMs;
+      return coldStart;
     },
     startup_finished: (_args: Args, { sender }) => {
       const window = BrowserWindow.fromWebContents(sender);

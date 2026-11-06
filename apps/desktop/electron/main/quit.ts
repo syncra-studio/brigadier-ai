@@ -10,12 +10,15 @@ import { native } from "./native";
 const FLUSH_TIMEOUT_MS = 1500;
 /** Covers the daemon's bounded ending of CLI sessions; it finishes quitting on its own if this runs out. */
 const QUIT_TIMEOUT_MS = 10_000;
+const HANDOVER_LIMIT_MS = 15_000;
 
 let quitting = false;
 let daemonStarted = false;
 let daemonStopped = false;
 let exitCode = 0;
 let nextFlush = 1;
+let beforeExit: (daemonStopped: boolean) => boolean = () => false;
+let handedOver = false;
 let waiting: { token: number; answered: () => void } | null = null;
 /** A window close and a quit each finish their save request before the next replaces it. */
 let flushGate: Promise<void> = Promise.resolve();
@@ -51,6 +54,11 @@ export function pagesFlushed(token: number): void {
   if (waiting?.token === token) waiting.answered();
 }
 
+/** The app's last step before exiting, once the daemon's fate is known; true when something else now ends the process. */
+export function setBeforeExit(step: (daemonStopped: boolean) => boolean): void {
+  beforeExit = step;
+}
+
 /** Orderly quit: pages saved, the daemon drained and acknowledged, then exit with `code`. */
 export function quit(window: () => BrowserWindow | null, code = 0): void {
   if (quitting) return;
@@ -66,6 +74,12 @@ export function quit(window: () => BrowserWindow | null, code = 0): void {
       note("daemon-quit", { acknowledged: daemonStopped });
       if (!daemonStopped) console.warn("brigadierd did not acknowledge the quit");
     }
+    if (beforeExit(daemonStopped)) {
+      // The updater ends the process itself, through app.quit; should it not, leave anyway.
+      handedOver = true;
+      setTimeout(() => app.exit(exitCode), HANDOVER_LIMIT_MS);
+      return;
+    }
     app.exit(exitCode);
   })();
 }
@@ -73,6 +87,7 @@ export function quit(window: () => BrowserWindow | null, code = 0): void {
 /** Every way to quit that Electron knows of comes through the orderly path. */
 export function holdQuits(window: () => BrowserWindow | null): void {
   app.on("before-quit", (event) => {
+    if (handedOver) return;
     event.preventDefault();
     quit(window);
   });
