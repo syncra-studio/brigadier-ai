@@ -421,7 +421,7 @@ impl McpGatewayService {
             ("code_challenge", &oauth::challenge(&verifier)),
             ("code_challenge_method", "S256"),
             ("state", &state),
-            ("resource", resource),
+            ("resource", &discovery.resource),
             ("scope", &discovery.scopes),
         ]);
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -458,6 +458,7 @@ impl McpGatewayService {
             client_secret: secret,
             token_endpoint: discovery.metadata.token_endpoint,
             revocation_endpoint: discovery.metadata.revocation_endpoint,
+            oauth_resource: Some(discovery.resource),
         };
         oauth::exchange(
             &self.client,

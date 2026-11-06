@@ -32,6 +32,7 @@ fn mcp_gateway_windows_dpapi_store_round_trip() {
         client_secret: Some("private-client-secret".into()),
         token_endpoint: "https://example.test/token".into(),
         revocation_endpoint: Some("https://example.test/revoke".into()),
+        oauth_resource: None,
     };
     store.save(resource, &grant).unwrap();
     // A new instance reads the persisted value, rather than an in-memory cache.
@@ -199,6 +200,20 @@ struct FixtureState {
     /// The MCP endpoint refuses its next request's bearer, as if the access token had been
     /// withdrawn early while its refresh token stays good.
     reject_next: AtomicBool,
+    /// Steady's shape: this value is served as the `resource` of origin-root metadata while the
+    /// /mcp-suffixed document 404s, an unauthenticated GET /mcp is a 200 page with no challenge,
+    /// and authorize and token expect it as their `resource`.
+    advertised_resource: Mutex<Option<String>>,
+}
+impl FixtureState {
+    /// The `resource` that authorize and token must receive.
+    fn expected_resource(&self) -> String {
+        self.advertised_resource
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| format!("{}/mcp", self.origin))
+    }
 }
 pub(crate) struct Fixture {
     state: Arc<FixtureState>,
@@ -221,6 +236,10 @@ impl Fixture {
             .route(
                 "/.well-known/oauth-protected-resource/mcp",
                 get(resource_metadata),
+            )
+            .route(
+                "/.well-known/oauth-protected-resource",
+                get(root_resource_metadata),
             )
             .route(
                 "/.well-known/oauth-authorization-server",
@@ -291,10 +310,23 @@ impl Fixture {
         panic!("sign-in fixture timed out");
     }
 }
-async fn resource_metadata(State(state): State<Arc<FixtureState>>) -> Json<Value> {
+async fn resource_metadata(State(state): State<Arc<FixtureState>>) -> Response<Body> {
+    if state.advertised_resource.lock().unwrap().is_some() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     Json(
         json!({"resource":format!("{}/mcp", state.origin), "authorization_servers":[state.origin], "scopes_supported":["tools"]}),
     )
+    .into_response()
+}
+async fn root_resource_metadata(State(state): State<Arc<FixtureState>>) -> Response<Body> {
+    let Some(resource) = state.advertised_resource.lock().unwrap().clone() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    Json(
+        json!({"resource":resource, "authorization_servers":[state.origin], "scopes_supported":["read", "write"]}),
+    )
+    .into_response()
 }
 async fn auth_metadata(State(state): State<Arc<FixtureState>>) -> Json<Value> {
     Json(
@@ -324,7 +356,7 @@ async fn authorize(
     Query(query): Query<HashMap<String, String>>,
 ) -> Redirect {
     assert_eq!(query["client_id"], "brigadier-fixture-client");
-    assert_eq!(query["resource"], format!("{}/mcp", state.origin));
+    assert_eq!(query["resource"], state.expected_resource());
     assert_eq!(query["code_challenge_method"], "S256");
     assert_eq!(query["redirect_uri"], *state.redirect.lock().unwrap());
     *state.challenge.lock().unwrap() = query["code_challenge"].clone();
@@ -348,7 +380,7 @@ async fn token(
     Form(form): Form<HashMap<String, String>>,
 ) -> Response<Body> {
     assert_eq!(form["client_id"], "brigadier-fixture-client");
-    assert_eq!(form["resource"], format!("{}/mcp", state.origin));
+    assert_eq!(form["resource"], state.expected_resource());
     if form["grant_type"] == "refresh_token" {
         let failure = *state.refresh_failure.lock().unwrap();
         // A revoked grant's refresh token is refused too.
@@ -403,12 +435,20 @@ async fn mcp(State(state): State<Arc<FixtureState>>, request: Request<Body>) -> 
         || state.revoked.load(Ordering::SeqCst)
         || state.reject_next.swap(false, Ordering::SeqCst)
     {
+        let root_document = state.advertised_resource.lock().unwrap().is_some();
+        if root_document && request.method() == axum::http::Method::GET {
+            return Response::builder()
+                .header("content-type", "text/html")
+                .body(Body::from("<html><body>Sign in</body></html>"))
+                .unwrap();
+        }
+        let suffix = if root_document { "" } else { "/mcp" };
         return Response::builder()
             .status(401)
             .header(
                 "www-authenticate",
                 format!(
-                    "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\"",
+                    "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource{suffix}\"",
                     state.origin
                 ),
             )
@@ -706,6 +746,7 @@ fn previous_account(fixture: &Fixture) -> Grant {
         client_secret: None,
         token_endpoint: format!("{}/token", fixture.state.origin),
         revocation_endpoint: Some(format!("{}/revoke", fixture.state.origin)),
+        oauth_resource: None,
     }
 }
 
@@ -1561,6 +1602,128 @@ async fn mcp_gateway_refused_refresh_signs_out() {
         assert_eq!(gateway.status(&resource).await, CatalogSignIn::SignedOut);
         assert!(store.load(&resource).unwrap().is_none(), "{refusal:?}");
     }
+}
+
+#[tokio::test]
+async fn mcp_gateway_steady_shaped_sign_in_refreshes_with_the_advertised_resource() {
+    let fixture = Fixture::new().await;
+    let origin = fixture.state.origin.clone();
+    // No trailing slash: re-serialising through Url would add one and the token server's
+    // `resource` assertion would fail.
+    *fixture.state.advertised_resource.lock().unwrap() = Some(origin.clone());
+    let resource = fixture.resource();
+    let client = reqwest::Client::new();
+    let page = client.get(&resource).send().await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(!page.headers().contains_key("www-authenticate"));
+    let refused = client.post(&resource).send().await.unwrap();
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        refused.headers()["www-authenticate"],
+        format!("Bearer resource_metadata=\"{origin}/.well-known/oauth-protected-resource\"")
+            .as_str()
+    );
+    let suffixed = format!("{origin}/.well-known/oauth-protected-resource/mcp");
+    assert_eq!(
+        client.get(&suffixed).send().await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let store = Arc::new(MemoryStore::default());
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    fixture.signed_in(&gateway).await;
+    let endpoint = gateway.test_endpoint("row", &resource).unwrap();
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+
+    expire_at(&gateway, &resource, 0).await;
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 1);
+    // The server URL stays the store key.
+    assert_eq!(
+        stored_refresh(&store, &resource).as_deref(),
+        Some("refresh-1")
+    );
+    assert!(store.load(&origin).unwrap().is_none());
+
+    // A restarted daemon renews from the saved grant alone.
+    let restarted = McpGatewayService::with_store(store.clone(), None).unwrap();
+    let endpoint = restarted.test_endpoint("row", &resource).unwrap();
+    expire_at(&restarted, &resource, 0).await;
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        stored_refresh(&store, &resource).as_deref(),
+        Some("refresh-2")
+    );
+}
+
+#[test]
+fn mcp_gateway_resource_covers_only_the_server_or_a_parent_on_its_origin() {
+    for (advertised, server, covers) in [
+        // Exact match.
+        ("https://a.test/mcp", "https://a.test/mcp", true),
+        // The origin root over a server below it, with or without the slash.
+        ("https://a.test", "https://a.test/mcp", true),
+        ("https://a.test/", "https://a.test/mcp", true),
+        // A whole-segment prefix.
+        ("https://a.test/api", "https://a.test/api/mcp", true),
+        ("https://a.test/api/", "https://a.test/api/mcp", true),
+        // A partial segment, or a path below the server's.
+        ("https://a.test/mcp", "https://a.test/mcpfoo", false),
+        ("https://a.test/api/mcp", "https://a.test/api", false),
+        // Another host, scheme or port.
+        ("https://b.test", "https://a.test/mcp", false),
+        ("https://a.test.b.test", "https://a.test/mcp", false),
+        ("http://a.test", "https://a.test/mcp", false),
+        ("https://a.test:8443", "https://a.test/mcp", false),
+        ("https://a.test:8443/mcp", "https://a.test/mcp", false),
+        // An advertised query only passes as an exact match.
+        ("https://a.test/?x=1", "https://a.test/mcp", false),
+        ("https://a.test/mcp?x=1", "https://a.test/mcp", false),
+        ("https://a.test/mcp?x=1", "https://a.test/mcp?x=1", true),
+    ] {
+        assert_eq!(
+            oauth::resource_covers(
+                &reqwest::Url::parse(advertised).unwrap(),
+                &reqwest::Url::parse(server).unwrap(),
+            ),
+            covers,
+            "{advertised} over {server}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_gateway_saved_grant_without_oauth_resource_refreshes_with_the_server_url() {
+    // The fixture's token endpoint asserts `resource` is the server URL.
+    let fixture = Fixture::new().await;
+    let resource = fixture.resource();
+    let saved: Grant = serde_json::from_value(json!({
+        "access_token":"access-0",
+        "refresh_token":"refresh-0",
+        "expires_at":0,
+        "client_id":"brigadier-fixture-client",
+        "client_secret":null,
+        "token_endpoint":format!("{}/token", fixture.state.origin),
+        "revocation_endpoint":null,
+    }))
+    .unwrap();
+    assert!(saved.oauth_resource.is_none());
+    let store = Arc::new(MemoryStore::default());
+    store.save(&resource, &saved).unwrap();
+    let gateway = McpGatewayService::with_store(store.clone(), None).unwrap();
+    let endpoint = gateway.test_endpoint("row", &resource).unwrap();
+    assert_eq!(tools_list(&endpoint).await, StatusCode::OK);
+    assert_eq!(fixture.state.refreshes.load(Ordering::SeqCst), 1);
+    let renewed = store.load(&resource).unwrap().unwrap();
+    assert_eq!(renewed.refresh_token.as_deref(), Some("refresh-1"));
+    assert!(renewed.oauth_resource.is_none());
+    assert!(
+        serde_json::to_value(&renewed)
+            .unwrap()
+            .get("oauth_resource")
+            .is_none()
+    );
 }
 
 #[tokio::test]
