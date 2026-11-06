@@ -3,7 +3,6 @@ import { persist } from "zustand/middleware";
 
 import { request } from "@/ipc/client";
 import type { CommitOutcome, SourceChange, SourceState } from "@/ipc/generated";
-import { openWorkspacePane } from "@/state/workspacePane";
 import type { WorkspaceTarget } from "@/state/workspaceCache";
 
 /** Whose changes the panel shows: a session's checkout, a project's folder, or a worktree the user made. */
@@ -134,24 +133,3 @@ export function useRowOpen(key: string, initial: boolean): [boolean, (open: bool
 
 /** The key a worker's row in its session's Source goes by. */
 export const workerRowKey = (conversationId: string, taskId: string) => `session:${conversationId}:${taskId}`;
-
-/**
- * The worker whose row each session's Source was just asked to open and bring into view (its
- * +N −N, clicked), by session.
- */
-export const useSourceScopes = create<Record<string, string>>(() => ({}));
-
-/** Asks a session's Source to open a worker's row (`taskId` null: nothing asked any more). */
-export function setSourceScope(conversationId: string, taskId: string | null): void {
-  useSourceScopes.setState((scopes) => {
-    const { [conversationId]: _shown, ...rest } = scopes;
-    return taskId ? { ...rest, [conversationId]: taskId } : rest;
-  }, true);
-}
-
-/** Opens the right sidebar's Source on a worker's changes: its +N −N, clicked. */
-export function showWorkerSource(conversationId: string, taskId: string): void {
-  useOpenRows.setState({ [workerRowKey(conversationId, taskId)]: true });
-  setSourceScope(conversationId, taskId);
-  openWorkspacePane(conversationId, "source");
-}

@@ -99,7 +99,7 @@ const read = (activity: string) => {
     tip: button.title,
   };
 };
-/** A row's actions, shown on hover in its time's place: Stop, and Show output on a web preview that is up. */
+/** A row's actions, shown on hover over its time: Stop, and Show output on a web preview that is up. */
 const action = (activity: string, label: string) =>
   row(activity)?.parentElement?.querySelector<HTMLButtonElement>(`[data-slot="summary-row-action"] button[aria-label^="${label}"]`) ?? null;
 const stop = (activity: string) => action(activity, "Stop");
@@ -110,7 +110,7 @@ const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTime
 /** Whether a row's actions show without the mouse over it or focus on it. */
 const actionsVisible = (activity: string) => {
   const place = row(activity)?.parentElement?.querySelector<HTMLElement>('[data-slot="summary-row-action"]');
-  return !!place && getComputedStyle(place).display !== "none";
+  return !!place && getComputedStyle(place).opacity !== "0";
 };
 
 /** One row in each state: a build, an app starting, the thread's page up, a paused app, an app a
@@ -306,7 +306,7 @@ async function driveApps(): Promise<Record<string, unknown>> {
   workerTasksSaid({ task: workerApp, command: "next dev" }, { task: { ...tests, id: "worker-test" }, command: "pnpm test" });
   await until(() => ids().length === 5, 5000);
   const running = ids();
-  const workerName = row("task:task-2:b7dev")?.querySelector("[data-activity-worker]")?.textContent;
+  const workerName = { shown: row("task:task-2:b7dev")?.textContent, tip: row("task:task-2:b7dev")?.getAttribute("title") };
   row("task:raw-browser")?.click();
   await frame();
   const output = sessionTabs(id).active;
@@ -364,7 +364,7 @@ async function readNames(): Promise<Record<string, unknown>> {
     await frame();
     seen[width] = Object.fromEntries(["preview-2", "long-building", "long-running"].map((activity) => [activity, measure(activity)]));
   }
-  // Hover replaces time with Stop; the full state word still fits in the narrower name space.
+  // Hover lays Stop over the time; the name and its state word stay as they were.
   const rect = row("long-building")!.getBoundingClientRect();
   await fixtureInput({ type: "pointer", x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
   await frame();
