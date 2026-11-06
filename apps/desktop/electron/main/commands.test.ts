@@ -23,7 +23,7 @@ test("every Tauri command is answered by Electron or owned by an area, and never
   for (const area of Object.keys(PENDING)) {
     let source = "";
     try {
-      source = read(`./${area.split(" ")[0]}.ts`);
+      source = read(`./${area.split(/\W/)[0]}.ts`);
     } catch { /* not started */ }
     for (const name of defined(source)) answered.add(name);
   }

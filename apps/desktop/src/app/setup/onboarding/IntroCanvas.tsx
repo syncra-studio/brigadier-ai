@@ -318,7 +318,9 @@ export function IntroCanvas({
     props.current = { start, settled, still, onUnavailable };
   }, [start, settled, still, onUnavailable]);
 
+  const letGo = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (letGo.current !== null) clearTimeout(letGo.current);
     const element = canvas.current;
     const gl = element?.getContext("webgl2", { antialias: false, premultipliedAlpha: true, alpha: true });
     const program = gl && link(gl);
@@ -400,7 +402,9 @@ export function IntroCanvas({
       // Its window-sized buffers go now, not whenever the canvas is collected (#569).
       element.width = 1;
       element.height = 1;
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      // Once no new run has come: a canvas gives back the same context for good, and StrictMode's second
+      // run in a dev build would compile on a lost one and show the browser's sad-WebGL icon.
+      letGo.current = setTimeout(() => gl.getExtension("WEBGL_lose_context")?.loseContext(), 0);
     };
   }, []);
 

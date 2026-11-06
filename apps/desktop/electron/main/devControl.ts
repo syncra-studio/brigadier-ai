@@ -21,7 +21,7 @@ type Args = Record<string, never> & {
 };
 
 type Control = {
-  createWindow: (options: { name: string; bounds?: Partial<Electron.Rectangle>; query?: string; real?: boolean }) => BrowserWindow;
+  createWindow: (options: { name: string; bounds?: Partial<Electron.Rectangle>; query?: string; real?: boolean }) => BrowserWindow | Promise<BrowserWindow>;
   windows: Map<string, BrowserWindow>;
   note: Note;
 };
@@ -54,8 +54,8 @@ export function installDevControl({ createWindow, windows, note }: Control): voi
       workArea: screen.getPrimaryDisplay().workArea,
     }),
     // Dev windows start hidden and small; openShell parks them before they ever show.
-    createWindow: ({ name, bounds, query, real }) => {
-      const window = createWindow({ name, bounds, query, real });
+    createWindow: async ({ name, bounds, query, real }) => {
+      const window = await createWindow({ name, bounds, query, real });
       return new Promise((resolve) => window.webContents.once("did-finish-load", () => resolve({ name, id: window.id, wc: window.webContents.id, media: window.getMediaSourceId() })));
     },
     // Off the screen first, shown, then the strip: at no moment is the window over the user's work.

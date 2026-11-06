@@ -15,7 +15,7 @@ export const PENDING: Record<string, readonly string[]> = {
     "computer_setup_subscribe", "computer_setup_drag", "reveal_computer_helper",
   ],
   "intro, smoke and packaging": [
-    "intro_begin", "intro_shaped", "intro_finish", "intro_release", "smoke_finish",
+    "smoke_finish",
     "app_update", "check_for_updates", "take_app_update", "restart_to_update",
   ],
 };

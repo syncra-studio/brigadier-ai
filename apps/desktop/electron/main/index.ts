@@ -10,6 +10,8 @@ import { installCommands, waitForCommands } from "./commands";
 import { folderOpened, installCoreCommands } from "./core";
 import { note } from "./events";
 import { daemonDataDir, dev, identifier, setIdentity, unfocused } from "./identity";
+import { holdForIntro, installIntroCommands } from "./intro";
+import { shouldHold } from "./introRules";
 import { native } from "./native";
 import { folderArgs } from "./paths";
 import { holdQuits, markDaemonStarted, quit } from "./quit";
@@ -37,6 +39,7 @@ const budgetTolerance = (() => {
 })();
 
 let daemonReady: Promise<void> | null = null;
+let firstLaunch = false;
 
 /** Tells the bridge whether a window is in front, which it can't ask from its own threads. */
 const front = () => native().setInFront(BrowserWindow.getAllWindows().some((window) => window.isVisible() && window.isFocused()));
@@ -59,7 +62,9 @@ function startDaemon(): Promise<void> {
     );
     markDaemonStarted();
     note("daemon-bridge-started", { dataDir: started.dataDir, firstLaunch: started.firstLaunch });
+    firstLaunch = started.firstLaunch;
     installCoreCommands({ started, smoke, budgetTolerance });
+    installIntroCommands();
     setOnVisibility((visible) => {
       native().emit(JSON.stringify({ type: "windowVisibility", visible }));
     });
@@ -78,8 +83,10 @@ function hearDaemon(ask: ShellAsk): void {
 
 async function openMain(): Promise<void> {
   await startDaemon();
-  const window = createWindow({ real: true });
-  window.once("ready-to-show", showMain);
+  const hold = shouldHold(process.platform, firstLaunch, smoke);
+  const window = createWindow({ real: true, transparent: hold });
+  if (hold) holdForIntro(window);
+  else window.once("ready-to-show", showMain);
 }
 
 app.on("second-instance", (_event, argv, cwd) => {
@@ -109,11 +116,13 @@ if (dev) {
   installDevControl({
     windows,
     note,
-    createWindow: (options) => {
+    createWindow: async (options) => {
       if (!options.real) return createWindow(options);
-      // Waits on nothing: the page's first call waits on the bridge through the commands it needs.
-      void startDaemon();
-      return createWindow(options);
+      await startDaemon();
+      const hold = shouldHold(process.platform, firstLaunch, smoke);
+      const window = createWindow({ ...options, transparent: hold });
+      if (hold) holdForIntro(window);
+      return window;
     },
   });
 }

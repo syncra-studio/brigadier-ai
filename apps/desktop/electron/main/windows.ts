@@ -13,7 +13,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const preloadPath = path.join(here, "preload.cjs");
 
 /** The window's colour once the app covers it (the Tauri build's backgroundColor). */
-const WINDOW_BACKGROUND = "#0f0f0e";
+export const WINDOW_BACKGROUND = "#0f0f0e";
 
 export const windows = new Map<string, BrowserWindow>();
 let main: BrowserWindow | null = null;
@@ -74,10 +74,10 @@ export function clearBackdrop(window: BrowserWindow): void {
   window.setBackgroundColor(WINDOW_BACKGROUND);
 }
 
-type WindowOptions = { name?: string; bounds?: Partial<Electron.Rectangle>; query?: string; real?: boolean };
+type WindowOptions = { name?: string; bounds?: Partial<Electron.Rectangle>; query?: string; real?: boolean; transparent?: boolean };
 
 /** Makes a window of the app's page. A real one reaches the daemon through the preload's native door. */
-export function createWindow({ name = "main", bounds = {}, query = "", real = !dev }: WindowOptions = {}): BrowserWindow {
+export function createWindow({ name = "main", bounds = {}, query = "", real = !dev, transparent = false }: WindowOptions = {}): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -85,10 +85,14 @@ export function createWindow({ name = "main", bounds = {}, query = "", real = !d
     minHeight: real ? 560 : 0,
     ...bounds,
     show: false,
+    // Only a first launch, whose intro shows nothing but the page's orb: a held window needs it from birth.
+    ...(transparent ? { transparent: true } : {}),
     title: dev ? "Brigadier Dev" : "Brigadier",
     backgroundColor: real && process.platform === "darwin" ? "#00000000" : WINDOW_BACKGROUND,
     titleBarStyle: process.platform === "darwin" ? "hidden" : "default",
-    trafficLightPosition: { x: 16, y: 24 },
+    // Their 14-point row centred on the 44-point title bar (tokens.css: --spacing-titlebar-toggle), level with
+    // Back. Electron's y is the distance to their top; Tauri's y: 24 was a title-bar height, not the same thing.
+    trafficLightPosition: { x: 16, y: 15 },
     ...(real && process.platform === "darwin" ? { vibrancy: "menu" as const, visualEffectState: "active" as const } : {}),
     focusable: !unfocused,
     minimizable: true,

@@ -3,6 +3,7 @@ import { app, BrowserWindow } from "electron";
 
 import { addCommands, channelId, channelSender, RawJson, type Args } from "./commands";
 import { identifier } from "./identity";
+import { isStaged } from "./intro";
 import { native, type Started } from "./native";
 import { isQuitting, pagesFlushed, quit } from "./quit";
 import { clearBackdrop, mainWindow } from "./windows";
@@ -47,7 +48,8 @@ export function installCoreCommands(facts: AppFacts): void {
     },
     startup_finished: (_args: Args, { sender }) => {
       const window = BrowserWindow.fromWebContents(sender);
-      if (window && !isQuitting()) clearBackdrop(window);
+      // A staged intro keeps the window clear until its burst has opened it.
+      if (window && !isQuitting() && !isStaged()) clearBackdrop(window);
     },
     quit_app: () => quit(mainWindow),
     pages_flushed: ({ token }: Args) => pagesFlushed(token as number),
