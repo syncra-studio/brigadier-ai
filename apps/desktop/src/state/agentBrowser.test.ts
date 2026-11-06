@@ -70,6 +70,10 @@ function fakeShell(answer: (op: Record<string, unknown>) => unknown, opening?: (
         return answer(args.op);
       case "browser_agent_capture":
         return new Uint8Array([137, 80, 78, 71]).buffer;
+      case "browser_agent_drive":
+        return null;
+      case "browser_agent_events":
+        return { lines: [], next: 0, dropped: 0 };
       case "ipc_request": {
         const sent = args.request as Extract<Request, { method: "appAnswer" }>;
         if (sent.method === "appAnswer")
@@ -129,7 +133,7 @@ test("an agent's tab opens behind the one in front, and works there without ever
   assert.equal((await answered(shell, { op: "type", tab, target: "e2", text: "mug", submit: true, guard: { declared: null, approved: null } })).result, "page");
   assert.deepEqual(await answered(shell, { op: "screenshot", tab }), { result: "shot", tab, url: "http://127.0.0.1:4000/", png: "iVBORw==" });
   assert.deepEqual(shell.scripts.map((each) => each.op.kind), ["read", "read", "click", "read", "type", "read"]);
-  assert.deepEqual(shell.scripts[4]!.op, { kind: "type", target: "e2", text: "mug", submit: true, declared: null, approved: null });
+  assert.deepEqual(shell.scripts[4]!.op, { kind: "type", label: "Check the shop", target: "e2", text: "mug", submit: true, declared: null, approved: null });
   assert.deepEqual(shell.shown, [], "the page was never put over a tab");
 
   const navigated = await answered(shell, { op: "navigate", tab, url: "http://127.0.0.1:4000/cart" });

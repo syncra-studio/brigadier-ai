@@ -80,7 +80,7 @@ const underWay = new Map<string, Set<(result: BrowserResult) => void>>();
 const moved = new Set<string>();
 
 /**
- * A delete moves tab `tab` to another profile, about to close its page. Calls under way end now, the hold goes, and
+ * A delete moves tab `tab` to another profile, about to close its page (section 4's onProfileChanged says so). Calls under way end now, the hold goes, and
  * the agent's next call hears it once if none was under way to hear it: it mustn't carry on as someone else.
  */
 export function profileChanged(tab: string): void {
@@ -93,14 +93,6 @@ export function profileChanged(tab: string): void {
   }
   for (const end of calls) end(failed(PROFILE_CHANGED));
   calls.clear();
-}
-
-// Section 4's hook, once its file is in; a plain import then. Until then this finds nothing.
-const profiles = import.meta.glob<{ onProfileChanged: (listener: (change: { tabId: string }) => void) => () => void }>("./browserProfiles.ts");
-export function startProfileChanges(): void {
-  for (const load of Object.values(profiles)) {
-    void load().then(({ onProfileChanged }) => onProfileChanged(({ tabId }) => profileChanged(tabId)));
-  }
 }
 
 /** An in-flight call the user's take-over or DevTools overtook. */
