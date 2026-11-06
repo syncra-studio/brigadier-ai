@@ -217,7 +217,7 @@ export function livePlugins(): PluginsAdapter {
     }),
     checkChanges: async () => {
       const { changes } = await request({ method: "checkPluginChanges" });
-      return { gone: changes.gone, found: changes.found.map(({ agents, ...item }) => ({ ...item, foundIn: agentNames(agents) })) };
+      return { gone: changes.gone, unread: changes.unread, found: changes.found.map(({ agents, ...item }) => ({ ...item, foundIn: agentNames(agents) })) };
     },
     applyChanges: async (choices) => { await request({ method: "applyPluginChanges", ...choices }); },
     restorePlugin: async (key) => { await request({ method: "restorePlugin", key }); },

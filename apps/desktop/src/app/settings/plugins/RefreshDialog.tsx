@@ -5,9 +5,12 @@ import { Button, Checkbox, ErrorLine } from "@/components/controls";
 import { cn } from "@/lib/utils";
 import type { PluginsAdapter } from "./adapter";
 import { PluginDialog } from "./dialogs";
-import { KIND_LABEL, shownDetail } from "./model";
+import { KIND_LABEL, listNames, shownDetail } from "./model";
 import { PluginMark } from "./parts";
 import type { PluginChanges } from "./types";
+
+/** Why nothing is reported gone just now. */
+export const unreadLine = (files: string[]) => `Couldn't read ${listNames(files)}, so nothing counts as removed for now. Fix it, then press Refresh again.`;
 
 /** A heading, the one line that says what its choices mean, then its items. */
 function Group({ title, line, children }: { title: string; line: string; children: ReactNode }) {
@@ -81,6 +84,7 @@ export function RefreshDialog({ changes, adapter, onClose, onDone }: {
           ))}
         </Group>
       )}
+      {changes.unread.length > 0 && <p data-slot="refresh-unread" className="text-warning text-xs">{unreadLine(changes.unread)}</p>}
       <ErrorLine error={action.error} />
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>Not now</Button>

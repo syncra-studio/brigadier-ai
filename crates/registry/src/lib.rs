@@ -340,6 +340,22 @@ pub struct Problem {
     pub error: String,
 }
 
+impl Problem {
+    /// A whole config file couldn't be read, rather than one entry in it: whatever it holds is
+    /// unknown.
+    pub fn is_file(&self) -> bool {
+        self.id == format!("{}:file:{}", self.source.prefix(), self.file.display())
+    }
+
+    /// The file only offers imports: nothing in it is any CLI's.
+    fn is_import_offer(&self) -> bool {
+        matches!(
+            self.source,
+            Source::Desktop | Source::CursorUser | Source::CursorProject
+        )
+    }
+}
+
 /// A session, as far as what it finds by itself goes.
 #[derive(Debug, Clone, Copy)]
 pub struct Session<'a> {

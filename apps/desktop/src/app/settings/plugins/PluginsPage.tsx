@@ -16,7 +16,7 @@ import { checked, RemoveDialog } from "./dialogs";
 import { FileDialog } from "./FileDialog";
 import { chipOf, lineOf, listed, TAB_LABEL } from "./model";
 import { MissingCard, PluginCard } from "./parts";
-import { RefreshDialog } from "./RefreshDialog";
+import { RefreshDialog, unreadLine } from "./RefreshDialog";
 import type { PluginChanges, PluginGoneView, PluginItemView, PluginKind, PluginsView } from "./types";
 
 const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use.";
@@ -61,12 +61,12 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
   const [open, setOpen] = useState<Open | null>(null);
   const [checking, setChecking] = useState(false);
   /** The last Refresh found nothing: said under the toolbar until the next one, or a dialog. */
-  const [nothingChanged, setNothingChanged] = useState(false);
+  const [nothingChanged, setNothingChanged] = useState<string | null>(null);
   const liveDialog = useRef<Open | null>(null);
   const setDialog = useCallback((dialog: Open | null) => {
     liveDialog.current = dialog;
     setOpen(dialog);
-    if (dialog) setNothingChanged(false);
+    if (dialog) setNothingChanged(null);
   }, []);
   useEffect(() => {
     // Leaving a visit invalidates its dialog even if Back restores the same selection object.
@@ -120,13 +120,13 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
     const check = adapter?.checkChanges;
     if (!check || checking) return;
     setChecking(true);
-    setNothingChanged(false);
+    setNothingChanged(null);
     void changes.run(null, place, {}, async () => {
       const found = await check();
       // Left the page meanwhile: its dialog would open over somewhere else.
       if (useApp.getState().selection !== selection) return;
       if (found.found.length || found.gone.length) setDialog({ type: "changes", changes: found });
-      else setNothingChanged(true);
+      else setNothingChanged(found.unread.length ? unreadLine(found.unread) : "Nothing changed. There are no new or removed skills or MCP servers.");
     }).finally(() => setChecking(false));
   };
   const forget = (item: PluginGoneView) => {
@@ -177,7 +177,7 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
           onFlip={flip}
           onAdd={() => setDialog({ type: "add" })}
           checking={checking}
-          nothingChanged={nothingChanged}
+          said={nothingChanged}
           onRefresh={adapter?.checkChanges ? checkChanges : null}
           onForget={forget}
         />
@@ -232,7 +232,7 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
   );
 }
 
-function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, onOpen, onFlip, onAdd, checking, nothingChanged, onRefresh, onForget }: {
+function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, onOpen, onFlip, onAdd, checking, said, onRefresh, onForget }: {
   view: PluginsView;
   tab: PluginKind;
   query: string;
@@ -245,7 +245,7 @@ function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, on
   onFlip: (item: PluginItemView, on: boolean) => void;
   onAdd: () => void;
   checking: boolean;
-  nothingChanged: boolean;
+  said: string | null;
   onRefresh: (() => void) | null;
   onForget: (item: PluginGoneView) => void;
 }) {
@@ -256,7 +256,7 @@ function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, on
   return (
     <div className="flex flex-col gap-5">
       <Toolbar tab={tab} query={query} count={count} adding={!!adapter} checking={checking} onRefresh={onRefresh} onTab={onTab} onQuery={onQuery} onAdd={onAdd} />
-      {nothingChanged && <p role="status" data-slot="nothing-changed" className="text-foreground/65 text-label">Nothing changed. There are no new or removed skills or MCP servers.</p>}
+      {said && <p role="status" data-slot="nothing-changed" className="text-foreground/65 text-label">{said}</p>}
       {loading ? (
         <p role="status" className="text-foreground/65 text-label py-6 text-center">Loading plugins…</p>
       ) : count(tab) === 0 && !view.missing?.some((item) => item.kind === tab) ? (

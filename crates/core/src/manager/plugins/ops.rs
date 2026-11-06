@@ -508,26 +508,31 @@ pub(super) static CATALOG_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new((
 impl crate::manager::SessionManager {
     /// The page and launches must read this same provenance-preserving source.
     pub fn plugin_catalog_rows(&self) -> Vec<brigadier_registry::catalog::Row> {
+        self.plugin_catalog_read().rows
+    }
+
+    /// The rows, and which config files they couldn't be read from.
+    pub(super) fn plugin_catalog_read(&self) -> brigadier_registry::catalog::RowsRead {
         let projects: Vec<_> = self
             .plugin_projects()
             .into_iter()
             .map(|(_, _, path)| path)
             .collect();
-        let rows =
-            Catalog::read_rows_with_library(self.registry().roots(), &projects, &self.data_dir);
-        self.cache_plugin_sign_in_targets(&rows);
-        rows
+        let read = Catalog::read_rows_checked(self.registry().roots(), &projects, &self.data_dir);
+        self.cache_plugin_sign_in_targets(&read.rows);
+        read
     }
 
     pub fn plugin_catalog(&self) -> crate::Result<super::CatalogView> {
-        let rows = self.plugin_catalog_rows();
-        let known =
-            super::known::Known::read(&self.data_dir, &rows).map_err(crate::Error::Invalid)?;
+        let read = self.plugin_catalog_read();
+        let rows = &read.rows;
+        let known = super::known::Known::read(&self.data_dir, rows, read.user_setup_read())
+            .map_err(crate::Error::Invalid)?;
         let mut choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
         known.apply(&rows, &mut choices);
         let mut view = super::CatalogView::new(&rows, &choices);
-        known.fill_view(&rows, &choices, &mut view);
+        known.fill_view(&read, &choices, &mut view);
         let projects: Vec<_> = self
             .plugin_projects()
             .into_iter()
@@ -603,22 +608,23 @@ impl crate::manager::SessionManager {
         scope: Option<super::choices::Scope>,
     ) -> crate::Result<()> {
         let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-        let rows = self.plugin_catalog_rows();
+        let read = self.plugin_catalog_read();
+        let rows = &read.rows;
         let row = rows
             .iter()
             .find(|row| row.id == row_id)
             .ok_or_else(|| crate::Error::Invalid(format!("No plugin {row_id}")))?;
-        let mut known = super::known::Known::read_or_start(&self.data_dir, || rows.clone())
+        let mut known = super::known::Known::read_or_start(&self.data_dir, || read.clone())
             .map_err(crate::Error::Invalid)?;
         let before = known.clone();
         let mut choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-        super::known::settle(&rows, row, &mut choices);
+        known.settle(rows, row, &mut choices);
         // A new item is off until now: changing where it's on doesn't turn it on as well.
-        let mut read = choices.clone();
-        known.apply(&rows, &mut read);
-        let mut choice = read.choice(row);
-        known.remember(row);
+        let mut shown = choices.clone();
+        known.apply(rows, &mut shown);
+        let mut choice = shown.choice(row);
+        known.remember(rows, row);
         if let Some(on) = on {
             choice.on = on;
         }
@@ -726,7 +732,7 @@ impl crate::manager::SessionManager {
                     )));
                 }
                 if keys.contains(&format!("lib:{}", row.name)) {
-                    known.remember(row);
+                    known.remember(&rows, row);
                     choices.0.insert(
                         row.id.clone(),
                         super::choices::Choice {
@@ -899,7 +905,8 @@ impl crate::manager::SessionManager {
         let name = if let Some(name) = key.strip_prefix("lib:") {
             name.to_owned()
         } else {
-            let rows = self.plugin_catalog_rows();
+            let read = self.plugin_catalog_read();
+            let rows = &read.rows;
             let row = rows
                 .iter()
                 .find(|row| row.id == key)
@@ -910,14 +917,14 @@ impl crate::manager::SessionManager {
                 .any(|definition| definition.provenance.file.starts_with(&root))
             {
                 let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-                let mut known = super::known::Known::read_or_start(&self.data_dir, || rows.clone())
+                let mut known = super::known::Known::read_or_start(&self.data_dir, || read.clone())
                     .map_err(crate::Error::Invalid)?;
                 let before = known.clone();
                 let mut choices =
                     super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-                super::known::settle(&rows, row, &mut choices);
+                known.settle(rows, row, &mut choices);
                 choices.hide(row);
-                known.remember(row);
+                known.remember(rows, row);
                 return choices
                     .save(&self.data_dir)
                     .and_then(|()| known.save_if_changed(&self.data_dir, &before))
@@ -948,7 +955,7 @@ impl crate::manager::SessionManager {
             let read = || super::known::read_rows(&registry, &known_projects, &data_dir);
             let mut known = super::known::Known::read_or_start(&data_dir, read)
                 .map_err(crate::Error::Invalid)?;
-            let removed = super::known::library_items(&read(), &root, &name);
+            let removed = super::known::library_items(&read().rows, &root, &name);
             remove_with_secrets(&root, &name, &store).map_err(crate::Error::Invalid)?;
             let (known_before, saved) = (
                 known.clone(),

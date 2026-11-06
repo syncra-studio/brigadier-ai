@@ -58,7 +58,12 @@ export type PluginGoneView = { key: string; kind: PluginKind; name: string };
 /** One the user kept out of Brigadier; its files stay, and Add can bring it back. */
 export type PluginHiddenView = { key: string; kind: PluginKind; name: string; detail: string };
 /** What a Refresh found. */
-export type PluginChanges = { found: PluginFoundView[]; gone: PluginGoneView[] };
+export type PluginChanges = {
+  found: PluginFoundView[];
+  gone: PluginGoneView[];
+  /** Settings files that couldn't be read: nothing counts as gone while there are any. */
+  unread: string[];
+};
 /** What the user chose for each: every key of a `PluginChanges` is in one of these. */
 export type PluginChangeChoices = { add: string[]; decline: string[]; remove: string[]; keep: string[] };
 export type PluginsView = {

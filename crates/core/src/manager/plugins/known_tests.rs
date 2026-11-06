@@ -507,3 +507,302 @@ async fn provider_controlled_plugins_are_not_new_or_suppressed_and_user_updates_
     }
     flow.stop().await;
 }
+
+/// One server name with a different definition in Claude and in Codex.
+fn two_clis_one_name(flow: &Flow, name: &str, version: &str) {
+    let roots = flow.manager.registry().roots().clone();
+    write(
+        &roots.claude_json,
+        &format!(r#"{{"mcpServers":{{"{name}":{{"command":"/app/claude-{version}"}}}}}}"#),
+    );
+    write(
+        &roots.codex_home.join("config.toml"),
+        &format!("[mcp_servers.{name}]\ncommand='/app/codex-{version}'\n"),
+    );
+}
+
+fn key_of(found: &PluginChanges, agent: ProviderKind) -> String {
+    found
+        .found
+        .iter()
+        .find(|item| item.agents == [agent])
+        .unwrap()
+        .key
+        .clone()
+}
+
+async fn resolved_for(flow: &Flow, agent: ProviderKind) -> super::super::resolve::Resolved {
+    flow.manager
+        .resolve_plugins(
+            &flow.manager.runtime.launch_account(agent, None),
+            Some(&flow.repo),
+            &flow.repo,
+            true,
+            super::super::resolve::Role::Thread,
+        )
+        .await
+        .unwrap()
+}
+
+/// An accepted item goes to every agent: each gets `name` as Codex defines it, never the
+/// declined definition Claude has.
+async fn only_codex_launches(flow: &Flow, name: &str) {
+    for agent in [ProviderKind::Claude, ProviderKind::Codex] {
+        let resolved = resolved_for(flow, agent).await;
+        let server = resolved
+            .servers
+            .iter()
+            .find(|server| server.name == name)
+            .unwrap();
+        let shown = format!("{server:?}");
+        assert!(shown.contains("/app/codex-"), "{agent:?}: {shown}");
+        assert!(!shown.contains("/app/claude-"), "{agent:?}: {shown}");
+    }
+}
+
+#[tokio::test]
+async fn a_declined_server_stays_out_after_an_edit_when_another_cli_has_its_name() {
+    let flow = fixture("known-two-clis").await;
+    flow.manager.plugin_catalog().unwrap();
+    two_clis_one_name(&flow, "dup", "one");
+    let found = changes(&flow).await;
+    let (claude, codex) = (
+        key_of(&found, ProviderKind::Claude),
+        key_of(&found, ProviderKind::Codex),
+    );
+    apply(&flow, &[&codex], &[&claude], &[], &[]).await;
+    only_codex_launches(&flow, "dup").await;
+
+    two_clis_one_name(&flow, "dup", "two");
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    let view = flow.manager.plugin_catalog().unwrap();
+    assert_eq!(view.hidden.as_ref().unwrap().len(), 1);
+    let shown: Vec<_> = view.rows.iter().filter(|row| row.name == "dup").collect();
+    assert_eq!(shown.len(), 1);
+    assert!(shown[0].choice.on, "the accepted one isn't hidden");
+    only_codex_launches(&flow, "dup").await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn an_explicit_on_in_one_cli_does_not_turn_on_what_another_declined() {
+    let flow = fixture("known-two-clis-explicit").await;
+    flow.manager.plugin_catalog().unwrap();
+    two_clis_one_name(&flow, "dup", "one");
+    let found = changes(&flow).await;
+    let (claude, codex) = (
+        key_of(&found, ProviderKind::Claude),
+        key_of(&found, ProviderKind::Codex),
+    );
+    apply(&flow, &[], &[&claude], &[], &[]).await;
+    flow.manager.set_plugin_choice(&codex, true).unwrap();
+    two_clis_one_name(&flow, "dup", "two");
+
+    only_codex_launches(&flow, "dup").await;
+    assert_eq!(
+        flow.manager.plugin_catalog().unwrap().hidden.unwrap().len(),
+        1
+    );
+    // Saving a change to one doesn't take the other's answer with it.
+    let edited = flow
+        .manager
+        .plugin_catalog()
+        .unwrap()
+        .rows
+        .iter()
+        .find(|row| row.name == "dup")
+        .unwrap()
+        .id
+        .clone();
+    flow.manager.set_plugin_choice(&edited, true).unwrap();
+    only_codex_launches(&flow, "dup").await;
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_name_arriving_from_another_cli_is_new_even_when_one_was_declined() {
+    let flow = fixture("known-new-source").await;
+    flow.manager.plugin_catalog().unwrap();
+    let roots = flow.manager.registry().roots().clone();
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"dup":{"command":"/app/claude"}}}"#,
+    );
+    let found = changes(&flow).await;
+    apply(&flow, &[], &[&found.found[0].key], &[], &[]).await;
+    write(
+        &roots.codex_home.join("config.toml"),
+        "[mcp_servers.dup]\ncommand='/app/codex'\n",
+    );
+    let found = changes(&flow).await;
+    assert_eq!(found.found[0].agents, [ProviderKind::Codex]);
+    assert_eq!(row_on(&flow, "dup"), Some(false));
+    let codex = resolved_for(&flow, ProviderKind::Codex).await;
+    assert!(codex.servers.iter().all(|server| server.name != "dup"));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn an_entry_saved_without_a_source_is_asked_about_after_an_edit_not_turned_on() {
+    let flow = fixture("known-old-entry").await;
+    claude_skill(&flow, "old-accepted", "one");
+    claude_skill(&flow, "old-declined", "one");
+    let rows = flow.manager.plugin_catalog_rows();
+    let id = |name: &str| rows.iter().find(|row| row.name == name).unwrap().id.clone();
+    let mut items = serde_json::Map::new();
+    for name in ["old-accepted", "old-declined"] {
+        items.insert(id(name), serde_json::json!({"kind":"skill","name":name}));
+    }
+    write(
+        &flow.manager.data_dir.join(FILE),
+        &serde_json::json!({ "items": items }).to_string(),
+    );
+    let mut saved = Choices::default();
+    saved.0.insert(
+        id("old-declined"),
+        Choice {
+            on: true,
+            scope: Scope::Global(super::super::choices::Global::Global),
+            removed: Some(true),
+        },
+    );
+    saved.save(&flow.manager.data_dir).unwrap();
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+
+    claude_skill(&flow, "old-accepted", "two");
+    claude_skill(&flow, "old-declined", "two");
+    let found = changes(&flow).await;
+    assert_eq!(names(&found).0, ["old-accepted", "old-declined"]);
+    assert_eq!(row_on(&flow, "old-accepted"), Some(false));
+    assert_eq!(row_on(&flow, "old-declined"), Some(false));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn earlier_versions_that_disagree_leave_an_item_off_and_asked_about() {
+    let flow = fixture("known-disagree").await;
+    claude_skill(&flow, "torn", "now");
+    flow.manager.plugin_catalog().unwrap();
+    let origin = serde_json::json!({"agent":"claude","plugin":null,"project":null});
+    write(
+        &flow.manager.data_dir.join(FILE),
+        &serde_json::json!({"items":{
+            "skill:torn:a": {"kind":"skill","name":"torn","origins":[origin]},
+            "skill:torn:b": {"kind":"skill","name":"torn","origins":[origin]},
+        }})
+        .to_string(),
+    );
+    let mut saved = Choices::default();
+    saved.0.insert(
+        "skill:torn:a".into(),
+        Choice {
+            on: true,
+            scope: Scope::Global(super::super::choices::Global::Global),
+            removed: Some(true),
+        },
+    );
+    saved.save(&flow.manager.data_dir).unwrap();
+    assert_eq!(row_on(&flow, "torn"), Some(false));
+    assert_eq!(names(&changes(&flow).await).0, ["torn"]);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_config_takes_no_first_list_until_it_is_repaired() {
+    let flow = fixture("known-first-partial").await;
+    let roots = flow.manager.registry().roots().clone();
+    claude_skill(&flow, "beside", "one");
+    write(&roots.claude_json, r#"{"mcpServers":{"preexisting":{"comm"#);
+    assert_eq!(row_on(&flow, "beside"), Some(true));
+    let id = flow.manager.plugin_catalog_rows()[0].id.clone();
+    flow.manager.set_plugin_choice(&id, true).unwrap();
+    let during = changes(&flow).await;
+    assert!(during.found.is_empty() && during.gone.is_empty());
+    assert_eq!(during.unread, [roots.claude_json.display().to_string()]);
+    resolved_for(&flow, ProviderKind::Claude).await;
+    assert!(!flow.manager.data_dir.join(FILE).exists());
+
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"preexisting":{"command":"/app/here"}}}"#,
+    );
+    assert_eq!(row_on(&flow, "preexisting"), Some(true));
+    assert!(flow.manager.data_dir.join(FILE).exists());
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_half_written_config_reports_nothing_gone() {
+    let flow = fixture("known-half-written").await;
+    let roots = flow.manager.registry().roots().clone();
+    let whole = r#"{"mcpServers":{"baseline-server":{"command":"/app/here"}}}"#;
+    write(&roots.claude_json, whole);
+    flow.manager.plugin_catalog().unwrap();
+
+    write(&roots.claude_json, &whole[..20]);
+    let during = changes(&flow).await;
+    assert!(during.gone.is_empty());
+    assert_eq!(during.unread, [roots.claude_json.display().to_string()]);
+    apply(&flow, &[], &[], &["server:baseline-server"], &[]).await;
+
+    write(&roots.claude_json, whole);
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    assert_eq!(row_on(&flow, "baseline-server"), Some(true));
+
+    // Once it reads again, what's really left is gone.
+    write(&roots.claude_json, "{}");
+    assert_eq!(names(&changes(&flow).await).1, ["baseline-server"]);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_half_written_plugin_list_reports_nothing_gone() {
+    let flow = fixture("known-half-plugins").await;
+    let roots = flow.manager.registry().roots().clone();
+    let plugin = flow.repo.join("../team-plugin");
+    write(
+        &plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name":"team"}"#,
+    );
+    write(
+        &plugin.join("skills/team-skill/SKILL.md"),
+        &skill_text("team-skill", "one"),
+    );
+    let list = roots.claude_dir.join("plugins/installed_plugins.json");
+    write(
+        &list,
+        &serde_json::json!({"plugins":{"team@test":[{"scope":"user","installPath":plugin}]}})
+            .to_string(),
+    );
+    flow.manager.plugin_catalog().unwrap();
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    write(&list, r#"{"plugins":{"team@te"#);
+    let during = changes(&flow).await;
+    assert!(during.gone.is_empty());
+    assert_eq!(during.unread, [list.display().to_string()]);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_server_entry_that_stopped_parsing_is_not_gone() {
+    let flow = fixture("known-broken-entry").await;
+    let roots = flow.manager.registry().roots().clone();
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"typo":{"command":"/app/here"}}}"#,
+    );
+    flow.manager.plugin_catalog().unwrap();
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"typo":{"type":"websocket","url":"wss://typo.test"}}}"#,
+    );
+    assert!(
+        flow.manager
+            .plugin_catalog_rows()
+            .iter()
+            .all(|row| row.name != "typo")
+    );
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    flow.stop().await;
+}

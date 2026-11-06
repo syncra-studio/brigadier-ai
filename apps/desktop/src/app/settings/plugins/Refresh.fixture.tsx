@@ -20,6 +20,7 @@ let changes: PluginChanges = {
     { key: "changelog", kind: "skill", name: "changelog-writer", detail: "/home/.codex/skills/changelog-writer", agents: ["codex"] },
   ],
   gone: [{ key: "skill:old-deploy", kind: "skill", name: "old-deploy" }, { key: "server:notion", kind: "server", name: "notion" }],
+  unread: [],
 };
 let missing: CatalogView["missing"];
 let hidden: CatalogView["hidden"];
@@ -33,7 +34,7 @@ mockIPC((_command, payload) => {
     for (const item of changes.found) if (request.add.includes(item.key)) rows = [...rows, row(item.key, item.kind, item.name, item.detail)];
     hidden = changes.found.filter((item) => request.decline.includes(item.key)).map(({ key, kind, name, detail }) => ({ key, kind, name, detail }));
     missing = [...(missing ?? []).filter((item) => !request.remove.includes(item.key)), ...changes.gone.filter((item) => request.keep.includes(item.key))];
-    changes = { found: [], gone: [] };
+    changes = { found: [], gone: [], unread: [] };
     return { method: request.method };
   }
   if (request.method === "restorePlugin") {
@@ -84,6 +85,10 @@ async function run() {
   click("Refresh");
   await wait(() => !!document.querySelector('[data-slot="nothing-changed"]'));
   const nothing = text('[data-slot="nothing-changed"]');
+  changes = { found: [], gone: [], unread: ["/home/.claude.json"] };
+  click("Refresh");
+  await wait(() => text('[data-slot="nothing-changed"]').includes("Couldn't read"));
+  const unread = text('[data-slot="nothing-changed"]');
   click("Add");
   await wait(() => !!named("Bring back…"));
   click("Bring back…");
@@ -91,7 +96,7 @@ async function run() {
   click("Bring back changelog-writer");
   await wait(() => rows.some((entry) => entry.id === "changelog") && !named("Bring back changelog-writer"));
   disconnect();
-  return { askedOnOpen, prompt, afterNotNow, missingCard, nothing, requests };
+  return { askedOnOpen, prompt, afterNotNow, missingCard, nothing, unread, requests };
 }
 void run().then((result) => { document.getElementById("result")!.textContent = JSON.stringify(result); }, (error: unknown) => {
   disconnect(); document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) });

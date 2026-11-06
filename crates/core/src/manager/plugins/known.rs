@@ -2,13 +2,16 @@
 //! off until the user chooses, and Refresh is the only thing that asks. This holds no settings
 //! (`plugins.json` does, and an accepted item saves none, so its derived scope stays derived).
 //!
-//! A row's id has a hash of its content, so an edit or an update changes it: an item here is
-//! its kind and name, and saved settings follow it to its new id.
+//! A row's id has a hash of its content, so an edit or an update changes it. Saved settings
+//! follow a definition to its new id by kind, name and where it comes from (several CLIs can
+//! have different definitions of one name, each with its own answer). When that's unclear the
+//! item counts as new: off and asked, so nothing declined can come back on by itself.
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use brigadier_providers::ProviderKind;
 use brigadier_registry::Catalog;
-use brigadier_registry::catalog::{Content, Kind, Row};
+use brigadier_registry::catalog::{Content, Kind, Row, RowsRead};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -27,7 +30,7 @@ pub struct PluginFound {
     pub name: String,
     /// Its command, address or folder; never a value.
     pub detail: String,
-    pub agents: Vec<brigadier_providers::ProviderKind>,
+    pub agents: Vec<ProviderKind>,
 }
 
 /// An item whose files have left every CLI: only its name is left.
@@ -55,6 +58,17 @@ pub struct PluginHidden {
 pub struct PluginChanges {
     pub found: Vec<PluginFound>,
     pub gone: Vec<PluginGone>,
+    /// Config files that couldn't be read: while there are any, nothing is reported gone.
+    pub unread: Vec<String>,
+}
+
+/// Where a definition comes from: what still identifies it once its content, and so its row's
+/// id, has changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Origin {
+    agent: ProviderKind,
+    plugin: Option<String>,
+    project: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,11 +78,27 @@ struct Item {
     /// The user chose Keep when its files went: it's listed as missing, and not asked again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     kept: bool,
+    /// Empty in a list saved before these were kept: such an entry matches only its own id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    origins: Vec<Origin>,
+    /// Here only so its settings can follow it (a project's own item): Refresh doesn't ask.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    exempt: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(super) struct Known {
     items: BTreeMap<String, Item>,
+    /// Stands in while a user config can't be read: never saved, so the first list is complete.
+    #[serde(skip)]
+    provisional: bool,
+}
+
+/// What's already been decided about a row with no saved choice of its own.
+enum Past {
+    Chosen(Choice),
+    Accepted,
+    Unknown,
 }
 
 fn kind_of(row: &Row) -> PluginKind {
@@ -117,19 +147,62 @@ fn in_a_cli(rows: &[Row], kind: PluginKind, name: &str) -> bool {
     })
 }
 
-/// The saved settings of an earlier version of `row`: an id that's no longer read.
-fn earlier_choice(rows: &[Row], row: &Row, choices: &Choices) -> Option<Choice> {
-    choices
-        .0
+/// Where `row`'s definitions come from. Old sharing mirrors don't count if it has originals, as
+/// in [`Choice::default_for`].
+fn origins(row: &Row) -> Vec<Origin> {
+    let mirrored = |origin: &brigadier_registry::catalog::Provenance| {
+        origin
+            .plugin
+            .as_deref()
+            .is_some_and(|id| id.ends_with("@brigadier"))
+    };
+    let original = row
+        .definitions
         .iter()
-        .find(|(id, _)| is_earlier(id, rows, row))
-        .map(|(_, choice)| choice.clone())
+        .any(|definition| !mirrored(&definition.provenance));
+    let mut found: Vec<Origin> = Vec::new();
+    for origin in row
+        .definitions
+        .iter()
+        .map(|definition| &definition.provenance)
+    {
+        let Some(agent) = origin.agent else { continue };
+        if original && mirrored(origin) {
+            continue;
+        }
+        let origin = Origin {
+            agent,
+            plugin: origin.plugin.clone(),
+            project: origin.project.clone(),
+        };
+        if !found.contains(&origin) {
+            found.push(origin);
+        }
+    }
+    found
 }
 
-fn is_earlier(id: &str, rows: &[Row], row: &Row) -> bool {
-    id != row.id
-        && same_item(id, kind_of(row), &row.name)
-        && !rows.iter().any(|other| other.id == id)
+/// Whether the row with id `id` still has a definition from `origin`.
+fn still_holds(rows: &[Row], id: &str, origin: &Origin) -> bool {
+    rows.iter()
+        .find(|row| row.id == id)
+        .is_some_and(|row| origins(row).contains(origin))
+}
+
+/// For an item Refresh never asks about, with no history of its own: a same-named saved "no"
+/// whose row has left still holds, as there's no prompt to answer. Hidden wins over off.
+fn fallback_choice(rows: &[Row], row: &Row, choices: &Choices) -> Option<(String, Choice)> {
+    let earlier = || {
+        choices.0.iter().filter(|(id, _)| {
+            **id != row.id
+                && same_item(id, kind_of(row), &row.name)
+                && !rows.iter().any(|other| other.id == **id)
+        })
+    };
+    earlier()
+        .find(|(_, choice)| choice.removed == Some(true))
+        .or_else(|| earlier().find(|(_, choice)| !choice.on))
+        .map(|(id, choice)| (id.clone(), choice.clone()))
 }
 
 /// Its command, address or folder, as the page shows it.
@@ -161,6 +234,9 @@ impl Known {
     }
 
     fn save(&self, data_dir: &Path) -> Result<(), String> {
+        if self.provisional {
+            return Ok(());
+        }
         let bytes = serde_json::to_vec_pretty(self).map_err(|error| error.to_string())?;
         std::fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
         crate::manager::session_dir::write_atomic(&data_dir.join(FILE), &bytes)
@@ -171,26 +247,37 @@ impl Known {
     /// accepted, so nobody starts with a giant prompt. The caller holds `CATALOG_WRITES`.
     pub(super) fn read_or_start(
         data_dir: &Path,
-        rows: impl FnOnce() -> Vec<Row>,
+        read: impl FnOnce() -> RowsRead,
     ) -> Result<Self, String> {
         if let Some(known) = Self::load(data_dir)? {
             return Ok(known);
         }
-        let mut known = Self::default();
-        for row in rows() {
-            known.remember(&row);
+        let read = read();
+        Self::start(data_dir, &read.rows, read.user_setup_read())
+    }
+
+    fn start(data_dir: &Path, rows: &[Row], complete: bool) -> Result<Self, String> {
+        let mut known = Self {
+            provisional: !complete,
+            ..Self::default()
+        };
+        for row in rows.iter().filter(|row| counted(row)) {
+            known.remember(rows, row);
         }
         known.save(data_dir)?;
         Ok(known)
     }
 
-    /// `read_or_start`, for a caller that doesn't hold the lock.
-    pub(super) fn read(data_dir: &Path, rows: &[Row]) -> Result<Self, String> {
+    /// `read_or_start`, for a caller that doesn't hold the lock and has read the rows.
+    pub(super) fn read(data_dir: &Path, rows: &[Row], complete: bool) -> Result<Self, String> {
         if let Some(known) = Self::load(data_dir)? {
             return Ok(known);
         }
         let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-        Self::read_or_start(data_dir, || rows.to_vec())
+        if let Some(known) = Self::load(data_dir)? {
+            return Ok(known);
+        }
+        Self::start(data_dir, rows, complete)
     }
 
     pub(super) fn save_if_changed(&self, data_dir: &Path, before: &Self) -> Result<(), String> {
@@ -200,26 +287,30 @@ impl Known {
         self.save(data_dir)
     }
 
-    /// The user has chosen about `row`, or it was there from the start.
-    pub(super) fn remember(&mut self, row: &Row) {
-        if counted(row) {
-            let kept = self.is_kept(kind_of(row), &row.name);
-            self.items.insert(
-                row.id.clone(),
-                Item {
-                    kind: kind_of(row),
-                    name: row.name.clone(),
-                    kept,
-                },
-            );
-        }
-    }
-
-    fn has(&self, row: &Row) -> bool {
-        let kind = kind_of(row);
-        self.items
-            .values()
-            .any(|item| item.kind == kind && item.name == row.name)
+    /// The user has chosen about `row`, or it was there from the start. It takes over the
+    /// origins of the earlier versions of it; `rows` tells those from what's still there.
+    pub(super) fn remember(&mut self, rows: &[Row], row: &Row) {
+        let (kind, mine) = (kind_of(row), origins(row));
+        let kept = self.is_kept(kind, &row.name);
+        self.items.retain(|id, item| {
+            if *id == row.id || item.kind != kind || item.name != row.name {
+                return true;
+            }
+            let had = !item.origins.is_empty();
+            item.origins
+                .retain(|origin| !mine.contains(origin) || still_holds(rows, id, origin));
+            !had || !item.origins.is_empty()
+        });
+        self.items.insert(
+            row.id.clone(),
+            Item {
+                kind,
+                name: row.name.clone(),
+                kept,
+                origins: mine,
+                exempt: !counted(row),
+            },
+        );
     }
 
     fn is_kept(&self, kind: PluginKind, name: &str) -> bool {
@@ -228,12 +319,47 @@ impl Known {
             .any(|item| item.kind == kind && item.name == name && item.kept)
     }
 
+    /// The ids that were `row`, from where it comes from now, and aren't any more.
+    fn earlier_ids(&self, rows: &[Row], row: &Row) -> Vec<&String> {
+        let (kind, mine) = (kind_of(row), origins(row));
+        self.items
+            .iter()
+            .filter(|(id, item)| {
+                **id != row.id
+                    && item.kind == kind
+                    && item.name == row.name
+                    && item
+                        .origins
+                        .iter()
+                        .any(|origin| mine.contains(origin) && !still_holds(rows, id, origin))
+            })
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// If its earlier versions don't all say the same, nothing is known about it.
+    fn past(&self, rows: &[Row], row: &Row, choices: &Choices) -> Past {
+        if self.items.contains_key(&row.id) {
+            return Past::Accepted;
+        }
+        let answers: Vec<_> = self
+            .earlier_ids(rows, row)
+            .into_iter()
+            .map(|id| choices.0.get(id))
+            .collect();
+        match answers.first() {
+            Some(first) if answers.iter().all(|answer| answer == first) => {
+                first.map_or(Past::Accepted, |choice| Past::Chosen(choice.clone()))
+            }
+            _ => Past::Unknown,
+        }
+    }
+
     /// Nobody has chosen about it: off, in launches and on the page, until someone does.
     fn is_new(&self, rows: &[Row], row: &Row, choices: &Choices) -> bool {
         counted(row)
             && !choices.0.contains_key(&row.id)
-            && earlier_choice(rows, row, choices).is_none()
-            && !self.has(row)
+            && matches!(self.past(rows, row, choices), Past::Unknown)
     }
 
     /// `choices` as launches and the page read them, never saved: each new item is off, and an
@@ -244,32 +370,61 @@ impl Known {
             if saved.0.contains_key(&row.id) {
                 continue;
             }
-            // Existing settings follow an item even when it now exists only in a project.
-            // Being exempt from Refresh must not undo a saved off/hidden choice.
-            if let Some(earlier) = earlier_choice(rows, row, &saved) {
-                choices.0.insert(row.id.clone(), earlier);
-            } else if counted(row) && !self.has(row) {
-                choices.0.insert(
-                    row.id.clone(),
-                    Choice {
-                        on: false,
-                        ..Choice::default_for(row)
-                    },
-                );
+            let choice = match self.past(rows, row, &saved) {
+                Past::Accepted => None,
+                Past::Chosen(choice) => Some(choice),
+                Past::Unknown if counted(row) => Some(Choice {
+                    on: false,
+                    ..Choice::default_for(row)
+                }),
+                Past::Unknown => fallback_choice(rows, row, &saved).map(|(_, choice)| choice),
+            };
+            if let Some(choice) = choice {
+                choices.0.insert(row.id.clone(), choice);
             }
         }
     }
 
+    /// Saved settings move to `row`'s id before anything saved is changed, and those of its
+    /// earlier versions go. Another CLI's definition of the name keeps its own.
+    pub(super) fn settle(&self, rows: &[Row], row: &Row, choices: &mut Choices) {
+        let saved = choices.clone();
+        if !saved.0.contains_key(&row.id) {
+            match self.past(rows, row, &saved) {
+                Past::Chosen(choice) => {
+                    choices.0.insert(row.id.clone(), choice);
+                }
+                Past::Unknown if !counted(row) => {
+                    if let Some((id, choice)) = fallback_choice(rows, row, &saved) {
+                        choices.0.remove(&id);
+                        choices.0.insert(row.id.clone(), choice);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for id in self.earlier_ids(rows, row) {
+            choices.0.remove(id);
+        }
+    }
+
     /// Everything in the list whose files have left every CLI, by kind and name; a hidden one
-    /// stays hidden without being asked about.
-    fn left(&self, rows: &[Row], choices: &Choices) -> Vec<(PluginKind, &str, bool)> {
+    /// stays hidden without being asked about. Nothing, while a config can't be read: what it
+    /// holds is unknown, and a broken server entry is still there.
+    fn left(&self, read: &RowsRead, choices: &Choices) -> Vec<(PluginKind, &str, bool)> {
+        if !read.unread_files().is_empty() {
+            return Vec::new();
+        }
         let mut left: Vec<(PluginKind, &str, bool)> = Vec::new();
-        for item in self.items.values() {
-            let hidden = choices.0.iter().any(|(id, choice)| {
-                choice.removed == Some(true) && same_item(id, item.kind, &item.name)
-            });
-            if !hidden
-                && !in_a_cli(rows, item.kind, &item.name)
+        for (id, item) in &self.items {
+            let hidden = choices
+                .0
+                .get(id)
+                .is_some_and(|choice| choice.removed == Some(true));
+            if !item.exempt
+                && !hidden
+                && !in_a_cli(&read.rows, item.kind, &item.name)
+                && !(item.kind == PluginKind::Server && read.has_broken_server(&item.name))
                 && !left
                     .iter()
                     .any(|(kind, name, _)| *kind == item.kind && *name == item.name)
@@ -281,8 +436,8 @@ impl Known {
         left
     }
 
-    fn gone(&self, rows: &[Row], choices: &Choices, kept: bool) -> Vec<PluginGone> {
-        self.left(rows, choices)
+    fn gone(&self, read: &RowsRead, choices: &Choices, kept: bool) -> Vec<PluginGone> {
+        self.left(read, choices)
             .into_iter()
             .filter(|(_, _, is_kept)| *is_kept == kept)
             .map(|(kind, name, _)| PluginGone {
@@ -293,7 +448,8 @@ impl Known {
             .collect()
     }
 
-    fn changes(&self, rows: &[Row], choices: &Choices) -> PluginChanges {
+    fn changes(&self, read: &RowsRead, choices: &Choices) -> PluginChanges {
+        let rows = &read.rows;
         PluginChanges {
             found: rows
                 .iter()
@@ -318,14 +474,25 @@ impl Known {
                     }
                 })
                 .collect(),
-            gone: self.gone(rows, choices, false),
+            gone: self.gone(read, choices, false),
+            unread: read
+                .unread_files()
+                .into_iter()
+                .map(|file| file.display().to_string())
+                .collect(),
         }
     }
 
     /// The page's lists beside its rows: what's missing and what's hidden.
-    pub(super) fn fill_view(&self, rows: &[Row], choices: &Choices, view: &mut super::CatalogView) {
-        let missing = self.gone(rows, choices, true);
-        let hidden: Vec<_> = rows
+    pub(super) fn fill_view(
+        &self,
+        read: &RowsRead,
+        choices: &Choices,
+        view: &mut super::CatalogView,
+    ) {
+        let missing = self.gone(read, choices, true);
+        let hidden: Vec<_> = read
+            .rows
             .iter()
             .filter(|row| {
                 choices.is_removed(&row.id)
@@ -363,25 +530,18 @@ impl Known {
     pub(super) fn forget_removed(
         &mut self,
         removed: &[(PluginKind, String)],
-        rows: &[Row],
+        read: &RowsRead,
         choices: &mut Choices,
     ) {
+        if !read.unread_files().is_empty() {
+            return;
+        }
         for (kind, name) in removed {
-            if !in_a_cli(rows, *kind, name) {
+            if !in_a_cli(&read.rows, *kind, name) {
                 self.forget(*kind, name, choices);
             }
         }
     }
-}
-
-/// Saved settings move to `row`'s id before anything saved is changed, and earlier ids go.
-pub(super) fn settle(rows: &[Row], row: &Row, choices: &mut Choices) {
-    if !choices.0.contains_key(&row.id)
-        && let Some(earlier) = earlier_choice(rows, row, choices)
-    {
-        choices.0.insert(row.id.clone(), earlier);
-    }
-    choices.0.retain(|id, _| !is_earlier(id, rows, row));
 }
 
 /// Everything the library's item `name` is read from, before it goes.
@@ -408,9 +568,9 @@ pub(super) fn read_rows(
     registry: &brigadier_registry::Registry,
     projects: &[(String, String, std::path::PathBuf)],
     data_dir: &Path,
-) -> Vec<Row> {
+) -> RowsRead {
     let paths: Vec<_> = projects.iter().map(|(_, _, path)| path.clone()).collect();
-    Catalog::read_rows_with_library(registry.roots(), &paths, data_dir)
+    Catalog::read_rows_checked(registry.roots(), &paths, data_dir)
 }
 
 impl crate::manager::SessionManager {
@@ -420,12 +580,12 @@ impl crate::manager::SessionManager {
             .ok_or_else(|| crate::Error::Invalid("The daemon is shutting down.".into()))
     }
 
-    fn plugin_rows_and_known(&self) -> crate::Result<(Vec<Row>, Known, Choices)> {
-        let rows = self.plugin_catalog_rows();
+    fn plugin_rows_and_known(&self) -> crate::Result<(RowsRead, Known, Choices)> {
+        let read = self.plugin_catalog_read();
         let known =
-            Known::read_or_start(&self.data_dir, || rows.clone()).map_err(crate::Error::Invalid)?;
+            Known::read_or_start(&self.data_dir, || read.clone()).map_err(crate::Error::Invalid)?;
         let choices = Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-        Ok((rows, known, choices))
+        Ok((read, known, choices))
     }
 
     /// Refresh: what's new or gone since the user last chose. Asks nobody and changes no
@@ -434,8 +594,8 @@ impl crate::manager::SessionManager {
         let manager = self.manager()?;
         crate::manager::blocking(move || {
             let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-            let (rows, known, choices) = manager.plugin_rows_and_known()?;
-            Ok(known.changes(&rows, &choices))
+            let (read, known, choices) = manager.plugin_rows_and_known()?;
+            Ok(known.changes(&read, &choices))
         })
         .await
     }
@@ -452,19 +612,20 @@ impl crate::manager::SessionManager {
         let manager = self.manager()?;
         crate::manager::blocking(move || {
             let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-            let (rows, mut known, mut choices) = manager.plugin_rows_and_known()?;
+            let (read, mut known, mut choices) = manager.plugin_rows_and_known()?;
+            let rows = &read.rows;
             let find = |id: &String| rows.iter().find(|row| row.id == *id);
             for row in add.iter().filter_map(find) {
-                settle(&rows, row, &mut choices);
-                known.remember(row);
+                known.settle(rows, row, &mut choices);
+                known.remember(rows, row);
             }
             for row in decline.iter().filter_map(find) {
-                settle(&rows, row, &mut choices);
+                known.settle(rows, row, &mut choices);
                 choices.hide(row);
-                known.remember(row);
+                known.remember(rows, row);
             }
             let left: Vec<_> = known
-                .left(&rows, &choices)
+                .left(&read, &choices)
                 .into_iter()
                 .map(|(kind, name, _)| (kind, name.to_owned()))
                 .collect();
@@ -495,16 +656,17 @@ impl crate::manager::SessionManager {
         let manager = self.manager()?;
         crate::manager::blocking(move || {
             let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-            let (rows, mut known, mut choices) = manager.plugin_rows_and_known()?;
+            let (read, mut known, mut choices) = manager.plugin_rows_and_known()?;
+            let rows = &read.rows;
             let row = rows
                 .iter()
                 .find(|row| row.id == row_id)
                 .ok_or_else(|| crate::Error::Invalid(format!("No plugin {row_id}")))?;
-            settle(&rows, row, &mut choices);
+            known.settle(rows, row, &mut choices);
             if let Some(choice) = choices.0.get_mut(&row.id) {
                 choice.removed = None;
             }
-            known.remember(row);
+            known.remember(rows, row);
             choices
                 .save(&manager.data_dir)
                 .and_then(|()| known.save(&manager.data_dir))

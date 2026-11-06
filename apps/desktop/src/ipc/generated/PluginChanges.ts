@@ -5,4 +5,8 @@ import type { PluginGone } from "./PluginGone";
 /**
  * What a Refresh found.
  */
-export type PluginChanges = { found: Array<PluginFound>, gone: Array<PluginGone>, };
+export type PluginChanges = { found: Array<PluginFound>, gone: Array<PluginGone>, 
+/**
+ * Config files that couldn't be read: while there are any, nothing is reported gone.
+ */
+unread: Array<string>, };

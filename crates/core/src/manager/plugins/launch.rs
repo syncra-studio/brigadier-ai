@@ -91,7 +91,9 @@ impl SessionManager {
                 .cloned()
                 .chain(own_checkout.clone())
                 .collect();
-            let mut rows = Catalog::read_rows_with_library(&roots, &sources, &data_dir);
+            let read = Catalog::read_rows_checked(&roots, &sources, &data_dir);
+            let complete = read.user_setup_read();
+            let mut rows = read.rows;
             if let (Some(checkout), Some(root)) = (&own_checkout, &project) {
                 adopt_checkout(&mut rows, checkout, root);
             }
@@ -101,7 +103,7 @@ impl SessionManager {
                     Catalog::read_rows_with_library(&roots, &registered, &data_dir)
                 });
             }
-            super::known::Known::read(&data_dir, &rows)
+            super::known::Known::read(&data_dir, &rows, complete)
                 .map_err(Error::Invalid)?
                 .apply(&rows, &mut choices);
             let warnings = if grants.is_none() {
