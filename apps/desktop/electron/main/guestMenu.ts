@@ -5,7 +5,6 @@ import { BrowserWindow, clipboard, Menu, type ContextMenuParams, type MenuItemCo
 
 import { note } from "./events";
 import { unfocused } from "./identity";
-import { openAsTab } from "./guestPopups";
 
 type Item = { id: string; label: string; enabled?: boolean; run: () => void };
 
@@ -15,7 +14,9 @@ const outward = (what: string, run: () => void) => () => {
   else run();
 };
 
-function sections(contents: WebContents, params: ContextMenuParams): Item[][] {
+type OpenAsTab = (from: WebContents, url: string) => void;
+
+function sections(contents: WebContents, params: ContextMenuParams, openAsTab: OpenAsTab): Item[][] {
   const { editFlags, isEditable, linkURL, mediaType, selectionText, srcURL, x, y } = params;
   const found: Item[][] = [];
   if (linkURL) {
@@ -51,9 +52,9 @@ function sections(contents: WebContents, params: ContextMenuParams): Item[][] {
 
 let lastMenu: Menu | null = null;
 
-export function installGuestMenu(contents: WebContents): void {
+export function installGuestMenu(contents: WebContents, openAsTab: OpenAsTab): void {
   contents.on("context-menu", (_event, params) => {
-    const template: MenuItemConstructorOptions[] = sections(contents, params).flatMap((section, index) => [
+    const template: MenuItemConstructorOptions[] = sections(contents, params, openAsTab).flatMap((section, index) => [
       ...(index > 0 ? [{ type: "separator" as const }] : []),
       ...section.map(({ id, label, enabled, run }) => ({ id, label, enabled: enabled ?? true, click: run })),
     ]);

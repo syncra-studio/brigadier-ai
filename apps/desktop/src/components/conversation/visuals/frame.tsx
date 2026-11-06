@@ -4,6 +4,11 @@ import { IDIOMORPH_JS } from "./idiomorph";
 import { extractCompleteStyles, processPartialHtml } from "./partial-html";
 
 /** The final document gets a fresh frame, so preview state cannot leak into its scripts. */
+/** Windows' Tauri webview can only reach the custom scheme over http; Electron serves `brigadier-ui:` on every OS. */
+function framesOverHttp(): boolean {
+  return typeof navigator !== "undefined" && navigator.userAgent.includes("Windows") && !("brigadierNative" in window);
+}
+
 export function VisualFrame({ code, writing }: { code: string; writing: boolean }) {
   return <Frame key={writing ? "preview" : `final:${code}`} code={code} writing={writing} />;
 }
@@ -15,7 +20,7 @@ function Frame({ code, writing }: { code: string; writing: boolean }) {
     if (document.head.querySelector('[data-visual-frame-policy]')) return;
     const policy = document.createElement("meta");
     policy.httpEquiv = "Content-Security-Policy";
-    policy.content = navigator.userAgent.includes("Windows")
+    policy.content = framesOverHttp()
       ? "frame-src http://brigadier-ui.localhost"
       : "frame-src brigadier-ui:";
     policy.dataset.visualFramePolicy = "";
@@ -63,5 +68,5 @@ function Frame({ code, writing }: { code: string; writing: boolean }) {
     const timer = setInterval(render, 1000);
     return () => clearInterval(timer);
   }, [writing, ready]);
-  return <iframe ref={frame} title={writing ? "Drawing…" : "Interactive visual"} sandbox="allow-scripts" src={typeof navigator !== "undefined" && navigator.userAgent.includes("Windows") ? "http://brigadier-ui.localhost/frame" : "brigadier-ui://localhost/frame"} onLoad={start} className="my-3 w-full rounded-2xl border border-border bg-background" style={{ height }} />;
+  return <iframe ref={frame} title={writing ? "Drawing…" : "Interactive visual"} sandbox="allow-scripts" src={framesOverHttp() ? "http://brigadier-ui.localhost/frame" : "brigadier-ui://localhost/frame"} onLoad={start} className="my-3 w-full rounded-2xl border border-border bg-background" style={{ height }} />;
 }

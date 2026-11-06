@@ -115,6 +115,11 @@ function takeKeyboard(): void {
   }
 }
 
+function focusTakingKeyboard(this: HTMLElement, options?: FocusOptions): void {
+  if (this.tagName !== "WEBVIEW" && keyboardInPage()) takeKeyboard();
+  nativeFocus.call(this, options);
+}
+
 function installKeyboardHandover(): void {
   keyboardAnchor = document.createElement("div");
   keyboardAnchor.tabIndex = -1;
@@ -126,10 +131,7 @@ function installKeyboardHandover(): void {
   keyboardAnchor.append(keyboardFrame);
   document.body.append(keyboardAnchor);
   // Every field of the app, by whatever path it takes focus: autoFocus, a menu key, a shortcut.
-  HTMLElement.prototype.focus = function focus(this: HTMLElement, options?: FocusOptions) {
-    if (this.tagName !== "WEBVIEW" && keyboardInPage()) takeKeyboard();
-    nativeFocus.call(this, options);
-  };
+  HTMLElement.prototype.focus = focusTakingKeyboard;
   window.brigadierShell.onGuestKey(() => { pageHadKey = true; });
 }
 
@@ -251,16 +253,16 @@ function listen(page: Page): void {
     canGoBack: page.ready && element.canGoBack(),
     canGoForward: page.ready && element.canGoForward(),
   });
-  const load = () => { emit({ type: "load", url: page.url, loading: page.loading }); history(); };
+  const loadChanged = () => { emit({ type: "load", url: page.url, loading: page.loading }); history(); };
   // A load drops a find in flight, with no answer from the old document: the bar looks again when it stops.
-  on("did-start-loading", () => { answerFind(page, NOT_FOUND); page.loading = true; load(); });
-  on("did-stop-loading", () => { page.loading = false; load(); });
-  on<{ url: string }>("did-navigate", ({ url }) => { page.url = url; load(); });
+  on("did-start-loading", () => { answerFind(page, NOT_FOUND); page.loading = true; loadChanged(); });
+  on("did-stop-loading", () => { page.loading = false; loadChanged(); });
+  on<{ url: string }>("did-navigate", ({ url }) => { page.url = url; loadChanged(); });
   on<{ url: string; isMainFrame: boolean }>("did-navigate-in-page", ({ url, isMainFrame }) => {
     // A frame's own navigation adds to the tab's history too.
     if (!isMainFrame) { history(); return; }
     page.url = url;
-    load();
+    loadChanged();
   });
   on<{ title: string }>("page-title-updated", ({ title }) => emit({ type: "title", title }));
   const favicon = () => {

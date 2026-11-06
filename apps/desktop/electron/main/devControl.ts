@@ -152,6 +152,14 @@ export function installDevControl({ createWindow, windows, note }: Control): voi
       contents.openDevTools({ mode: "detach", activate: false });
       return contents.isDevToolsOpened();
     },
+    // The engine's frame, not OS pixels: for CI, which has no screen to read. Colours say whether anything painted.
+    guestCapture: async ({ id }) => {
+      const image = await guest(id).capturePage();
+      const bitmap = image.toBitmap();
+      const colours = new Set<number>();
+      for (let at = 0; at + 3 < bitmap.length; at += 4 * 97) colours.add(bitmap.readUInt32LE(at));
+      return { png: image.toPNG().toString("base64"), colours: colours.size, size: image.getSize() };
+    },
     guestExec: ({ id, js }) => guest(id).executeJavaScript(js, false),
     guestMenuItems: () => lastMenuItems(),
     guestMenuChoose: ({ text }) => chooseFromLastMenu(text),

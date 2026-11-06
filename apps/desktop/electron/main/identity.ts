@@ -17,8 +17,11 @@ export const identifier = dev ? "ai.brigadier.dev" : "ai.brigadier.app";
 export const pageDir = dev ? (process.env.BRIGADIER_PAGE_DIR ?? null) : null;
 export const rendererUrl = dev && !pageDir ? (process.env.BRIGADIER_RENDERER_URL ?? "http://127.0.0.1:1431/") : "app://brigadier/index.html";
 
+/** A check on a throwaway Keychain (CI only, tools/browser-check/real-pages.mjs): the shipped name against a real Keychain. */
+const realKeychain = dev && process.env.BRIGADIER_REAL_KEYCHAIN === "1";
+
 export function setIdentity(): void {
-  app.setName(dev ? "Brigadier Dev" : "Brigadier");
+  app.setName(dev && !realKeychain ? "Brigadier Dev" : "Brigadier");
   if (dev) {
     const data = process.env.BRIGADIER_DEV_DATA;
     if (!data) throw new Error("BRIGADIER_DEV_DATA is required in dev: dev must never use a real data folder");
@@ -26,7 +29,7 @@ export function setIdentity(): void {
     app.setPath("crashDumps", path.join(data, "crashes"));
     app.setAppLogsPath(path.join(data, "logs"));
     // Dev is ad-hoc signed, and would raise Keychain dialogs. The real item needs a signed build.
-    app.commandLine.appendSwitch("use-mock-keychain");
+    if (!realKeychain) app.commandLine.appendSwitch("use-mock-keychain");
     return;
   }
   const folder = chromiumFolder(process.platform, app.getPath("appData"), identifier);

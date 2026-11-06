@@ -46,7 +46,7 @@ export function shownUrl(url: string): string {
       parsed.username = "";
       parsed.password = "";
     }
-    for (const name of [...parsed.searchParams.keys()]) {
+    for (const name of Array.from(parsed.searchParams.keys())) {
       if (SECRET_NAME.test(name)) parsed.searchParams.set(name, "(hidden)");
     }
     shown = parsed.toString();

@@ -63,7 +63,7 @@ async function acting(guest: WebContents, input: (send: (method: string, params:
   try {
     return await run;
   } catch (error) {
-    if (guest.isDestroyed()) throw new Error("The tab closed.");
+    if (guest.isDestroyed()) throw new Error("The tab closed.", { cause: error });
     if (guest.isDevToolsOpened() || !guest.debugger.isAttached()) return { paused: guest.isDevToolsOpened() ? "devtools" : "user" };
     throw error;
   }
