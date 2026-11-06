@@ -380,6 +380,38 @@ fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+/// Claude's plugin lists and switches that exist but can't be read. [`claude`] reads such a file
+/// as an empty one, and its plugins' items would look gone.
+pub(crate) fn claude_unread(roots: &Roots, project: Option<&Path>) -> Vec<crate::Problem> {
+    let (files, source) = match project {
+        Some(project) => (
+            vec![
+                project.join(".claude").join("settings.json"),
+                project.join(".claude").join("settings.local.json"),
+            ],
+            crate::Source::ClaudeProject,
+        ),
+        None => (
+            vec![
+                roots.claude_dir.join("settings.json"),
+                roots
+                    .claude_dir
+                    .join("plugins")
+                    .join("installed_plugins.json"),
+            ],
+            crate::Source::ClaudeUser,
+        ),
+    };
+    files
+        .iter()
+        .filter(|file| match std::fs::read_to_string(file) {
+            Ok(text) => serde_json::from_str::<Value>(&text).is_err(),
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        })
+        .map(|file| crate::servers::file_problem(file, source, project, None))
+        .collect()
+}
+
 /// `<plugin>@<marketplace>` split at its last `@`.
 fn split_id(id: &str) -> Option<(&str, &str)> {
     let (plugin, marketplace) = id.rsplit_once('@')?;

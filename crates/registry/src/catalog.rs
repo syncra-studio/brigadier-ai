@@ -212,12 +212,47 @@ impl Server {
     }
 }
 
+/// A read of the rows, and what it couldn't read: a config file that's broken or being written
+/// looks just like one that's empty, so what isn't in `rows` isn't known to be gone.
+#[derive(Debug, Clone, Default)]
+pub struct RowsRead {
+    pub rows: Vec<Row>,
+    /// Each once, though every project's read repeats the user's.
+    pub problems: Vec<crate::Problem>,
+}
+
+impl RowsRead {
+    /// The CLI config files that couldn't be read; import offers' don't count.
+    pub fn unread_files(&self) -> Vec<&Path> {
+        self.problems
+            .iter()
+            .filter(|problem| problem.is_file() && !problem.is_import_offer())
+            .map(|problem| problem.file.as_path())
+            .collect()
+    }
+
+    /// Whether every user-level CLI config was read. A broken project file can't hide anything
+    /// from a list of the user's own items, and may stay broken on some branch for good.
+    pub fn user_setup_read(&self) -> bool {
+        !self.problems.iter().any(|problem| {
+            problem.is_file() && !problem.is_import_offer() && problem.project.is_none()
+        })
+    }
+
+    /// Whether a CLI has a server `name` it couldn't take, so it has no row.
+    pub fn has_broken_server(&self, name: &str) -> bool {
+        self.problems
+            .iter()
+            .any(|problem| !problem.is_file() && !problem.is_import_offer() && problem.name == name)
+    }
+}
+
 impl Catalog {
     /// Complete page catalog, including disabled project-only plugin definitions. Unlike
     /// `Catalog::read`, presence here does not imply native availability in a session.
     pub fn read_rows(roots: &crate::Roots, projects: &[PathBuf]) -> Vec<Row> {
         let data_dir = roots.vars.get("BRIGADIER_DATA_DIR").map(PathBuf::from);
-        Self::read_row_sources(roots, projects, data_dir.as_deref())
+        Self::read_row_sources(roots, projects, data_dir.as_deref()).rows
     }
 
     pub fn read_rows_with_library(
@@ -225,6 +260,15 @@ impl Catalog {
         projects: &[PathBuf],
         data_dir: &Path,
     ) -> Vec<Row> {
+        Self::read_row_sources(roots, projects, Some(data_dir)).rows
+    }
+
+    /// `read_rows_with_library`, saying what it couldn't read.
+    pub fn read_rows_checked(
+        roots: &crate::Roots,
+        projects: &[PathBuf],
+        data_dir: &Path,
+    ) -> RowsRead {
         Self::read_row_sources(roots, projects, Some(data_dir))
     }
 
@@ -232,7 +276,7 @@ impl Catalog {
         roots: &crate::Roots,
         projects: &[PathBuf],
         data_dir: Option<&Path>,
-    ) -> Vec<Row> {
+    ) -> RowsRead {
         // The user's part is read once; each project adds only its own files.
         let user = Self::read(roots, None);
         let mut catalogs = Vec::new();
@@ -274,7 +318,19 @@ impl Catalog {
         if let Some(data_dir) = data_dir {
             catalogs.push(library(data_dir));
         }
-        Self::rows(&catalogs)
+        let mut problems: Vec<crate::Problem> = crate::plugins::claude_unread(roots, None);
+        for project in projects {
+            problems.extend(crate::plugins::claude_unread(roots, Some(project)));
+        }
+        for problem in catalogs.iter().flat_map(|catalog| &catalog.problems) {
+            if !problems.iter().any(|known| known.id == problem.id) {
+                problems.push(problem.clone());
+            }
+        }
+        RowsRead {
+            rows: Self::rows(&catalogs),
+            problems,
+        }
     }
 
     /// Combine user and registered-project catalogs without losing definitions or aliases.

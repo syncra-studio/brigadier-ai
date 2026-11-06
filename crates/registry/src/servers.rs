@@ -508,8 +508,14 @@ pub(crate) fn opencode(
 ) -> Vec<Server> {
     let mut found: std::collections::BTreeMap<String, Server> = Default::default();
     for file in files {
-        let Ok(text) = std::fs::read_to_string(file) else {
-            continue;
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    problems.push(file_problem(file, source, project, None));
+                }
+                continue;
+            }
         };
         let config: Value = match serde_json::from_str(&without_jsonc(&text)) {
             Ok(config) => config,
@@ -1222,7 +1228,7 @@ fn entry_problem(
 }
 
 /// A config file that can't be parsed: none of its servers can be read.
-fn file_problem(
+pub(crate) fn file_problem(
     path: &Path,
     source: Source,
     project: Option<&Path>,
@@ -1252,7 +1258,15 @@ fn read_json(
     project: Option<&Path>,
     problems: &mut Vec<Problem>,
 ) -> Option<(Value, Written)> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                problems.push(file_problem(path, source, project, None));
+            }
+            return None;
+        }
+    };
     match serde_json::from_str(&text) {
         Ok(value) => {
             let written = if text.contains("\"headers\"") {
@@ -1276,7 +1290,15 @@ pub(crate) fn read_toml(
     project: Option<&Path>,
     problems: &mut Vec<Problem>,
 ) -> Option<toml::Table> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                problems.push(file_problem(path, source, project, None));
+            }
+            return None;
+        }
+    };
     match text.parse::<toml::Table>() {
         Ok(table) => Some(table),
         Err(error) => {
