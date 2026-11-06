@@ -74,6 +74,9 @@ async function launch() {
     ...process.env,
     BRIGADIER_DEV: "1",
     BRIGADIER_UNFOCUSED: process.env.BRIGADIER_FOCUSED === "1" ? "0" : "1",
+    // A clickable instance still comes up without activating the app: window.show() takes the focus, and it pulls a
+    // parked window back on the screen. It takes the focus when the user clicks it.
+    BRIGADIER_BACKGROUND_LAUNCH: "1",
     ...(noPipe ? { BRIGADIER_DEV_OPEN_MAIN: "1" } : {}),
     BRIGADIER_DEV_DATA: dataDir,
     BRIGADIER_EVENTS: eventsPath,

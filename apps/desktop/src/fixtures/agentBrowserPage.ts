@@ -55,16 +55,19 @@ seen.declaredSend = agent({ kind: "type", target: refOf("chat"), text: "hi there
 seen.sent = [...byId("sent").children].map((item) => item.textContent);
 seen.chatValue = byId<HTMLInputElement>("chat").value;
 
-// A password asks, and goes only with a yes given at this address.
+// A password field gets no ref, and with one given anyway nothing goes into it, yes or no.
 seen.email = agent({ kind: "type", target: refOf("email"), text: "ada@example.com", submit: false });
-seen.password = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false });
-// Declared as a sign-in or a payment, a password or card field still asks as what it is.
-seen.passwordDeclared = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false, declared: "signIn" });
-seen.cardDeclared = agent({ kind: "type", target: refOf("card"), text: "4242424242424242", submit: false, declared: "pay" });
-seen.passwordElsewhere = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false, approved: "https://other.example/" });
-seen.passwordEmpty = byId<HTMLInputElement>("password").value;
-seen.passwordYes = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false, approved: location.href });
+seen.passwordRef = refOf("password");
+byId("password").setAttribute("data-brigadier-ref", "e90");
+seen.password = agent({ kind: "type", target: "e90", text: "hunter2", submit: false });
+seen.passwordDeclared = agent({ kind: "type", target: "e90", text: "hunter2", submit: false, declared: "signIn" });
+seen.passwordYes = agent({ kind: "type", target: "e90", text: "hunter2", submit: false, approved: location.href });
+seen.passwordClick = agent({ kind: "click", target: "e90" });
 seen.passwordValue = byId<HTMLInputElement>("password").value;
+// Declared as a payment, a card field still asks as what it is.
+seen.cardDeclared = agent({ kind: "type", target: refOf("card"), text: "4242424242424242", submit: false, declared: "pay" });
+// Filled by the user: a button beside it asks, with a yes given at this address.
+byId<HTMLInputElement>("password").value = "hunter2";
 seen.signIn = agent({ kind: "click", target: refAt("#login button") });
 seen.signInYes = agent({ kind: "click", target: refAt("#login button"), approved: location.href });
 seen.card = agent({ kind: "type", target: refOf("card"), text: "4242424242424242", submit: false });
@@ -72,7 +75,7 @@ seen.code = agent({ kind: "type", target: refOf("code"), text: "123456", submit:
 seen.declaredPay = agent({ kind: "click", target: refAt("#pay button"), declared: "pay" });
 seen.submitted = [...submitted];
 // A sign-in without a form: the button beside a filled password asks too.
-agent({ kind: "type", target: refOf("pin"), text: "1234", submit: false, approved: location.href });
+byId<HTMLInputElement>("pin").value = "1234";
 seen.unlock = agent({ kind: "click", target: refOf("unlock") });
 
 seen.stale = agent({ kind: "click", target: "e999" });
@@ -80,16 +83,24 @@ seen.notField = agent({ kind: "type", target: refOf("add"), text: "x", submit: f
 seen.link = agent({ kind: "click", target: refAt('a[href="#docs"]') });
 seen.hash = location.hash;
 
-// Filled by the user or autofill: a password shown as text, a card number and a code are read
-// as filled, never by their value.
+// Filled by the user or autofill: a password shown as text and a disguised field stay hidden; a
+// card number and a code are read as filled, never by their value.
 const shownPassword = Object.assign(document.createElement("input"), { value: "s3cret" });
 shownPassword.setAttribute("autocomplete", "current-password");
 shownPassword.setAttribute("aria-label", "Shown password");
 document.body.append(shownPassword);
+const disguised = Object.assign(document.createElement("input"), { type: "text", value: "s3cret-word" });
+disguised.setAttribute("aria-label", "Security word");
+disguised.style.setProperty("-webkit-text-security", "disc");
+document.body.append(disguised);
+disguised.setAttribute("data-brigadier-ref", "e91");
+seen.disguised = agent({ kind: "type", target: "e91", text: "hacked", submit: false, approved: location.href });
+seen.disguisedValue = disguised.value;
 byId<HTMLInputElement>("card").value = "4242424242424242";
 byId<HTMLInputElement>("code").value = "123456";
-seen.filled = (agent({ kind: "read", max: 20000 }) as { text: string }).text.split("\n")
-  .filter((line) => /assword|Card number|Code|PIN/.test(line));
+const filledRead = (agent({ kind: "read", max: 20000 }) as { text: string }).text;
+seen.filled = filledRead.split("\n").filter((line) => /assword|Card number|Code/.test(line));
+seen.secretsRead = /hunter2|1234|s3cret/.test(filledRead);
 
 // A display: contents wrapper has no box of its own, but what it holds shows (#362).
 const wrapper = document.createElement("div");

@@ -567,7 +567,7 @@ async fn a_no_while_the_call_waits_is_its_answer() {
     assert!(!reply.is_error, "{}", reply.text);
     assert_eq!(
         reply.text,
-        "The user said no: Use your password on shop.example? Nothing was done. Don't do it, or anything else that does the same."
+        "The user said no: Press Enter in “Pay $5” (e7) beside your password? Nothing was done. Don't do it, or anything else that does the same."
     );
     assert_eq!(approved_of(&shop), [None]);
     flow.stop().await;

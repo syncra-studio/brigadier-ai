@@ -4,9 +4,12 @@ import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
 // The browser tool's page script on a local test page in Chromium: the page read with a ref per
-// control, clicks and typing as a page's own handlers hear them, and the actions that ask the
-// user first (a declared send or payment, a password, a card, a one-time code) doing nothing
-// until a yes given at the page's address.
+// control, clicks and typing as a page's own handlers hear them, password fields out of reach
+// whatever is said, and the actions that ask the user first (a declared send or payment, a card,
+// a one-time code, a button beside a filled password) doing nothing until a yes given at the
+// page's address.
+const HIDDEN = "(A password field, hidden: only the user fills it in.)";
+
 test("browser tool: the page script reads, clicks, types and asks first", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "agent-browser.html", "agent-browser-result", 60000)) as Record<string, unknown>;
   if (process.env.AGENT_BROWSER_SEEN) console.log(JSON.stringify(seen, null, 2));
@@ -29,14 +32,14 @@ test("browser tool: the page script reads, clicks, types and asks first", { time
     '[e7] textbox "Message"',
     "## Sign in",
     '[e8] textbox "Email"',
-    '[e9] textbox "Password" (password field)',
-    '[e10] button "Sign in"',
-    '[e11] textbox "Card number" (card field)',
-    '[e12] textbox "Code" (one-time code field)',
-    '[e13] button "Pay $5"',
-    '[e14] textbox "PIN" (password field)',
-    '[e15] button "Unlock"',
-    '[e16] checkbox "I agree" (not checked)',
+    HIDDEN,
+    '[e9] button "Sign in"',
+    '[e10] textbox "Card number" (card field)',
+    '[e11] textbox "Code" (one-time code field)',
+    '[e12] button "Pay $5"',
+    HIDDEN,
+    '[e13] button "Unlock"',
+    '[e14] checkbox "I agree" (not checked)',
   ], "hidden controls are left out; a label's text is its control's name");
   assert.equal(seen.again, true, "a second read keeps the refs");
   assert.match((seen.cut as { text: string }).text, /^# Test shop\nWelcome to the test shop\. \[i\n\(The page goes on: \d+ more characters not shown\.\)$/);
@@ -55,12 +58,12 @@ test("browser tool: the page script reads, clicks, types and asks first", { time
   assert.equal(seen.chatValue, "");
 
   assert.deepEqual(seen.email, done);
-  assert.deepEqual(seen.password, ask("credentials", 'textbox "Password"'));
-  assert.deepEqual([seen.passwordDeclared, seen.cardDeclared], [ask("credentials", 'textbox "Password"'), ask("card", 'textbox "Card number"')],
-    "a declared sign-in or payment into a secret's field asks as the field, so its card never shows the secret");
-  assert.deepEqual(seen.passwordElsewhere, ask("credentials", 'textbox "Password"'), "a yes given at another address doesn't hold");
-  assert.equal(seen.passwordEmpty, "");
-  assert.deepEqual([seen.passwordYes, seen.passwordValue], [done, "hunter2"]);
+  assert.equal(seen.passwordRef, "", "a password field gets no ref");
+  const handsOff = { error: "That is a password field, and only the user fills those in, so nothing was done. Ask them to sign in in this tab, and go on when they say so." };
+  assert.deepEqual([seen.password, seen.passwordDeclared, seen.passwordYes, seen.passwordClick], [handsOff, handsOff, handsOff, handsOff], "with a ref given anyway, nothing goes in, yes or no");
+  assert.equal(seen.passwordValue, "");
+  assert.deepEqual([seen.disguised, seen.disguisedValue], [handsOff, "s3cret-word"], "a disguised field is a password field");
+  assert.deepEqual(seen.cardDeclared, ask("card", 'textbox "Card number"'), "a declared payment into a card's field asks as the field, so its card never shows the secret");
   assert.deepEqual(seen.signIn, ask("credentials", 'button "Sign in"'), "submitting a filled password asks");
   assert.deepEqual(seen.signInYes, done);
   assert.deepEqual(seen.card, ask("card", 'textbox "Card number"'));
@@ -73,12 +76,14 @@ test("browser tool: the page script reads, clicks, types and asks first", { time
   assert.deepEqual(seen.notField, { error: "e2 isn't a field to type in (it is a button)." });
   assert.deepEqual([seen.link, seen.hash], [done, "#docs"], "a link goes, a filled password elsewhere on the page or not");
   assert.deepEqual(seen.filled, [
-    '[e9] textbox "Password" (filled) (password field)',
-    '[e11] textbox "Card number" (filled) (card field)',
-    '[e12] textbox "Code" (filled) (one-time code field)',
-    '[e14] textbox "PIN" (filled) (password field)',
-    '[e17] textbox "Shown password" (filled) (password field)',
-  ], "no secret's value is read out");
-  assert.deepEqual(seen.contents, ["Inside a wrapper", '[e18] button "Wrapped"'], "a display: contents wrapper's children are read, its hidden ones left out");
-  assert.deepEqual(seen.hiddenContents, ['[e18] button "Wrapped"', "Shown again"], "a hidden display: contents wrapper's own text is left out");
+    HIDDEN,
+    '[e10] textbox "Card number" (filled) (card field)',
+    '[e11] textbox "Code" (filled) (one-time code field)',
+    HIDDEN,
+    HIDDEN,
+    HIDDEN,
+  ], "no secret's value is read out, and a password field not even that it is filled");
+  assert.equal(seen.secretsRead, false);
+  assert.deepEqual(seen.contents, ["Inside a wrapper", '[e15] button "Wrapped"'], "a display: contents wrapper's children are read, its hidden ones left out");
+  assert.deepEqual(seen.hiddenContents, ['[e15] button "Wrapped"', "Shown again"], "a hidden display: contents wrapper's own text is left out");
 });

@@ -387,6 +387,37 @@ pub(crate) fn question(sensitive: BrowserSensitive, url: &str) -> String {
     }
 }
 
+/// A browser card's question for the action that asks, as the user would say it. An action that
+/// asks because of a filled password says what it does, which may be no sign-in at all: a button
+/// beside the field can be "Show password" as well as "Sign in".
+pub(crate) fn action_question(
+    op: &BrowserOp,
+    sensitive: BrowserSensitive,
+    what: &str,
+    url: &str,
+) -> String {
+    if sensitive != BrowserSensitive::Credentials {
+        return question(sensitive, url);
+    }
+    // `what` is the control as the page names it: its role, then its name in quotes.
+    let name = what
+        .trim()
+        .split_once(' ')
+        .map_or("", |(_, name)| name.trim());
+    let named = !name.is_empty() && name != "\"\"";
+    match op {
+        BrowserOp::Click { .. } if named => format!("Press {name} beside your password?"),
+        BrowserOp::Click { .. } => "Press this button beside your password?".to_owned(),
+        BrowserOp::Type { submit: true, .. } if named => {
+            format!("Press Enter in {name} beside your password?")
+        }
+        BrowserOp::Type { submit: true, .. } => {
+            "Press Enter in this field beside your password?".to_owned()
+        }
+        _ => question(sensitive, url),
+    }
+}
+
 /// What the agent would do, for a browser card: never a password, card or code it types.
 pub(crate) fn details(
     op: &BrowserOp,
@@ -581,7 +612,7 @@ impl SessionManager {
                         url: url.clone(),
                         generation: *generation,
                         sensitive: *sensitive,
-                        question: question(*sensitive, url),
+                        question: action_question(&op, *sensitive, what, url),
                         details: details(&op, *sensitive, what, url),
                         fingerprint: key
                             .as_ref()
