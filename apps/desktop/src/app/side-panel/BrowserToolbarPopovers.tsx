@@ -4,8 +4,8 @@ import { TooltipIconButton, Button } from "@/components/controls";
 import { Camera, Download, Mic, X } from "@/components/icons";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { revealPath } from "@/ipc/client";
-import type { BrowserDownload } from "@/ipc/generated";
-import { browserDownloads, openDownload, siteOf } from "@/state/browserData";
+import { browserDownloads, cancelDownload, downloadProgress, type DownloadRecord, openDownload, siteOf } from "@/state/browserData";
+import { useFrontProfile } from "@/state/browserProfilePlaces";
 import { openBrowserSettings } from "@/state/browserSettings";
 import { answerPermission, type BrowserAsking, useBrowsers } from "@/state/browsers";
 import { useApp } from "@/state/store";
@@ -83,10 +83,11 @@ export function PermissionPrompt({
   );
 }
 
-const STATES: Record<BrowserDownload["state"], string | null> = {
+const STATES: Record<DownloadRecord["state"], string | null> = {
   running: "Downloading",
   done: null,
   failed: "Failed",
+  cancelled: "Cancelled",
 };
 
 /** How many of the newest downloads the popover lists. */
@@ -102,13 +103,14 @@ function failed(cause: unknown) {
  */
 export function DownloadsButton() {
   const mac = useApp((s) => s.info?.platform === "macos");
+  const profile = useFrontProfile().id;
   const finished = useBrowsers((s) => s.downloads);
   const [open, setOpen] = useState(false);
-  const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
+  const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [read, setRead] = useState(0);
   useEffect(() => {
     let current = true;
-    browserDownloads("").then(
+    browserDownloads(profile, "").then(
       (found) => current && setDownloads(Array.isArray(found) ? found.slice(0, NEWEST) : []),
       () => {},
     );
@@ -117,7 +119,7 @@ export function DownloadsButton() {
     };
     // Read again as a download finishes and as the popover opens.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [finished, read]);
+  }, [profile, finished, read]);
   if (downloads.length === 0) return null;
   return (
     <Popover
@@ -143,13 +145,16 @@ export function DownloadsButton() {
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="text-browser truncate" title={download.path}>{name}</span>
                   <span className="text-muted-foreground truncate text-xs">
-                    {state ? `${state} · ` : ""}
+                    {download.state === "running" ? `${downloadProgress(download)} · ` : state ? `${state} · ` : ""}
                     {siteOf(download.url)}
                   </span>
                 </span>
+                {download.state === "running" && (
+                  <Button size="xs" variant="ghost" onClick={() => cancelDownload(profile, download.id).catch(failed)}>Cancel</Button>
+                )}
                 {download.state === "done" && (
                   <>
-                    <Button size="xs" variant="ghost" onClick={() => openDownload(download.id).catch(failed)}>Open</Button>
+                    <Button size="xs" variant="ghost" onClick={() => openDownload(profile, download.id).catch(failed)}>Open</Button>
                     <Button size="xs" variant="ghost" onClick={() => revealPath(download.path).catch(failed)}>
                       {mac ? "Show in Finder" : "Show in folder"}
                     </Button>

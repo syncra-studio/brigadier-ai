@@ -7,6 +7,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "@/components/overlays";
 import type { BrowserVisit } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { browserHistory, removeHistory } from "@/state/browserData";
+import { useFrontProfile } from "@/state/browserProfilePlaces";
 import { useBrowsers } from "@/state/browsers";
 import { useSessionTabs } from "@/state/sessionTabs";
 
@@ -28,6 +29,7 @@ function useOpenTabs(self: string): OpenTab[] {
 /** What the address field suggests for `typed` (null: not typing): see `addressSuggestions`. */
 export function useAddressSuggestions(self: string, typed: string | null) {
   const tabs = useOpenTabs(self);
+  const profile = useFrontProfile().id;
   const [visits, setVisits] = useState<BrowserVisit[]>([]);
   const [changed, setChanged] = useState(0);
   const query = typed?.trim() ?? "";
@@ -35,7 +37,7 @@ export function useAddressSuggestions(self: string, typed: string | null) {
     if (!query) return;
     let current = true;
     const timer = setTimeout(() => {
-      browserHistory(query, "all", null, 24).then(
+      browserHistory(profile, query, "all", null, 24).then(
         (found) => current && setVisits(Array.isArray(found) ? found : []),
         () => current && setVisits([]),
       );
@@ -46,11 +48,11 @@ export function useAddressSuggestions(self: string, typed: string | null) {
     };
     // `changed` reads the history again after a removal.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [query, changed]);
+  }, [query, changed, profile]);
   const rows = useMemo(() => addressSuggestions(query, tabs, query ? visits : [], self), [query, tabs, visits, self]);
   const remove = (id: number) => {
     setVisits((shown) => shown.filter((visit) => visit.id !== id));
-    removeHistory([id]).then(
+    removeHistory(profile, [id]).then(
       () => setChanged((count) => count + 1),
       () => setChanged((count) => count + 1),
     );

@@ -10,6 +10,7 @@ import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Grid, Search,
 import { pageList } from "@/ipc/client";
 import type { BrowserVisit, PageSummary } from "@/ipc/generated";
 import { browserHistory } from "@/state/browserData";
+import { useFrontProfile } from "@/state/browserProfilePlaces";
 import { isDraftTabs } from "@/state/draftTabs";
 import { useBrowsers } from "@/state/browsers";
 import { useBrowserOn } from "@/state/links";
@@ -33,6 +34,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
   // Before its conversation exists there is nothing for a side chat to be about.
   const draft = isDraftTabs(conversationId);
   const browserOn = useBrowserOn();
+  const profile = useFrontProfile().id;
   const [history, setHistory] = useState<BrowserVisit[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
   useEffect(() => {
@@ -41,7 +43,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
     let revision = 0;
     const refresh = () => {
       const current = ++revision;
-      void browserHistory("", "all", null).then(
+      void browserHistory(profile, "", "all", null).then(
         (visits) => { if (!disposed && current === revision) setHistory(Array.isArray(visits) ? visits : []); },
         () => { if (!disposed && current === revision) setHistory([]); },
       );
@@ -59,7 +61,7 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
       if (state.selection !== previous.selection && state.selection.type === "conversation" && state.selection.id === conversationId) refresh();
     });
     return () => { disposed = true; unsubscribe(); unsubscribeTabs(); unsubscribeSelection(); window.removeEventListener("focus", refresh); };
-  }, [browserOn, conversationId, tabId]);
+  }, [browserOn, conversationId, tabId, profile]);
   const pages = useRecentPages();
   const sites = browserOn ? suggestedSites(history, dismissed) : [];
   const tools = [
