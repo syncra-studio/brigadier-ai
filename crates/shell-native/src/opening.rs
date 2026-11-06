@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 /// The file types the default app would run, one list for the app and the shell.
-const LAUNCH_TYPES: &str = include_str!("../../src/lib/launchTypes.json");
+const LAUNCH_TYPES: &str = include_str!("../../../apps/desktop/src/lib/launchTypes.json");
 
 static LAUNCHES: LazyLock<HashSet<String>> = LazyLock::new(|| {
     #[derive(serde::Deserialize)]

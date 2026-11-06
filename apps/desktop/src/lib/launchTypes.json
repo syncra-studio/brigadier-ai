@@ -1,5 +1,5 @@
 {
-  "about": "File types the system's default app would run instead of showing, by extension (lower case, no dot). One list for the app (attachments: components/conversation/elements/attachment-open.ts) and the shell (src-tauri/src/opening.rs), which never hands these to the default app. launches: apps, installers, bundles, compiled scripts, shortcuts and links that start something, disk images that mount. scripts: source text that runs when launched; the app's reader shows it instead.",
+  "about": "File types the system's default app would run instead of showing, by extension (lower case, no dot). One list for the app (attachments: components/conversation/elements/attachment-open.ts) and the shell (crates/shell-native/src/opening.rs), which never hands these to the default app. launches: apps, installers, bundles, compiled scripts, shortcuts and links that start something, disk images that mount. scripts: source text that runs when launched; the app's reader shows it instead.",
   "launches": [
     "app", "command", "tool", "terminal", "workflow", "wflow", "action", "pkg", "mpkg", "dmg", "scpt", "scptd", "osascript", "osax",
     "prefpane", "saver", "qlgenerator", "kext", "mobileconfig", "shortcut", "widget", "plugin", "bundle", "webloc", "inetloc", "fileloc", "jar", "pyc",

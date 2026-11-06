@@ -1,4 +1,4 @@
-//! The app's single connection to `brigadierd`, bridged to the webview.
+//! The app's single connection to `brigadierd`, bridged to the app's page.
 //!
 //! One task owns the connection: it (re)connects, launching the daemon when nothing is
 //! listening, resubscribes from the last event it forwarded, pairs requests with responses,
@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brigadier_core::{
-    AccountsView, ApprovalSubject, CardState, ConversationId, DomainEvent, NotifyFinished,
-    Question, QuotaWarning, RequestState, Settings, UserRequest,
+    AccountsView, ApprovalSubject, CardState, ComputerUseStatus, ConversationId, DomainEvent,
+    NotifyFinished, Question, QuotaWarning, RequestState, Settings, UserRequest,
 };
 use brigadier_ipc::app::BridgeEvent;
 use brigadier_ipc::protocol::{
@@ -24,7 +24,6 @@ use brigadier_ipc::protocol::{
 };
 use brigadier_ipc::{Connection, Hello, Reader};
 use brigadier_sandbox::Platform;
-use tauri::ipc::Channel;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::launcher::{Launched, Launcher};
@@ -118,6 +117,25 @@ pub type InFront = Box<dyn Fn() -> bool + Send + Sync>;
 /// Opens computer use's setup window for an agent waiting on it.
 pub type OpenSetup = Box<dyn Fn() + Send + Sync>;
 
+/// Hears the daemon's computer-use status, for the menu-bar item that lists who uses apps.
+pub type ComputerUseChanged = Box<dyn Fn(&ComputerUseStatus) + Send + Sync>;
+
+/// Whether the app is quitting: reading a window then waits on the main thread, which is waiting on
+/// the daemon, so no notice is raised.
+pub type IsQuitting = Box<dyn Fn() -> bool + Send + Sync>;
+
+/// A page's feed of bridge events. The shell behind it decides how they cross.
+pub type Sink = Box<dyn Fn(BridgeEvent) + Send + Sync>;
+
+/// What the bridge asks of the shell that hosts it.
+pub struct Hooks {
+    pub notify: Notify,
+    pub in_front: InFront,
+    pub open_setup: OpenSetup,
+    pub computer_use_changed: ComputerUseChanged,
+    pub is_quitting: IsQuitting,
+}
+
 /// Where the connection task is. Quitting waits out an attempt in flight, since that attempt
 /// may just have launched a daemon.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -142,9 +160,9 @@ struct Inner {
     launcher: Launcher,
     waits: Waits,
     requests: mpsc::Sender<Outgoing>,
-    ui: Mutex<Option<Channel<BridgeEvent>>>,
+    ui: Mutex<Option<Sink>>,
     /// The computer-use setup window's feed: computer use's status only.
-    setup_ui: Mutex<Option<Channel<BridgeEvent>>>,
+    setup_ui: Mutex<Option<Sink>>,
     navigation: Mutex<Option<String>>,
     /// Latest connection state, replayed to a webview that subscribes late or reloads.
     status: Mutex<Option<BridgeEvent>>,
@@ -153,39 +171,22 @@ struct Inner {
     /// Highest event `seq` forwarded to the webview; the resubscribe cursor.
     last_seq: AtomicI64,
     stopping: AtomicBool,
-    notify: Notify,
-    in_front: InFront,
-    open_setup: OpenSetup,
+    hooks: Hooks,
     /// What was already notified (a "Waiting on you" item, an approval, a question, a request's
     /// finish), so an update doesn't notify again. Quota keys persist across restarts.
     notified: Mutex<NotificationKeys>,
 }
 
 impl Bridge {
-    /// Starts the connection task on Tauri's async runtime.
-    pub fn start(
-        platform: Arc<dyn Platform>,
-        launcher: Launcher,
-        notify: Notify,
-        in_front: InFront,
-        open_setup: OpenSetup,
-    ) -> Self {
-        Self::start_with(
-            platform,
-            launcher,
-            notify,
-            in_front,
-            open_setup,
-            Waits::default(),
-        )
+    /// Starts the connection task on the Tokio runtime this is called within.
+    pub fn start(platform: Arc<dyn Platform>, launcher: Launcher, hooks: Hooks) -> Self {
+        Self::start_with(platform, launcher, hooks, Waits::default())
     }
 
     fn start_with(
         platform: Arc<dyn Platform>,
         launcher: Launcher,
-        notify: Notify,
-        in_front: InFront,
-        open_setup: OpenSetup,
+        hooks: Hooks,
         waits: Waits,
     ) -> Self {
         let (requests, queue) = mpsc::channel(QUEUED_REQUESTS);
@@ -209,18 +210,15 @@ impl Bridge {
                 metrics_wanted: AtomicBool::new(false),
                 last_seq: AtomicI64::new(-1),
                 stopping: AtomicBool::new(false),
-                notify,
-                in_front,
-                open_setup,
+                hooks,
                 notified: Mutex::new(notified),
             }),
         };
         let task = bridge.clone();
-        tauri::async_runtime::spawn(async move { task.run(queue).await });
+        tokio::spawn(async move { task.run(queue).await });
         bridge
     }
 
-    #[cfg(target_os = "macos")]
     pub fn data_dir(&self) -> std::path::PathBuf {
         self.inner.platform.paths().data_dir.clone()
     }
@@ -251,11 +249,11 @@ impl Bridge {
     }
 
     /// Routes events to the webview. Sends the current connection state right away.
-    pub fn attach_ui(&self, channel: Channel<BridgeEvent>) {
+    pub fn attach_ui(&self, sink: Sink) {
         if let Some(status) = self.inner.status.lock().expect("status lock").clone() {
-            let _ = channel.send(status);
+            sink(status);
         }
-        *self.inner.ui.lock().expect("ui lock") = Some(channel);
+        *self.inner.ui.lock().expect("ui lock") = Some(sink);
         let navigation = self
             .inner
             .navigation
@@ -270,16 +268,15 @@ impl Bridge {
     }
 
     /// Routes computer use's status to the setup window (replacing a closed one's feed).
-    pub fn attach_setup_ui(&self, channel: Channel<BridgeEvent>) {
-        *self.inner.setup_ui.lock().expect("setup ui lock") = Some(channel);
+    pub fn attach_setup_ui(&self, sink: Sink) {
+        *self.inner.setup_ui.lock().expect("setup ui lock") = Some(sink);
     }
 
     /// Retains native activation until the webview is ready to receive it.
-    #[cfg(target_os = "macos")]
     pub fn open_conversation(&self, conversation_id: String) {
         let ui = self.inner.ui.lock().expect("ui lock");
-        if let Some(channel) = ui.as_ref() {
-            let _ = channel.send(BridgeEvent::OpenConversation { conversation_id });
+        if let Some(sink) = ui.as_ref() {
+            sink(BridgeEvent::OpenConversation { conversation_id });
         } else {
             *self.inner.navigation.lock().expect("navigation lock") = Some(conversation_id);
         }
@@ -295,12 +292,12 @@ impl Bridge {
             *self.inner.status.lock().expect("status lock") = Some(event.clone());
         }
         if matches!(event, BridgeEvent::ComputerUse { .. })
-            && let Some(channel) = self.inner.setup_ui.lock().expect("setup ui lock").as_ref()
+            && let Some(sink) = self.inner.setup_ui.lock().expect("setup ui lock").as_ref()
         {
-            let _ = channel.send(event.clone());
+            sink(event.clone());
         }
-        if let Some(channel) = self.inner.ui.lock().expect("ui lock").as_ref() {
-            let _ = channel.send(event);
+        if let Some(sink) = self.inner.ui.lock().expect("ui lock").as_ref() {
+            sink(event);
         }
     }
 
@@ -549,7 +546,7 @@ impl Bridge {
         let Connection { reader, mut writer } = connection;
         // Frames are read on their own task: reading is not cancel-safe inside select!.
         let (frames_tx, mut frames) = mpsc::channel(64);
-        let reader_task = tauri::async_runtime::spawn(read_frames(reader, frames_tx));
+        let reader_task = tokio::spawn(read_frames(reader, frames_tx));
 
         let mut pending: HashMap<u32, Option<Reply>> = HashMap::new();
         let mut next_id: u32 = 1;
@@ -668,12 +665,12 @@ impl Bridge {
                 self.emit(BridgeEvent::Search { id, update });
             }
             ServerFrame::ComputerUse { status } => {
-                crate::computer_menu::status_changed(&status);
+                (self.inner.hooks.computer_use_changed)(&status);
                 self.emit(BridgeEvent::ComputerUse { status });
             }
             ServerFrame::ComputerUseSetupNeeded => {
-                (self.inner.open_setup)();
-                (self.inner.notify)(
+                (self.inner.hooks.open_setup)();
+                (self.inner.hooks.notify)(
                     "Computer use needs setting up",
                     "An agent wants to use apps on this Mac. Finish setup in the window Brigadier opened.",
                 );
@@ -719,16 +716,20 @@ impl Bridge {
     fn notify_notice(&self, notice: Notice) {
         // Not while the app quits: reading a window waits on the main thread, which
         // is waiting on the daemon.
-        if crate::shell::is_quitting() {
+        if (self.inner.hooks.is_quitting)() {
             return;
         }
         let bridge = self.clone();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             let Ok(Response::GetCatalog { catalog }) = bridge.request(Request::GetCatalog).await
             else {
                 return;
             };
-            if !allowed(notice.kind, &catalog.settings, (bridge.inner.in_front)()) {
+            if !allowed(
+                notice.kind,
+                &catalog.settings,
+                (bridge.inner.hooks.in_front)(),
+            ) {
                 return;
             }
             if !bridge
@@ -756,7 +757,7 @@ impl Bridge {
                     after_peer(name(id).as_deref(), name(from).as_deref())
                 }
             };
-            (bridge.inner.notify)(&title, &notice.body);
+            (bridge.inner.hooks.notify)(&title, &notice.body);
         });
     }
 }

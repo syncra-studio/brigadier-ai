@@ -48,6 +48,8 @@ impl Launched {
 pub struct Launcher {
     platform: Arc<dyn Platform>,
     extra_env: Vec<(String, String)>,
+    /// Where `brigadierd` is, when not beside this executable (a dev run of the Electron app).
+    sidecar_dir: Option<PathBuf>,
     last_launch: Mutex<Option<Instant>>,
     /// In tests, what a launch gives instead of starting a process.
     #[cfg(test)]
@@ -59,10 +61,17 @@ impl Launcher {
         Self {
             platform,
             extra_env,
+            sidecar_dir: None,
             last_launch: Mutex::new(None),
             #[cfg(test)]
             fake: None,
         }
+    }
+
+    /// Finds `brigadierd` in `dir` instead of beside this executable.
+    pub fn with_sidecar_dir(mut self, dir: PathBuf) -> Self {
+        self.sidecar_dir = Some(dir);
+        self
     }
 
     /// A launcher that starts no process: each launch gives what `launch` returns.
@@ -77,12 +86,16 @@ impl Launcher {
         }
     }
 
-    /// The sidecar sits next to the app executable, both in dev and inside the bundle.
-    fn sidecar() -> std::io::Result<PathBuf> {
+    /// The sidecar sits next to the app executable, both in dev and inside the bundle, unless
+    /// this launcher was told otherwise.
+    fn sidecar(&self) -> std::io::Result<PathBuf> {
         let exe = std::env::current_exe()?;
-        let dir = exe
-            .parent()
-            .ok_or_else(|| std::io::Error::other("executable has no parent directory"))?;
+        let dir = match &self.sidecar_dir {
+            Some(dir) => dir.as_path(),
+            None => exe
+                .parent()
+                .ok_or_else(|| std::io::Error::other("executable has no parent directory"))?,
+        };
         Ok(dir.join(format!("brigadierd{}", std::env::consts::EXE_SUFFIX)))
     }
 
@@ -99,7 +112,9 @@ impl Launcher {
             *last = Some(Instant::now());
             return Ok(Some(fake()));
         }
-        let program = Self::sidecar().map_err(|err| format!("locating brigadierd: {err}"))?;
+        let program = self
+            .sidecar()
+            .map_err(|err| format!("locating brigadierd: {err}"))?;
         let mut spec = SpawnSpec::new(program)
             .arg("--data-dir")
             .arg(self.platform.paths().data_dir.as_os_str());

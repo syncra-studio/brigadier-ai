@@ -159,11 +159,15 @@ async fn quota_recovery(initially_ready: bool) {
         Bridge::start(
             platform.clone(),
             Launcher::new(platform.clone(), vec![]),
-            Box::new(move |title, body| {
-                shown.send((title.to_owned(), body.to_owned())).unwrap();
-            }),
-            Box::new(|| false),
-            Box::new(|| {}),
+            Hooks {
+                notify: Box::new(move |title, body| {
+                    shown.send((title.to_owned(), body.to_owned())).unwrap();
+                }),
+                in_front: Box::new(|| false),
+                open_setup: Box::new(|| {}),
+                computer_use_changed: Box::new(|_| {}),
+                is_quitting: Box::new(|| false),
+            },
         )
     };
     let bridge = start();
@@ -348,9 +352,13 @@ fn bridge_for(daemon: &OtherDaemon, launcher: Launcher, waits: Waits) -> Bridge 
     Bridge::start_with(
         daemon.platform.clone(),
         launcher,
-        Box::new(|_, _| {}),
-        Box::new(|| false),
-        Box::new(|| {}),
+        Hooks {
+            notify: Box::new(|_, _| {}),
+            in_front: Box::new(|| false),
+            open_setup: Box::new(|| {}),
+            computer_use_changed: Box::new(|_| {}),
+            is_quitting: Box::new(|| false),
+        },
         waits,
     )
 }

@@ -50,7 +50,6 @@ impl Drop for Download {
 }
 
 /// No background polling or account setup: Reports reads when opened or refreshed.
-#[tauri::command]
 pub async fn get_continuity_report() -> Result<Value, String> {
     let bytes = gh(&[
         "api",

@@ -25,7 +25,6 @@ pub fn booted_device(listing: &str, device: Option<&str>) -> Option<String> {
 
 /// Brings Simulator to the front, opening it on the booted device named `device` (a preview's
 /// target) or on any booted one.
-#[tauri::command]
 pub async fn open_simulator(device: Option<String>) -> Result<(), IpcError> {
     let failed = |message: String| IpcError {
         code: ErrorCode::Internal,
@@ -37,7 +36,7 @@ pub async fn open_simulator(device: Option<String>) -> Result<(), IpcError> {
             message: "the iOS Simulator runs on a Mac only".to_owned(),
         });
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let listing = std::process::Command::new("xcrun")
             .args(["simctl", "list", "devices", "booted", "-j"])
             .output()

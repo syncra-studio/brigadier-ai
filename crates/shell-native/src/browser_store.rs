@@ -122,7 +122,6 @@ impl Store {
         Self::with(Connection::open(path)?)
     }
 
-    #[cfg(test)]
     pub fn in_memory() -> Self {
         Self::with(Connection::open_in_memory().expect("in-memory db")).expect("schema")
     }
@@ -478,6 +477,18 @@ pub fn combined(choices: &[SitePermission]) -> SitePermission {
     }
 }
 
+static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Keeps the browser's saved data with Brigadier's data folder `data_dir`.
+pub fn set_data_dir(data_dir: &Path) {
+    let _ = DATA_DIR.set(data_dir.join("browser"));
+}
+
+/// The folder of the browser's saved data, once it's known.
+pub fn data_dir() -> Option<&'static Path> {
+    DATA_DIR.get().map(std::path::PathBuf::as_path)
+}
+
 /// The browser's store, opened on first use.
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
@@ -488,7 +499,7 @@ pub fn with<T>(action: impl FnOnce(&mut Store) -> rusqlite::Result<T>) -> Option
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if store.is_none() {
-        let dir = crate::browser::data_dir()?;
+        let dir = data_dir()?;
         match Store::open(&dir.join("browser.sqlite")) {
             Ok(opened) => *store = Some(opened),
             Err(err) => {

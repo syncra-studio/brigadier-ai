@@ -18,3 +18,7 @@ export const socketPath = path.join(checkDir, "devd.sock");
 export const eventsPath = path.join(checkDir, "events.jsonl");
 export const evidenceDir = path.join(checkDir, "evidence");
 export const vitePort = 1431;
+/** The Rust addon, as main loads it in a dev run. */
+export const addonPath = path.join(buildDir, "shell_native.node");
+/** Where a dev run finds `brigadierd` and `brigadier`. */
+export const sidecarDir = path.join(repoRoot, "target/debug");

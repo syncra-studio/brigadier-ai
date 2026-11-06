@@ -15,6 +15,7 @@ members = [
   "crates/browser-data",
   "crates/cli",
   "crates/kind",
+  "crates/shell-native",
   "apps/desktop/src-tauri",
 ]
 default-members = ["crates/*"]
