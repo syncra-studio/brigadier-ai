@@ -76,6 +76,18 @@ impl SessionDir {
         self.0.join("workers").join("home")
     }
 
+    /// Every worker's `record` folder, closed ones too.
+    pub(crate) fn worker_records(&self) -> Vec<PathBuf> {
+        std::fs::read_dir(self.0.join("workers"))
+            .map(|dir| {
+                dir.flatten()
+                    .map(|entry| entry.path().join("record"))
+                    .filter(|record| record.join("lineage.json").is_file())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Worker `task`'s folder: its worktree in `work/`, its scratch (`TMPDIR`) in `tmp/`.
     pub(crate) fn worker(&self, task: &Task) -> PathBuf {
         self.0.join("workers").join(format!(

@@ -6514,7 +6514,9 @@ async fn element_bounds_for_visited(
                 },
                 _ => None,
             };
-            let client_size = bounded_blocking(move || x11_window_size(xid)).await.flatten();
+            let client_size = bounded_blocking(move || x11_window_size(xid))
+                .await
+                .flatten();
             accessible_frame.and_then(|frame_extents| {
                 screen_extent_rebase(origin, frame_extents, top_level, client_size)
             })
@@ -7271,7 +7273,10 @@ mod coord_tests {
             screen_extent_rebase((155, 149), (-1, -1, -1, -1), None, None),
             None
         );
-        assert_eq!(screen_extent_rebase((155, 149), (0, 0, 0, 0), None, None), None);
+        assert_eq!(
+            screen_extent_rebase((155, 149), (0, 0, 0, 0), None, None),
+            None
+        );
     }
 
     #[test]

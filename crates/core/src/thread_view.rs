@@ -238,6 +238,10 @@ pub struct WorkerRow {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub paused: bool,
+    /// Its CLI ended on its own and its next message continues it: the words saying so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cli_ended: Option<String>,
     /// When its CLI last said anything.
     pub last_event_at_ms: Option<i64>,
     /// The usage limit its model hit, while it holds.
@@ -272,6 +276,44 @@ pub struct WorkerRow {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<WorkerTask>>", optional)]
     pub background: Vec<WorkerTask>,
+    /// What holds its running work up: a stalled command or a starved build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub job_hold: Option<JobHold>,
+    /// Its turn is over and only background commands of its own keep it at work: their silence
+    /// is the stall check's, so it never reads quiet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub only_jobs: bool,
+}
+
+/// What holds a worker's running work up, as the machine shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct JobHold {
+    pub kind: JobHoldKind,
+    /// Since when, time the machine slept left out.
+    pub since_ms: i64,
+    /// The command, when it is one command's.
+    pub what: Option<String>,
+    /// A starved build: the machine's load, and its cores.
+    pub load: Option<u32>,
+    pub cores: Option<u32>,
+    /// That load is a debug build's faked reading, not the machine's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub faked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum JobHoldKind {
+    /// A background command with no new output and almost no CPU.
+    Stalled,
+    /// A compile queued behind the machine's build slots.
+    BuildSlot,
+    /// A compile running far under one core on an overloaded machine.
+    Starved,
 }
 
 /// One of a worker's CLI's background tasks, with the command that started it when its CLI
@@ -618,22 +660,7 @@ impl LiveTurn {
 
     /// Notes a subagent call's start or end ([`Self::subagents`]).
     pub(crate) fn note_subagent(&mut self, event: &ProviderEvent) {
-        if let ProviderEvent::ToolCall {
-            item_id,
-            name,
-            status,
-            ..
-        } = event
-            && brigadier_providers::adapters::ADAPTERS.iter().any(|cli| {
-                cli.subagent_tools
-                    .contains(&crate::digest::bare_tool_name(name))
-            })
-        {
-            self.subagents.retain(|id| id != item_id);
-            if *status == brigadier_providers::ItemStatus::InProgress {
-                self.subagents.push(item_id.clone());
-            }
-        }
+        note_subagent(&mut self.subagents, event);
     }
 
     /// What of its CLI's background work holds its turn now (`CliJobs`).
@@ -665,6 +692,26 @@ impl LiveTurn {
             waking: (!self.open || self.awaiting_user)
                 && self.waking_until.is_some_and(|until| now < until),
             subagents,
+        }
+    }
+}
+
+/// Notes in `subagents`, by item id, a subagent call's start or end.
+pub(crate) fn note_subagent(subagents: &mut Vec<String>, event: &ProviderEvent) {
+    if let ProviderEvent::ToolCall {
+        item_id,
+        name,
+        status,
+        ..
+    } = event
+        && brigadier_providers::adapters::ADAPTERS.iter().any(|cli| {
+            cli.subagent_tools
+                .contains(&crate::digest::bare_tool_name(name))
+        })
+    {
+        subagents.retain(|id| id != item_id);
+        if *status == brigadier_providers::ItemStatus::InProgress {
+            subagents.push(item_id.clone());
         }
     }
 }

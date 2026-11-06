@@ -21,6 +21,8 @@ Waves:
    - fresh context (compacted): check it still knows the brief, or resend.
    - failed or interrupted: `brigadier read <id> --last 10`; send it on or close it.
    - gone: read its branch; start a successor with "continue from branch X; `git log` first".
-   - quiet (20 min silent): read its last 10; nudge or close it.
+   - quiet (20 min silent, in a turn): read its last 10; nudge or close it.
+   - stalled (a background command, no new output and almost no CPU for 10 min; told once per stall): say so in the thread, read its last 10, and have the worker look at the command. Nothing was stopped. A deliberate wait like `sleep 900` reads the same; a command doing real work never does.
+   - starved (a compile 10 min behind the build slots, or far under one core on an overloaded machine; told once): not hung. Say so in the thread; pause or finish your other builds and stress runs if they are the load, else tell the user what holds it.
    - any event where Brigadier, its CLI or the worker acts abnormally (a crash or error that isn't the project's, stuck, looping, repeating, ending wrong): handle it as above, and offer the user feedback once (`brigadier feedback offer`).
 3. Next wave when this one is integrated.

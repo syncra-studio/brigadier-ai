@@ -108,17 +108,19 @@ test("only Background names truncate: building stays whole and shimmering, runni
     }
   }
   assert.equal(seen.hover.stopVisible, true);
-  assert.equal(seen.hover.truncated && seen.hover.stateFits && seen.hover.shimmer, true, "hover leaves room for the whole building word and Stop");
+  assert.equal(seen.hover.truncated && seen.hover.stateFits && seen.hover.shimmer, true, "hover moves nothing: Stop lies over the row's end");
 });
 
 
 test("raw session/worker commands use Background once and stop only their exact native invocation", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?apps=1", "activities-result", 60000)) as {
-    running: string[]; workerName: string; output: string; ended: string[]; history: boolean;
+    running: string[]; workerName: { shown: string; tip: string }; output: string; ended: string[]; history: boolean;
     stops: { id: string; worker: string | null; started: number }[]; expectedStarts: number[];
   };
   assert.deepEqual(seen.running, ["task:raw-browser", "task:raw-dev", "task:task-2:worker-test", "task:raw-tests", "task:task-2:b7dev"]);
-  assert.equal(seen.workerName, "Demo of the fixes");
+  // Whose it is shows in its tip, not on its row.
+  assert.doesNotMatch(seen.workerName.shown, /Demo of the fixes/);
+  assert.match(seen.workerName.tip, /\nFrom Demo of the fixes$/);
   assert.match(seen.output, /^panel:output:task:raw-browser:\d+$/, "terminal output remains invocation-bound");
   assert.deepEqual(seen.ended, [], "completed, failed and stopped commands leave for Background history");
   // The worker's app still runs: the section and its history link stay.

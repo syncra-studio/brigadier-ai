@@ -503,27 +503,36 @@ fn remove_plain(root: &Path, name: &str) -> Result<(), String> {
 }
 
 // The page/CLI path serializes durable choices independently of legacy sync jobs.
-static CATALOG_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static CATALOG_WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl crate::manager::SessionManager {
     /// The page and launches must read this same provenance-preserving source.
     pub fn plugin_catalog_rows(&self) -> Vec<brigadier_registry::catalog::Row> {
+        self.plugin_catalog_read().rows
+    }
+
+    /// The rows, and which config files they couldn't be read from.
+    pub(super) fn plugin_catalog_read(&self) -> brigadier_registry::catalog::RowsRead {
         let projects: Vec<_> = self
             .plugin_projects()
             .into_iter()
             .map(|(_, _, path)| path)
             .collect();
-        let rows =
-            Catalog::read_rows_with_library(self.registry().roots(), &projects, &self.data_dir);
-        self.cache_plugin_sign_in_targets(&rows);
-        rows
+        let read = Catalog::read_rows_checked(self.registry().roots(), &projects, &self.data_dir);
+        self.cache_plugin_sign_in_targets(&read.rows);
+        read
     }
 
     pub fn plugin_catalog(&self) -> crate::Result<super::CatalogView> {
-        let rows = self.plugin_catalog_rows();
-        let choices =
+        let read = self.plugin_catalog_read();
+        let rows = &read.rows;
+        let known = super::known::Known::read(&self.data_dir, rows, read.user_setup_read())
+            .map_err(crate::Error::Invalid)?;
+        let mut choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-        let mut view = super::CatalogView::new(&rows, &choices);
+        known.apply(rows, &mut choices);
+        let mut view = super::CatalogView::new(rows, &choices);
+        known.fill_view(&read, &choices, &mut view);
         let projects: Vec<_> = self
             .plugin_projects()
             .into_iter()
@@ -599,14 +608,23 @@ impl crate::manager::SessionManager {
         scope: Option<super::choices::Scope>,
     ) -> crate::Result<()> {
         let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
-        let rows = self.plugin_catalog_rows();
+        let read = self.plugin_catalog_read();
+        let rows = &read.rows;
         let row = rows
             .iter()
             .find(|row| row.id == row_id)
             .ok_or_else(|| crate::Error::Invalid(format!("No plugin {row_id}")))?;
+        let mut known = super::known::Known::read_or_start(&self.data_dir, || read.clone())
+            .map_err(crate::Error::Invalid)?;
+        let before = known.clone();
         let mut choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-        let mut choice = choices.choice(row);
+        known.settle(rows, row, &mut choices);
+        // A new item is off until now: changing where it's on doesn't turn it on as well.
+        let mut shown = choices.clone();
+        known.apply(rows, &mut shown);
+        let mut choice = shown.choice(row);
+        known.remember(rows, row);
         if let Some(on) = on {
             choice.on = on;
         }
@@ -620,6 +638,7 @@ impl crate::manager::SessionManager {
         choices.0.insert(row_id.to_owned(), choice.clone());
         choices
             .save(&self.data_dir)
+            .and_then(|()| known.save_if_changed(&self.data_dir, &before))
             .map_err(crate::Error::Invalid)?;
         self.cache_plugin_choice(row_id, choice);
         Ok(())
@@ -672,6 +691,7 @@ impl crate::manager::SessionManager {
             cli: self.brigadier_cli(),
             env: registry.roots().vars.clone(),
         };
+        let known_projects = self.plugin_projects();
         super::super::blocking(move || {
             let mut items = add_parse::parse(&text, name.as_deref(), &home)
                 .map_err(|e| crate::Error::Invalid(e.to_string()))?;
@@ -692,6 +712,12 @@ impl crate::manager::SessionManager {
             let rows = Catalog::rows(&[brigadier_registry::catalog::library(&staging)]);
             let mut choices =
                 super::choices::Choices::load(&data_dir).map_err(crate::Error::Invalid)?;
+            // Before it's published: what's added here isn't part of the first list, it's chosen.
+            let mut known = super::known::Known::read_or_start(&data_dir, || {
+                super::known::read_rows(&registry, &known_projects, &data_dir)
+            })
+            .map_err(crate::Error::Invalid)?;
+            let known_before = known.clone();
             for row in &rows {
                 // Validate all destinations before publishing any item.
                 let file = &row.definitions[0].provenance.file;
@@ -706,6 +732,7 @@ impl crate::manager::SessionManager {
                     )));
                 }
                 if keys.contains(&format!("lib:{}", row.name)) {
+                    known.remember(&rows, row);
                     choices.0.insert(
                         row.id.clone(),
                         super::choices::Choice {
@@ -723,7 +750,10 @@ impl crate::manager::SessionManager {
             saved
                 .save_items(&items, &staged_library)
                 .map_err(crate::Error::Invalid)?;
-            choices.save(&data_dir).map_err(crate::Error::Invalid)?;
+            choices
+                .save(&data_dir)
+                .and_then(|()| known.save_if_changed(&data_dir, &known_before))
+                .map_err(crate::Error::Invalid)?;
             for folder in ["skills", "servers", "origins"] {
                 let from = staged_library.join(folder);
                 if !from.is_dir() {
@@ -875,7 +905,8 @@ impl crate::manager::SessionManager {
         let name = if let Some(name) = key.strip_prefix("lib:") {
             name.to_owned()
         } else {
-            let rows = self.plugin_catalog_rows();
+            let read = self.plugin_catalog_read();
+            let rows = &read.rows;
             let row = rows
                 .iter()
                 .find(|row| row.id == key)
@@ -886,10 +917,18 @@ impl crate::manager::SessionManager {
                 .any(|definition| definition.provenance.file.starts_with(&root))
             {
                 let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+                let mut known = super::known::Known::read_or_start(&self.data_dir, || read.clone())
+                    .map_err(crate::Error::Invalid)?;
+                let before = known.clone();
                 let mut choices =
                     super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
+                known.settle(rows, row, &mut choices);
                 choices.hide(row);
-                return choices.save(&self.data_dir).map_err(crate::Error::Invalid);
+                known.remember(rows, row);
+                return choices
+                    .save(&self.data_dir)
+                    .and_then(|()| known.save_if_changed(&self.data_dir, &before))
+                    .map_err(crate::Error::Invalid);
             }
             row.definitions
                 .iter()
@@ -909,9 +948,31 @@ impl crate::manager::SessionManager {
             cli: self.brigadier_cli(),
             env: registry.roots().vars.clone(),
         };
+        let data_dir = self.data_dir.clone();
+        let known_projects = self.plugin_projects();
         super::super::blocking(move || {
             let _guard = CATALOG_WRITES.lock().unwrap_or_else(|p| p.into_inner());
+            let read = || super::known::read_rows(&registry, &known_projects, &data_dir);
+            let mut known = super::known::Known::read_or_start(&data_dir, read)
+                .map_err(crate::Error::Invalid)?;
+            let removed = super::known::library_items(&read().rows, &root, &name);
             remove_with_secrets(&root, &name, &store).map_err(crate::Error::Invalid)?;
+            let (known_before, saved) = (
+                known.clone(),
+                super::choices::Choices::load(&data_dir).map_err(crate::Error::Invalid)?,
+            );
+            let mut choices = saved.clone();
+            known.forget_removed(&removed, &read(), &mut choices);
+            let forgotten = if choices == saved {
+                Ok(())
+            } else {
+                choices.save(&data_dir)
+            };
+            if let Err(error) =
+                forgotten.and_then(|()| known.save_if_changed(&data_dir, &known_before))
+            {
+                tracing::warn!(reason = %error, "Cannot forget a removed library item");
+            }
             registry.refresh();
             Ok(())
         })

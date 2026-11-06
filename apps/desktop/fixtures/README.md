@@ -233,11 +233,12 @@ the production answer image, tile and proof components under the app's image pol
 daemon: a local path it knows is an image, a tile's kept copy, refused paths, and an image the webview
 can't draw. What it saw goes to `#thread-images-result`.
 
-# Inbox sidebar
+# One-list sidebar
 
 `http://localhost:1426/fixtures/inbox.html` renders the real sidebar over a faked daemon, with the
-rows of the Inbox mockups (`src/fixtures/inbox.tsx`). Query: `view=archived`, `view=projects`,
-`view=settings`. Buttons in the main area start and end a turn and send a message, to see which rows
+rows of the sidebar mockups (`src/fixtures/inbox.tsx`). Query: `view=archived`, `view=projects`
+(Group by Project), `view=settings`, `show=picked` (a Show filter applied). brigadier-ai has an icon,
+freelogo's won't load and steady-app has none. Buttons in the main area start and end a turn and send a message, to see which rows
 move. `drive=1` backs `src/app/shell/InboxRender.test.ts`.
 
 # Tab names and active rows

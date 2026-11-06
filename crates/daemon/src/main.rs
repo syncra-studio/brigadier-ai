@@ -28,6 +28,7 @@ mod idle;
 mod logging;
 mod metrics;
 mod news;
+mod project_icons;
 mod quit;
 mod registry;
 mod server;
@@ -289,6 +290,7 @@ async fn run(
     let providers = Runtime::start(core.clone(), platform.clone(), spawner.clone())
         .await
         .context("starting the provider runtime")?;
+    brigadier_providers::claude::sweep_settings_files(&platform.paths().run_dir);
     let daemon_exe = std::env::current_exe().context("locating brigadierd")?;
     let cli_name = if cfg!(windows) {
         "brigadier.exe"

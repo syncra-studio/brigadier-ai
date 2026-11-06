@@ -384,6 +384,21 @@
 }
 
 /* A row that scrolls sideways without showing a scrollbar (the composer's utility bar). */
+/* What lies under a row's hover buttons: the row's own colour, fading in over the words beneath. */
+@utility row-backing {
+  background-image: linear-gradient(to right, transparent, var(--row-backing, var(--color-popover)) calc(var(--spacing) * 4));
+}
+
+/* On a summary row with its hover wash. */
+@utility row-backing-washed {
+  --row-backing: color-mix(in srgb, var(--color-foreground) 8%, var(--color-popover));
+}
+
+/* On a row of the right sidebar, which has no wash. */
+@utility row-backing-pane {
+  --row-backing: var(--color-background);
+}
+
 @utility hide-scrollbar {
   scrollbar-width: none;
   &::-webkit-scrollbar {

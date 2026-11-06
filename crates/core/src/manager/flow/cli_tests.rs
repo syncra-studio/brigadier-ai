@@ -1708,14 +1708,20 @@ async fn wait_hears_a_worker_gone_and_its_usage_limit() {
     let answers = answers.lock().unwrap().clone();
     let crashed = answers["crashed"].as_array().unwrap();
     assert!(
-        crashed.iter().any(|event| event["event"] == "gone"),
+        crashed.iter().any(|event| event["event"] == "interrupted"
+            && event["message"]
+                .as_str()
+                .is_some_and(|words| words.contains("the next message continues it"))),
         "{crashed:#?}"
     );
     let limited = &answers["limited"][0];
     assert_eq!(limited["event"], "usage-limit", "{limited:#}");
     assert!(limited["resetsAtMs"].as_i64().is_some());
     let board = flow.board().await;
-    assert_eq!(Flow::task(&board, 1).state, crate::work::TaskState::Failed);
+    assert_eq!(
+        Flow::task(&board, 1).state,
+        crate::work::TaskState::Reported
+    );
     assert_eq!(Flow::task(&board, 2).state, crate::work::TaskState::Paused);
     // Nobody took either over.
     assert_eq!(board.tasks.len(), 2);

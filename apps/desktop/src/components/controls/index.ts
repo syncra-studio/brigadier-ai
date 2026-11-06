@@ -5,6 +5,7 @@ export * from "./badge";
 export * from "./button";
 export * from "./checkbox";
 export * from "./checkbox-row";
+export * from "./radio";
 export * from "./error-line";
 export * from "./input";
 export * from "./kbd";

@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 
+import { threadActions } from "@/components/conversation/thread-scroll";
 import type { EventEnvelope, Message, Mention, QueuedMessage, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";
+import { fromSnapshot, useActivity } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
+import { addStop, useStopping } from "@/state/stopping";
 import { applyEvents, emptyThread, useApp } from "@/state/store";
 
 const id = "follow-ups";
@@ -17,6 +20,9 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
   useApp.setState({ selection: { type: "conversation", id }, pending: [], threads: { [id]: emptyThread } });
   useBoard.setState({ board: emptyBoard(id) });
+  useApp.setState({ conversations: {} });
+  useStopping.setState({ stops: [] });
+  useActivity.setState({ byConversation: {} });
   mockIPC(() => new Promise((resolve) => { reply = (outcome) => resolve({ method: "sendMessage", outcome }); }));
 });
 afterEach(() => {
@@ -165,4 +171,77 @@ test("an idle admission preceding an identical follow-up stays in chat while tha
   reply({ type: "sent", message });
   await sent;
   assert.equal(chatCount(), 1);
+});
+
+/** A session whose turn runs, as the board and the activity read it. */
+function working(kind: "session" | "chat" = "session", sideOf: string | null = null) {
+  useApp.setState({ conversations: { [id]: { id, kind, sideOf } } } as never);
+  useBoard.setState({ board: { ...emptyBoard(id), run: "running" } });
+}
+
+test("a follow-up while the user's Stop ends the turn shows no queued or Deciding row, and its turn stays in view", async () => {
+  working();
+  addStop({ conversationId: id, turn: true, tasks: [] });
+  const actions = threadActions();
+  const sending = start();
+  const [entry] = useApp.getState().pending;
+  assert.equal(entry?.queued, undefined, "it shows in the thread, no row in the rail");
+  assert.equal(threadActions(), actions + 1, "its turn is expected, so it is placed in view");
+  assert.equal(useStopping.getState().stops.length, 0, "what it sends now shows as it really is");
+  reply({ type: "sent", message });
+  await sending;
+});
+
+test("a follow-up after the Stop shows, with a background command still running, shows no queued row", async () => {
+  useApp.setState({ conversations: { [id]: { id, kind: "session", sideOf: null } } } as never);
+  useActivity.setState({
+    byConversation: { [id]: fromSnapshot({ conversationId: id, run: "idle", turnOpen: false, commandsWorking: true, stopped: true, tasks: [], approvals: [], questions: [] }) },
+  });
+  const actions = threadActions();
+  const sending = start();
+  assert.equal(useApp.getState().pending[0]?.queued, undefined);
+  assert.equal(threadActions(), actions + 1);
+  reply({ type: "sent", message });
+  await sending;
+});
+
+test("with no Stop a command still running holds it: it shows Deciding", async () => {
+  useApp.setState({ conversations: { [id]: { id, kind: "session", sideOf: null } } } as never);
+  useActivity.setState({
+    byConversation: { [id]: fromSnapshot({ conversationId: id, run: "idle", turnOpen: false, commandsWorking: true, tasks: [], approvals: [], questions: [] }) },
+  });
+  const sending = start();
+  assert.equal(useApp.getState().pending[0]?.queued?.deciding, true);
+  reply({ type: "queued", item });
+  await sending;
+});
+
+test("with no Stop a follow-up while the turn runs still shows Deciding", async () => {
+  working();
+  const sending = start();
+  assert.equal(useApp.getState().pending[0]?.queued?.deciding, true);
+  reply({ type: "queued", item });
+  await sending;
+});
+
+test("a side chat's follow-up behind a Stop keeps the plain queue", async () => {
+  working("chat", "parent");
+  addStop({ conversationId: id, turn: true, tasks: [] });
+  const sending = start();
+  const queued = useApp.getState().pending[0]?.queued;
+  assert.ok(queued, "it waits, as the daemon keeps it");
+  assert.equal(queued.deciding, false);
+  reply({ type: "queued", item });
+  await sending;
+});
+
+test("one shown as waiting that the daemon sent right in still has its turn placed", async () => {
+  working();
+  const actions = threadActions();
+  const sending = start();
+  assert.ok(useApp.getState().pending[0]?.queued);
+  assert.equal(threadActions(), actions);
+  reply({ type: "sent", message });
+  await sending;
+  assert.equal(threadActions(), actions + 1);
 });

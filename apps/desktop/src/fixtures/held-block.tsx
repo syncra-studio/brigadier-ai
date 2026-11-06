@@ -11,6 +11,12 @@
  * `?refresh=wake`, `?refresh=quiet`: its lead's turn ends, Brigadier refreshes its context while two
  * workers work; a worker's end then wakes the thread as a real session's does, a hidden input that
  * opens no turn, so its work goes on under the `/compact`; or nothing follows it.
+ *
+ * `?seam=held`: its lead's turn ends and Brigadier hands the session on while its workers work: a
+ * hidden `/compact`, a hidden note turn, then a successor that carries on by itself and messages a
+ * worker, its turn joining the block; its turn ends, then the block closes. Then the same with
+ * nothing held: no join, the block open only through the hand-off's own turns. `?seam=moved`: the
+ * same, the hand-off going to another CLI. `&stop=<step>` leaves the page at that step.
  */
 import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
@@ -68,6 +74,8 @@ let view: ThreadView = {
 
 const failing = new URLSearchParams(location.search).get("failed");
 const refreshing = new URLSearchParams(location.search).get("refresh");
+const seaming = new URLSearchParams(location.search).get("seam");
+const stopAt = new URLSearchParams(location.search).get("stop");
 const failedTurn: ThreadTurn = { ...turn("u1", 0, 3_000, ["r1"]), end: "failed", error: "The agent could not start." };
 if (failing) {
   view = {
@@ -89,6 +97,33 @@ if (refreshing) {
     entries: refreshed,
     turns: [turn("u1", 0, 3_000, ["r1"]), turn("c1", 10_000, 20_000, [])],
     workers: [worker("aa11bb22", "First bug", 1_000, false), worker("cc33dd44", "Second bug", 2_000, false)],
+    block: { startedAtMs: at(100) },
+  };
+}
+
+const fromBrigadier = (entry: FileEntry): FileEntry => ({ ...entry, said: { by: "brigadier" } });
+const handedOn: FileEntry[] = [
+  ...refreshed.slice(0, 3),
+  fromBrigadier(said("c1", "user", "/compact Besides your usual summary, keep these exactly", 10_000)),
+  fromBrigadier(said("n1", "user", "[Brigadier] A fresh session will continue this work.", 30_000)),
+  said("n2", "assistant", "The hand-off note is written.", 34_000),
+  // The core's view has the hand-off off a successor's first message: its word to carry on stays.
+  fromBrigadier(said("s1", "user", "Carry on from the hand-off note.", 40_000)),
+  said("s2", "assistant", "Picking up where the last session stopped.", 41_000),
+  said("s3", "assistant", "The worker has what it needs.", 43_000),
+];
+const handedOnTurns = (last: Partial<ThreadTurn>): ThreadTurn[] => [
+  turn("u1", 0, 3_000, ["r1"]),
+  turn("c1", 10_000, 20_000, []),
+  turn("n1", 30_000, 35_000, []),
+  { ...turn("s1", 40_000, 44_000, [], true), ...last },
+];
+if (seaming) {
+  view = {
+    entries: handedOn,
+    turns: handedOnTurns({ endedAtMs: null, end: null }),
+    workers: [worker("aa11bb22", "First bug", 1_000, false), worker("cc33dd44", "Second bug", 2_000, false)],
+    seams: [{ n: 1, open: false, at: "s1", carried: true, nudge: "n1", note: null, start: null, death: null, movedTo: seaming === "moved" ? "codex" : null }],
     block: { startedAtMs: at(100) },
   };
 }
@@ -117,7 +152,14 @@ mockIPC((command, payload) => {
   }
 });
 
-useBoard.setState({ board: { ...emptyBoard(id), loaded: true } });
+useBoard.setState({
+  board: {
+    ...emptyBoard(id),
+    loaded: true,
+    // Filed under the latest request, as a carry-on turn names none.
+    ...(seaming && { orchestratorSteps: [{ requestId: "r1", atMs: at(42_000), position: 0, kind: { type: "messaged", taskId: "aa11bb22", text: "Go on." } }] }),
+  },
+});
 useApp.setState({
   selection: { type: "conversation", id },
   conversations: { [id]: conversation },
@@ -163,6 +205,12 @@ function seen() {
       while (above && above.getBoundingClientRect().height === 0) above = above.previousElementSibling;
       return line && above ? [Math.round(line.getBoundingClientRect().top - above.getBoundingClientRect().bottom)] : [];
     }),
+    // Every line that says the block is live, and what the composer says of it.
+    liveLines: blocks.map((block) => block.querySelectorAll('[data-slot="thread-status"]').length),
+    composer: [...document.querySelectorAll("main *")].find((each) => !each.closest('[data-slot="aui_assistant-message-root"]') && each.children.length === 0 && each.textContent?.startsWith("Working for"))?.textContent ?? null,
+    // What the block shows in order, top to bottom: its dividers, its replies, its row of a message to a worker.
+    order: blocks.map((block) => [...block.querySelectorAll('[data-slot="compaction"], [data-slot="seam"], [data-slot="orchestrator-step"], [data-slot="aui_assistant-message-content"]')]
+      .map((each) => (each.getAttribute("data-slot") === "seam" ? "moved" : each.getAttribute("data-slot") === "compaction" ? "divider" : (each.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 40)))),
     // A refresh's divider: how far under the reply before it, and whether the live line is under it.
     refresh: (() => {
       const divider = document.querySelector('[data-slot="compaction"]')?.getBoundingClientRect();
@@ -259,6 +307,35 @@ async function driveRefresh() {
   document.body.append(result);
 }
 
+const turnNews = (word: { opened?: boolean; ended?: "done" }) => applyActivityNews({ conversationId: id, entries: [], ...word } as Parameters<typeof applyActivityNews>[0]);
+
+/** A block held through a hand-off, step by step: the successor's turn runs, ends, and the block closes. */
+async function driveSeam() {
+  const steps: Record<string, unknown> = {};
+  const step = async (name: string, next?: ThreadView) => {
+    if (next) show(next);
+    await settled();
+    steps[name] = seen();
+    return name === stopAt;
+  };
+  const worked = [worker("aa11bb22", "First bug", 1_000, true), worker("cc33dd44", "Second bug", 2_000, true)];
+  const closed = { startedAtMs: at(100), endedAtMs: at(300_000) };
+  // The tab and composer's word that it works, for the steps its turn runs.
+  turnNews({ opened: true });
+  const running = await step("running");
+  if (!running) turnNews({ ended: "done" });
+  const done =
+    running ||
+    (await step("over", { ...view, turns: handedOnTurns({}) })) ||
+    (await step("closed", { ...view, workers: worked, block: closed })) ||
+    (await step("nothingHeld", { ...view, turns: handedOnTurns({ endedAtMs: null, end: null, joins: false }), block: { startedAtMs: at(100) } }));
+  void done;
+  const result = document.createElement("pre");
+  result.id = "held-block-result";
+  result.textContent = JSON.stringify(steps);
+  document.body.append(result);
+}
+
 async function drive() {
   await pause();
   const bothWork = seen();
@@ -288,4 +365,4 @@ async function drive() {
 }
 
 createRoot(document.getElementById("root")!).render(<Page />);
-void (refreshing ? driveRefresh() : failing ? driveFailed() : drive());
+void (seaming ? driveSeam() : refreshing ? driveRefresh() : failing ? driveFailed() : drive());

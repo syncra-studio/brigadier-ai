@@ -8,7 +8,7 @@ import { type BlockCard, isImageStep, type SequenceEntry as Entry } from "@/app/
 import { CompactionDivider } from "@/app/conversation/CompactionRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
 import { ReplyText } from "@/app/conversation/ReplyText";
-import { TaskNoticeRow } from "@/app/conversation/SeamRows";
+import { SeamDivider, TaskNoticeRow } from "@/app/conversation/SeamRows";
 import { cardBody } from "@/app/conversation/threadCode";
 import { SteerBubble } from "@/app/conversation/SteerBubble";
 import { TimeSeparator } from "@/components/conversation";
@@ -60,6 +60,8 @@ export const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: 
       return <>{entry.steps.map((step) => <ThreadStep key={stepKey(step)} step={step} />)}</>;
     case "compaction":
       return <CompactionDivider compaction={entry.compaction} />;
+    case "seam":
+      return <SeamDivider seam={entry.seam} />;
     case "nudge":
       return null;
     case "taskNotice":

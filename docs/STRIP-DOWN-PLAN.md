@@ -269,6 +269,8 @@ still holds it), queueing on and the queue not paused:
 - **Steer.** The user's own Steer always joins the open block (D25).
 - **Thread (run2-D44).** The frame lines are never drawn. A queued message shows once.
 - **Who gets it.** Sessions and normal Chats; side chats and tab chats keep the plain queue.
+- **Right in, not judged.** A block only paused workers hold, and any block after the user's Stop until the next
+  turn starts or the user resumes a worker: no rail row and no judge; a turn starts at once, joining the block if one holds.
 Overnight is the same skill with a deadline. The engine has no lead, phase or landing protocol.
 A Chat is a brigade too and acts almost exactly as a normal session: it starts workers, and its CLI has its own
 shell with the Chat's session folder as cwd, with no `brigadier`-only gate (S28) (user, 2026-10-23: "a chat is

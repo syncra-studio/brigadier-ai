@@ -24,6 +24,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{ProviderKind, accounts, cli::CliEnv};
 
+#[cfg(any(test, target_os = "macos"))]
+mod keychain;
+
 type Entries = BTreeMap<String, Value>;
 
 // Decrypt only after ciphertext or key changes. Scrypt is deliberately expensive; polling
@@ -175,34 +178,30 @@ trait Keyring {
     fn set(&self, service: &str, account: &str, data: &[u8]) -> io::Result<()>;
     /// Creates a missing encryption key, returning an existing one if another CLI won.
     fn insert(&self, service: &str, account: &str, data: &[u8]) -> io::Result<Vec<u8>>;
+    /// Puts a managed account's item right if an earlier write broke it. Never the main home's.
+    fn repair(&self, _service: &str, _account: &str) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(not(test))]
 struct SystemKeyring;
 
-/// A Keychain error in plain words; never holds credential data. The user saying no to macOS's
-/// prompt (`errSecUserCanceled`, `errSecAuthFailed`) is told apart: see [`Blocked`].
-#[cfg(all(not(test), target_os = "macos"))]
-fn keychain_error(action: &str, code: i32) -> io::Error {
-    if matches!(code, -128 | -25293) {
-        io::Error::other(Blocked::KeychainRefused)
-    } else {
-        io::Error::other(format!("MCP Keychain {action} failed ({code})"))
-    }
-}
-
 #[cfg(all(not(test), target_os = "macos"))]
 impl Keyring for SystemKeyring {
     fn get(&self, service: &str, account: &str) -> io::Result<Option<Vec<u8>>> {
-        match security_framework::passwords::get_generic_password(service, account) {
-            Ok(data) => Ok(Some(data)),
-            Err(error) if error.code() == -25300 => Ok(None),
-            Err(error) => Err(keychain_error("read", error.code())),
+        if keychain::is_claude(service) {
+            keychain::get(service, account)
+        } else {
+            keychain::framework_get(service, account)
         }
     }
     fn set(&self, service: &str, account: &str, data: &[u8]) -> io::Result<()> {
-        security_framework::passwords::set_generic_password(service, account, data)
-            .map_err(|error| keychain_error("write", error.code()))
+        if keychain::is_claude(service) {
+            keychain::set(service, account, data)
+        } else {
+            keychain::framework_set(service, account, data)
+        }
     }
     fn insert(&self, service: &str, account: &str, data: &[u8]) -> io::Result<Vec<u8>> {
         let keychain = security_framework::os::macos::keychain::SecKeychain::default()
@@ -212,8 +211,11 @@ impl Keyring for SystemKeyring {
             Err(error) if error.code() == -25299 => self
                 .get(service, account)?
                 .ok_or_else(|| io::Error::other("MCP encryption key disappeared")),
-            Err(error) => Err(keychain_error("key creation", error.code())),
+            Err(error) => Err(keychain::keychain_error("key creation", error.code())),
         }
+    }
+    fn repair(&self, service: &str, account: &str) -> io::Result<()> {
+        keychain::repair(service, account)
     }
 }
 
@@ -667,6 +669,12 @@ fn sync_with(
             let Some(lock) = store.lock()? else {
                 return Ok(());
             };
+            if let Some((service, account)) = &store.keychain {
+                if let StoreLock::Directory(lock) = &lock {
+                    lock.check()?;
+                }
+                keyring.repair(service, account)?;
+            }
             let before = store.read(keyring)?;
             let after = store.merge(before.clone(), &entries);
             if before != after {

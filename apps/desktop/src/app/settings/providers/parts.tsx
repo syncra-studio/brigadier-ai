@@ -2,10 +2,10 @@ import type { ComponentProps } from "react";
 
 import { Badge, Button } from "@/components/controls";
 import { Reload } from "@/components/icons";
-import { UsageBar } from "@/components/shared";
+import { PlanLimit, UsageBar } from "@/components/shared";
 import type { QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
-import { usageTone, used, windowTitle } from "@/lib/quota";
+import { isPlanLimit, usageTone, used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 
 /*
@@ -52,6 +52,7 @@ export function UsageMeter({
   label?: string;
   compact?: boolean;
 }) {
+  if (isPlanLimit(window)) return <PlanLimit window={window} now={now} />;
   const percent = used(window);
   const colors = usageTone(percent);
   const resets = window.resetsAtMs !== null ? formatCountdown(window.resetsAtMs, now) : null;

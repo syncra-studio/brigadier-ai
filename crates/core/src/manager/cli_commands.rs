@@ -1036,6 +1036,16 @@ mod tests {
         let file = flow.manager.data_dir.join("library/skills/new/SKILL.md");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "---\nname: new\n---\nNEW").unwrap();
+        // A newly found skill is off until the user chooses it.
+        let added = flow
+            .manager
+            .plugin_catalog()
+            .unwrap()
+            .rows
+            .into_iter()
+            .find(|r| r.name == "new")
+            .unwrap();
+        flow.manager.set_plugin_choice(&added.id, true).unwrap();
         let commands = flow
             .manager
             .cli_commands(Some(flow.conversation.clone()), None, None, None)

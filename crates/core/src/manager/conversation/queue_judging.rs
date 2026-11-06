@@ -10,7 +10,9 @@
 //! - The user edited, moved, steered or deleted the row meanwhile: the answer is dropped, and
 //!   the row is no longer Deciding from that moment.
 //!
-//! The user's own Steer always joins (D25). Side chats and tab chats keep the plain queue.
+//! The user's own Steer always joins (D25). Side chats and tab chats keep the plain queue. A block
+//! only paused workers hold, or any block after the user's Stop until the next turn starts or they
+//! resume a worker, judges nothing: what the user sends goes right in.
 
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -196,7 +198,7 @@ impl SessionManager {
             ))
             .await?;
         if queue_index.is_some() {
-            // As a judge's answer ends: only paused workers hold, and nothing else sends it.
+            // As a judge's answer ends: the hold may have ended meanwhile, and nothing else sends it.
             self.kick(conv);
         } else {
             self.judge_now(conv, &item);

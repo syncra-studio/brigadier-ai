@@ -5,8 +5,8 @@
  * Providers ›, a provider that needs signing in, and the help menu's two rows, writing what it
  * saw to #popovers-result (SidebarPopoversRender.test.ts reads it), then opens a plain popover and
  * menu built from the shared parts and reads how each is drawn beside the usage list and help menu.
- * ?show=usage, ?show=limit (the account in use at its limit) or ?show=help leaves that one open,
- * for screenshots.
+ * ?show=usage, ?show=limit (the account in use at its limit), ?show=plan (OpenCode at its Go plan's
+ * limit) or ?show=help leaves that one open, for screenshots.
  */
 import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
@@ -131,6 +131,12 @@ const codex = (loggedIn: boolean) =>
     limit("primary", "5-hour", 82, 300, 3 * HOUR),
     limit("secondary", "Weekly", 13, 10_080, 148 * HOUR),
   ]);
+// OpenCode at its Go plan's limit: the window the engine writes, with no usage behind it.
+const goPlan = (resetsInMs: number | null) =>
+  overview("opencode", true, [
+    { id: "limit.opencode-go", label: "Usage limit", usedPercent: 100, resetsAtMs: resetsInMs === null ? null : start + resetsInMs,
+      windowMinutes: null, bucket: null, model: "opencode-go" },
+  ]);
 const publish = (providers: ProviderOverview[]) =>
   useApp.setState((state) => ({
     providers: { ...state.providers, view: { providers, sessions: [], fixtures: [] } },
@@ -196,6 +202,7 @@ function Fixture() {
         return;
       }
       if (show === "limit") publish([limited, codex(true)]);
+      if (show === "plan") publish([goPlan(72 * HOUR), claude]);
       usageButton()?.click();
     })();
   }, []);
@@ -261,6 +268,27 @@ function Fixture() {
         tip: usageButton()?.getAttribute("aria-label"),
         red: Boolean(q('[data-slot="usage-value"][data-level="danger"]')),
       };
+      usageButton()?.click();
+      await wait(200);
+
+      // OpenCode's plan limit is no usage reading: grey words last, no bar, red or say on the icon.
+      publish([goPlan(72 * HOUR), claude]);
+      usageButton()?.click();
+      await wait(200);
+      seen.planRows = usageRows().map((entry) => entry.words);
+      seen.planQuiet = {
+        tip: usageButton()?.getAttribute("aria-label"),
+        dot: Boolean(usageButton()?.querySelector(".bg-destructive, .bg-warning")),
+        red: Boolean(q('[data-slot="usage-value"][data-level="danger"]')),
+        rowParts: rowNamed("OpenCode")?.children.length,
+      };
+      usageButton()?.click();
+      await wait(200);
+      publish([goPlan(null)]);
+      usageButton()?.click();
+      await wait(200);
+      seen.planNoReset = usageRows().map((entry) => entry.words);
+      seen.planAlone = usageButton()?.getAttribute("aria-label");
       usageButton()?.click();
       await wait(200);
 

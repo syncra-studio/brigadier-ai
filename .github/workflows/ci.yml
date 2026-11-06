@@ -71,6 +71,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Rust formatting
         run: cargo fmt --all --check
+      - name: Computer-use helper formatting
+        working-directory: helpers/computer-use
+        run: cargo fmt --all --check
       - name: Generated TypeScript bindings are current
         run: |
           cargo run --locked -q -p brigadier-ipc --bin gen-ts
@@ -161,7 +164,7 @@ jobs:
             sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
             sleep 5
           done
-          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          sudo timeout 300 apt-get "${apt_opts[@]}" install -y "${packages[@]}"
           # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
           sudo rm -rf "$archives/partial" "$archives/lock"
           sudo chown -R "$(id -u):$(id -g)" "$archives"
@@ -254,7 +257,7 @@ jobs:
             sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
             sleep 5
           done
-          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          sudo timeout 300 apt-get "${apt_opts[@]}" install -y "${packages[@]}"
           # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
           sudo rm -rf "$archives/partial" "$archives/lock"
           sudo chown -R "$(id -u):$(id -g)" "$archives"
@@ -356,7 +359,7 @@ jobs:
             sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
             sleep 5
           done
-          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          sudo timeout 300 apt-get "${apt_opts[@]}" install -y "${packages[@]}"
           # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
           sudo rm -rf "$archives/partial" "$archives/lock"
           sudo chown -R "$(id -u):$(id -g)" "$archives"

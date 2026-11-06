@@ -1,13 +1,14 @@
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+
 import { Comment, Folder, ProviderGlyph } from "@/components/icons";
 import { TooltipContent } from "@/components/overlays";
 import { SidebarRowMark } from "@/components/shared/session-status";
-import { useSharedNow } from "@/hooks/use-now";
 import type { Conversation } from "@/ipc/generated";
-import { projectInitials, shortAge, tildePath } from "@/lib/rowLabels";
+import { useProjectIcon } from "@/lib/projectIcon";
+import { projectInitials, tildePath } from "@/lib/rowLabels";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
-import { sortTime } from "@/state/inbox";
 import { useRowMark } from "@/state/tabStates";
 
 /** Where a session works: its worktree once created, else the repository. Chats work nowhere. */
@@ -17,21 +18,47 @@ export function workingDirectory(conversation: Conversation): string | null {
   return (setup.environment.type === "newWorktree" && setup.environment.path) || setup.repo;
 }
 
-/** A row's grey badge: its project's initials, or a bubble for a chat. */
-export function ProjectBadge({ name }: { name: string | null }) {
+/**
+ * A project's mark: `fallback` until its icon has actually loaded, then the icon, drawn through
+ * `<img>` so an SVG's scripts don't run. A project with no icon, one still being asked for or
+ * loading, and a file that won't load all keep the fallback; one already loaded swaps before paint.
+ */
+export function ProjectIcon({ projectId, fallback }: { projectId: string; fallback: ReactNode }) {
+  const icon = useProjectIcon(projectId);
+  const image = useRef<HTMLImageElement>(null);
+  const [loaded, setLoaded] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (image.current?.complete && image.current.naturalWidth > 0) setLoaded(icon);
+  }, [icon]);
+  const showing = icon !== null && loaded === icon;
   return (
-    <span data-slot="row-badge" aria-hidden className="bg-foreground/8 text-foreground/70 text-badge flex size-icon-md shrink-0 items-center justify-center rounded-xs font-semibold">
-      {name === null ? <Comment className="size-icon-xs" /> : projectInitials(name)}
-    </span>
+    <>
+      {!showing && fallback}
+      {icon !== null && (
+        <img
+          ref={image}
+          data-slot="project-icon"
+          src={icon}
+          alt=""
+          draggable={false}
+          className={cn("size-icon-md shrink-0 rounded-xs object-contain", !showing && "hidden")}
+          onLoad={() => setLoaded(icon)}
+        />
+      )}
+    </>
   );
 }
 
-/** How long since the user last wrote to `conversation`, on the one clock all rows share. */
-export function RowTime({ conversation, className }: { conversation: Conversation; className?: string }) {
-  const now = useSharedNow();
+/** A row's badge: its project's icon, with its initials in grey as the fallback; a chat's bubble in grey. */
+export function ProjectBadge({ name, projectId }: { name: string | null; projectId: string | null }) {
+  const grey = (
+    <span className="bg-foreground/8 text-foreground/70 text-badge flex size-icon-md shrink-0 items-center justify-center rounded-xs font-semibold">
+      {name === null ? <Comment className="size-icon-xs" /> : projectInitials(name)}
+    </span>
+  );
   return (
-    <span data-slot="row-time" className={cn("text-muted-foreground shrink-0 pe-0.5 text-end text-xs tabular-nums", className)}>
-      {shortAge(sortTime(conversation), now)}
+    <span data-slot="row-badge" aria-hidden className="flex shrink-0">
+      {name === null || projectId === null ? grey : <ProjectIcon projectId={projectId} fallback={grey} />}
     </span>
   );
 }
@@ -56,7 +83,7 @@ function RowCardBody({ conversation, project }: { conversation: Conversation; pr
       )}
       <div className="border-divider my-1.5 border-t" />
       <div data-slot="card-project" className={CARD_LINE}>
-        <ProjectBadge name={project} />
+        <ProjectBadge name={project} projectId={conversation.projectId} />
         <span className="min-w-0 wrap-anywhere">{project ?? "Chat"}</span>
       </div>
       {model && (

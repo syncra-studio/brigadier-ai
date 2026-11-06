@@ -68,6 +68,11 @@ const menuChoices = () =>
     const lines = all(":scope > span > span", item).map(text).filter(Boolean);
     return lines.length > 0 ? lines : [text(item)];
   });
+/** The open model picker's Automatic band: its name, then the line under it. */
+const automaticBand = () => {
+  const band = document.querySelector('[data-slot="model-picker-band"]');
+  return [[text(band?.querySelector(".text-sm")), text(band?.querySelector(".text-xs"))]];
+};
 /** Whether the element is in the page's scrolled view. */
 const inView = (element: Element | undefined | null) => {
   if (!element) return false;
@@ -136,13 +141,13 @@ function Fixture() {
         trigger(MENUS.sessions!)?.click();
       },
       () => {
-        seen.sessionsMenu = menuChoices().slice(0, 2);
+        seen.sessionsMenu = automaticBand();
         closeMenu();
       },
       // A click alone, as an accessibility press (VoiceOver's) is, opens a menu too (#564).
       () => trigger(MENUS.chats!)?.click(),
       () => {
-        seen.chatsMenu = menuChoices().slice(0, 1);
+        seen.chatsMenu = automaticBand();
         closeMenu();
       },
       () => trigger(MENUS.permission!)?.click(),

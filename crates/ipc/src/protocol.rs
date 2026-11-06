@@ -39,7 +39,7 @@ use ts_rs::TS;
 use crate::metrics::{DaemonMetrics, Diagnostics};
 
 /// Bumped on any incompatible change to these types.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// What a development build's injected limit applies to.
 #[cfg(debug_assertions)]
@@ -1110,6 +1110,10 @@ pub enum Request {
     SiteIcon {
         origin: String,
     },
+    /// A project's icon, found among the files of its first repository; `None` when it has none.
+    ProjectIcon {
+        project_id: ProjectId,
+    },
     /// Stops its CLI processes and removes temp files now; the next message continues it.
     Hibernate {
         id: ConversationId,
@@ -1292,6 +1296,21 @@ pub enum Request {
     },
     /// Deletes a Library item, or hides a machine-found item from Brigadier.
     RemovePlugin {
+        key: String,
+    },
+    /// Refresh on the Plugins page: new items and items gone from every CLI. Nothing else
+    /// looks for them.
+    CheckPluginChanges,
+    /// What the user chose for what `CheckPluginChanges` found: new items by `add` or
+    /// `decline`, gone items by `remove` or `keep`.
+    ApplyPluginChanges {
+        add: Vec<String>,
+        decline: Vec<String>,
+        remove: Vec<String>,
+        keep: Vec<String>,
+    },
+    /// Brings an item the user kept out back into Brigadier.
+    RestorePlugin {
         key: String,
     },
     /// What item `key` is set up with: its skill files (path and text) to open, or its
@@ -1945,6 +1964,10 @@ pub enum Response {
         /// The icon as a `data:` URL.
         icon: Option<String>,
     },
+    ProjectIcon {
+        /// The icon as a `data:` URL.
+        icon: Option<String>,
+    },
     Hibernate {
         conversation: Box<Conversation>,
     },
@@ -2055,6 +2078,11 @@ pub enum Response {
     RemovePlugin {
         job: String,
     },
+    CheckPluginChanges {
+        changes: brigadier_core::manager::plugins::known::PluginChanges,
+    },
+    ApplyPluginChanges,
+    RestorePlugin,
     GetPluginItem {
         item: brigadier_core::manager::plugins::PluginItemDetails,
     },

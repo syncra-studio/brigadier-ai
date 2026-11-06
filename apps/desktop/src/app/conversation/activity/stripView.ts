@@ -28,7 +28,7 @@ export function workersStrip(rows: readonly WorkerRow[], now: number): StripView
     working: live.length - waiting - paused.length,
     waiting,
     paused: paused.length,
-    pausable: live.filter((row) => !row.gone && !paused.includes(row) && !isNativeWorker(row)).map((row) => row.id),
+    pausable: live.filter((row) => !row.gone && !row.cliEnded && !paused.includes(row) && !isNativeWorker(row)).map((row) => row.id),
   };
 }
 

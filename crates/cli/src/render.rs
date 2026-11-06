@@ -322,7 +322,10 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
         rows.push(vec![
             worker.id.clone(),
             worker.number.to_string(),
-            worker.state.word().into(),
+            worker
+                .held_up
+                .clone()
+                .unwrap_or_else(|| worker.state.word().into()),
             worker.agent.id().into(),
             model,
             changes(worker.changes),
@@ -655,6 +658,15 @@ pub fn pause(output: &ManageOutput) -> String {
 }
 
 pub fn resume(output: &ManageOutput) -> String {
+    if !output.done {
+        return format!(
+            "{} is ready: its CLI ended, and its next message continues it, with its worktree and \
+             context. Send what it should do with `brigadier send {} \"<text>\"`.\n{}",
+            output.id,
+            output.id,
+            now(output.worker.as_ref())
+        );
+    }
     format!(
         "Resumed {}: it continues where it stopped; the thread shows it.\n{}",
         output.id,

@@ -4,6 +4,7 @@ pub mod choices;
 mod cleanup;
 mod cleanup_context;
 mod cleanup_state;
+pub mod known;
 pub mod launch;
 mod library_cli;
 mod model;

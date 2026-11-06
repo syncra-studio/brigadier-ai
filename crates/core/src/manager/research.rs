@@ -1,7 +1,8 @@
 //! The daily ratings research (brief L1, L8, L10): once a day, at the time Settings › Routing
 //! sets (04:00 by default; at the next start when missed), the model with the best research
 //! rating that still has quota reads current model cards, release notes and benchmarks with
-//! read-only web tools and answers one JSON object of rating patches, within 15 minutes.
+//! read-only web tools and answers one JSON object of rating patches, within 15 minutes. With no
+//! rated model to run, the user's own model does, and the research row says it is unrated.
 //!
 //! The registry checks and keeps the patches ([`crate::routing::RegistryHolder::finish_refresh`]):
 //! each is sourced, names a concrete model of the user's catalogs (an inherited model, such as
@@ -65,7 +66,7 @@ impl SessionManager {
         let now = now_ms();
         let inputs = self.routing_inputs(now).await;
         let settings = self.core.settings();
-        let producer = pick_researcher(
+        let producer = researcher(
             &inputs.models,
             &inputs.providers,
             &inputs.registry,
@@ -78,8 +79,9 @@ impl SessionManager {
                         &model.id,
                     )
             },
+            &self.own_models(&settings),
         );
-        let Some(producer) = producer else {
+        let Some((producer, producer_unrated)) = producer else {
             self.runtime.registry().finish_refresh(
                 id,
                 inputs.registry.revision,
@@ -116,6 +118,7 @@ impl SessionManager {
             id,
             &refs,
             (producer.provider, &producer.id),
+            producer_unrated,
             &notes,
         ) else {
             return;
@@ -140,6 +143,26 @@ impl SessionManager {
         self.runtime
             .registry()
             .finish_refresh(id, revision, &models, reply);
+    }
+
+    /// The models a user's sessions run on, the likeliest first: the default for new sessions
+    /// (no model named: its agent's default), then each agent's own default.
+    fn own_models(&self, settings: &crate::model::Settings) -> Vec<(ProviderKind, String)> {
+        let default_of = |provider: ProviderKind| {
+            let catalog = self.runtime.overview(provider)?.models?;
+            let default = catalog.models.into_iter().find(|model| model.is_default)?;
+            Some((provider, default.id))
+        };
+        let chosen = settings.default_orchestrator.as_ref().and_then(|choice| {
+            match choice.model.as_deref() {
+                Some(model) => Some((choice.provider, self.listed_model(choice.provider, model))),
+                None => default_of(choice.provider),
+            }
+        });
+        chosen
+            .into_iter()
+            .chain(brigadier_providers::adapters::kinds().filter_map(default_of))
+            .collect()
     }
 
     /// One read-only web research turn on `account`, bounded by [`RESEARCH_TIME`].
@@ -332,6 +355,46 @@ fn pick_researcher<'a>(
                 // The first listed of equals.
                 .then(std::cmp::Ordering::Greater)
         })
+}
+
+/// The researcher, and whether it has no research rating: a rated model that can run, as
+/// [`pick_researcher`] picks it; with none, the user's own (#745): the first of `own` that can
+/// run, else the first listed. Never an older model, or one kept for other work.
+fn researcher<'a>(
+    models: &'a [MergedModel],
+    providers: &[brigadier_router::ProviderState],
+    registry: &brigadier_router::Registry,
+    now: i64,
+    allowed: impl Fn(&MergedModel) -> bool,
+    own: &[(ProviderKind, String)],
+) -> Option<(&'a MergedModel, bool)> {
+    if let Some(rated) = pick_researcher(models, providers, registry, now, &allowed) {
+        return Some((rated, false));
+    }
+    let can_run = |model: &&MergedModel| {
+        !model.excluded
+            && !model.legacy
+            && model.only.is_none()
+            && allowed(model)
+            && brigadier_router::available(model, providers, registry, now)
+    };
+    let named = |provider: ProviderKind, id: &str, model: &MergedModel| {
+        model.provider == provider
+            && (model.id.eq_ignore_ascii_case(id)
+                || model
+                    .resolved
+                    .as_deref()
+                    .is_some_and(|resolved| resolved.eq_ignore_ascii_case(id)))
+    };
+    own.iter()
+        .find_map(|(provider, id)| {
+            models
+                .iter()
+                .filter(can_run)
+                .find(|model| named(*provider, id, model))
+        })
+        .or_else(|| models.iter().find(can_run))
+        .map(|model| (model, true))
 }
 
 /// One bounded, read-only research turn. Closing is outside the cancellation race, so a reset
@@ -639,6 +702,89 @@ mod tests {
             .map(|model| model.id.as_str()),
             Some("claude-opus-5-5")
         );
+    }
+
+    fn signed_in(provider: ProviderKind) -> brigadier_router::ProviderState {
+        brigadier_router::ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        }
+    }
+
+    /// #745: with no rated model to run, the research runs on the user's own: the session
+    /// default, else what the agent marks as its default, else the first it lists.
+    #[test]
+    fn with_no_rated_model_the_research_runs_on_your_own() {
+        let registry = brigadier_router::Registry::bundled();
+        let legacy = brigadier_providers::ModelInfo {
+            legacy: true,
+            ..info("opencode/old")
+        };
+        let catalog = [
+            legacy,
+            info("opencode/a"),
+            info("opencode/b"),
+            info("opencode/c"),
+        ];
+        let models =
+            brigadier_router::merge(&registry, &[(ProviderKind::OpenCode, &catalog)], &[], &[]);
+        let providers = [signed_in(ProviderKind::OpenCode)];
+        let pick = |own: &[&str], allowed: &dyn Fn(&MergedModel) -> bool| {
+            let own: Vec<_> = own
+                .iter()
+                .map(|id| (ProviderKind::OpenCode, (*id).to_owned()))
+                .collect();
+            researcher(&models, &providers, &registry, 0, allowed, &own)
+                .map(|(model, unrated)| (model.id.clone(), unrated))
+        };
+        let on = |id: &str| Some((id.to_owned(), true));
+        assert_eq!(
+            pick(&["opencode/b", "opencode/c"], &|_| true),
+            on("opencode/b")
+        );
+        // The first choice can't run, or is an older model: the next.
+        assert_eq!(
+            pick(&["opencode/b", "opencode/c"], &|m| m.id != "opencode/b"),
+            on("opencode/c")
+        );
+        assert_eq!(
+            pick(&["opencode/old", "opencode/c"], &|_| true),
+            on("opencode/c")
+        );
+        // Nothing named: the first listed that isn't older. Nothing can run: no research.
+        assert_eq!(pick(&[], &|_| true), on("opencode/a"));
+        assert_eq!(pick(&["opencode/b"], &|_| false), None);
+        // Not signed in: no research.
+        assert!(researcher(&models, &[], &registry, 0, |_| true, &[]).is_none());
+    }
+
+    /// A user with a rated model available sees no change, whatever their own default is.
+    #[test]
+    fn a_rated_model_available_is_still_the_researcher() {
+        let registry = brigadier_router::Registry::bundled();
+        let claude = [info("claude-opus-5-5"), info("claude-sonnet-5-5")];
+        let opencode = [info("opencode/a")];
+        let models = brigadier_router::merge(
+            &registry,
+            &[
+                (ProviderKind::Claude, &claude),
+                (ProviderKind::OpenCode, &opencode),
+            ],
+            &[],
+            &[],
+        );
+        let providers = [
+            signed_in(ProviderKind::Claude),
+            signed_in(ProviderKind::OpenCode),
+        ];
+        let own = [(ProviderKind::OpenCode, "opencode/a".to_owned())];
+        let (model, unrated) =
+            researcher(&models, &providers, &registry, 0, |_| true, &own).unwrap();
+        let rated = pick_researcher(&models, &providers, &registry, 0, |_| true).unwrap();
+        assert_eq!(model.id, rated.id);
+        assert_eq!(model.id, "claude-sonnet-5-5");
+        assert!(!unrated);
     }
 
     #[test]

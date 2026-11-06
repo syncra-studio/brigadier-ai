@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from "react";
 
 import { SettingsSwitch } from "@/app/settings/parts";
+import { Button } from "@/components/controls";
 import { ChevronDown, ChevronRight, Folder, Folders, ProviderGlyph, ServerArt, ServerBrand, SkillArt } from "@/components/icons";
 import { SettingsCard } from "@/components/shared";
 import { PROVIDERS } from "@/lib/providerKinds";
 import { cn } from "@/lib/utils";
 import { brandOf } from "./brand";
 import type { Line, Tone } from "./model";
-import type { PluginItemView, PluginKind } from "./types";
+import type { PluginGoneView, PluginItemView, PluginKind } from "./types";
 
 /** The agents with a mark of their own; any other shows its name's first letter. */
 const glyphed = (agent: string) => PROVIDERS.includes(agent);
@@ -93,6 +94,22 @@ export function PluginCard({ item, line, chip, busy, onOpen, onSwitch }: {
         </button>
       </div>
       <SettingsSwitch label={item.name} checked={on} disabled={busy} onCheckedChange={onSwitch} />
+    </SettingsCard>
+  );
+}
+
+/** A kept item whose files are gone: nothing to switch, only to forget. */
+export function MissingCard({ item, busy, onRemove }: { item: PluginGoneView; busy: boolean; onRemove: () => void }) {
+  return (
+    <SettingsCard data-slot="plugin-missing" data-key={item.key} split={false} className="flex-row items-center gap-3 px-4 py-3.5">
+      <span className="flex min-w-0 flex-1 items-center gap-3">
+        <span className="opacity-50"><PluginMark item={{ kind: item.kind, name: item.name, detail: "" }} /></span>
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="truncate text-label font-medium">{item.name}</span>
+          <span className={cn("truncate text-xs", TONE.warning)}>Missing: its files are gone</span>
+        </span>
+      </span>
+      <Button variant="ghost" size="sm" aria-label={`Remove ${item.name}`} disabled={busy} onClick={onRemove}>Remove</Button>
     </SettingsCard>
   );
 }

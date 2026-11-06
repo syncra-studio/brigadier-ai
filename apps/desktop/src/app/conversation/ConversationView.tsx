@@ -227,6 +227,7 @@ function signature(
     block.errorAt,
     block.startedAtMs,
     block.endedAtMs,
+    block.followed,
     block.worked,
     block.cardWait,
     block.texts.map((text) => [text.messageId, text.position, text.model, text.anchors, text.answerAtMs, text.commentary, text.live]),
@@ -346,6 +347,7 @@ function useItems(
               ...(peer && { peer }),
             };
           }),
+          ...(block.followed && { followed: true }),
           state: block.state,
           error: block.error,
           errorAt: block.errorAt,

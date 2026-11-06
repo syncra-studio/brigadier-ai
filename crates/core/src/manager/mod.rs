@@ -63,6 +63,7 @@ mod git_actions;
 mod inbox;
 mod inbox_store;
 pub mod integrations;
+mod job_watch;
 mod kept;
 #[cfg(all(test, unix))]
 mod kept_live_tests;
@@ -307,6 +308,9 @@ pub struct SessionManager {
     /// them at a time, so an older reading never lands after a newer one.
     work_blocks: std::sync::Mutex<HashMap<ConversationId, crate::thread_view::WorkBlock>>,
     block_refresh: tokio::sync::Mutex<()>,
+    /// Whether work ran across a successor's start, by its first message: from times that don't
+    /// change, so read once ([`cli_thread`]).
+    seam_holds: std::sync::Mutex<HashMap<(ConversationId, String), bool>>,
     /// Per conversation, the inbox read so far for Brigadier's own messages its CLI was
     /// handed ([`cli_thread`]): the last event's sequence, and the texts of those found.
     inbox_read: std::sync::Mutex<HashMap<ConversationId, (i64, std::collections::HashSet<String>)>>,
@@ -486,6 +490,7 @@ impl SessionManager {
             checkout_saves: tokio::sync::broadcast::channel(16).0,
             cli_threads: std::sync::Mutex::default(),
             work_blocks: std::sync::Mutex::default(),
+            seam_holds: std::sync::Mutex::default(),
             block_refresh: tokio::sync::Mutex::const_new(()),
             inbox_read: std::sync::Mutex::default(),
             thread_news: tokio::sync::broadcast::channel(1024).0,

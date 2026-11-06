@@ -24,22 +24,33 @@ const { useApp } = await import("./store");
 const { useReveal, revealSetting } = await import("@/app/settings/reveal");
 
 const home: Selection = { type: "draft", kind: "chat" };
+const general: Selection = { type: "settings", page: "general" };
+const routing: Selection = { type: "settings", page: "routing" };
 const providers: Selection = { type: "settings", page: "providers" };
 const claude: Selection = { type: "settings", page: "providers", detail: { provider: "claude" } };
 const codex: Selection = { type: "settings", page: "providers", detail: { provider: "codex" } };
+const chat = (id: string): Selection => ({ type: "conversation", id });
 const shown = () => useApp.getState().selection;
-const places = () => useHistory.getState().entries;
+const redo = () => useHistory.getState().forward;
 const conversation = (id: string) => ({ id, kind: "chat", title: id, sideOf: null }) as Conversation;
 const message = (id: string): Message => ({
   id: `${id}-m1`, conversationId: id, seq: 1, role: "user", text: `message in ${id}`, attachments: [], mentions: [],
   createdAtMs: 1, blob: null, model: null, requestId: null, parentId: null,
 });
 
+/** Steps `delta` once per place, each time expecting to arrive at that place. */
+function walk(delta: -1 | 1, places: Selection[]): void {
+  for (const place of places) {
+    stepHistory(delta);
+    assert.deepEqual(shown(), place);
+  }
+}
+
 beforeEach(() => {
   frames.length = 0;
   forgetKeptBoards();
   useBoard.setState({ board: null });
-  useHistory.setState({ entries: [], index: -1 });
+  useHistory.setState({ forward: [] });
   useAgentPageAsk.setState({ ask: null });
   useReveal.setState({ label: null });
   useApp.setState((state) => ({ selection: home, conversations: {}, projects: {}, threads: {}, providers: { ...state.providers, view: null } }));
@@ -57,87 +68,115 @@ beforeEach(() => {
   });
 });
 
-test("provider list/detail round trips survive other Settings pages and different providers", () => {
-  openSettings("general");
+test("Home, Settings, Routing, Providers: Back skips Routing and ends at Home, Forward redoes those steps", () => {
+  openSettings();
+  assert.deepEqual(shown(), general);
+  openSettings("routing");
+  assert.deepEqual(shown(), routing);
   openSettings("providers");
+  walk(-1, [general, home, home]);
+  assert.deepEqual(redo(), [providers, general]);
+  walk(1, [general, providers, providers]);
+  assert.deepEqual(redo(), []);
+});
+
+test("from a chat, Back goes Home whichever chat came before, and Forward returns to it", async () => {
+  useApp.setState({ conversations: { a: conversation("a"), b: conversation("b") } });
+  await select(chat("a"));
+  await select(chat("b"));
+  walk(-1, [home, home]);
+  walk(1, [chat("b"), chat("b")]);
+});
+
+test("a project's draft goes Home too, and a removed project's draft can't be returned to", () => {
+  useApp.setState({ projects: { p: { id: "p" } as Project } });
+  const draft: Selection = { type: "draft", kind: "session", projectId: "p" };
+  select(draft);
+  walk(-1, [home]);
+  walk(1, [draft]);
+  walk(-1, [home]);
+  useApp.setState({ projects: {} });
+  walk(1, [home]);
+  assert.deepEqual(redo(), []);
+});
+
+test("from a chat, Back leaves Settings through General for that chat, then Home", async () => {
+  useApp.setState({ conversations: { a: conversation("a") } });
+  await select(chat("a"));
+  openSettings();
+  walk(-1, [chat("a"), home, home]);
+  walk(1, [chat("a"), general]);
+  // Settings re-entered by Forward still leaves for the same chat.
+  walk(-1, [chat("a")]);
+});
+
+test("Settings opened from a chat since deleted, or from nothing, leaves for Home", async () => {
+  useApp.setState({ conversations: { a: conversation("a") } });
+  await select(chat("a"));
+  openSettings("providers");
+  useApp.setState({ conversations: {} });
+  walk(-1, [general, home]);
+
+  useApp.setState({ selection: { type: "none" } });
+  stepHistory(-1);
+  assert.deepEqual(shown(), { type: "none" });
+  openSettings();
+  walk(-1, [home]);
+});
+
+test("a detail goes to its own page, then General, however it was reached", () => {
+  openSettings("git");
   openAgentPage("claude");
   openAgentPage("codex");
-  openSettings("git");
-  assert.deepEqual(places(), [home, { type: "settings", page: "general" }, providers, claude, codex, { type: "settings", page: "git" }]);
-  for (const target of places().slice(0, -1).toReversed()) {
-    stepHistory(-1);
-    assert.deepEqual(shown(), target);
-  }
-  stepHistory(-1);
-  assert.deepEqual(shown(), home);
-  for (const target of places().slice(1)) {
-    stepHistory(1);
-    assert.deepEqual(shown(), target);
-  }
-  stepHistory(1);
-  assert.equal(useHistory.getState().index, 5);
+  walk(-1, [providers, general, home]);
+  walk(1, [general, providers, codex]);
 });
 
-test("new navigation after Back drops Forward while revisiting the same place adds no loop", () => {
+test("any new navigation clears Forward; showing the same place again does not", () => {
   openSettings("providers");
   openAgentPage("claude");
-  openAgentPage("claude");
-  assert.deepEqual(places(), [home, providers, claude]);
   stepHistory(-1);
+  assert.deepEqual(redo(), [claude]);
+  openSettings("providers");
+  assert.deepEqual(redo(), [claude]);
   openSettings("voice");
-  assert.deepEqual(places(), [home, providers, { type: "settings", page: "voice" }]);
+  assert.deepEqual(redo(), []);
   stepHistory(1);
   assert.deepEqual(shown(), { type: "settings", page: "voice" });
-});
 
-test("returning to an earlier place by a link drops the detour, so Back unwinds the way it was reached", () => {
-  const plugins: Selection = { type: "settings", page: "plugins" };
-  const pluginA: Selection = { type: "settings", page: "plugins", detail: { plugin: "server:a" } };
-  const pluginB: Selection = { type: "settings", page: "plugins", detail: { plugin: "server:b" } };
-  openSettings("general");
-  openSettings("plugins");
-  select(pluginA);
-  openSettings("plugins");
-  select(pluginB);
-  assert.deepEqual(places(), [home, { type: "settings", page: "general" }, plugins, pluginB]);
   stepHistory(-1);
-  assert.deepEqual(shown(), plugins);
-  stepHistory(-1);
-  assert.deepEqual(shown(), { type: "settings", page: "general" });
-  stepHistory(-1);
+  closeSettings();
   assert.deepEqual(shown(), home);
+  assert.deepEqual(redo(), []);
 });
 
-test("Browser nested pages and plugin details are restored as app destinations", () => {
+test("Browser nested pages and plugin details go up to their page and are restored by Forward", () => {
   openSettings("browser");
+  const browser: Selection = { type: "settings", page: "browser" };
   for (const view of ["history", "downloads", "sites"] as const) {
     showBrowserSettingsView(view);
     const destination = shown();
-    stepHistory(-1);
-    stepHistory(1);
-    assert.deepEqual(shown(), destination);
+    walk(-1, [browser]);
+    walk(1, [destination]);
+    showBrowserSettingsView("page");
   }
+  const plugins: Selection = { type: "settings", page: "plugins" };
+  const plugin: Selection = { type: "settings", page: "plugins", detail: { plugin: "server:example" } };
   openSettings("plugins");
-  select({ type: "settings", page: "plugins", detail: { plugin: "server:example" } });
-  openSettings("general");
-  stepHistory(-1);
-  assert.deepEqual(shown(), { type: "settings", page: "plugins", detail: { plugin: "server:example" } });
-  stepHistory(-1);
-  assert.deepEqual(shown(), { type: "settings", page: "plugins" });
+  select(plugin);
+  walk(-1, [plugins, general]);
+  walk(1, [plugins, plugin]);
 });
 
-test("external Browser links open one destination without a phantom parent entry", () => {
+test("an external Browser link goes up through its page like any other", () => {
   openBrowserSettings("downloads");
-  assert.deepEqual(places(), [home, { type: "settings", page: "browser", detail: { view: "downloads" } }]);
-  stepHistory(-1);
-  assert.deepEqual(shown(), home);
+  walk(-1, [{ type: "settings", page: "browser" }, general, home]);
 });
 
 test("provider sign-in is visit state, canceled by Back and absent on Forward", () => {
   openSettings("providers");
   openAgentPage("codex", true);
   assert.equal(useAgentPageAsk.getState().ask?.under, shown());
-  assert.deepEqual(places(), [home, providers, codex]);
   stepHistory(-1);
   assert.equal(useAgentPageAsk.getState().ask, null);
   assert.deepEqual(shown(), providers);
@@ -150,7 +189,6 @@ test("merged links and Settings search resolve detail once before reveal, cancel
   openSettings("providers");
   openSettings("usage");
   assert.deepEqual(shown(), claude);
-  assert.deepEqual(places(), [home, providers, claude]);
   assert.equal(useReveal.getState().label, "Accounts");
   const pending = frames.splice(0);
   stepHistory(-1);
@@ -158,7 +196,6 @@ test("merged links and Settings search resolve detail once before reveal, cancel
   // A stale callback returns before asking the DOM for a row (there is no DOM here).
   for (const callback of pending) callback(0);
   assert.deepEqual(shown(), providers);
-  assert.deepEqual(places(), [home, providers, claude]);
   openSettings("providers", "Models");
   assert.deepEqual(shown(), claude);
   openSettings("providers", "Agents");
@@ -188,48 +225,42 @@ test("provider reveals keep the current provider, or resolve the model or first 
   assert.deepEqual(shown(), claude);
   openSettings("providers", "GPT fixture");
   assert.deepEqual(shown(), codex);
-  // Codex was reached before Claude, so Back skips the detour through Claude.
   stepHistory(-1);
   assert.deepEqual(shown(), providers);
 });
 
 test("close and toggle still leave all of Settings for its entry destination", () => {
+  const draft: Selection = { type: "draft", kind: "session", projectId: "p" };
   useApp.setState({ projects: { p: { id: "p" } as Project } });
-  select({ type: "draft", kind: "session", projectId: "p" });
+  select(draft);
   openSettings("providers");
   openAgentPage("claude");
   openSettings("git");
   closeSettings();
-  assert.deepEqual(shown(), { type: "draft", kind: "session", projectId: "p" });
-  // Back from where Settings was entered unwinds past it, not into it again.
-  assert.deepEqual(places(), [home, { type: "draft", kind: "session", projectId: "p" }]);
+  assert.deepEqual(shown(), draft);
   openSettings("providers");
   openSettings("git");
   stepHistory(-1);
+  assert.deepEqual(shown(), general);
   toggleSettings();
-  assert.deepEqual(shown(), { type: "draft", kind: "session", projectId: "p" });
+  assert.deepEqual(shown(), draft);
 });
 
-test("conversation Back/Forward keeps loaded messages and board, and replaces deleted targets", async () => {
+test("conversation Back/Forward keeps loaded messages and board, and a deleted one shows Home", async () => {
   useApp.setState({ conversations: { a: conversation("a"), b: conversation("b") } });
-  await select({ type: "conversation", id: "a" });
+  await select(chat("a"));
   const board = useBoard.getState().board;
   const thread = useApp.getState().threads.a;
-  await select({ type: "conversation", id: "b" });
-  openSettings("providers");
-  openAgentPage("claude");
   stepHistory(-1);
-  stepHistory(-1);
-  assert.deepEqual(shown(), { type: "conversation", id: "b" });
-  stepHistory(-1);
-  assert.deepEqual(shown(), { type: "conversation", id: "a" });
+  assert.deepEqual(shown(), home);
+  stepHistory(1);
+  assert.deepEqual(shown(), chat("a"));
   assert.equal(useBoard.getState().board, board);
   assert.equal(useApp.getState().threads.a?.items, thread?.items);
   assert.deepEqual(thread?.items.map((item) => item.text), ["message in a"]);
-  stepHistory(1);
-  assert.deepEqual(shown(), { type: "conversation", id: "b" });
-  useApp.setState({ conversations: { b: conversation("b") } });
   stepHistory(-1);
+  useApp.setState({ conversations: { b: conversation("b") } });
+  stepHistory(1);
   assert.deepEqual(shown(), home);
-  assert.deepEqual(places()[1], home);
+  assert.deepEqual(redo(), []);
 });

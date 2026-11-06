@@ -29,7 +29,7 @@ use brigadier_providers::{
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::conversation::{Cli, safe_file_name};
+use super::conversation::{BACKGROUND_TURN_GRACE, Cli, safe_file_name};
 use super::outputs::outputs_dir;
 use super::refcheck::engine_rewrite;
 use super::usage::TokenOwner;
@@ -92,8 +92,10 @@ pub(crate) struct WorkerSession {
     pub grant: String,
 }
 
+mod once;
 mod quota;
 mod seam;
+pub(crate) use once::{marked_once, once_mark, without_mark};
 
 #[derive(Default)]
 struct TaskLiveState {
@@ -116,8 +118,16 @@ struct TaskLiveState {
     cutoff: Option<AttemptEnd>,
     /// Its hand-off to a fresh CLI session, under way (D14).
     seam: Option<seam::SeamLive>,
-    /// What its session sent while it hands off: its successor's first input carries it.
+    /// What its session sent while it hands off: its successor's first input carries it, or,
+    /// when a usage limit called the hand-off off, its next input. Kept in the same order in
+    /// `record/seam-held.json`, written only with this state's lock held.
     seam_held: Vec<String>,
+    /// Which hold on its hand-off is the current one, and whether one is running.
+    seam_hold_timer: u64,
+    seam_hold_armed: bool,
+    /// How many turns its CLI was seen starting: a refused send leaves a turn that started
+    /// meanwhile running.
+    turns_started: u64,
     /// Its turn is a compaction of its own (development builds' `debugCompact`): its session
     /// already heard its last turn end and hears nothing of this one.
     compacting: bool,
@@ -131,6 +141,18 @@ struct TaskLiveState {
     /// The model this run started on (the one its session or routing chose): it goes back there
     /// when nothing else can take it.
     run_origin: Option<ModelChoice>,
+    /// Its turn ended well with a job of its own running, and its parent wasn't told: a turn it
+    /// starts takes that over, or the job's end with none after it tells it.
+    turn_end_held: bool,
+}
+
+impl TaskLiveState {
+    /// Its hand-off is over or called off, and so is the hold on it.
+    fn seam_over(&mut self) {
+        self.seam = None;
+        self.seam_hold_armed = false;
+        self.seam_hold_timer += 1;
+    }
 }
 
 /// A task's live worker.
@@ -211,7 +233,30 @@ impl TaskLive {
         }
         if matches!(event, ProviderEvent::TurnStarted { .. }) {
             state.busy = true;
+            state.turns_started += 1;
+            state.turn_end_held = false;
         }
+    }
+
+    /// Holds its turn end back from its parent if `jobs` says any of its own run, in one step
+    /// with a job's end seeing the hold; never during a hand-off, which has its own course.
+    pub(crate) async fn hold_turn_end(
+        &self,
+        jobs: impl FnOnce() -> Vec<String>,
+    ) -> Option<Vec<String>> {
+        let mut state = self.state.lock().await;
+        if state.seam.is_some() || state.stopping {
+            return None;
+        }
+        let jobs = jobs();
+        state.turn_end_held = !jobs.is_empty();
+        state.turn_end_held.then_some(jobs)
+    }
+
+    /// Tests: holds its state lock, to order what waits for it.
+    #[cfg(all(test, unix))]
+    pub(crate) async fn state_guard(&self) -> impl Sized + '_ {
+        self.state.lock().await
     }
 
     /// The worker's CLI session, while one runs.
@@ -1049,6 +1094,13 @@ impl SessionManager {
             }
             t.state = TaskState::Running;
             t.blocked_reason = None;
+            // It runs again: its row no longer says its CLI ended (#811).
+            if t.error
+                .as_deref()
+                .is_some_and(super::plain_workers::cli_ended)
+            {
+                t.error = None;
+            }
         })
         .await?;
         if stopped || live.state.lock().await.quota_cancelled {
@@ -1065,10 +1117,16 @@ impl SessionManager {
             })
             .await;
         }
-        if let Err(err) = cli.session.send(first).await {
+        // What a usage limit left waiting goes first; a successor's first input has it already.
+        let held = match successor_of {
+            Some(_) => Vec::new(),
+            None => self.held_for_input(live, task).await,
+        };
+        if let Err(err) = cli.session.send(seam::with_held(first, &held)).await {
             self.first_send_refused(live, task, &cli).await;
             return Err(Error::Provider(err.to_string()));
         }
+        self.held_went(live, task, held.len()).await;
         live.state.lock().await.quota_send_accepted = true;
         self.confirm_worker_quota_transition(live, &cli).await;
         Ok(())
@@ -1723,10 +1781,16 @@ impl SessionManager {
                 state.cli = None;
             }
             state.busy = false;
+            // Whatever it held back, the worker hears of its CLI's end now (`plain_gone`).
+            state.turn_end_held = false;
             // A compaction cut off with its CLI never ends: the next turn is a real one.
             state.compacting = false;
             (state.stopping, state.cli.is_some())
         };
+        // Before whoever closed it goes on: nothing is left to take their answer (#767).
+        if !replaced {
+            self.expire_cli_cards(&live.conversation_id, &live.id).await;
+        }
         cli.ended.cancel();
         // A fresh session that already took the task over tells its own MCP servers.
         if !replaced {
@@ -1753,6 +1817,12 @@ impl SessionManager {
         let cwd = live.cwd().await;
         self.follow_worker_commands(&live.conversation_id, &live.id, cwd, &event)
             .await;
+        if matches!(
+            event,
+            ProviderEvent::BackgroundTask { .. } | ProviderEvent::ToolCall { .. }
+        ) {
+            self.tell_held_turn_end_soon(live).await;
+        }
         match &event {
             ProviderEvent::ApprovalRequested { request } => {
                 let request = request.clone();
@@ -1931,6 +2001,39 @@ impl SessionManager {
         }
     }
 
+    /// Its last job ended while a turn end of its is held back: the turn that end starts takes
+    /// it over (Claude and OpenCode start one, Codex doesn't); with none after
+    /// [`BACKGROUND_TURN_GRACE`], its parent hears the turn held back.
+    async fn tell_held_turn_end_soon(&self, live: &Arc<TaskLive>) {
+        if !live.state.lock().await.turn_end_held || !self.worker_jobs_running(&live.id).is_empty()
+        {
+            return;
+        }
+        let (manager, live) = (self.arc(), live.clone());
+        self.spawn(async move {
+            loop {
+                tokio::time::sleep(BACKGROUND_TURN_GRACE).await;
+                let mut state = live.state.lock().await;
+                if !state.turn_end_held || !manager.worker_jobs_running(&live.id).is_empty() {
+                    return;
+                }
+                // A message on its way: its turn takes this over, or a refused one looks again.
+                if !state.busy {
+                    state.turn_end_held = false;
+                    break;
+                }
+            }
+            manager.worker_quiet.holding(&live.id, None);
+            if let Ok(task) = manager.task_by_id(&live.conversation_id, &live.id).await
+                && !task.state.is_final()
+            {
+                manager
+                    .plain_turn_ended(&live, &task, TurnStatus::Completed)
+                    .await;
+            }
+        });
+    }
+
     /// B7 for worker approvals: what the user already allowed "for this session" in this
     /// conversation goes; anything else asks its orchestrator (the CLI asks only what its level
     /// leaves open). A worker raised to Full access since its CLI started asks nobody.
@@ -2042,6 +2145,14 @@ impl SessionManager {
                 },
             )
             .await;
+            // Its session may have heard it ask: it hears who settled it, not silence (#650).
+            let mut told =
+                super::plain_workers::event(task_id, brigadier_cli::protocol::EventKind::Settled);
+            told.message = Some(format!(
+                "its permission prompt for {} went ahead because the session went to Full access; nobody answered it",
+                request.tool
+            ));
+            self.worker_event(id, task_id, None, told);
         }
     }
 
@@ -2275,23 +2386,48 @@ impl SessionManager {
         let mut state = live.state.lock().await;
         // Handing off (D14): its successor's first input carries it.
         if state.seam.as_ref().is_some_and(|seam| seam.holds()) {
-            state.seam_held.push(held_text(&input));
+            self.hold_for_successor(&mut state, task, held_text(&input))
+                .await?;
+            drop(state);
+            self.arm_worker_seam_hold(task).await;
             return Ok(());
         }
         let Some(cli) = state.cli.clone() else {
             drop(state);
             return self.revive_worker(&live, task, input).await;
         };
-        if state.busy {
+        // What a usage limit left waiting goes first.
+        let held = state.seam_held.clone();
+        let input = seam::with_held(input, &held);
+        // The lock stays free during the call, as its event pump needs it (#768). Busy from
+        // before it: a turn could end before the lock was taken again.
+        let steering = std::mem::replace(&mut state.busy, true);
+        let turns = state.turns_started;
+        drop(state);
+        let sent = if steering {
             cli.session.steer(input).await
         } else {
-            // Busy only once a turn really started: a refused send leaves it idle.
-            let sent = cli.session.send(input).await;
-            state.busy = sent.is_ok();
-            sent
+            cli.session.send(input).await
+        };
+        if let Err(err) = sent {
+            // A refused send leaves it idle, unless a turn started all the same.
+            let mut state = live.state.lock().await;
+            if !steering
+                && state.turns_started == turns
+                && state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, &cli))
+            {
+                state.busy = false;
+            }
+            return Err(Error::Provider(err.to_string()));
         }
-        .map_err(|err| Error::Provider(err.to_string()))?;
-        drop(state);
+        self.held_went(&live, task, held.len()).await;
+        // A turn that ended during the send isn't running: its pump took busy back and its end
+        // stays. Under the lock, so that end can only be recorded after this write. Nothing
+        // under a task write waits for this lock.
+        let state = live.state.lock().await;
+        if !state.busy {
+            return Ok(());
+        }
         let running = self
             .update_task(conversation_id, &task.id, |task| {
                 if !task.state.is_final() {
@@ -2300,6 +2436,7 @@ impl SessionManager {
                 }
             })
             .await;
+        drop(state);
         if let Err(err) = running {
             tracing::warn!(task = %task.id, error = %err, "could not record a messaged worker running");
         }
@@ -2697,6 +2834,10 @@ impl SessionManager {
             .await?;
             return Err(err);
         }
+        // It really runs again: no Stop stands for what the user sends next.
+        if let Ok(conv) = self.conv(&conversation_id) {
+            conv.worker_resumed().await;
+        }
         self.worker_resume_taken(&task, &input).await?;
         self.orchestrator_step(&conversation_id, OrchestratorStepKind::Resumed { task_id })
             .await;
@@ -2716,18 +2857,9 @@ impl SessionManager {
         let live = self.task_live(task);
         let _managed = live.manage.lock().await;
         let _settled = live.settle.lock().await;
-        if let Some(native_id) = self.last_worker_native_id(task).await {
-            // The preferred account may have changed while the daemon was down.
-            for candidate in self.runtime.account_candidates(task.route.choice.provider) {
-                if let Ok(provider) = self.runtime.provider_for(&candidate.account)
-                    && provider
-                        .took_input(&native_id, input.lines().next().unwrap())
-                        .await
-                {
-                    self.worker_resume_taken(task, input).await?;
-                    return Ok(false);
-                }
-            }
+        if self.worker_took(task, input.lines().next().unwrap()).await {
+            self.worker_resume_taken(task, input).await?;
+            return Ok(false);
         }
         let (manager, task, input) = (self.arc(), task.clone(), input.clone());
         self.spawn(async move {
@@ -2773,6 +2905,8 @@ impl SessionManager {
         why: impl Into<String>,
     ) -> Error {
         self.restore_quota_recovery(live, task, was_cancelled).await;
+        // Its hand-off may be why: somebody waits on it now.
+        self.arm_worker_seam_hold(task).await;
         Error::Invalid(why.into())
     }
 

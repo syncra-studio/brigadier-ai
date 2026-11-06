@@ -4,7 +4,7 @@ import { errorText } from "@/app/shell/dialogs/fields";
 import { NavRow } from "@/components/controls";
 import { ComposeEditSquare, DotsHorizontal, Download, Folder, FolderOpen, SettingsCog, Trash } from "@/components/icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
-import { ConversationRow, EmptyState, NavFold, NavList, RowAction, RowActionsSlot, type RowActions } from "@/components/shared";
+import { ConversationRow, EmptyState, NavFold, NavList, ProjectIcon, RowAction, RowActionsSlot, type RowActions } from "@/components/shared";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, Project } from "@/ipc/generated";
 import { select, setProjectExpanded } from "@/state/actions";
@@ -18,7 +18,7 @@ export function underSource(conversation: Conversation, list: readonly Conversat
 }
 
 /**
- * A project in the sidebar: its folder and name, folding its sessions away; on hover its menu
+ * A project in the sidebar: its icon (its folder when it has none) and name, folding its sessions away; on hover its menu
  * (New session, Project settings…, Reveal, Export conventions, Remove…) and New session.
  */
 export const ProjectRow = memo(function ProjectRow({
@@ -54,7 +54,7 @@ export const ProjectRow = memo(function ProjectRow({
           className="pe-16"
           onClick={() => setProjectExpanded(project.id, !expanded)}
         >
-          {expanded ? <FolderOpen /> : <Folder />}
+          <ProjectIcon projectId={project.id} fallback={expanded ? <FolderOpen /> : <Folder />} />
           <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
             {project.name}
           </span>

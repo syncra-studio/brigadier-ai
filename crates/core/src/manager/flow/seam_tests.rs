@@ -175,6 +175,27 @@ fn gate_note(
     })
 }
 
+/// With nothing held, a successor's own turn joins nothing: it is its own block under the divider.
+#[tokio::test]
+async fn a_successors_own_turn_with_nothing_held_is_not_recorded_as_joining() {
+    let inputs: Inputs = Arc::default();
+    let mut flow = Flow::start(
+        "seam-no-join",
+        options(),
+        thread(inputs.clone(), Arc::default()),
+    )
+    .await;
+    seam_on(&mut flow, Duration::from_secs(60));
+    grow(&flow, 1).await;
+    assert_eq!(given(&inputs, CARRY_ON).len(), 1);
+    let id = flow.conversation.clone();
+    let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
+    assert!(records.iter().all(|record| !record.joins), "{records:#?}");
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(view.turns.iter().all(|turn| !turn.joins), "{view:#?}");
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
     let inputs: Inputs = Arc::default();

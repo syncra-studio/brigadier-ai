@@ -32,6 +32,11 @@ model: string | null,
  */
 provider: ProviderKind | null, 
 /**
+ * Whether the research model had no research rating of its own: none that had one could
+ * run, so it ran on the user's own model (#745).
+ */
+researcherUnrated: boolean, 
+/**
  * The host-captured curated revision researched by this job.
  */
 baseRevision: number | null, 

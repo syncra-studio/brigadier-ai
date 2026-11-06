@@ -19,6 +19,10 @@ pub struct Grant {
     pub client_secret: Option<String>,
     pub token_endpoint: String,
     pub revocation_endpoint: Option<String>,
+    /// The OAuth `resource` this grant was signed in with, as the server's metadata wrote it.
+    /// Grants saved without one were signed in with their server URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_resource: Option<String>,
 }
 
 /// Implementations must replace each resource's entire value atomically. Never log data.

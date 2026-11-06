@@ -32,14 +32,12 @@ impl RatingPatch {
         !model.excluded && self.provider == model.provider && self.model == model.rating_identity()
     }
 
-    /// Whether whoever researched this patch makes the model it rates: run on that model's CLI,
-    /// or on the CLI of the maker of a model listed through another CLI (#745).
+    /// Whether whoever researched this patch makes the model it rates: run on the CLI of that
+    /// model's maker, wherever it's listed (#745). A CLI that runs anyone's models makes none.
     fn by_its_maker(&self) -> bool {
-        self.researched_by.is_some_and(|by| {
-            by == self.provider
-                || cli_maker(by)
-                    .is_some_and(|maker| model_maker(self.provider, &self.model) == Some(maker))
-        })
+        self.researched_by
+            .and_then(cli_maker)
+            .is_some_and(|maker| model_maker(self.provider, &self.model) == Some(maker))
     }
 
     pub fn apply(&self, model: &mut MergedModel) {
@@ -82,6 +80,27 @@ impl RatingPatch {
         if !self.by_its_maker() {
             return Vec::new();
         }
+        self.drop_raises(model)
+    }
+
+    /// As [`Self::drop_self_raises`], knowing the model that researched: `researched_by` names
+    /// only its CLI, which for one running anyone's models doesn't say whose it is. It doesn't
+    /// raise itself, nor a model of a maker the two ids' words name.
+    pub fn drop_raises_by(
+        &mut self,
+        model: &MergedModel,
+        researcher: (ProviderKind, &str),
+    ) -> Vec<String> {
+        let maker = model_maker(researcher.0, researcher.1);
+        let itself = model.provider == researcher.0 && model.id == researcher.1;
+        if itself || (maker.is_some() && maker == model_maker(self.provider, &self.model)) {
+            self.drop_raises(model)
+        } else {
+            self.drop_self_raises(model)
+        }
+    }
+
+    fn drop_raises(&mut self, model: &MergedModel) -> Vec<String> {
         let mut dropped = Vec::new();
         if self.tier.is_some_and(|tier| tier > model.tier) {
             self.tier = None;
@@ -364,6 +383,45 @@ mod tests {
         let mut model = merged(theirs);
         rating(theirs).apply(&mut model);
         assert_eq!(model.strengths[&TaskCategory::Research], 9.0);
+    }
+
+    /// #745: research run through OpenCode can rate OpenCode's models, but not raise itself or
+    /// its maker's, which only the model it ran on can tell.
+    #[test]
+    fn research_through_a_cli_of_anyones_models_rates_all_but_its_own() {
+        let merged = |id: &str| {
+            merge(
+                &Registry::bundled(),
+                &[(ProviderKind::OpenCode, &[info(id, None)])],
+                &[],
+                &[],
+            )
+            .remove(0)
+        };
+        let dropped = |id: &str, researcher: &str| {
+            RatingPatch {
+                provider: ProviderKind::OpenCode,
+                model: id.into(),
+                sources: Vec::new(),
+                tier: Some(QualityTier::Strong),
+                strengths: BTreeMap::from([(TaskCategory::Research, 9.0)]),
+                area_strengths: BTreeMap::new(),
+                default_effort: BTreeMap::new(),
+                researched_by: Some(ProviderKind::OpenCode),
+            }
+            .drop_raises_by(&merged(id), (ProviderKind::OpenCode, researcher))
+        };
+        let raises = vec!["tier".to_owned(), "strengths.research".to_owned()];
+        let (claude, sonnet, kimi, glm) = (
+            "anthropic/claude-opus-5",
+            "openrouter/anthropic/claude-sonnet-5",
+            "opencode-go/kimi-k2",
+            "opencode-go/glm-5",
+        );
+        assert_eq!(dropped(sonnet, claude), raises);
+        assert_eq!(dropped(kimi, kimi), raises);
+        assert!(dropped(kimi, glm).is_empty());
+        assert!(dropped(claude, glm).is_empty());
     }
 
     fn patch(model: &str) -> serde_json::Value {

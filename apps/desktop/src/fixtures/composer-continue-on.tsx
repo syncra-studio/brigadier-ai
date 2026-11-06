@@ -1,8 +1,9 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a started session's
  * composer on Claude Code, with Codex installed too, IPC mocked (S38c). Browsing Codex in the
- * model picker says a pick continues there, and picking a Codex model asks the daemon to move the
- * session there on that model; Claude Code's own list says nothing of the kind. Then the picker's
+ * model picker says a pick continues there, and a Codex model picked asks the daemon to move the
+ * session there on that model as the picker closes, not after Escape; Claude Code's own list says
+ * nothing of the kind. Then the picker's
  * keys: arrows between its columns, typing to search, Escape. What it saw goes as JSON into `<pre id="composer-continue-on-result">`.
  */
 import { mockIPC } from "@/ipc/nativeMocks";
@@ -82,12 +83,12 @@ const key = (target: Element, name: string) =>
 const trigger = () => document.querySelector<HTMLElement>("[data-slot=model-selector-trigger]");
 const picker = () => document.querySelector<HTMLElement>("[data-slot=model-picker-popover]");
 const agent = (label: string) =>
-  [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-agent]")].find((row) => row.textContent === label);
+  [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-agent]")].find((row) => row.getAttribute("aria-label") === label);
 const models = () => [...document.querySelectorAll<HTMLElement>("[data-slot=model-picker-model]")];
 const line = () => document.querySelector("[data-slot=model-picker-continue]")?.textContent ?? null;
 const focused = () => {
   const active = document.activeElement as HTMLElement | null;
-  return active?.matches("input") ? `search:${(active as HTMLInputElement).value}` : (active?.textContent ?? null);
+  return active?.matches("input") ? `search:${(active as HTMLInputElement).value}` : (active?.getAttribute("aria-label") ?? active?.textContent ?? null);
 };
 
 async function open(): Promise<void> {
@@ -137,9 +138,21 @@ async function drive() {
     agent("Codex")!.click();
     await until("Codex's models", () => models().some((row) => row.textContent?.startsWith("GPT-5.5")));
     seen.codex = { line: line(), models: models().map((row) => row.textContent) };
+    // Picked, it stays open and waits; Escape closes it without moving.
+    models()[0]!.click();
+    await until("the pick on the trigger", () => trigger()?.textContent?.includes("GPT-5.5"));
+    seen.held = { open: picker() !== null, asked: asked.length, line: line(), trigger: trigger()!.textContent };
+    key(document.activeElement!, "Escape");
+    await until("the picker closed by Escape", () => picker() === null);
+    seen.afterEscape = { asked: asked.length, trigger: trigger()!.textContent };
+    await open();
+    agent("Codex")!.click();
+    await until("Codex's models again", () => models().some((row) => row.textContent?.startsWith("GPT-5.5")));
+    models()[0]!.click();
+    await until("the pick on the trigger again", () => trigger()?.textContent?.includes("GPT-5.5"));
     // Opened again right as it goes, the first ↓ the moment it opens (below).
     const reopened = reopenAtOnceAndPress("ArrowDown");
-    models()[0]!.click();
+    trigger()!.click();
     await until("the move asked for", () => asked.length === 1);
     seen.asked = asked;
 

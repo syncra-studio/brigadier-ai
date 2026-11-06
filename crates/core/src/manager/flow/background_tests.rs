@@ -3,6 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use brigadier_providers::{
+    BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ProviderEvent,
+};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
@@ -1897,5 +1900,198 @@ async fn a_stopped_codex_commands_terminal_ends_with_its_turn() {
         .find(|entry| entry.conversation_id == id)
         .is_some_and(|entry| entry.commands_working);
     assert!(!working, "the sidebar rests");
+    flow.stop().await;
+}
+
+// ── A restart: what became of the jobs the old daemon's CLI left ────────────────────────────
+
+const RESTART_WORDS: &str = "before Brigadier restarted";
+
+fn job(id: &str, kind: BackgroundTaskKind, file: Option<&std::path::Path>) -> ProviderEvent {
+    ProviderEvent::BackgroundTask {
+        task: BackgroundTask {
+            id: id.into(),
+            item_id: Some(format!("call-{id}")),
+            kind,
+            label: format!("label-{id}"),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: 100,
+            ended_at_ms: None,
+            output_file: file.map(|file| file.display().to_string()),
+            summary: None,
+            last_line: None,
+            command: None,
+            provider: None,
+        },
+    }
+}
+
+async fn job_started(flow: &Flow, event: ProviderEvent) {
+    flow.manager
+        .follow_background_history(&flow.conversation, None, Some(&event))
+        .await;
+}
+
+/// What a crash leaves: the records as a previous daemon wrote them, still running.
+fn from_old_daemon(flow: &Flow) {
+    let file = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .record()
+        .join("background-history/history.json");
+    let mut journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    for entry in journal["records"].as_array_mut().unwrap() {
+        entry["epoch"] = json!("old-daemon");
+    }
+    std::fs::write(&file, serde_json::to_vec(&journal).unwrap()).unwrap();
+}
+
+/// A thread that records what its CLI is told about jobs, and the flow, past its first turn.
+async fn job_flow(name: &str) -> (Flow, Log) {
+    let told: Log = Arc::default();
+    let log = told.clone();
+    let flow = Flow::start(
+        name,
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.input.contains(RESTART_WORDS) {
+                    log.lock().unwrap().push(turn.input.clone());
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start some jobs.").await;
+    flow.idle().await;
+    (flow, told)
+}
+
+#[tokio::test]
+async fn a_restart_tells_the_session_once_in_one_message_of_all_its_jobs() {
+    let (mut flow, told) = job_flow("restart-tells-jobs-once").await;
+    let ended = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .tmp()
+        .join("ended.output");
+    std::fs::write(&ended, "job-said-this\n\n[exited with code 7]\n").unwrap();
+    job_started(&flow, job("ended", BackgroundTaskKind::Shell, Some(&ended))).await;
+    job_started(&flow, job("terminal", BackgroundTaskKind::Terminal, None)).await;
+    job_started(&flow, job("agent", BackgroundTaskKind::Agent, None)).await;
+    from_old_daemon(&flow);
+
+    flow.restart().await;
+    super::eventually("the session to hear of its jobs", || {
+        !told.lock().unwrap().is_empty()
+    })
+    .await;
+    flow.idle().await;
+    {
+        let told = told.lock().unwrap();
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert!(told[0].contains("exit code 7"), "{}", told[0]);
+        assert!(told[0].contains("job-said-this"), "{}", told[0]);
+        assert!(told[0].contains("label-terminal"), "{}", told[0]);
+        assert!(told[0].contains("label-agent"), "{}", told[0]);
+    }
+
+    // Told holds across another restart.
+    flow.restart().await;
+    flow.idle().await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(told.lock().unwrap().len(), 1);
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_job_still_running_after_a_restart_gives_its_result_when_it_ends() {
+    use std::process::{Command, Stdio};
+    if Command::new("lsof")
+        .arg("-v")
+        .stderr(Stdio::null())
+        .status()
+        .is_err()
+    {
+        return;
+    }
+    let (mut flow, told) = job_flow("restart-follows-claude-job").await;
+    let file = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .tmp()
+        .join("running.output");
+    let out = std::fs::File::create(&file).unwrap();
+    // Runs until its stdin closes, with its output file for stdout, as Claude starts one.
+    let mut running = Command::new("/bin/sh")
+        .args(["-c", "echo job-said-this; cat >/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(out.try_clone().unwrap())
+        .stderr(out)
+        .spawn()
+        .unwrap();
+    job_started(
+        &flow,
+        job("running", BackgroundTaskKind::Shell, Some(&file)),
+    )
+    .await;
+    from_old_daemon(&flow);
+
+    flow.restart().await;
+    flow.idle().await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(told.lock().unwrap().is_empty(), "told while it still runs");
+
+    drop(running.stdin.take());
+    running.wait().unwrap();
+    super::eventually("the session to hear its result", || {
+        !told.lock().unwrap().is_empty()
+    })
+    .await;
+    {
+        let told = told.lock().unwrap();
+        assert!(told[0].contains("job-said-this"), "{}", told[0]);
+        assert!(told[0].contains("exit code is unknown"), "{}", told[0]);
+    }
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_clean_stop_tells_the_session_its_job_was_cut_off() {
+    let (mut flow, told) = job_flow("restart-clean-stop-cut-off").await;
+    job_started(&flow, job("terminal", BackgroundTaskKind::Terminal, None)).await;
+
+    // No old daemon's records here: the stop's own close of the CLI ends the record.
+    flow.restart().await;
+    super::eventually("the session to hear its job was cut off", || {
+        !told.lock().unwrap().is_empty()
+    })
+    .await;
+    assert!(told.lock().unwrap()[0].contains("cut off"));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn an_archived_session_hears_nothing_of_its_jobs() {
+    let (mut flow, told) = job_flow("restart-archived-hears-nothing").await;
+    job_started(&flow, job("terminal", BackgroundTaskKind::Terminal, None)).await;
+    from_old_daemon(&flow);
+    flow.manager
+        .archive(flow.conversation.clone())
+        .await
+        .unwrap();
+    from_old_daemon(&flow);
+
+    flow.restart().await;
+    flow.manager
+        .restore(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.restart().await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(told.lock().unwrap().is_empty());
     flow.stop().await;
 }

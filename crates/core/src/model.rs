@@ -896,10 +896,10 @@ pub enum KeepAwake {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum SidebarMode {
-    /// One list across all projects: pinned, open, archived.
+    /// Group by None: one list across all projects: pinned, open, archived.
     #[default]
     Inbox,
-    /// Sessions under their projects, then chats.
+    /// Group by Project: sessions under their projects, then chats.
     Projects,
 }
 
@@ -1017,6 +1017,9 @@ pub struct Settings {
     pub agent_paths: Vec<AgentPath>,
     /// Models the Providers page makes unavailable: hidden from every picker and never used.
     pub hidden_models: Vec<ModelRef>,
+    /// Models the user starred in the model picker: its Favorites tab, and first in their agent's
+    /// list.
+    pub favorite_models: Vec<ModelRef>,
     /// Every model Brigadier has seen in its agent's list: startup doesn't wait for an agent
     /// whose every known model is made unavailable.
     pub known_models: Vec<ModelRef>,
@@ -1082,6 +1085,11 @@ pub struct Settings {
     pub dismissed_suggestions: Vec<DismissedSuggestion>,
     /// How the sidebar lists conversations, the same in every window.
     pub sidebar_mode: SidebarMode,
+    /// The projects unticked in the sidebar's View, the same in every window. With none and
+    /// `sidebar_hide_chats` off, everything shows.
+    pub sidebar_hidden_projects: Vec<ProjectId>,
+    /// Chats unticked in the sidebar's View.
+    pub sidebar_hide_chats: bool,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -1298,6 +1306,7 @@ impl Default for Settings {
             disabled_providers: Vec::new(),
             agent_paths: Vec::new(),
             hidden_models: Vec::new(),
+            favorite_models: Vec::new(),
             known_models: Vec::new(),
             older_models_off: Vec::new(),
             accounts: Vec::new(),
@@ -1319,6 +1328,8 @@ impl Default for Settings {
             ratings_research_at: DEFAULT_RATINGS_RESEARCH_AT.to_owned(),
             dismissed_suggestions: Vec::new(),
             sidebar_mode: SidebarMode::Inbox,
+            sidebar_hidden_projects: Vec::new(),
+            sidebar_hide_chats: false,
             settings_version: SETTINGS_VERSION,
         }
     }

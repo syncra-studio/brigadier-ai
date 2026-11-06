@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import type { ProviderKind } from "@/ipc/generated";
-import type { PluginItemDetails, PluginKind, PluginsView } from "./types";
+import type { PluginChangeChoices, PluginChanges, PluginItemDetails, PluginKind, PluginsView } from "./types";
 
 /** Something read from what the user pasted, before it is added. */
 export type PluginDraft = {
@@ -64,6 +64,12 @@ export type PluginsAdapter = {
   signIn?: (key: string, serverId: string, projectId: string | null) => Promise<PluginAgentResult[]>;
   /** Cancels the pending flow without deleting an existing saved grant. */
   cancelSignIn?: (key: string) => Promise<PluginAgentResult[]>;
+  /** Refresh: what's new or gone since the user last chose. Changes nothing. */
+  checkChanges?: () => Promise<PluginChanges>;
+  /** Saves what the user chose for what `checkChanges` found. */
+  applyChanges?: (choices: PluginChangeChoices) => Promise<void>;
+  /** Brings an item the user kept out back into Brigadier. */
+  restorePlugin?: (key: string) => Promise<void>;
   /** A folder to add a skill from, or null when the user cancels. */
   pickFolder: () => Promise<string | null>;
   /** Trusts the project's folder, in Brigadier and in each agent's own settings (a project's note asks for it). */

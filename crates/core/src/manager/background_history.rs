@@ -14,6 +14,14 @@ use super::session_dir::{read_lineage, write_atomic};
 use crate::{ConversationId, DomainEvent, Error, Result, TaskId, now_ms};
 
 const OUTPUT_BYTES: u64 = 1024 * 1024;
+/// How much of a job's output its restart message carries; the rest stays in its history.
+const TOLD_BYTES: usize = 4 * 1024;
+/// How often a job that outlived a restart is checked on.
+const FOLLOW_EVERY: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_millis(50)
+} else {
+    std::time::Duration::from_secs(5)
+};
 // Serializes short disk transactions, never held over an await. No task cache is authoritative.
 static DISK: Mutex<()> = Mutex::new(());
 fn epoch() -> &'static str {
@@ -77,6 +85,29 @@ struct Entry {
     preview_log: Option<String>,
     #[serde(default)]
     detached: bool,
+    /// A restart caught it unfinished and its session is yet to hear of it. Cleared once told,
+    /// for good, whatever restarts come after.
+    #[serde(default)]
+    owed: bool,
+    /// A process was seen holding its output file since the restart: its end was watched.
+    #[serde(default)]
+    followed: bool,
+}
+impl Entry {
+    /// Whether its session is to hear of it after a restart: what a sub-agent's turn waits on
+    /// reads as that turn's cut-off, and what the user stopped was already meant to end.
+    fn tellable(&self) -> bool {
+        self.record.kind != "preview"
+            && (self.record.kind != "agent" || self.detached)
+            && self.record.stop_actor.is_none()
+    }
+    /// Only a Claude command's output is a file of its own, which outlives the CLI and which
+    /// a process holds for as long as the command runs. Trial: Claude Code 2.1.318.
+    fn followable(&self) -> Option<&str> {
+        (self.record.provider.as_deref() == Some("claude") && self.record.kind == "shell")
+            .then_some(self.source.as_deref())
+            .flatten()
+    }
 }
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Journal {
@@ -99,6 +130,7 @@ impl Journal {
                 && entry.record.kind != "preview"
                 && entry.record.status == "running"
             {
+                entry.owed = entry.tellable();
                 entry.record.status = "unknown".into();
                 entry.record.summary = Some("Daemon restarted; end was not observed".into());
                 // Reconciliation time is not the command's end time.
@@ -123,16 +155,7 @@ impl Journal {
         fallback: Generation,
         provider: Option<String>,
     ) -> Vec<(String, String)> {
-        let active_before: Vec<String> = self
-            .records
-            .iter()
-            .filter(|entry| {
-                entry.epoch == epoch()
-                    && entry.record.worker_id.as_deref().unwrap_or("") == owner
-                    && entry.record.status == "running"
-            })
-            .map(|entry| entry.record.id.clone())
-            .collect();
+        let active_before = self.active(owner);
         let generation = self.generations.entry(owner.to_owned()).or_insert(fallback);
         if let Some(ProviderEvent::SessionStarted { native_id, cwd, .. }) = event {
             self.commands.retain(|(who, ..)| who != owner);
@@ -277,6 +300,8 @@ impl Journal {
                         source: old.as_ref().and_then(|entry| entry.source.clone()),
                         preview_log: None,
                         detached,
+                        owed: false,
+                        followed: false,
                     };
                     match existing {
                         Some(index) => self.records[index] = entry,
@@ -368,6 +393,8 @@ impl Journal {
                         .or_else(|| old.and_then(|e| e.source.clone())),
                     preview_log: None,
                     detached: task.kind == BackgroundTaskKind::Agent,
+                    owed: false,
+                    followed: false,
                 };
                 match existing {
                     Some(i) => self.records[i] = entry,
@@ -417,6 +444,18 @@ impl Journal {
             })
             .collect()
     }
+    /// `owner`'s records running in this daemon.
+    fn active(&self, owner: &str) -> Vec<String> {
+        self.records
+            .iter()
+            .filter(|entry| {
+                entry.epoch == epoch()
+                    && entry.record.worker_id.as_deref().unwrap_or("") == owner
+                    && entry.record.status == "running"
+            })
+            .map(|entry| entry.record.id.clone())
+            .collect()
+    }
     fn command(&mut self, owner: &str, item: &str, text: String, cwd: Option<String>) {
         self.commands
             .retain(|(who, id, ..)| who != owner || id != item);
@@ -447,6 +486,122 @@ fn tail(path: &Path) -> std::io::Result<(Vec<u8>, u64)> {
     let mut bytes = Vec::new();
     file.take(OUTPUT_BYTES).read_to_end(&mut bytes)?;
     Ok((bytes, size))
+}
+
+/// Whether a background job of the session or a worker ran across `at_ms`, by the journal in the
+/// `record` folder of the session. A job with no end observed says nothing, one still running does.
+/// A persistent app (a preview, a dev server) holds no work.
+pub(super) fn job_ran_across(record: &Path, at_ms: i64) -> bool {
+    let _guard = DISK.lock().unwrap();
+    let Ok(journal) = Journal::load(&record.join("background-history")) else {
+        return false;
+    };
+    journal.records.iter().any(|Entry { record, .. }| {
+        record.kind != "preview"
+            && record.started_at_ms <= at_ms
+            && record
+                .ended_at_ms
+                .map_or(record.status == "running", |ended| ended > at_ms)
+            && !record
+                .command
+                .as_deref()
+                .is_some_and(crate::thread_view::persistent_app)
+    })
+}
+
+/// What became of a job a restart caught, as far as can be known.
+#[derive(Debug, PartialEq)]
+enum JobEnd {
+    /// The CLI saw its end and wrote the code into its output file.
+    Exited(i32),
+    /// It was seen running after the restart and then ended; nothing says how.
+    Watched,
+    /// It was killed, can't be followed, or was gone with nothing saying how it ended.
+    CutOff,
+}
+
+/// Its end, from whether a process holds its output file (`held`), whether one was seen to
+/// since the restart, and the file's end as Claude Code leaves it.
+fn job_end(held: Option<bool>, followed: bool, output: Option<&str>) -> JobEnd {
+    let last = output.and_then(|text| text.lines().rev().find(|line| !line.trim().is_empty()));
+    if let Some(code) = last
+        .and_then(|line| line.strip_prefix("[exited with code "))
+        .and_then(|rest| rest.strip_suffix(']'))
+        .and_then(|code| code.parse().ok())
+    {
+        return JobEnd::Exited(code);
+    }
+    if held.is_some() && followed && last != Some("[killed]") {
+        JobEnd::Watched
+    } else {
+        JobEnd::CutOff
+    }
+}
+
+/// `entry`'s line in its session's message.
+fn told_line(entry: &Entry, end: &JobEnd, output: Option<&str>) -> String {
+    let record = &entry.record;
+    let what = match record.kind.as_str() {
+        "agent" => format!("Sub-agent \"{}\"", record.purpose),
+        _ => format!(
+            "Command \"{}\"",
+            record.command.as_deref().unwrap_or(&record.purpose)
+        ),
+    };
+    let owner = record
+        .worker_id
+        .as_ref()
+        .map_or(String::new(), |worker| format!(" (worker {worker})"));
+    let how = match end {
+        JobEnd::Exited(code) => format!("ended with exit code {code}."),
+        JobEnd::Watched => "ended after the restart; its exit code is unknown.".to_owned(),
+        JobEnd::CutOff => {
+            "was cut off by the restart, and how it ended can't be known. Run it again if you still need it."
+                .to_owned()
+        }
+    };
+    let last = output
+        .map(|text| {
+            let from = text.len().saturating_sub(TOLD_BYTES);
+            let from = (from..=text.len())
+                .find(|at| text.is_char_boundary(*at))
+                .unwrap_or(0);
+            text[from..].trim()
+        })
+        .filter(|text| !text.is_empty())
+        .map_or(String::new(), |text| format!(" Last output:\n{text}"));
+    format!("- {what}{owner} {how}{last}")
+}
+
+/// Whether a process holds `file` open for writing; `None` when that can't be asked. A job's
+/// stdout stays open on its file while it runs, whatever became of the CLI that started it.
+#[cfg(unix)]
+fn held_for_writing(file: &Path) -> Option<bool> {
+    // A daemon started by launchd doesn't have `/usr/sbin` on its PATH.
+    let output = ["/usr/sbin/lsof", "/usr/bin/lsof", "lsof"]
+        .into_iter()
+        .find_map(|lsof| {
+            std::process::Command::new(lsof)
+                .args(["-Fa", "--"])
+                .arg(file)
+                .output()
+                .ok()
+        })?;
+    Some(lsof_writer(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Windows has no `lsof`: a job there can't be followed.
+#[cfg(not(unix))]
+fn held_for_writing(_file: &Path) -> Option<bool> {
+    None
+}
+
+/// Whether `lsof -Fa`'s output has an open for writing: a reader (`tail -f`) isn't the job.
+#[cfg(unix)]
+fn lsof_writer(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.starts_with('a') && line.contains(['w', 'u']))
 }
 
 impl SessionManager {
@@ -512,7 +667,20 @@ impl SessionManager {
         let sources = {
             let _guard = DISK.lock().unwrap();
             let mut journal = Journal::load(&dir)?;
+            // Brigadier quitting closes the CLI: what ran in it is a restart's to tell of.
+            let quit = if !self.admitting.load(std::sync::atomic::Ordering::Acquire)
+                && matches!(event, None | Some(ProviderEvent::Exited { .. }))
+            {
+                journal.active(owner)
+            } else {
+                Vec::new()
+            };
             let sources = journal.apply(&id.0, owner, event, now_ms(), fallback, provider);
+            for entry in &mut journal.records {
+                if quit.contains(&entry.record.id) {
+                    entry.owed = entry.tellable();
+                }
+            }
             journal.save(&dir)?;
             sources
         };
@@ -727,6 +895,8 @@ impl SessionManager {
                         source: None,
                         preview_log: None,
                         detached: false,
+                        owed: false,
+                        followed: false,
                     });
                 }
                 journal.save(&dir)?;
@@ -758,6 +928,150 @@ impl SessionManager {
         if let Err(error) = result {
             tracing::warn!(%error, "could not preserve background stop actor");
         }
+    }
+
+    /// After a restart: `id`'s session hears what became of the jobs the restart caught, in
+    /// one message, and of those it can still follow when they end.
+    pub(super) async fn recover_background_jobs(&self, id: &ConversationId) {
+        if !self.settle_restarted_jobs(id).await {
+            return;
+        }
+        let manager = self.arc();
+        let id = id.clone();
+        self.spawn(async move {
+            loop {
+                tokio::time::sleep(FOLLOW_EVERY).await;
+                if !manager.admitting.load(std::sync::atomic::Ordering::Acquire)
+                    || !manager.settle_restarted_jobs(&id).await
+                {
+                    return;
+                }
+            }
+        });
+    }
+
+    /// One look at `id`'s owed jobs: tells of each that is over, all in one message. Whether
+    /// any still runs.
+    async fn settle_restarted_jobs(&self, id: &ConversationId) -> bool {
+        match self.settle_restarted(id).await {
+            Ok(following) => following,
+            Err(error) => {
+                tracing::warn!(conversation = %id, %error, "could not settle background jobs after a restart");
+                false
+            }
+        }
+    }
+
+    async fn settle_restarted(&self, id: &ConversationId) -> Result<bool> {
+        // A deleted session's record is gone and stays so: nothing here writes it again.
+        let Ok(conversation) = self.core.conversation(id) else {
+            return Ok(false);
+        };
+        if conversation.deleting || self.is_closing(id) {
+            return Ok(false);
+        }
+        let dir = self.history_dir(id);
+        let owed: Vec<Entry> = {
+            let _guard = DISK.lock().unwrap();
+            let mut journal = Journal::load(&dir)?;
+            let owed: Vec<Entry> = journal
+                .records
+                .iter()
+                .filter(|entry| entry.owed)
+                .cloned()
+                .collect();
+            if owed.is_empty() {
+                return Ok(false);
+            }
+            // An archived session hears nothing, then or if it is restored later.
+            if conversation.lifecycle == crate::Lifecycle::Archived {
+                journal.records.iter_mut().for_each(|e| e.owed = false);
+            }
+            journal.save(&dir)?;
+            owed
+        };
+        if conversation.lifecycle == crate::Lifecycle::Archived {
+            return Ok(false);
+        }
+        let mut lines = Vec::new();
+        let mut over = Vec::new();
+        let mut watching = Vec::new();
+        for entry in owed {
+            let source = entry.followable().map(PathBuf::from);
+            let file = source.clone();
+            let held = match file {
+                Some(file) => super::blocking(move || Ok(held_for_writing(&file)))
+                    .await
+                    .unwrap_or(None),
+                None => None,
+            };
+            if held == Some(true) {
+                watching.push(entry.record.id);
+                continue;
+            }
+            let output = match &source {
+                Some(file) => match tail(file) {
+                    Ok((bytes, size)) => Some((self.hide_secrets(id, bytes).await, size)),
+                    Err(_) => None,
+                },
+                None => None,
+            };
+            let text = output
+                .as_ref()
+                .map(|(bytes, _)| String::from_utf8_lossy(bytes).into_owned());
+            let end = job_end(held, entry.followed, text.as_deref());
+            lines.push(told_line(&entry, &end, text.as_deref()));
+            over.push((entry.record.id, end, output));
+        }
+        if !lines.is_empty() {
+            let envelope = super::conversation::Envelope {
+                kind: crate::work::InjectionKind::Reminder,
+                // The same jobs get the same label: a message still queued isn't queued twice.
+                label: format!("background restart {}", over[0].0),
+                task_id: None,
+                text: format!(
+                    "[Background jobs from before Brigadier restarted:\n{}]",
+                    lines.join("\n")
+                ),
+            };
+            if Box::pin(self.steer_or_queue(id, envelope)).await.is_none() {
+                // No way in now; the next restart tries again.
+                return Ok(!watching.is_empty());
+            }
+        }
+        let _guard = DISK.lock().unwrap();
+        let mut journal = Journal::load(&dir)?;
+        for entry in &mut journal.records {
+            if watching.contains(&entry.record.id) {
+                entry.followed = true;
+                entry.record.summary = Some("Daemon restarted; following its output file".into());
+            }
+            let Some((_, end, output)) = over.iter().find(|(key, ..)| *key == entry.record.id)
+            else {
+                continue;
+            };
+            entry.owed = false;
+            if let Some((bytes, size)) = output {
+                write_atomic(&dir.join(format!("{}.output", entry.record.id)), bytes)?;
+                entry.record.output_available = true;
+                entry.record.output_truncated = *size > OUTPUT_BYTES;
+                entry.record.output_bytes = *size;
+            }
+            match end {
+                JobEnd::Exited(code) => {
+                    entry.record.status = if *code == 0 { "completed" } else { "failed" }.into();
+                    entry.record.exit_code = Some(*code);
+                    entry.record.summary = Some(format!("Ended with exit code {code}"));
+                }
+                JobEnd::Watched => {
+                    entry.record.ended_at_ms = Some(now_ms());
+                    entry.record.summary = Some("Ended after a restart; exit code unknown".into());
+                }
+                JobEnd::CutOff => {}
+            }
+        }
+        journal.save(&dir)?;
+        Ok(!watching.is_empty())
     }
 
     async fn refresh_preview_history(&self, id: &ConversationId) -> Result<()> {
@@ -839,6 +1153,8 @@ impl SessionManager {
                     source: None,
                     preview_log: preview.log,
                     detached: false,
+                    owed: false,
+                    followed: false,
                 };
                 match journal.records.iter().position(|e| e.record.id == key) {
                     Some(i) => journal.records[i] = entry,
@@ -997,6 +1313,49 @@ fn page(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_job_known_to_run_across_a_time_counts() {
+        let dir = std::env::temp_dir().join(format!("bg-across-{}", uuid::Uuid::now_v7()));
+        let history = dir.join("background-history");
+        std::fs::create_dir_all(&history).unwrap();
+        let write = |kind: &str, status: &str, started: i64, ended: Option<i64>, command: &str| {
+            let mut journal = Journal::default();
+            journal.records.push(Entry {
+                record: serde_json::from_value(serde_json::json!({
+                    "id": "j", "conversationId": "c", "workerId": "w", "provider": null,
+                    "nativeSessionId": null, "generation": "g", "taskId": "t", "callId": null,
+                    "kind": kind, "purpose": "p", "command": command, "cwd": null,
+                    "status": status, "startedAtMs": started, "endedAtMs": ended, "exitCode": null,
+                    "stopActor": null, "summary": null, "outputAvailable": false,
+                    "outputTruncated": false, "outputBytes": 0,
+                }))
+                .unwrap(),
+                epoch: epoch().to_owned(),
+                source: None,
+                preview_log: None,
+                detached: false,
+                owed: false,
+                followed: false,
+            });
+            journal.save(&history).unwrap();
+        };
+        write("shell", "completed", 0, Some(100), "gh run watch 1");
+        assert!(job_ran_across(&dir, 50));
+        assert!(!job_ran_across(&dir, 100));
+        assert!(!job_ran_across(&dir, 150));
+        write("shell", "running", 0, None, "gh run watch 1");
+        assert!(job_ran_across(&dir, 50));
+        // No end observed: it says nothing.
+        write("shell", "unknown", 0, None, "gh run watch 1");
+        assert!(!job_ran_across(&dir, 50));
+        // An app left running holds no work.
+        write("preview", "running", 0, None, "gh run watch 1");
+        assert!(!job_ran_across(&dir, 50));
+        write("shell", "running", 0, None, "pnpm dev");
+        assert!(!job_ran_across(&dir, 50));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     use brigadier_providers::{BackgroundTask, BackgroundTaskStatus};
     struct Temp(PathBuf);
     impl Temp {
@@ -1113,6 +1472,47 @@ mod tests {
         write_atomic(&copy, &snapshot).unwrap();
         std::fs::remove_file(&provider).unwrap();
         assert_eq!(tail(&copy).unwrap().0, snapshot);
+    }
+    #[test]
+    fn a_jobs_end_reads_only_what_its_file_and_watching_say() {
+        let said = |held, followed, text| job_end(held, followed, Some(text));
+        assert_eq!(
+            said(Some(false), false, "x\n\n[exited with code 7]\n"),
+            JobEnd::Exited(7)
+        );
+        assert_eq!(said(Some(false), true, "x\n"), JobEnd::Watched);
+        assert_eq!(said(Some(false), false, "x\n"), JobEnd::CutOff);
+        assert_eq!(said(Some(false), true, "x\n\n[killed]\n"), JobEnd::CutOff);
+        assert_eq!(said(None, true, "x\n"), JobEnd::CutOff);
+    }
+    #[test]
+    fn only_a_claude_command_with_an_output_file_can_be_followed() {
+        let mut journal = Journal::default();
+        apply(&mut journal, "", Some(&task(BackgroundTaskStatus::Running)));
+        let mut entry = journal.records.remove(0);
+        entry.record.kind = "shell".into();
+        entry.source = Some("/provider/job.output".into());
+        assert_eq!(entry.followable(), Some("/provider/job.output"));
+        entry.record.provider = Some("opencode".into());
+        assert_eq!(entry.followable(), None);
+        entry.record.provider = Some("claude".into());
+        entry.record.kind = "agent".into();
+        assert_eq!(entry.followable(), None);
+    }
+    #[test]
+    #[cfg(unix)]
+    fn a_reader_of_the_output_file_is_not_the_job() {
+        assert!(lsof_writer("p12\nf1\naw\n"));
+        assert!(lsof_writer("p12\nf9\nau\n"));
+        assert!(!lsof_writer("p12\nf3\nar\n"));
+        assert!(!lsof_writer(""));
+    }
+    #[test]
+    fn a_cli_ending_without_a_restart_owes_its_session_nothing() {
+        let mut journal = Journal::default();
+        apply(&mut journal, "", Some(&task(BackgroundTaskStatus::Running)));
+        apply(&mut journal, "", None);
+        assert!(!journal.records[0].owed);
     }
     #[test]
     fn pages_are_stable_bounded_and_do_not_drop_history() {

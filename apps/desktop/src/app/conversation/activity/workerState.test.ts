@@ -19,6 +19,12 @@ test("a worker that waits on the user needs you, before anything else", () => {
   assert.equal(word({ working: false, lastEnd: "done", waiting: [{ kind: "signIn", what: "linear", card: null }] }), "Needs you");
 });
 
+test("a kept worker whose CLI ended says so, stays on hand and is no failure", () => {
+  const ended = row({ working: false, lastEnd: "interrupted", cliEnded: "Its CLI ended; the next message continues it (signal 15)." });
+  assert.equal(workerStateOf(ended, NOW).word, "Its CLI ended · next message continues it");
+  assert.equal(rowOnHand(ended, NOW), true);
+});
+
 test("a usage limit reads Limit until its reset, or Limit without a time", () => {
   const at = NOW + 3_600_000;
   assert.equal(word({ limit: { kind: "usageWindow", resetsAtMs: at, window: "five_hour" } }), `Limit until ${formatTime(at)}`);
@@ -36,6 +42,18 @@ test("a worker at work turns quiet after 20 minutes of nothing, by the real minu
   assert.equal(word({ lastEventAtMs: NOW - 34 * 60_000 - 59_000 }), "Quiet 34m");
   // Not started its first turn yet: it is at it, never quiet.
   assert.equal(word({ working: false, lastEventAtMs: NOW - 2 * QUIET_MS }), "Working");
+});
+
+test("what holds its work up reads on its row, by the real minutes", () => {
+  const hold = (patch: object) => ({ jobHold: { kind: "stalled", sinceMs: NOW - 12 * 60_000, what: null, load: null, cores: null, ...patch } as NonNullable<WorkerRow["jobHold"]> });
+  assert.equal(word(hold({ what: "cargo test" })), "Stalled 12m · cargo test");
+  assert.equal(word(hold({ kind: "buildSlot" })), "Waiting for a build slot 12m");
+  assert.equal(word(hold({ kind: "starved", load: 60, cores: 14 })), "Build starved 12m · load 60 on 14 cores");
+  assert.equal(word(hold({ kind: "starved", load: 60, cores: 14, faked: true })), "Build starved 12m · load 60 on 14 cores · faked");
+  // Its turn is over and only its commands run: never quiet, whatever its CLI last said.
+  assert.equal(word({ onlyJobs: true, lastEventAtMs: NOW - 2 * QUIET_MS }), "Working");
+  // Ended: what held it up is over.
+  assert.equal(word({ working: false, lastEnd: "done", ...hold({}) }), "Done");
 });
 
 test("how its last turn ended: failed (or cut off, or gone without a done end), stopped", () => {

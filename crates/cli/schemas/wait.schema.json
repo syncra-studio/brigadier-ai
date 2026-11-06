@@ -43,6 +43,9 @@
               "usage-limit",
               "fresh-context",
               "quiet",
+              "stalled",
+              "starved",
+              "settled",
               "answered",
               "removed"
             ]

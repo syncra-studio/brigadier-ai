@@ -9,8 +9,8 @@ import { rowName } from "@/app/conversation/activity/workerState";
 import { useTicking } from "@/app/conversation/requestTime";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { StateIcon, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
-import { Clock, Terminal } from "@/components/icons";
-import { TooltipIconButton, Button } from "@/components/controls";
+import { Clock, StopCircle, Terminal } from "@/components/icons";
+import { TooltipIconButton } from "@/components/controls";
 import type { BackgroundTask, FileEntry, Preview } from "@/ipc/generated";
 import { stopBackgroundTask, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -78,15 +78,11 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   );
 }
 
-/**
- * Only the name truncates; a live dot needs no word, and every other state, and the worker whose
- * it is, keeps its room.
- */
-function ActivityLabel({ name, state, worker, word = state }: { name: string; state: BackgroundState; worker?: string | null | undefined; word?: string }) {
+/** Only the name truncates; a live dot needs no word, and every other state keeps its room. */
+function ActivityLabel({ name, state, word = state }: { name: string; state: BackgroundState; word?: string }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
       <span data-activity-name className="truncate">{name}</span>
-      {worker && <span data-activity-worker className="text-muted-foreground shrink-0 whitespace-nowrap">{worker}</span>}
       {state !== "running" && (
         <span data-state={state} className={cn("text-muted-foreground shrink-0 whitespace-nowrap", live(state) && "shimmer")}>
           {word}
@@ -118,7 +114,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
       action={
         <>
           {url && (
-            <TooltipIconButton tooltip="Show output" aria-label={`Show output of ${name}`} size="icon-xs" onClick={output}>
+            <TooltipIconButton tooltip="Show output" aria-label={`Show output of ${name}`} className={ROW_BUTTON} onClick={output}>
               <Terminal />
             </TooltipIconButton>
           )}
@@ -157,7 +153,7 @@ function TaskRow({ conversationId, task, worker, command, name, meta, state }: {
   };
   const { setPanel } = useContext(AgentsPanelContext);
   const end = taskEnd(task);
-  const words = <ActivityLabel name={name} state={state} worker={worker?.name} {...(end && { word: endWords(end) })} />;
+  const words = <ActivityLabel name={name} state={state} {...(end && { word: endWords(end) })} />;
   // A background subagent opens its transcript, running or over (D97).
   if (task.kind === "agent" && task.itemId !== null && !worker) return <SummaryRowButton {...parts} onClick={() => setPanel(subagentPanel(conversationId, task.itemId!))}>{words}</SummaryRowButton>;
   if ((task.kind !== "shell" && task.kind !== "terminal") || !task.outputFile) return <SummaryRow {...parts}>{words}</SummaryRow>;
@@ -168,11 +164,14 @@ function TaskRow({ conversationId, task, worker, command, name, meta, state }: {
   );
 }
 
+/** A row's buttons: dimmed until the pointer is on them, as a worker's pause and End are. */
+const ROW_BUTTON = "text-foreground/60 hover:text-foreground shrink-0";
+
 /** A row's Stop. Its row leaves once it has stopped: the focus goes back to the card, not the page. */
 function StopButton({ name, stop }: { name: string; stop: () => Promise<void> }) {
   const [stopping, setStopping] = useState(false);
   return (
-    <Button variant="ghost" size="xs" disabled={stopping} aria-label={`Stop ${name}`}
+    <TooltipIconButton tooltip="Stop" className={ROW_BUTTON} disabled={stopping} aria-label={`Stop ${name}`}
       onClick={(event) => {
         const button = event.currentTarget;
         const card = button.closest<HTMLElement>('[data-slot="summary-card"]');
@@ -187,7 +186,7 @@ function StopButton({ name, stop }: { name: string; stop: () => Promise<void> })
           },
         );
       }}>
-      Stop
-    </Button>
+      <StopCircle />
+    </TooltipIconButton>
   );
 }

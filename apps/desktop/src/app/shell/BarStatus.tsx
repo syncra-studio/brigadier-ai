@@ -21,7 +21,7 @@ import type { AccountView, ProviderKind, ProviderOverview, QuotaSnapshot, QuotaW
 
 import { maskEmailsIn } from "@/lib/email";
 
-import { ordered, usageLevel, used } from "@/lib/quota";
+import { isPlanLimit, ordered, tightest, usageLevel, used } from "@/lib/quota";
 
 import { cn } from "@/lib/utils";
 
@@ -120,17 +120,12 @@ function useUsageRefresh(): void {
   }, [connected]);
 }
 
-/** The window nearest its limit. */
-function tightest(windows: readonly QuotaWindow[]): QuotaWindow | null {
-  return windows.reduce<QuotaWindow | null>((top, window) => (top && used(top) >= used(window) ? top : window), null);
-}
-
 /** A provider in the list: one that reports usage (its account in use's), or one that needs signing in. */
 export type UsageEntry =
   | { provider: ProviderKind; needs: "signIn" }
-  | { provider: ProviderKind; needs: null; top: QuotaWindow; limitReached: boolean };
+  | { provider: ProviderKind; needs: null; top: QuotaWindow; limitReached: boolean; quiet: boolean };
 
-/** The providers on and set up: those needing the user first, then the most used first. */
+/** The providers on and set up: those needing the user first, then the most used first, quiet plan limits last. */
 function usageEntries(
   providers: readonly ProviderOverview[],
   settings: Availability,
@@ -144,9 +139,11 @@ function usageEntries(
     const top = tightest(ordered(overview.quota));
     if (!top) return [];
     const limitReached = (overview.usage?.limit ?? overview.quota.limit) !== null;
-    return [{ provider: overview.provider, needs: null, top, limitReached }];
+    // A plan's limit with nothing else to say: the provider's other models still work.
+    const quiet = isPlanLimit(top) && !limitReached;
+    return [{ provider: overview.provider, needs: null, top, limitReached, quiet }];
   });
-  const rank = (entry: UsageEntry) => (entry.needs ? Number.POSITIVE_INFINITY : used(entry.top));
+  const rank = (entry: UsageEntry) => (entry.needs ? Number.POSITIVE_INFINITY : entry.quiet ? -1 : used(entry.top));
   return entries.toSorted((a, b) => rank(b) - rank(a));
 }
 
@@ -155,7 +152,7 @@ function barStatus(entries: readonly UsageEntry[]): {
   label: string;
   alert: "text-destructive" | "text-warning" | null;
 } {
-  const shown = entries.flatMap((entry) => (entry.needs ? [] : [entry]));
+  const shown = entries.flatMap((entry) => (entry.needs || entry.quiet ? [] : [entry]));
   if (shown.length === 0) return { label: "Usage", alert: null };
   if (shown.some((entry) => entry.limitReached)) return { label: "Usage · limit reached", alert: "text-destructive" };
   // Coloured by how much is used, like the agents' own CLIs: from 80% and from 90%. Said as

@@ -692,13 +692,20 @@ async fn a_worker_whose_own_background_commands_still_run_still_works() {
     .await;
     flow.say("Start a worker.").await;
     flow.idle().await;
-    flow.until("the worker's turn to end", |board| {
-        board
-            .tasks
-            .values()
-            .any(|task| task.state == crate::work::TaskState::Reported)
+    super::eventually_async("the worker's turn to end", || async {
+        flow.manager
+            .worker_rows_of(&flow.conversation, false)
+            .await
+            .unwrap()
+            .first()
+            .is_some_and(|row| row.last_end.is_some())
     })
     .await;
+    assert_eq!(
+        Flow::task(&flow.board().await, 1).state,
+        crate::work::TaskState::Running,
+        "no news until its job ended"
+    );
     let conv = flow.manager.conv(&flow.conversation).unwrap();
     let working = || async {
         flow.manager

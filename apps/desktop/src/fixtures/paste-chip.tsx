@@ -284,6 +284,7 @@ async function drive() {
     await until("the composer gone", () => field() === null);
     unescapedDraft();
     stepHistory(-1);
+    stepHistory(-1);
     await until("the composer back", () => field() !== null && typed().startsWith("back"));
     seen.returned = await chipsShown("the chips back");
     await fixtureClick(field()!);

@@ -54,7 +54,8 @@ useApp.setState((state) => ({
 const wait = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
 const text = (element: Element | null) => element?.textContent?.trim() ?? "";
 const title = () => text(document.querySelector("main h1"));
-const snapshot = () => ({ title: title(), selection: useApp.getState().selection, index: useHistory.getState().index });
+const snapshot = () => ({ title: title(), selection: useApp.getState().selection, forward: useHistory.getState().forward.length });
+const place = () => JSON.stringify(useApp.getState().selection);
 const one = <T extends HTMLElement = HTMLElement>(selector: string) => {
   const element = document.querySelector<T>(selector);
   if (!element) throw new Error(`Missing ${selector}; title ${title()}`);
@@ -79,6 +80,7 @@ const side = (type: string) => {
   window.dispatchEvent(event);
   return event.defaultPrevented;
 };
+const dimmed = () => ({ back: arrow("Back").disabled, forward: arrow("Forward").disabled });
 const untilTitle = async (expected: string) => {
   for (let tries = 0; tries < 100 && title() !== expected; tries++) await wait();
   if (title() !== expected) throw new Error(`Expected ${expected}; got ${title()}`);
@@ -87,6 +89,27 @@ const untilTitle = async (expected: string) => {
 
 async function drive() {
   const seen: Record<string, unknown> = {};
+  // The user's way: Home, Settings, Routing, Providers. Back goes up and skips Routing.
+  const steps: unknown[] = [];
+  const step = () => steps.push({ ...snapshot(), ...dimmed() });
+  step();
+  openSettings("general");
+  await untilTitle("General");
+  await fixtureClick(button("Routing", one('[data-slot="sidebar-panel"]')));
+  await untilTitle("Routing");
+  await fixtureClick(button("Providers", one('[data-slot="sidebar-panel"]')));
+  await untilTitle("Providers");
+  step();
+  await back();
+  step();
+  await back();
+  step();
+  await forward();
+  step();
+  await forward();
+  step();
+  seen.levelUp = steps;
+
   openSettings("general");
   await untilTitle("General");
   await fixtureClick(button("Providers", one('[data-slot="sidebar-panel"]')));
@@ -176,20 +199,20 @@ async function drive() {
     const owner = document.createElement("div");
     owner.setAttribute("role", role);
     document.body.append(owner);
-    const index = useHistory.getState().index;
+    const before = place();
     const prevented = key("BracketLeft", { metaKey: true });
     key("Escape");
-    blocked.push({ role, prevented, stayed: useHistory.getState().index === index && title().startsWith("Codex") });
+    blocked.push({ role, prevented, stayed: place() === before && title().startsWith("Codex") });
     owner.remove();
   }
   seen.blocked = blocked;
-  const index = useHistory.getState().index;
+  const before = place();
   key("BracketLeft", { metaKey: true, isComposing: true });
   const prevented = new KeyboardEvent("keydown", { code: "BracketLeft", metaKey: true, bubbles: true, cancelable: true });
   prevented.preventDefault();
   window.dispatchEvent(prevented);
   key("ArrowLeft", { metaKey: true });
-  seen.unclaimed = useHistory.getState().index === index;
+  seen.unclaimed = place() === before;
 
   // The View menu also works while a native browser page owns focus. Its forwarded key
   // bubbles through the browser host, and app history returns focus to the app.
@@ -208,13 +231,13 @@ async function drive() {
   key("BracketRight", { ctrlKey: true });
   await wait();
   seen.ctrlForward = snapshot();
-  const before = useHistory.getState().index;
+  const pressed = place();
   const down = side("mousedown");
-  const held = useHistory.getState().index === before;
+  const held = place() === pressed;
   const up = side("mouseup");
   await wait();
   seen.mouse = { down, held, up, ...snapshot() };
-  // Navigating somewhere new after Back drops the forward provider detail.
+  // Navigating somewhere new after Back clears Forward.
   openSettings("git");
   await untilTitle("Git");
   seen.truncated = { ...snapshot(), disabled: arrow("Forward").disabled };

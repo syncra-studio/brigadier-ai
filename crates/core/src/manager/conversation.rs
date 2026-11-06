@@ -311,6 +311,10 @@ struct ConvState {
     end_commands: bool,
     /// The user stopped the running turn: nothing more is steered into it.
     interrupted: bool,
+    /// The user's Stop, until the next turn starts or they resume a worker: what they send goes
+    /// right in, never judged, whatever still holds. Don't resume sets `interrupted` too, but is
+    /// no Stop.
+    user_stopped: bool,
     /// A turn is marked running and its send isn't accepted yet: nothing can join it, and on
     /// its CLI a steer would go first (#607).
     turn_starting: bool,
@@ -390,8 +394,9 @@ struct ConvState {
     /// Those of them a `brigadier wait` already ended for: the next wait blocks (goal 3).
     held_told: Vec<String>,
     /// The running turn started with a message the user sent while the session's work still
-    /// held (its workers or its CLI's background commands): it goes on with that work, in its
-    /// block ([`crate::thread_view::ThreadTurn::joins`]).
+    /// held (its workers or its CLI's background commands), or is a successor's first while it
+    /// held: it goes on with that work, in its block
+    /// ([`crate::thread_view::ThreadTurn::joins`]).
     turn_joins: bool,
     /// The open block's `brigadier` look-ups, and whether its drift note went (D167).
     look_ups: u32,
@@ -459,6 +464,13 @@ struct ConvState {
 }
 
 impl ConvState {
+    /// Whether the running turn's run state shows, for the tab and the composer. A hand-off's
+    /// own turn doesn't (D193), unless it joins work that still holds: that work is under way.
+    /// Only what shows: a message sent meanwhile still waits, by `seam.quiet` itself.
+    fn shows_turn(&self) -> bool {
+        !self.seam.quiet || self.turn_joins
+    }
+
     /// The drift note (D167) for the turn starting now: when the block took more look-ups than
     /// one `brigadier state` call would, once a block. A new block counts afresh.
     fn drift_note(&mut self, opens_block: bool) -> Option<String> {
@@ -527,6 +539,12 @@ impl ConvState {
             .as_ref()
             .is_some_and(|jobs| !jobs.owed.is_empty())
             || self.runs_cli_work()
+    }
+
+    /// A new turn starts: no stop stands any more.
+    fn stop_over(&mut self) {
+        self.interrupted = false;
+        self.user_stopped = false;
     }
 
     /// Its CLI's work that still runs: a job, or a command past its turn.
@@ -1129,6 +1147,11 @@ impl ConvLive {
         }
     }
 
+    /// The user resumed a worker after a Stop: what they send next is judged as usual.
+    pub(super) async fn worker_resumed(&self) {
+        self.state.lock().await.user_stopped = false;
+    }
+
     /// Holds new turns while startup recovers what the stop left (`true`); released, whether
     /// something waits for a turn.
     pub(super) async fn recovering(&self, on: bool) -> bool {
@@ -1444,7 +1467,11 @@ impl SessionManager {
         }
         let mut state = conv.state.lock().await;
         state.last_activity_ms = now_ms();
-        if state.busy && !state.compacting {
+        // After the user's Stop nothing is judged, whatever still holds. A side chat keeps the
+        // plain queue.
+        let stopped =
+            state.user_stopped && !steer && !paused && queue_judging::judges_queue(&conversation);
+        if state.busy && !state.compacting && !stopped {
             if steer {
                 // In the running turn's block from the first frame: marked in the write that stores it.
                 let message = self
@@ -1515,18 +1542,19 @@ impl SessionManager {
         }
         // No turn runs, but the Chat's work still holds (its workers, its CLI's background
         // commands): as a session's, the message waits in the queue, judged in the background.
-        // A Steer still goes straight in.
+        // Paused workers alone don't make it wait, nor does anything after the user's Stop: it
+        // goes right in. A Steer always does.
         let mut holds = false;
         let mut into = None;
         if !paused && queue_judging::judges_queue(&conversation) {
             drop(state);
             holds = self.work_holds(&conv).await;
-            if !steer && holds {
+            if !steer && !stopped && holds && self.queue_holds(&conv).await {
                 return self
                     .queue_to_judge(&conv, text, attachments, mentions, queue_index)
                     .await;
             }
-            if steer && holds {
+            if holds {
                 into = self.request_for(&id).await;
             }
             state = conv.state.lock().await;
@@ -1539,8 +1567,8 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
-        // Steered into the work that holds with no turn running: it takes it (D25), in its
-        // open block from the first frame.
+        // Into the work that holds with no turn running: it takes it (D25), in its open block
+        // from the first frame.
         let message = self
             .core
             .append_steered_message(id.clone(), text, attachments, mentions, into)
@@ -1698,7 +1726,7 @@ impl SessionManager {
         let id = &conv.id;
         // A reply instead of "Build it" closes the plan's card (harness D7).
         self.plan_replied(id).await;
-        let (busy, held, compacting, quiet) = {
+        let (busy, held, compacting, quiet, stopped) = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
             (
@@ -1706,6 +1734,7 @@ impl SessionManager {
                 state.seam.held,
                 state.compacting,
                 state.busy && state.seam.quiet,
+                state.user_stopped,
             )
         };
         // No steer while compacting: it waits in the queue and goes once compaction is done.
@@ -1751,23 +1780,25 @@ impl SessionManager {
             .await;
             return Ok(SendOutcome::Sent(message));
         }
-        if busy && !paused {
+        // After the user's Stop nothing is judged, whatever still holds or is still ending.
+        if busy && !stopped && !paused {
             // It waits in the queue, judged in the background (D157).
             return self
                 .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
         // No turn runs, but the session's work still holds (its workers, its CLI's background
-        // commands): the message waits in the queue all the same, judged in the background. A
-        // Steer still goes straight in.
+        // commands): the message waits in the queue all the same, judged in the background.
+        // Paused workers alone don't make it wait, nor does anything after the user's Stop: it
+        // goes right in. A Steer always does.
         let holds = !paused && self.work_holds(conv).await;
-        if !steer && holds {
+        if !steer && !stopped && holds && self.queue_holds(conv).await {
             return self
                 .queue_to_judge(conv, text, attachments, mentions, queue_index)
                 .await;
         }
-        if busy || paused {
-            // A turn runs, or the queue is paused: it waits for its own turn.
+        if paused {
+            // The queue is paused: it waits for its own turn.
             let item = conv
                 .user_write(
                     self.core
@@ -1776,9 +1807,9 @@ impl SessionManager {
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
-        // Steered into the work that holds with no turn running: it takes it (D25), in its
-        // open block from the first frame.
-        let into = if steer && holds {
+        // Into the work that holds with no turn running: it takes it (D25), in its open block
+        // from the first frame. Behind a turn still ending, the next turn carries it.
+        let into = if holds {
             self.request_for(id).await
         } else {
             None
@@ -2173,6 +2204,7 @@ impl SessionManager {
         {
             let mut state = conv.state.lock().await;
             state.interrupted = true;
+            state.user_stopped = true;
             state.wait_timer += 1;
         }
         self.cancel_quota_recovery(&id).await?;
@@ -2265,6 +2297,9 @@ impl SessionManager {
             .is_empty();
         if waiting {
             self.core.set_queue_paused(&id, true).await?;
+            // Its rows stay put whatever a judge still out would say: none reads Deciding now.
+            conv.judging.lock().unwrap().clear();
+            self.end_deciding(&id, None).await;
         }
         // The thread first, so it starts nothing more; then what it runs: its commands (when
         // the turn ends, see `end_commands`), its previews, a start of one still under way
@@ -2545,7 +2580,7 @@ impl SessionManager {
             // A turn of its own, for no request.
             state.busy = true;
             state.turn_starting = false;
-            state.interrupted = false;
+            state.stop_over();
             state.compacting = true;
             state.request = None;
             state.turn_error = None;
@@ -2796,6 +2831,14 @@ impl SessionManager {
         // a message of the user's starting this turn goes on with that work.
         let holds = self.work_holds(&conv).await;
         let queue_held = holds && self.queue_holds(&conv).await;
+        // A successor's first turn goes on with the work its generation left holding, whatever
+        // starts it: the word to carry on, a worker's news (D163). No message of the user's need.
+        let successor_joins = session
+            && holds
+            && matches!(
+                self.read_seam_of(&conv.id).await.phase,
+                super::seam::Phase::Closed { .. }
+            );
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         let mut carry = false;
@@ -2909,7 +2952,7 @@ impl SessionManager {
             };
             state.busy = true;
             state.turn_starting = true;
-            state.interrupted = false;
+            state.stop_over();
             state.landed = false;
             state.watchdog.begin(now_ms());
             state.limit_hit = None;
@@ -2922,7 +2965,7 @@ impl SessionManager {
                 state.outcomes.remove(request);
                 state.stopped_open.remove(request);
             }
-            state.turn_joins = holds && !users.is_empty();
+            state.turn_joins = holds && !users.is_empty() || successor_joins;
             // A user's message with no work held opens a new block.
             drift = state.drift_note(!holds && !users.is_empty());
             state.in_turn = users.clone();
@@ -2939,7 +2982,7 @@ impl SessionManager {
             break (users, envelopes, request, notes);
         };
         self.settle_requests(&conv.id).await;
-        if !conv.state.lock().await.seam.quiet {
+        if conv.state.lock().await.shows_turn() {
             self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
                 .await;
         }
@@ -5490,7 +5533,7 @@ impl SessionManager {
                         // answers the request that started them.
                         state.busy = true;
                         state.turn_starting = false;
-                        state.interrupted = false;
+                        state.stop_over();
                         state.limit_hit = None;
                         state.model_failed = false;
                         state.turn_error = None;
@@ -5515,7 +5558,7 @@ impl SessionManager {
                     self.session_message_taken(&conv.id, label);
                 }
                 if let Some(request) = started
-                    && !conv.state.lock().await.seam.quiet
+                    && conv.state.lock().await.shows_turn()
                 {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
                         .await;
@@ -7047,7 +7090,7 @@ impl SessionManager {
         let Ok(conv) = self.conv(id) else { return };
         let request = {
             let state = conv.state.lock().await;
-            if state.seam.quiet {
+            if !state.shows_turn() {
                 return;
             }
             state.request.clone()

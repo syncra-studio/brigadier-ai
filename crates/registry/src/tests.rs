@@ -2149,3 +2149,67 @@ fn a_plugins_hooks_commands_and_agents_are_listed_read_only() {
     assert_eq!(own[0].plugins, ["status"]);
     assert_eq!(own[0].commands, ["polish", "ship"]);
 }
+
+#[test]
+fn rows_read_says_which_configs_it_could_not_read() {
+    let home = fixture("rows-read-problems");
+    let roots = roots(&home, &[]);
+    let data = home.join("data");
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let projects = std::slice::from_ref(&project);
+
+    // No config at all, and every config whole: both read in full.
+    let read = Catalog::read_rows_checked(&roots, projects, &data);
+    assert!(read.unread_files().is_empty() && read.user_setup_read());
+    write(&roots.claude_json, r#"{"mcpServers":{}}"#);
+    write(&roots.codex_home.join("config.toml"), "");
+    let read = Catalog::read_rows_checked(&roots, projects, &data);
+    assert!(read.unread_files().is_empty() && read.user_setup_read());
+
+    // An import offer's file isn't any CLI's.
+    write(&roots.cursor_dir.join("mcp.json"), "{\"mcpServers\":{");
+    let read = Catalog::read_rows_checked(&roots, projects, &data);
+    assert!(read.unread_files().is_empty() && read.user_setup_read());
+
+    // A project's file counts as unread, once, without holding up the user's own list.
+    write(&project.join(".mcp.json"), "{\"mcpServers\":{");
+    let read = Catalog::read_rows_checked(&roots, projects, &data);
+    assert_eq!(read.unread_files(), [project.join(".mcp.json")]);
+    assert!(read.user_setup_read());
+    std::fs::remove_file(project.join(".mcp.json")).unwrap();
+
+    let list = roots.claude_dir.join("plugins/installed_plugins.json");
+    let settings = roots.claude_dir.join("settings.json");
+    let binary = roots.codex_home.join("config.toml");
+    for (file, text) in [
+        (
+            &roots.claude_json,
+            b"{\"mcpServers\":{\"a\":{\"comm".as_slice(),
+        ),
+        (&list, b"{\"plugins\":{"),
+        (&settings, b"{\"enabledPlugins\":"),
+        (&binary, b"\xff\xfe not text"),
+    ] {
+        let before = std::fs::read(file).ok();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+        let read = Catalog::read_rows_checked(&roots, projects, &data);
+        assert_eq!(read.unread_files(), [file.as_path()], "{}", file.display());
+        assert!(!read.user_setup_read());
+        match before {
+            Some(bytes) => std::fs::write(file, bytes).unwrap(),
+            None => std::fs::remove_file(file).unwrap(),
+        }
+    }
+
+    // One bad entry leaves its file read, and names the server.
+    write(
+        &roots.claude_json,
+        r#"{"mcpServers":{"typo":{"type":"websocket","url":"wss://typo.test"}}}"#,
+    );
+    let read = Catalog::read_rows_checked(&roots, projects, &data);
+    assert!(read.unread_files().is_empty());
+    assert!(read.has_broken_server("typo"));
+    assert!(!read.has_broken_server("other"));
+}

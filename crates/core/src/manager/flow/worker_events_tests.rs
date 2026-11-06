@@ -9,13 +9,14 @@ use std::time::Duration;
 
 use brigadier_cli::protocol::{CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, SESSION_ENV};
 use brigadier_providers::{
-    ItemStatus, McpServerState, McpStatus, ProviderEvent, ProviderKind, Role, TurnStatus,
+    BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ItemStatus, McpServerState,
+    McpStatus, ProviderEvent, ProviderKind, Role, TurnStatus,
 };
 use serde_json::Value;
 
 use super::cli_tests::{brigadier, wait};
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
-use crate::manager::seam::SeamConfig;
+use crate::manager::seam::{CARRY_ON, SeamConfig};
 use crate::model::PermissionLevel;
 use crate::thread_view::NUDGE_MARK;
 
@@ -34,6 +35,13 @@ struct Seen {
     hold_resumes: AtomicBool,
     /// Every worker's input, in order.
     worker_inputs: Mutex<Vec<String>>,
+    /// A successor's word to carry on hangs until `carry_on_goes`, once this is set.
+    hold_carry_on: AtomicBool,
+    carry_on_goes: AtomicBool,
+    /// What a worker's `Job-` turn leaves running (a shell command when not set), and its CLI's
+    /// events, to say more once that turn ended.
+    job_kind: Mutex<Option<BackgroundTaskKind>>,
+    job_events: Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>,
 }
 
 impl Seen {
@@ -92,6 +100,31 @@ fn told_in(input: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A background task of a worker's CLI, as it says it.
+fn job(
+    id: &str,
+    kind: BackgroundTaskKind,
+    label: &str,
+    status: BackgroundTaskStatus,
+) -> ProviderEvent {
+    ProviderEvent::BackgroundTask {
+        task: BackgroundTask {
+            id: id.to_owned(),
+            item_id: None,
+            kind,
+            label: label.to_owned(),
+            status,
+            started_at_ms: 1,
+            ended_at_ms: (status != BackgroundTaskStatus::Running).then(crate::now_ms),
+            output_file: None,
+            summary: None,
+            last_line: None,
+            command: None,
+            provider: None,
+        },
+    }
+}
+
 /// The event ids one net message carries.
 fn ids_in(input: &str) -> Vec<String> {
     let ids = &input[input.rfind(" (").unwrap() + 2..input.rfind(')').unwrap()];
@@ -117,6 +150,29 @@ fn script(seen: Arc<Seen>) -> Script {
 async fn worker(turn: &Turn, seen: &Seen) -> Reply {
     let said = turn.input.clone();
     seen.worker_inputs.lock().unwrap().push(said.clone());
+    if said.contains("Job-dev.") {
+        turn.emit(job(
+            "dev",
+            BackgroundTaskKind::Terminal,
+            "pnpm dev",
+            BackgroundTaskStatus::Running,
+        ))
+        .await;
+    } else if said.contains("Job-") {
+        let kind = (*seen.job_kind.lock().unwrap()).unwrap_or(BackgroundTaskKind::Shell);
+        turn.emit(job(
+            "one",
+            kind,
+            "Long build",
+            BackgroundTaskStatus::Running,
+        ))
+        .await;
+        if said.contains("Job-two.") {
+            turn.emit(job("two", kind, "Long test", BackgroundTaskStatus::Running))
+                .await;
+        }
+        *seen.job_events.lock().unwrap() = Some(turn.events.clone());
+    }
     if said.contains("Ask-first.") {
         return match turn.ask_approval("curl https://example.com", "curl").await {
             Some(decision) => Reply::text(format!("Answered: {decision:?}.")),
@@ -225,6 +281,11 @@ async fn parent(turn: Turn, seen: Arc<Seen>) -> Reply {
         turn.env(SESSION_ENV).unwrap().to_owned(),
         turn.env(GRANT_ENV).unwrap().to_owned(),
     ));
+    if seen.hold_carry_on.load(Ordering::SeqCst) && turn.input.trim_end().ends_with(CARRY_ON) {
+        while !seen.carry_on_goes.load(Ordering::SeqCst) && !turn.stops.0.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
     if turn.input.starts_with(NUDGE_MARK) {
         let note = turn
             .input
@@ -236,6 +297,13 @@ async fn parent(turn: Turn, seen: Arc<Seen>) -> Reply {
         return Reply::text("Handed off.");
     }
     let said = crate::manager::seam::without_handoff(&turn.input);
+    if said.contains("Big-turn.") {
+        return Reply {
+            text: "Big.".into(),
+            context_tokens: Some(70_000),
+            ..Reply::default()
+        };
+    }
     if said.contains("Grow.") {
         turn.report_context(70_000).await;
         turn.until_steered().await;
@@ -750,6 +818,118 @@ async fn an_event_after_the_parents_seam_reaches_its_successor_once() {
     flow.stop().await;
 }
 
+/// A successor that starts by itself while its generation's worker still works goes on in that
+/// work's block, and the join is on record, so the block stays one once it closes (D163).
+#[tokio::test]
+async fn a_successors_own_turn_while_a_worker_works_is_recorded_as_joining() {
+    let (mut flow, seen) = flow("events-seam-join", PermissionLevel::Full).await;
+    let config = SeamConfig {
+        tokens: 60_000,
+        hold: Duration::from_millis(200),
+        long: None,
+        tokens_set: false,
+    };
+    flow.seam = Some(config);
+    flow.manager.set_seam(config);
+    flow.say("Start Hang-on.").await;
+    flow.settled().await;
+    let first = seen.inputs.lock().unwrap()[0].0.clone();
+    flow.say("Grow.").await;
+    super::eventually("the successor's turn", || {
+        seen.inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(native, _)| *native != first)
+    })
+    .await;
+    flow.idle().await;
+    let id = flow.conversation.clone();
+    let records = crate::thread_view::read_turns(&flow.manager.session_dir(&id).record());
+    let last = records.last().expect("the successor's turn is noted");
+    assert!(last.joins, "{records:#?}");
+    // A thread recorded before the engine noted that join reads the same, from recorded times.
+    let record = flow.manager.session_dir(&id).record();
+    let path = record.join("turns.jsonl");
+    let lines = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, lines.replace("\"joins\":true", "\"joins\":false")).unwrap();
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert!(view.turns.last().unwrap().joins, "{view:#?}");
+    seen.release.store(true, Ordering::SeqCst);
+    flow.stop().await;
+}
+
+/// While a successor's own first turn joins held work the tab and composer read working, as the
+/// block's header does; a message sent meanwhile still waits in the queue for that turn's end
+/// (D193). The hand-off's note turn stays quiet though the worker holds.
+#[tokio::test]
+async fn a_successors_joined_turn_reads_working_and_a_message_still_waits() {
+    // The nudge goes as a turn of its own, so the word to carry on serves no request and is quiet.
+    let seen = Arc::new(Seen::default());
+    let mut flow = Flow::start(
+        "events-seam-working",
+        Options {
+            permission: PermissionLevel::Full,
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                refuse_steers: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(seen.clone()),
+    )
+    .await;
+    seen.hold_carry_on.store(true, Ordering::SeqCst);
+    let config = SeamConfig {
+        tokens: 60_000,
+        hold: Duration::from_millis(200),
+        long: None,
+        tokens_set: false,
+    };
+    flow.seam = Some(config);
+    flow.manager.set_seam(config);
+    flow.say("Start Hang-on.").await;
+    flow.settled().await;
+    flow.say("Big-turn.").await;
+    super::eventually("the successor's word to carry on", || {
+        seen.inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, input)| input.trim_end().ends_with(CARRY_ON))
+    })
+    .await;
+    let id = flow.conversation.clone();
+    super::eventually_async("the run state shown", || async {
+        flow.board().await.run == crate::work::RunState::Running
+    })
+    .await;
+    flow.say("While it carries on.").await;
+    let queue = flow.board().await.queue;
+    assert_eq!(queue.items.len(), 1, "{queue:#?}");
+    // Each of the user's two turns and the successor's: starting and running. None for the note's.
+    let shown = flow
+        .events_of(&id)
+        .await
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                crate::model::DomainEvent::RunStateChanged {
+                    state: crate::work::RunState::Starting | crate::work::RunState::Running,
+                    step: None,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(shown, 6, "the note's turn stays quiet");
+    seen.carry_on_goes.store(true, Ordering::SeqCst);
+    seen.release.store(true, Ordering::SeqCst);
+    flow.stop().await;
+}
+
 /// A worker its model declined (D143): its parent hears it, told to switch it to the next
 /// model itself, never in the provider's own words.
 #[tokio::test]
@@ -861,7 +1041,7 @@ async fn every_fault_of_a_worker_reaches_an_idle_parent_once() {
     let expected: Vec<(String, String)> = [
         ("Ask-first", "asks"),
         ("Fail-now", "failed"),
-        ("Crash-now", "ended"),
+        ("Crash-now", "stopped"),
         ("Limit-now", "hit a usage limit"),
         ("Compact-now", "compacted its context"),
         ("Compact-now", "finished"),
@@ -1282,5 +1462,311 @@ async fn a_turns_end_carries_the_facts_git_and_the_cli_showed() {
     assert_eq!(output["waitRunning"], false);
     assert_eq!(output["workers"][0]["git"], *git);
     assert_eq!(output["workers"][0]["commands"], *commands);
+    flow.stop().await;
+}
+
+/// Starts a worker on `prompt` and waits for its turn to have ended with its job running.
+async fn worker_with_a_job(flow: &Flow, seen: &Seen, prompt: &str) {
+    flow.say(&format!("Start {prompt}")).await;
+    flow.until("the worker's CLI session to be recorded", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.native_session.is_some())
+    })
+    .await;
+    super::eventually("its turn's end", || {
+        !seen.worker_inputs.lock().unwrap().is_empty() && seen.job_events.lock().unwrap().is_some()
+    })
+    .await;
+    flow.settled().await;
+    settle_net().await;
+}
+
+/// What its CLI says from now on, outside any turn of the test's.
+async fn job_says(seen: &Seen, events: Vec<ProviderEvent>) {
+    let sender = seen.job_events.lock().unwrap().clone().expect("its CLI");
+    for event in events {
+        sender.send(event).await.unwrap();
+    }
+}
+
+/// The turn a CLI starts on its own as a job ends.
+fn own_turn(words: &str) -> Vec<ProviderEvent> {
+    vec![
+        ProviderEvent::TurnStarted { turn_id: None },
+        ProviderEvent::Message {
+            item_id: format!("said-{words}"),
+            role: Role::Assistant,
+            text: words.to_owned(),
+        },
+        ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: TurnStatus::Completed,
+            duration_ms: Some(1),
+            usage: None,
+        },
+    ]
+}
+
+/// What `brigadier workers` says of its one worker.
+async fn workers_says(flow: &Flow, seen: &Seen) -> Value {
+    let (session, grant) = seen.caller.lock().unwrap().clone().unwrap();
+    let caller = flow.manager.cli_caller(&session, &grant).unwrap();
+    let (reply, _) = flow
+        .manager
+        .cli_call_held(
+            &caller,
+            CliCall {
+                protocol: PROTOCOL,
+                request: CliRequest::Workers,
+            },
+        )
+        .await;
+    let CliReply::Ok { output } = reply else {
+        panic!("{reply:?}");
+    };
+    output["workers"][0]["state"].clone()
+}
+
+/// Its worker's own job still runs as its turn ends (a background command, a watcher, a
+/// subagent): it reads working everywhere, and its parent hears nothing until the turn the
+/// CLI starts as that job ends is over, then once.
+#[tokio::test]
+async fn a_turn_end_with_a_live_job_is_no_news_until_the_turn_its_end_starts() {
+    for kind in [
+        BackgroundTaskKind::Shell,
+        BackgroundTaskKind::Terminal,
+        BackgroundTaskKind::Other,
+        BackgroundTaskKind::Agent,
+    ] {
+        let (flow, seen) = flow("events-job-holds", PermissionLevel::Full).await;
+        *seen.job_kind.lock().unwrap() = Some(kind);
+        worker_with_a_job(&flow, &seen, "Job-on.").await;
+        let board = flow.board().await;
+        assert_eq!(
+            Flow::task(&board, 1).state,
+            crate::work::TaskState::Running,
+            "{kind:?}"
+        );
+        let tasks: Vec<_> = board.tasks.values().cloned().collect();
+        assert!(flow.manager.workers_working(&tasks), "{kind:?}: its row");
+        assert_eq!(workers_says(&flow, &seen).await, "working", "{kind:?}");
+        assert_eq!(seen.told(), Vec::new(), "{kind:?}");
+        let mut end = vec![job(
+            "one",
+            kind,
+            "Long build",
+            BackgroundTaskStatus::Completed,
+        )];
+        end.extend(own_turn("The build passed."));
+        job_says(&seen, end).await;
+        let finished = ("Job-on".to_owned(), "finished".to_owned());
+        super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+        settle_net().await;
+        assert_eq!(seen.told(), vec![finished], "{kind:?}: once");
+        assert!(
+            seen.nets()[0].1.contains("The build passed."),
+            "{:?}",
+            seen.nets()
+        );
+        let board = flow.board().await;
+        assert_eq!(
+            Flow::task(&board, 1).state,
+            crate::work::TaskState::Reported
+        );
+        assert_eq!(workers_says(&flow, &seen).await, "reported", "{kind:?}");
+        flow.stop().await;
+    }
+}
+
+/// A job that ends with no turn after it (Codex starts none): the turn end it held back comes
+/// after a grace, with that turn's own words.
+#[tokio::test]
+async fn a_job_that_ends_without_a_new_turn_still_wakes_its_parent() {
+    let (flow, seen) = flow("events-job-dies", PermissionLevel::Full).await;
+    worker_with_a_job(&flow, &seen, "Job-on.").await;
+    assert_eq!(seen.told(), Vec::new());
+    job_says(
+        &seen,
+        vec![job(
+            "one",
+            BackgroundTaskKind::Shell,
+            "Long build",
+            BackgroundTaskStatus::Failed,
+        )],
+    )
+    .await;
+    let finished = ("Job-on".to_owned(), "finished".to_owned());
+    super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+    settle_net().await;
+    assert_eq!(seen.told(), vec![finished], "once");
+    assert!(
+        seen.nets()[0].1.contains("Finished it."),
+        "{:?}",
+        seen.nets()
+    );
+    let board = flow.board().await;
+    assert_eq!(
+        Flow::task(&board, 1).state,
+        crate::work::TaskState::Reported
+    );
+    flow.stop().await;
+}
+
+/// With two jobs, the first one's end and its turn are still no news: only the last one's.
+#[tokio::test]
+async fn only_the_turn_after_the_last_job_wakes_its_parent() {
+    let (flow, seen) = flow("events-job-two", PermissionLevel::Full).await;
+    worker_with_a_job(&flow, &seen, "Job-two.").await;
+    let shell = BackgroundTaskKind::Shell;
+    let mut first = vec![job(
+        "one",
+        shell,
+        "Long build",
+        BackgroundTaskStatus::Completed,
+    )];
+    first.extend(own_turn("One of two."));
+    job_says(&seen, first).await;
+    settle_net().await;
+    assert_eq!(seen.told(), Vec::new());
+    let board = flow.board().await;
+    assert_eq!(Flow::task(&board, 1).state, crate::work::TaskState::Running);
+    let mut last = vec![job(
+        "two",
+        shell,
+        "Long test",
+        BackgroundTaskStatus::Completed,
+    )];
+    last.extend(own_turn("Both done."));
+    job_says(&seen, last).await;
+    let finished = ("Job-two".to_owned(), "finished".to_owned());
+    super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+    settle_net().await;
+    assert_eq!(seen.told(), vec![finished], "once");
+    flow.stop().await;
+}
+
+/// A failure, or a question, is news whatever still runs.
+#[tokio::test]
+async fn a_failed_turn_or_a_question_wakes_its_parent_with_a_job_running() {
+    let (flow, seen) = flow("events-job-fails", PermissionLevel::AcceptEdits).await;
+    flow.say("Start Job-on Fail-now.|Job-on Ask-first.").await;
+    let failed = seen_word(&seen, "failed");
+    let asks = seen_word(&seen, "asks");
+    super::eventually("both heard", || failed() && asks()).await;
+    flow.stop().await;
+}
+
+fn seen_word<'a>(seen: &'a Seen, word: &'a str) -> impl Fn() -> bool + 'a {
+    move || seen.told().iter().any(|(_, told)| told == word)
+}
+
+/// An app it left running never ends by itself, nor does Brigadier's own wait: its turn's end
+/// wakes as one with no job does.
+#[tokio::test]
+async fn a_turn_end_with_only_a_dev_server_running_wakes_as_today() {
+    let (flow, seen) = flow("events-job-dev", PermissionLevel::Full).await;
+    flow.say("Start Job-dev.").await;
+    let finished = ("Job-dev".to_owned(), "finished".to_owned());
+    super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+    let board = flow.board().await;
+    assert_eq!(
+        Flow::task(&board, 1).state,
+        crate::work::TaskState::Reported
+    );
+    flow.stop().await;
+}
+
+/// A held-back turn end survives a daemon restart: the job went with the CLI, the worker reads
+/// running, so it goes on by itself once, and that turn's end wakes its parent.
+#[tokio::test]
+async fn a_turn_end_held_back_across_a_restart_wakes_with_the_turn_after_it() {
+    for crash in [true, false] {
+        let (mut flow, seen) = flow("events-job-restart", PermissionLevel::Full).await;
+        worker_with_a_job(&flow, &seen, "Job-on.").await;
+        assert_eq!(seen.told(), Vec::new());
+        if crash {
+            flow.crash().await;
+        } else {
+            flow.restart().await;
+        }
+        let finished = ("Job-on".to_owned(), "finished".to_owned());
+        super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+        flow.settled().await;
+        settle_net().await;
+        assert_eq!(seen.told(), vec![finished], "crash {crash}: once");
+        assert_eq!(
+            worker_inputs(&seen, "check git status and git log first"),
+            1,
+            "crash {crash}"
+        );
+        let board = flow.board().await;
+        assert_eq!(
+            Flow::task(&board, 1).state,
+            crate::work::TaskState::Reported
+        );
+        flow.stop().await;
+    }
+}
+
+/// A command held after its turn is the job watch's, by its output and CPU: however long its
+/// CLI says nothing, its worker never reads quiet.
+#[tokio::test]
+async fn a_held_job_is_never_quiet() {
+    let (flow, seen) = flow("events-job-silent", PermissionLevel::Full).await;
+    worker_with_a_job(&flow, &seen, "Job-on.").await;
+    assert_eq!(seen.told(), Vec::new());
+    flow.manager.set_worker_quiet(Duration::from_millis(100));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(seen.told(), Vec::new());
+    flow.stop().await;
+}
+
+/// A message that wakes a reported worker draws only its "Messaged" row: no "started working"
+/// (`Resumed`) beside it. A worker's first start keeps its row.
+#[tokio::test]
+async fn a_message_that_wakes_a_worker_files_no_resumed_step() {
+    let (flow, seen) = flow("events-woken", PermissionLevel::Full).await;
+    flow.say("Start Soon.").await;
+    let finished = ("Soon".to_owned(), "finished".to_owned());
+    super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+    flow.settled().await;
+    let board = flow.board().await;
+    let id = Flow::task(&board, 1).id.clone();
+    flow.manager
+        .send_to_worker(
+            flow.conversation.clone(),
+            id,
+            "Once more.".into(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    super::eventually("the worker took it", || {
+        worker_inputs(&seen, "Once more.") == 1
+    })
+    .await;
+    flow.settled().await;
+    let board = flow.board().await;
+    let kinds: Vec<_> = board.worker_steps.iter().map(|step| step.kind).collect();
+    assert!(
+        kinds.contains(&crate::work::WorkerStepKind::Started),
+        "{kinds:?}"
+    );
+    assert!(
+        !kinds.contains(&crate::work::WorkerStepKind::Resumed),
+        "{kinds:?}"
+    );
+    assert!(
+        board.orchestrator_steps.iter().any(|step| matches!(
+            step.kind,
+            crate::work::OrchestratorStepKind::Messaged { .. }
+        )),
+        "its Messaged row"
+    );
     flow.stop().await;
 }

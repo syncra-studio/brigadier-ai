@@ -573,6 +573,8 @@ pub(crate) struct Quiet {
     after_ms: AtomicU64,
     /// Wakes the timer when the limit changes.
     changed: tokio::sync::Notify,
+    /// Whether its background commands move: on this timer, by its own clock per job.
+    pub(super) jobs: super::job_watch::JobWatch,
 }
 
 impl Default for Quiet {
@@ -585,6 +587,7 @@ impl Default for Quiet {
             watches: Mutex::default(),
             after_ms: AtomicU64::new(u64::try_from(after.as_millis()).unwrap_or(u64::MAX)),
             changed: tokio::sync::Notify::new(),
+            jobs: super::job_watch::JobWatch::default(),
         }
     }
 }
@@ -635,6 +638,19 @@ impl Quiet {
         }
     }
 
+    /// A worker whose turn ended with `jobs` of its own running, held back from its parent:
+    /// watched as one at work, so a job whose end never comes is told too. `None`: over.
+    pub(crate) fn holding(&self, task: &TaskId, jobs: Option<Vec<String>>) {
+        let mut watches = self.watches.lock().unwrap_or_else(PoisonError::into_inner);
+        let watch = watches.entry(task.clone()).or_default();
+        watch.working = jobs.is_some();
+        watch.running = jobs
+            .unwrap_or_default()
+            .into_iter()
+            .map(|job| (job.clone(), job))
+            .collect();
+    }
+
     /// The workers quiet past the limit, now told: each with its parent and what runs.
     fn due(&self, now: i64) -> Vec<(ConversationId, TaskId, Vec<String>, i64)> {
         let after = i64::try_from(self.after_ms.load(Ordering::Relaxed)).unwrap_or(i64::MAX);
@@ -654,6 +670,16 @@ impl Quiet {
             }
         }
         due
+    }
+
+    /// The session worker `task` was last heard for.
+    fn conversation_of(&self, task: &TaskId) -> Option<ConversationId> {
+        self.watches
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(task)?
+            .conversation
+            .clone()
     }
 
     fn forget(&self, task: &TaskId) {
@@ -682,6 +708,9 @@ fn net_word(kind: EventKind) -> &'static str {
         EventKind::UsageLimit => "hit a usage limit",
         EventKind::FreshContext => "compacted its context",
         EventKind::Quiet => "is quiet",
+        EventKind::Stalled => "has a stalled command",
+        EventKind::Starved => "has a starved build",
+        EventKind::Settled => "was settled",
         // A session's events only; never a worker's.
         EventKind::Answered => "answered",
         EventKind::Removed => "had a message removed",
@@ -1002,7 +1031,7 @@ impl SessionManager {
         self.spawn(async move {
             loop {
                 let after = quiet.after_ms.load(Ordering::Relaxed) / 4;
-                let every = Duration::from_millis(after.clamp(20, 60_000));
+                let every = Duration::from_millis(after.clamp(20, 60_000)).min(quiet.jobs.every());
                 tokio::select! {
                     () = tokio::time::sleep(every) => {}
                     () = quiet.changed.notified() => {}
@@ -1014,6 +1043,9 @@ impl SessionManager {
                     return;
                 }
                 manager.tell_quiet().await;
+                if quiet.jobs.due() {
+                    manager.watch_jobs().await;
+                }
             }
         });
     }
@@ -1034,6 +1066,57 @@ impl SessionManager {
             let mut event = super::plain_workers::event(&task, EventKind::Quiet);
             event.message = Some(message);
             self.worker_event(&conversation, &task, None, event);
+        }
+    }
+
+    /// One look of the job watch: rows say what it finds at once, and the parent hears what is
+    /// due.
+    async fn watch_jobs(&self) {
+        let mut workers = Vec::new();
+        for (task, jobs) in self.workers_to_sample() {
+            let Some(conversation) = self.worker_quiet.conversation_of(&task) else {
+                continue;
+            };
+            // A worker that ended or was paused has nothing of its own to watch.
+            let Ok(found) = self.task_by_id(&conversation, &task).await else {
+                continue;
+            };
+            if found.state.is_final()
+                || found.plain.as_ref().is_some_and(|plain| plain.closed)
+                || super::workers::explicitly_paused(&found)
+            {
+                continue;
+            }
+            let folder = found
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.worktree.clone())
+                .filter(|_| !found.plain.as_ref().is_some_and(|plain| plain.local));
+            workers.push(super::job_watch::SampledWorker {
+                task,
+                conversation,
+                jobs,
+                folder,
+            });
+        }
+        let quiet = self.worker_quiet.clone();
+        if workers.is_empty() {
+            quiet.jobs.idle();
+            return;
+        }
+        let now = now_ms();
+        let Ok(verdicts) = blocking(move || Ok(quiet.jobs.look(&workers, now))).await else {
+            return;
+        };
+        for verdict in verdicts {
+            if self.note_worker_hold(&verdict.task, verdict.hold) {
+                self.workers_changed(&verdict.conversation, false);
+            }
+            for (kind, message) in verdict.tell {
+                let mut event = super::plain_workers::event(&verdict.task, kind);
+                event.message = Some(message);
+                self.worker_event(&verdict.conversation, &verdict.task, None, event);
+            }
         }
     }
 

@@ -161,5 +161,9 @@ for (const full of [false, true]) {
     ]);
     assert.equal(seen.newTabScreenshot, true);
     assert.equal(seen.newTabFind, false);
+
+    // During first-launch setup the app is see-through, so a stored tab's page waits for its end.
+    assert.deepEqual(seen.storedDuringSetup, []);
+    assert.deepEqual(seen.storedAfterSetup, [{ navigate: "http://127.0.0.1:18504/" }]);
   });
 }

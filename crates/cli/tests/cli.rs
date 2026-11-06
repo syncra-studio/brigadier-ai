@@ -132,6 +132,7 @@ fn worker_row() -> WorkerRow {
         model: Some("codex-model-1".into()),
         effort: Some("high".into()),
         state: WorkerState::Working,
+        held_up: None,
         branch: Some("brigadier/a1b2c3d4/task-2".into()),
         changes: Some(Changes {
             files: 3,
@@ -291,6 +292,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     changes: None,
                     context: None,
                     state: WorkerState::Done,
+                    held_up: None,
                     git: None,
                     commands: None,
                     ..worker_row()
@@ -401,6 +403,7 @@ fn sample(request: &CliRequest) -> CliReply {
             // A just-started worker has no branch yet: its worktree is still being made.
             worker: WorkerRow {
                 state: WorkerState::Starting,
+                held_up: None,
                 branch: None,
                 changes: None,
                 git: None,
@@ -482,6 +485,7 @@ fn sample(request: &CliRequest) -> CliReply {
             closed: true,
             worker: Some(WorkerRow {
                 state: WorkerState::Stopped,
+                held_up: None,
                 ..worker_row()
             }),
         }),
