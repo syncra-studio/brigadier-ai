@@ -276,6 +276,40 @@ pub struct WorkerRow {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<WorkerTask>>", optional)]
     pub background: Vec<WorkerTask>,
+    /// What holds its running work up: a stalled command or a starved build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub job_hold: Option<JobHold>,
+    /// Its turn is over and only background commands of its own keep it at work: their silence
+    /// is the stall check's, so it never reads quiet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub only_jobs: bool,
+}
+
+/// What holds a worker's running work up, as the machine shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct JobHold {
+    pub kind: JobHoldKind,
+    /// Since when, time the machine slept left out.
+    pub since_ms: i64,
+    /// The command, when it is one command's.
+    pub what: Option<String>,
+    /// A starved build: the machine's load, and its cores.
+    pub load: Option<u32>,
+    pub cores: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum JobHoldKind {
+    /// A background command with no new output and almost no CPU.
+    Stalled,
+    /// A compile queued behind the machine's build slots.
+    BuildSlot,
+    /// A compile running far under one core on an overloaded machine.
+    Starved,
 }
 
 /// One of a worker's CLI's background tasks, with the command that started it when its CLI

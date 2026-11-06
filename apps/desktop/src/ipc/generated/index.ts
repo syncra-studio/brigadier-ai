@@ -213,6 +213,8 @@ export type { IndexStatus } from "./IndexStatus";
 export type { InjectedError } from "./InjectedError";
 export type { IpcError } from "./IpcError";
 export type { ItemStatus } from "./ItemStatus";
+export type { JobHold } from "./JobHold";
+export type { JobHoldKind } from "./JobHoldKind";
 export type { KeepAwake } from "./KeepAwake";
 export type { KeepAwakeStatus } from "./KeepAwakeStatus";
 export type { KeptBranch } from "./KeptBranch";

@@ -1710,17 +1710,16 @@ async fn a_turn_end_held_back_across_a_restart_wakes_with_the_turn_after_it() {
     }
 }
 
-/// A job its CLI never says the end of: its parent hears it is quiet, naming the job, so
-/// nothing waits on it unseen.
+/// A command held after its turn is the job watch's, by its output and CPU: however long its
+/// CLI says nothing, its worker never reads quiet.
 #[tokio::test]
-async fn a_job_whose_end_never_comes_shows_as_quiet() {
+async fn a_held_job_is_never_quiet() {
     let (flow, seen) = flow("events-job-silent", PermissionLevel::Full).await;
     worker_with_a_job(&flow, &seen, "Job-on.").await;
     assert_eq!(seen.told(), Vec::new());
-    flow.manager.set_worker_quiet(Duration::from_millis(200));
-    let quiet = ("Job-on".to_owned(), "is quiet".to_owned());
-    super::eventually("the worker quiet", || seen.told().contains(&quiet)).await;
-    assert!(seen.nets()[0].1.contains("Long build"), "{:?}", seen.nets());
+    flow.manager.set_worker_quiet(Duration::from_millis(100));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(seen.told(), Vec::new());
     flow.stop().await;
 }
 

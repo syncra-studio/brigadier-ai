@@ -322,7 +322,10 @@ fn worker_rows(workers: &[WorkerRow]) -> String {
         rows.push(vec![
             worker.id.clone(),
             worker.number.to_string(),
-            worker.state.word().into(),
+            worker
+                .held_up
+                .clone()
+                .unwrap_or_else(|| worker.state.word().into()),
             worker.agent.id().into(),
             model,
             changes(worker.changes),

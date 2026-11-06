@@ -1108,8 +1108,11 @@ impl SessionManager {
                 tracing::warn!(task = %task.id, error = %err, "could not record a worker's turn end");
             }
         }
-        if let Some(jobs) = holding {
-            self.worker_quiet.holding(&task.id, Some(jobs));
+        if holding.is_some() {
+            // Its commands are the job watch's: what that can't judge still reads quiet.
+            let unsampled = self.worker_jobs_unsampled(&task.id);
+            self.worker_quiet
+                .holding(&task.id, (!unsampled.is_empty()).then_some(unsampled));
             let (manager, conversation, worker) =
                 (self.arc(), task.conversation_id.clone(), task.id.clone());
             self.spawn(async move { manager.drain_worker_queue(&conversation, &worker).await });

@@ -1,5 +1,5 @@
 import { shortWorkerName } from "@/app/conversation/rowWords";
-import type { WorkerRow } from "@/ipc/generated";
+import type { JobHold, WorkerRow } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 
 /**
@@ -12,6 +12,9 @@ export type WorkerStateKind =
   | "limit"
   | "freshContext"
   | "quiet"
+  | "stalled"
+  | "buildSlot"
+  | "starved"
   | "working"
   | "paused"
   | "cliEnded"
@@ -38,7 +41,7 @@ function unmerged(row: WorkerRow): boolean {
 
 /**
  * A worker's state at `now`, the first that holds of: Needs you, Limit until HH:MM, Paused (its
- * session paused it, D7), CLI ended (kept, on hand, its next message continues it), Fresh context, Quiet Nm, Working, Failed, Ended, Merged, Done · not
+ * session paused it, D7), CLI ended (kept, on hand, its next message continues it), Fresh context, Stalled Nm · its command, Waiting for a build slot Nm, Build starved Nm, Quiet Nm, Working, Failed, Ended, Merged, Done · not
  * merged, Done.
  */
 export function workerStateOf(row: WorkerRow, now: number): WorkerState {
@@ -50,8 +53,11 @@ export function workerStateOf(row: WorkerRow, now: number): WorkerState {
   if (row.cliEnded) return { kind: "cliEnded", word: "Its CLI ended · next message continues it" };
   if (row.freshContext && row.working) return { kind: "freshContext", word: "Fresh context" };
   if (atWork(row)) {
+    const held = row.jobHold ? jobHoldState(row.jobHold, now) : null;
+    if (held) return held;
     const quiet = row.lastEventAtMs === null ? 0 : now - row.lastEventAtMs;
-    if (row.working && quiet >= QUIET_MS) return { kind: "quiet", word: `Quiet ${Math.floor(quiet / 60_000)}m` };
+    // Only its own commands keep it at work: their silence is the stall check's.
+    if (row.working && !row.onlyJobs && quiet >= QUIET_MS) return { kind: "quiet", word: `Quiet ${Math.floor(quiet / 60_000)}m` };
     return { kind: "working", word: "Working" };
   }
   if (row.lastEnd === "failed" || row.lastEnd === "interrupted" || (row.gone && row.lastEnd !== "done" && row.lastEnd !== "stopped")) {
@@ -62,6 +68,19 @@ export function workerStateOf(row: WorkerRow, now: number): WorkerState {
   if (row.merged) return { kind: "merged", word: "Merged" };
   if (row.lastEnd === "done" && unmerged(row)) return { kind: "doneNotMerged", word: "Done · not merged" };
   return { kind: "done", word: "Done" };
+}
+
+/** What holds its running work up, in words; core sees it, the row counts its minutes. */
+function jobHoldState(hold: JobHold, now: number): WorkerState {
+  const minutes = Math.max(0, Math.floor((now - hold.sinceMs) / 60_000));
+  switch (hold.kind) {
+    case "stalled":
+      return { kind: "stalled", word: hold.what ? `Stalled ${minutes}m · ${hold.what}` : `Stalled ${minutes}m` };
+    case "buildSlot":
+      return { kind: "buildSlot", word: `Waiting for a build slot ${minutes}m` };
+    case "starved":
+      return { kind: "starved", word: `Build starved ${minutes}m · load ${hold.load ?? 0} on ${hold.cores ?? 0} cores` };
+  }
 }
 
 /** A state word inside a line: "Needs you" reads "needs you". */
