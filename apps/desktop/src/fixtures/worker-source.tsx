@@ -151,7 +151,7 @@ function Fixture() {
         scope: worker.getAttribute("data-scope"),
         groups: groupsOf("Cart fixes"),
         files: all("li", worker).map(text),
-        countSize: getComputedStyle(worker.querySelector("li span.font-mono")!).fontSize,
+        countSize: parseFloat(getComputedStyle(worker.querySelector("li span.font-mono")!).fontSize),
       };
 
       // The pane's tab changes and comes back, the read still slow: the kept files on its first

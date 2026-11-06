@@ -31,7 +31,7 @@ test("a session's Source stacks its checkout and its workers, their files right 
     scope: "worker",
     groups: [],
     files: ["total.tssrc/cart+10 −3M", "loose.tssrc/cart+2 −0U"],
-    countSize: "11px",
+    countSize: 11,
   });
 
   // Coming back to the tab with the read still slow: its files on the first frame, read again behind them.
