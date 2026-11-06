@@ -2,19 +2,24 @@ import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { DownloadRow } from "@/app/settings/DownloadRow";
+import { ProfilePicker } from "@/app/settings/ProfilePicker";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { Button, ErrorLine } from "@/components/controls";
 import { Download } from "@/components/icons";
 import { EmptyState, SettingsCard, SettingsSearch } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
-import type { BrowserDownload } from "@/ipc/generated";
-import { browserDownloads, byDay, removeDownloads } from "@/state/browserData";
+import { browserDownloads, byDay, cancelDownload, type DownloadRecord, removeDownloads } from "@/state/browserData";
+import { useBrowsers } from "@/state/browsers";
+import { useDefaultProfile } from "@/state/browserProfilePlaces";
 import { useApp } from "@/state/store";
 
 /** Settings › Browser › Download history: the files the browser downloaded, by day. */
-export function BrowserDownloads({ onBack }: { onBack: () => void }) {
+export function BrowserDownloads({ profile: opened, onBack }: { profile?: string | undefined; onBack: () => void }) {
+  const fallback = useDefaultProfile();
+  const [profile, setProfile] = useState(opened ?? fallback.id);
+  const told = useBrowsers((s) => s.downloads);
   const [query, setQuery] = useState("");
-  const [downloads, setDownloads] = useState<BrowserDownload[] | null>(null);
+  const [downloads, setDownloads] = useState<DownloadRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [changed, setChanged] = useState(0);
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -23,7 +28,7 @@ export function BrowserDownloads({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     let current = true;
     const timer = setTimeout(() => {
-      browserDownloads(query)
+      browserDownloads(profile, query)
         .then((found) => current && setDownloads(found))
         .catch((cause: unknown) => current && setError(errorText(cause)));
     }, query ? 150 : 0);
@@ -31,12 +36,12 @@ export function BrowserDownloads({ onBack }: { onBack: () => void }) {
       current = false;
       clearTimeout(timer);
     };
-    // `changed` reads the list again after a removal.
+    // `changed` reads the list again after a removal, `told` as the shell says a download moved.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [query, changed]);
+  }, [profile, query, changed, told]);
 
   const remove = (ids: number[] | null) => {
-    removeDownloads(ids)
+    removeDownloads(profile, ids)
       .then(() => setChanged((count) => count + 1))
       .catch((cause: unknown) => setError(errorText(cause)));
   };
@@ -45,6 +50,7 @@ export function BrowserDownloads({ onBack }: { onBack: () => void }) {
   const days = byDay(shown, now);
   return (
     <SettingsPage title="Download history" back={{ label: "Browser", onBack }}>
+      <ProfilePicker value={profile} onChange={setProfile} />
       <SettingsSearch label="Search download history" value={query} onChange={setQuery} />
       <SettingsSection
         title="All-time history"
@@ -75,6 +81,7 @@ export function BrowserDownloads({ onBack }: { onBack: () => void }) {
                     download={download}
                     mac={mac}
                     onRemove={() => remove([download.id])}
+                    onCancel={() => void cancelDownload(profile, download.id).catch((cause: unknown) => setError(errorText(cause)))}
                     onError={setError}
                   />
                 ))}

@@ -4,12 +4,14 @@ import { errorText } from "@/app/shell/dialogs/fields";
 import { DayGroup } from "@/app/settings/DayGroup";
 import { FilterMenu } from "@/app/settings/FilterMenu";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
+import { ProfilePicker } from "@/app/settings/ProfilePicker";
 import { VisitRow } from "@/app/settings/VisitRow";
 import { Button, ErrorLine } from "@/components/controls";
 import { EmptyState, SettingsSearch } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
 import { browserHistory, byDay, HISTORY_PAGE, removeHistory } from "@/state/browserData";
+import { useDefaultProfile } from "@/state/browserProfilePlaces";
 
 const HEADINGS: Record<HistoryFilter, string> = {
   all: "All-time history",
@@ -28,15 +30,20 @@ const EMPTY: Record<HistoryFilter, string> = {
  * agent's link or preview opened; Other: the rest) over the pages, by day, newest first.
  */
 export function BrowserHistory({
+  profile: opened,
   onBack,
   onClear,
   cleared = 0,
 }: {
+  profile?: string | undefined;
   onBack: () => void;
-  onClear?: () => void;
+  /** Opens Clear browsing data on the profile shown. */
+  onClear?: (profile: string) => void;
   /** Counts the clears since the page opened: each one reads the history again. */
   cleared?: number;
 }) {
+  const fallback = useDefaultProfile();
+  const [profile, setProfile] = useState(opened ?? fallback.id);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [visits, setVisits] = useState<BrowserVisit[] | null>(null);
@@ -47,7 +54,7 @@ export function BrowserHistory({
   useEffect(() => {
     let current = true;
     const timer = setTimeout(() => {
-      browserHistory(query, filter, null)
+      browserHistory(profile, query, filter, null)
         .then((found) => {
           if (!current) return;
           setVisits(found);
@@ -62,12 +69,12 @@ export function BrowserHistory({
     };
     // `cleared` reads the history again after a clear.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [query, filter, cleared]);
+  }, [profile, query, filter, cleared]);
 
   const loadMore = () => {
     const last = visits?.at(-1);
     if (!last) return;
-    browserHistory(query, filter, last)
+    browserHistory(profile, query, filter, last)
       .then((found) => {
         setVisits((shown) => [...(shown ?? []), ...found]);
         setMore(found.length === HISTORY_PAGE);
@@ -76,7 +83,7 @@ export function BrowserHistory({
   };
 
   const remove = (id: number) => {
-    removeHistory([id])
+    removeHistory(profile, [id])
       .then(() => setVisits((shown) => shown?.filter((visit) => visit.id !== id) ?? null))
       .catch((cause: unknown) => setError(errorText(cause)));
   };
@@ -84,13 +91,14 @@ export function BrowserHistory({
   const days = byDay(visits ?? [], now);
   return (
     <SettingsPage title="Browsing history" back={{ label: "Browser", onBack }}>
+      <ProfilePicker value={profile} onChange={setProfile} />
       <div className="flex items-center gap-2">
         <SettingsSearch label="Search browsing history" value={query} onChange={setQuery} />
         <FilterMenu value={filter} onChange={setFilter} />
       </div>
       <SettingsSection
         title={HEADINGS[filter]}
-        actions={onClear && <Button variant="soft" size="sm" onClick={onClear}>Clear browsing data</Button>}
+        actions={onClear && <Button variant="soft" size="sm" onClick={() => onClear(profile)}>Clear browsing data</Button>}
       >
         <ErrorLine error={error} />
         {visits && days.length === 0 && (

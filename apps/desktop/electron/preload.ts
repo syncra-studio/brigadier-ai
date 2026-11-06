@@ -9,6 +9,7 @@ if (!process.isMainFrame) void webFrame.executeJavaScript(frameHtml.slice(frameH
 
 if (process.isMainFrame) contextBridge.exposeInMainWorld("brigadierShell", {
   profiles: (op: string, args: unknown) => ipcRenderer.invoke("brigadier:profiles", op, args),
+  browserData: (op: string, args: unknown) => ipcRenderer.invoke("brigadier:browser-data", op, args),
   permissionAnswer: (request: number, answer: string) => ipcRenderer.invoke("brigadier:permission-answer", request, answer),
   flushStorage: () => ipcRenderer.send("brigadier:flush-storage"),
   profilePartition: (profileId: string) => ipcRenderer.invoke("brigadier:profile-partition", profileId),

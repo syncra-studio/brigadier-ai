@@ -3,6 +3,7 @@ import { stepZoom } from "@/app/conversation/browserKeys";
 
 import { browserClose, browserNavigate, browserOpen, browserPermission, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
+import { listen } from "@/ipc/native";
 import { pageUsed } from "@/state/agentPause";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
 import { shareTabProfile } from "@/state/browserProfilePlaces";
@@ -173,6 +174,14 @@ export function answerPermission(id: string, answer: PermissionAnswer): void {
   browserPermission(asking.request, answer).catch((error: unknown) =>
     console.error("answering the page failed", error),
   );
+}
+
+/** The shell's word on a download: the lists read again, and a finished or failed one gets its toast. */
+export function listenForDownloads(): void {
+  void listen<{ finished: { path: string; ok: boolean } | null }>("browser-download", ({ payload }) => {
+    if (payload.finished) downloaded(payload.finished.path, payload.finished.ok);
+    else useBrowsers.setState(({ downloads }) => ({ downloads: downloads + 1 }));
+  });
 }
 
 /** A download finished or failed: a toast says so, and finds the file. */

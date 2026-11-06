@@ -2,6 +2,7 @@
 // the thing clicked, as in a normal browser: Back, Forward and Reload only on the page itself. Inspect comes
 // with section 9.
 import { BrowserWindow, clipboard, Menu, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from "electron";
+import { askWhereToSave } from "./browserDownloads";
 
 import { note } from "./events";
 import { unfocused } from "./identity";
@@ -26,7 +27,10 @@ function sections(contents: WebContents, params: ContextMenuParams): Item[][] {
   }
   if (mediaType === "image" && srcURL) {
     found.push([
-      { id: "save-image", label: "Save Image As…", run: outward(`save-image ${srcURL}`, () => contents.downloadURL(srcURL)) },
+      { id: "save-image", label: "Save Image As…", run: outward(`save-image ${srcURL}`, () => {
+        askWhereToSave(srcURL);
+        contents.downloadURL(srcURL);
+      }) },
       { id: "copy-image", label: "Copy Image", run: outward(`copy-image ${x},${y}`, () => contents.copyImageAt(x, y)) },
     ]);
   }

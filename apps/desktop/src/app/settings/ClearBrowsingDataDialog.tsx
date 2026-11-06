@@ -8,22 +8,27 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/overlays";
+import { useDefaultProfile } from "@/state/browserProfilePlaces";
 
 /**
  * Clear browsing data: a time range and what to remove from Brigadier's browser. Cookies and the
  * cache are WebKit's, so they show only where the browser can clear them (`siteData`).
  */
 export function ClearBrowsingDataDialog({
+  profile,
   open,
   onOpenChange,
   siteData,
   onCleared,
 }: {
+  /** The profile it starts on; the default when none is given. */
+  profile?: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   siteData: boolean;
-  onCleared?: () => void;
+  onCleared?: (() => void) | undefined;
 }) {
+  const fallback = useDefaultProfile();
   const [clearing, setClearing] = useState(false);
   return (
     <Dialog open={open} onOpenChange={(next) => !clearing && onOpenChange(next)}>
@@ -37,6 +42,7 @@ export function ClearBrowsingDataDialog({
         {/* Made each time it opens, so it starts from the usual picks. */}
         {open && (
           <ClearForm
+            profile={profile ?? fallback.id}
             siteData={siteData}
             clearing={clearing}
             setClearing={setClearing}

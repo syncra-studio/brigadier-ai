@@ -7,6 +7,8 @@ import path from "node:path";
 import { app, BrowserWindow, session, webContents } from "electron";
 
 import { handleFromApp } from "./appPage";
+import { clearVisits, removeStoreOf } from "./browserHistory";
+import { cancelDownloadsOf, removeDownloads } from "./browserDownloads";
 import { replaceFile } from "./durableStorage";
 import { note } from "./events";
 import { profileFolderName, profilePartition, refusalToRemove, type SavedProfiles, type SiteChoice, type SitePermission } from "./profiles";
@@ -58,6 +60,14 @@ export function setSiteChoice(profileId: string, origin: string, change: { camer
   keepSites();
 }
 
+/** Forgets what sites asked since `sinceMs`, or all of it: they ask again. */
+export function clearSiteChoices(profileId: string, sinceMs: number | null): void {
+  const all = allSites();
+  const kept = Object.entries(all[profileId] ?? {}).filter(([, choice]) => sinceMs !== null && choice.askedMs < sinceMs);
+  all[profileId] = Object.fromEntries(kept);
+  keepSites();
+}
+
 /**
  * Empties a profile's session: sign-ins, site data and caches. Its folder can't go while Chromium has the session
  * open, and Electron has no way to close one, so a deleted profile's folder goes at the next launch.
@@ -66,6 +76,8 @@ async function clearProfile(profileId: string): Promise<void> {
   const profileSession = session.fromPartition(profilePartition(profileId));
   await profileSession.clearData();
   await profileSession.clearAuthCache();
+  clearVisits(profileId, null);
+  removeDownloads(profileId, null);
   await profileSession.cookies.flushStore();
   profileSession.flushStorageData();
   note("profile-cleared", { profileId });
@@ -95,7 +107,9 @@ async function removeProfile(profileId: string): Promise<void> {
   // Written first: a crash during the clear still ends with the folder gone.
   replaceFile(removedFile(), JSON.stringify([...new Set([...removed, profileId])]));
   closePopupsOf(profileId);
+  cancelDownloadsOf(profileId);
   await clearProfile(profileId);
+  removeStoreOf(profileId);
   const all = allSites();
   delete all[profileId];
   keepSites();

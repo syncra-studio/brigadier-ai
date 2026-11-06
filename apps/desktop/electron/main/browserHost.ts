@@ -2,6 +2,7 @@
 // section (L4); per-frame loops go in stage 3 (L35).
 import { app, webContents } from "electron";
 
+import { installBrowserData, watchProfileSession } from "./browserClearData";
 import { installBrowserAgent, watchGuest, watchNetwork } from "./browserAgent";
 import { installBrowserImport } from "./browserImport";
 import { handleFromApp, isAppPage } from "./appPage";
@@ -28,6 +29,7 @@ export function installBrowserHost(): void {
   installBrowserImport();
   installPermissionAnswers();
   installBrowserAgent();
+  installBrowserData();
   installGuestFavicon();
   installBrowserVault();
   installBrowserBookmarks();
@@ -47,6 +49,7 @@ export function installBrowserHost(): void {
     applyPermissionPolicy(created, { note });
     keepSessionCookies(created, { note });
     watchNetwork(created);
+    watchProfileSession(created);
     if (process.platform === "darwin") created.registerPreloadScript({ type: "frame", filePath: guestPasskeyPath });
     created.registerPreloadScript({ type: "frame", filePath: guestPasswordsPath });
     if (unfocused) note("session-unfocused-policy", { path: created.storagePath });

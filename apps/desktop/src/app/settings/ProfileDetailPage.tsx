@@ -95,7 +95,26 @@ export function ProfileDetailPage({ id, onBack }: { id: string; onBack: () => vo
               ? `${counted(counts.signIns, "site", "sites")} with cookies, not a count of accounts.`
               : undefined}
           />
-          <SettingsRow label="Browsing history" />
+          <SettingsRow label="Browsing history" description="The pages this profile visited.">
+            <Button
+              variant="soft"
+              size="sm"
+              aria-label="Manage browsing history"
+              onClick={() => void select({ type: "settings", page: "browser", detail: { view: "history", profile: id } })}
+            >
+              Manage
+            </Button>
+          </SettingsRow>
+          <SettingsRow label="Download history" description="The files this profile downloaded.">
+            <Button
+              variant="soft"
+              size="sm"
+              aria-label="Manage download history"
+              onClick={() => void select({ type: "settings", page: "browser", detail: { view: "downloads", profile: id } })}
+            >
+              Manage
+            </Button>
+          </SettingsRow>
           <SettingsRow label="Bookmarks" />
           <SettingsRow label="Saved passwords" description="Agents never see these." />
           <SettingsRow label="Site settings" description="Which sites may use your camera and microphone in this profile.">
@@ -108,7 +127,7 @@ export function ProfileDetailPage({ id, onBack }: { id: string; onBack: () => vo
               Manage
             </Button>
           </SettingsRow>
-          <SettingsRow label="Browsing data" description="Clear this profile's history, sign-ins, site data, cache and download history. Other profiles aren't touched.">
+          <SettingsRow label="Browsing data" description="Clear this profile's history, sign-ins, site data, cache and download history, by time range. Saved passwords are kept, and other profiles aren't touched.">
             <Button variant="soft" size="sm" onClick={() => setClearing(true)}>Clear browsing data</Button>
           </SettingsRow>
         </SettingsCard>

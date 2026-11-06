@@ -24,6 +24,7 @@ import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
 import { applyEvents, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
+import { listenForDownloads } from "@/state/browsers";
 import { startBrowserOptions } from "@/state/links";
 import { startMenuBar } from "@/state/menuBar";
 import { emitPageChanged } from "@/state/pageChanges";
@@ -241,5 +242,6 @@ export async function startBridge(): Promise<void> {
   startHandingBack();
   startMenuBar();
   startBrowserOptions();
+  listenForDownloads();
   onProfileChanged(({ tabId }) => profileChanged(tabId));
 }

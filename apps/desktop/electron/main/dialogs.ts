@@ -117,7 +117,7 @@ async function daemon(request: Record<string, unknown>): Promise<Record<string, 
 }
 
 /** Opens `target` as the addon's policy allows (#770): one that would run something is shown instead. */
-async function openChecked(target: string, application: string | null | undefined): Promise<void> {
+export async function openChecked(target: string, application: string | null | undefined): Promise<void> {
   const decision = native().decideOpening(target, Boolean(application));
   if (decision.kind === "refuse") throw failure("invalid", decision.detail ?? "");
   if (decision.kind === "reveal") {

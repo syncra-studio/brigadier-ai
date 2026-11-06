@@ -92,8 +92,10 @@ export function BrowserPage() {
   const profileId = shown.type === "settings" && shown.page === "browser" ? shown.detail?.profile : undefined;
   const clearing = clearingUnder !== null && clearingUnder === shown;
   const [cleared, setCleared] = useState(0);
+  const [clearOn, setClearOn] = useState<string | undefined>(undefined);
   const clearDialog = (
     <ClearBrowsingDataDialog
+      profile={clearOn ?? profileId}
       open={clearing}
       onOpenChange={setClearing}
       siteData={mac}
@@ -106,11 +108,20 @@ export function BrowserPage() {
   if (on && embedded && view === "sites") {
     return <BrowserSiteSettings profile={profileId} onBack={() => (profileId ? void openProfileDetail(profileId) : setView("page"))} />;
   }
-  if (on && embedded && view === "downloads") return <BrowserDownloads onBack={() => setView("page")} />;
+  const backFromData = () => (profileId ? void openProfileDetail(profileId) : setView("page"));
+  if (on && embedded && view === "downloads") return <BrowserDownloads profile={profileId} onBack={backFromData} />;
   if (on && embedded && view === "history") {
     return (
       <>
-        <BrowserHistory onBack={() => setView("page")} onClear={() => setClearing(true)} cleared={cleared} />
+        <BrowserHistory
+          profile={profileId}
+          onBack={backFromData}
+          onClear={(profile) => {
+            setClearOn(profile);
+            setClearing(true);
+          }}
+          cleared={cleared}
+        />
         {clearDialog}
       </>
     );
@@ -131,7 +142,16 @@ export function BrowserPage() {
             <LinkRow setting="localLinksIn" row={BROWSER_ROWS.localLinks} />
             <SwitchSetting setting="browserFullUrl" row={BROWSER_ROWS.fullUrl} />
             <SettingsRow label={BROWSER_ROWS.data.label} description={BROWSER_ROWS.data.description}>
-              <Button variant="soft" size="sm" onClick={() => setClearing(true)}>Clear browsing data</Button>
+              <Button
+                variant="soft"
+                size="sm"
+                onClick={() => {
+                  setClearOn(undefined);
+                  setClearing(true);
+                }}
+              >
+                Clear browsing data
+              </Button>
             </SettingsRow>
             <SettingsRow label={BROWSER_ROWS.history.label} description={BROWSER_ROWS.history.description}>
               <Button variant="soft" size="sm" onClick={() => setView("history")}>Manage</Button>
