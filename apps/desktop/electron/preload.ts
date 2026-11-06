@@ -21,6 +21,9 @@ if (process.isMainFrame) contextBridge.exposeInMainWorld("brigadierShell", {
   onGuestKey: (listener: () => void) => ipcRenderer.on("brigadier:guest-key", () => listener()),
   agent: (call: unknown) => ipcRenderer.invoke("brigadier:agent", call),
   onAgentEvent: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:agent-event", (_event, details) => listener(details)),
+  vault: (op: string, args: unknown) => ipcRenderer.invoke("brigadier:vault", op, args),
+  bookmarks: (op: string, args: unknown) => ipcRenderer.invoke("brigadier:bookmarks", op, args),
+  onGuestLogin: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-login", (_event, details) => listener(details)),
   devControl: (op: string, args: unknown) => ipcRenderer.invoke("brigadier:dev-control", op, args),
 });
 
