@@ -35,3 +35,4 @@ for (const file of fs.existsSync(out) ? fs.readdirSync(out) : []) if (/\.(mjs|cj
 await bundle("./main/index.ts", "main", "es");
 await bundle("./preload.ts", "preload", "cjs");
 await bundle("./guestPasskey.ts", "guestPasskey", "cjs");
+await bundle("./guestPasswords.ts", "guestPasswords", "cjs");

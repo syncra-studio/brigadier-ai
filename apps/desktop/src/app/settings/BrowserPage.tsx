@@ -1,7 +1,9 @@
 import { useState } from "react";
 
+import { BrowserBookmarks } from "@/app/settings/BrowserBookmarks";
 import { BrowserDownloads } from "@/app/settings/BrowserDownloads";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
+import { BrowserPasswords } from "@/app/settings/BrowserPasswords";
 import { BrowserOffNote } from "@/app/settings/BrowserOffNote";
 import { BrowserSiteSettings } from "@/app/settings/BrowserSiteSettings";
 import { BrowserSwitch } from "@/app/settings/BrowserSwitch";
@@ -45,6 +47,14 @@ export const BROWSER_ROWS = {
   history: {
     label: "Browsing history",
     description: "View and remove pages you visited in the built-in browser",
+  },
+  passwords: {
+    label: "Saved passwords",
+    description: "View, add and remove the passwords the built-in browser fills",
+  },
+  bookmarks: {
+    label: "Bookmarks",
+    description: "View, add and remove the built-in browser's bookmarks",
   },
   location: {
     label: "Location",
@@ -91,6 +101,8 @@ export function BrowserPage() {
     />
   );
   if (on && embedded && view === "profile" && profileId) return <ProfileDetailPage id={profileId} onBack={() => setView("page")} />;
+  if (on && embedded && view === "passwords") return <BrowserPasswords profile={profileId} onBack={() => setView("page")} />;
+  if (on && embedded && view === "bookmarks") return <BrowserBookmarks profile={profileId} onBack={() => setView("page")} />;
   if (on && embedded && view === "sites") {
     return <BrowserSiteSettings profile={profileId} onBack={() => (profileId ? void openProfileDetail(profileId) : setView("page"))} />;
   }
@@ -123,6 +135,18 @@ export function BrowserPage() {
             </SettingsRow>
             <SettingsRow label={BROWSER_ROWS.history.label} description={BROWSER_ROWS.history.description}>
               <Button variant="soft" size="sm" onClick={() => setView("history")}>Manage</Button>
+            </SettingsRow>
+          </SettingsCard>
+        </SettingsSection>
+      )}
+      {on && embedded && (
+        <SettingsSection title="Passwords and bookmarks">
+          <SettingsCard>
+            <SettingsRow label={BROWSER_ROWS.passwords.label} description={BROWSER_ROWS.passwords.description}>
+              <Button variant="soft" size="sm" onClick={() => setView("passwords")}>Manage</Button>
+            </SettingsRow>
+            <SettingsRow label={BROWSER_ROWS.bookmarks.label} description={BROWSER_ROWS.bookmarks.description}>
+              <Button variant="soft" size="sm" onClick={() => setView("bookmarks")}>Manage</Button>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>

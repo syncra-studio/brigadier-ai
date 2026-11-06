@@ -7,6 +7,8 @@ import { installBrowserImport } from "./browserImport";
 import { handleFromApp, isAppPage } from "./appPage";
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
+import { installBrowserBookmarks } from "./browserBookmarks";
+import { guestPasswordsPath, installBrowserVault, installGuestLogins } from "./browserLogins";
 import { installGuestFavicon } from "./guestFavicon";
 import { installGuest, webOrBlank } from "./guestPopups";
 import { installGuestKeys } from "./guestKeys";
@@ -27,6 +29,8 @@ export function installBrowserHost(): void {
   installPermissionAnswers();
   installBrowserAgent();
   installGuestFavicon();
+  installBrowserVault();
+  installBrowserBookmarks();
   app.on("render-process-gone", (_event, contents, details) => {
     note("render-process-gone", { webContents: contents.id, type: contents.getType(), url: contents.getURL(), ...details });
   });
@@ -44,6 +48,7 @@ export function installBrowserHost(): void {
     keepSessionCookies(created, { note });
     watchNetwork(created);
     if (process.platform === "darwin") created.registerPreloadScript({ type: "frame", filePath: guestPasskeyPath });
+    created.registerPreloadScript({ type: "frame", filePath: guestPasswordsPath });
     if (unfocused) note("session-unfocused-policy", { path: created.storagePath });
   });
 
@@ -76,6 +81,7 @@ export function installBrowserHost(): void {
         if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
       });
       installGuest(contents);
+      installGuestLogins(contents);
     }
     contents.on("will-attach-webview", (attach, preferences, params) => {
       if (!profileSessions.has(params.partition ?? "") || !webOrBlank(params.src ?? "")) {
