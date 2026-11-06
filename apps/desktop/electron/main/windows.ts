@@ -11,6 +11,7 @@ import { flushPages, isQuitting, quit } from "./quit";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const preloadPath = path.join(here, "preload.cjs");
+export const guestPasskeyPath = path.join(here, "guestPasskey.cjs");
 
 /** The window's colour once the app covers it (the Tauri build's backgroundColor). */
 export const WINDOW_BACKGROUND = "#0f0f0e";

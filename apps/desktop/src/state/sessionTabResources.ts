@@ -2,7 +2,7 @@ import { request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { handBack } from "@/state/agentPause";
 import { shellOwner } from "@/state/draftTabs";
-import { closePage, useBrowsers } from "@/state/browsers";
+import { closePage, originOf, useBrowsers } from "@/state/browsers";
 import { forgetDraft } from "@/state/drafts";
 import { changeSessionTab, discardTab, dropBrowserTabs, isAgentTab, onDiscardTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -114,8 +114,11 @@ useBrowsers.subscribe(({ pages }) => {
     for (const tab of session.tabs) {
       const page = pages[tab.id];
       // A navigated New tab keeps its ID; resource ownership follows its kind, not the prefix.
-      if (tab.kind === "browser" && page && (tab.url !== page.url || tab.title !== page.title))
-        changeSessionTab(id, tab.id, (current) => current.kind === "browser" ? { ...current, url: page.url, title: page.title } : current);
+      if (tab.kind !== "browser" || !page) continue;
+      // A page yet to read its icon keeps the saved one, until it turns out to be another site.
+      const favicon = page.favicon ?? (originOf(page.url) === originOf(tab.url) ? tab.favicon ?? null : null);
+      if (tab.url !== page.url || tab.title !== page.title || (tab.favicon ?? null) !== favicon)
+        changeSessionTab(id, tab.id, (current) => current.kind === "browser" ? { ...current, url: page.url, title: page.title, favicon } : current);
     }
   }
 });
