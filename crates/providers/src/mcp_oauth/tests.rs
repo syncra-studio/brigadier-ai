@@ -726,7 +726,7 @@ fn a_line_that_fits_goes_over_stdin_and_a_longer_one_goes_to_argv() {
         ]
     );
     // The limit stays below the longest line seen stored whole.
-    assert!(keychain::STDIN_LINE_LIMIT < 2099);
+    const { assert!(keychain::STDIN_LINE_LIMIT < 2099) };
     assert_eq!(keychain::to_hex("{é".as_bytes()), "7bc3a9");
 }
 
