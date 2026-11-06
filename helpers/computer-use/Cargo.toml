@@ -8,6 +8,11 @@ members = [
 # The vendored upstream crates are their own workspace (upstream/UPSTREAM.md).
 exclude = ["upstream"]
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
 [workspace.package]
 version = "0.8.12"
 edition = "2021"

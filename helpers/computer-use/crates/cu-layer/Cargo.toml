@@ -9,7 +9,8 @@ description = "Brigadier's behaviour on top of the vendored driver: target guard
 publish = false
 
 [dependencies]
-cua-driver-core = { path = "../../upstream/crates/cua-driver-core" }
+# Only YAML policies: Brigadier never uses the driver's Rego or JavaScript engines.
+cua-driver-core = { path = "../../upstream/crates/cua-driver-core", default-features = false, features = ["yaml"] }
 async-trait = "0.1"
 anyhow = { workspace = true }
 serde_json = { workspace = true }
@@ -49,8 +50,7 @@ futures-util = "0.3"
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # Plans glides in a test of the saved cursor motion.
 cua-cursor-motion = { path = "../../upstream/crates/cua-cursor-motion" }
-# Runs the page-field probe against a small stand-in page (the driver
-# already builds this engine).
+# Runs the page-field probe against a small stand-in page.
 rquickjs = { version = "0.14", default-features = false, features = ["std"] }
 
 [build-dependencies]
