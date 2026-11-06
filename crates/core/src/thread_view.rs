@@ -299,6 +299,10 @@ pub struct JobHold {
     /// A starved build: the machine's load, and its cores.
     pub load: Option<u32>,
     pub cores: Option<u32>,
+    /// That load is a debug build's faked reading, not the machine's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub faked: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

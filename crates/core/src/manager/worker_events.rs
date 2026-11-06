@@ -1087,10 +1087,16 @@ impl SessionManager {
             {
                 continue;
             }
+            let folder = found
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.worktree.clone())
+                .filter(|_| !found.plain.as_ref().is_some_and(|plain| plain.local));
             workers.push(super::job_watch::SampledWorker {
                 task,
                 conversation,
                 jobs,
+                folder,
             });
         }
         let quiet = self.worker_quiet.clone();

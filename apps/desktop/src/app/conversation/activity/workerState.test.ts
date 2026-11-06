@@ -49,6 +49,7 @@ test("what holds its work up reads on its row, by the real minutes", () => {
   assert.equal(word(hold({ what: "cargo test" })), "Stalled 12m · cargo test");
   assert.equal(word(hold({ kind: "buildSlot" })), "Waiting for a build slot 12m");
   assert.equal(word(hold({ kind: "starved", load: 60, cores: 14 })), "Build starved 12m · load 60 on 14 cores");
+  assert.equal(word(hold({ kind: "starved", load: 60, cores: 14, faked: true })), "Build starved 12m · load 60 on 14 cores · faked");
   // Its turn is over and only its commands run: never quiet, whatever its CLI last said.
   assert.equal(word({ onlyJobs: true, lastEventAtMs: NOW - 2 * QUIET_MS }), "Working");
   // Ended: what held it up is over.
