@@ -124,17 +124,19 @@ fn acquire(dir: &Path, slots: usize) -> io::Result<File> {
         options.read(true);
         #[cfg(windows)]
         options.write(true);
-        let file = options.open(dir.join(format!("slot-{i}")))?;
-        match file.try_lock() {
-            Ok(()) => return Ok(file),
-            Err(TryLockError::WouldBlock) => files.push(file),
-            Err(TryLockError::Error(err)) => return Err(err),
-        }
+        files.push(options.open(dir.join(format!("slot-{i}")))?);
     }
-    // Spread waiters among slots instead of queuing every build behind slot zero.
-    let file = files.swap_remove(std::process::id() as usize % slots);
-    file.lock()?;
-    Ok(file)
+    // Poll: blocking on one slot would wait out its compile while another is free.
+    loop {
+        for (i, file) in files.iter().enumerate() {
+            match file.try_lock() {
+                Ok(()) => return Ok(files.swap_remove(i)),
+                Err(TryLockError::WouldBlock) => {}
+                Err(TryLockError::Error(err)) => return Err(err),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 /// Ecosystem compiler launchers and job caps. An existing Rust wrapper runs inside ours;

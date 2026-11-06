@@ -131,6 +131,29 @@ fn preparing_preserves_existing_slot_and_its_lock() {
 }
 
 #[test]
+fn a_waiter_takes_the_slot_that_frees_while_the_other_stays_busy() {
+    let dir = std::env::temp_dir().join(format!("brigadier-slot-wait-{}", std::process::id()));
+    prepare_pool(&dir, 2).unwrap();
+    for busy in 0..2 {
+        let mut held = vec![acquire(&dir, 2).unwrap(), acquire(&dir, 2).unwrap()];
+        let (done, waiting) = std::sync::mpsc::channel();
+        let pool = dir.clone();
+        std::thread::spawn(move || done.send(acquire(&pool, 2).unwrap()));
+        // Let the waiter find both slots taken before one frees.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let freed = held.swap_remove(1 - busy);
+        freed.unlock().unwrap();
+        let taken = waiting
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("waiter stayed behind the busy slot");
+        // Explicit: a concurrent test's fork can briefly hold a copy of these handles.
+        taken.unlock().unwrap();
+        held[0].unlock().unwrap();
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn preparing_installs_the_multicall_launcher_and_keeps_live_slots() {
     let dir = std::env::temp_dir().join(format!("brigadier-launcher-{}", std::process::id()));
     let pool = dir.join("shared-slots");
