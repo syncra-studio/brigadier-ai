@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { stepZoom } from "@/app/conversation/browserKeys";
 
-import { browserClose, browserNavigate, browserOpen, browserPermission, browserZoom, revealPath } from "@/ipc/client";
+import { browserClose, browserNavigate, browserOpen, browserPermission, browserPermissionSettings, browserZoom, revealPath } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import { pageUsed } from "@/state/agentPause";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
@@ -32,11 +32,14 @@ export type BrowserPage = {
   zoom?: number;
   /** The page's question for the camera or microphone, waiting for an answer (macOS). */
   asking?: BrowserAsking | null;
+  /** What the system refused or has off, after the person allowed it here. */
+  osRefused?: { origin: string; refused: OsRefused[] } | null;
   /** Counts the tab's page loads: an agent's refs and the user's yes hold within one. */
   generation?: number;
 };
 
-export type BrowserAsking = { request: number; origin: string; camera: boolean; microphone: boolean };
+export type BrowserAsking = { request: number; origin: string; camera: boolean; microphone: boolean; location?: boolean };
+export type OsRefused = "camera" | "microphone" | "location";
 
 /** How the tab answers a page's question: see `browserPermission`. */
 export type PermissionAnswer = Parameters<typeof browserPermission>[1];
@@ -140,9 +143,10 @@ export async function openPage(
       }
       else if (event.type === "closed") closeTabAnywhere(id);
       else if (event.type === "permission") {
-        const { request, origin, camera, microphone } = event;
-        update(id, { asking: { request, origin, camera, microphone } });
+        const { request, origin, camera, microphone, location } = event;
+        update(id, { asking: { request, origin, camera, microphone, location } });
       }
+      else if (event.type === "permissionRefused") update(id, { osRefused: { origin: event.origin, refused: event.refused as OsRefused[] } });
       else if (event.type === "blocked") update(id, { blocked: event.url, loading: false });
       else if (event.type === "passkeyRefused") update(id, { passkeyRefused: true });
     });
@@ -173,6 +177,14 @@ export function answerPermission(id: string, answer: PermissionAnswer): void {
   browserPermission(asking.request, answer).catch((error: unknown) =>
     console.error("answering the page failed", error),
   );
+}
+
+export function closeOsRefused(id: string): void {
+  update(id, { osRefused: null });
+}
+
+export function openOsPermissionSettings(device: OsRefused): Promise<void> {
+  return browserPermissionSettings(device);
 }
 
 /** A download finished or failed: a toast says so, and finds the file. */

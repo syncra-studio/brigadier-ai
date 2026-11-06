@@ -64,7 +64,7 @@ export const BROWSER_ROWS = {
   },
   sites: {
     label: "Site settings",
-    description: "Which sites may use your camera and microphone, for each profile",
+    description: "Which sites may use your camera, microphone and location, for each profile",
   },
 } as const;
 

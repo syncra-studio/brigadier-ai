@@ -98,7 +98,7 @@ export function ProfileDetailPage({ id, onBack }: { id: string; onBack: () => vo
           <SettingsRow label="Browsing history" />
           <SettingsRow label="Bookmarks" />
           <SettingsRow label="Saved passwords" description="Agents never see these." />
-          <SettingsRow label="Site settings" description="Which sites may use your camera and microphone in this profile.">
+          <SettingsRow label="Site settings" description="Which sites may use your camera, microphone and location in this profile.">
             <Button
               variant="soft"
               size="sm"

@@ -23,6 +23,7 @@ export const browserCommands: Record<string, (args: Args) => unknown> = {
   browser_configure: () => null,
   browser_focus: (args) => focusPage(args.id as string | null),
   browser_permission: (args) => window.brigadierShell.permissionAnswer(args.request as number, args.answer as string),
+  browser_permission_settings: (args) => window.brigadierShell.permissionOpenSettings(args.device as string),
   browser_profiles_read: () => window.brigadierShell.profiles("read"),
   browser_profiles_write: (args) => window.brigadierShell.profiles("write", args),
   browser_profile_clear: (args) => window.brigadierShell.profiles("clear", args),

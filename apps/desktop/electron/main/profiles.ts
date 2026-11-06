@@ -37,15 +37,17 @@ export function refusalToRemove(profileId: string, saved: SavedProfiles | null):
 }
 
 export type SitePermission = "ask" | "allow" | "block";
-export type SiteChoice = { camera: SitePermission; microphone: SitePermission; askedMs: number };
-/** Devices a page asked for. */
-export type MediaAsk = { camera: boolean; microphone: boolean };
-export type MediaAnswer = "grant" | "deny" | "ask";
+export type SiteDevice = "camera" | "microphone" | "location";
+/** `location` is absent from what was saved before sites could ask for it. */
+export type SiteChoice = { camera: SitePermission; microphone: SitePermission; location?: SitePermission; askedMs: number };
+/** What a page asked for. */
+export type SiteAsk = Record<SiteDevice, boolean>;
+export type SiteAnswer = "grant" | "deny" | "ask";
 
 /** A request goes by the site's saved choices for what it asks: a block refuses, all allowed grants. */
-export function mediaAnswer(site: SiteChoice | undefined, asked: MediaAsk, visiting: MediaAsk | null): MediaAnswer {
-  const devices = [asked.camera && "camera", asked.microphone && "microphone"].filter(Boolean) as ("camera" | "microphone")[];
+export function siteAnswer(site: SiteChoice | undefined, asked: SiteAsk): SiteAnswer {
+  const devices = (["camera", "microphone", "location"] as const).filter((device) => asked[device]);
   if (devices.length === 0) return "deny";
   if (devices.some((device) => site?.[device] === "block")) return "deny";
-  return devices.every((device) => site?.[device] === "allow" || visiting?.[device]) ? "grant" : "ask";
+  return devices.every((device) => site?.[device] === "allow") ? "grant" : "ask";
 }

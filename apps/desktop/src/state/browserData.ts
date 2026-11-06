@@ -119,11 +119,11 @@ export function browserSites(profile: string): Promise<BrowserSite[]> {
   return invoke<BrowserSite[]>("browser_sites", { profile });
 }
 
-/** Sets what a site may use without asking: its camera, its microphone, or both. */
+/** Sets what a site may use without asking: its camera, its microphone, its location. */
 export function setSite(
   profile: string,
   origin: string,
-  choice: { camera?: SitePermission; microphone?: SitePermission },
+  choice: { camera?: SitePermission; microphone?: SitePermission; location?: SitePermission },
 ): Promise<void> {
-  return invoke("browser_site_set", { profile, origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null });
+  return invoke("browser_site_set", { profile, origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null, location: choice.location ?? null });
 }

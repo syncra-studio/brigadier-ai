@@ -26,6 +26,7 @@ type Addon = {
   shiftHeld(): boolean;
   noticePermission(): Promise<string>;
   noticeAsk(): void;
+  locationStatus(): "off" | "undetermined" | "denied" | "restricted" | "allowed" | "unknown";
 };
 
 let loaded: Addon | null = null;

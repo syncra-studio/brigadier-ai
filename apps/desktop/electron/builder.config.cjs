@@ -68,6 +68,8 @@ module.exports = {
     extendInfo: {
       NSMicrophoneUsageDescription: "Brigadier listens only while you dictate into the message box; your speech is turned into text on this Mac and stays on it.",
       NSCameraUsageDescription: "Only web pages you allow in Brigadier's browser can use the camera, like in any browser.",
+      NSLocationUsageDescription: "Only web pages you allow in Brigadier's browser can know your location, like in any browser.",
+      NSLocationWhenInUseUsageDescription: "Only web pages you allow in Brigadier's browser can know your location, like in any browser.",
       CFBundleDocumentTypes: [{ CFBundleTypeName: "Folder", CFBundleTypeRole: "Viewer", LSHandlerRank: "Alternate", LSItemContentTypes: ["public.folder"] }],
     },
   },

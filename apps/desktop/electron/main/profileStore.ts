@@ -44,16 +44,16 @@ export function siteChoice(profileId: string, origin: string): SiteChoice | unde
 export function siteAsked(profileId: string, origin: string): void {
   const all = allSites();
   const known = all[profileId]?.[origin];
-  all[profileId] = { ...all[profileId], [origin]: { camera: known?.camera ?? "ask", microphone: known?.microphone ?? "ask", askedMs: Date.now() } };
+  all[profileId] = { ...all[profileId], [origin]: { camera: known?.camera ?? "ask", microphone: known?.microphone ?? "ask", location: known?.location ?? "ask", askedMs: Date.now() } };
   keepSites();
 }
 
-export function setSiteChoice(profileId: string, origin: string, change: { camera?: SitePermission | null; microphone?: SitePermission | null }): void {
+export function setSiteChoice(profileId: string, origin: string, change: { camera?: SitePermission | null; microphone?: SitePermission | null; location?: SitePermission | null }): void {
   const all = allSites();
   const known = all[profileId]?.[origin];
   all[profileId] = {
     ...all[profileId],
-    [origin]: { camera: change.camera ?? known?.camera ?? "ask", microphone: change.microphone ?? known?.microphone ?? "ask", askedMs: known?.askedMs ?? Date.now() },
+    [origin]: { camera: change.camera ?? known?.camera ?? "ask", microphone: change.microphone ?? known?.microphone ?? "ask", location: change.location ?? known?.location ?? "ask", askedMs: known?.askedMs ?? Date.now() },
   };
   keepSites();
 }
@@ -120,7 +120,7 @@ function removeDeletedFolders(): void {
   fs.rmSync(removedFile(), { force: true });
 }
 
-type Op = (args: Record<string, never> & { profile: string; origin: string; state: unknown; camera: SitePermission | null; microphone: SitePermission | null }) => unknown;
+type Op = (args: Record<string, never> & { profile: string; origin: string; state: unknown; camera: SitePermission | null; microphone: SitePermission | null; location: SitePermission | null }) => unknown;
 
 const OPS: Record<string, Op> = {
   read: () => readJson(listFile()),
@@ -134,10 +134,10 @@ const OPS: Record<string, Op> = {
     refuseIfDeleting(profile);
     return { signIns: await signInCount(profile) };
   },
-  sites: ({ profile }) => Object.entries(allSites()[profile] ?? {}).map(([origin, choice]) => ({ origin, ...choice })),
-  setSite: ({ profile, origin, camera, microphone }) => {
+  sites: ({ profile }) => Object.entries(allSites()[profile] ?? {}).map(([origin, choice]) => ({ origin, ...choice, location: choice.location ?? "ask" })),
+  setSite: ({ profile, origin, camera, microphone, location }) => {
     refuseIfDeleting(profile);
-    setSiteChoice(profile, origin, { camera, microphone });
+    setSiteChoice(profile, origin, { camera, microphone, location });
   },
 };
 

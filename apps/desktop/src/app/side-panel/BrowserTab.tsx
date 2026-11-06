@@ -6,7 +6,7 @@ import { browserAddress, shownAddress, webAddress } from "./browserAddress";
 import { showPage } from "../conversation/browserLayer";
 import { followLayout } from "../conversation/pageWatch";
 import { type BrowserKey, browserKey, stepZoom } from "../conversation/browserKeys";
-import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
+import { DownloadsButton, OsRefusedNotice, PermissionPrompt } from "./BrowserToolbarPopovers";
 import { ProfileButton } from "./ProfileButton";
 import { BrowserOptions } from "./BrowserOptions";
 import { FindBar } from "./FindBar";
@@ -489,6 +489,7 @@ export function BrowserTab({
           />
           {/* Only over its own tab: a question waits, unanswered, while another tab is in front. */}
           {embedded && <PermissionPrompt id={conversationId} asking={active ? page?.asking : null} anchor={address} />}
+          {embedded && <OsRefusedNotice id={conversationId} refused={active && page?.osRefused?.origin === originOf(page?.url ?? "") ? page?.osRefused : null} anchor={address} />}
         </form>
         {embedded && <ProfileButton />}
         {embedded && <DownloadsButton />}

@@ -52,8 +52,8 @@ const DOWNLOADS: BrowserDownload[] = [
 ];
 
 const SITES: BrowserSite[] = [
-  { origin: "https://meet.example.com", camera: "allow", microphone: "allow", askedMs: now - HOUR },
-  { origin: "http://localhost:3000", camera: "ask", microphone: "block", askedMs: now - 2 * HOUR },
+  { origin: "https://meet.example.com", camera: "allow", microphone: "allow", location: "ask", askedMs: now - HOUR },
+  { origin: "http://localhost:3000", camera: "ask", microphone: "block", location: "ask", askedMs: now - 2 * HOUR },
 ];
 
 /** What the page asked the shell for, in order: the commands and the arguments that matter. */

@@ -1,5 +1,5 @@
 import { SettingsSelect } from "@/components/controls";
-import { Camera, Mic } from "@/components/icons";
+import { Camera, MapPin, Mic } from "@/components/icons";
 import type { BrowserSite, SitePermission } from "@/ipc/generated";
 
 const CHOICES = [
@@ -8,13 +8,13 @@ const CHOICES = [
   { value: "block", label: "Block" },
 ] as const satisfies readonly { value: SitePermission; label: string }[];
 
-/** One site in Site settings: its origin and what it may use, the camera and the microphone. */
+/** One site in Site settings: its origin and what it may use: the camera, the microphone and location. */
 export function SiteRow({
   site,
   onChoose,
 }: {
   site: BrowserSite;
-  onChoose: (device: "camera" | "microphone", choice: SitePermission) => void;
+  onChoose: (device: "camera" | "microphone" | "location", choice: SitePermission) => void;
 }) {
   return (
     <li className="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-2 py-2">
@@ -37,6 +37,15 @@ export function SiteRow({
           value={site.microphone}
           options={CHOICES}
           onChange={(choice) => onChoose("microphone", choice)}
+        />
+      </span>
+      <span className="flex items-center gap-2">
+        <MapPin aria-hidden className="text-foreground/65 size-icon-sm" />
+        <SettingsSelect
+          label={`Location for ${site.origin}`}
+          value={site.location}
+          options={CHOICES}
+          onChange={(choice) => onChoose("location", choice)}
         />
       </span>
     </li>

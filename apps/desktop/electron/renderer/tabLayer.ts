@@ -22,13 +22,15 @@ declare global {
     brigadierShell: {
       profiles(op: string, args?: unknown): Promise<unknown>;
       permissionAnswer(request: number, answer: string): Promise<void>;
+      permissionOpenSettings(device: string): Promise<void>;
       flushStorage(): void;
       profilePartition(profileId: string): Promise<string>;
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
       guestFavicon(id: number, href: string): Promise<string | null>;
       onGuestPasskey(listener: (details: { from: number }) => void): void;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;
-      onGuestPermission(listener: (details: { from: number; request: number; origin: string; camera: boolean; microphone: boolean }) => void): void;
+      onGuestPermission(listener: (details: { from: number; request: number; origin: string; camera: boolean; microphone: boolean; location: boolean }) => void): void;
+      onGuestPermissionRefused(listener: (details: { from: number; origin: string; refused: string[] }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
       onGuestKey(listener: () => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
@@ -179,6 +181,11 @@ export function installTabLayer(): void {
   window.brigadierShell.onGuestPermission(({ from, ...question }) => {
     for (const page of pages.values()) {
       if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "permission", ...question });
+    }
+  });
+  window.brigadierShell.onGuestPermissionRefused(({ from, origin, refused }) => {
+    for (const page of pages.values()) {
+      if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "permissionRefused", origin, refused });
     }
   });
   window.brigadierShell.onGuestPasskey(({ from }) => {

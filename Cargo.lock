@@ -949,6 +949,7 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "objc2-app-kit",
+ "objc2-core-location",
  "rusqlite",
  "serde",
  "serde_json",

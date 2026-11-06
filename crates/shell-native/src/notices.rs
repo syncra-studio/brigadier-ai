@@ -86,3 +86,31 @@ mod mac {
         unsafe { brigadier_notice_ask() };
     }
 }
+
+/// What the system says about this app and location, read without asking: `off` (Location Services
+/// off for the whole Mac), `undetermined`, `denied`, `restricted`, `allowed`. `unknown` where the
+/// system has no such answer to read here.
+#[napi]
+pub fn location_status() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_core_location::{CLAuthorizationStatus, CLLocationManager};
+        // SAFETY: both are class methods with no arguments, and neither starts or asks for anything.
+        #[allow(deprecated)]
+        let (enabled, status) = unsafe {
+            (CLLocationManager::locationServicesEnabled_class(), CLLocationManager::authorizationStatus_class())
+        };
+        let answer = match status {
+            _ if !enabled => "off",
+            CLAuthorizationStatus::NotDetermined => "undetermined",
+            CLAuthorizationStatus::Denied => "denied",
+            CLAuthorizationStatus::Restricted => "restricted",
+            _ => "allowed",
+        };
+        answer.to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unknown".to_string()
+    }
+}

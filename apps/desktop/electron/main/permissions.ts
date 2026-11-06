@@ -1,21 +1,21 @@
-// What a web page may have. The camera and microphone go by the profile's saved choice for the site, then a
-// question in the tab; everything else not listed is refused: no handler at all would mean Electron grants it.
-import { systemPreferences, type Session, type WebContents } from "electron";
+// What a web page may have. The camera, microphone and location go by the profile's saved choice for the site, then
+// a question in the tab, then the system's; everything else not listed is refused: no handler at all would mean
+// Electron grants it.
+import type { Session, WebContents } from "electron";
 
 import { handleFromApp } from "./appPage";
+import { locationStatus, openOsSettings, type OsDevice, refusedByOs } from "./browserPermissionsOs";
 
 import type { Note } from "./events";
 import { isDeleting, setSiteChoice, siteAsked, siteChoice } from "./profileStore";
-import { type MediaAsk, mediaAnswer, profileOfStorage } from "./profiles";
+import { profileOfStorage, type SiteAsk, siteAnswer } from "./profiles";
 
 const ALLOWED = new Set<string>(["fullscreen", "clipboard-sanitized-write", "pointerLock"]);
 
-type Question = { guest: WebContents; profileId: string; origin: string; asked: MediaAsk; answer: (allowed: boolean) => void };
+type Question = { guest: WebContents; profileId: string; origin: string; asked: SiteAsk; answer: (allowed: boolean) => void };
 
 let nextQuestion = 1;
 const questions = new Map<number, Question>();
-/** "Allow while visiting": by guest, for as long as that guest stays on the site. Never saved. */
-const visiting = new Map<number, { origin: string; devices: MediaAsk }>();
 const watched = new WeakSet<WebContents>();
 
 function originOf(url: string): string | null {
@@ -27,16 +27,19 @@ function originOf(url: string): string | null {
   }
 }
 
-/** The system's own question comes only after the person's yes to ours: the first thing they see is ours. */
-async function allowedByOs(asked: MediaAsk): Promise<boolean> {
-  if (process.platform !== "darwin") return true;
-  const devices = [asked.camera && "camera", asked.microphone && "microphone"].filter(Boolean) as ("camera" | "microphone")[];
-  const answers = await Promise.all(devices.map((device) => systemPreferences.askForMediaAccess(device)));
-  return answers.every(Boolean);
-}
-
-function grant(asked: MediaAsk, answer: (allowed: boolean) => void): void {
-  allowedByOs(asked).then(answer, () => answer(false));
+/**
+ * The system's own question comes only after the person's yes to ours: the first thing they see is ours. What it
+ * refuses is told to the tab by name. The page's answer stays the system's: location goes on to Chromium, whose
+ * provider gives the page macOS's own refusal.
+ */
+function grant(guest: WebContents, origin: string, asked: SiteAsk, answer: (allowed: boolean) => void): void {
+  refusedByOs(asked).then(
+    (refused) => {
+      if (refused.length > 0 && !guest.isDestroyed()) guest.hostWebContents?.send("brigadier:guest-permission-refused", { from: guest.id, origin, refused });
+      answer(refused.every((device) => device === "location"));
+    },
+    () => answer(false),
+  );
 }
 
 function dropQuestions(guest: WebContents, unlessOrigin: string | null): void {
@@ -47,44 +50,31 @@ function dropQuestions(guest: WebContents, unlessOrigin: string | null): void {
   }
 }
 
-/** Leaving the site ends what was allowed while visiting it, and its open question. */
+/** Leaving the site ends its open question. */
 function watchGuest(guest: WebContents): void {
   if (watched.has(guest)) return;
   watched.add(guest);
-  const { id } = guest;
   guest.on("did-start-navigation", (details) => {
     if (!details.isMainFrame) return;
-    const origin = originOf(details.url);
-    dropQuestions(guest, origin);
-    if (visiting.get(id)?.origin !== origin) visiting.delete(id);
+    dropQuestions(guest, originOf(details.url));
   });
-  guest.once("destroyed", () => {
-    dropQuestions(guest, null);
-    visiting.delete(id);
-  });
+  guest.once("destroyed", () => dropQuestions(guest, null));
 }
 
-function visitingFor(guest: WebContents, origin: string): MediaAsk | null {
-  const granted = visiting.get(guest.id);
-  return granted?.origin === origin ? granted.devices : null;
-}
-
-function requestMedia(profileId: string, guest: WebContents, details: Electron.MediaAccessPermissionRequest, answer: (allowed: boolean) => void, note: Note): void {
-  const types = details.mediaTypes ?? [];
-  const asked: MediaAsk = { camera: types.includes("video"), microphone: types.includes("audio") };
-  const origin = originOf(details.requestingUrl);
+function request(permission: string, profileId: string, guest: WebContents, requestingUrl: string, asked: SiteAsk, answer: (allowed: boolean) => void, note: Note): void {
+  const origin = originOf(requestingUrl);
   const top = originOf(guest.getURL());
   const host = guest.hostWebContents;
   // A question names one site, the tab's: another site's frame asking gets no question, and a page with no tab no door.
   if (!origin || origin !== top || !host || isDeleting(profileId)) {
-    note("permission-request", { permission: "media", allowed: false, origin, reason: "not the tab's own site, or the profile is being deleted" });
+    note("permission-request", { permission, allowed: false, origin, reason: "not the tab's own site, or the profile is being deleted" });
     answer(false);
     return;
   }
-  const decided = mediaAnswer(siteChoice(profileId, origin), asked, visitingFor(guest, origin));
-  note("permission-request", { permission: "media", profileId, origin, asked, decided });
+  const decided = siteAnswer(siteChoice(profileId, origin), asked);
+  note("permission-request", { permission, profileId, origin, asked, decided, ...(asked.location ? { osLocation: locationStatus() } : {}) });
   if (decided === "grant") {
-    grant(asked, answer);
+    grant(guest, origin, asked, answer);
     return;
   }
   if (decided === "deny") {
@@ -93,27 +83,24 @@ function requestMedia(profileId: string, guest: WebContents, details: Electron.M
   }
   siteAsked(profileId, origin);
   watchGuest(guest);
-  const request = nextQuestion++;
-  questions.set(request, { guest, profileId, origin, asked, answer });
-  host.send("brigadier:guest-permission", { from: guest.id, request, origin, ...asked });
+  const number = nextQuestion++;
+  questions.set(number, { guest, profileId, origin, asked, answer });
+  host.send("brigadier:guest-permission", { from: guest.id, request: number, origin, ...asked });
 }
 
 export function installPermissionAnswers(): void {
+  // "visiting" is the card's Allow while visiting the site: saved for the site in this profile, as "never" is.
   handleFromApp("brigadier:permission-answer", (_event, request: number, choice: "once" | "visiting" | "never" | "dismiss") => {
     const question = questions.get(request);
     if (!question) return;
     questions.delete(request);
     const { guest, profileId, origin, asked, answer } = question;
-    if (choice === "visiting") {
-      const had = visitingFor(guest, origin);
-      visiting.set(guest.id, { origin, devices: { camera: asked.camera || (had?.camera ?? false), microphone: asked.microphone || (had?.microphone ?? false) } });
-    }
-    if (choice === "never") {
-      setSiteChoice(profileId, origin, { ...(asked.camera ? { camera: "block" } : {}), ...(asked.microphone ? { microphone: "block" } : {}) });
-    }
-    if (choice === "once" || choice === "visiting") grant(asked, answer);
+    const saved = choice === "visiting" ? "allow" : choice === "never" ? "block" : null;
+    if (saved) setSiteChoice(profileId, origin, { ...(asked.camera ? { camera: saved } : {}), ...(asked.microphone ? { microphone: saved } : {}), ...(asked.location ? { location: saved } : {}) });
+    if (choice === "once" || choice === "visiting") grant(guest, origin, asked, answer);
     else answer(false);
   });
+  handleFromApp("brigadier:permission-open-settings", (_event, device: OsDevice) => openOsSettings(device));
 }
 
 /** The app's own session: its page keeps what it asks for (the microphone for dictation), and nothing else in it, a visual's frame say, gets anything. */
@@ -131,18 +118,25 @@ export function applyPermissionPolicy(session: Session, { note }: { note: Note }
   const profileId = profileOfStorage(session.storagePath);
   session.setPermissionRequestHandler((contents, permission, callback, details) => {
     if (permission === "media" && profileId) {
-      requestMedia(profileId, contents, details as Electron.MediaAccessPermissionRequest, callback, note);
+      const types = (details as Electron.MediaAccessPermissionRequest).mediaTypes ?? [];
+      request(permission, profileId, contents, details.requestingUrl, { camera: types.includes("video"), microphone: types.includes("audio"), location: false }, callback, note);
+      return;
+    }
+    if (permission === "geolocation" && profileId) {
+      request(permission, profileId, contents, details.requestingUrl, { camera: false, microphone: false, location: true }, callback, note);
       return;
     }
     const allowed = ALLOWED.has(permission);
     note("permission-request", { permission, allowed, origin: details.requestingUrl || contents.getURL() });
     callback(allowed);
   });
-  session.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
-    if (permission === "media" && profileId) {
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
+    if ((permission === "media" || permission === "geolocation") && profileId) {
       const origin = originOf(requestingOrigin);
-      const device = details.mediaType === "video" ? { camera: true, microphone: false } : { camera: false, microphone: true };
-      return origin !== null && mediaAnswer(siteChoice(profileId, origin), device, contents ? visitingFor(contents, origin) : null) === "grant";
+      const device: SiteAsk = permission === "geolocation"
+        ? { camera: false, microphone: false, location: true }
+        : { camera: details.mediaType === "video", microphone: details.mediaType !== "video", location: false };
+      return origin !== null && siteAnswer(siteChoice(profileId, origin), device) === "grant";
     }
     return ALLOWED.has(permission);
   });
