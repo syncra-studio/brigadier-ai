@@ -6,11 +6,11 @@ import { nowInLine, workerNow } from "@/app/conversation/activity/workerNow";
 import { WorkerControls } from "@/app/conversation/activity/StopWorker";
 import { endedWord, finishedWords, rowOnHand } from "@/app/conversation/activity/workerState";
 import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
-import { showWorkerSource } from "@/app/side-panel/sourceTarget";
 import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conversation";
 import { useNow } from "@/hooks/use-now";
 import type { WorkerRow } from "@/ipc/generated";
 import { useWorkerRows } from "@/state/cliThread";
+import { isNativeWorker } from "@/state/nativeWorkers";
 
 /**
  * The session's worker summary: its workers as their CLIs and git show them (S14), its CLI's own
@@ -25,17 +25,19 @@ const TICK_MS = 30_000;
 
 /**
  * A worker at work: its glyph, its name, in a soft word what it does while it works ("running
- * pnpm build", shimmering) or its state ("needs you", "paused"), its +N −N against the session's
- * branch, and its pause/resume and End (D199). The row opens the worker's panel; its +N −N, the
- * right sidebar's Source on the worker's changes.
+ * pnpm build", shimmering) or its state ("needs you", "paused"), and its +N −N against the
+ * session's branch, under its pause/resume and End on hover (D199). The row opens the worker's
+ * panel. With neither to offer (it finished; a subagent that can't be ended), its +N −N stays.
  */
-const WorkerLineRow: FC<{ conversationId: string; row: WorkerRow; now: number }> = ({ conversationId, row, now }) => {
+const WorkerLineRow: FC<{ row: WorkerRow; now: number }> = ({ row, now }) => {
   const name = useWorkerName(row.id);
   const { setPanel } = useContext(AgentsPanelContext);
   const live = workerNow(row, now);
+  const onHand = rowOnHand(row, now);
   // A finished one reads only done or ended here; a paused one, paused (D198, D199).
-  const state = rowOnHand(row, now) ? live : { kind: live.kind, word: endedWord(live.kind) };
+  const state = onHand ? live : { kind: live.kind, word: endedWord(live.kind) };
   const stat = row.diff;
+  const controls = onHand && !row.gone && (!isNativeWorker(row) || row.native.backgroundId !== null);
   return (
     <SummaryRowButton
       data-slot="workers-summary-worker"
@@ -43,24 +45,10 @@ const WorkerLineRow: FC<{ conversationId: string; row: WorkerRow; now: number }>
       title={name ?? undefined}
       onClick={() => setPanel(row.id)}
       icon={<span className="flex h-lh items-center"><WorkerGlyph taskId={row.id} className="size-4" /></span>}
-      action={
-        <span className="flex items-center gap-1">
-          {stat && stat.insertions + stat.deletions > 0 && (
-            <button
-              type="button"
-              data-slot="workers-summary-changes"
-              aria-label={`Show ${name ?? "the worker"}'s changes in Source`}
-              title="Show changes in Source"
-              onClick={() => showWorkerSource(conversationId, row.id)}
-              className="rounded-sm text-xs hover:bg-foreground/8 focus-visible:ring-ring cursor-pointer outline-none focus-visible:ring-1"
-            >
-              <Counts insertions={stat.insertions} deletions={stat.deletions} />
-            </button>
-          )}
-          <WorkerControls row={row} name={name ?? "this worker"} />
-        </span>
-      }
-      actionVisible
+      meta={stat && stat.insertions + stat.deletions > 0 && (
+        <Counts data-slot="workers-summary-changes" insertions={stat.insertions} deletions={stat.deletions} className="text-2xs" />
+      )}
+      action={controls ? <WorkerControls row={row} name={name ?? "this worker"} /> : undefined}
     >
       <span className="block truncate">
         {name}
@@ -89,7 +77,7 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
     <SummarySection foldKey="workers" title={WORKERS_LABEL} aria-label="Session workers">
       {lined.length > 0 ? (
         <>
-          {lined.map((row) => <WorkerLineRow key={row.id} conversationId={conversationId} row={row} now={now} />)}
+          {lined.map((row) => <WorkerLineRow key={row.id} row={row} now={now} />)}
           {finished && lined === active && (
             <SummaryRowButton
               aria-label="Open workers"

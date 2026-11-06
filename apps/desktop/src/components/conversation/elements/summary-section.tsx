@@ -108,6 +108,13 @@ const ROW =
 const ROW_INTERACTIVE =
   "rounded-control before:rounded-control hover:before:bg-foreground/8 data-[state=open]:before:bg-foreground/8 active:before:bg-foreground/10 focus-visible:before:ring-ring cursor-pointer outline-none before:absolute before:inset-y-0 before:-inset-x-2 before:-z-10 before:transition-colors focus-visible:before:ring-1";
 
+/**
+ * What shows only on a row hovered or holding keyboard focus, over its end: a mouse click's focus
+ * doesn't keep it showing. The row is a `group/row`.
+ */
+export const rowReveal =
+  "pointer-events-none opacity-0 transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-has-focus-visible/row:pointer-events-auto group-has-focus-visible/row:opacity-100";
+
 type RowContent = {
   /** In the icon slot; a 14px icon (a spinner while it runs) or a worker's glyph. */
   icon?: ReactNode;
@@ -115,13 +122,11 @@ type RowContent = {
   meta?: ReactNode;
   /** Dimmer: done, a link to more. */
   muted?: boolean;
-  /** The row's one action, in its meta's place while the row is hovered or focused. */
+  /** The row's actions, over its meta while the row is hovered or focused: nothing moves. */
   action?: ReactNode;
-  /** Keeps `action` showing without hover or focus (a failed row's Restart and ×), after the meta in a place of its own. */
-  actionVisible?: boolean | undefined;
 };
 
-function RowParts({ icon, meta, action, actionVisible, children }: RowContent & { children: ReactNode }) {
+function RowParts({ icon, meta, action, children }: RowContent & { children: ReactNode }) {
   return (
     <>
       {icon !== undefined && (
@@ -137,7 +142,7 @@ function RowParts({ icon, meta, action, actionVisible, children }: RowContent & 
         <span
           className={cn(
             "text-muted-foreground/70 flex shrink-0 items-center gap-1.5 text-xs tabular-nums",
-            action && !actionVisible && "group-hover/row:hidden group-focus-within/row:hidden",
+            action && "group-hover/row:invisible group-has-focus-visible/row:invisible",
           )}
         >
           {meta}
@@ -147,16 +152,18 @@ function RowParts({ icon, meta, action, actionVisible, children }: RowContent & 
   );
 }
 
-/** The action's place: after the text, replacing the meta while the row is hovered or focused;
- * or, for a row whose action must stay put (a failed row's Restart and ×), after the meta, taking
- * its own room so the row's words truncate before it. */
-function RowAction({ children, visible }: { children: ReactNode; visible?: boolean | undefined }) {
+/**
+ * The action's place: over the row's end, on a backing in the row's own colour that fades in over
+ * the words beneath, a step lighter on a row that `washed` on hover.
+ */
+function RowAction({ children, washed }: { children: ReactNode; washed?: boolean }) {
   return (
     <span
       data-slot="summary-row-action"
       className={cn(
-        "items-center",
-        visible ? "flex shrink-0" : "hidden shrink-0 group-focus-within/row:flex group-hover/row:flex",
+        rowReveal,
+        "row-backing absolute inset-y-0 end-0 flex items-center ps-4 has-[[role=alert]]:pointer-events-auto has-[[role=alert]]:opacity-100",
+        washed && "row-backing-washed",
       )}
     >
       {children}
@@ -170,7 +177,6 @@ export function SummaryRow({
   meta,
   muted,
   action,
-  actionVisible,
   className,
   children,
   ...props
@@ -181,10 +187,10 @@ export function SummaryRow({
       className={cn(ROW, "group/row isolate", muted && "text-muted-foreground", className)}
       {...props}
     >
-      <RowParts icon={icon} meta={meta} action={action} actionVisible={actionVisible}>
+      <RowParts icon={icon} meta={meta} action={action}>
         {children}
       </RowParts>
-      {action && <RowAction visible={actionVisible}>{action}</RowAction>}
+      {action && <RowAction>{action}</RowAction>}
     </div>
   );
 }
@@ -195,7 +201,6 @@ export function SummaryRowButton({
   meta,
   muted,
   action,
-  actionVisible,
   className,
   children,
   ...props
@@ -208,26 +213,23 @@ export function SummaryRowButton({
         ROW,
         ROW_INTERACTIVE,
         "isolate",
-        !action && "group/row",
-        // Beside an action that keeps its own room (a failed row's Restart and ×), a definite
-        // flex basis shrinks the row reliably; a 100% width basis doesn't reliably shrink a
-        // <button> below its content everywhere.
-        action && "w-auto min-w-0 flex-1 basis-0",
+        // The pointer on its action is still on the row: the wash stays, the whole row wide.
+        action ? "group-hover/row:before:bg-foreground/8 group-has-focus-visible/row:before:bg-foreground/8" : "group/row",
         muted && "text-muted-foreground",
         className,
       )}
       {...props}
     >
-      <RowParts icon={icon} meta={meta} action={action} actionVisible={actionVisible}>
+      <RowParts icon={icon} meta={meta} action={action}>
         {children}
       </RowParts>
     </button>
   );
   if (!action) return button;
   return (
-    <div className="group/row relative isolate flex min-w-0 items-center gap-2">
+    <div className="group/row relative isolate min-w-0">
       {button}
-      <RowAction visible={actionVisible}>{action}</RowAction>
+      <RowAction washed>{action}</RowAction>
     </div>
   );
 }
