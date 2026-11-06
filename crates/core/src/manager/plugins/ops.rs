@@ -530,8 +530,8 @@ impl crate::manager::SessionManager {
             .map_err(crate::Error::Invalid)?;
         let mut choices =
             super::choices::Choices::load(&self.data_dir).map_err(crate::Error::Invalid)?;
-        known.apply(&rows, &mut choices);
-        let mut view = super::CatalogView::new(&rows, &choices);
+        known.apply(rows, &mut choices);
+        let mut view = super::CatalogView::new(rows, &choices);
         known.fill_view(&read, &choices, &mut view);
         let projects: Vec<_> = self
             .plugin_projects()
