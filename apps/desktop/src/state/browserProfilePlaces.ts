@@ -90,17 +90,32 @@ function known(id: string | undefined): string | null {
   return id && allProfiles().some((profile) => profile.id === id) ? id : null;
 }
 
-/** The profile a session is on, which its new tabs and an agent's tabs in it open on. */
+/** The conversation a session came from: started from, forked from, or beside. */
+function parentOf(conversationId: string): string | null {
+  const conversation = useApp.getState().conversations[conversationId];
+  return conversation?.startedFrom ?? conversation?.forkedFrom?.conversationId ?? conversation?.sideOf ?? null;
+}
+
+/**
+ * The profile a session is on, which its new tabs and an agent's tabs in it open on: its own pick, else its
+ * parent's, else the default. A parent whose profile is gone has the default, and so does its child.
+ */
 export function sessionProfileId(conversationId: string): string {
-  return known(useProfilePlaces.getState().sessions[conversationId]) ?? defaultProfile().id;
+  const { sessions } = useProfilePlaces.getState();
+  const seen = new Set<string>();
+  for (let at: string | null = conversationId; at && !seen.has(at); at = parentOf(at)) {
+    seen.add(at);
+    if (sessions[at]) return known(sessions[at]) ?? defaultProfile().id;
+  }
+  return defaultProfile().id;
 }
 
 /** The same, following changes. */
 export function useSessionProfileId(conversationId: string): string {
-  return useProfilePlaces((s) => {
-    const placed = s.sessions[conversationId];
-    return live(s.profiles).some((profile) => profile.id === placed) ? (placed as string) : defaultOf(s).id;
-  });
+  // Its parent's link comes with the conversation.
+  useApp((s) => s.conversations[conversationId]);
+  useProfilePlaces();
+  return sessionProfileId(conversationId);
 }
 
 export function tabProfileId(tabId: string): string {

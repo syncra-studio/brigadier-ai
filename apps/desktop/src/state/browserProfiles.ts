@@ -14,7 +14,7 @@ import {
   useProfilePlaces,
 } from "@/state/browserProfilePlaces";
 import { closePage, useBrowsers } from "@/state/browsers";
-import { newSessionTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
+import { changeSessionTab, newSessionTab, sessionTabs, sessionWith, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -159,6 +159,9 @@ export async function deleteProfile(id: string): Promise<void> {
   for (const tab of moved) {
     for (const listener of profileChangeListeners) listener({ tabId: tab.id, from: id, to: moveTo });
     closePage(tab.id);
+    // A tab behind reopens only when shown, and its old title may name who it was signed in as: its address until then.
+    const session = sessionWith(tab.id);
+    if (session) changeSessionTab(session, tab.id, (each) => (each.kind === "browser" ? { ...each, title: "" } : each));
   }
   await finishDeleting(id);
 }

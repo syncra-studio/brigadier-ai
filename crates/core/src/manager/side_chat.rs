@@ -106,6 +106,7 @@ impl SessionManager {
                 Origin {
                     forked_from: None,
                     side_of: Some(parent.clone()),
+                    started_from: None,
                     tab_chat: None,
                 },
             )
@@ -186,6 +187,7 @@ impl SessionManager {
                 Origin {
                     forked_from: None,
                     side_of: Some(parent.clone()),
+                    started_from: None,
                     tab_chat: Some(TabChat { tab_id, target }),
                 },
             )
