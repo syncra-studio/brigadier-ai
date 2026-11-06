@@ -1,11 +1,11 @@
-//! A project's icon, found among the files of its first repository on this machine; nothing goes
-//! over the network. Repositories are untrusted: a file counts only when it really lies inside the
+//! A project's icon, found among the files of its first repository on this machine, a monorepo's
+//! apps and packages included; nothing goes over the network. Repositories are untrusted: a file counts only when it really lies inside the
 //! repository (a symlink out of it doesn't), is a regular file under a size cap, and its first
 //! bytes say it is an image. The app draws the answer through `<img>`, so an SVG's scripts don't
 //! run.
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -16,23 +16,62 @@ use crate::site_icons::image_kind;
 const ICON_BYTES: u64 = 512 * 1024;
 /// Square marks first, a possibly wide logo last.
 const NAMES: [&str; 3] = ["favicon", "icon", "logo"];
-const FOLDERS: [&str; 6] = ["", "public", "static", "app", "src/app", "assets"];
+/// Where they are looked for, from the repository's root and from each app or package in it.
+const FOLDERS: [&str; 13] = [
+    "",
+    "public",
+    "static",
+    "app",
+    "src/app",
+    "assets",
+    "favicon",
+    "public/favicon",
+    "static/favicon",
+    "app/favicon",
+    "src/app/favicon",
+    "assets/favicon",
+    "src-tauri/icons",
+];
 const EXTENSIONS: [&str; 7] = ["svg", "png", "ico", "webp", "jpg", "jpeg", "gif"];
+/// A monorepo's folders whose folders are each searched like the root.
+const WORKSPACES: [&str; 2] = ["apps", "packages"];
 
-/// The first icon in `repo` as a `data:` URL: every folder for each name, in the order above.
-/// `None` when there is none, or the repository can't be read.
+/// The first icon in `repo` as a `data:` URL: each name in turn, in the root and then in each app
+/// or package, in the orders above. `None` when there is none, or the repository can't be read.
 pub fn find_icon(repo: &Path) -> Option<String> {
     let root = repo.canonicalize().ok()?;
+    let bases = bases(&root);
     NAMES.iter().find_map(|name| {
-        FOLDERS.iter().find_map(|folder| {
-            EXTENSIONS.iter().find_map(|extension| {
-                read_icon(
-                    &root,
-                    &root.join(folder).join(format!("{name}.{extension}")),
-                )
+        bases.iter().find_map(|base| {
+            FOLDERS.iter().find_map(|folder| {
+                EXTENSIONS.iter().find_map(|extension| {
+                    read_icon(
+                        &root,
+                        &base.join(folder).join(format!("{name}.{extension}")),
+                    )
+                })
             })
         })
     })
+}
+
+/// The root, then the folders directly under `apps` and `packages`, by name. A symlink isn't
+/// followed to another; `read_icon` has the last word on what lies inside the repository.
+fn bases(root: &Path) -> Vec<PathBuf> {
+    let mut bases = vec![root.to_path_buf()];
+    for workspace in WORKSPACES {
+        let Ok(entries) = std::fs::read_dir(root.join(workspace)) else {
+            continue;
+        };
+        let mut folders: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect();
+        folders.sort();
+        bases.extend(folders);
+    }
+    bases
 }
 
 /// The image at `path` as a `data:` URL, when it passes the checks above.
@@ -142,6 +181,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_favicon_folder_is_searched() {
+        let dir = repo();
+        write(dir.path(), "public/auth/logo.png", PNG);
+        write(dir.path(), "public/favicon/favicon.svg", SVG);
+        assert!(
+            find_icon(dir.path())
+                .unwrap()
+                .starts_with("data:image/svg+xml;base64,")
+        );
+    }
+
+    #[test]
+    fn an_app_in_a_monorepo_is_searched() {
+        let dir = repo();
+        write(dir.path(), "apps/desktop/src-tauri/icons/icon.png", PNG);
+        assert!(
+            find_icon(dir.path())
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+    }
+
+    #[test]
+    fn the_root_comes_first_then_apps_then_packages_within_a_name() {
+        let dir = repo();
+        write(
+            dir.path(),
+            "packages/ui/public/favicon.ico",
+            &[0, 0, 1, 0, 1],
+        );
+        assert!(
+            find_icon(dir.path())
+                .unwrap()
+                .starts_with("data:image/x-icon;base64,")
+        );
+        write(dir.path(), "apps/web/public/favicon.png", PNG);
+        assert!(
+            find_icon(dir.path())
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        // A logo at the root still waits behind a favicon in an app.
+        write(dir.path(), "logo.svg", SVG);
+        assert!(
+            find_icon(dir.path())
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        write(dir.path(), "favicon.svg", SVG);
+        assert!(
+            find_icon(dir.path())
+                .unwrap()
+                .starts_with("data:image/svg+xml;base64,")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_symlink_stays_inside_the_repository() {
@@ -155,6 +251,12 @@ mod tests {
         .unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.path().join("public")).unwrap();
         write(outside.path(), "favicon.svg", SVG);
+        // Nor does a monorepo's folder lead out of it.
+        write(outside.path(), "web/public/favicon.svg", SVG);
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("apps")).unwrap();
+        std::fs::create_dir_all(dir.path().join("packages")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("web"), dir.path().join("packages/web"))
+            .unwrap();
         assert_eq!(find_icon(dir.path()), None);
         // One pointing within it is a file of the repository like any other.
         write(dir.path(), "brand/mark.png", PNG);
