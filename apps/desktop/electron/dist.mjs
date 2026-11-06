@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Builds a production app for one architecture: the page, main without its dev control, the Rust release for
 // that target, then electron-builder.
-//   node electron/dist.mjs [--arch arm64|x64] [--dir]    --dir: the .app only, no DMG or zip
+//   node electron/dist.mjs [--arch arm64|x64] [--dir] [--check]
+//     --dir: the .app only, no DMG or zip
+//     --check: a package only a check runs: main keeps its dev switches (so it parks unfocused on scratch data)
+//       and the app can't come to the front. Everything else is as shipped: asar, addon, sidecars in the bundle.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,7 +22,8 @@ if (!triple) throw new Error(`no build configured for ${process.platform} ${arch
 const run = (file, list, options = {}) => execFileSync(file, list, { cwd: desktop, stdio: "inherit", ...options });
 const bin = (name) => path.join(desktop, "node_modules/.bin", name);
 
-run(process.execPath, ["electron/build.mjs", "--production"]);
+const check = args.includes("--check");
+run(process.execPath, ["electron/build.mjs", ...(check ? [] : ["--production"])]);
 run(bin("vite"), ["build", "--config", "electron/vite.config.ts"]);
 // The daemon, the CLI and the computer-use helper, as the Tauri build stages them.
 run(process.execPath, ["scripts/stage-sidecar.mjs", "--target", triple]);
@@ -33,6 +37,18 @@ const binaries = path.join(desktop, "src-tauri/binaries");
 for (const name of ["brigadierd", "brigadier"]) fs.copyFileSync(path.join(binaries, `${name}-${triple}`), path.join(stage, "sidecars", name));
 fs.cpSync(path.join(binaries, "Brigadier Computer Use.app"), path.join(stage, "Brigadier Computer Use.app"), { recursive: true, verbatimSymlinks: true });
 
-run(bin("electron-builder"), ["--mac", ...(args.includes("--dir") ? ["dir"] : []), `--${arch}`, "--config", "electron/builder.config.cjs", "--publish", "never"], {
-  env: { ...process.env, BRIGADIER_STAGE: stage, BRIGADIER_DIST: path.join(root, "target/electron-dist", arch), CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+const dist = path.join(root, "target/electron-dist", check ? `${arch}-check` : arch);
+run(bin("electron-builder"), ["--mac", ...(args.includes("--dir") || check ? ["dir"] : []), `--${arch}`, "--config", "electron/builder.config.cjs", "--publish", "never"], {
+  env: { ...process.env, BRIGADIER_STAGE: stage, BRIGADIER_DIST: dist, ...(check ? { BRIGADIER_CHECK_PACKAGE: "1" } : {}), CSC_IDENTITY_AUTO_DISCOVERY: "false" },
 });
+
+if (check) {
+  // Background-only, as the kept-alive dev app: macOS can't make it the front app.
+  const app = path.join(dist, `mac-${arch === "x64" ? "" : "arm64"}`.replace(/-$/, ""), "Brigadier.app");
+  const plists = [path.join(app, "Contents/Info.plist")];
+  const frameworks = path.join(app, "Contents/Frameworks");
+  for (const entry of fs.readdirSync(frameworks)) if (entry.endsWith(".app")) plists.push(path.join(frameworks, entry, "Contents/Info.plist"));
+  for (const plist of plists) run("plutil", ["-replace", "LSBackgroundOnly", "-bool", "true", plist]);
+  run("codesign", ["--force", "--deep", "--sign", "-", app]);
+  console.log(app);
+}

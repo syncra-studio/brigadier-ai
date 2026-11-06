@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Builds the Electron main process and preload from TypeScript into dist-electron. A preload in a sandbox
 // can require only "electron", so it's one CommonJS file. --production drops the dev control.
+import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 
@@ -27,5 +29,8 @@ const bundle = (entry, name, format) => build({
     },
   },
 });
+// A chunk left by an earlier build would ship: electron-builder packs what's here.
+const out = path.join(root, "dist-electron");
+for (const file of fs.existsSync(out) ? fs.readdirSync(out) : []) if (/\.(mjs|cjs)$/.test(file)) fs.rmSync(path.join(out, file));
 await bundle("./main/index.ts", "main", "es");
 await bundle("./preload.ts", "preload", "cjs");

@@ -10,6 +10,7 @@ const inStage = (name) => path.join(stage, name);
 module.exports = {
   appId: "ai.brigadier.app",
   productName: "Brigadier",
+  afterPack: "electron/afterPack.cjs",
   electronVersion: "45.2.3",
   npmRebuild: false,
   nodeGypRebuild: false,
@@ -22,7 +23,15 @@ module.exports = {
   },
   asar: true,
   // Only the bundles and the page: nothing from node_modules, which main has bundled.
-  files: ["package.json", "dist-electron/*.mjs", "dist-electron/preload.cjs", { from: "dist-electron/page", to: "page" }, "!**/node_modules/**"],
+  // The dev control's chunk ships only in a check package, whose main can reach it.
+  files: [
+    "package.json",
+    "dist-electron/*.mjs",
+    ...(process.env.BRIGADIER_CHECK_PACKAGE ? [] : ["!dist-electron/devControl.mjs"]),
+    "dist-electron/preload.cjs",
+    { from: "dist-electron/page", to: "page" },
+    "!**/node_modules/**",
+  ],
   extraResources: [{ from: inStage("shell_native.node"), to: "shell_native.node" }],
   electronFuses: {
     runAsNode: false,
@@ -41,7 +50,7 @@ module.exports = {
     // Sidecars stay in Contents/MacOS: computer use and recorded Claude hooks name that path.
     extraFiles: [
       { from: inStage("sidecars/brigadierd"), to: "MacOS/brigadierd" },
-      { from: inStage("sidecars/brigadier"), to: "MacOS/brigadier" },
+      // The CLI goes in afterPack.cjs, once the executable has moved off its name.
       { from: inStage("Brigadier Computer Use.app"), to: "Helpers/Brigadier Computer Use.app" },
     ],
     // An ad-hoc signature can't load an addon under the hardened runtime's library validation.
@@ -60,6 +69,8 @@ module.exports = {
   },
   dmg: { sign: false },
   win: {
+    // "Brigadier" and the CLI "brigadier" would be one file on a case-insensitive disk.
+    executableName: "brigadier-app",
     icon: "src-tauri/icons/icon.ico",
     target: ["nsis"],
     extraFiles: [
@@ -72,6 +83,7 @@ module.exports = {
   // is in %LOCALAPPDATA%\Brigadier\Data, which this must never contain (paths.ts, installFolderLeavesData).
   nsis: { oneClick: true, perMachine: false, allowToChangeInstallationDirectory: false, deleteAppDataOnUninstall: false, shortcutName: "Brigadier" },
   linux: {
+    executableName: "brigadier-app",
     icon: "src-tauri/icons",
     target: ["deb", "AppImage"],
     category: "Development",

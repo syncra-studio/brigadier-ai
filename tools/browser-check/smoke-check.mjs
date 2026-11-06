@@ -13,6 +13,8 @@ const data = path.join(checkDir, "smoke-data");
 const chromium = path.join(checkDir, "smoke-chromium");
 const reports = path.join(checkDir, "evidence/smoke");
 const runs = Number(process.argv[2] ?? 1);
+// A package from `electron/dist.mjs --check`: addon, sidecars and page all from inside the bundle.
+const bundle = process.argv[3] ?? null;
 fs.mkdirSync(reports, { recursive: true });
 fs.mkdirSync(daemonHome, { recursive: true });
 fs.rmSync(data, { recursive: true, force: true });
@@ -27,17 +29,17 @@ function launch(name) {
     BRIGADIER_DEV: "1",
     BRIGADIER_UNFOCUSED: "1",
     BRIGADIER_DEV_DATA: chromium,
-    BRIGADIER_ADDON: addonPath,
-    BRIGADIER_PAGE_DIR: path.join(desktopDir, "dist-electron/page"),
+    ...(bundle
+      ? { BRIGADIER_PAGE_DIR: path.join(bundle, "Contents/Resources/app.asar/page") }
+      : { BRIGADIER_ADDON: addonPath, BRIGADIER_PAGE_DIR: path.join(desktopDir, "dist-electron/page"), BRIGADIER_DEV_SIDECARS: sidecarDir }),
     BRIGADIER_DEV_DAEMON_DATA: data,
-    BRIGADIER_DEV_SIDECARS: sidecarDir,
     BRIGADIER_DEV_DAEMON_HOME: daemonHome,
     BRIGADIER_CHECK_BOUNDS: JSON.stringify({ x: 1714, y: 120, width: 1280, height: 800 }),
     BRIGADIER_SMOKE_REPORT: report,
     BRIGADIER_LOG: "warn",
   };
   return new Promise((resolve) => {
-    const child = spawn(path.join(binDir, "spawn-disclaimed"), [appBinary, "--smoke"], { env, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(path.join(binDir, "spawn-disclaimed"), [bundle ? path.join(bundle, "Contents/MacOS/brigadier-app") : appBinary, "--smoke"], { env, stdio: ["ignore", "ignore", "pipe"] });
     let log = "";
     child.stderr.on("data", (chunk) => { log += chunk; });
     child.on("exit", (code) => resolve({ code, log, report }));
