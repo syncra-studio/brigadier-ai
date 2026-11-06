@@ -259,6 +259,8 @@ async function drive(): Promise<Record<string, unknown>> {
   seen.projectsSections = sections().map((section) => section.title);
   seen.projectsPill = pill() !== null;
   seen.projectsAction = q('[data-slot="archive-merged"]') !== null;
+  // These rows are new: a file that won't load gives way to the folder once its error fires.
+  await until(() => !projectRows().find((button) => button.textContent?.trim() === "freelogo")?.querySelector("img"));
   seen.projectMarks = Object.fromEntries(projectRows().map((button) => [button.textContent?.trim(), button.querySelector("img") ? "icon" : button.querySelector("svg") ? "folder" : null]));
   seen.projectButtons = [...document.querySelectorAll('li > div button[aria-label$=" brigadier-ai"]')].map((button) => button.getAttribute("aria-label"));
   await click(box("freelogo"));

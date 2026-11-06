@@ -267,24 +267,20 @@ export function AppSidebar() {
             title="Projects"
             open={sections.isOpen("projects")}
             onOpenChange={(open) => sections.setOpen("projects", open)}
-            steadyActions
+            steadyEnd={view}
             actions={
-              <>
-                {/* Shows on the section's hover, as a section's actions do; View keeps the end. */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <RowAction
-                      aria-label="Add project"
-                      className="size-icon-button-sm opacity-0 group-focus-within/section:opacity-100 group-hover/section:opacity-100"
-                      onClick={() => openAddProject()}
-                    >
-                      <Plus />
-                    </RowAction>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Add project</TooltipContent>
-                </Tooltip>
-                {view}
-              </>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <RowAction
+                    aria-label="Add project"
+                    className="size-icon-button-sm"
+                    onClick={() => openAddProject()}
+                  >
+                    <Plus />
+                  </RowAction>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Add project</TooltipContent>
+              </Tooltip>
             }
           >
             <NavList>
