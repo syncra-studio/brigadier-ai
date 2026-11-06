@@ -1,5 +1,6 @@
 import { browserLayer } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
+import { followLayout } from "./pageWatch";
 
 /**
  * On macOS a Browser tab's page lies beneath the app's own web view (see `src-tauri/src/
@@ -18,7 +19,7 @@ const TOOLTIP = "[data-slot=tooltip-content], [role=tooltip]";
 
 /** Where each tab's page shows now, by tab. */
 const holes = new Map<string, BrowserBounds>();
-let next = 0;
+let stopFollowing: (() => void) | null = null;
 let cut = "";
 let sent = "";
 
@@ -56,7 +57,6 @@ const areaOf = (element: Element): BrowserBounds | null => {
 };
 
 function sync() {
-  next = 0;
   const root = document.getElementById("root");
   const shown = holes.size > 0;
   const clip = shown ? clipPath(window.innerWidth, window.innerHeight, holes.values()) : "";
@@ -74,15 +74,18 @@ function sync() {
     sent = layer;
     browserLayer(above, modal).catch(() => {});
   }
-  // Menus open and floating controls move between page placements: watched every frame while
-  // a page shows.
-  if (shown) next = requestAnimationFrame(sync);
 }
 
 /** The tab's page shows at `bounds` (in the window), or no longer shows (`null`). */
 export function showPage(id: string, bounds: BrowserBounds | null) {
   if (bounds) holes.set(id, bounds);
   else holes.delete(id);
-  // While a page shows the next frame takes it; else at once.
-  if (next === 0) sync();
+  // Same frame as the page's own move. Menus open and floating controls move between placements,
+  // and the window resizes: heard for as long as a page shows.
+  sync();
+  if (holes.size > 0) stopFollowing ??= followLayout(() => [document.documentElement], sync);
+  else {
+    stopFollowing?.();
+    stopFollowing = null;
+  }
 }

@@ -12,6 +12,7 @@ import { useRowActivity } from "@/state/activity";
 import { type BoardStore, BoardStoreContext, createSideBoard, disposeSideBoard } from "@/state/board";
 import type { TabChatState } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
+import { followLayout } from "../conversation/pageWatch";
 import {
   type ChatTab,
   chatTarget,
@@ -111,9 +112,8 @@ function ChatButton({ conversationId, tab, chat, floating }: { conversationId: s
 function AbovePage({ anchor, children }: { anchor: RefObject<HTMLDivElement | null>; children: ReactNode }) {
   const [corner, setCorner] = useState<{ end: number; bottom: number } | null>(null);
   useEffect(() => {
-    let frame = 0;
     let placed = "";
-    // The tab moves and resizes with the panels around it: followed every frame.
+    // The tab moves and resizes with the panels around it.
     const follow = () => {
       const element = anchor.current;
       const box = element && !element.closest("[inert]") ? element.getBoundingClientRect() : null;
@@ -126,10 +126,8 @@ function AbovePage({ anchor, children }: { anchor: RefObject<HTMLDivElement | nu
         placed = key;
         setCorner(next);
       }
-      frame = requestAnimationFrame(follow);
     };
-    follow();
-    return () => cancelAnimationFrame(frame);
+    return followLayout(() => [anchor.current], follow);
   }, [anchor]);
   if (!corner) return null;
   return createPortal(

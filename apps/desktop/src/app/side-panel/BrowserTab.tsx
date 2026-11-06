@@ -4,6 +4,7 @@ import { AddressSuggestions, useAddressSuggestions } from "./AddressSuggestions"
 import { type Suggestion, stepSuggestion } from "./browserSuggestions";
 import { browserAddress, shownAddress, webAddress } from "./browserAddress";
 import { showPage } from "../conversation/browserLayer";
+import { followLayout } from "../conversation/pageWatch";
 import { type BrowserKey, browserKey, stepZoom } from "../conversation/browserKeys";
 import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
 import { BrowserOptions } from "./BrowserOptions";
@@ -62,16 +63,18 @@ function covered(area: DOMRect, layers: readonly Element[]): boolean {
   });
 }
 
+/** The floating editor over this tab's pane, if there is one. */
+function composerOf(element: HTMLElement): Element | null {
+  return element.closest('[data-slot="pane-workspace"]')?.querySelector('[data-slot="floating-composer"]') ?? null;
+}
+
 function pageBounds(
   element: HTMLElement,
   rect = element.getBoundingClientRect(),
 ): BrowserBounds {
   // A native child webview paints above the app DOM. End its rectangle above the
   // floating editor, so the same editor stays accessible without a second webview.
-  const composer = element
-    .closest('[data-slot="pane-workspace"]')
-    ?.querySelector('[data-slot="floating-composer"]')
-    ?.getBoundingClientRect();
+  const composer = composerOf(element)?.getBoundingClientRect();
   return {
     x: rect.left,
     y: rect.top,
@@ -159,16 +162,8 @@ export function BrowserTab({
     const element = area.current;
     if (!page?.ready || !element) return;
     if (!active) { void browserPlace(conversationId, null).catch(() => {}); return; }
-    let layers: Element[] = [];
-    const collect = () => {
-      layers = [...document.querySelectorAll(COVERS)];
-    };
-    collect();
-    // Menus, popovers and dialogs mount in portals at the end of the body.
-    const observer = new MutationObserver(collect);
-    observer.observe(document.body, { childList: true });
     let placed = "";
-    let next = 0;
+    let showed: boolean | null = null;
     // The side panel clips its contents while it opens, closes or hides; the page, drawn over
     // the window rather than in it, shows only once the tab is wholly in view.
 
@@ -187,7 +182,7 @@ export function BrowserTab({
         !element.closest("[inert]") &&
         placedBounds.width > 0 &&
         placedBounds.height > 0 &&
-        (beneath || !covered(rendered, layers))
+        (beneath || !covered(rendered, [...document.querySelectorAll(COVERS)]))
           ? placedBounds
           : null;
       const key = JSON.stringify(bounds);
@@ -197,13 +192,14 @@ export function BrowserTab({
         if (beneath) showPage(conversationId, bounds);
       }
       shown.current = bounds !== null;
-      pageShows(conversationId, shown.current);
-      next = requestAnimationFrame(place);
+      if (shown.current !== showed) {
+        showed = shown.current;
+        pageShows(conversationId, showed);
+      }
     };
-    next = requestAnimationFrame(place);
+    const stop = followLayout(() => [element, composerOf(element)], place);
     return () => {
-      cancelAnimationFrame(next);
-      observer.disconnect();
+      stop();
       shown.current = false;
       pageShows(conversationId, false);
       browserPlace(conversationId, null).catch(() => {});
