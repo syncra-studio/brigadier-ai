@@ -5,6 +5,7 @@
 //   tauri-compare.mjs <Brigadier Dev.app> [cold runs]
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { osWindows, capture } from "./instruments.mjs";
@@ -15,6 +16,7 @@ const runs = Number(process.argv[3] ?? 3);
 const exe = path.join(app, "Contents/MacOS/brigadier-app");
 const data = path.join(checkDir, "tauri-data");
 const reports = path.join(evidenceDir, "tauri");
+const load = () => `load ${os.loadavg().map((value) => value.toFixed(1)).join(" ")}`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 fs.mkdirSync(reports, { recursive: true });
 fs.mkdirSync(daemonHome, { recursive: true });
@@ -30,6 +32,7 @@ for (let run = 0; run <= runs; run++) {
   const name = run === 0 ? "first" : `cold-${run}`;
   const report = path.join(reports, `${name}.json`);
   fs.rmSync(report, { force: true });
+  const loadBefore = load();
   const child = launch(["--smoke"], { BRIGADIER_SMOKE_REPORT: report });
   let log = "";
   child.stderr.on("data", (chunk) => { log += chunk; });
@@ -40,7 +43,7 @@ for (let run = 0; run <= runs; run++) {
   }
   const parsed = JSON.parse(fs.readFileSync(report, "utf8"));
   const start = parsed.checks.find((check) => ["coldStart", "firstColdStart"].includes(check.id) && check.measured !== null);
-  console.log(`${name}: exit ${code}, passed ${parsed.passed}, ${start.metric} ${Math.round(start.measured)} ms (limit ${start.limit}): ${String(start.note).split("since process start: ")[1]}`);
+  console.log(`${name}: exit ${code}, passed ${parsed.passed}, ${start.metric} ${Math.round(start.measured)} ms (limit ${start.limit}): ${String(start.note).split("since process start: ")[1]}; before: ${loadBefore}; after: ${load()}`);
 }
 
 // One idle launch.
@@ -52,7 +55,7 @@ const rows = execFileSync("ps", ["-axo", "pid=,rss=,lstart=,command="], { encodi
   return match ? { pid: Number(match[1]), mb: Number(match[2]) / 1024, started: new Date(match[3]).getTime(), command: match[4] } : null;
 }).filter(Boolean);
 const ours = rows.filter((row) => row.command.startsWith(app) || (row.command.includes("com.apple.WebKit") && row.started >= launchedAt - 1000));
-console.log(`Tauri processes, idle after 15 s: ${ours.map((row) => `${path.basename(row.command.split(" ")[0])} ${Math.round(row.mb)}`).join(", ")}; total without the daemon ${Math.round(ours.filter((row) => !row.command.includes("brigadierd")).reduce((sum, row) => sum + row.mb, 0))} MB`);
+console.log(`Tauri processes, idle after 15 s: ${ours.map((row) => `${path.basename(row.command.split(" ")[0])} ${Math.round(row.mb)}`).join(", ")}; total without the daemon ${Math.round(ours.filter((row) => !row.command.includes("brigadierd")).reduce((sum, row) => sum + row.mb, 0))} MB; ${load()}`);
 const windows = await osWindows(child.pid);
 const window = windows.find((each) => each.width >= 800 || each.w >= 800) ?? windows[0];
 console.log(`windows: ${JSON.stringify(windows).slice(0, 300)}`);

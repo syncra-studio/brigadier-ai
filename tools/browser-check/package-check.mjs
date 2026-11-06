@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 
 import { FIXTURES, control, host, openShell, sleep } from "./lib.mjs";
@@ -60,9 +61,11 @@ if (zip) {
   server.close();
 }
 
+// Settled, and on the same footing as the Tauri reading: its page, idle, with no guest.
+await sleep(15000);
 const metrics = await control("metrics");
 const total = metrics.reduce((sum, each) => sum + (each.kb ?? 0), 0);
-console.log(`Electron processes, idle: ${metrics.map((each) => `${each.type} ${Math.round(each.kb / 1024)}`).join(", ")}; total ${Math.round(total / 1024)} MB`);
+console.log(`Electron processes, idle: ${metrics.map((each) => `${each.type} ${Math.round(each.kb / 1024)}`).join(", ")}; total ${Math.round(total / 1024)} MB; load ${os.loadavg().map((value) => value.toFixed(1)).join(" ")}`);
 const events = fs.readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.at >= started);
 check("no renderer exit, no focus taken", !events.some((event) => ["render-process-gone", "browser-window-focus", "did-become-active"].includes(event.kind)));
 console.log(`console errors: ${JSON.stringify([...new Set(events.filter((event) => event.kind === "console-error").map((event) => event.message.slice(0, 160)))])}`);

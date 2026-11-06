@@ -5,6 +5,7 @@
 // the page's own measurements. Build with `build-native.mjs --release` for numbers worth comparing.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { addonPath, appBinary, binDir, checkDir, daemonHome, desktopDir, sidecarDir } from "./paths.mjs";
@@ -20,6 +21,8 @@ fs.mkdirSync(daemonHome, { recursive: true });
 fs.rmSync(data, { recursive: true, force: true });
 fs.rmSync(chromium, { recursive: true, force: true });
 fs.mkdirSync(chromium, { recursive: true });
+
+const load = () => `load ${os.loadavg().map((value) => value.toFixed(1)).join(" ")}`;
 
 function launch(name) {
   const report = path.join(reports, `${name}.json`);
@@ -48,6 +51,7 @@ function launch(name) {
 
 for (let run = 0; run < runs + 1; run++) {
   const name = run === 0 ? "first" : `cold-${run}`;
+  const loadBefore = load();
   const { code, log, report } = await launch(name);
   if (!fs.existsSync(report)) {
     console.log(`${name}: exit ${code}, no report\n${log.slice(-1500)}`);
@@ -57,7 +61,7 @@ for (let run = 0; run < runs + 1; run++) {
   const failing = (parsed.checks ?? []).filter((check) => check.status === "fail");
   const cold = (parsed.checks ?? []).find((check) => ["coldStart", "firstColdStart"].includes(check.id) && check.measured !== null);
   const rss = (parsed.checks ?? []).find((check) => check.id === "coreIdleRss");
-  console.log(`${name}: exit ${code}, passed ${parsed.passed}, ${cold?.metric} ${Math.round(cold?.measured)} ms (limit ${cold?.limit}), daemon idle ${rss ? Math.round(rss.measured) : "?"} MB`);
+  console.log(`${name}: exit ${code}, passed ${parsed.passed}, ${cold?.metric} ${Math.round(cold?.measured)} ms (limit ${cold?.limit}), daemon idle ${rss ? Math.round(rss.measured) : "?"} MB; before: ${loadBefore}; after: ${load()}`);
   for (const check of failing) console.log(`  FAIL ${check.metric}: ${check.measured} ${check.note ? `(${String(check.note).slice(0, 200)})` : ""}`);
 }
 process.exit(0);
