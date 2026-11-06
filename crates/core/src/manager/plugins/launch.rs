@@ -101,6 +101,9 @@ impl SessionManager {
                     Catalog::read_rows_with_library(&roots, &registered, &data_dir)
                 });
             }
+            super::known::Known::read(&data_dir, &rows)
+                .map_err(Error::Invalid)?
+                .apply(&rows, &mut choices);
             let warnings = if grants.is_none() {
                 fill_library_values(&mut rows, &data_dir, &choices, project.as_deref(), &secrets)
             } else {

@@ -44,10 +44,30 @@ export type PluginItemView = {
   cliOnly?: string[];
   signIn?: CatalogSignIn;
 };
+/** A skill or MCP server found since the last Refresh, off until the user adds it. */
+export type PluginFoundView = {
+  key: string;
+  kind: PluginKind;
+  name: string;
+  detail: string;
+  /** The agents that have it, in words: "Claude Code + Codex". */
+  foundIn: string;
+};
+/** One whose files have left every agent: it has only a name now. */
+export type PluginGoneView = { key: string; kind: PluginKind; name: string };
+/** One the user kept out of Brigadier; its files stay, and Add can bring it back. */
+export type PluginHiddenView = { key: string; kind: PluginKind; name: string; detail: string };
+/** What a Refresh found. */
+export type PluginChanges = { found: PluginFoundView[]; gone: PluginGoneView[] };
+/** What the user chose for each: every key of a `PluginChanges` is in one of these. */
+export type PluginChangeChoices = { add: string[]; decline: string[]; remove: string[]; keep: string[] };
 export type PluginsView = {
   projects: PluginProjectView[];
   items: PluginItemView[];
   elsewhere: PluginElsewhereView[];
+  /** Gone items the user chose to keep: they return with their settings if their files do. */
+  missing?: PluginGoneView[];
+  hidden?: PluginHiddenView[];
   /** What each CLI has of its own that only it can run, read-only. */
   cliOnly?: string[];
 };

@@ -8,7 +8,7 @@ import type { PluginAgentResult, PluginDraft, PluginsAdapter } from "./adapter";
 import { failures, notes, PluginDialog, useWatch } from "./dialogs";
 import { KIND_LABEL, shownDetail } from "./model";
 import { PluginMark, RadioRow } from "./parts";
-import type { PluginElsewhereView, PluginKind, PluginsView } from "./types";
+import type { PluginElsewhereView, PluginHiddenView, PluginKind, PluginsView } from "./types";
 import { FileDialog, settingsText } from "./FileDialog";
 
 export const ADD_HINT = "Works with an mcp add line from any agent, a server URL, mcpServers JSON, a GitHub link, a skills.sh name or a skill folder.";
@@ -39,6 +39,7 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
   const [sourceFolder, setSourceFolder] = useState<string | null>(null);
   const [importing, setImporting] = useState<PluginElsewhereView | null>(null);
   const [showImports, setShowImports] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
   const [where, setWhere] = useState<"every" | "one">("every");
   const [project, setProject] = useState(view.projects[0]?.id ?? "");
   const [advanced, setAdvanced] = useState(false);
@@ -48,6 +49,8 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
   const [values, setValues] = useState<ValueRow[]>([]);
   const action = useAction();
   const adding = step.type === "adding" && step.results === null;
+  const hidden = view.hidden ?? [];
+  const restore = adapter.restorePlugin;
   useWatch(refresh, adding);
 
   if (step.type === "paste") {
@@ -115,13 +118,15 @@ export function AddDialog({ view, adapter, refresh, onClose }: {
             <span className="flex-1" />
             <Button variant="ghost" size="sm" disabled={action.busy} onClick={choose}>Choose folder…</Button>
             {view.elsewhere.length > 0 && <Button variant="ghost" size="sm" onClick={() => setShowImports(!showImports)}>Import from…</Button>}
+            {restore && hidden.length > 0 && <Button variant="ghost" size="sm" aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}>Bring back…</Button>}
           </div>,
-          extra: needsName || showImports ? <>
+          extra: needsName || showImports || (showHidden && hidden.length > 0) ? <>
             {needsName && <div data-slot="paste-name" className="flex items-center gap-3">
               <label htmlFor={`${id}-paste-name`} className="text-foreground/65 shrink-0 text-label">Name</label>
               <Input id={`${id}-paste-name`} aria-label="Name" value={name} autoFocus {...PLAIN_FIELD} onChange={(event) => setName(event.target.value)} className="h-8 font-mono text-xs" />
             </div>}
             {showImports && <ImportList entries={view.elsewhere} onImport={loadImport} />}
+            {showHidden && restore && hidden.length > 0 && <HiddenList entries={hidden} disabled={action.busy} onRestore={(key) => action.run(async () => { await restore(key); refresh(); })} />}
           </> : null,
         }}
       />
@@ -347,6 +352,25 @@ function ImportList({ entries, onImport }: { entries: PluginElsewhereView[]; onI
         </section>
       ))}
     </div>
+  );
+}
+
+/** What the user kept out of Brigadier: its files are still there, so it can come back as it is. */
+function HiddenList({ entries, disabled, onRestore }: { entries: PluginHiddenView[]; disabled: boolean; onRestore: (key: string) => void }) {
+  return (
+    <section data-slot="hidden-items" aria-label="Bring back" className="flex min-w-0 flex-col gap-2">
+      <h3 className="text-foreground/65 text-label">Bring back something you left out</h3>
+      {entries.map((entry) => (
+        <div key={entry.key} data-slot="hidden-row" className="bg-foreground/5 rounded-control flex items-center gap-3 px-3 py-2">
+          <PluginMark item={{ kind: entry.kind, name: entry.name, detail: entry.detail }} />
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="truncate text-label font-medium">{entry.name}</span>
+            <span className="text-foreground/65 truncate font-mono text-xs">{entry.detail}</span>
+          </span>
+          <Button variant="soft" size="sm" aria-label={`Bring back ${entry.name}`} disabled={disabled} onClick={() => onRestore(entry.key)}>Bring back</Button>
+        </div>
+      ))}
+    </section>
   );
 }
 

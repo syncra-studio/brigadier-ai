@@ -12,6 +12,14 @@ pub struct CatalogView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cli_only: Option<Vec<CatalogCliOnly>>,
+    /// Gone items the user kept: they return with their settings if their files do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub missing: Option<Vec<super::known::PluginGone>>,
+    /// Items the user kept out of Brigadier; Add can bring them back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hidden: Option<Vec<super::known::PluginHidden>>,
 }
 
 /// A plugin's hooks, commands and agents, or a CLI's own: never shared, installed or edited.
@@ -108,6 +116,8 @@ impl CatalogView {
             rows,
             version: brigadier_registry::catalog::fingerprint(&bytes),
             cli_only: None,
+            missing: None,
+            hidden: None,
         }
     }
 }

@@ -1294,6 +1294,21 @@ pub enum Request {
     RemovePlugin {
         key: String,
     },
+    /// Refresh on the Plugins page: new items and items gone from every CLI. Nothing else
+    /// looks for them.
+    CheckPluginChanges,
+    /// What the user chose for what `CheckPluginChanges` found: new items by `add` or
+    /// `decline`, gone items by `remove` or `keep`.
+    ApplyPluginChanges {
+        add: Vec<String>,
+        decline: Vec<String>,
+        remove: Vec<String>,
+        keep: Vec<String>,
+    },
+    /// Brings an item the user kept out back into Brigadier.
+    RestorePlugin {
+        key: String,
+    },
     /// What item `key` is set up with: its skill files (path and text) to open, or its
     /// server's settings (no value, only their names).
     GetPluginItem {
@@ -2055,6 +2070,11 @@ pub enum Response {
     RemovePlugin {
         job: String,
     },
+    CheckPluginChanges {
+        changes: brigadier_core::manager::plugins::known::PluginChanges,
+    },
+    ApplyPluginChanges,
+    RestorePlugin,
     GetPluginItem {
         item: brigadier_core::manager::plugins::PluginItemDetails,
     },

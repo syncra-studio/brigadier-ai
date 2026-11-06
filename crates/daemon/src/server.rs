@@ -2728,6 +2728,29 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             daemon.sessions.rebuild_plugin_catalog().await?;
             Response::RemovePlugin { job: String::new() }
         }
+        Request::CheckPluginChanges => {
+            let changes = daemon.sessions.check_plugin_changes().await?;
+            daemon.sessions.rebuild_plugin_catalog().await?;
+            Response::CheckPluginChanges { changes }
+        }
+        Request::ApplyPluginChanges {
+            add,
+            decline,
+            remove,
+            keep,
+        } => {
+            daemon
+                .sessions
+                .apply_plugin_changes(add, decline, remove, keep)
+                .await?;
+            daemon.sessions.rebuild_plugin_catalog().await?;
+            Response::ApplyPluginChanges
+        }
+        Request::RestorePlugin { key } => {
+            daemon.sessions.restore_plugin(key).await?;
+            daemon.sessions.rebuild_plugin_catalog().await?;
+            Response::RestorePlugin
+        }
         Request::GetPluginItem { key } => Response::GetPluginItem {
             item: daemon.sessions.catalog_item_details(key)?,
         },

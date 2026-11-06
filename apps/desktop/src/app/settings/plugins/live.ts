@@ -14,10 +14,8 @@ const partsLine = (part: CatalogCliOnly) => {
   return `${part.agent ? cliFacts(part.agent).label : ""} only. ${groups.join(" ")}`;
 };
 
-const agentName = (row: CatalogView["rows"][number]) => {
-  const agents = new Set(row.definitions.map((definition) => definition.agent));
-  return PROVIDERS.filter((agent) => agents.has(agent)).map((agent) => cliFacts(agent).label).join(" + ");
-};
+const agentNames = (agents: readonly (string | null)[]) => PROVIDERS.filter((agent) => agents.includes(agent)).map((agent) => cliFacts(agent).label).join(" + ");
+const agentName = (row: CatalogView["rows"][number]) => agentNames(row.definitions.map((definition) => definition.agent));
 
 /** The catalog's durable choices, rendered with the shared Settings grid. */
 export function catalogPage(catalog: CatalogView, projects: PluginProjectView[]): PluginsView {
@@ -40,6 +38,8 @@ export function catalogPage(catalog: CatalogView, projects: PluginProjectView[])
   return {
     projects,
     ...(ownParts.length > 0 ? { cliOnly: ownParts } : {}),
+    ...(catalog.missing ? { missing: catalog.missing } : {}),
+    ...(catalog.hidden ? { hidden: catalog.hidden } : {}),
     elsewhere: offers.map((row) => {
       const definition = row.definitions[0]!;
       return { key: row.id, name: row.name, detail: definition.endpoint ?? definition.file, url: definition.transport === "http" ? definition.endpoint : null,
@@ -215,6 +215,12 @@ export function livePlugins(): PluginsAdapter {
       const { state } = await request({ method: "cancelPluginSignIn", rowId });
       return state;
     }),
+    checkChanges: async () => {
+      const { changes } = await request({ method: "checkPluginChanges" });
+      return { gone: changes.gone, found: changes.found.map(({ agents, ...item }) => ({ ...item, foundIn: agentNames(agents) })) };
+    },
+    applyChanges: async (choices) => { await request({ method: "applyPluginChanges", ...choices }); },
+    restorePlugin: async (key) => { await request({ method: "restorePlugin", key }); },
     pickFolder,
     trustProject: async () => {},
   };

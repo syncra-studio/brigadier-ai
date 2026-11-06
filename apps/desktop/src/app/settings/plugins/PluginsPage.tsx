@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { SettingsPage } from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
 import { Button } from "@/components/controls";
-import { Plus, Sparkle, Terminal } from "@/components/icons";
+import { Plus, Sparkle, Spinner, Terminal } from "@/components/icons";
 import { SettingsCard, SettingsSearch } from "@/components/shared";
 import { cn } from "@/lib/utils";
 import { openSettings, select } from "@/state/actions";
@@ -15,8 +15,9 @@ import { DetailsPage } from "./DetailsPage";
 import { checked, RemoveDialog } from "./dialogs";
 import { FileDialog } from "./FileDialog";
 import { chipOf, lineOf, listed, TAB_LABEL } from "./model";
-import { PluginCard } from "./parts";
-import type { PluginItemView, PluginKind, PluginsView } from "./types";
+import { MissingCard, PluginCard } from "./parts";
+import { RefreshDialog } from "./RefreshDialog";
+import type { PluginChanges, PluginGoneView, PluginItemView, PluginKind, PluginsView } from "./types";
 
 const PLUGINS_DESCRIPTION = "Skills and MCP servers your agents can use.";
 
@@ -33,6 +34,7 @@ export function pluginSearchRows() {
 /** A dialog open over the page. */
 type Open =
   | { type: "add" }
+  | { type: "changes"; changes: PluginChanges }
   | { type: "remove"; key: string }
   | { type: "file"; key: string };
 
@@ -57,10 +59,14 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
   const selection = useApp((s) => s.selection);
   const selected = selection.type === "settings" && selection.page === "plugins" ? selection.detail?.plugin : undefined;
   const [open, setOpen] = useState<Open | null>(null);
+  const [checking, setChecking] = useState(false);
+  /** The last Refresh found nothing: said under the toolbar until the next one, or a dialog. */
+  const [nothingChanged, setNothingChanged] = useState(false);
   const liveDialog = useRef<Open | null>(null);
   const setDialog = useCallback((dialog: Open | null) => {
     liveDialog.current = dialog;
     setOpen(dialog);
+    if (dialog) setNothingChanged(false);
   }, []);
   useEffect(() => {
     // Leaving a visit invalidates its dialog even if Back restores the same selection object.
@@ -109,6 +115,25 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
   /** The card's switch: the whole item on or off, in every agent, keeping where it's set to be. */
   const flip = (item: PluginItemView, on: boolean) => adapter && change(item.key, { on }, () => adapter.switchPlugin(item.key, on));
 
+  /** The only place new and gone items are looked for: it never runs on its own. */
+  const checkChanges = () => {
+    const check = adapter?.checkChanges;
+    if (!check || checking) return;
+    setChecking(true);
+    setNothingChanged(false);
+    void changes.run(null, place, {}, async () => {
+      const found = await check();
+      // Left the page meanwhile: its dialog would open over somewhere else.
+      if (useApp.getState().selection !== selection) return;
+      if (found.found.length || found.gone.length) setDialog({ type: "changes", changes: found });
+      else setNothingChanged(true);
+    }).finally(() => setChecking(false));
+  };
+  const forget = (item: PluginGoneView) => {
+    const apply = adapter?.applyChanges;
+    if (apply) void changes.run(item.key, place, {}, () => apply({ add: [], decline: [], remove: [item.key], keep: [] }));
+  };
+
   const current = selected ? find(selected) : undefined;
   let page;
   if (current && adapter) {
@@ -151,13 +176,17 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
           onOpen={(item) => select({ type: "settings", page: "plugins", detail: { plugin: item.key } })}
           onFlip={flip}
           onAdd={() => setDialog({ type: "add" })}
+          checking={checking}
+          nothingChanged={nothingChanged}
+          onRefresh={adapter?.checkChanges ? checkChanges : null}
+          onForget={forget}
         />
         {view.cliOnly?.map((line) => <p key={line} data-slot="cli-only" className="text-foreground/65 text-xs">{line}</p>)}
       </SettingsPage>
     );
   }
 
-  const target = open && open.type !== "add" ? find(open.key) : undefined;
+  const target = open && "key" in open ? find(open.key) : undefined;
   // The same calls for as long as one item's file stays open, however often the page is read again.
   const fileKey = open?.type === "file" ? open.key : null;
   const fileCalls = useMemo(() => adapter && fileKey !== null ? {
@@ -170,6 +199,17 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
     <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">
       {page}
       {adapter && open?.type === "add" && <AddDialog view={view} adapter={adapter} refresh={refresh} onClose={close} />}
+      {adapter && open?.type === "changes" && (
+        <RefreshDialog
+          changes={open.changes}
+          adapter={adapter}
+          onClose={close}
+          onDone={() => {
+            if (liveDialog.current === open) close();
+            refresh();
+          }}
+        />
+      )}
       {adapter && open?.type === "remove" && target && (
         <RemoveDialog
           item={target}
@@ -192,7 +232,7 @@ function PluginsScreen({ view: read, adapter, error, refresh, loading }: {
   );
 }
 
-function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, onOpen, onFlip, onAdd }: {
+function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, onOpen, onFlip, onAdd, checking, nothingChanged, onRefresh, onForget }: {
   view: PluginsView;
   tab: PluginKind;
   query: string;
@@ -204,17 +244,24 @@ function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, on
   onOpen: (item: PluginItemView) => void;
   onFlip: (item: PluginItemView, on: boolean) => void;
   onAdd: () => void;
+  checking: boolean;
+  nothingChanged: boolean;
+  onRefresh: (() => void) | null;
+  onForget: (item: PluginGoneView) => void;
 }) {
   const count = (kind: PluginKind) => view.items.filter((item) => item.kind === kind).length;
   const items = listed(view, tab, query);
+  const words = query.trim().toLowerCase();
+  const missing = (view.missing ?? []).filter((item) => item.kind === tab && item.name.toLowerCase().includes(words));
   return (
     <div className="flex flex-col gap-5">
-      <Toolbar tab={tab} query={query} count={count} adding={!!adapter} onTab={onTab} onQuery={onQuery} onAdd={onAdd} />
+      <Toolbar tab={tab} query={query} count={count} adding={!!adapter} checking={checking} onRefresh={onRefresh} onTab={onTab} onQuery={onQuery} onAdd={onAdd} />
+      {nothingChanged && <p role="status" data-slot="nothing-changed" className="text-foreground/65 text-label">Nothing changed. There are no new or removed skills or MCP servers.</p>}
       {loading ? (
         <p role="status" className="text-foreground/65 text-label py-6 text-center">Loading plugins…</p>
-      ) : count(tab) === 0 ? (
+      ) : count(tab) === 0 && !view.missing?.some((item) => item.kind === tab) ? (
         <EmptyTab tab={tab} onAdd={onAdd} />
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && missing.length === 0 ? (
         <p data-slot="no-match" className="text-foreground/65 text-label py-6 text-center">Nothing matches “{query.trim()}”.</p>
       ) : (
         <div data-slot="plugins-grid" className="grid grid-cols-1 gap-2.5 @thread:grid-cols-2">
@@ -229,6 +276,7 @@ function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, on
               onSwitch={(on) => onFlip(item, on)}
             />
           ))}
+          {missing.map((item) => <MissingCard key={item.key} item={item} busy={busy} onRemove={() => onForget(item)} />)}
         </div>
       )}
     </div>
@@ -236,11 +284,13 @@ function ListBody({ view, tab, query, busy, loading, adapter, onTab, onQuery, on
 }
 
 /** The list's one row of controls: the two tabs, search and Add. */
-function Toolbar({ tab, query, count, adding, onTab, onQuery, onAdd }: {
+function Toolbar({ tab, query, count, adding, checking, onRefresh, onTab, onQuery, onAdd }: {
   tab: PluginKind;
   query: string;
   count: (kind: PluginKind) => number;
   adding: boolean;
+  checking: boolean;
+  onRefresh: (() => void) | null;
   onTab: (tab: PluginKind) => void;
   onQuery: (query: string) => void;
   onAdd: () => void;
@@ -276,6 +326,7 @@ function Toolbar({ tab, query, count, adding, onTab, onQuery, onAdd }: {
       <span className="flex-1" />
       {/* "Search" alone fits a narrow window; the field's name still says what it searches. */}
       <SettingsSearch className="max-w-60 min-w-28 flex-1" label={tab === "server" ? "Search MCP servers" : "Search skills"} placeholder="Search" value={query} onChange={onQuery} />
+      {onRefresh && <Button variant="soft" size="sm" className="shrink-0" disabled={checking} onClick={onRefresh}>{checking && <Spinner aria-hidden />}{checking ? "Checking…" : "Refresh"}</Button>}
       <Button size="sm" className="shrink-0" disabled={!adding} onClick={onAdd}><Plus aria-hidden />Add</Button>
     </div>
   );
