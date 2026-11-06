@@ -5,6 +5,7 @@ import { browserClose, browserNavigate, browserOpen, browserPermission, browserZ
 import type { BrowserBounds } from "@/ipc/generated";
 import { pageUsed } from "@/state/agentPause";
 import { closeFind, findState, forgetFind } from "@/state/browserFind";
+import { shareTabProfile } from "@/state/browserProfilePlaces";
 import { closeTabAnywhere, openPopupTab, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -127,6 +128,8 @@ export async function openPage(
         zoomPage(id, stepZoom(zoom, 1)).catch(() => {});
       }
       else if (event.type === "popup") {
+        // A popup is signed in as its opener: it opens on the opener's profile, whatever its session is on now.
+        shareTabProfile(id, event.id);
         // Its page waits for a tab; with the opener's tab gone it has none.
         if (!openPopupTab(id, event.id, event.url)) browserClose(event.id).catch(() => {});
       }

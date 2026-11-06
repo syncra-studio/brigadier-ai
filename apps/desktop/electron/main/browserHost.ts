@@ -1,24 +1,21 @@
 // The browser's security foundations and the record of its guests, from stage 1. Browser features come by
 // section (L4); per-frame loops go in stage 3 (L35).
-import fs from "node:fs";
-import path from "node:path";
-
 import { app, ipcMain, webContents } from "electron";
 
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
 import { installGuest } from "./guestPopups";
 import { installGuestKeys } from "./guestKeys";
-import { applyPermissionPolicy } from "./permissions";
+import { applyPermissionPolicy, installPermissionAnswers } from "./permissions";
+import { installProfileStore } from "./profileStore";
 import { isProfilePartition, profilePartition } from "./profiles";
-import { installDurableStorage, keepStorageOf, replaceFile } from "./durableStorage";
+import { installDurableStorage, keepStorageOf } from "./durableStorage";
 import { keepSessionCookies } from "./sessionCookies";
-
-// The renderer's tab model: one JSON file. Which profile a tab belongs to has to survive a restart.
-const tabsFile = () => path.join(app.getPath("userData"), "browser-tabs.json");
 
 export function installBrowserHost(): void {
   installDurableStorage();
+  installProfileStore();
+  installPermissionAnswers();
   app.on("render-process-gone", (_event, contents, details) => {
     note("render-process-gone", { webContents: contents.id, type: contents.getType(), url: contents.getURL(), ...details });
   });
@@ -70,16 +67,6 @@ export function installBrowserHost(): void {
     });
   });
 
-  ipcMain.handle("brigadier:tabs-read", () => {
-    try {
-      return JSON.parse(fs.readFileSync(tabsFile(), "utf8"));
-    } catch {
-      return {};
-    }
-  });
-  ipcMain.handle("brigadier:tabs-write", (_event, tabs) => {
-    replaceFile(tabsFile(), JSON.stringify(tabs));
-  });
   ipcMain.handle("brigadier:profile-partition", (_event, profileId: string) => profilePartition(profileId));
   ipcMain.handle("brigadier:guest-info", (_event, id: number) => {
     const guest = webContents.fromId(id);

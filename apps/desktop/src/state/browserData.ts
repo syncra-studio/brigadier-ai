@@ -114,14 +114,16 @@ export function rangeStart(range: ClearRange, nowMs: number): number | null {
   return range === "all" ? null : nowMs - RANGE_MS[range];
 }
 
-export function browserSites(): Promise<BrowserSite[]> {
-  return invoke<BrowserSite[]>("browser_sites");
+/** The sites that asked in `profile`: permissions are each profile's own. */
+export function browserSites(profile: string): Promise<BrowserSite[]> {
+  return invoke<BrowserSite[]>("browser_sites", { profile });
 }
 
 /** Sets what a site may use without asking: its camera, its microphone, or both. */
 export function setSite(
+  profile: string,
   origin: string,
   choice: { camera?: SitePermission; microphone?: SitePermission },
 ): Promise<void> {
-  return invoke("browser_site_set", { origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null });
+  return invoke("browser_site_set", { profile, origin, camera: choice.camera ?? null, microphone: choice.microphone ?? null });
 }

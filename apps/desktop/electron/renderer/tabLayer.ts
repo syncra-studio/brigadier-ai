@@ -16,12 +16,13 @@ import { readFavicon } from "./pageFavicon";
 declare global {
   interface Window {
     brigadierShell: {
-      tabsRead(): Promise<Record<string, TabRecord>>;
-      tabsWrite(tabs: Record<string, TabRecord>): Promise<void>;
+      profiles(op: string, args?: unknown): Promise<unknown>;
+      permissionAnswer(request: number, answer: string): Promise<void>;
       flushStorage(): void;
       profilePartition(profileId: string): Promise<string>;
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;
+      onGuestPermission(listener: (details: { from: number; request: number; origin: string; camera: boolean; microphone: boolean }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
       onGuestKey(listener: () => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
@@ -51,8 +52,6 @@ type Webview = HTMLElement & {
   executeJavaScript(code: string): Promise<unknown>;
 };
 
-export type TabRecord = { profileId: string };
-
 type Page = {
   id: string;
   element: Webview;
@@ -67,13 +66,10 @@ type Page = {
   loading: boolean;
 };
 
-export const DEFAULT_PROFILE = "default";
-
 const pages = new Map<string, Page>();
-let tabs: Record<string, TabRecord> = {};
-let loaded: Promise<void> | null = null;
 let layer: HTMLDivElement | null = null;
-let profileForNewTabs = DEFAULT_PROFILE;
+/** Section 1's interaction check puts its tabs on a profile by this door (tools/browser-check/interactions.mjs). */
+let profileForNewTabs: string | null = null;
 /** Times the layer lost a child: the oracle for "never moved or removed" holds this at the tabs closed. */
 const counters = { created: 0, closed: 0, removedFromLayer: 0, moved: 0 };
 
@@ -167,16 +163,16 @@ export function installTabLayer(): void {
       }
     }
   });
+  window.brigadierShell.onGuestPermission(({ from, ...question }) => {
+    for (const page of pages.values()) {
+      if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "permission", ...question });
+    }
+  });
   window.brigadierShell.onGuestEscape(({ from }) => {
     for (const page of pages.values()) {
       if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "escape" });
     }
   });
-}
-
-function loadTabs(): Promise<void> {
-  loaded ??= window.brigadierShell.tabsRead().then((saved) => { tabs = saved; });
-  return loaded;
 }
 
 function need(id: string): Page {
@@ -278,12 +274,10 @@ export function openPage(id: string, url: string, bounds: BrowserBounds, emit: (
 }
 
 async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (event: BrowserEvent) => void): Promise<void> {
-  await loadTabs();
-  const profileId = tabs[id]?.profileId ?? profileForNewTabs;
-  if (!tabs[id]) {
-    tabs[id] = { profileId };
-    void window.brigadierShell.tabsWrite(tabs);
-  }
+  // By import, not at the top: this module runs before the app's state may.
+  const { pinTabToItsProfile, profilesLoaded } = await import("@/state/browserProfilePlaces");
+  await profilesLoaded();
+  const profileId = profileForNewTabs ?? pinTabToItsProfile(id);
   const element = document.createElement("webview") as Webview;
   element.setAttribute("partition", await window.brigadierShell.profilePartition(profileId));
   element.setAttribute("allowpopups", "");
@@ -395,15 +389,13 @@ export function closePage(id: string): void {
   if (!page) return;
   answerFind(page, NOT_FOUND);
   pages.delete(id);
-  delete tabs[id];
-  void window.brigadierShell.tabsWrite(tabs);
   counters.closed += 1;
   page.element.remove();
 }
 
-/** The profile a new tab opens in. The UI for choosing one comes with section 3. */
+/** Puts the next tabs on `profileId` whatever their session is on; "default" lets go again. Checks only. */
 export function setProfileForNewTabs(profileId: string): void {
-  profileForNewTabs = profileId;
+  profileForNewTabs = profileId === "default" ? null : profileId;
 }
 
 /** What the checks compare before and after: identity, not looks. */

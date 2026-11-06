@@ -7,6 +7,7 @@ import { showPage } from "../conversation/browserLayer";
 import { followLayout } from "../conversation/pageWatch";
 import { type BrowserKey, browserKey, stepZoom } from "../conversation/browserKeys";
 import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
+import { ProfileButton } from "./ProfileButton";
 import { BrowserOptions } from "./BrowserOptions";
 import { FindBar } from "./FindBar";
 import { NavigationCapsule } from "./NavigationCapsule";
@@ -484,6 +485,7 @@ export function BrowserTab({
           {/* Only over its own tab: a question waits, unanswered, while another tab is in front. */}
           {embedded && <PermissionPrompt id={conversationId} asking={active ? page?.asking : null} anchor={address} />}
         </form>
+        {embedded && <ProfileButton />}
         {embedded && <DownloadsButton />}
         {mac && (
           <TooltipIconButton
