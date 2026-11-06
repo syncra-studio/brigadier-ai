@@ -285,7 +285,10 @@ impl SessionManager {
                 Some(project_id),
                 None,
                 Some(setup),
-                crate::sessions::Origin::default(),
+                crate::sessions::Origin {
+                    started_from: Some(from.clone()),
+                    ..Default::default()
+                },
             )
             .await
     }

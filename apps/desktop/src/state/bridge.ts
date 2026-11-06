@@ -18,7 +18,8 @@ import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, applyBoardNews, forgetKeptBoards, sideBoardIds } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
-import { startHandingBack } from "@/state/agentBrowser";
+import { profileChanged, startHandingBack } from "@/state/agentBrowser";
+import { onProfileChanged } from "@/state/browserProfiles";
 import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
 import { applyEvents, useApp } from "@/state/store";
@@ -240,4 +241,5 @@ export async function startBridge(): Promise<void> {
   startHandingBack();
   startMenuBar();
   startBrowserOptions();
+  onProfileChanged(({ tabId }) => profileChanged(tabId));
 }

@@ -26,6 +26,8 @@ export type Shortcut = {
    * One chip per key. "⌘1–9" is a range of digits; "Esc Esc" is two presses.
    */
   keys: readonly string[];
+  /** Its keys off macOS, when they aren't what `formatKeys` makes of `keys`. */
+  offMacKeys?: readonly string[];
   /** The Panes, Browser or View menu item (macOS) that owns the first key, as `MENU_KEYS` names it. */
   menu?: string;
   /** Only on macOS (its menu bar holds it). */
@@ -154,6 +156,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "find-next", name: "Find next", line: "Go to the next match in the chat or web page", area: "Files and browser", keys: ["⌘G"], menu: "find-next" },
   { id: "find-previous", name: "Find previous", line: "Go to the previous match in the chat or web page", area: "Files and browser", keys: ["⇧⌘G"], menu: "find-previous" },
   { id: "go-to-line", name: "Go to line", line: "Jump to a line of the file in front", area: "Files and browser", keys: ["⌃G"] },
+  { id: "switch-profile", name: "Switch browser profile", line: "Put the tab in front and new tabs on profile 1 to 9", area: "Files and browser", keys: ["⌥⌘1–9"], offMacKeys: ["⌃⇧1–9"] },
   { id: "address", name: "Browser address", line: "Type an address in the browser tab", area: "Files and browser", keys: ["⌘L"], menu: "address" },
   { id: "page-back", name: "Page back", line: "Go back a page in the browser tab", area: "Files and browser", keys: ["⌘←"], menu: "page-back" },
   { id: "page-forward", name: "Page forward", line: "Go forward a page in the browser tab", area: "Files and browser", keys: ["⌘→"], menu: "page-forward" },
@@ -182,6 +185,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
  * ⌘G and ⇧⌘G find in the chat as well.
  */
 export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
+  "switch-profile",
   "new-browser",
   "address",
   "page-back",
@@ -211,7 +215,7 @@ function withComposerKeys(shortcut: Shortcut, { followUp }: ComposerKeys): Short
 export function shortcutsFor(mac: boolean, browser = true, composer = DEFAULT_COMPOSER_KEYS): Shortcut[] {
   return SHORTCUTS.filter(
     (shortcut) => (mac || !shortcut.macOnly) && (browser || !BROWSER_SHORTCUTS.has(shortcut.id)),
-  ).map((shortcut) => withComposerKeys(shortcut, composer));
+  ).map((shortcut) => withComposerKeys(!mac && shortcut.offMacKeys ? { ...shortcut, keys: shortcut.offMacKeys } : shortcut, composer));
 }
 
 export type Stroke = { ctrl: boolean; alt: boolean; shift: boolean; cmd: boolean; key: string };

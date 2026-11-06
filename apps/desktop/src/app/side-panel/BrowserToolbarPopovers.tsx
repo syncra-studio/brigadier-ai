@@ -11,6 +11,8 @@ import { answerPermission, type BrowserAsking, useBrowsers } from "@/state/brows
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
+const ARM_MS = 500;
+
 /**
  * The page's question for the camera or microphone, from the address field's start: allow it
  * while the tab stays on the site, this time only, or never (saved for the site). It stays until
@@ -31,6 +33,15 @@ export function PermissionPrompt({
   } catch {
     // The origin as the shell named it.
   }
+  // A click meant for the page must not land on a card that just came up under it.
+  const [armedFor, setArmedFor] = useState<number | null>(null);
+  const request = asking?.request ?? null;
+  useEffect(() => {
+    if (request === null) return;
+    const timer = setTimeout(() => setArmedFor(request), ARM_MS);
+    return () => clearTimeout(timer);
+  }, [request]);
+  const armed = request !== null && armedFor === request;
   const uses = [
     ...(asking?.camera ? [{ Icon: Camera, text: "Use your camera" }] : []),
     ...(asking?.microphone ? [{ Icon: Mic, text: "Use your microphone" }] : []),
@@ -63,9 +74,9 @@ export function PermissionPrompt({
           ))}
         </ul>
         <div className="mt-3 flex flex-col gap-1.5">
-          <Button size="sm" variant="secondary" onClick={() => answerPermission(id, "visiting")}>Allow while visiting the site</Button>
-          <Button size="sm" variant="secondary" onClick={() => answerPermission(id, "once")}>Allow this time</Button>
-          <Button size="sm" variant="secondary" onClick={() => answerPermission(id, "never")}>Never allow</Button>
+          <Button size="sm" variant="secondary" disabled={!armed} onClick={() => answerPermission(id, "visiting")}>Allow while visiting the site</Button>
+          <Button size="sm" variant="secondary" disabled={!armed} onClick={() => answerPermission(id, "once")}>Allow this time</Button>
+          <Button size="sm" variant="secondary" disabled={!armed} onClick={() => answerPermission(id, "never")}>Never allow</Button>
         </div>
       </PopoverContent>
     </Popover>

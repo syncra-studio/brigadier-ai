@@ -8,14 +8,15 @@ import frameHtml from "../src-tauri/src/visuals_frame.html?raw";
 if (!process.isMainFrame) void webFrame.executeJavaScript(frameHtml.slice(frameHtml.indexOf("<script>") + 8, frameHtml.indexOf("</script>")));
 
 if (process.isMainFrame) contextBridge.exposeInMainWorld("brigadierShell", {
-  tabsRead: () => ipcRenderer.invoke("brigadier:tabs-read"),
-  tabsWrite: (tabs: unknown) => ipcRenderer.invoke("brigadier:tabs-write", tabs),
+  profiles: (op: string, args: unknown) => ipcRenderer.invoke("brigadier:profiles", op, args),
+  permissionAnswer: (request: number, answer: string) => ipcRenderer.invoke("brigadier:permission-answer", request, answer),
   flushStorage: () => ipcRenderer.send("brigadier:flush-storage"),
   profilePartition: (profileId: string) => ipcRenderer.invoke("brigadier:profile-partition", profileId),
   guestInfo: (id: number) => ipcRenderer.invoke("brigadier:guest-info", id),
   guestFavicon: (id: number, href: string) => ipcRenderer.invoke("brigadier:guest-favicon", id, href),
   onGuestPasskey: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-passkey", (_event, details) => listener(details)),
   onGuestPopup: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-popup", (_event, details) => listener(details)),
+  onGuestPermission: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-permission", (_event, details) => listener(details)),
   onGuestEscape: (listener: (details: unknown) => void) => ipcRenderer.on("brigadier:guest-escape", (_event, details) => listener(details)),
   onGuestKey: (listener: () => void) => ipcRenderer.on("brigadier:guest-key", () => listener()),
   agent: (call: unknown) => ipcRenderer.invoke("brigadier:agent", call),

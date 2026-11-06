@@ -295,6 +295,7 @@ mod tests {
             lifecycle: Lifecycle::Active,
             forked_from: None,
             side_of: None,
+            started_from: None,
             tab_chat: None,
             quota_wait: None,
             cleanup_pending: false,

@@ -17,3 +17,4 @@ if (window.brigadierNative) {
 }
 void import("@/main");
 void keepTabsOnDisk();
+void import("@/state/browserProfiles").then(({ listenForProfileKeys }) => listenForProfileKeys());
