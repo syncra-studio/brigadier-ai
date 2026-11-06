@@ -1670,7 +1670,8 @@ pub enum WorkerStepKind {
     Waiting,
     /// The user interrupted it.
     Paused,
-    /// Working again after waiting, a pause or its report.
+    /// Working again after waiting or a pause. A message that wakes a worker that reported says
+    /// so with its own "Messaged" row.
     Resumed,
     /// It reported (or ended without anything to land).
     Finished,
@@ -1712,7 +1713,11 @@ impl WorkerStepKind {
             }
             S::Paused => Some(Self::Paused),
             _ if waiting(now) && !waiting(was) => Some(Self::Waiting),
-            _ if working(now) && (waiting(was) || matches!(was, S::Paused | S::Reported)) => {
+            _ if working(now)
+                && (waiting(was)
+                    || was == S::Paused
+                    || (was == S::Reported && now == S::Blocked)) =>
+            {
                 Some(Self::Resumed)
             }
             _ => None,
@@ -3142,6 +3147,34 @@ pub enum SettingChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_workers_rows_say_its_start_and_a_resume_but_not_a_message_waking_it() {
+        use TaskState as S;
+        use WorkerStepKind as K;
+        assert_eq!(
+            WorkerStepKind::between(None, S::Queued, false),
+            Some(K::Started)
+        );
+        assert_eq!(
+            WorkerStepKind::between(Some(S::Paused), S::Running, false),
+            Some(K::Resumed)
+        );
+        // Woken by a message (its "Messaged" row says so) or held back on a job of its own.
+        assert_eq!(
+            WorkerStepKind::between(Some(S::Reported), S::Running, true),
+            None
+        );
+        assert_eq!(
+            WorkerStepKind::between(Some(S::Reported), S::Starting, true),
+            None
+        );
+        // A turn its CLI started on its own that asks something has no message to say it.
+        assert_eq!(
+            WorkerStepKind::between(Some(S::Reported), S::Blocked, true),
+            Some(K::Resumed)
+        );
+    }
 
     /// The retired routing's offer and move notices in stored events are ignored without a
     /// migration; Deciding and its held note read again (run2-D40), and a restart settles

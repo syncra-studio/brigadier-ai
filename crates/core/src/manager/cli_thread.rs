@@ -1536,7 +1536,7 @@ fn reads_output(tasks: &[BackgroundTask]) -> bool {
 }
 
 /// The last line with text in the file at `path`, read from its end.
-fn last_line(path: &std::path::Path) -> Option<String> {
+pub(super) fn last_line(path: &std::path::Path) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();

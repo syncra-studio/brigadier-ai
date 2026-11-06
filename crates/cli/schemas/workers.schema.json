@@ -90,6 +90,10 @@
             "null"
           ]
         },
+        "heldUp": {
+          "type": "string",
+          "description": "What holds its running work up, as its row says it: a stalled command or a starved build."
+        },
         "state": {
           "enum": [
             "queued",

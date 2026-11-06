@@ -29,7 +29,7 @@ use brigadier_providers::{
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::conversation::{Cli, safe_file_name};
+use super::conversation::{BACKGROUND_TURN_GRACE, Cli, safe_file_name};
 use super::outputs::outputs_dir;
 use super::refcheck::engine_rewrite;
 use super::usage::TokenOwner;
@@ -141,6 +141,9 @@ struct TaskLiveState {
     /// The model this run started on (the one its session or routing chose): it goes back there
     /// when nothing else can take it.
     run_origin: Option<ModelChoice>,
+    /// Its turn ended well with a job of its own running, and its parent wasn't told: a turn it
+    /// starts takes that over, or the job's end with none after it tells it.
+    turn_end_held: bool,
 }
 
 impl TaskLiveState {
@@ -231,7 +234,23 @@ impl TaskLive {
         if matches!(event, ProviderEvent::TurnStarted { .. }) {
             state.busy = true;
             state.turns_started += 1;
+            state.turn_end_held = false;
         }
+    }
+
+    /// Holds its turn end back from its parent if `jobs` says any of its own run, in one step
+    /// with a job's end seeing the hold; never during a hand-off, which has its own course.
+    pub(crate) async fn hold_turn_end(
+        &self,
+        jobs: impl FnOnce() -> Vec<String>,
+    ) -> Option<Vec<String>> {
+        let mut state = self.state.lock().await;
+        if state.seam.is_some() || state.stopping {
+            return None;
+        }
+        let jobs = jobs();
+        state.turn_end_held = !jobs.is_empty();
+        state.turn_end_held.then_some(jobs)
     }
 
     /// Tests: holds its state lock, to order what waits for it.
@@ -1762,6 +1781,8 @@ impl SessionManager {
                 state.cli = None;
             }
             state.busy = false;
+            // Whatever it held back, the worker hears of its CLI's end now (`plain_gone`).
+            state.turn_end_held = false;
             // A compaction cut off with its CLI never ends: the next turn is a real one.
             state.compacting = false;
             (state.stopping, state.cli.is_some())
@@ -1796,6 +1817,12 @@ impl SessionManager {
         let cwd = live.cwd().await;
         self.follow_worker_commands(&live.conversation_id, &live.id, cwd, &event)
             .await;
+        if matches!(
+            event,
+            ProviderEvent::BackgroundTask { .. } | ProviderEvent::ToolCall { .. }
+        ) {
+            self.tell_held_turn_end_soon(live).await;
+        }
         match &event {
             ProviderEvent::ApprovalRequested { request } => {
                 let request = request.clone();
@@ -1972,6 +1999,39 @@ impl SessionManager {
                 }
             },
         }
+    }
+
+    /// Its last job ended while a turn end of its is held back: the turn that end starts takes
+    /// it over (Claude and OpenCode start one, Codex doesn't); with none after
+    /// [`BACKGROUND_TURN_GRACE`], its parent hears the turn held back.
+    async fn tell_held_turn_end_soon(&self, live: &Arc<TaskLive>) {
+        if !live.state.lock().await.turn_end_held || !self.worker_jobs_running(&live.id).is_empty()
+        {
+            return;
+        }
+        let (manager, live) = (self.arc(), live.clone());
+        self.spawn(async move {
+            loop {
+                tokio::time::sleep(BACKGROUND_TURN_GRACE).await;
+                let mut state = live.state.lock().await;
+                if !state.turn_end_held || !manager.worker_jobs_running(&live.id).is_empty() {
+                    return;
+                }
+                // A message on its way: its turn takes this over, or a refused one looks again.
+                if !state.busy {
+                    state.turn_end_held = false;
+                    break;
+                }
+            }
+            manager.worker_quiet.holding(&live.id, None);
+            if let Ok(task) = manager.task_by_id(&live.conversation_id, &live.id).await
+                && !task.state.is_final()
+            {
+                manager
+                    .plain_turn_ended(&live, &task, TurnStatus::Completed)
+                    .await;
+            }
+        });
     }
 
     /// B7 for worker approvals: what the user already allowed "for this session" in this

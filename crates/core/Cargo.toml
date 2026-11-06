@@ -40,6 +40,8 @@ rusqlite_migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.0"
+# Whether a worker's background commands still move: their CPU and the machine's load.
+sysinfo.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "process", "io-util", "net"] }
 tokio-util = { workspace = true, features = ["rt"] }

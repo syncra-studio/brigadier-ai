@@ -63,6 +63,7 @@ mod git_actions;
 mod inbox;
 mod inbox_store;
 pub mod integrations;
+mod job_watch;
 mod kept;
 #[cfg(all(test, unix))]
 mod kept_live_tests;

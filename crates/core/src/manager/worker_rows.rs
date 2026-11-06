@@ -57,6 +57,11 @@ pub(crate) struct WorkerCli {
     doing: Option<(Option<String>, WorkerDoing)>,
     /// Its background tasks, as its CLI says them, and those that ended lately.
     background: Vec<BackgroundTask>,
+    /// What the job watch last found holds it up, and the job when it is one job's.
+    hold: Option<(Option<String>, crate::thread_view::JobHold)>,
+    /// Its subagent calls under way, by item id: Codex lists no task for one that outlives its
+    /// turn.
+    subagents: Vec<String>,
     /// The commands of its latest calls that may start a background task, by item id: a Claude
     /// task is labelled with its description, and only its call says what it runs.
     commands: Vec<(String, String)>,
@@ -106,6 +111,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         ..cli.clone()
     };
     cli.last_event_ms = Some(at);
+    thread_view::note_subagent(&mut cli.subagents, event);
     match event {
         ProviderEvent::TurnStarted { .. } => {
             if !cli.open {
@@ -163,6 +169,7 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         ProviderEvent::Exited { .. } => {
             // Its background tasks end with its CLI.
             cli.background.clear();
+            cli.subagents.clear();
             cli.commands.clear();
             if cli.open {
                 cli.open = false;
@@ -409,35 +416,82 @@ fn working(task: &Task, cli: Option<&WorkerCli>) -> bool {
         && !task.plain.as_ref().is_some_and(|plain| plain.closed)
 }
 
-/// Its CLI's turn is open, or background commands of its own still run (see [`working`]).
+/// Its CLI's turn is open, or background work of its own still runs (see [`working`]).
 fn busy(cli: &WorkerCli) -> bool {
-    cli.open
-        || cli.background.iter().any(|job| {
-            job.status == brigadier_providers::BackgroundTaskStatus::Running
-                && job.kind != brigadier_providers::BackgroundTaskKind::Agent
-                && !cli
-                    .commands
-                    .iter()
-                    .find(|(id, _)| job.item_id.as_ref() == Some(id))
-                    .map(|(_, command)| command.as_str())
-                    .or_else(|| {
-                        (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
-                            .then_some(job.label.as_str())
-                    })
-                    .is_some_and(|command| {
-                        (matches!(
-                            job.kind,
-                            brigadier_providers::BackgroundTaskKind::Shell
-                                | brigadier_providers::BackgroundTaskKind::Terminal
-                        ) && thread_view::persistent_app(command))
-                            || (brigadier_providers::policy::runs_only_brigadier(command)
-                                && (brigadier_providers::policy::runs_brigadier(
-                                    command, "preview",
-                                ) || brigadier_providers::policy::runs_brigadier(
-                                    command, "wait",
-                                )))
-                    })
+    cli.open || !cli.subagents.is_empty() || cli.background.iter().any(|job| job_runs(cli, job))
+}
+
+/// Whether `job` still runs and is work it comes back from: not an app it left running, nor
+/// Brigadier's own `wait` or `preview`, which never end by themselves.
+fn job_runs(cli: &WorkerCli, job: &BackgroundTask) -> bool {
+    job.status == brigadier_providers::BackgroundTaskStatus::Running
+        && !cli
+            .commands
+            .iter()
+            .find(|(id, _)| job.item_id.as_ref() == Some(id))
+            .map(|(_, command)| command.as_str())
+            .or_else(|| {
+                (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
+                    .then_some(job.label.as_str())
+            })
+            .is_some_and(|command| {
+                (matches!(
+                    job.kind,
+                    brigadier_providers::BackgroundTaskKind::Shell
+                        | brigadier_providers::BackgroundTaskKind::Terminal
+                ) && thread_view::persistent_app(command))
+                    || (brigadier_providers::policy::runs_only_brigadier(command)
+                        && (brigadier_providers::policy::runs_brigadier(command, "preview")
+                            || brigadier_providers::policy::runs_brigadier(command, "wait")))
+            })
+}
+
+/// Whether the job watch can judge `job` by its output and CPU: a command. A subagent's work is
+/// its CLI's own process, which tells nothing.
+fn job_sampled(job: &BackgroundTask) -> bool {
+    matches!(
+        job.kind,
+        brigadier_providers::BackgroundTaskKind::Shell
+            | brigadier_providers::BackgroundTaskKind::Terminal
+    )
+}
+
+/// The command line `job` runs, when its CLI said one.
+fn job_command(cli: &WorkerCli, job: &BackgroundTask) -> Option<String> {
+    job.command
+        .clone()
+        .or_else(|| {
+            cli.commands
+                .iter()
+                .find(|(id, _)| job.item_id.as_ref() == Some(id))
+                .map(|(_, command)| command.clone())
         })
+        .or_else(|| {
+            (job.kind == brigadier_providers::BackgroundTaskKind::Terminal)
+                .then(|| job.label.clone())
+        })
+}
+
+/// What holds `cli`'s work up, while that work still runs.
+fn held_up(cli: &WorkerCli) -> Option<crate::thread_view::JobHold> {
+    let (job, hold) = cli.hold.as_ref()?;
+    let live = match job {
+        Some(id) => cli
+            .background
+            .iter()
+            .any(|running| running.id == *id && job_runs(cli, running)),
+        None => busy(cli),
+    };
+    live.then(|| hold.clone())
+}
+
+/// Its turn is over and only commands of its own run on (see [`job_sampled`]).
+fn only_jobs(cli: &WorkerCli) -> bool {
+    let mut running = cli.background.iter().filter(|job| job_runs(cli, job));
+    !cli.open
+        && cli.subagents.is_empty()
+        && running.clone().next().is_some()
+        && running.all(job_sampled)
 }
 
 /// Its turn ended done and nothing of its own runs on: a turn that ended with a background
@@ -476,6 +530,8 @@ pub(crate) fn row(
         end => end,
     };
     let git = git.cloned().unwrap_or_default();
+    let job_hold = held_up(&cli).filter(|_| !gone && !paused);
+    let only_jobs = only_jobs(&cli);
     let background = if gone {
         Vec::new()
     } else {
@@ -523,6 +579,8 @@ pub(crate) fn row(
             .filter(|_| cli.open && !gone)
             .map(|(_, doing)| doing.clone()),
         background,
+        job_hold,
+        only_jobs,
     }
 }
 
@@ -560,6 +618,106 @@ impl SessionManager {
     }
 
     /// The sidebar's activity bit, from the same CLI state as the workers' rows, without git.
+    /// What of worker `task`'s own still runs after a turn that ended well, in its CLI's words:
+    /// its parent hears of that turn only once none does.
+    pub(super) fn worker_jobs_running(&self, task: &TaskId) -> Vec<String> {
+        let held = self.worker_rows.cli.lock().unwrap();
+        let Some(cli) = held
+            .get(task)
+            .filter(|cli| cli.last_end == Some(TurnEnd::Done))
+        else {
+            return Vec::new();
+        };
+        cli.background
+            .iter()
+            .filter(|job| job_runs(cli, job))
+            .map(|job| {
+                if job.label.is_empty() {
+                    job.id.clone()
+                } else {
+                    job.label.clone()
+                }
+            })
+            .chain(cli.subagents.iter().map(|_| "a subagent".to_owned()))
+            .collect()
+    }
+
+    /// Of what worker `task` still runs after its turn, what the job watch cannot judge: only
+    /// these may read quiet.
+    pub(super) fn worker_jobs_unsampled(&self, task: &TaskId) -> Vec<String> {
+        let held = self.worker_rows.cli.lock().unwrap();
+        let Some(cli) = held.get(task) else {
+            return Vec::new();
+        };
+        cli.background
+            .iter()
+            .filter(|job| job_runs(cli, job) && !job_sampled(job))
+            .map(|job| {
+                if job.label.is_empty() {
+                    job.id.clone()
+                } else {
+                    job.label.clone()
+                }
+            })
+            .chain(cli.subagents.iter().map(|_| "a subagent".to_owned()))
+            .collect()
+    }
+
+    /// The workers with something running the job watch looks at: a command in the background,
+    /// or one at work in their turn, which can wait for a build slot as well.
+    pub(super) fn workers_to_sample(&self) -> Vec<(TaskId, Vec<super::job_watch::SampledJob>)> {
+        let held = self.worker_rows.cli.lock().unwrap();
+        held.iter()
+            .filter_map(|(task, cli)| {
+                let jobs: Vec<_> = cli
+                    .background
+                    .iter()
+                    .filter(|job| job_sampled(job) && job_runs(cli, job))
+                    .map(|job| {
+                        let command = job_command(cli, job);
+                        let what = command.as_deref().map_or_else(
+                            || job.label.clone(),
+                            brigadier_providers::policy::unwrapped_command,
+                        );
+                        super::job_watch::SampledJob {
+                            id: job.id.clone(),
+                            what: super::job_watch::short_what(&what),
+                            command,
+                            started_ms: job.started_at_ms,
+                            output_file: job.output_file.clone(),
+                        }
+                    })
+                    .collect();
+                (!jobs.is_empty() || (cli.open && !cli.steps.is_empty()))
+                    .then(|| (task.clone(), jobs))
+            })
+            .collect()
+    }
+
+    /// The job watch's finding on worker `task`; whether its row changes.
+    pub(super) fn note_worker_hold(
+        &self,
+        task: &TaskId,
+        hold: Option<(Option<String>, crate::thread_view::JobHold)>,
+    ) -> bool {
+        let mut held = self.worker_rows.cli.lock().unwrap();
+        let Some(cli) = held.get_mut(task) else {
+            return false;
+        };
+        if cli.hold == hold {
+            return false;
+        }
+        cli.hold = hold;
+        true
+    }
+
+    /// `brigadier workers`' words for what holds worker `task` up.
+    pub(super) fn worker_held_up(&self, task: &TaskId) -> Option<String> {
+        let held = self.worker_rows.cli.lock().unwrap();
+        let hold = held_up(held.get(task)?)?;
+        Some(super::job_watch::hold_words(&hold, now_ms()))
+    }
+
     pub(super) fn workers_working(&self, tasks: &[Task]) -> bool {
         let cli = self.worker_rows.cli.lock().unwrap();
         tasks.iter().any(|task| working(task, cli.get(&task.id)))

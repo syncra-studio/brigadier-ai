@@ -137,6 +137,7 @@ pub(super) fn worker_row(task: &Task, diffs: &HashMap<TaskId, Changes>) -> Worke
         model: task.route.choice.model.clone(),
         effort: task.route.choice.effort.clone(),
         state: worker_state(task.state),
+        held_up: None,
         branch: task
             .workspace
             .as_ref()
@@ -724,6 +725,9 @@ impl SessionManager {
         WorkerRow {
             git,
             commands,
+            held_up: self
+                .worker_held_up(&task.id)
+                .filter(|_| !task.state.is_final()),
             ..worker_row(task, diffs)
         }
     }

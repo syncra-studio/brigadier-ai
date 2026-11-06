@@ -565,6 +565,9 @@ pub struct WorkerRow {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub state: WorkerState,
+    /// What holds its running work up, as its row says it ("Stalled 12m · cargo test").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_up: Option<String>,
     pub branch: Option<String>,
     /// What its worktree changed since it started; absent when it has none, or once it ended.
     pub changes: Option<Changes>,
@@ -1000,7 +1003,7 @@ pub struct WaitEvent {
     pub event_id: String,
     pub event: EventKind,
     /// A turn's last message; why it failed, stopped or is gone; a usage limit; what runs
-    /// while it is quiet.
+    /// while it is quiet; which command stalled or what starves a build.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// What a permission prompt asks to do: the command, or the tool and its target.
@@ -1038,6 +1041,11 @@ pub enum EventKind {
     FreshContext,
     /// Its CLI said nothing for 20 minutes while it worked.
     Quiet,
+    /// A background command of its showed no new output and almost no CPU for 10 minutes.
+    Stalled,
+    /// A compile of its waited for a build slot, or ran far under one core on an overloaded
+    /// machine, for 10 minutes. Not hung.
+    Starved,
     /// Its permission prompt went ahead without an answer: its session went to Full access.
     Settled,
     /// A session waited on sent you a message: its answer, given here and not again as a
@@ -1059,6 +1067,8 @@ impl EventKind {
             Self::UsageLimit => "usage-limit",
             Self::FreshContext => "fresh-context",
             Self::Quiet => "quiet",
+            Self::Stalled => "stalled",
+            Self::Starved => "starved",
             Self::Settled => "settled",
             Self::Answered => "answered",
             Self::Removed => "removed",
