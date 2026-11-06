@@ -4,8 +4,9 @@
 // dropped: a page can't name a file into the list `read_dropped` is limited to.
 import fs from "node:fs";
 
-import { ipcMain, Notification, shell } from "electron";
+import { Notification, shell } from "electron";
 
+import { onFromApp } from "./appPage";
 import { addCommands } from "./commands";
 import { droppedFile } from "./dropped";
 import { note } from "./events";
@@ -61,7 +62,7 @@ export function notify(title: string, body: string): void {
 
 export function installDrops(): void {
   // Before the page's own drop handler asks for `last_drop`: the preload's listener sends first, on one pipe.
-  ipcMain.on("brigadier:dropped", (_event, paths: string[], shift: boolean) => {
+  onFromApp("brigadier:dropped", (_event, paths: string[], shift: boolean) => {
     // The addon reads the key on macOS only; elsewhere the drop's own event says.
     lastDrop = { paths, shift: shift || native().shiftHeld() };
   });

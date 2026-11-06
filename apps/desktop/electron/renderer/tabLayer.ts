@@ -296,7 +296,8 @@ async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (e
   counters.created += 1;
   await new Promise<void>((resolve) => {
     element.addEventListener("dom-ready", () => { page.ready = true; resolve(); }, { once: true });
-    element.setAttribute("src", url);
+    // Main destroys a guest with any other first address, and dom-ready would never come (a tab restored at a blob:).
+    element.setAttribute("src", /^https?:/.test(url) ? url : "about:blank");
     (layer as HTMLDivElement).append(element);
   });
 }

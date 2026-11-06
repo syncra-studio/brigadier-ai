@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, shell } from "electron";
 
+import { keepOnAppPage } from "./appPage";
 import { dev, rendererUrl, unfocused } from "./identity";
 import { note } from "./events";
 import { flushPages, isQuitting, quit } from "./quit";
@@ -121,6 +122,7 @@ export function createWindow({ name = "main", bounds = {}, query = "", real = !d
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
+  keepOnAppPage(window.webContents);
   const resized = () => {
     if (!window.isDestroyed()) window.webContents.send("brigadier:resized");
   };

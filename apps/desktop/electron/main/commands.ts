@@ -1,7 +1,9 @@
 // What the app's page asks of its shell: the same commands, by the same names, as the Tauri build's
 // `invoke_handler` (src-tauri/src/main.rs). A page gets its answer as an envelope, since a rejection across
 // Electron's IPC keeps only a message and the page needs the daemon's error code.
-import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
+import type { IpcMainInvokeEvent, WebContents } from "electron";
+
+import { handleFromApp } from "./appPage";
 
 export type Args = Record<string, unknown>;
 export type CommandContext = { sender: WebContents };
@@ -67,5 +69,5 @@ async function run(event: IpcMainInvokeEvent, name: string, args: Args | undefin
 }
 
 export function installCommands(): void {
-  ipcMain.handle("brigadier:invoke", (event, name: string, args?: Args) => run(event, name, args));
+  handleFromApp("brigadier:invoke", (event, name: string, args?: Args) => run(event, name, args));
 }

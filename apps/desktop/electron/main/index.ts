@@ -7,6 +7,7 @@ import { app, BrowserWindow, protocol } from "electron";
 
 import type { ComputerUseStatus } from "@/ipc/generated";
 
+import { refuseUnsafeSwitches } from "./appPage";
 import { installBrowserHost } from "./browserHost";
 import { installCommands, waitForCommands } from "./commands";
 import { folderOpened, installCoreCommands } from "./core";
@@ -28,6 +29,7 @@ import { createWindow, mainWindow, setOnVisibility, showMain, userCameToIt, wind
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+refuseUnsafeSwitches();
 setIdentity();
 app.enableSandbox();
 // The arguments as given: the `argv` a second launch delivers has Chromium's switches first and values moved

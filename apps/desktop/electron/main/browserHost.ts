@@ -3,19 +3,22 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { app, ipcMain, webContents } from "electron";
+import { app, webContents } from "electron";
 
+import { handleFromApp, isAppPage } from "./appPage";
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
-import { installGuest } from "./guestPopups";
+import { installGuest, webOrBlank } from "./guestPopups";
 import { installGuestKeys } from "./guestKeys";
-import { applyPermissionPolicy } from "./permissions";
+import { applyAppSessionPolicy, applyPermissionPolicy } from "./permissions";
 import { isProfilePartition, profilePartition } from "./profiles";
 import { installDurableStorage, keepStorageOf, replaceFile } from "./durableStorage";
 import { keepSessionCookies } from "./sessionCookies";
 
 // The renderer's tab model: one JSON file. Which profile a tab belongs to has to survive a restart.
 const tabsFile = () => path.join(app.getPath("userData"), "browser-tabs.json");
+/** The partitions main has named for a profile: the only sessions a guest may have. */
+const profileSessions = new Set<string>();
 
 export function installBrowserHost(): void {
   installDurableStorage();
@@ -28,7 +31,10 @@ export function installBrowserHost(): void {
   }
 
   app.on("session-created", (created) => {
-    if (!isProfilePartition(created.storagePath)) return;
+    if (!isProfilePartition(created.storagePath)) {
+      applyAppSessionPolicy(created, { note, isAppPage });
+      return;
+    }
     applyPermissionPolicy(created, { note });
     keepSessionCookies(created, { note });
     if (unfocused) note("session-unfocused-policy", { path: created.storagePath });
@@ -59,7 +65,12 @@ export function installBrowserHost(): void {
       });
       installGuest(contents);
     }
-    contents.on("will-attach-webview", (_attach, preferences) => {
+    contents.on("will-attach-webview", (attach, preferences, params) => {
+      if (!profileSessions.has(params.partition ?? "") || !webOrBlank(params.src ?? "")) {
+        note("guest-refused", { host: contents.id, partition: params.partition, src: params.src });
+        attach.preventDefault();
+        return;
+      }
       delete preferences.preload;
       preferences.nodeIntegration = false;
       preferences.nodeIntegrationInSubFrames = false;
@@ -70,18 +81,22 @@ export function installBrowserHost(): void {
     });
   });
 
-  ipcMain.handle("brigadier:tabs-read", () => {
+  handleFromApp("brigadier:tabs-read", () => {
     try {
       return JSON.parse(fs.readFileSync(tabsFile(), "utf8"));
     } catch {
       return {};
     }
   });
-  ipcMain.handle("brigadier:tabs-write", (_event, tabs) => {
+  handleFromApp("brigadier:tabs-write", (_event, tabs) => {
     replaceFile(tabsFile(), JSON.stringify(tabs));
   });
-  ipcMain.handle("brigadier:profile-partition", (_event, profileId: string) => profilePartition(profileId));
-  ipcMain.handle("brigadier:guest-info", (_event, id: number) => {
+  handleFromApp("brigadier:profile-partition", (_event, profileId: string) => {
+    const partition = profilePartition(profileId);
+    profileSessions.add(partition);
+    return partition;
+  });
+  handleFromApp("brigadier:guest-info", (_event, id: number) => {
     const guest = webContents.fromId(id);
     return guest ? { id, pid: guest.getOSProcessId(), url: guest.getURL() } : null;
   });
