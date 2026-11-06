@@ -27,6 +27,9 @@ struct ResourceMetadata {
 pub(super) struct Discovery {
     pub metadata: Metadata,
     pub scopes: String,
+    /// The metadata's `resource`, as written: the OAuth `resource` to request. A `Url` would
+    /// add a trailing slash to an origin.
+    pub resource: String,
 }
 
 pub(super) fn url(value: &str) -> Result<Url, String> {
@@ -39,6 +42,23 @@ pub(super) fn url(value: &str) -> Result<Url, String> {
         return Err("OAuth requires HTTPS".into());
     }
     Ok(url)
+}
+
+/// Whether metadata advertising `advertised` may speak for the MCP server at `server`: the same
+/// URL, or a parent of it on the same origin. Anything wider would let a server claim another
+/// server's tokens.
+pub(super) fn resource_covers(advertised: &Url, server: &Url) -> bool {
+    if advertised == server {
+        return true;
+    }
+    if advertised.query().is_some() || advertised.origin() != server.origin() {
+        return false;
+    }
+    let parent = advertised.path().trim_end_matches('/');
+    server
+        .path()
+        .strip_prefix(parent)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 pub(super) fn random() -> String {
@@ -111,7 +131,7 @@ pub(super) async fn discover(client: &Client, resource: &str) -> Result<Discover
         }
     }
     let protected = protected.ok_or("MCP protected-resource metadata unavailable")?;
-    if url(&protected.resource)? != resource_url {
+    if !resource_covers(&url(&protected.resource)?, &resource_url) {
         return Err("MCP metadata resource mismatch".into());
     }
     let issuer = url(protected
@@ -164,6 +184,7 @@ pub(super) async fn discover(client: &Client, resource: &str) -> Result<Discover
         return Ok(Discovery {
             metadata,
             scopes: requested_scope.unwrap_or_else(|| protected.scopes_supported.join(" ")),
+            resource: protected.resource,
         });
     }
     Err("OAuth authorization-server metadata unavailable".into())
@@ -262,7 +283,8 @@ pub(super) async fn exchange(
     mut form: Vec<(&str, String)>,
 ) -> Result<Grant, TokenError> {
     form.push(("client_id", grant.client_id.clone()));
-    form.push(("resource", resource.into()));
+    let oauth_resource = grant.oauth_resource.as_deref().unwrap_or(resource);
+    form.push(("resource", oauth_resource.into()));
     if let Some(secret) = &grant.client_secret {
         form.push(("client_secret", secret.clone()));
     }
