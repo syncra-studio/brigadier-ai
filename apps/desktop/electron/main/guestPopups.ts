@@ -5,6 +5,7 @@ import { BrowserWindow, screen, type HandlerDetails, type WebContents } from "el
 
 import { note } from "./events";
 import { installFailedLoad } from "./guestFailedLoad";
+import { installGuestLinks, takeOsLink } from "./guestLinks";
 import { installGuestMenu } from "./guestMenu";
 import { unfocused } from "./identity";
 import { WINDOW_BACKGROUND } from "./windows";
@@ -34,7 +35,9 @@ export function openAsTab(from: WebContents, url: string): void {
 export function installGuest(contents: WebContents): void {
   installGuestMenu(contents);
   installFailedLoad(contents);
+  installGuestLinks(contents);
   contents.setWindowOpenHandler((details) => {
+    if (takeOsLink(contents, details.url)) return { action: "deny" };
     if (!keepsOpener(details) || !webOrBlank(details.url)) {
       openAsTab(contents, details.url);
       return { action: "deny" };

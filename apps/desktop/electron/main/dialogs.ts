@@ -88,6 +88,8 @@ function scripted(file: string): Effects {
 }
 
 const effects = dev && process.env.BRIGADIER_DEV_EFFECTS ? scripted(process.env.BRIGADIER_DEV_EFFECTS) : real;
+/** A page's mailto: or tel: link, once guestLinks.ts has seen the user's press. Thread links go through checkUrl. */
+export const openWithOs = (url: string): Promise<void> => effects.openUrl(url);
 
 const isFolder = (candidate: string | null | undefined): candidate is string => {
   if (!candidate) return false;
