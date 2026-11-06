@@ -11,6 +11,7 @@ import { installBrowserHost } from "./browserHost";
 import { installCommands, waitForCommands } from "./commands";
 import { folderOpened, installCoreCommands } from "./core";
 import { installDrops, notify } from "./drops";
+import { dialogsBridgeUp, installDialogs, openFolders, visualScheme } from "./dialogs";
 import { note } from "./events";
 import { daemonDataDir, dev, identifier, setIdentity, unfocused } from "./identity";
 import { holdForIntro, installIntroCommands } from "./intro";
@@ -26,16 +27,20 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 setIdentity();
 app.enableSandbox();
-if (!app.requestSingleInstanceLock()) app.exit(0);
+// The arguments as given: the `argv` a second launch delivers has Chromium's switches first and values moved
+// off their options, which would offer `--brigadier-data-dir`'s folder as a project (#67, #97).
+if (!app.requestSingleInstanceLock({ argv: process.argv.slice(1) })) app.exit(0);
 
 // The production page's origin: a real scheme, so localStorage and fetch work as on the web.
 protocol.registerSchemesAsPrivileged([
   { scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  visualScheme,
 ]);
 
 installBrowserHost();
 installCommands();
 installDrops();
+installDialogs();
 
 const smoke = process.argv.includes("--smoke");
 const TOLERANCE_ENV = "BRIGADIER_BUDGET_TOLERANCE";
@@ -72,6 +77,7 @@ function startDaemon(): Promise<void> {
     installCoreCommands({ started, smoke, budgetTolerance });
     installIntroCommands();
     installLoginCommands(started.dataDir);
+    dialogsBridgeUp();
     setOnVisibility((visible) => {
       native().emit(JSON.stringify({ type: "windowVisibility", visible }));
     });
@@ -99,9 +105,9 @@ async function openMain(): Promise<void> {
   else window.once("ready-to-show", showMain);
 }
 
-app.on("second-instance", (_event, argv, cwd) => {
+app.on("second-instance", (_event, _argv, cwd, given) => {
   showMain();
-  folderOpened(folderArgs(argv.slice(1), cwd, isFolder));
+  openFolders(folderArgs((given as { argv: string[] }).argv, cwd, isFolder));
 });
 const isFolder = (candidate: string) => {
   try {

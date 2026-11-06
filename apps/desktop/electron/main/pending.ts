@@ -3,10 +3,7 @@
 // can go only once it's empty (browser commands come by section, stage 3 on).
 export const PENDING: Record<string, readonly string[]> = {
   "tray and menu": [],
-  "dialogs and opening": [
-    "pick_folder", "warm_folder_picker", "pick_folders", "pick_file", "save_artifact", "export_conventions",
-    "open_artifact", "open_folder", "open_url", "open_pdf", "reveal_path", "save_document", "save_copy", "forget_document",
-  ],
+  "dialogs and opening": [],
   "drops and notifications": [],
   "login and computer setup": [],
   "intro, smoke and packaging": [
