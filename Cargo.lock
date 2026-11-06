@@ -948,6 +948,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "objc2",
  "objc2-app-kit",
  "objc2-core-location",
  "rusqlite",
