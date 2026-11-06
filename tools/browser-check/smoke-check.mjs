@@ -53,7 +53,7 @@ for (let run = 0; run < runs + 1; run++) {
   }
   const parsed = JSON.parse(fs.readFileSync(report, "utf8"));
   const failing = (parsed.checks ?? []).filter((check) => check.status === "fail");
-  const cold = (parsed.checks ?? []).find((check) => /old start/.test(check.metric) && check.measured !== null);
+  const cold = (parsed.checks ?? []).find((check) => ["coldStart", "firstColdStart"].includes(check.id) && check.measured !== null);
   const rss = (parsed.checks ?? []).find((check) => check.id === "coreIdleRss");
   console.log(`${name}: exit ${code}, passed ${parsed.passed}, ${cold?.metric} ${Math.round(cold?.measured)} ms (limit ${cold?.limit}), daemon idle ${rss ? Math.round(rss.measured) : "?"} MB`);
   for (const check of failing) console.log(`  FAIL ${check.metric}: ${check.measured} ${check.note ? `(${String(check.note).slice(0, 200)})` : ""}`);

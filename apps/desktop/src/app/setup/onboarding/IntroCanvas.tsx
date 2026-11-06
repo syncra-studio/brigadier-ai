@@ -326,9 +326,18 @@ export function IntroCanvas({
     const program = gl && link(gl);
     if (!element || !gl || !program) {
       console.error("the intro can't draw with WebGL; it shows its end");
+      // Chromium paints a canvas without its context white with a sad face, over the shell's dark.
+      if (element) element.dataset.unavailable = "";
       props.current.onUnavailable();
       return;
     }
+    const lost = () => {
+      console.error("the intro lost its WebGL context; it shows its end");
+      cancelAnimationFrame(raf);
+      element.dataset.unavailable = "";
+      props.current.onUnavailable();
+    };
+    element.addEventListener("webglcontextlost", lost);
     // Called through the prototype: a bare `gl.useProgram` reads as a React hook to the linter.
     WebGL2RenderingContext.prototype.useProgram.call(gl, program);
     const buffer = gl.createBuffer();
@@ -396,6 +405,8 @@ export function IntroCanvas({
     };
     raf = requestAnimationFrame(draw);
     return () => {
+      element.removeEventListener("webglcontextlost", lost);
+      delete element.dataset.unavailable;
       cancelAnimationFrame(raf);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);

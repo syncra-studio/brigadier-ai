@@ -29,6 +29,15 @@ if (params.has("corners")) {
     return getContext.call(this, kind, kind === "webgl2" ? { ...options, preserveDrawingBuffer: true } : options);
   } as typeof getContext;
 }
+if (params.has("lost")) {
+  // A GPU that goes before the first frame: the state Chromium paints white with a sad face.
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, options?: object) {
+    const context = getContext.call(this, kind, options) as WebGL2RenderingContext | null;
+    if (kind === "webgl2") context?.getExtension("WEBGL_lose_context")?.loseContext();
+    return context;
+  } as typeof getContext;
+}
 const step = params.get("step") === "name" ? "name" : "intro";
 const named: string[] = [];
 let continued = 0;
@@ -96,6 +105,17 @@ async function driveCorners(): Promise<string> {
 let leave: () => void = () => {};
 
 /** Takes the intro away once it draws, then reads its canvas: its buffers given back, not held until it is collected (#569). */
+/** The intro without its context: the canvas gone from view, its title on the shell's dark. */
+async function driveLost(): Promise<string> {
+  for (let tries = 0; tries < 200 && !document.querySelector(".welcome[data-settled]"); tries++) await new Promise((resolve) => setTimeout(resolve, 25));
+  const canvas = document.querySelector(".welcome-canvas");
+  return JSON.stringify({
+    settled: Boolean(document.querySelector(".welcome[data-settled]")),
+    canvasShown: canvas ? getComputedStyle(canvas).display !== "none" : false,
+    title: document.querySelector(".welcome-title")?.textContent,
+  });
+}
+
 async function driveLeave(): Promise<string> {
   for (let tries = 0; !document.querySelector(".welcome-canvas") && tries < 50; tries++) await wait(50);
   await wait(300);
@@ -126,6 +146,10 @@ function Fixture() {
     }
     if (params.has("leave")) {
       void driveLeave().then(setLeaveResult);
+      return;
+    }
+    if (params.has("lost")) {
+      void driveLost().then(setLeaveResult);
       return;
     }
     if (step === "name" && params.has("drive")) void driveName().then(setNameResult);

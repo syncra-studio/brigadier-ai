@@ -75,6 +75,10 @@ async function check(): Promise<void> {
   if (shown) emit(shown);
 }
 
+const attempt = () => {
+  check().catch((error: unknown) => console.info("no nightly update this time:", error));
+};
+
 export function installUpdates(smoke: boolean): void {
   const enabled = updatesEnabled(dev, updateConfigured(), smoke);
   addCommands({
@@ -100,9 +104,6 @@ export function installUpdates(smoke: boolean): void {
     return false;
   });
   if (!enabled) return;
-  const attempt = () => {
-    check().catch((error: unknown) => console.info("no nightly update this time:", error));
-  };
   setTimeout(() => {
     attempt();
     setInterval(attempt, CHECK_EVERY_MS);
