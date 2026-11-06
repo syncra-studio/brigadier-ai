@@ -97,6 +97,8 @@ export type ReviewTabState = {
 
 export type BrowserTabState = {
   kind: "browser"; id: string; opener: string | null; url: string; title: string;
+  /** The page's icon as last seen, for the tab before the page loads. */
+  favicon?: string | null;
   /** Opened from something an agent gave (a link in its reply, a preview's address). */
   agent?: boolean;
   /** An agent works this tab with the browser tool: who, as the user knows it. */

@@ -257,6 +257,18 @@ jobs:
             echo "brigadierd is still running"; exit 1
           fi
 
+      - name: Compress the DMG with LZMA
+        # Tauri always writes zlib (UDZO). LZMA (ULMO) needs macOS 10.15 and the app needs 14.
+        # Before signing, because converting writes a new image with no signature.
+        run: |
+          if [ "$UNIVERSAL" = true ]; then dir=target/universal-apple-darwin/release; else dir=target/release; fi
+          dmg="$(ls "$dir"/bundle/dmg/*.dmg)"
+          ls -l "$dmg"
+          hdiutil convert "$dmg" -format ULMO -o "$RUNNER_TEMP/lzma.dmg"
+          hdiutil verify "$RUNNER_TEMP/lzma.dmg"
+          mv -f "$RUNNER_TEMP/lzma.dmg" "$dmg"
+          ls -l "$dmg"
+
       - name: Notarize the DMG
         if: steps.signing.outputs.signed == 'true'
         # Tauri notarizes and staples the app inside; the disk image is signed, notarized and

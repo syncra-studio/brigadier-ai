@@ -8,6 +8,7 @@ Scratch data and evidence go in `$BRIGADIER_CHECK_DIR` (default `$TMPDIR/browser
 |---|---|
 | `build-dev-app.mjs` | `target/browser-check/Brigadier Dev.app`, id `ai.brigadier.dev`: stock Electron, checksum verified, cookie encryption fuse on, background-only, ad-hoc signed; builds the native tools |
 | `bc.mjs up\|down\|wipe\|status\|restart [kill]\|targets` | The one kept-alive instance: starts `devd.mjs`, which owns the dev server, the app and its `--remote-debugging-pipe` |
+| `bc.mjs up --no-pipe` | The same instance with no debugging pipe, opening its window as the shipped app does, for sign-ins by hand. Nothing can drive it: only `status` and `down` work. `down` quits it in order |
 | `bc.mjs control <op> [json]` | A fixed operation in the main process (`apps/desktop/electron/devControl.mjs`) |
 | `bc.mjs host <window> <js>` | Evaluates in a window's page, over the pipe |
 | `validate-instruments.mjs` | Positive and negative controls for capture, recording and the watcher. Run it before trusting them |
@@ -29,6 +30,8 @@ Scratch data and evidence go in `$BRIGADIER_CHECK_DIR` (default `$TMPDIR/browser
 
 ## Things that bit
 
+- `--remote-debugging-pipe` alone makes `navigator.webdriver` true in every page, with no debugger attached. Google then refuses sign-in after the email step ("This browser or app may not be secure") and may answer a search with its "unusual traffic" page. Nothing run over the pipe can show how Google treats the app: use `bc.mjs up --no-pipe`. Its bundle must not be `LSBackgroundOnly` for typing to reach it (`LSUIElement` instead, then re-sign), and a build puts `LSBackgroundOnly` back.
+- A no-pipe instance is only for a window the user opens by saying go. It opens the window as the shipped app does: `BRIGADIER_CHECK_BOUNDS` parking didn't hold, and a 1280×800 window sat on the user's screen for 9 s at 20:56:57 UTC on 2026-11-06, which their rule against windows in their way (L8) forbids.
 - Building the Tauri crate overwrites `target/debug/brigadierd` with its empty sidecar placeholder. A dev run uses `target/browser-check/sidecars`, from `build-native.mjs`.
 - `devd.mjs` reads `paths.mjs` once: restart it (`bc down`, `bc up`) after changing a path or its environment. A main-process edit needs `pnpm electron:main` and `bc restart`.
 - `log` is a builtin in zsh: use `/usr/bin/log`, or your reads return nothing with no error you'd notice.

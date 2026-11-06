@@ -90,7 +90,7 @@ export function SessionTab({
           {tab.kind === "file" || tab.kind === "conflict" ? (
             <FileTypeIcon name={tab.path} className="size-icon-sm shrink-0" />
           ) : tab.kind === "newTab" ? <Globe className="size-icon-sm shrink-0" />
-            : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} />
+            : tab.kind === "browser" ? <BrowserTabIcon tabId={tab.id} saved={tab.favicon} />
             : tab.kind === "terminal" ? <Dock className="size-icon-sm shrink-0" />
             : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
             : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
