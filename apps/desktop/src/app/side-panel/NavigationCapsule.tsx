@@ -6,17 +6,19 @@ import type { browserGo } from "@/ipc/client";
 const NAV_BUTTON = "rounded-full disabled:opacity-40 disabled:text-muted-foreground";
 
 /** The browser toolbar's Back, Forward and Reload (Stop while the page loads), in one capsule. */
-export function NavigationCapsule({ disabled, loading, onAct }: {
+export function NavigationCapsule({ disabled, canGoBack, canGoForward, loading, onAct }: {
   disabled: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
   loading: boolean;
   onAct: (action: Parameters<typeof browserGo>[1]) => void;
 }) {
   return (
     <div role="group" aria-label="Navigation" data-slot="browser-navigation" className="bg-muted/60 flex h-control-md shrink-0 items-center rounded-full p-0.5">
-      <TooltipIconButton tooltip="Back" size="icon-md" className={NAV_BUTTON} disabled={disabled} onClick={() => onAct("back")}>
+      <TooltipIconButton tooltip="Back" size="icon-md" className={NAV_BUTTON} disabled={disabled || !canGoBack} onClick={() => onAct("back")}>
         <ArrowLeft />
       </TooltipIconButton>
-      <TooltipIconButton tooltip="Forward" size="icon-md" className={NAV_BUTTON} disabled={disabled} onClick={() => onAct("forward")}>
+      <TooltipIconButton tooltip="Forward" size="icon-md" className={NAV_BUTTON} disabled={disabled || !canGoForward} onClick={() => onAct("forward")}>
         <ArrowRight />
       </TooltipIconButton>
       <span aria-hidden className="bg-border mx-1 h-4 w-px shrink-0" />

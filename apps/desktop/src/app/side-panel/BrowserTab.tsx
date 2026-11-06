@@ -221,6 +221,11 @@ export function BrowserTab({
     browserGo(conversationId, action).catch(failed);
   };
 
+  /** A click on the toolbar took the keyboard from the page; it goes back, so the page can be used at once. */
+  const keyboardToPage = () => {
+    browserFocus(conversationId).catch(() => {});
+  };
+
   /** Waits (up to 2s) for the page to show over the tab again, as once the ⋯ menu has gone. */
   const whenShown = async () => {
     for (let tries = 0; tries < 120 && !shown.current; tries++) await frame();
@@ -249,6 +254,7 @@ export function BrowserTab({
     void whenShown().then(() => browserPrint(conversationId)).catch(failed);
   };
   const screenshot = () => {
+    keyboardToPage();
     void whenShown()
       .then(() => browserSnapshot(conversationId))
       .then(() => toast("Screenshot saved to clipboard"), failed);
@@ -341,9 +347,11 @@ export function BrowserTab({
       openUrl(to).catch(failed);
       return;
     }
-    if (onNavigate) { onNavigate(to); return; }
+    // Reading the page comes next, as in any browser.
+    if (onNavigate) { onNavigate(to); keyboardToPage(); return; }
     if (!area.current) return;
     openPage(conversationId, to, pageBounds(area.current), agent).catch(failed);
+    keyboardToPage();
   };
   const editing = focused || typed !== null;
   const suggestions = useAddressSuggestions(conversationId, focused ? typed : null);
@@ -365,7 +373,14 @@ export function BrowserTab({
   return (
     <div data-pane="browser" data-active={active || undefined} className="@container/new-tab flex min-h-0 flex-1 flex-col">
       <div data-slot="browser-toolbar" className="@container/browser-toolbar border-border flex h-12 shrink-0 items-center gap-1.5 border-b p-2">
-        <NavigationCapsule disabled={!embedded || !made} loading={loading} onAct={act} />
+        <NavigationCapsule
+          disabled={!embedded || !made}
+          // A shell that doesn't say what the history allows leaves both on (see `BrowserEvent`).
+          canGoBack={page?.canGoBack !== false}
+          canGoForward={page?.canGoForward !== false}
+          loading={loading}
+          onAct={(action) => { act(action); keyboardToPage(); }}
+        />
         <form
           className="flex min-w-0 flex-1 justify-center px-1 @max-sm/browser-toolbar:px-0"
           onSubmit={(event) => {
@@ -382,9 +397,10 @@ export function BrowserTab({
             {!editing && <SiteInfo url={url} />}
             <input
               ref={field}
-              // ⌘T opens the tab to type an address at once.
+              // ⌘T opens the tab to type an address at once. A tab with an address has its page coming:
+              // Return in a New tab mounts this anew, and the keyboard is on its way to the page.
               // oxlint-disable-next-line jsx-a11y/no-autofocus
-              autoFocus={active && !made}
+              autoFocus={active && !made && !initialUrl}
               value={typed ?? (focused ? url : shownAddress(url, fullUrl))}
               placeholder="Search or enter a URL"
               aria-label="Address"
@@ -403,7 +419,8 @@ export function BrowserTab({
                 setFocused(true);
                 // The whole URL replaces the site first, then is selected.
                 const input = event.target;
-                requestAnimationFrame(() => input.select());
+                // select() also focuses: by the next frame Return may have sent the keyboard to the page.
+                requestAnimationFrame(() => { if (document.activeElement === input) input.select(); });
               }}
               onBlur={() => {
                 setFocused(false);

@@ -23,6 +23,7 @@ declare global {
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
+      onGuestKey(listener: () => void): void;
       devControl(op: string, args?: unknown): Promise<unknown>;
     };
   }
@@ -36,6 +37,8 @@ type Webview = HTMLElement & {
   getURL(): string;
   goBack(): void;
   goForward(): void;
+  canGoBack(): boolean;
+  canGoForward(): boolean;
   reload(): void;
   reloadIgnoringCache(): void;
   stop(): void;
@@ -74,6 +77,56 @@ let profileForNewTabs = DEFAULT_PROFILE;
 /** Times the layer lost a child: the oracle for "never moved or removed" holds this at the tabs closed. */
 const counters = { created: 0, closed: 0, removedFromLayer: 0, moved: 0 };
 
+/**
+ * A page holding the keyboard keeps it through a host element's focus(): Chromium moves it back only when a frame
+ * of the host says it took focus (WebContentsImpl::SetFocusedFrame), a frame says so only when Blink's focused frame
+ * changes, and the app's page may already be that frame. hostWebContents.focus() does nothing here on macOS, since
+ * the host's view is first responder all along (RenderWidgetHostViewMac::Focus), and window.focus() asks for a user
+ * gesture that a key taken in the page never gave the host. So a hidden frame takes focus, then the app's page does.
+ */
+let keyboardFrame: HTMLIFrameElement | null = null;
+let keyboardAnchor: HTMLElement | null = null;
+/** A page's shortcut just came through it, whatever document.hasFocus() says. */
+let pageHadKey = false;
+/** The tab whose page gets the keyboard once it shows: its page may not exist or show yet. */
+let wantsKeyboard: string | null = null;
+const nativeFocus = HTMLElement.prototype.focus;
+
+function keyboardInPage(): boolean {
+  return pageHadKey || !document.hasFocus();
+}
+
+function takeKeyboard(): void {
+  if (!keyboardFrame || !keyboardAnchor) return;
+  pageHadKey = false;
+  const had = document.activeElement;
+  nativeFocus.call(keyboardFrame, { preventScroll: true });
+  nativeFocus.call(keyboardAnchor, { preventScroll: true });
+  if (had instanceof HTMLElement && had !== document.body && had !== keyboardFrame && had !== keyboardAnchor && had.tagName !== "WEBVIEW") {
+    nativeFocus.call(had, { preventScroll: true });
+  } else {
+    keyboardAnchor.blur();
+  }
+}
+
+function installKeyboardHandover(): void {
+  keyboardAnchor = document.createElement("div");
+  keyboardAnchor.tabIndex = -1;
+  keyboardAnchor.setAttribute("aria-hidden", "true");
+  keyboardAnchor.style.cssText = "position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; outline: none;";
+  keyboardFrame = document.createElement("iframe");
+  keyboardFrame.tabIndex = -1;
+  keyboardFrame.style.cssText = "display: block; width: 1px; height: 1px; border: 0;";
+  keyboardAnchor.append(keyboardFrame);
+  document.body.append(keyboardAnchor);
+  // Every field of the app, by whatever path it takes focus: autoFocus, a menu key, a shortcut.
+  HTMLElement.prototype.focus = function focus(this: HTMLElement, options?: FocusOptions) {
+    if (this.tagName !== "WEBVIEW" && keyboardInPage()) takeKeyboard();
+    nativeFocus.call(this, options);
+  };
+  window.brigadierShell.onGuestKey(() => { pageHadKey = true; });
+}
+
 export function installTabLayer(): void {
   const style = document.createElement("style");
   style.textContent = `
@@ -92,10 +145,13 @@ export function installTabLayer(): void {
     for (const record of records) counters.removedFromLayer += record.removedNodes.length;
   }).observe(layer, { childList: true });
 
+  installKeyboardHandover();
+
   // A drag anywhere in the app must not fall into a page it crosses: the divider's or a text
   // selection's pointer stays with the app until it's let go.
   window.addEventListener("pointerdown", (event) => {
     if (event.target instanceof Element && event.target.closest("webview")) return;
+    pageHadKey = false;
     layer?.toggleAttribute("data-locked", true);
   }, { capture: true });
   const release = () => { if (!modal) layer?.toggleAttribute("data-locked", false); };
@@ -134,6 +190,9 @@ function place(page: Page, bounds: BrowserBounds | null): void {
   if (bounds === null) {
     style.visibility = "hidden";
     style.pointerEvents = "none";
+    if (wantsKeyboard === page.id) wantsKeyboard = null;
+    // A hidden page must not hold the keyboard: typing would go to it unseen.
+    if (page.shown && keyboardInPage()) takeKeyboard();
     page.shown = false;
     return;
   }
@@ -144,6 +203,11 @@ function place(page: Page, bounds: BrowserBounds | null): void {
   style.visibility = "visible";
   style.pointerEvents = "";
   page.shown = true;
+  if (wantsKeyboard === page.id && page.element.isConnected) {
+    wantsKeyboard = null;
+    // Unless the person went on to a field of the app while the page was coming.
+    if (document.activeElement === null || document.activeElement === document.body) page.element.focus();
+  }
 }
 
 const NOT_FOUND: BrowserFound = { found: false, current: 0, total: 0 };
@@ -158,13 +222,19 @@ function listen(page: Page): void {
   const emit = (event: BrowserEvent) => page.emit(event);
   const on = <T>(name: string, listener: (event: T) => void) =>
     element.addEventListener(name, listener as unknown as EventListener);
-  const load = () => emit({ type: "load", url: page.url, loading: page.loading });
+  const history = () => emit({
+    type: "history",
+    canGoBack: page.ready && element.canGoBack(),
+    canGoForward: page.ready && element.canGoForward(),
+  });
+  const load = () => { emit({ type: "load", url: page.url, loading: page.loading }); history(); };
   // A load drops a find in flight, with no answer from the old document: the bar looks again when it stops.
   on("did-start-loading", () => { answerFind(page, NOT_FOUND); page.loading = true; load(); });
   on("did-stop-loading", () => { page.loading = false; load(); });
   on<{ url: string }>("did-navigate", ({ url }) => { page.url = url; load(); });
   on<{ url: string; isMainFrame: boolean }>("did-navigate-in-page", ({ url, isMainFrame }) => {
-    if (!isMainFrame) return;
+    // A frame's own navigation adds to the tab's history too.
+    if (!isMainFrame) { history(); return; }
     page.url = url;
     load();
   });
@@ -290,9 +360,15 @@ export function zoom(id: string, factor: number | null): number {
 
 /** The keyboard to the tab's page, or back to the app's own (null). */
 export function focusPage(id: string | null): void {
-  if (id !== null) { pages.get(id)?.element.focus(); return; }
-  if (document.activeElement?.tagName === "WEBVIEW") (document.activeElement as HTMLElement).blur();
-  window.focus();
+  wantsKeyboard = null;
+  if (id === null) {
+    if (keyboardInPage()) takeKeyboard();
+    return;
+  }
+  const page = pages.get(id);
+  // A hidden element can't take focus, and a first address has no page yet: place() gives it when it shows.
+  if (page?.element.isConnected && page.element.style.visibility === "visible") page.element.focus();
+  else wantsKeyboard = id;
 }
 
 export function find(id: string, query: string, step: "type" | "next" | "previous"): Promise<BrowserFound> {

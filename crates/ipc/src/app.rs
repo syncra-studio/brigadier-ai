@@ -125,6 +125,12 @@ pub struct RunningChat {
 pub enum BrowserEvent {
     /// A page started (`loading`) or finished loading.
     Load { url: String, loading: bool },
+    /// What the page's own history allows, after each of its navigations. A shell that doesn't
+    /// send this leaves Back and Forward enabled.
+    History {
+        can_go_back: bool,
+        can_go_forward: bool,
+    },
     /// The page's title changed.
     Title { title: String },
     /// A small PNG for the page's tab icon, safe under the app's image CSP.

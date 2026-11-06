@@ -54,6 +54,8 @@ export function installGuestKeys(guest: WebContents): void {
     const key = guestKey(input);
     if (!key) return;
     event.preventDefault();
+    // Sent first: what the shortcut does may be to put the keyboard in a field of the app (tabLayer's takeKeyboard).
+    guest.hostWebContents?.send("brigadier:guest-key");
     guest.hostWebContents?.send("brigadier:event", "pane-shortcut", key);
   });
 }

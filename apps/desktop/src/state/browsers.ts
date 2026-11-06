@@ -22,6 +22,9 @@ export type BrowserPage = {
   favicon?: string | null;
   /** The last navigation or download the tab refused, offered to the system browser. */
   blocked: string | null;
+  /** What the page's history allows, once the shell has said (the Electron build does). */
+  canGoBack?: boolean;
+  canGoForward?: boolean;
   /** The page zoom (1 is 100%) the shell last said; it stays from page to page in the tab. */
   zoom?: number;
   /** The page's question for the camera or microphone, waiting for an answer (macOS). */
@@ -87,6 +90,8 @@ export async function openPage(
         loading: true,
         blocked: null,
         ready: made.has(id),
+        ...(page?.canGoBack === undefined ? {} : { canGoBack: page.canGoBack }),
+        ...(page?.canGoForward === undefined ? {} : { canGoForward: page.canGoForward }),
         ...(page?.zoom === undefined ? {} : { zoom: page.zoom }),
         ...(page?.generation === undefined ? {} : { generation: page.generation }),
       },
@@ -107,6 +112,7 @@ export async function openPage(
           // The shell drops a question from a site the page left.
           ...(shown?.asking && originOf(event.url) !== shown.asking.origin ? { asking: null } : {}) });
       }
+      else if (event.type === "history") update(id, { canGoBack: event.canGoBack, canGoForward: event.canGoForward });
       else if (event.type === "title") update(id, { title: event.title });
       else if (event.type === "favicon") {
         if (faviconFits(useBrowsers.getState().pages[id], event.url)) update(id, { favicon: event.dataUrl });

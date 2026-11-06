@@ -88,10 +88,10 @@ for (const full of [false, true]) {
     assert.deepEqual(seen.newTab, { value: "", align: "center", placeholder: "Search or enter a URL", siteInfo: null, external: false });
     assert.deepEqual(seen.newTabBack, { disabled: true, opacity: "0.4" });
 
-    assert.deepEqual(seen.asked, [{ go: "stop" }, { open: PAGE }]);
+    assert.deepEqual(seen.asked, [{ go: "stop" }, { focus: "c-browser" }, { open: PAGE }]);
     // Enter in the address goes there in the tab only: the form has no default button that would
     // also open the address in the system browser.
-    assert.deepEqual(seen.addressEnter, { submitters: 0, asked: [{ navigate: "https://example.org/next" }] });
+    assert.deepEqual(seen.addressEnter, { submitters: 0, asked: [{ navigate: "https://example.org/next" }, { focus: "c-browser" }] });
 
     // Zoom steps 10% and resets to 100%; the screenshot says where it went; each asks the shell.
     assert.deepEqual(seen.zoomStepped, { shows: "110%", group: zoom("110%", []) });
@@ -103,6 +103,7 @@ for (const full of [false, true]) {
       { zoom: 1.2, id },
       { zoom: 1.1, id },
       { zoom: 1, id },
+      { focus: id },
       { snapshot: id },
       { print: id },
     ]);
