@@ -15,6 +15,7 @@ const IMAGE = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www
 const location = () => `${head("location fixture", "2d4a6c")}
 <button id="ask" onclick="ask()">Ask for my location</button>
 <button id="cam" onclick="cam()">Ask for the camera</button>
+<button id="mic" onclick="mic()">Ask for the microphone</button>
 <pre id="out">nothing asked yet</pre>
 <script>
 window.__fixture={log:[]};
@@ -22,6 +23,7 @@ const say=(line)=>{__fixture.log.push(line);document.getElementById("out").textC
 function ask(){say("asked "+new Date().toISOString());navigator.geolocation.getCurrentPosition(
   (p)=>say("position "+p.coords.latitude+","+p.coords.longitude+" accuracy "+p.coords.accuracy),
   (e)=>say("error code "+e.code+": "+e.message),{timeout:30000})}
+function mic(){say("microphone asked");navigator.mediaDevices.getUserMedia({audio:true}).then((m)=>{say("microphone granted");m.getTracks().forEach((t)=>t.stop())},(e)=>say("microphone error "+e.name+": "+e.message))}
 function cam(){say("camera asked");navigator.mediaDevices.getUserMedia({video:true}).then((m)=>{say("camera granted");m.getTracks().forEach((t)=>t.stop())},(e)=>say("camera error "+e.name+": "+e.message))}
 </script>`;
 
