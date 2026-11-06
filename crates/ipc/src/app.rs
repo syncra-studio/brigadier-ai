@@ -153,6 +153,8 @@ pub enum BrowserEvent {
     Popup { id: String, url: String },
     /// The page closed itself (`window.close()` in a popup): its tab closes.
     Closed,
+    /// The page asked for a passkey, which this build can't use: the tab says so.
+    PasskeyRefused,
     /// The page asked for the camera or microphone, which its site's choices leave to the user:
     /// the tab asks, and answers `request` (`browser_permission`).
     Permission {

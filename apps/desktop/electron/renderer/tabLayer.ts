@@ -21,6 +21,8 @@ declare global {
       flushStorage(): void;
       profilePartition(profileId: string): Promise<string>;
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
+      guestFavicon(id: number, href: string): Promise<string | null>;
+      onGuestPasskey(listener: (details: { from: number }) => void): void;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
       onGuestKey(listener: () => void): void;
@@ -167,6 +169,11 @@ export function installTabLayer(): void {
       }
     }
   });
+  window.brigadierShell.onGuestPasskey(({ from }) => {
+    for (const page of pages.values()) {
+      if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "passkeyRefused" });
+    }
+  });
   window.brigadierShell.onGuestEscape(({ from }) => {
     for (const page of pages.values()) {
       if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "escape" });
@@ -241,7 +248,7 @@ function listen(page: Page): void {
   on<{ title: string }>("page-title-updated", ({ title }) => emit({ type: "title", title }));
   const favicon = () => {
     const url = page.url;
-    void readFavicon((code) => element.executeJavaScript(code)).then((dataUrl) => {
+    void readFavicon((code) => element.executeJavaScript(code), (href) => window.brigadierShell.guestFavicon(element.getWebContentsId(), href)).then((dataUrl) => {
       if (dataUrl) emit({ type: "favicon", url, dataUrl });
     });
   };

@@ -34,3 +34,4 @@ const out = path.join(root, "dist-electron");
 for (const file of fs.existsSync(out) ? fs.readdirSync(out) : []) if (/\.(mjs|cjs)$/.test(file)) fs.rmSync(path.join(out, file));
 await bundle("./main/index.ts", "main", "es");
 await bundle("./preload.ts", "preload", "cjs");
+await bundle("./guestPasskey.ts", "guestPasskey", "cjs");

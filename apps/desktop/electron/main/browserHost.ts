@@ -7,18 +7,21 @@ import { app, ipcMain, webContents } from "electron";
 
 import { dev, unfocused } from "./identity";
 import { note } from "./events";
+import { installGuestFavicon } from "./guestFavicon";
 import { installGuest } from "./guestPopups";
 import { installGuestKeys } from "./guestKeys";
 import { applyPermissionPolicy } from "./permissions";
 import { isProfilePartition, profilePartition } from "./profiles";
 import { installDurableStorage, keepStorageOf, replaceFile } from "./durableStorage";
 import { keepSessionCookies } from "./sessionCookies";
+import { guestPasskeyPath } from "./windows";
 
 // The renderer's tab model: one JSON file. Which profile a tab belongs to has to survive a restart.
 const tabsFile = () => path.join(app.getPath("userData"), "browser-tabs.json");
 
 export function installBrowserHost(): void {
   installDurableStorage();
+  installGuestFavicon();
   app.on("render-process-gone", (_event, contents, details) => {
     note("render-process-gone", { webContents: contents.id, type: contents.getType(), url: contents.getURL(), ...details });
   });
@@ -31,6 +34,7 @@ export function installBrowserHost(): void {
     if (!isProfilePartition(created.storagePath)) return;
     applyPermissionPolicy(created, { note });
     keepSessionCookies(created, { note });
+    if (process.platform === "darwin") created.registerPreloadScript({ type: "frame", filePath: guestPasskeyPath });
     if (unfocused) note("session-unfocused-policy", { path: created.storagePath });
   });
 
@@ -54,6 +58,10 @@ export function installBrowserHost(): void {
       // The Local Network prompt comes from WebRTC's local candidates; dev must show no dialog.
       if (unfocused) contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
       installGuestKeys(contents);
+      contents.ipc.on("brigadier:guest-passkey-refused", () => {
+        note("guest-passkey-refused", { webContents: contents.id });
+        contents.hostWebContents?.send("brigadier:guest-passkey", { from: contents.id });
+      });
       contents.on("did-start-navigation", (details) => {
         if (details.isMainFrame) note("guest-navigation", { webContents: contents.id, url: details.url, inPlace: details.isSameDocument, reload: contents.getURL() === details.url });
       });

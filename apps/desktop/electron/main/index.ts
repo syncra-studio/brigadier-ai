@@ -161,7 +161,8 @@ if (dev) {
 void app.whenReady().then(async () => {
   installTray(startDaemon);
   servePage();
-  if (dev && !smoke) {
+  // BRIGADIER_DEV_OPEN_MAIN: a run with no driver (`bc up --no-pipe`) opens its window as the shipped app does.
+  if (dev && !smoke && process.env.BRIGADIER_DEV_OPEN_MAIN !== "1") {
     note("ready", { pid: process.pid, electron: process.versions.electron, chrome: process.versions.chrome, sandboxForced: true });
     // The first window waits for the driver: the checks place each window before it shows.
     const control = new BrowserWindow({
