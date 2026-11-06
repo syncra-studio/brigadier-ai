@@ -1,4 +1,4 @@
-Why: The linux backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, as patch 0261 does for macOS, so an embedding app that never uses them can leave them out of its binary.
+Why: The linux backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, as patch 0262 does for macOS, so an embedding app that never uses them can leave them out of its binary.
 
 diff --git a/crates/platform-linux/Cargo.toml b/crates/platform-linux/Cargo.toml
 index dfb5ec0fd..2aa6d8f63 100644

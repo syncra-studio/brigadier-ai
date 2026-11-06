@@ -1,4 +1,4 @@
-Why: The windows backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, as patch 0261 does for macOS, so an embedding app that never uses them can leave them out of its binary.
+Why: The windows backend asks for cua-driver-core without its Rego and QuickJS engines, keeping YAML policies, as patch 0262 does for macOS, so an embedding app that never uses them can leave them out of its binary.
 
 diff --git a/crates/platform-windows/Cargo.toml b/crates/platform-windows/Cargo.toml
 index eb8771d13..7148bfda8 100644
