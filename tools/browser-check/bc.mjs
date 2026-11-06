@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The driver's command line. Talks to devd over its socket; devd owns the kept-alive instance.
-//   bc up | down | wipe | status | restart | targets
+//   bc up [--no-pipe] | down | wipe | status | restart | targets
 //   bc control <op> [json]       a fixed operation in the main process (devControl.mjs)
 //   bc host <window> <js>        evaluate in that window's page over the debugging pipe
 import { spawn } from "node:child_process";
@@ -28,19 +28,22 @@ export function call(message, timeoutMs = 120000) {
   });
 }
 
-async function up() {
+async function up(noPipe = false) {
   try {
-    return await call({ op: "status" }, 3000);
-  } catch {
+    const status = await call({ op: "status" }, 3000);
+    if (Boolean(status.noPipe) !== noPipe) throw new Error(`already up ${status.noPipe ? "without" : "with"} the pipe: bc down first`);
+    return status;
+  } catch (error) {
+    if (String(error.message).startsWith("already up")) throw error;
     fs.mkdirSync(checkDir, { recursive: true });
     const log = fs.openSync(path.join(checkDir, "devd.log"), "a");
     const here = path.dirname(fileURLToPath(import.meta.url));
-    spawn(process.execPath, [path.join(here, "devd.mjs")], { detached: true, stdio: ["ignore", log, log] }).unref();
+    spawn(process.execPath, [path.join(here, "devd.mjs")], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, ...(noPipe ? { BRIGADIER_NO_PIPE: "1", BRIGADIER_FOCUSED: process.env.BRIGADIER_FOCUSED ?? "1" } : {}) } }).unref();
     for (let tries = 0; tries < 240; tries++) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       try {
         const status = await call({ op: "status" }, 2000);
-        if (status.controlReady) return status;
+        if (status.controlReady || (noPipe && status.pid)) return status;
       } catch { /* still starting */ }
     }
     throw new Error(`devd did not come up; see ${path.join(checkDir, "devd.log")}`);
@@ -51,7 +54,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [command, first, second] = process.argv.slice(2);
   let result;
   switch (command) {
-    case "up": result = await up(); break;
+    case "up": result = await up(first === "--no-pipe"); break;
     case "down": result = await call({ op: "down" }); break;
     case "wipe": {
       // Only ever the scratch folder under checkDir, while nothing is running.
@@ -65,7 +68,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     case "control": result = await call({ op: "control", name: first, args: second ? JSON.parse(second) : {} }); break;
     case "host": result = await call({ op: "host", window: first, js: second }); break;
     default:
-      console.error("usage: bc up|down|wipe|status|restart|targets|control <op> [json]|host <window> <js>");
+      console.error("usage: bc up [--no-pipe]|down|wipe|status|restart|targets|control <op> [json]|host <window> <js>");
       process.exit(64);
   }
   console.log(JSON.stringify(result, null, 1));

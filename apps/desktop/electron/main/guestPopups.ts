@@ -14,7 +14,7 @@ import { WINDOW_BACKGROUND } from "./windows";
 const tabGuest = new WeakMap<WebContents, WebContents>();
 const popups = new Set<BrowserWindow>();
 
-const webOrBlank = (url: string) => /^https?:/.test(url) || url === "about:blank" || url === "";
+export const webOrBlank = (url: string) => /^https?:/.test(url) || url === "about:blank" || url === "";
 
 /** The features ask for a window, and the page didn't give up its opener. */
 function keepsOpener({ disposition, features }: HandlerDetails): boolean {

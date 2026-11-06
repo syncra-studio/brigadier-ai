@@ -25,6 +25,8 @@ declare global {
       flushStorage(): void;
       profilePartition(profileId: string): Promise<string>;
       guestInfo(id: number): Promise<{ id: number; pid: number; url: string } | null>;
+      guestFavicon(id: number, href: string): Promise<string | null>;
+      onGuestPasskey(listener: (details: { from: number }) => void): void;
       onGuestPopup(listener: (details: { from: number; url: string }) => void): void;
       onGuestEscape(listener: (details: { from: number }) => void): void;
       onGuestKey(listener: () => void): void;
@@ -176,6 +178,11 @@ export function installTabLayer(): void {
       }
     }
   });
+  window.brigadierShell.onGuestPasskey(({ from }) => {
+    for (const page of pages.values()) {
+      if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "passkeyRefused" });
+    }
+  });
   window.brigadierShell.onGuestEscape(({ from }) => {
     for (const page of pages.values()) {
       if (page.ready && page.element.getWebContentsId() === from) page.emit({ type: "escape" });
@@ -259,7 +266,7 @@ function listen(page: Page): void {
   on<{ title: string }>("page-title-updated", ({ title }) => emit({ type: "title", title }));
   const favicon = () => {
     const url = page.url;
-    void readFavicon((code) => element.executeJavaScript(code)).then((dataUrl) => {
+    void readFavicon((code) => element.executeJavaScript(code), (href) => window.brigadierShell.guestFavicon(element.getWebContentsId(), href)).then((dataUrl) => {
       if (dataUrl) emit({ type: "favicon", url, dataUrl });
     });
   };
@@ -314,7 +321,8 @@ async function makePage(id: string, url: string, bounds: BrowserBounds, emit: (e
   counters.created += 1;
   await new Promise<void>((resolve) => {
     element.addEventListener("dom-ready", () => { page.ready = true; resolve(); }, { once: true });
-    element.setAttribute("src", url);
+    // Main destroys a guest with any other first address, and dom-ready would never come (a tab restored at a blob:).
+    element.setAttribute("src", /^https?:/.test(url) ? url : "about:blank");
     (layer as HTMLDivElement).append(element);
   });
 }

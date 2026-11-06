@@ -24,6 +24,7 @@ import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findInPage, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";
 import {
   dismissBlocked,
+  dismissPasskeyRefused,
   openPage,
   syncZoom,
   useBrowsers,
@@ -518,6 +519,13 @@ export function BrowserTab({
             Continue
           </Button>
         </Banner>
+      )}
+      {page?.passkeyRefused && (
+        <Banner
+          data-slot="browser-passkey"
+          text={<>Passkeys don't work in Brigadier yet, so this page's request was refused. Sign in with a password or another option on the page.</>}
+          onDismiss={() => dismissPasskeyRefused(conversationId)}
+        />
       )}
       {page?.blocked && (
         <Banner

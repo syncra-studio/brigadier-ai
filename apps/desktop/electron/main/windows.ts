@@ -5,12 +5,14 @@ import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, shell } from "electron";
 
+import { keepOnAppPage } from "./appPage";
 import { dev, rendererUrl, unfocused } from "./identity";
 import { note } from "./events";
 import { flushPages, isQuitting, quit } from "./quit";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const preloadPath = path.join(here, "preload.cjs");
+export const guestPasskeyPath = path.join(here, "guestPasskey.cjs");
 
 /** The window's colour once the app covers it (the Tauri build's backgroundColor). */
 export const WINDOW_BACKGROUND = "#0f0f0e";
@@ -121,6 +123,7 @@ export function createWindow({ name = "main", bounds = {}, query = "", real = !d
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
+  keepOnAppPage(window.webContents);
   const resized = () => {
     if (!window.isDestroyed()) window.webContents.send("brigadier:resized");
   };

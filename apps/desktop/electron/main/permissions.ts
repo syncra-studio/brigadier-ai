@@ -6,6 +6,17 @@ import type { Note } from "./events";
 
 const ALLOWED = new Set<string>(["fullscreen", "clipboard-sanitized-write", "pointerLock"]);
 
+/** The app's own session: its page keeps what it asks for (the microphone for dictation), and nothing else in it, a visual's frame say, gets anything. */
+export function applyAppSessionPolicy(session: Session, { note, isAppPage }: { note: Note; isAppPage: (url: string) => boolean }): void {
+  session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const origin = details.requestingUrl || contents.getURL();
+    const allowed = details.isMainFrame && isAppPage(origin);
+    note("permission-request", { permission, allowed, origin, session: "app" });
+    callback(allowed);
+  });
+  session.setPermissionCheckHandler((_contents, _permission, origin) => isAppPage(origin));
+}
+
 export function applyPermissionPolicy(session: Session, { note }: { note: Note }): void {
   session.setPermissionRequestHandler((contents, permission, callback, details) => {
     const allowed = ALLOWED.has(permission);

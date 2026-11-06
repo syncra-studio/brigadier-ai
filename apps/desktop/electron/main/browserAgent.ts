@@ -3,10 +3,11 @@
 // a CDP call or a script. Pages, network and console come from Electron's own events, with no debugger on the tab;
 // webContents.debugger is attached only while an agent acts, for trusted input, and goes as soon as the user takes
 // the tab. It is in-process, so no port and no automation switch.
-import { ipcMain, webContents, type WebContents } from "electron";
+import { webContents, type WebContents } from "electron";
 
 import agentScript from "../../src-tauri/src/browser_agent.js?raw";
 
+import { handleFromApp } from "./appPage";
 import { activityOf, forgetActivity, watchActivity, watchNetwork } from "./browserAgentActivity";
 
 export { watchNetwork };
@@ -128,7 +129,7 @@ type Call =
   | { call: "capture"; guest: number };
 
 export function installBrowserAgent(): void {
-  ipcMain.handle("brigadier:agent", async (event, call: Call) => {
+  handleFromApp("brigadier:agent", async (event, call: Call) => {
     const guest = guestFor(event.sender, call.guest);
     switch (call.call) {
       case "script":

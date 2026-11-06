@@ -2,6 +2,7 @@
 // debugging pipe. A fixed list, so a check can't quietly do something the app itself can't.
 import { app, BrowserWindow, ipcMain, screen, session, webContents, type WebContents } from "electron";
 
+import { fromAppPage } from "./appPage";
 import type { Note } from "./events";
 import { chooseFromLastMenu, lastMenuItems } from "./guestMenu";
 import { openPopups } from "./guestPopups";
@@ -176,7 +177,8 @@ export function installDevControl({ createWindow, windows, note }: Control): voi
     quit: () => { setTimeout(() => app.quit(), 50); return true; },
     kill: () => { setTimeout(() => process.kill(process.pid, "SIGKILL"), 50); return true; },
   };
-  ipcMain.handle("brigadier:dev-control", (_event, op: string, args?: Args) => {
+  ipcMain.handle("brigadier:dev-control", (event, op: string, args?: Args) => {
+    if (!fromAppPage(event) && event.sender !== windows.get("control")?.webContents) throw new Error("brigadier:dev-control is for the driver");
     const run = ops[op];
     if (!run) throw new Error(`Unknown op ${op}`);
     note("dev-control", { op, name: args?.name });
