@@ -349,3 +349,161 @@ async fn what_add_adds_is_accepted_and_what_remove_removes_is_not_gone() {
     assert_eq!(changes(&flow).await, PluginChanges::default());
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn a_declined_item_moved_into_a_project_stays_hidden_after_an_edit() {
+    let flow = fixture("known-decline-moved").await;
+    flow.manager.plugin_catalog().unwrap();
+    let dir = claude_skill(&flow, "moved", "user version");
+    let found = changes(&flow).await;
+    apply(&flow, &[], &[&found.found[0].key], &[], &[]).await;
+    std::fs::remove_dir_all(dir).unwrap();
+    write(
+        &flow.repo.join(".claude/skills/moved/SKILL.md"),
+        &skill_text("moved", "project version"),
+    );
+
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    let view = flow.manager.plugin_catalog().unwrap();
+    assert!(view.rows.iter().all(|row| row.name != "moved"));
+    let hidden = view.hidden.unwrap();
+    assert_eq!(hidden[0].name, "moved");
+    assert_ne!(hidden[0].key, found.found[0].key);
+    // Resolve the checkout containing the new file; a fresh session's worktree would not
+    // contain this uncommitted fixture and would have no native skill to suppress.
+    let resolved = flow
+        .manager
+        .resolve_plugins(
+            &flow
+                .manager
+                .runtime
+                .launch_account(ProviderKind::Claude, None),
+            Some(&flow.repo),
+            &flow.repo,
+            true,
+            super::super::resolve::Role::Thread,
+        )
+        .await
+        .unwrap();
+    assert!(resolved.skills.iter().all(|skill| skill.display != "moved"));
+    assert!(resolved.off.skill_names.iter().any(|name| name == "moved"));
+
+    flow.manager
+        .restore_plugin(hidden[0].key.clone())
+        .await
+        .unwrap();
+    assert_eq!(row_on(&flow, "moved"), Some(true));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn saved_project_settings_follow_an_edited_row_without_enrolling_it_in_refresh() {
+    let flow = fixture("known-project-edit").await;
+    flow.manager.plugin_catalog().unwrap();
+    let file = flow.repo.join(".claude/skills/local/SKILL.md");
+    write(&file, &skill_text("local", "one"));
+    let view = flow.manager.plugin_catalog().unwrap();
+    let row = view.rows.iter().find(|row| row.name == "local").unwrap();
+    let old_id = row.id.clone();
+    flow.manager.set_plugin_choice(&old_id, false).unwrap();
+    write(&file, &skill_text("local", "two"));
+    let view = flow.manager.plugin_catalog().unwrap();
+    let row = view.rows.iter().find(|row| row.name == "local").unwrap();
+    assert_ne!(row.id, old_id);
+    assert!(!row.choice.on);
+    assert_eq!(row.choice.scope, Scope::Projects(vec![flow.repo.clone()]));
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn provider_controlled_plugins_are_not_new_or_suppressed_and_user_updates_stay_on() {
+    let flow = fixture("known-provider-controlled").await;
+    flow.manager.plugin_catalog().unwrap();
+    let codex = flow.manager.registry().roots().codex_home.clone();
+    let mut config = String::new();
+    for (name, market) in [
+        ("remote", "openai-curated-remote"),
+        ("bundled", "openai-bundled"),
+        ("runtime", "openai-primary-runtime"),
+        ("user", "user-market"),
+    ] {
+        let plugin = codex.join(format!("plugins/cache/{market}/{name}/1.0.0"));
+        write(
+            &plugin.join(".codex-plugin/plugin.json"),
+            &format!(r#"{{"name":"{name}"}}"#),
+        );
+        write(
+            &plugin.join(format!("skills/{name}/SKILL.md")),
+            &skill_text(name, "one"),
+        );
+        write(
+            &plugin.join(".mcp.json"),
+            &format!(r#"{{"mcpServers":{{"{name}":{{"command":"/app/{name}"}}}}}}"#),
+        );
+        config.push_str(&format!("[plugins.\"{name}@{market}\"]\nenabled = true\n"));
+    }
+    write(&codex.join("config.toml"), &config);
+    let found = changes(&flow).await;
+    assert_eq!(names(&found).0, ["user", "user"]);
+    let keys = found.found.iter().map(|item| &item.key).collect::<Vec<_>>();
+    apply(&flow, &keys, &[], &[], &[]).await;
+    write(
+        &codex.join("plugins/cache/user-market/user/1.0.0/skills/user/SKILL.md"),
+        &skill_text("user", "updated"),
+    );
+    assert_eq!(changes(&flow).await, PluginChanges::default());
+    let view = flow.manager.plugin_catalog().unwrap();
+    assert!(
+        view.rows
+            .iter()
+            .all(|row| row.name == "user" && row.choice.on)
+    );
+    let resolved = flow
+        .manager
+        .resolve_plugins(
+            &flow
+                .manager
+                .runtime
+                .launch_account(ProviderKind::Codex, None),
+            Some(&flow.repo),
+            &flow.repo,
+            true,
+            super::super::resolve::Role::Thread,
+        )
+        .await
+        .unwrap();
+    assert!(resolved.servers.iter().any(|server| server.name == "user"));
+    assert!(resolved.skills.iter().any(|skill| skill.display == "user"));
+    for name in ["remote", "bundled", "runtime"] {
+        assert!(
+            !resolved
+                .off
+                .servers
+                .iter()
+                .any(|server| server.contains(name))
+        );
+        assert!(
+            !resolved
+                .off
+                .plugin_servers
+                .iter()
+                .any(|(plugin, _)| plugin.starts_with(name))
+        );
+        assert!(
+            !resolved
+                .off
+                .plugin_skills
+                .iter()
+                .any(|skill| skill.contains(name))
+        );
+        assert!(
+            !resolved
+                .off
+                .skill_files
+                .iter()
+                .any(|file| file.to_string_lossy().contains(name))
+        );
+    }
+    flow.stop().await;
+}

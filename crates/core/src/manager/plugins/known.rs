@@ -241,12 +241,14 @@ impl Known {
     pub(super) fn apply(&self, rows: &[Row], choices: &mut Choices) {
         let saved = choices.clone();
         for row in rows {
-            if !counted(row) || saved.0.contains_key(&row.id) {
+            if saved.0.contains_key(&row.id) {
                 continue;
             }
+            // Existing settings follow an item even when it now exists only in a project.
+            // Being exempt from Refresh must not undo a saved off/hidden choice.
             if let Some(earlier) = earlier_choice(rows, row, &saved) {
                 choices.0.insert(row.id.clone(), earlier);
-            } else if !self.has(row) {
+            } else if counted(row) && !self.has(row) {
                 choices.0.insert(
                     row.id.clone(),
                     Choice {
