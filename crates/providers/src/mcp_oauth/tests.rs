@@ -696,3 +696,163 @@ fn a_keychain_refusal_stops_the_pass_at_the_first_item() {
     // One prompt at most, not one per account.
     assert_eq!(refusing.0.get(), 1);
 }
+
+#[test]
+fn a_line_that_fits_goes_over_stdin_and_a_longer_one_goes_to_argv() {
+    let line = keychain::stdin_line("Claude Code-credentials-ab", "me", "7b7d", 200).unwrap();
+    assert_eq!(
+        line,
+        "add-generic-password -U -a \"me\" -s \"Claude Code-credentials-ab\" -X \"7b7d\"\n"
+    );
+    assert_eq!(
+        keychain::stdin_line("Claude Code-credentials-ab", "me", "7b7d", line.len()).as_ref(),
+        Some(&line)
+    );
+    assert_eq!(
+        keychain::stdin_line("Claude Code-credentials-ab", "me", "7b7d", line.len() - 1),
+        None
+    );
+    assert_eq!(
+        keychain::add_args("Claude Code-credentials-ab", "me", "7b7d"),
+        [
+            "add-generic-password",
+            "-U",
+            "-a",
+            "me",
+            "-s",
+            "Claude Code-credentials-ab",
+            "-X",
+            "7b7d"
+        ]
+    );
+    // The limit stays below the longest line seen stored whole.
+    const { assert!(keychain::STDIN_LINE_LIMIT < 2099) };
+    assert_eq!(keychain::to_hex("{é".as_bytes()), "7bc3a9");
+}
+
+#[test]
+fn a_name_that_would_need_quoting_never_goes_over_stdin() {
+    for name in ["a\"b", "a\\b", "a\nb"] {
+        assert_eq!(keychain::stdin_line("Claude Code", name, "7b", 200), None);
+        assert_eq!(keychain::stdin_line(name, "me", "7b", 200), None);
+    }
+}
+
+#[test]
+fn a_password_printed_as_hex_reads_as_its_bytes() {
+    assert_eq!(keychain::decode_password(b"{\"a\":1}\n"), b"{\"a\":1}");
+    assert_eq!(
+        keychain::decode_password(b"7b2261223a22c3a9227d\n"),
+        "{\"a\":\"é\"}".as_bytes()
+    );
+    assert_eq!(keychain::decode_password(b"\n"), b"");
+    assert_eq!(keychain::decode_password(b"abc\n"), b"abc");
+}
+
+#[test]
+fn only_a_claude_item_listing_partitions_without_apple_tool_is_broken() {
+    let item = |service: &str, account: &str, partitions: Option<&str>| {
+        let partitions = partitions.map_or_else(String::new, |ids| {
+            format!(
+                "    entry 3:\n        authorizations (1): partition_id\n        \
+                 don't-require-password\n        description: {ids}\n        applications: <null>\n"
+            )
+        });
+        format!(
+            "keychain: \"/login.keychain-db\"\nversion: 512\nclass: \"genp\"\nattributes:\n    \
+             \"acct\"<blob>=\"{account}\"\n    \"svce\"<blob>=\"{service}\"\naccess: 5 entries\n    \
+             entry 0:\n        authorizations (6): decrypt derive\n        \
+             description: {service}\n{partitions}    entry 4:\n        \
+             authorizations (1): change_acl\n        description: {service}\n"
+        )
+    };
+    let dump = [
+        item(
+            "Claude Code-credentials-aa",
+            "me",
+            Some("teamid:7JQSPMWT79"),
+        ),
+        item("Claude Code-credentials-bb", "me", Some("apple-tool:")),
+        item(
+            "Claude Code-credentials-cc",
+            "me",
+            Some("teamid:7JQSPMWT79, apple-tool:"),
+        ),
+        item("Claude Code-credentials-dd", "me", None),
+        item("codex", "me", Some("teamid:7JQSPMWT79")),
+        item("Claude Code-credentials-ee", "you", Some("cdhash:12")),
+    ]
+    .concat();
+    assert_eq!(
+        keychain::broken_items(&dump)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [
+            ("Claude Code-credentials-aa".to_owned(), "me".to_owned()),
+            ("Claude Code-credentials-ee".to_owned(), "you".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn security_exits_are_told_apart() {
+    assert!(keychain::refused(Some(128)));
+    assert!(keychain::refused(Some(51)));
+    assert!(!keychain::refused(Some(keychain::EXIT_NOT_FOUND)));
+    assert!(!keychain::refused(None));
+    assert!(keychain::is_claude("Claude Code-custom-oauth-credentials"));
+    assert!(!keychain::is_claude("codex"));
+    assert!(!keychain::is_claude(&keychain::backup_service(
+        "Claude Code-credentials-aa"
+    )));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn repair_runs_under_each_free_managed_lock_and_never_on_the_main_item() {
+    #[derive(Default)]
+    struct Repairs {
+        inner: FakeKeyring,
+        repaired: RefCell<Vec<(String, bool)>>,
+        locks: RefCell<Vec<PathBuf>>,
+    }
+    impl Keyring for Repairs {
+        fn get(&self, service: &str, account: &str) -> io::Result<Option<Vec<u8>>> {
+            self.inner.get(service, account)
+        }
+        fn set(&self, service: &str, account: &str, data: &[u8]) -> io::Result<()> {
+            self.inner.set(service, account, data)
+        }
+        fn insert(&self, service: &str, account: &str, data: &[u8]) -> io::Result<Vec<u8>> {
+            self.inner.insert(service, account, data)
+        }
+        fn repair(&self, service: &str, _account: &str) -> io::Result<()> {
+            let locked = self.locks.borrow().iter().all(|path| path.exists());
+            self.repaired
+                .borrow_mut()
+                .push((service.to_owned(), locked));
+            Ok(())
+        }
+    }
+    let f = Fixture::new(ProviderKind::Claude);
+    let binary = f.root.join("names-it");
+    fs::write(&binary, CLAUDE_LOCK_NAME).unwrap();
+    let cli = InstalledCli {
+        version: CLAUDE_LOCK_SINCE,
+        binary: &binary,
+    };
+    let free = f.store(ProviderKind::Claude, &f.homes[0]);
+    let busy = f.store(ProviderKind::Claude, &f.homes[1]);
+    let main = f.store(ProviderKind::Claude, &f.main);
+    // Another writer holds the second account's lock.
+    fs::create_dir(busy.home.join(".storage-write.lock")).unwrap();
+    let repairs = Repairs::default();
+    repairs
+        .locks
+        .borrow_mut()
+        .push(free.home.join(".storage-write.lock"));
+    sync_with(ProviderKind::Claude, &f.env, &f.homes, Some(cli), &repairs).unwrap();
+    let service = |store: &Store| store.keychain.as_ref().unwrap().0.clone();
+    assert_eq!(*repairs.repaired.borrow(), [(service(&free), true)]);
+    assert_ne!(service(&free), service(&main));
+}
