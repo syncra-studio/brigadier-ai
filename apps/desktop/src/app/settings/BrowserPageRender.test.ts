@@ -15,9 +15,10 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
   const seen = JSON.parse(await renderFixturePage(t, "browser.html?drive=1", "browser-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen.on, {
     title: "Browser",
-    sections: ["General", "Downloads", "Browser permissions"],
+    sections: ["Profiles", "General", "Downloads", "Browser permissions"],
     rows: [
       "Browser",
+      "New sessions start on",
       "Open web links in",
       "Open local dev URLs in",
       "Show full URL",
@@ -29,8 +30,8 @@ test("browser settings: rows, clear, history, downloads, sites, off", { timeout:
       "Site settings",
     ],
   });
-  // Import has a page of its own now.
-  assert.equal(seen.importButton, false);
+  // Import has a page of its own; the Profiles section's button goes there.
+  assert.equal(seen.importButton, true);
   // Web links open in the default browser and local ones in Brigadier's, until changed.
   assert.deepEqual(seen.links, ["Your default browser", "Brigadier's browser"]);
   assert.deepEqual(seen.linkChoices, ["Brigadier's browser", "Your default browser"]);

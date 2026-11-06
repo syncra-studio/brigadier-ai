@@ -185,6 +185,7 @@ test("search finds shortcuts by words and by a key press", () => {
 const shortcutIds = (browser: boolean) => shortcutsFor(true, browser).map((shortcut) => shortcut.id);
 
 const BROWSER_ONLY = [
+  "switch-profile",
   "new-browser",
   "address",
   "page-back",
@@ -210,7 +211,8 @@ test("the Browser menu holds the browser's items, which leave with it", () => {
   const shell = readFileSync(new URL("../../src-tauri/src/shell.rs", import.meta.url), "utf8");
   const menu = shell.slice(shell.indexOf("const BROWSER_ITEMS"), shell.indexOf("const BROWSER_MENU"));
   const items = [...menu.matchAll(/\(\s*"([a-z-]+)",/g)].map(([, id]) => id);
-  assert.deepEqual(items.toSorted(), [...BROWSER_ONLY, "find", "find-next", "find-previous"].toSorted());
+  // Switching profile has no menu item: its keys are heard in the app's page and from a tab's page (main/guestKeys.ts).
+  assert.deepEqual(items.toSorted(), [...BROWSER_ONLY.filter((id) => id !== "switch-profile"), "find", "find-next", "find-previous"].toSorted());
   // Each reaches the page's tab as its key, and the Panes menu no longer has them.
   const panes = shell.slice(shell.indexOf('Submenu::new(app, "Panes"'), shell.indexOf("menu.append(&panes)"));
   for (const id of items) {

@@ -202,6 +202,7 @@ impl SessionManager {
                         message_id: message_id.clone(),
                     }),
                     side_of: None,
+                    started_from: None,
                     tab_chat: None,
                 },
             )

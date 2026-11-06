@@ -8,6 +8,8 @@ import { BrowserSwitch } from "@/app/settings/BrowserSwitch";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
 import { LinkRow } from "@/app/settings/LinkRow";
 import { LocationRow } from "@/app/settings/LocationRow";
+import { ProfileDetailPage } from "@/app/settings/ProfileDetailPage";
+import { openProfileDetail, ProfilesSection } from "@/app/settings/ProfilesSection";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { Button } from "@/components/controls";
 import { SettingsCard, SettingsRow } from "@/components/shared";
@@ -56,9 +58,13 @@ export const BROWSER_ROWS = {
     label: "Download history",
     description: "View the files you downloaded in the built-in browser",
   },
+  profiles: {
+    label: "Profiles",
+    description: "Separate sign-ins, history, bookmarks and passwords for each part of your life, and which profile new sessions start on",
+  },
   sites: {
     label: "Site settings",
-    description: "Which sites may use your camera and microphone in the built-in browser",
+    description: "Which sites may use your camera and microphone, for each profile",
   },
 } as const;
 
@@ -73,6 +79,7 @@ export function BrowserPage() {
   const shown = useApp((s) => s.selection);
   const clearingUnder = useBrowserSettingsView((s) => s.clearing);
   const view = shown.type === "settings" && shown.page === "browser" ? shown.detail?.view ?? "page" : "page";
+  const profileId = shown.type === "settings" && shown.page === "browser" ? shown.detail?.profile : undefined;
   const clearing = clearingUnder !== null && clearingUnder === shown;
   const [cleared, setCleared] = useState(0);
   const clearDialog = (
@@ -83,7 +90,10 @@ export function BrowserPage() {
       onCleared={() => setCleared((count) => count + 1)}
     />
   );
-  if (on && mac && view === "sites") return <BrowserSiteSettings onBack={() => setView("page")} />;
+  if (on && embedded && view === "profile" && profileId) return <ProfileDetailPage id={profileId} onBack={() => setView("page")} />;
+  if (on && embedded && view === "sites") {
+    return <BrowserSiteSettings profile={profileId} onBack={() => (profileId ? void openProfileDetail(profileId) : setView("page"))} />;
+  }
   if (on && embedded && view === "downloads") return <BrowserDownloads onBack={() => setView("page")} />;
   if (on && embedded && view === "history") {
     return (
@@ -101,6 +111,7 @@ export function BrowserPage() {
         </SettingsCard>
         {!on && <BrowserOffNote>{OFF_NOTE}</BrowserOffNote>}
       </SettingsSection>
+      {on && embedded && <ProfilesSection />}
       {on && embedded && (
         <SettingsSection title="General">
           <SettingsCard>
@@ -127,7 +138,7 @@ export function BrowserPage() {
           </SettingsCard>
         </SettingsSection>
       )}
-      {on && mac && (
+      {on && embedded && (
         <SettingsSection title="Browser permissions">
           <SettingsCard>
             <SettingsRow label={BROWSER_ROWS.sites.label} description={BROWSER_ROWS.sites.description}>

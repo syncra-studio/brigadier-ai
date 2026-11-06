@@ -1,8 +1,5 @@
 // The browser's security foundations and the record of its guests, from stage 1. Browser features come by
 // section (L4); per-frame loops go in stage 3 (L35).
-import fs from "node:fs";
-import path from "node:path";
-
 import { app, webContents } from "electron";
 
 import { installBrowserAgent, watchGuest, watchNetwork } from "./browserAgent";
@@ -12,19 +9,20 @@ import { note } from "./events";
 import { installGuestFavicon } from "./guestFavicon";
 import { installGuest, webOrBlank } from "./guestPopups";
 import { installGuestKeys } from "./guestKeys";
-import { applyAppSessionPolicy, applyPermissionPolicy } from "./permissions";
+import { applyAppSessionPolicy, applyPermissionPolicy, installPermissionAnswers } from "./permissions";
+import { installProfileStore, isDeleting } from "./profileStore";
 import { isProfilePartition, profilePartition } from "./profiles";
-import { installDurableStorage, keepStorageOf, replaceFile } from "./durableStorage";
+import { installDurableStorage, keepStorageOf } from "./durableStorage";
 import { keepSessionCookies } from "./sessionCookies";
 import { guestPasskeyPath } from "./windows";
 
-// The renderer's tab model: one JSON file. Which profile a tab belongs to has to survive a restart.
-const tabsFile = () => path.join(app.getPath("userData"), "browser-tabs.json");
 /** The partitions main has named for a profile: the only sessions a guest may have. */
 const profileSessions = new Set<string>();
 
 export function installBrowserHost(): void {
   installDurableStorage();
+  installProfileStore();
+  installPermissionAnswers();
   installBrowserAgent();
   installGuestFavicon();
   app.on("render-process-gone", (_event, contents, details) => {
@@ -93,17 +91,8 @@ export function installBrowserHost(): void {
     });
   });
 
-  handleFromApp("brigadier:tabs-read", () => {
-    try {
-      return JSON.parse(fs.readFileSync(tabsFile(), "utf8"));
-    } catch {
-      return {};
-    }
-  });
-  handleFromApp("brigadier:tabs-write", (_event, tabs) => {
-    replaceFile(tabsFile(), JSON.stringify(tabs));
-  });
   handleFromApp("brigadier:profile-partition", (_event, profileId: string) => {
+    if (isDeleting(profileId)) throw new Error("This profile is being deleted");
     const partition = profilePartition(profileId);
     profileSessions.add(partition);
     return partition;

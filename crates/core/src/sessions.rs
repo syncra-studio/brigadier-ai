@@ -55,12 +55,13 @@ struct Titles {
 
 type TitleHook = Box<dyn Fn(TitleRequest) + Send + Sync>;
 
-/// Where a new conversation comes from: a fork's source, or the conversation a side chat
-/// sits beside. Neither for a new session or Chat.
+/// Where a new conversation comes from: a fork's source, the conversation a side chat sits
+/// beside, or the session it was started from. None for a new session or Chat of its own.
 #[derive(Debug, Clone, Default)]
 pub struct Origin {
     pub forked_from: Option<ForkOrigin>,
     pub side_of: Option<ConversationId>,
+    pub started_from: Option<ConversationId>,
     /// A tab's own chat: the tab it belongs to (`side_of` is its session).
     pub tab_chat: Option<crate::model::TabChat>,
 }
@@ -478,6 +479,7 @@ impl Core {
             lifecycle: Lifecycle::Active,
             forked_from: origin.forked_from,
             side_of: origin.side_of,
+            started_from: origin.started_from,
             tab_chat: origin.tab_chat,
             quota_wait: None,
             cleanup_pending: false,
