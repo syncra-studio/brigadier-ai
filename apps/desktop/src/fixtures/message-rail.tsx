@@ -13,7 +13,7 @@
  * `window.messageRail` holds the steps for a browser probe.
  */
 import "@/fixtures/cliView";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 

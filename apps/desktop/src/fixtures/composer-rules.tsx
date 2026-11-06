@@ -9,7 +9,7 @@
  * the keyboard back to its trigger, and the fixture looks again only once the editor has taken it:
  * a slow machine's order (#682).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { updateDraft } from "@/app/conversation/draftSetup";

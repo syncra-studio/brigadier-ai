@@ -2,7 +2,7 @@
  * Settings → Routing over a faked daemon and a faked rules file: kinds of work and your rows,
  * rules, model strength and how a model is picked.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

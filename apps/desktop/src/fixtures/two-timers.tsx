@@ -6,7 +6,7 @@
  * still runs (D24): the two are read together again while that holds the block open, and once
  * the subagent ended, into `#two-timers-held`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

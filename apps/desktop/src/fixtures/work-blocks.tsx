@@ -36,7 +36,7 @@
  * page at that moment instead, for a screenshot.
  */
 import "@/fixtures/cliView";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

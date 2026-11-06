@@ -4,7 +4,7 @@
  * has no tab bar until then, that the tab shows in one and can be put in front and closed, and
  * that the bar goes with the last tab. What it saw goes as JSON into `<pre id="chat-tabs-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

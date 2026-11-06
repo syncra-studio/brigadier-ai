@@ -7,7 +7,7 @@
  * run failed with no request, which the daemon says as a notice (#639), and the drive dismisses
  * it and reads the session again.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { Notices } from "@/app/conversation/Notices";

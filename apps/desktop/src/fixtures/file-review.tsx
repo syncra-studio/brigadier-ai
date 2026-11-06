@@ -9,7 +9,7 @@
  * - ⌘Y keeps the change in view; Undo on the other one undoes it; the file is then done, and
  *   the bar offers "Keep all changes" and "Review next file"; ⌥L opens the next file.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { FileTabView } from "@/app/side-panel/FileTabView";

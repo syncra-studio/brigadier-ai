@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 
 import type { AttachmentRef, Conversation, Request } from "@/ipc/generated";
 import { deleteAll, removeProject } from "@/state/actions";

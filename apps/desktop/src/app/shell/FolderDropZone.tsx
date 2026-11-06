@@ -1,8 +1,8 @@
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useState } from "react";
 
 import { type DropTarget, dragShift, dropTargetAt, lastDrop } from "@/app/nativeDrop";
 import { FolderPlus } from "@/components/icons";
+import { onDragDrop } from "@/ipc/native";
 import { openFolders } from "@/state/addProject";
 
 /**
@@ -49,32 +49,31 @@ export function FolderDropZone() {
       const last = await lastDrop();
       target.drop(last?.entries ?? dropped.map((path) => ({ path, folder: false })), last?.shift ?? false);
     };
-    getCurrentWebview()
-      .onDragDropEvent(({ payload }) => {
-        switch (payload.type) {
-          case "enter":
-            paths = payload.paths;
-            hover(payload.position.x, payload.position.y);
-            break;
-          case "leave":
-            hovered?.hover(null);
-            hovered = null;
-            paths = [];
-            setOver(false);
-            break;
-          case "drop":
-            void drop(payload.paths, payload.position.x, payload.position.y).catch((error: unknown) =>
-              console.error("drop failed", error),
-            );
-            break;
-          case "over":
-            hover(payload.position.x, payload.position.y);
-            break;
-        }
+    onDragDrop((payload) => {
+      switch (payload.type) {
+        case "enter":
+          paths = payload.paths;
+          hover(payload.position.x, payload.position.y);
+          break;
+        case "leave":
+          hovered?.hover(null);
+          hovered = null;
+          paths = [];
+          setOver(false);
+          break;
+        case "drop":
+          void drop(payload.paths, payload.position.x, payload.position.y).catch((error: unknown) =>
+            console.error("drop failed", error),
+          );
+          break;
+        case "over":
+          hover(payload.position.x, payload.position.y);
+          break;
+      }
       })
       .then((stop) => {
-        if (live) unlisten = stop;
-        else stop();
+      if (live) unlisten = stop;
+      else stop();
       })
       .catch((error: unknown) => console.error("folder drops unavailable", error));
     return () => {

@@ -1,10 +1,9 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SetupWindow } from "@/app/setup/computerSetup/SetupWindow";
 import type { BridgeEvent } from "@/ipc/generated";
+import { invoke, nativeWindow, newChannel } from "@/ipc/native";
 import { onComputerUse } from "@/state/computerUse";
 
 /**
@@ -14,7 +13,7 @@ import { onComputerUse } from "@/state/computerUse";
 export async function startComputerSetup(): Promise<void> {
   document.getElementById("splash")?.remove();
   delete document.documentElement.dataset.splash;
-  const channel = new Channel<BridgeEvent>((event) => {
+  const channel = newChannel<BridgeEvent>((event) => {
     if (event.type === "computerUse") onComputerUse(event.status);
   });
   await invoke("computer_setup_subscribe", { channel });
@@ -22,7 +21,7 @@ export async function startComputerSetup(): Promise<void> {
   if (!root) throw new Error("Missing #root element");
   createRoot(root).render(
     <StrictMode>
-      <SetupWindow onClose={() => void getCurrentWindow().close()} />
+      <SetupWindow onClose={() => void nativeWindow.close()} />
     </StrictMode>,
   );
 }

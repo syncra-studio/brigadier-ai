@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 
 import { turnCommands } from "@/app/conversation/turnCommands";
 import type { BackgroundTask, FileEntry, ProviderEvent, ThreadView } from "@/ipc/generated";

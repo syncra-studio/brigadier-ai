@@ -15,12 +15,12 @@
  * (only the events up to that time, a live moment of the session); `done=1` (the turn that waits
  * on the user's merge answer as done, its work folded).
  */
-import type { Channel } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import type { Channel } from "@/ipc/native";
+import { emit } from "@/ipc/nativeMocks";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { newSessionTab, sessionTabs, openReviewTab } from "@/state/sessionTabs";
 import type { BrowserEvent } from "@/ipc/generated";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";

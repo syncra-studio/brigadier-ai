@@ -10,7 +10,7 @@
  * and some of its pages and writes what each showed on its first frame to #settings-open-result
  * (SettingsOpenRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

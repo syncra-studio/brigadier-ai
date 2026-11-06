@@ -15,7 +15,7 @@
  * neither curl nor wget, and the drive opens the install guide the card links.
  * ?platform= names the platform (macos, linux or windows; none unless given).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

@@ -4,7 +4,7 @@
  * ignored folder read when opened, again when the tree comes back and anew for another checkout;
  * a change heard from the daemon reads the tree again.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

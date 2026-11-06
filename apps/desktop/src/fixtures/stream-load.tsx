@@ -15,7 +15,7 @@
  */
 // First: React DOM finds the counting hook as it loads.
 import { countRenders, renderCounts } from "@/fixtures/renderCounts";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@/ipc/nativeMocks";
 import { Profiler, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

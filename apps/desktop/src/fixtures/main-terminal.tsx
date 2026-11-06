@@ -1,5 +1,5 @@
 /** A main terminal tab's shell exiting, a reconnect and a restart, with synthetic IPC; never contacts a daemon. */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { MainTerminalTab } from "@/app/side-panel/MainTerminalTab";

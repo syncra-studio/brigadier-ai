@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/ipc/native";
 import { useEffect, useState } from "react";
 
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";

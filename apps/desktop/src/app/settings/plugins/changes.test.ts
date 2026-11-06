@@ -178,7 +178,7 @@ test("queued requests also lose their error after leaving and returning", async 
 });
 
 test("live catalog adapter saves project roots and reads persisted choices on a new connection", async () => {
-  const { mockIPC, clearMocks } = await import("@tauri-apps/api/mocks");
+  const { mockIPC, clearMocks } = await import("@/ipc/nativeMocks");
   const { livePlugins } = await import("./live");
   const { useApp } = await import("@/state/store");
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");

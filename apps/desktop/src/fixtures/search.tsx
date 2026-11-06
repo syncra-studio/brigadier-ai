@@ -9,7 +9,7 @@
  * Then a draft: Replace offered, and the title row's Refresh, Expand all and Clear, and the files
  * to include and exclude staying open when the view opens again.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

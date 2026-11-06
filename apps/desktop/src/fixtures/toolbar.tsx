@@ -1,6 +1,6 @@
 /** Headless exercise of production toolbar, workspace pane and panel entry points. */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime, SummarySection } from "@/components/conversation";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

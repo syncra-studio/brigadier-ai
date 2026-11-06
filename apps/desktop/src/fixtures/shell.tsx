@@ -16,7 +16,7 @@
  * whether a wheel turns past an end or the app brings something into view, and that the panes
  * inside still scroll. It writes what it saw to `<pre id="shell-result">`.
  */
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

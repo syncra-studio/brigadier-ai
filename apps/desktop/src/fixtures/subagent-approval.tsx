@@ -3,7 +3,7 @@
  * session's pending approval names the subagent as its asker (`ApprovalRequest.agent`). What the
  * panel says while the approval waits, and once it is allowed, goes into `#subagent-approval-result`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { WorkerThread } from "@/app/side-panel/WorkerThread";

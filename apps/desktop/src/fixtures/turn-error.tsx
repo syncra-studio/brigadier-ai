@@ -9,7 +9,7 @@
  */
 // oxlint-disable-next-line import/no-unassigned-import
 import "@/fixtures/flow";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ErrorState } from "@/components/conversation";

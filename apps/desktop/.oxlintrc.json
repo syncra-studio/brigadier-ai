@@ -53,7 +53,17 @@
       ],
       "rules": {
         "brigadier/no-raw-design-values": "error",
-        "brigadier/thread-scroll-helper": "error"
+        "brigadier/thread-scroll-helper": "error",
+        "eslint/no-restricted-imports": ["error", { "patterns": [{ "group": ["@tauri-apps/*"], "message": "Go through @/ipc/native, or @/ipc/nativeMocks in tests and fixtures." }] }]
+      }
+    },
+    {
+      "files": [
+        "src/ipc/native.ts",
+        "src/ipc/nativeMocks.ts"
+      ],
+      "rules": {
+        "eslint/no-restricted-imports": "off"
       }
     },
     {

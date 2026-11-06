@@ -18,7 +18,7 @@
  * `drive=motion` instead opens and closes the first group and a row in it, reading each body's
  * state and the animation it runs as it starts ("none" with reduced motion).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

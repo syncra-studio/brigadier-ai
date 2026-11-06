@@ -2,7 +2,7 @@
  * Settings › Browser over a faked shell and daemon: the rows, Clear, the sub-views and off.
  * (Import Browser Data has its own fixture, browserImport.tsx.)
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

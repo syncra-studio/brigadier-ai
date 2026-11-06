@@ -6,7 +6,7 @@
  * gone (the daemon no longer finds it, or it leaves the list) closes its Review tab and loses its
  * row, with no error. Without workers there are no rows.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

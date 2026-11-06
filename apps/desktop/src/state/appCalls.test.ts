@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { Channel } from "@tauri-apps/api/core";
+import { mockIPC } from "@/ipc/nativeMocks";
+import type { Channel } from "@/ipc/native";
 import type { AppAnswer, AppCall, AppOp, BrowserEvent, Request } from "@/ipc/generated";
 
 const data = new Map<string, string>();

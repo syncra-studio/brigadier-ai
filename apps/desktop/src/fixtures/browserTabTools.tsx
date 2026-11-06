@@ -3,7 +3,7 @@
  * its Downloads popover, over a faked shell. ?drive=1 drives them and writes what it saw to
  * #browser-tab-tools-result (BrowserTabToolsRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

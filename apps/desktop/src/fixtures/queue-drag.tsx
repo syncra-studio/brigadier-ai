@@ -1,6 +1,6 @@
 /** Interactive queue demo using the real conversation, queue adapter and queue card. IPC is
  * isolated in memory; delayed reorder acknowledgements mimic the daemon. */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";

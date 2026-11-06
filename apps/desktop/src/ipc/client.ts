@@ -1,6 +1,3 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-
 import type {
   AppInfo,
   BridgeEvent,
@@ -21,6 +18,7 @@ import type {
   SmokeReport,
   UiMeasurements,
 } from "@/ipc/generated";
+import { invoke, listen, newChannel, type UnlistenFn } from "@/ipc/native";
 
 export type Method = Request["method"];
 export type RequestOf<M extends Method> = Extract<Request, { method: M }>;
@@ -67,7 +65,7 @@ export async function request<M extends Method>(
 export async function subscribe(
   onEvent: (event: BridgeEvent) => void,
 ): Promise<void> {
-  const channel = new Channel<BridgeEvent>(onEvent);
+  const channel = newChannel<BridgeEvent>(onEvent);
   await invoke("ipc_subscribe", { channel });
 }
 
@@ -278,7 +276,7 @@ export async function browserOpen(
   onEvent: (event: BrowserEvent) => void,
 ): Promise<void> {
   try {
-    await invoke("browser_open", { id, url, bounds, agent, events: new Channel<BrowserEvent>(onEvent) });
+    await invoke("browser_open", { id, url, bounds, agent, events: newChannel<BrowserEvent>(onEvent) });
   } catch (error) {
     throw isIpcError(error) ? new RequestError(error) : error;
   }

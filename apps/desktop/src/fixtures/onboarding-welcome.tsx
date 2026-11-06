@@ -10,7 +10,7 @@
  * the intro goes as onboarding ends and it writes what its canvas still holds to
  * #onboarding-leave-result.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

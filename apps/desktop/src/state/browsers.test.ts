@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import type { Channel } from "@tauri-apps/api/core";
+import { mockIPC } from "@/ipc/nativeMocks";
+import type { Channel } from "@/ipc/native";
 import type { BrowserEvent } from "@/ipc/generated";
 import { findState, openFind, useBrowserFind } from "./browserFind";
 import { answerPermission, closePage, faviconFits, openPage, originOf, useBrowsers } from "./browsers";

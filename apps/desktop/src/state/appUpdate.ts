@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/ipc/native";
 import { create } from "zustand";
 
 import { type AppUpdate, appUpdate, restartToUpdate, takeAppUpdate } from "@/ipc/client";

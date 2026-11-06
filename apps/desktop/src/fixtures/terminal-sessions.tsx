@@ -1,5 +1,5 @@
 /** Production terminal and its per-place store, synthetic IPC; never contacts a daemon. */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { TerminalPane } from "@/app/side-panel/TerminalTab";

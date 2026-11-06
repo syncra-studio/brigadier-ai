@@ -25,7 +25,7 @@
  * - An answer's web links: a globe until the daemon has the site's icon, and when it has none.
  */
 import "@/fixtures/cliView";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 

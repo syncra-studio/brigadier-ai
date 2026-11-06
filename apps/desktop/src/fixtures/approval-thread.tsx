@@ -8,7 +8,7 @@
  * `?case=<id>[,<id>...]` selects cards for a screenshot; `?drive=1` writes each card's header, body
  * and footer measures to `<pre id="approval-thread-result">` (ApprovalThreadRender.test.ts).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ApprovalCardView } from "@/app/conversation/cards/ApprovalCardView";

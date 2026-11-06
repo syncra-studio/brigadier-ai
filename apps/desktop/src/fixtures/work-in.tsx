@@ -6,7 +6,7 @@
  * `stop=1` holds the page with the menu open for a screenshot, `stop=local` once Local checkout
  * is picked.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

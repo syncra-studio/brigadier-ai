@@ -3,7 +3,7 @@
  * front lights up in Files and Source, in a draft and a session, and on stacked rows only in that
  * tab's own checkout. `?drive=1` runs the checks; `?shot=<name>` holds one state for a screenshot.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";

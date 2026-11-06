@@ -3,7 +3,7 @@
  * picker, importing, Full Disk Access, a blocked import, the toasts after one, the last import's
  * record, the browser off, and no browsers or an error.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

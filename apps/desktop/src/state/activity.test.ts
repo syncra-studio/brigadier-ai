@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { EventEnvelope, WorkerRow } from "@/ipc/generated";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 
 import { applyActivityEvents, applyActivityNews, fromSnapshot, loadActivity, rowActivity, stoppedOf, useActivity, workHolds } from "@/state/activity";
 import { applyToBoard, emptyBoard } from "@/state/board";

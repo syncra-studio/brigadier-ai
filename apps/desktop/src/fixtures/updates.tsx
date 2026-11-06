@@ -2,8 +2,8 @@
  * The sidebar over a faked daemon and shell: the Chats section's "+", updates that leave by
  * themselves, and Brigadier's own update pill from offered to "Restart to update".
  */
-import { emit } from "@tauri-apps/api/event";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@/ipc/nativeMocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

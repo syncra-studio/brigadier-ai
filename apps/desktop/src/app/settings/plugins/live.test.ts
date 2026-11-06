@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@/ipc/nativeMocks";
 import type { CatalogRow, CatalogView, Request } from "@/ipc/generated";
 import { catalogPage, livePlugins } from "./live";
 import { connectPlugins, usePlugins } from "./adapter";

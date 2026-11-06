@@ -5,7 +5,7 @@
  * replays. Continue goes on to the next commit's conflicts, and Abort Rebase ends it. Add
  * `?still` to stop at the first stop, for a look at it.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

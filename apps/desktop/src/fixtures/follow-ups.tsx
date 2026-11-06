@@ -1,7 +1,7 @@
 /** Drives follow-up events through the real ConversationView, with no daemon or app data. */
 // oxlint-disable-next-line import/no-unassigned-import
 import "@/fixtures/flow";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 
 import type { EventEnvelope, Message, QueuedMessage, Request, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";

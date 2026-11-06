@@ -4,7 +4,7 @@
  * its box, Delete Branch… a branch git won't delete as not merged offers Delete Anyway, Drop
  * Stash… asks first, and Git Output lists what ran, a failure in red, with Copy.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

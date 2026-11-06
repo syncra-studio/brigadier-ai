@@ -2,7 +2,7 @@
 // The existing fixture owns the real window layout and mounts its conversation.
 // oxlint-disable-next-line import/no-unassigned-import
 import "@/fixtures/flow";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 
 import type { AttachmentRef, Message, Request } from "@/ipc/generated";
 import { useBoard } from "@/state/board";

@@ -5,7 +5,7 @@
  * they do in the app's main area). Then the page's native actions: the zoom stepper, Print, the
  * toolbar's screenshot, the find bar (typed, stepped, kept per tab, closed) and the tab's keys.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";

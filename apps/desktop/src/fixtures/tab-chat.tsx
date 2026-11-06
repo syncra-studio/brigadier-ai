@@ -8,7 +8,7 @@
  * what it saw to `<pre id="tab-chat-result">`.
  */
 import "@/fixtures/cliView";
-import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

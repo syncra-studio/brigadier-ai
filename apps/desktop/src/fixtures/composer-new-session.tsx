@@ -8,7 +8,7 @@
  * under the card, on every frame from the click until a while after the read is in. What it saw
  * goes as JSON into `<pre id="composer-new-session-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

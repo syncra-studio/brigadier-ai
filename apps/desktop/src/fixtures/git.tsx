@@ -1,5 +1,5 @@
 /** Settings › Git over a faked daemon: the writer model, the styles and their boxes, the prefix. */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

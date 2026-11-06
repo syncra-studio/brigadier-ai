@@ -12,7 +12,7 @@
  * workers work; a worker's end then wakes the thread as a real session's does, a hidden input that
  * opens no turn, so its work goes on under the `/compact`; or nothing follows it.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

@@ -4,8 +4,8 @@
  * after a close, and Delete on a tab.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
-import { mockIPC } from "@tauri-apps/api/mocks";
-import { emit } from "@tauri-apps/api/event";
+import { mockIPC } from "@/ipc/nativeMocks";
+import { emit } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

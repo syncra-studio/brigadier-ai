@@ -10,7 +10,7 @@
  * presses Enter while it asks, answers, types on and writes what the message box held to
  * #trust-typed (#477). Without any the page stays as it opens, for screenshots.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

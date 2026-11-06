@@ -7,7 +7,7 @@
  * (ConfigurationPageRender.test.ts reads it). Without it the page stays as it opens, for
  * screenshots; ?menu=sessions | chats | permission opens that row's menu.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

@@ -1,4 +1,8 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { nativeWindow } from "@/ipc/native";
+
+async function check(): Promise<void> {
+  document.documentElement.toggleAttribute("data-fullscreen", await nativeWindow.isFullscreen());
+}
 
 /**
  * Marks the root `data-fullscreen` while the window is in full screen, where macOS hides the
@@ -7,11 +11,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  * rechecks.
  */
 export async function trackFullscreen(): Promise<void> {
-  const appWindow = getCurrentWindow();
-  const check = async () => {
-    document.documentElement.toggleAttribute("data-fullscreen", await appWindow.isFullscreen());
-  };
-  await appWindow.onResized(() => {
+  await nativeWindow.onResized(() => {
     void check().catch((error: unknown) => console.error("reading full screen failed", error));
   });
   await check();

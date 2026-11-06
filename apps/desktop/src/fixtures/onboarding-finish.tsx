@@ -5,7 +5,7 @@
  * what it says, presses it again with the write going through, and writes all of it to
  * #onboarding-finish-result (OnboardingFinishRender.test.ts reads it).
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

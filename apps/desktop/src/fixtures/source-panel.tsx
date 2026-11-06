@@ -5,7 +5,7 @@
  * Commit reading Continue until they are staged (asking first while markers are left); then
  * Continue committing the merge; a merge that ends without it takes its message along.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

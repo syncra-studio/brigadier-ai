@@ -21,7 +21,7 @@
  * - The turn's changed files from the request's own record: one file named in the title; four
  *   files with one Undo leaves as it is; Undo, its toast naming that file, then Reapply.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { type ReactNode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

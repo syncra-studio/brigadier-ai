@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke, newChannel } from "@/ipc/native";
 
 import type { ImportFailure, ImportOutcome, ImportProgress, ImportRecord, ImportSource } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
@@ -53,7 +53,7 @@ export function importBrowser(
     key,
     ids,
     history,
-    progress: new Channel<ImportProgress>(onProgress),
+    progress: newChannel<ImportProgress>(onProgress),
   });
 }
 

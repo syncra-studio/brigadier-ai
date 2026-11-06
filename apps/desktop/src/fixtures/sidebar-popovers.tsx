@@ -8,7 +8,7 @@
  * ?show=usage, ?show=limit (the account in use at its limit) or ?show=help leaves that one open,
  * for screenshots.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 

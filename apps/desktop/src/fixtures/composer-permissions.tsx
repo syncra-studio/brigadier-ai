@@ -5,7 +5,7 @@
  * the Model command, and writes what it saw as
  * JSON into `<pre id="composer-permissions-result">`; `stop=1` holds the page for a screenshot.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";

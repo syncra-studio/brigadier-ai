@@ -4,7 +4,7 @@
  * before and under the pointer (cursor, words' colour, fill) goes into `#workers-strip-hover-result`.
  */
 import { createRoot } from "react-dom/client";
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC } from "@/ipc/nativeMocks";
 
 import { useWorkersStrip, WorkersStrip } from "@/app/conversation/activity/WorkersStrip";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
