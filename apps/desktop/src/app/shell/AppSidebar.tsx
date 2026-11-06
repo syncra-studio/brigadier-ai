@@ -14,6 +14,7 @@ import { NewChatRow } from "@/app/shell/NewChatRow";
 import { ProjectRow, underSource } from "@/app/shell/ProjectRow";
 import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
 import { SidebarHeader } from "@/app/shell/SidebarHeader";
+import { shownBy, useShowFilter, ViewMenu, ViewTrigger } from "@/app/shell/SidebarView";
 import {
   BrigadierGlyph,
   Chats,
@@ -37,8 +38,9 @@ import {
   setProjectExpanded,
 } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
+import { sortTime } from "@/state/inbox";
 import { pickClick, pickedIn, prunePicked } from "@/state/picking";
-import { useRowMark, useTabStates } from "@/state/tabStates";
+import { useRowMark } from "@/state/tabStates";
 import { useApp } from "@/state/store";
 
 // ----- the Home panel --------------------------------------------------------------------
@@ -69,7 +71,8 @@ function useSections(): Sections {
       .toSorted((a, b) => (b.pinnedAtMs ?? 0) - (a.pinnedAtMs ?? 0));
     const recent = all
       .filter((conversation) => conversation.pinnedAtMs === null)
-      .toSorted((a, b) => b.updatedAtMs - a.updatedAtMs);
+      // Only the user's own message moves a row, as in the one list.
+      .toSorted((a, b) => sortTime(b) - sortTime(a) || b.id.localeCompare(a.id));
     const sessions: Record<string, Conversation[]> = {};
     const chats: Conversation[] = [];
     for (const conversation of recent) {
@@ -79,45 +82,15 @@ function useSections(): Sections {
         (sessions[conversation.projectId] ??= []).push(conversation);
       }
     }
-    // Projects with recent activity first, then newest.
-    const lastActivity = (project: Project) =>
-      Math.max(project.createdAtMs, sessions[project.id]?.[0]?.updatedAtMs ?? 0);
-    const sortedProjects = Object.values(projects).toSorted(
-      (a, b) => lastActivity(b) - lastActivity(a),
-    );
+    // By name: a project stays put whatever its sessions do.
+    const sortedProjects = Object.values(projects).toSorted((a, b) => a.name.localeCompare(b.name));
+    // A fork sits under its source all the same (D211).
+    for (const [projectId, list] of Object.entries(sessions)) sessions[projectId] = forksUnderSources(list);
     return { pinned, chats: forksUnderSources(chats), projects: sortedProjects, sessions };
   }, [projects, conversations]);
   // What the list shows is what is opened next: read ahead so it opens at once.
   useEffect(() => prewarmConversations(conversations), [conversations]);
   return sections;
-}
-
-/**
- * The light inbox (Q63): each project's sessions that need the user come first, in their order
- * otherwise.
- */
-function useInboxSections(): Sections {
-  const sections = useSections();
-  const { projects, sessions } = sections;
-  const ids = useMemo(
-    () => projects.flatMap((project) => (sessions[project.id] ?? NO_SESSIONS).map((conversation) => conversation.id)),
-    [projects, sessions],
-  );
-  const needs = useTabStates(ids)
-    .map((state) => (state === "needsYou" || state === "failed" ? "1" : "0"))
-    .join("");
-  return useMemo(() => {
-    const needing = new Set(ids.filter((_, index) => needs[index] === "1"));
-    const ordered: Record<string, Conversation[]> = {};
-    for (const [projectId, list] of Object.entries(sessions)) {
-      const first = list.filter((conversation) => needing.has(conversation.id));
-      // A fork sits under its source all the same (D211).
-      ordered[projectId] = forksUnderSources(
-        first.length > 0 ? [...first, ...list.filter((conversation) => !needing.has(conversation.id))] : list,
-      );
-    }
-    return { ...sections, sessions: ordered };
-  }, [sections, sessions, ids, needs]);
 }
 
 type SectionId = "pinned" | "projects" | "chats";
@@ -155,12 +128,16 @@ function useFoldedSections<T extends string>(key: string, initial: T[] = []) {
 }
 
 /**
- * The sidebar panel on Home: its header (title, search and the Inbox | Projects tabs), New chat,
- * then the Inbox (D7) or, in Projects mode, Pinned (when there are any), Projects with their
- * sessions, and Chats. Each section folds away from its title.
+ * The sidebar panel on Home: its header (title and search), New chat, then with Group by None the
+ * one list (D7), or with Group by Project Pinned (when there are any), Projects with their sessions,
+ * and Chats. View's Show list narrows either. Each section folds away from its title.
  */
 export function AppSidebar() {
-  const { pinned, chats, projects, sessions } = useInboxSections();
+  const { pinned: allPinned, chats: allChats, projects: allProjects, sessions } = useSections();
+  const show = useShowFilter();
+  const projects = useMemo(() => allProjects.filter((project) => !show.hiddenProjects.has(project.id)), [allProjects, show]);
+  const pinned = useMemo(() => allPinned.filter((conversation) => shownBy(conversation, show)), [allPinned, show]);
+  const chats = show.hideChats ? NO_SESSIONS : allChats;
   const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const draftProjectId = useApp((s) =>
     s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,
@@ -170,7 +147,7 @@ export function AppSidebar() {
   const shortcuts = useShortcuts();
   const sections = useFoldedSections<SectionId>(SECTIONS_KEY);
   const inboxSections = useFoldedSections(INBOX_SECTIONS_KEY, INBOX_FOLDED);
-  // Everyone starts in Inbox (D8); every window reads the same daemon setting.
+  // Everyone starts with Group by None (D8); every window reads the same daemon setting.
   const inboxMode = useApp((s) => s.settings.sidebarMode !== "projects");
   const [dialog, setDialog] = useState<DialogState>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
@@ -225,108 +202,114 @@ export function AppSidebar() {
         <NewChatRow active={isChatDraft} />
       </NavList>
 
-      {inboxMode ? (
-        <InboxSidebar
-          activeId={activeId}
-          actions={actions}
-          isOpen={inboxSections.isOpen}
-          setOpen={inboxSections.setOpen}
-          onShown={onShown}
-        />
-      ) : (
-        <div className={SIDEBAR_LIST}>
-          {pinned.length > 0 && (
+      <ViewMenu projects={allProjects}>
+        {inboxMode ? (
+          <InboxSidebar
+            activeId={activeId}
+            actions={actions}
+            isOpen={inboxSections.isOpen}
+            setOpen={inboxSections.setOpen}
+            onShown={onShown}
+            view={<ViewTrigger />}
+          />
+        ) : (
+          <div className={SIDEBAR_LIST}>
+            {pinned.length > 0 && (
+              <NavSection
+                title="Pinned"
+                open={sections.isOpen("pinned")}
+                onOpenChange={(open) => sections.setOpen("pinned", open)}
+              >
+                <NavList className="gap-1">
+                  {pinned.map((conversation) => (
+                    <ConversationRow
+                      key={conversation.id}
+                      conversation={conversation}
+                      active={conversation.id === activeId}
+                      actions={actions}
+                      badged
+                    />
+                  ))}
+                </NavList>
+              </NavSection>
+            )}
+
             <NavSection
-              title="Pinned"
-              open={sections.isOpen("pinned")}
-              onOpenChange={(open) => sections.setOpen("pinned", open)}
+              title="Projects"
+              open={sections.isOpen("projects")}
+              onOpenChange={(open) => sections.setOpen("projects", open)}
+              steadyEnd={<ViewTrigger />}
+              actions={
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <RowAction
+                      aria-label="Add project"
+                      className="size-icon-button-sm"
+                      onClick={() => openAddProject()}
+                    >
+                      <Plus />
+                    </RowAction>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Add project</TooltipContent>
+                </Tooltip>
+              }
             >
               <NavList>
-                {pinned.map((conversation) => (
-                  <ConversationRow
-                    key={conversation.id}
-                    conversation={conversation}
-                    active={conversation.id === activeId}
+                {projects.map((project) => (
+                  <ProjectRow
+                    key={project.id}
+                    project={project}
+                    sessions={sessions[project.id] ?? NO_SESSIONS}
+                    activeId={activeId}
+                    drafting={draftProjectId === project.id}
                     actions={actions}
-                    twoLine
+                    onSettings={onProjectSettings}
+                    onRemove={setRemoving}
                   />
                 ))}
+                {catalogLoaded && allProjects.length === 0 && (
+                  <ProjectsEmptyPrompt />
+                )}
               </NavList>
             </NavSection>
-          )}
 
-          <NavSection
-            title="Projects"
-            open={sections.isOpen("projects")}
-            onOpenChange={(open) => sections.setOpen("projects", open)}
-            actions={
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <RowAction
-                    aria-label="Add project"
-                    className="size-icon-button-sm"
-                    onClick={() => openAddProject()}
-                  >
-                    <Plus />
-                  </RowAction>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Add project</TooltipContent>
-              </Tooltip>
-            }
-          >
-            <NavList>
-              {projects.map((project) => (
-                <ProjectRow
-                  key={project.id}
-                  project={project}
-                  sessions={sessions[project.id] ?? NO_SESSIONS}
-                  activeId={activeId}
-                  drafting={draftProjectId === project.id}
-                  actions={actions}
-                  onSettings={onProjectSettings}
-                  onRemove={setRemoving}
-                />
-              ))}
-              {catalogLoaded && projects.length === 0 && (
-                <ProjectsEmptyPrompt />
-              )}
-            </NavList>
-          </NavSection>
-
-          <NavSection
-            title="Chats"
-            open={sections.isOpen("chats")}
-            onOpenChange={(open) => sections.setOpen("chats", open)}
-            actions={
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <RowAction
-                    aria-label="New chat"
-                    className="size-icon-button-sm"
-                    onClick={() => select({ type: "draft", kind: "chat" })}
-                  >
-                    <Plus />
-                  </RowAction>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">New chat</TooltipContent>
-              </Tooltip>
-            }
-          >
-            <NavList>
-              {chats.map((conversation) => (
-                <ConversationRow
-                  key={conversation.id}
-                  conversation={conversation}
-                  active={conversation.id === activeId}
-                  actions={actions}
-                  forked={underSource(conversation, chats)}
-                />
-              ))}
-              {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
-            </NavList>
-          </NavSection>
-        </div>
-      )}
+            {!show.hideChats && (
+              <NavSection
+                title="Chats"
+                open={sections.isOpen("chats")}
+                onOpenChange={(open) => sections.setOpen("chats", open)}
+                actions={
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <RowAction
+                        aria-label="New chat"
+                        className="size-icon-button-sm"
+                        onClick={() => select({ type: "draft", kind: "chat" })}
+                      >
+                        <Plus />
+                      </RowAction>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">New chat</TooltipContent>
+                  </Tooltip>
+                }
+              >
+                <NavList>
+                  {chats.map((conversation) => (
+                    <ConversationRow
+                      key={conversation.id}
+                      conversation={conversation}
+                      active={conversation.id === activeId}
+                      actions={actions}
+                      forked={underSource(conversation, chats)}
+                    />
+                  ))}
+                  {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
+                </NavList>
+              </NavSection>
+            )}
+          </div>
+        )}
+      </ViewMenu>
 
       {error && (
         <Banner tone="error" text={error} onDismiss={() => setError(null)} />
@@ -461,7 +444,7 @@ function FlyoutConversation({
 
 /** The Projects flyout: each project, picked to start a session in it, with its sessions. */
 function ProjectsFlyout({ pick }: { pick: (choose: () => void) => void }) {
-  const { projects, sessions } = useInboxSections();
+  const { projects, sessions } = useSections();
   const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const draftProjectId = useApp((s) =>
     s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,

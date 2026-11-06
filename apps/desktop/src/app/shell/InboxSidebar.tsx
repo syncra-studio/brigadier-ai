@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { underSource } from "@/app/shell/ProjectRow";
+import { shownBy, useShowFilter } from "@/app/shell/SidebarView";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, SidebarError, SidebarQuestion } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { ConversationRow, EmptyState, NavList, NavSection, RowAction, type RowActions } from "@/components/shared";
+import type { Conversation } from "@/ipc/generated";
 import { archiveAll, openSettings } from "@/state/actions";
 import { INBOX_SECTIONS, type InboxSection, useInbox } from "@/state/inbox";
 import { useApp } from "@/state/store";
@@ -15,7 +17,7 @@ const TITLES: Record<InboxSection, string> = {
   archived: "Archived",
 };
 
-/** The sidebar's scrolling list, in both modes. */
+/** The sidebar's scrolling list, in both groupings. */
 export const SIDEBAR_LIST = "scroll-edge-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pt-1 pb-2";
 
 /** Archived starts folded. */
@@ -86,10 +88,11 @@ function NeedYouPill({ list, ids, waiting }: { list: RefObject<HTMLDivElement | 
 }
 
 /**
- * The sidebar's Inbox mode: one list across all projects, in Pinned and Open, with Archived folded
- * and docked above the footer, its count and the way to Settings › Archived always showing. A row
- * names its project over its title. A row moves only when the user sends it a message, pins,
- * archives or restores it. A section with no rows is left out.
+ * The sidebar with Group by None: one list across all projects and chats, in Pinned and Open, with
+ * Archived folded and docked above the footer, its count and the way to Settings › Archived always
+ * showing. A row has its project's badge before its title. A row moves only when the user sends it a
+ * message, pins, archives or restores it. What View leaves out goes from Pinned and Open; Archived always lists everything. A
+ * section with no rows is left out, except Open, whose header holds the View control.
  */
 export function InboxSidebar({
   activeId,
@@ -97,6 +100,7 @@ export function InboxSidebar({
   isOpen,
   setOpen,
   onShown,
+  view,
 }: {
   activeId: string | null;
   actions: RowActions;
@@ -104,8 +108,15 @@ export function InboxSidebar({
   setOpen: (id: InboxSection, open: boolean) => void;
   /** The rows as they show, top to bottom: what a Shift-click picks a range of. */
   onShown: (ids: string[]) => void;
+  /** The View control, on Open's header. */
+  view: ReactNode;
 }) {
-  const inbox = useInbox();
+  const everything = useInbox();
+  const show = useShowFilter();
+  const inbox = useMemo(() => {
+    const kept = (list: Conversation[]) => list.filter((conversation) => shownBy(conversation, show));
+    return { pinned: kept(everything.pinned), open: kept(everything.open), archived: everything.archived };
+  }, [everything, show]);
   const catalogLoaded = useApp((s) => s.catalogLoaded);
   const shownKey = INBOX_SECTIONS.flatMap((id) => (isOpen(id) ? inbox[id].map((c) => c.id) : [])).join(" ");
   const shown = useMemo(() => (shownKey ? shownKey.split(" ") : []), [shownKey]);
@@ -118,9 +129,10 @@ export function InboxSidebar({
   const mergedKey = useSettledTabs((s) => inbox.open.filter((c) => s.byTab[c.id]?.prMerged).map((c) => c.id).join(" "));
   const merged = mergedKey ? mergedKey.split(" ") : [];
 
-  const empty = INBOX_SECTIONS.every((id) => inbox[id].length === 0);
+  // Archived is no answer to a view that leaves everything else out.
+  const empty = inbox.pinned.length === 0 && inbox.open.length === 0 && (!show.all || inbox.archived.length === 0);
   const section = (id: InboxSection) =>
-    inbox[id].length === 0 ? null : (
+    inbox[id].length === 0 && id !== "open" ? null : (
       <NavSection
         key={id}
         title={TITLES[id]}
@@ -150,7 +162,7 @@ export function InboxSidebar({
           ) : id === "open" && merged.length > 0 ? (
             <RowAction
               data-slot="archive-merged"
-              className="w-auto gap-1.5 pe-0.5 text-xs"
+              className="me-1 w-auto gap-1.5 pe-0.5 text-xs whitespace-nowrap"
               onClick={() => void archiveAll(merged)}
             >
               <Archive />
@@ -158,8 +170,9 @@ export function InboxSidebar({
             </RowAction>
           ) : undefined
         }
+        steadyEnd={id === "open" ? view : undefined}
       >
-        <NavList>
+        <NavList className="gap-1">
           {inbox[id].map((conversation) => (
             <ConversationRow
               key={conversation.id}
@@ -167,9 +180,12 @@ export function InboxSidebar({
               active={conversation.id === activeId}
               actions={actions}
               forked={underSource(conversation, inbox[id])}
-              twoLine={id !== "archived"}
+              badged
             />
           ))}
+          {id === "open" && catalogLoaded && empty && (
+            <EmptyState as="li" title={show.all ? "Chats and sessions you start appear here." : "Nothing here with this view."} />
+          )}
         </NavList>
       </NavSection>
     );
@@ -179,11 +195,6 @@ export function InboxSidebar({
         <div ref={list} className={SIDEBAR_LIST}>
           {section("pinned")}
           {section("open")}
-          {catalogLoaded && empty && (
-            <NavList>
-              <EmptyState as="li" title="Chats and sessions you start appear here." />
-            </NavList>
-          )}
         </div>
         <NeedYouPill list={list} ids={attention} waiting={states.includes("needsYou")} />
       </div>

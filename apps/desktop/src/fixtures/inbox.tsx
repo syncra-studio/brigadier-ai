@@ -1,7 +1,10 @@
 /**
- * The real sidebar in its Inbox mode over a faked daemon, with the rows of the approved mockups.
- * ?view=archived opens the Archived section, ?view=projects starts in Projects, ?view=settings
- * shows Settings › General; ?archived=101 lists that many archived rows. The page's main area has buttons to start and end a turn and to send a
+ * The real sidebar with Group by None over a faked daemon, with the rows of the approved mockups.
+ * ?view=archived opens the Archived section, ?view=projects starts with Group by Project,
+ * ?view=settings shows Settings › General; ?show=picked unticks all but brigadier-ai, and Chats;
+ * ?open=view or ?open=menu opens the View control or a row's ⋯; ?archived=101 lists that many
+ * archived rows. brigadier-ai has an icon, freelogo's won't load,
+ * steady-app has none. The page's main area has buttons to start and end a turn and to send a
  * message, through the same events the daemon sends, to see which rows move. ?drive=1 goes through
  * all of it and writes what it saw to #inbox-result (InboxRender.test.ts reads it).
  */
@@ -27,14 +30,39 @@ import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 const params = new URLSearchParams(location.search);
 const view = params.get("view");
 const requests: Request[] = [];
+const ICONS: Record<string, string> = {
+  "brigadier-ai": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzNiODJmNiIvPjxwYXRoIGQ9Ik05IDIyIDE2IDhsNyAxNGgtNWwtMi00LTIgNHoiIGZpbGw9IiNmZmYiLz48L3N2Zz4=",
+  freelogo: "data:image/png;base64,bm90IGFuIGltYWdl",
+};
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   requests.push(req);
+  if (req.method === "projectIcon") return { method: req.method, icon: ICONS[req.projectId] ?? null };
   if (req.method === "updateSettings") return { method: req.method, settings: req.settings };
   if (req.method === "archive") return { method: req.method, outcomes: req.ids.map((id) => ({ id, conversation: { ...useApp.getState().conversations[id], lifecycle: "archived" } })) };
   return { method: req.method };
 });
+
+/**
+ * From before the first render: every project icon slot, at every change to the page, shows its
+ * fallback or an image that has loaded, and never anything else.
+ */
+const slotProblems = new Set<string>();
+const firstBadges: Record<string, string> = {};
+const showing = (image: HTMLImageElement | null) => image !== null && getComputedStyle(image).display !== "none";
+new MutationObserver(() => {
+  const slots = document.querySelectorAll<HTMLElement>('[data-slot="row-badge"], section li > div > button[aria-expanded]:not([aria-haspopup])');
+  for (const slot of slots) {
+    const image = slot.querySelector<HTMLImageElement>('[data-slot="project-icon"]');
+    const name = slot.closest("li")?.textContent ?? "";
+    if (showing(image) ? !(image!.complete && image!.naturalWidth > 0) : !(slot.querySelector("svg") || slot.dataset.slot === "row-badge" && slot.textContent)) slotProblems.add(name);
+  }
+  for (const id of ["core-tests", "flaky", "rate-limit"]) {
+    const badge = document.querySelector(`[data-row-id="${id}"] [data-slot="row-badge"]`);
+    if (badge && firstBadges[id] === undefined) firstBadges[id] = badge.textContent ?? "";
+  }
+}).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "src"] });
 
 const NOW = Date.now();
 const MIN = 60_000;
@@ -78,7 +106,7 @@ useApp.setState((state) => ({
   conversations: Object.fromEntries(conversations.map((each) => [each.id, each])),
   selection: { type: "conversation", id: "core-tests" },
   expandedProjects: { "steady-app-billing-service": false },
-  settings: { ...state.settings, userName: "Stephen", sidebarMode: view === "projects" ? "projects" : "inbox" },
+  settings: { ...state.settings, userName: "Stephen", sidebarMode: view === "projects" ? "projects" : "inbox", ...(params.get("show") === "picked" ? { sidebarHiddenProjects: ["freelogo", "steady-app", "steady-app-billing-service"], sidebarHideChats: true } : {}) },
 }));
 const activity = (id: string, extra: Partial<ConversationActivity>): [string, ReturnType<typeof fromSnapshot>] =>
   [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], ...extra })];
@@ -114,6 +142,9 @@ const userSends = (id: string) => applyEvents([event("catalog", { type: "convers
 
 const openRows = () => [...document.querySelectorAll<HTMLElement>('section')].find((section) => section.querySelector("button[aria-expanded]")?.textContent?.trim() === "Open");
 const titles = () => [...(openRows()?.querySelectorAll<HTMLElement>('[data-slot="row-title"]') ?? [])].map((title) => title.textContent);
+const rowTitles = () => [...document.querySelectorAll<HTMLElement>('[data-row-id] [data-slot="row-title"]')].map((title) => title.textContent);
+const projectRows = () => [...document.querySelectorAll<HTMLElement>("section li > div > button[aria-expanded]:not([aria-haspopup])")];
+const box4 = (element: Element | null) => { const { x, y, width, height } = element!.getBoundingClientRect(); return { x, y, width, height }; };
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (check: () => boolean) => { for (let n = 0; n < 200 && !check(); n++) await wait(20); };
 
@@ -127,12 +158,15 @@ async function drive(): Promise<Record<string, unknown>> {
     rows: [...section.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].map((title) => title.textContent),
   }));
   seen.sections = sections();
+  // brigadier-ai's icon has loaded; freelogo's has had its time to fail.
+  await until(() => showing(q<HTMLImageElement>('[data-row-id="core-tests"] [data-slot="project-icon"]')));
+  await wait(200);
+  seen.brokenTried = q('[data-row-id="flaky"] [data-slot="project-icon"]') !== null;
   const row = (id: string) => q(`[data-row-id="${id}"]`)!;
   const rowOf = (id: string) => ({
-    label: q('[data-slot="row-label"]', row(id))?.textContent ?? null,
     badge: q('[data-slot="row-badge"]', row(id))?.textContent ?? null,
-    time: q('[data-slot="row-time"]', row(id))?.textContent ?? null,
-    labelAboveTitle: q('[data-slot="row-label"]', row(id)) !== null && q('[data-slot="row-label"]', row(id))!.getBoundingClientRect().bottom <= q('[data-slot="row-title"]', row(id))!.getBoundingClientRect().top + 1,
+    icon: showing(q<HTMLImageElement>('[data-slot="project-icon"]', row(id))),
+    text: q("button", row(id))?.textContent ?? null,
     status: q('[data-slot="row-status"]', row(id))?.dataset.status ?? null,
     merged: q('[data-slot="row-merged"]', row(id))?.textContent ?? null,
     height: Math.round(row(id).getBoundingClientRect().height),
@@ -176,7 +210,7 @@ async function drive(): Promise<Record<string, unknown>> {
   // A failed row has the amber mark and counts in the pill too.
   seen.failedStatus = q('[data-slot="row-status"]', row("flaky"))?.dataset.status;
   // The pill, with a row scrolled out of view; a click brings it in.
-  q<HTMLElement>(".h-screen")!.classList.replace("h-screen", "h-120");
+  q<HTMLElement>(".h-screen")!.classList.replace("h-screen", "h-96");
   const list = q<HTMLElement>(".scroll-edge-fade")!;
   list.scrollTop = 0;
   await wait(100);
@@ -207,21 +241,83 @@ async function drive(): Promise<Record<string, unknown>> {
   seen.archived = (archiveRequest() as { ids?: string[] } | undefined)?.ids;
   seen.actionAfter = q('[data-slot="archive-merged"]')?.textContent ?? null;
 
-  // The tabs name both views, with their icons, and write the shared setting.
-  const tabs = () => q('[aria-label="Sidebar view"]')!;
-  const tabLook = () => [...tabs().querySelectorAll("button")].map((tab) => ({ text: tab.textContent, on: tab.dataset.state === "on", icon: tab.querySelector("svg") !== null, width: Math.round(tab.getBoundingClientRect().width) }));
-  seen.tabsInbox = tabLook();
-  [...tabs().querySelectorAll("button")].find((tab) => tab.textContent === "Projects")!.click();
+  // View: Group by, and Show with All, each project and Chats.
+  q<HTMLElement>(".h-96")!.classList.replace("h-96", "h-screen");
+  const viewButton = () => q('[data-slot="sidebar-view"]');
+  const label = () => q('[data-slot="view-filtered"]')?.textContent ?? null;
+  const box = (name: string) => q<HTMLElement>(`[data-slot="sidebar-view-menu"] [aria-label="${name}"]`)!;
+  const lines = () => Object.fromEntries([...document.querySelectorAll<HTMLElement>('[data-slot="show-row"]')].map((line) => [
+    q('[role="checkbox"]', line)!.getAttribute("aria-label"),
+    [q('[role="checkbox"]', line)!.getAttribute("aria-checked") === "true", q('[data-slot="show-count"]', line)!.textContent],
+  ]));
+  const click = async (element: HTMLElement) => { element.click(); await wait(60); };
+  await click(viewButton()!);
+  await until(() => q('[data-slot="sidebar-view-menu"]') !== null);
+  seen.menuWords = [...q('[data-slot="sidebar-view-menu"]')!.querySelectorAll("div")].filter((part) => part.childElementCount === 0).map((part) => part.textContent).filter(Boolean);
+  seen.addProject = [...q('[data-slot="sidebar-view-menu"]')!.querySelectorAll("button")].some((button) => button.textContent === "Add project…");
+  seen.lineActions = document.querySelectorAll('[data-slot="show-row"] [aria-label^="Actions for"]').length;
+  seen.allOn = { lines: lines(), label: label() };
+  // With everything ticked, All unticks everything; again, and it ticks everything.
+  await click(box("All"));
+  seen.allOff = { lines: lines(), label: label(), written: [useApp.getState().settings.sidebarHiddenProjects.toSorted(), useApp.getState().settings.sidebarHideChats], empty: q("section li")?.textContent ?? null, view: viewButton() !== null };
+  await click(box("All"));
+  seen.allOnAgain = { lines: lines(), label: label() };
+  await click(box("freelogo"));
+  await click(box("steady-app"));
+  await click(box("steady-app-billing-service"));
+  seen.picked = { lines: lines(), label: label(), written: useApp.getState().settings.sidebarHiddenProjects, rows: rowTitles() };
+  seen.pickedCount = q('[data-slot="archived-count"]')?.textContent;
+  await click(box("Chats"));
+  seen.chatsOff = { lines: lines(), label: label(), hideChats: useApp.getState().settings.sidebarHideChats, rows: rowTitles() };
+  await click(box("brigadier-ai"));
+  seen.nothing = { label: label(), view: viewButton() !== null, empty: q("section li")?.textContent ?? null, sections: sections().map((section) => section.title) };
+  await click(box("brigadier-ai"));
+  await click(box("All"));
+  seen.allBack = { lines: lines(), label: label(), written: [useApp.getState().settings.sidebarHiddenProjects, useApp.getState().settings.sidebarHideChats], rows: rowTitles().length };
+
+  // Group by Project: today's Projects, under the same control; switching moves nothing.
+  const placedView = () => ({ view: box4(viewButton()), header: box4(viewButton()!.closest("section > div")), firstRow: box4(q("section li")), menu: box4(q('[data-slot="sidebar-view-menu"]')) });
+  q<HTMLElement>(".scroll-edge-fade")!.scrollTop = 0;
+  await wait(200);
+  seen.viewNone = placedView();
+  const menuBefore = q('[data-slot="sidebar-view-menu"]');
+  await click([...document.querySelectorAll<HTMLElement>('[data-slot="radio"]')].at(-1)!);
   await until(() => Boolean(q('button[aria-label="Add project"]')));
-  seen.tabsProjects = tabLook();
+  seen.viewProject = placedView();
+  await wait(200);
+  seen.viewProjectSettled = placedView();
+  seen.sameMenu = menuBefore === q('[data-slot="sidebar-view-menu"]');
   seen.oneLineRow = rowOf("core-tests");
-  seen.projectsCard = await cardOf("core-tests");
   seen.mode = useApp.getState().settings.sidebarMode;
   seen.saved = requests.some((request) => request.method === "updateSettings");
   seen.projectsSections = sections().map((section) => section.title);
   seen.projectsPill = pill() !== null;
   seen.projectsAction = q('[data-slot="archive-merged"]') !== null;
-  seen.projectsLabels = document.querySelectorAll('[data-slot="row-label"]').length;
+  // These rows are new: brigadier-ai's icon swaps in once it has loaded; the rest keep their folders.
+  await until(() => showing(q<HTMLImageElement>('[data-slot="project-icon"]', projectRows().find((button) => button.textContent?.trim() === "brigadier-ai"))));
+  seen.projectMarks = Object.fromEntries(projectRows().map((button) => [button.textContent?.trim(), showing(button.querySelector("img")) ? "icon" : button.querySelector("svg") ? "folder" : null]));
+  seen.projectButtons = [...document.querySelectorAll('li > div button[aria-label$=" brigadier-ai"]')].map((button) => button.getAttribute("aria-label"));
+  // An agent's update moves nothing; the user's message moves its session, and never its project.
+  const projectOrder = () => projectRows().map((button) => button.textContent?.trim());
+  const sessionsOf = (name: string) => [...(projectRows().find((button) => button.textContent?.trim() === name)?.closest("li")?.querySelectorAll<HTMLElement>('[data-slot="row-title"]') ?? [])].map((title) => title.textContent);
+  const placed = () => ({ projects: projectOrder(), sessions: sessionsOf("steady-app") });
+  seen.showOrder = Object.keys(lines());
+  seen.placedBefore = placed();
+  useApp.setState((state) => ({ conversations: { ...state.conversations, invoices: { ...state.conversations.invoices!, updatedAtMs: Date.now(), finishedAtMs: Date.now() } } }));
+  await wait(100);
+  seen.placedAfterAgent = placed();
+  userSends("invoices");
+  await until(() => sessionsOf("steady-app").indexOf("Invoice export columns") < sessionsOf("steady-app").indexOf("Onboarding email sequence"));
+  seen.placedAfterSend = placed();
+  await click(box("freelogo"));
+  await click(box("Chats"));
+  seen.groupedFiltered = { sections: sections().map((section) => section.title), projects: projectRows().map((button) => button.textContent?.trim()), label: label(), view: viewButton() !== null };
+  await click(box("All"));
+  await fixtureInput({ type: "key", key: "Escape" });
+  await until(() => q('[data-slot="sidebar-view-menu"]') === null);
+  seen.projectsCard = await cardOf("core-tests");
+  seen.slotProblems = [...slotProblems];
+  seen.firstBadges = firstBadges;
   return seen;
 }
 
@@ -243,7 +339,7 @@ async function cardOf(id: string): Promise<Record<string, unknown>> {
 
 const shown = (element: Element | null) => element !== null && getComputedStyle(element).display !== "none" && getComputedStyle(element).visibility !== "hidden";
 
-/** A row under the real pointer: the card, and what its first line and second line keep. */
+/** A row under the real pointer: the card, and what it keeps. */
 async function hoverRow(id: string): Promise<Record<string, unknown>> {
   const row = q<HTMLElement>(`[data-row-id="${id}"]`)!;
   const box = row.getBoundingClientRect();
@@ -251,7 +347,6 @@ async function hoverRow(id: string): Promise<Record<string, unknown>> {
   await until(() => q('[data-slot="row-card"]') !== null);
   const seen = {
     card: q('[data-slot="row-card"]') !== null,
-    time: shown(q('[data-slot="row-time"]', row)),
     chip: shown(q('[data-slot="row-merged"]', row)),
     actions: getComputedStyle(q<HTMLElement>(`button[aria-label^="Actions for"]`, row)!.parentElement!).opacity,
     pin: q(`button[aria-label^="Pin"]`, row) !== null,
@@ -331,11 +426,11 @@ async function driveSettings(): Promise<Record<string, unknown>> {
   const choice = () => q('[aria-label="Sidebar view"]')!;
   const active = () => q('[data-state="on"]', choice())?.textContent;
   const before = active();
-  await fixtureClick([...choice().querySelectorAll("button")].find((button) => button.textContent === "Projects")!);
-  await until(() => active() === "Projects");
+  await fixtureClick([...choice().querySelectorAll("button")].find((button) => button.textContent === "By project")!);
+  await until(() => active() === "By project");
   const projects = useApp.getState().settings.sidebarMode;
-  await fixtureClick([...choice().querySelectorAll("button")].find((button) => button.textContent === "Inbox")!);
-  await until(() => active() === "Inbox");
+  await fixtureClick([...choice().querySelectorAll("button")].find((button) => button.textContent === "One list")!);
+  await until(() => active() === "One list");
   const inbox = useApp.getState().settings.sidebarMode;
   q<HTMLInputElement>('[aria-label="Search settings"]')!.focus();
   await fixtureInput({ type: "type", text: "Sidebar view" });
@@ -368,6 +463,16 @@ function Fixture() {
   useLifecycleShortcuts();
   const page = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [result, setResult] = useState<string | null>(null);
+  // ?open=view or ?open=menu opens the View control or the first open row's ⋯, for a look.
+  useEffect(() => {
+    const target = params.get("open") === "view" ? q('[data-slot="sidebar-view"]') : params.get("open") === "menu" ? q('[data-row-id="core-tests"] button[aria-label^="Actions for"]') : null;
+    if (!target) return;
+    const timer = setTimeout(() => {
+      target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, ctrlKey: false }));
+      target.click();
+    }, 200);
+    return () => clearTimeout(timer);
+  }, []);
   useEffect(() => {
     if (!params.has("drive")) return;
     const timer = setTimeout(() => void (params.get("drive") === "layout" ? driveLayout() : params.get("drive") === "settings" ? driveSettings() : params.get("drive") === "lifecycle" ? driveLifecycle() : drive()).then((seen) => setResult(JSON.stringify(seen))), 300);

@@ -28,6 +28,7 @@ mod idle;
 mod logging;
 mod metrics;
 mod news;
+mod project_icons;
 mod quit;
 mod registry;
 mod server;

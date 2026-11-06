@@ -262,6 +262,8 @@ export const useApp = create<AppState>()(() => ({
     ratingsResearchAt: "04:00",
     dismissedSuggestions: [],
     sidebarMode: "inbox",
+    sidebarHiddenProjects: [],
+    sidebarHideChats: false,
     settingsVersion: 1,
   },
   threads: {},

@@ -172,6 +172,10 @@ exists: boolean, stored: StoredCopy | null, } | { "method": "siteIcon",
 /**
  * The icon as a `data:` URL.
  */
+icon: string | null, } | { "method": "projectIcon", 
+/**
+ * The icon as a `data:` URL.
+ */
 icon: string | null, } | { "method": "hibernate", conversation: Conversation, } | { "method": "archive", outcomes: Array<LifecycleOutcome>, } | { "method": "restore", outcomes: Array<LifecycleOutcome>, } | { "method": "previewRemoveProject", removal: ProjectRemoval, } | { "method": "removeProject", report: RemoveProjectReport, } | { "method": "delete", outcomes: Array<LifecycleOutcome>, } | { "method": "previewDelete", branches: Array<UnlandedBranch>, 
 /**
  * Files a Local checkout session left uncommitted in the user's checkout, which go

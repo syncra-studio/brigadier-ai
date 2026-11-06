@@ -7,8 +7,8 @@ import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 const CHOICES: { mode: SidebarMode; label: string }[] = [
-  { mode: "inbox", label: "Inbox" },
-  { mode: "projects", label: "Projects" },
+  { mode: "inbox", label: "One list" },
+  { mode: "projects", label: "By project" },
 ];
 
 /** Each line of the picture's sidebar, as a share of its width; a project mark leads every third. */
@@ -34,7 +34,7 @@ function SidebarViewPicture({ grouped }: { grouped: boolean }) {
   );
 }
 
-/** How the sidebar lists, as two pictures to pick from: the same setting as its header's toggle. */
+/** How the sidebar lists, as two pictures to pick from: the same setting as Group by in its View control. */
 export function SidebarViewChoice({ label }: { label: string }) {
   const value = useApp((s) => (s.settings.sidebarMode === "projects" ? "projects" : "inbox"));
   return (

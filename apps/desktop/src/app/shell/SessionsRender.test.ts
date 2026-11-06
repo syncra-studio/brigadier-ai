@@ -7,6 +7,7 @@ type HoveredRow = {
   idle: { background: string; titleWidth: number; statusVisible: boolean; rowHeight: number; fontSize: number; actionWidth: number; iconWidth: number };
   hovered: { background: string; titleRight: number; titleWidth: number; actionsLeft: number; statusVisible: boolean; statusDisplay: string; overflowing: boolean };
   actions: { background: string; underPointer: boolean; tooltip: string; titleRight: number }[];
+  pins: number;
   menu: string[];
   copy: string[];
   navHoverBackground: string;
@@ -18,15 +19,15 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
   const chat = place.endsWith("chats");
   const page = `sessions.html?hover=1${pinned ? "&pinned=1" : ""}${chat ? "&chats=1" : ""}`;
 
-  test(`${place}: hovering with a mark gives the title all the room before the two actions`, { timeout: 60000 }, async (t) => {
+  test(`${place}: hovering with a mark gives the title all the room before the ⋯`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
-    // Pinned rows take two lines, with the actions on the first; the rest one.
-    assert.equal(seen.idle.rowHeight, pinned ? 46 : 30);
+    // One line each; pinned rows are the taller, badged kind.
+    assert.equal(seen.idle.rowHeight, pinned ? 36 : 30);
     assert.equal(seen.idle.fontSize, 14);
     assert.equal(seen.idle.actionWidth, 20);
     assert.equal(seen.idle.iconWidth, 16);
     assert.equal(seen.idle.statusVisible, true);
-    assert.equal(seen.hovered.statusVisible, true, "the mark stays while the actions take the time's place");
+    assert.equal(seen.hovered.statusVisible, true, "the mark stays beside the ⋯");
     assert.equal(seen.hovered.overflowing, true, "a long title still truncates");
     if (!pinned) {
       const gap = seen.hovered.actionsLeft - seen.hovered.titleRight;
@@ -35,7 +36,7 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
     assert.equal(seen.after.titleWidth, seen.idle.titleWidth, "the mark regains its usual space after leaving");
   });
 
-  test(`${place}: the ⋯ and pin keep NavRow's exact hover background while their tooltips show`, { timeout: 60000 }, async (t) => {
+  test(`${place}: the ⋯ keeps NavRow's exact hover background while its tooltip shows, and no Pin shows`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
     assert.notEqual(seen.hovered.background, seen.idle.background, "the pointer gives an inactive row its hover fill");
     assert.equal(seen.hovered.background, seen.navHoverBackground, "the row uses NavRow's exact hover colour");
@@ -44,13 +45,14 @@ for (const place of ["project sessions", "chats", "pinned sessions", "pinned cha
       assert.equal(action.background, seen.navHoverBackground, `${action.tooltip}: the whole row keeps NavRow's hover colour`);
       assert.equal(action.titleRight, seen.hovered.titleRight, "moving onto actions does not shorten the title");
     }
-    assert.deepEqual(seen.actions.map((action) => action.tooltip), [chat ? "Chat actions" : "Session actions", `${pinned ? "Unpin" : "Pin"} ${chat ? "chat" : "session"}`]);
+    assert.deepEqual(seen.actions.map((action) => action.tooltip), [chat ? "Chat actions" : "Session actions"]);
+    assert.equal(seen.pins, 0);
     assert.equal(seen.after.background, seen.idle.background, "leaving the row clears the hover fill");
   });
 
   test(`${place}: the row's ⋯ opens its tab's menu`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "sessions-result", 20000)) as HoveredRow;
-    assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A"]);
+    assert.deepEqual(seen.menu, [pinned ? "Unpin⌥⌘P" : "Pin⌥⌘P", "Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A"]);
     assert.deepEqual(seen.copy, [chat ? "Copy chat id" : "Copy session id", "Copy as Markdown"]);
   });
 }
@@ -62,7 +64,7 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
   };
   assert.equal(seen.error, undefined);
   assert.equal(seen.open, "none", "no session is open");
-  assert.deepEqual(seen.menu, ["Rename⌥⌘R", "Copy", "Fork", "Put to sleep", "Archive⇧⌘A"]);
+  assert.deepEqual(seen.menu, ["Pin⌥⌘P", "Rename⌥⌘R", "Copy", "Fork", "Archive⇧⌘A"]);
   assert.equal(seen.markdown, "# Fix the login\n\n## User\n\nFix the login.\n\n## Assistant\n\nThe token expired; it refreshes now.\n\n## User\n\nAnd the logout?\n\n## Assistant\n\nLogout clears it too.\n");
   assert.deepEqual(seen.forks, [{ conversationId: "w2-a", messageId: "a2", place: "newWorktree" }]);
   // Read once, for Copy; Fork finds it held.
@@ -77,7 +79,7 @@ test("a row's ⋯, its session not open, reads the thread to copy it as Markdown
 });
 
 // The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each
-// with its own title and state, those that need the user first,
+// with its own title and state, in the order of the user's last message,
 // and a click opens that session.
 test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too, each with its state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html", "sessions-result", 20000)) as {
@@ -96,17 +98,17 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(
     seen.rows.map(({ title, status, tip }) => [title, status, tip]),
     [
-      // Those that need the user float to the top, newest first like the rest.
-      ["Deploy the site", "waiting", "Needs you · approval"],
-      ["Broken build", "amber", "Failed"],
-      ["Ship the release", "waiting", "Needs you · sign-in"],
+      // By the user's last message alone: needing them or failing moves no row.
       ["Footer", "working", "Working"],
       ["Header", "working", "Working"],
       ["Fix the login", null, null],
       ["Tidy the docs", null, null],
       ["Waiting on a limit", "working", "Waiting for usage limit · resets 14:05"],
+      ["Deploy the site", "waiting", "Needs you · approval"],
       ["Lone worker", "working", "Working"],
+      ["Broken build", "amber", "Failed"],
       ["Old fix", null, null],
+      ["Ship the release", "waiting", "Needs you · sign-in"],
       ["Finished reply", null, null],
       // Stopped shows nothing (D11).
       ["Paused task", null, null],
@@ -120,7 +122,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     assert.equal(row.error, false);
     assert.equal(row.plain, true, `${row.title}: no chip`);
   }
-  // The title tells sessions apart: a mark takes only its 20-unit slot, its time what's left.
+  // The title tells sessions apart: a mark takes only its 20-unit slot.
   assert.equal(seen.widths.length, 7, "the seven rows with a mark");
   for (const row of seen.widths) assert.ok(row.titleShare >= 70, `${row.title}: the title keeps the row (${row.titleShare}%)`);
   assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 }, "the project header contains only its folder icon and name");
@@ -128,8 +130,8 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(seen.activeAfter, ["Header"]);
   assert.deepEqual(
     seen.rowsAfter,
-    ["Deploy the site", "Broken build", "Old fix", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Finished reply", "Paused task", "Draft the notes"],
-    "a session that starts needing the user moves up",
+    ["Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Deploy the site", "Lone worker", "Broken build", "Old fix", "Ship the release", "Finished reply", "Paused task", "Draft the notes"],
+    "a session that starts needing the user stays where it is",
   );
   assert.deepEqual(seen.projectHeaderAfter, seen.projectHeader, "sessions needing the user add no badge to the header");
   // A long title fades out at the end, a stopped row's as any other: no word beside it.
@@ -149,7 +151,7 @@ test("the Projects flyout shows a folder and name without a count, preserving it
     sessions: string[];
   };
   assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 });
-  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Finished reply", "Paused task", "Draft the notes"]);
+  assert.deepEqual(seen.sessions, ["Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Deploy the site", "Lone worker", "Broken build", "Old fix", "Ship the release", "Finished reply", "Paused task", "Draft the notes"]);
 });
 
 test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
@@ -234,9 +236,9 @@ test("unopened sessions with working workers keep Working until idle, including 
   type Row = { title: string; status: string; mark: string | null };
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?workerActivity=1", "sessions-result", 20000)) as { before: Row[]; someWorking: Row; idle: Row; reconnected: Row; threadReads: string[] };
   assert.deepEqual(seen.before.map(({ title, status, mark }) => [title, status, mark]), [
+    ["Workers still running", "working", "spinner"],
     ["Approval with workers", "waiting", "waiting"],
     ["Question with workers", "waiting", "waiting"],
-    ["Workers still running", "working", "spinner"],
   ]);
   for (const row of [seen.someWorking, seen.reconnected]) {
     assert.equal(row.status, "working");
