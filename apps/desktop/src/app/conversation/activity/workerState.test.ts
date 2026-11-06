@@ -45,7 +45,7 @@ test("a worker at work turns quiet after 20 minutes of nothing, by the real minu
 });
 
 test("what holds its work up reads on its row, by the real minutes", () => {
-  const hold = (patch: object) => ({ jobHold: { kind: "stalled", sinceMs: NOW - 12 * 60_000, what: null, load: null, cores: null, ...patch } as WorkerRow["jobHold"] });
+  const hold = (patch: object) => ({ jobHold: { kind: "stalled", sinceMs: NOW - 12 * 60_000, what: null, load: null, cores: null, ...patch } as NonNullable<WorkerRow["jobHold"]> });
   assert.equal(word(hold({ what: "cargo test" })), "Stalled 12m · cargo test");
   assert.equal(word(hold({ kind: "buildSlot" })), "Waiting for a build slot 12m");
   assert.equal(word(hold({ kind: "starved", load: 60, cores: 14 })), "Build starved 12m · load 60 on 14 cores");
