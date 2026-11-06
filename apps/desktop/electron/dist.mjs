@@ -49,6 +49,8 @@ if (check) {
   const frameworks = path.join(app, "Contents/Frameworks");
   for (const entry of fs.readdirSync(frameworks)) if (entry.endsWith(".app")) plists.push(path.join(frameworks, entry, "Contents/Info.plist"));
   for (const plist of plists) run("plutil", ["-replace", "LSBackgroundOnly", "-bool", "true", plist]);
+  // electron-builder's `dir` target writes no update config: a check given a feed gets it here.
+  if (process.env.BRIGADIER_UPDATE_FEED) fs.writeFileSync(path.join(app, "Contents/Resources/app-update.yml"), `provider: generic\nurl: ${process.env.BRIGADIER_UPDATE_FEED}\nupdaterCacheDirName: brigadier-updater\n`);
   run("codesign", ["--force", "--deep", "--sign", "-", app]);
   console.log(app);
 }

@@ -8,7 +8,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { addonPath, appBinary, binDir, checkDir, daemonDataDir, daemonHome, dataDir, desktopDir, electronDir, eventsPath, evidenceDir, sidecarDir, socketPath, vitePort } from "./paths.mjs";
+import { addonPath, appBinary, binDir, checkDir, checkPackage, daemonDataDir, daemonHome, dataDir, desktopDir, electronDir, eventsPath, evidenceDir, sidecarDir, socketPath, vitePort } from "./paths.mjs";
 import { startFixtures } from "./fixture-pages.mjs";
 import { startWatch } from "./watch.mjs";
 
@@ -75,10 +75,10 @@ async function launch() {
     BRIGADIER_DEV_DATA: dataDir,
     BRIGADIER_EVENTS: eventsPath,
     BRIGADIER_RENDERER_URL: `http://127.0.0.1:${vitePort}/`,
-    BRIGADIER_ADDON: addonPath,
+    // A package carries its own: only the dev bundle takes these from the build.
+    ...(checkPackage ? { BRIGADIER_PAGE_DIR: path.join(checkPackage, "Contents/Resources/app.asar/page") } : { BRIGADIER_ADDON: addonPath, BRIGADIER_DEV_SIDECARS: sidecarDir }),
     BRIGADIER_CONTROL_HTML: path.join(electronDir, "control.html"),
     BRIGADIER_DEV_DAEMON_DATA: daemonDataDir,
-    BRIGADIER_DEV_SIDECARS: sidecarDir,
     // Off the user's CLI sign-ins unless a check says otherwise.
     BRIGADIER_DEV_DAEMON_HOME: process.env.BRIGADIER_DEV_DAEMON_HOME ?? daemonHome,
   };
@@ -123,7 +123,14 @@ async function control(op, args) {
   return evaluate(controlSession, `window.brigadierShell.devControl(${JSON.stringify(op)}, ${JSON.stringify(args ?? {})})`);
 }
 
-// The front end's server.
+// The front end's server. A port already answering is another worktree's server, whose code this run would then
+// test: stop rather than reuse it.
+const portTaken = await new Promise((resolve) => {
+  const probe = net.connect(vitePort, "127.0.0.1");
+  probe.once("connect", () => { probe.destroy(); resolve(true); });
+  probe.once("error", () => resolve(false));
+});
+if (portTaken) throw new Error(`port ${vitePort} is in use by another dev server: bring that instance down first`);
 const vite = spawn(path.join(desktopDir, "node_modules/.bin/vite"), ["--config", "electron/vite.config.ts"], { cwd: desktopDir, stdio: ["ignore", fs.openSync(path.join(checkDir, "vite.log"), "a"), fs.openSync(path.join(checkDir, "vite.log"), "a")] });
 for (let tries = 0; ; tries++) {
   try {

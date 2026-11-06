@@ -22,6 +22,8 @@ module.exports = {
     ...(process.env.BRIGADIER_VERSION ? { version: process.env.BRIGADIER_VERSION } : {}),
   },
   asar: true,
+  // Says which Mac it's for: separate Apple silicon and Intel downloads.
+  artifactName: "${productName}-${version}-${arch}.${ext}",
   // Only the bundles and the page: nothing from node_modules, which main has bundled.
   // The dev control's chunk ships only in a check package, whose main can reach it.
   files: [

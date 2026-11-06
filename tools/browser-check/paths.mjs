@@ -10,7 +10,9 @@ export const buildDir = path.join(repoRoot, "target/browser-check");
 export const binDir = path.join(buildDir, "bin");
 export const checkInputApp = path.join(binDir, "Brigadier Check Input.app");
 export const appBundle = path.join(buildDir, "Brigadier Dev.app");
-export const appBinary = path.join(appBundle, "Contents/MacOS/Brigadier Dev");
+/** The app a check drives: the dev bundle, or a package from `electron/dist.mjs --check`. */
+export const checkPackage = process.env.BRIGADIER_CHECK_PACKAGE ?? null;
+export const appBinary = checkPackage ? path.join(checkPackage, "Contents/MacOS/brigadier-app") : path.join(appBundle, "Contents/MacOS/Brigadier Dev");
 /** Scratch data and evidence: never the repo. */
 export const checkDir = process.env.BRIGADIER_CHECK_DIR ?? path.join(process.env.TMPDIR ?? os.tmpdir(), "browser-check");
 export const dataDir = path.join(checkDir, "data");

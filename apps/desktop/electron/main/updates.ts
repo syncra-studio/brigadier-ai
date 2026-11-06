@@ -24,7 +24,9 @@ const stages = new UpdateStages();
 
 /** Whether this build carries a feed. */
 export function updateConfigured(): boolean {
-  return dev ? false : fs.existsSync(path.join(process.resourcesPath, "app-update.yml"));
+  // A check package may switch it on, and only "Check now" looks: no timers in a dev run (updatesEnabled).
+  if (dev && process.env.BRIGADIER_DEV_UPDATES !== "1") return false;
+  return fs.existsSync(path.join(process.resourcesPath, "app-update.yml"));
 }
 
 /** The feed in words, for Settings › About. */
