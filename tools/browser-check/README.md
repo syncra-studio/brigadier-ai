@@ -13,6 +13,7 @@ Scratch data and evidence go in `$BRIGADIER_CHECK_DIR` (default `$TMPDIR/browser
 | `validate-instruments.mjs` | Positive and negative controls for capture, recording and the watcher. Run it before trusting them |
 | `interactions.mjs` | Section 1's interactions in the real front end. Scripted input, OS pixels |
 | `gate.mjs idle [minutes] [cases]`, `gate.mjs stress [minutes]` | The section 1 gate: `behind minimised space shown` run together; `hidden` alone, since it hides every window |
+| `drops.mjs` | Drops and notifications in the real window on the dev daemon. Scripted drag through Chromium's input layer (trusted events, real files), OS pixels |
 | `repro-blank-state.mjs`, `space-probe.mjs` | The spike's blank state: each window state with and without `capturePage`, and a probe that waits for a real Space change |
 | `go.mjs --plan`, `--preflight`, `--go` | Real pointer, cursor and focus, all in one go. Stops on any human input and restores the pointer. Real input comes from `target/browser-check/bin/Brigadier Check Input.app`, which holds the Accessibility grant; don't rebuild it, since an ad-hoc grant is tied to its hash |
 

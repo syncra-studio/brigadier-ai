@@ -158,6 +158,11 @@ function electronDragDrop(shell: ElectronNative, handler: (payload: DragDropPayl
   };
 }
 
+/** Under Electron `onDragDrop` hears every drop with its real paths, so nothing else in the page should take one. */
+export function dropsComeByWindow(): boolean {
+  return Boolean(electron());
+}
+
 /** Hears files dragged over and dropped on this window. */
 export function onDragDrop(handler: (payload: DragDropPayload) => void): Promise<UnlistenFn> {
   const shell = electron();

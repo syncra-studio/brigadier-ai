@@ -4,6 +4,7 @@ import { type DragEvent, useCallback, useContext, useEffect, useState } from "re
 import { whileReading } from "@/app/conversation/attachments";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { droppedFile, registerDropTarget } from "@/app/nativeDrop";
+import { dropsComeByWindow } from "@/ipc/native";
 import { openFolders } from "@/state/addProject";
 import { insertAtCaret } from "@/state/dictation";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
@@ -13,8 +14,9 @@ import { toast } from "@/state/toasts";
  * Files dropped on the thread (`zone`) attach to the composer's message; with Shift held their
  * paths are typed at the composer's caret instead, and no "Drop to attach" shows. The page's own
  * drop (Linux, Windows) attaches through the dropzone, which `handlers` keep out of a Shift
- * drop; where the window takes drops from the page (macOS) they come by `registerDropTarget`,
- * and a folder among them still becomes a project.
+ * drop; where the window takes drops from the page (macOS under Tauri) or hears them with their
+ * paths (Electron) they come by `registerDropTarget`, and a folder among them still becomes a
+ * project. Under Electron the page sees the same drag too, so the dropzone is kept out of it.
  */
 export function useFileDrops(zone: HTMLElement | null): {
   /** Files from the window's own drag are over the thread, to attach: the overlay shows. */
@@ -73,14 +75,20 @@ export function useFileDrops(zone: HTMLElement | null): {
   const drag = useCallback((event: DragEvent) => {
     if (!event.dataTransfer.types.includes("Files")) return;
     setShift(event.shiftKey);
-    if (!event.shiftKey) return;
+    if (!event.shiftKey && !dropsComeByWindow()) return;
     // Handled here, so the dropzone neither shows its overlay nor attaches.
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }, []);
   const drop = useCallback(
     (event: DragEvent) => {
-      if (!event.dataTransfer.types.includes("Files") || !event.shiftKey) return;
+      if (!event.dataTransfer.types.includes("Files")) return;
+      if (dropsComeByWindow()) {
+        // Only keeps the dropzone from attaching it as well: `registerDropTarget`'s drop has it.
+        event.preventDefault();
+        return;
+      }
+      if (!event.shiftKey) return;
       event.preventDefault();
       typePaths(droppedPaths(event.dataTransfer));
     },

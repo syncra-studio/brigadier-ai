@@ -34,4 +34,10 @@ if (!process.argv.includes("--brigadier-stand-in")) {
     },
     pathForFile: (file: File) => webUtils.getPathForFile(file),
   });
+  // What the OS really dropped, for main (main/drops.ts): the page can't reach this world or forge the event.
+  window.addEventListener("drop", (event) => {
+    if (!event.isTrusted) return;
+    const paths = [...(event.dataTransfer?.files ?? [])].map((file) => webUtils.getPathForFile(file)).filter((path) => path !== "");
+    if (paths.length > 0) ipcRenderer.send("brigadier:dropped", paths, event.shiftKey);
+  }, true);
 }

@@ -10,6 +10,7 @@ import type { ComputerUseStatus } from "@/ipc/generated";
 import { installBrowserHost } from "./browserHost";
 import { installCommands, waitForCommands } from "./commands";
 import { folderOpened, installCoreCommands } from "./core";
+import { installDrops, notify } from "./drops";
 import { note } from "./events";
 import { daemonDataDir, dev, identifier, setIdentity, unfocused } from "./identity";
 import { holdForIntro, installIntroCommands } from "./intro";
@@ -34,6 +35,7 @@ protocol.registerSchemesAsPrivileged([
 
 installBrowserHost();
 installCommands();
+installDrops();
 
 const smoke = process.argv.includes("--smoke");
 const TOLERANCE_ENV = "BRIGADIER_BUDGET_TOLERANCE";
@@ -84,6 +86,7 @@ type ShellAsk = { kind: "notify"; title: string; body: string } | { kind: "openS
 /** What the bridge asks of the shell; each is filled in by its own area. */
 function hearDaemon(ask: ShellAsk): void {
   note("daemon-asks", { kind: ask.kind });
+  if (ask.kind === "notify") notify(ask.title, ask.body);
   if (ask.kind === "computerUse") computerStatusChanged(ask.status);
   if (ask.kind === "openSetup") openComputerSetup(false);
 }

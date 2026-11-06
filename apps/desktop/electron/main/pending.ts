@@ -7,9 +7,7 @@ export const PENDING: Record<string, readonly string[]> = {
     "pick_folder", "warm_folder_picker", "pick_folders", "pick_file", "save_artifact", "export_conventions",
     "open_artifact", "open_folder", "open_url", "open_pdf", "reveal_path", "save_document", "save_copy", "forget_document",
   ],
-  "drops and notifications": [
-    "drag_shift", "last_drop", "read_dropped", "notification_permission", "ask_notification_permission", "open_notification_settings",
-  ],
+  "drops and notifications": [],
   "login and computer setup": [],
   "intro, smoke and packaging": [
     "smoke_finish",

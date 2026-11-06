@@ -15,3 +15,6 @@ pub mod smoke;
 #[cfg(feature = "napi")]
 #[allow(unsafe_code)]
 mod native;
+#[cfg(feature = "napi")]
+#[allow(unsafe_code)]
+mod notices;

@@ -165,6 +165,9 @@ async function handle(message) {
         return evaluate(await hostSession(message.window), message.js);
       }
     }
+    case "drag":
+      // A drag as Chromium's input layer takes it: trusted events with real files, but no OS pointer.
+      return send("Input.dispatchDragEvent", message.params, await hostSession(message.window));
     case "restart": {
       // One real relaunch, for what only a restart can show. `kill` is the crash version.
       const old = app.pid;

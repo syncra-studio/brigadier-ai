@@ -23,6 +23,9 @@ type Addon = {
   systemName(): string;
   continuityReport(): Promise<string>;
   openSimulator(device?: string | null): Promise<void>;
+  shiftHeld(): boolean;
+  noticePermission(): Promise<string>;
+  noticeAsk(): void;
 };
 
 let loaded: Addon | null = null;
