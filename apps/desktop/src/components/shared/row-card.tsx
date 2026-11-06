@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Comment, Folder, ProviderGlyph } from "@/components/icons";
 import { TooltipContent } from "@/components/overlays";
@@ -18,29 +18,47 @@ export function workingDirectory(conversation: Conversation): string | null {
   return (setup.environment.type === "newWorktree" && setup.environment.path) || setup.repo;
 }
 
-/** A project's own icon in a square of its slot's size; drawn through `<img>`, so an SVG's scripts don't run. */
-function ProjectIconImage({ icon, onBroken }: { icon: string; onBroken: () => void }) {
-  return <img data-slot="project-icon" src={icon} alt="" draggable={false} className="size-icon-md shrink-0 rounded-xs object-contain" onError={onBroken} />;
-}
-
-/** A project row's mark: the project's icon when it has one that loads, else `fallback`. */
-export function ProjectIcon({ projectId, fallback }: { projectId: string; fallback: ReactNode }) {
-  const { icon, broken } = useProjectIcon(projectId);
-  return icon === null ? fallback : <ProjectIconImage icon={icon} onBroken={broken} />;
-}
-
 /**
- * A row's badge: its project's icon when it has one that loads, else its initials in grey; a bubble
- * in grey for a chat (`name` null).
+ * A project's mark: `fallback` until its icon has actually loaded, then the icon, drawn through
+ * `<img>` so an SVG's scripts don't run. A project with no icon, one still being asked for or
+ * loading, and a file that won't load all keep the fallback; one already loaded swaps before paint.
  */
-export function ProjectBadge({ name, projectId }: { name: string | null; projectId: string | null }) {
-  const { icon, broken } = useProjectIcon(name === null ? null : projectId);
-  if (icon !== null) {
-    return <span data-slot="row-badge" aria-hidden className="flex shrink-0"><ProjectIconImage icon={icon} onBroken={broken} /></span>;
-  }
+export function ProjectIcon({ projectId, fallback }: { projectId: string; fallback: ReactNode }) {
+  const icon = useProjectIcon(projectId);
+  const image = useRef<HTMLImageElement>(null);
+  const [loaded, setLoaded] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (image.current?.complete && image.current.naturalWidth > 0) setLoaded(icon);
+  }, [icon]);
+  const showing = icon !== null && loaded === icon;
   return (
-    <span data-slot="row-badge" aria-hidden className="bg-foreground/8 text-foreground/70 text-badge flex size-icon-md shrink-0 items-center justify-center rounded-xs font-semibold">
+    <>
+      {!showing && fallback}
+      {icon !== null && (
+        <img
+          ref={image}
+          data-slot="project-icon"
+          src={icon}
+          alt=""
+          draggable={false}
+          className={cn("size-icon-md shrink-0 rounded-xs object-contain", !showing && "hidden")}
+          onLoad={() => setLoaded(icon)}
+        />
+      )}
+    </>
+  );
+}
+
+/** A row's badge: its project's icon, with its initials in grey as the fallback; a chat's bubble in grey. */
+export function ProjectBadge({ name, projectId }: { name: string | null; projectId: string | null }) {
+  const grey = (
+    <span className="bg-foreground/8 text-foreground/70 text-badge flex size-icon-md shrink-0 items-center justify-center rounded-xs font-semibold">
       {name === null ? <Comment className="size-icon-xs" /> : projectInitials(name)}
+    </span>
+  );
+  return (
+    <span data-slot="row-badge" aria-hidden className="flex shrink-0">
+      {name === null || projectId === null ? grey : <ProjectIcon projectId={projectId} fallback={grey} />}
     </span>
   );
 }

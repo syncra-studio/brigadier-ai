@@ -23,6 +23,7 @@ type Seen = {
   archived: string[]; actionAfter: string | null;
   menuWords: string[]; addProject: boolean; lineActions: number;
   allOn: { lines: Lines; label: string | null }; allStays: [boolean, string];
+  firstBadges: Record<string, string>; slotProblems: string[]; brokenTried: boolean;
   pickedCount: string;
   picked: { lines: Lines; label: string | null; written: string[]; rows: string[] };
   chatsOff: { lines: Lines; label: string | null; hideChats: boolean; rows: string[] };
@@ -42,6 +43,10 @@ test("Group by None: Pinned, Open and a folded Archived; rows stay put through a
   assert.deepEqual(seen.archivedHeader, { count: "3", open: "Open Settings › Archived", opacity: "1" });
 
   // One line: the project's icon, its initials when it has none or it won't load, a chat's bubble; then the title. No time.
+  // The fallback shows first and whenever no image has loaded: never a blank slot, at any change to the page.
+  assert.deepEqual(seen.firstBadges, { "core-tests": "BA", flaky: "FR", "rate-limit": "SA" });
+  assert.deepEqual(seen.slotProblems, []);
+  assert.equal(seen.brokenTried, true, "the broken file was really tried");
   assert.equal(seen.rows["core-tests"]!.icon, true);
   assert.equal(seen.rows["core-tests"]!.badge, "");
   assert.equal(seen.rows["rate-limit"]!.icon, false);

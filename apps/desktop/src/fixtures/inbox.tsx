@@ -44,6 +44,26 @@ mockIPC((command, payload) => {
   return { method: req.method };
 });
 
+/**
+ * From before the first render: every project icon slot, at every change to the page, shows its
+ * fallback or an image that has loaded, and never anything else.
+ */
+const slotProblems = new Set<string>();
+const firstBadges: Record<string, string> = {};
+const showing = (image: HTMLImageElement | null) => image !== null && getComputedStyle(image).display !== "none";
+new MutationObserver(() => {
+  const slots = document.querySelectorAll<HTMLElement>('[data-slot="row-badge"], section li > div > button[aria-expanded]:not([aria-haspopup])');
+  for (const slot of slots) {
+    const image = slot.querySelector<HTMLImageElement>('[data-slot="project-icon"]');
+    const name = slot.closest("li")?.textContent ?? "";
+    if (showing(image) ? !(image!.complete && image!.naturalWidth > 0) : !(slot.querySelector("svg") || slot.dataset.slot === "row-badge" && slot.textContent)) slotProblems.add(name);
+  }
+  for (const id of ["core-tests", "flaky", "rate-limit"]) {
+    const badge = document.querySelector(`[data-row-id="${id}"] [data-slot="row-badge"]`);
+    if (badge && firstBadges[id] === undefined) firstBadges[id] = badge.textContent ?? "";
+  }
+}).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "src"] });
+
 const NOW = Date.now();
 const MIN = 60_000;
 // No providers are listed here, so a model shows by its id: this one reads as its name would.
@@ -137,12 +157,14 @@ async function drive(): Promise<Record<string, unknown>> {
     rows: [...section.querySelectorAll<HTMLElement>('[data-slot="row-title"]')].map((title) => title.textContent),
   }));
   seen.sections = sections();
-  // freelogo's icon has had its time to fail.
-  await until(() => q('[data-slot="row-badge"]', q('[data-row-id="flaky"]')!)?.textContent === "FR");
+  // brigadier-ai's icon has loaded; freelogo's has had its time to fail.
+  await until(() => showing(q<HTMLImageElement>('[data-row-id="core-tests"] [data-slot="project-icon"]')));
+  await wait(200);
+  seen.brokenTried = q('[data-row-id="flaky"] [data-slot="project-icon"]') !== null;
   const row = (id: string) => q(`[data-row-id="${id}"]`)!;
   const rowOf = (id: string) => ({
     badge: q('[data-slot="row-badge"]', row(id))?.textContent ?? null,
-    icon: q('[data-slot="project-icon"]', row(id)) !== null,
+    icon: showing(q<HTMLImageElement>('[data-slot="project-icon"]', row(id))),
     text: q("button", row(id))?.textContent ?? null,
     status: q('[data-slot="row-status"]', row(id))?.dataset.status ?? null,
     merged: q('[data-slot="row-merged"]', row(id))?.textContent ?? null,
@@ -259,9 +281,9 @@ async function drive(): Promise<Record<string, unknown>> {
   seen.projectsSections = sections().map((section) => section.title);
   seen.projectsPill = pill() !== null;
   seen.projectsAction = q('[data-slot="archive-merged"]') !== null;
-  // These rows are new: a file that won't load gives way to the folder once its error fires.
-  await until(() => !projectRows().find((button) => button.textContent?.trim() === "freelogo")?.querySelector("img"));
-  seen.projectMarks = Object.fromEntries(projectRows().map((button) => [button.textContent?.trim(), button.querySelector("img") ? "icon" : button.querySelector("svg") ? "folder" : null]));
+  // These rows are new: brigadier-ai's icon swaps in once it has loaded; the rest keep their folders.
+  await until(() => showing(q<HTMLImageElement>('[data-slot="project-icon"]', projectRows().find((button) => button.textContent?.trim() === "brigadier-ai"))));
+  seen.projectMarks = Object.fromEntries(projectRows().map((button) => [button.textContent?.trim(), showing(button.querySelector("img")) ? "icon" : button.querySelector("svg") ? "folder" : null]));
   seen.projectButtons = [...document.querySelectorAll('li > div button[aria-label$=" brigadier-ai"]')].map((button) => button.getAttribute("aria-label"));
   await click(box("freelogo"));
   await click(box("Chats"));
@@ -270,6 +292,8 @@ async function drive(): Promise<Record<string, unknown>> {
   await fixtureInput({ type: "key", key: "Escape" });
   await until(() => q('[data-slot="sidebar-view-menu"]') === null);
   seen.projectsCard = await cardOf("core-tests");
+  seen.slotProblems = [...slotProblems];
+  seen.firstBadges = firstBadges;
   return seen;
 }
 

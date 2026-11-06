@@ -1,7 +1,6 @@
 /**
  * Projects' icons, asked of the daemon (which looks in each project's first repository) once per
- * project per run. A project with none, still being asked, or whose file won't load has its
- * fallback.
+ * project per run.
  */
 import { useEffect, useState } from "react";
 
@@ -23,13 +22,9 @@ function ask(projectId: string): Promise<void> {
   return asking;
 }
 
-/**
- * The project's icon as a `data:` URL, once known and until `broken` says it won't load; `null`
- * otherwise.
- */
-export function useProjectIcon(projectId: string | null): { icon: string | null; broken: () => void } {
+/** The project's icon as a `data:` URL, once known; `null` meanwhile and when it has none. */
+export function useProjectIcon(projectId: string | null): string | null {
   const [, answered] = useState(0);
-  const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
     if (projectId === null || known.has(projectId)) return;
     let live = true;
@@ -40,6 +35,5 @@ export function useProjectIcon(projectId: string | null): { icon: string | null;
       live = false;
     };
   }, [projectId]);
-  const found = projectId === null ? null : (known.get(projectId) ?? null);
-  return { icon: found === failed ? null : found, broken: () => setFailed(found) };
+  return projectId === null ? null : (known.get(projectId) ?? null);
 }
