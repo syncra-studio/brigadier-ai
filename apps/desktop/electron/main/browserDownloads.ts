@@ -1,5 +1,6 @@
 // A profile's downloads: where each file goes, its progress and a cancel. The list is in the profile's store
 // (browserHistory.ts); bytes so far are only in memory, since nothing resumes a download after a restart.
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -41,6 +42,18 @@ function chosenDir(): string {
   return usable ? dir : app.getPath("downloads");
 }
 
+/**
+ * Marks a finished file as from the web, as a browser must on a Mac: Electron doesn't, so without this Gatekeeper
+ * never checks an app or script someone downloaded. Failing leaves it unmarked, which the record says.
+ */
+function quarantine(target: string): void {
+  if (process.platform !== "darwin") return;
+  const stamp = Math.floor(Date.now() / 1000).toString(16);
+  execFile("/usr/bin/xattr", ["-w", "com.apple.quarantine", `0081;${stamp};Brigadier;`, target], (error) => {
+    if (error) note("download-quarantine-failed", { path: target, error: String(error) });
+  });
+}
+
 function tell(profileId: string, id: number, finished: { path: string; ok: boolean } | null): void {
   mainWindow()?.webContents.send("brigadier:event", "browser-download", { profile: profileId, id, finished });
 }
@@ -59,7 +72,14 @@ function follow(profileId: string, item: DownloadItem, asked: boolean): void {
     return id;
   };
   listed();
-  item.on("updated", () => {
+  let broke = false;
+  item.on("updated", (_event, state) => {
+    // Electron holds an interrupted item open to resume, and "done" never comes. Nothing here resumes one, so it ends as failed.
+    if (state === "interrupted") {
+      broke = true;
+      item.cancel();
+      return;
+    }
     const shown = listed();
     if (shown !== null) tell(profileId, shown, null);
   });
@@ -68,15 +88,12 @@ function follow(profileId: string, item: DownloadItem, asked: boolean): void {
     note("download-done", { profileId, id: shown, state, bytes: item.getReceivedBytes() });
     if (shown === null) return;
     running.delete(key(profileId, shown));
-    const final: DownloadState = state === "completed" ? "done" : state === "cancelled" ? "cancelled" : "failed";
-    // The store is gone with a profile deleted meanwhile, and so is the row.
-    if (stillListed(profileId, shown)) profileStore(profileId).prepare("UPDATE downloads SET state = ? WHERE id = ?").run(final, shown);
+    const final: DownloadState = state === "completed" ? "done" : state === "cancelled" && !broke ? "cancelled" : "failed";
+    if (final === "done") quarantine(item.getSavePath());
+    profileStore(profileId).prepare("UPDATE downloads SET state = ? WHERE id = ?").run(final, shown);
     tell(profileId, shown, final === "cancelled" ? null : { path: item.getSavePath(), ok: final === "done" });
   });
 }
-
-const forgotten = new Set<string>();
-const stillListed = (profileId: string, id: number) => !forgotten.has(key(profileId, id));
 
 /** Takes the session's downloads into the profile's folder and list. */
 export function watchDownloads(session: Session, profileId: string): void {
@@ -126,7 +143,6 @@ export function removeDownloads(profileId: string, ids: readonly number[] | null
 export function cancelDownloadsOf(profileId: string): void {
   for (const each of [...running.values()]) {
     if (each.profileId !== profileId) continue;
-    forgotten.add(key(profileId, each.id));
     each.item.cancel();
   }
 }

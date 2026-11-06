@@ -161,9 +161,12 @@ export function markAgentGuest(webContentsId: number): void {
 /** The profile's data is going: its store goes now, with what's in it. */
 export function removeStoreOf(profileId: string): void {
   stores.get(profileId)?.close();
-  stores.delete(profileId);
   const file = storeFile(profileId);
   for (const each of [file, `${file}-wal`, `${file}-shm`]) fs.rmSync(each, { force: true });
+  // Its session's last events still come (the clear's own cookie changes, a closing guest's title): they land nowhere, and the file stays gone.
+  const nowhere = new DatabaseSync(":memory:");
+  nowhere.exec(SCHEMA);
+  stores.set(profileId, nowhere);
   for (const guest of watched.values()) {
     if (guest.profileId === profileId) guest.id = null;
   }
