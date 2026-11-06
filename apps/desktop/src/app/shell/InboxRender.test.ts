@@ -5,6 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Row = { badge: string | null; icon: boolean; text: string | null; status: string | null; merged: string | null; height: number };
 type Card = { title: string | null; status: string | null; project: string | null; model: string | null; folder: string | null; beside: boolean };
+type Placed = { projects: string[]; sessions: string[] };
 type Lines = Record<string, [boolean, string]>;
 type Seen = {
   sections: { title: string; open: boolean; rows: string[] }[];
@@ -24,6 +25,7 @@ type Seen = {
   menuWords: string[]; addProject: boolean; lineActions: number;
   allOn: { lines: Lines; label: string | null }; allStays: [boolean, string];
   firstBadges: Record<string, string>; slotProblems: string[]; brokenTried: boolean;
+  showOrder: string[]; placedBefore: Placed; placedAfterAgent: Placed; placedAfterSend: Placed;
   pickedCount: string;
   picked: { lines: Lines; label: string | null; written: string[]; rows: string[] };
   chatsOff: { lines: Lines; label: string | null; hideChats: boolean; rows: string[] };
@@ -138,6 +140,13 @@ test("Group by None: Pinned, Open and a folded Archived; rows stay put through a
   assert.equal(seen.projectsAction, false);
   assert.deepEqual(seen.projectMarks, { "brigadier-ai": "icon", freelogo: "folder", "steady-app": "folder", "steady-app-billing-service": "folder" });
   assert.deepEqual(seen.projectButtons, ["Actions for brigadier-ai", "New session in brigadier-ai"]);
+  // Projects stay in name order, in the list and in Show; only the user's message moves a session.
+  const byName = ["brigadier-ai", "freelogo", "steady-app", "steady-app-billing-service"];
+  assert.deepEqual(seen.showOrder, ["All", ...byName, "Chats"]);
+  assert.deepEqual(seen.placedBefore.projects, byName);
+  assert.deepEqual(seen.placedBefore.sessions, ["Rate limit the exports", "Onboarding email sequence", "Invoice export columns"]);
+  assert.deepEqual(seen.placedAfterAgent, seen.placedBefore, "an agent's update moves neither a project nor a session");
+  assert.deepEqual(seen.placedAfterSend, { projects: byName, sessions: ["Rate limit the exports", "Invoice export columns", "Onboarding email sequence"] }, "the user's message moves its session, not its project");
   // Show narrows it too, the Chats section with it; the control stays.
   assert.deepEqual(seen.groupedFiltered.sections, ["Pinned", "Projects"]);
   assert.ok(!seen.groupedFiltered.projects.includes("freelogo"));

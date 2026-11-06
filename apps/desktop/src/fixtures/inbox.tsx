@@ -285,6 +285,18 @@ async function drive(): Promise<Record<string, unknown>> {
   await until(() => showing(q<HTMLImageElement>('[data-slot="project-icon"]', projectRows().find((button) => button.textContent?.trim() === "brigadier-ai"))));
   seen.projectMarks = Object.fromEntries(projectRows().map((button) => [button.textContent?.trim(), showing(button.querySelector("img")) ? "icon" : button.querySelector("svg") ? "folder" : null]));
   seen.projectButtons = [...document.querySelectorAll('li > div button[aria-label$=" brigadier-ai"]')].map((button) => button.getAttribute("aria-label"));
+  // An agent's update moves nothing; the user's message moves its session, and never its project.
+  const projectOrder = () => projectRows().map((button) => button.textContent?.trim());
+  const sessionsOf = (name: string) => [...(projectRows().find((button) => button.textContent?.trim() === name)?.closest("li")?.querySelectorAll<HTMLElement>('[data-slot="row-title"]') ?? [])].map((title) => title.textContent);
+  const placed = () => ({ projects: projectOrder(), sessions: sessionsOf("steady-app") });
+  seen.showOrder = Object.keys(lines());
+  seen.placedBefore = placed();
+  useApp.setState((state) => ({ conversations: { ...state.conversations, invoices: { ...state.conversations.invoices!, updatedAtMs: Date.now(), finishedAtMs: Date.now() } } }));
+  await wait(100);
+  seen.placedAfterAgent = placed();
+  userSends("invoices");
+  await until(() => sessionsOf("steady-app").indexOf("Invoice export columns") < sessionsOf("steady-app").indexOf("Onboarding email sequence"));
+  seen.placedAfterSend = placed();
   await click(box("freelogo"));
   await click(box("Chats"));
   seen.groupedFiltered = { sections: sections().map((section) => section.title), projects: projectRows().map((button) => button.textContent?.trim()), label: label(), view: viewButton() !== null };

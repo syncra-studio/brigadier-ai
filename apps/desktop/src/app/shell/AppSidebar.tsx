@@ -38,6 +38,7 @@ import {
   setProjectExpanded,
 } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
+import { sortTime } from "@/state/inbox";
 import { pickClick, pickedIn, prunePicked } from "@/state/picking";
 import { useRowMark, useTabStates } from "@/state/tabStates";
 import { useApp } from "@/state/store";
@@ -70,7 +71,8 @@ function useSections(): Sections {
       .toSorted((a, b) => (b.pinnedAtMs ?? 0) - (a.pinnedAtMs ?? 0));
     const recent = all
       .filter((conversation) => conversation.pinnedAtMs === null)
-      .toSorted((a, b) => b.updatedAtMs - a.updatedAtMs);
+      // Only the user's own message moves a row, as in the one list.
+      .toSorted((a, b) => sortTime(b) - sortTime(a) || b.id.localeCompare(a.id));
     const sessions: Record<string, Conversation[]> = {};
     const chats: Conversation[] = [];
     for (const conversation of recent) {
@@ -80,12 +82,8 @@ function useSections(): Sections {
         (sessions[conversation.projectId] ??= []).push(conversation);
       }
     }
-    // Projects with recent activity first, then newest.
-    const lastActivity = (project: Project) =>
-      Math.max(project.createdAtMs, sessions[project.id]?.[0]?.updatedAtMs ?? 0);
-    const sortedProjects = Object.values(projects).toSorted(
-      (a, b) => lastActivity(b) - lastActivity(a),
-    );
+    // By name: a project stays put whatever its sessions do.
+    const sortedProjects = Object.values(projects).toSorted((a, b) => a.name.localeCompare(b.name));
     return { pinned, chats: forksUnderSources(chats), projects: sortedProjects, sessions };
   }, [projects, conversations]);
   // What the list shows is what is opened next: read ahead so it opens at once.
