@@ -2,7 +2,7 @@
 // area that moves it. Moving one means deleting it here; commands.test.ts keeps this list honest, and Tauri
 // can go only once it's empty (browser commands come by section, stage 3 on).
 export const PENDING: Record<string, readonly string[]> = {
-  "tray and menu": ["set_running_chats", "set_key_capture", "set_computer_menu"],
+  "tray and menu": [],
   "dialogs and opening": [
     "pick_folder", "warm_folder_picker", "pick_folders", "pick_file", "save_artifact", "export_conventions",
     "open_artifact", "open_folder", "open_url", "open_pdf", "reveal_path", "save_document", "save_copy", "forget_document",
